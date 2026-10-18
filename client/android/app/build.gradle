@@ -1,0 +1,60 @@
+plugins {
+    id 'com.android.application'
+}
+
+def pkg = new groovy.json.JsonSlurper().parse(file('../../package.json'))
+def ver = pkg.version.toString()
+def parts = ver.tokenize('.-').take(3).collect { it.isInteger() ? it.toInteger() : 0 }
+while (parts.size() < 3) parts << 0
+def vcode = parts[0] * 10000 + parts[1] * 100 + parts[2]
+
+android {
+    namespace 'ai.arena.client'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId 'ai.arena.client'
+        minSdk 24
+        targetSdk 34
+        versionCode vcode
+        versionName ver
+    }
+
+    signingConfigs {
+        release {
+            // 可用环境变量覆盖（GitHub Secrets），否则使用仓库内置的签名，保证每个版本签名一致、可直接覆盖升级
+            def ks = System.getenv('ANDROID_KEYSTORE_FILE')
+            storeFile ks ? file(ks) : file('release.jks')
+            storeType 'pkcs12'
+            storePassword System.getenv('ANDROID_KEYSTORE_PASSWORD') ?: 'arenaclient'
+            keyAlias System.getenv('ANDROID_KEY_ALIAS') ?: 'arena'
+            keyPassword System.getenv('ANDROID_KEY_PASSWORD') ?: 'arenaclient'
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            signingConfig signingConfigs.release
+        }
+    }
+
+    lint {
+        checkReleaseBuilds false
+        abortOnError false
+    }
+
+    // 内置 xray 内核（libxray.so）：必须解压到 nativeLibraryDir 才能执行
+    packagingOptions {
+        jniLibs { useLegacyPackaging true }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
+
+dependencies {
+    implementation 'androidx.webkit:webkit:1.12.1'
+}

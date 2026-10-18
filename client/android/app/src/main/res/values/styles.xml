@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="bg">#FAF9F7</color>
+    <style name="App" parent="@android:style/Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@color/bg</item>
+        <item name="android:statusBarColor">#FAF9F7</item>
+        <item name="android:windowLightStatusBar">true</item>
+    </style>
+</resources>

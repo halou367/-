@@ -1,0 +1,34 @@
+node_modules/
+release/
+gen/
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+android/app/src/main/assets/ui.bundle.js
+android/build.log
+android/app/src/main/assets/offline.html
+bin/
+android/app/src/main/jniLibs/
+android/app/src/main/assets/vless.js
+android/app/src/main/assets/route-policy.js
+android/app/src/main/assets/route-host.js
+
+# Generated document-start guard
+/android/app/src/main/assets/rtc-lockdown.js
+
+# Generated shared routing policy for Android offline UI
+/android/app/src/main/assets/route-state.js
+
+/android/app/src/main/assets/node-routes.js
+/android/app/src/main/assets/offline-modes.js
+/android/app/src/main/assets/webbar.js
+
+# Shared connection picker assets copied by scripts/bundle.js
+/android/app/src/main/assets/offline-context.js
+/android/app/src/main/assets/nodes.js
+/android/app/src/main/assets/iprep.js
+/android/app/src/main/assets/pool.js
+/android/app/src/main/assets/node-speed.js
+/android/app/src/main/assets/app.css
+/android/app/src/main/assets/flags.woff2

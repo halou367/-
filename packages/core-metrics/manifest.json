@@ -1,0 +1,38 @@
+{
+  "manifest_version": 3,
+  "name": "Brana Model Probe Beta",
+  "version": "1.2.0",
+  "description": "在 Brana Agent 对话中自动发送数字指纹探针、捕获回复并在本机统计识别模型。",
+  "minimum_chrome_version": "118",
+  "permissions": [
+    "activeTab"
+  ],
+  "host_permissions": [
+    "https://arena.ai/*"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self'; connect-src 'self' https://whatsmyllm.com"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Brana Model Probe"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://arena.ai/agent*"
+      ],
+      "js": [
+        "probe-runtime.js",
+        "conversation-rename.js",
+        "content.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ],
+  "version_name": "1.2.0-beta.1"
+}

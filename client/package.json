@@ -1,0 +1,71 @@
+{
+  "name": "brana-client",
+  "productName": "Brana AI",
+  "version": "0.13.158",
+  "description": "Cross-platform workspace client with multi-tab markdown rendering and session telemetry",
+  "main": "src/main.js",
+  "author": "755287249",
+  "license": "MIT",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "bundle": "node scripts/bundle.js",
+    "dist:win": "electron-builder --win nsis --x64 --publish never",
+    "test": "node --test tests/*.test.cjs",
+    "build:probe": "node scripts/build-probe.js"
+  },
+  "devDependencies": {
+    "electron": "44.7.2",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "ai.arena.client.desktop",
+    "productName": "Brana AI",
+    "files": [
+      "src/**/*",
+      "ui/**/*",
+      "!ui/gen/**",
+      "assets/**/*",
+      "package.json",
+      "licenses/**/*"
+    ],
+    "directories": {
+      "output": "release"
+    },
+    "publish": null,
+    "win": {
+      "artifactName": "BranaAi-${version}-${arch}-${target}.${ext}",
+      "icon": "assets/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "perMachine": false,
+      "artifactName": "BranaAi-Setup-${version}.${ext}",
+      "shortcutName": "Brana AI",
+      "installerIcon": "assets/icon.ico",
+      "uninstallerIcon": "assets/icon.ico",
+      "include": "scripts/installer.nsh"
+    },
+    "extraResources": [
+      {
+        "from": "bin",
+        "to": "bin",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ],
+    "electronLanguages": [
+      "zh-CN",
+      "zh-TW",
+      "en-US"
+    ]
+  },
+  "updateUrl": "https://arena.755.cc.cd",
+  "dependencies": {
+    "extract-zip": "2.0.1",
+    "https-proxy-agent": "7.0.6",
+    "socks-proxy-agent": "8.0.5"
+  }
+}

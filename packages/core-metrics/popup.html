@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Brana Model Probe</title><link rel="stylesheet" href="popup.css"></head>
+<body>
+  <header><span class="mark">M</span><div><h1>Brana Model Probe</h1><p>STANDALONE · v1.2.0-beta.1</p></div></header>
+  <section id="unavailable" class="notice" hidden>请先打开或刷新一个 Brana Agent 页面。</section>
+  <section id="controls">
+    <p class="warning">点击后立即发送；每轮自动点“继续工作”，得到结果后自动把当前会话重命名为模型名。</p>
+    <div class="primary-actions"><button id="run-one" class="primary" disabled>发送下一条</button><button id="run-three" disabled>自动探测 1–3 条</button></div>
+    <div class="minor-actions"><button id="stop" disabled>停止</button><button id="clear" disabled>清除结果</button></div>
+    <p id="progress" class="progress" role="status">正在读取当前页状态…</p>
+    <section id="result" class="result" hidden><div class="result-head"><b id="model"></b><span id="badge"></span></div><p id="metrics"></p><small id="bank"></small></section>
+  </section>
+  <footer>只提取数字序列 · 本机评分 · 不保存历史<br><span>单条模式更符合独立探测；连续模式固定同一对话模型，但不是全新上下文。</span></footer>
+  <script src="popup.js" type="module"></script>
+</body>
+</html>

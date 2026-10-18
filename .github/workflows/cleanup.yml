@@ -1,0 +1,56 @@
+name: Cleanup
+
+# 清理仓库：只保留最新的 N 个版本（Release + 标签），删除所有已结束的 Actions 运行记录和构建产物。
+# 触发：推送 cleanup-* 标签（用完自动删掉），或在 Actions 页面手动运行。
+on:
+  push:
+    tags: ['cleanup-*']
+  workflow_dispatch:
+    inputs:
+      keep:
+        description: '保留最新几个版本'
+        default: '3'
+
+permissions:
+  contents: write
+  actions: write
+
+env:
+  GH_TOKEN: ${{ github.token }}
+  GH_REPO: ${{ github.repository }}
+  KEEP: ${{ inputs.keep || '3' }}
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Old releases and tags
+        run: |
+          set -e
+          git init -q . && git remote add origin "https://x-access-token:${GH_TOKEN}@github.com/${GH_REPO}.git"
+          git ls-remote --tags origin 'refs/tags/client-v*' | grep -v '\^{}' | awk '{print $2}' | sed 's#refs/tags/##' | sort -V -r > tags.txt
+          head -n "$KEEP" tags.txt > keep.txt
+          [ "$(wc -l < keep.txt)" -ge 1 ] || { echo "::error::没有读到版本标签，停止（防止误删全部）"; exit 1; }
+          echo "keep:"; cat keep.txt
+          # 有 Release 的版本：删 Release 连同标签
+          gh api --paginate "repos/$GH_REPO/releases?per_page=100" --jq '.[].tag_name' | sort -u > rel.txt
+          for t in $(grep -vxF -f keep.txt rel.txt | grep '^client-v' || true); do
+            gh release delete "$t" --cleanup-tag -y && echo "release deleted: $t" || echo "::warning::release $t not deleted"
+          done
+          # 剩下没有 Release 的旧标签
+          for t in $(grep -vxF -f keep.txt tags.txt || true); do
+            gh api -X DELETE "repos/$GH_REPO/git/refs/tags/$t" >/dev/null 2>&1 && echo "tag deleted: $t" || true
+          done
+      - name: Workflow runs and artifacts
+        run: |
+          for pass in 1 2 3 4 5 6; do
+            ids=$(gh api "repos/$GH_REPO/actions/runs?per_page=100&status=completed" --jq '.workflow_runs[].id' | grep -vx "$GITHUB_RUN_ID" || true)
+            [ -z "$ids" ] && break
+            for id in $ids; do gh api -X DELETE "repos/$GH_REPO/actions/runs/$id" >/dev/null 2>&1 && echo "run deleted: $id"; done
+          done
+          gh api --paginate "repos/$GH_REPO/actions/artifacts?per_page=100" --jq '.artifacts[].id' | while read -r id; do gh api -X DELETE "repos/$GH_REPO/actions/artifacts/$id" >/dev/null 2>&1 && echo "artifact deleted: $id"; done
+          echo "remaining runs: $(gh api "repos/$GH_REPO/actions/runs?per_page=1" --jq .total_count)"
+          echo "remaining releases: $(gh api "repos/$GH_REPO/releases?per_page=100" --jq length)"
+      - name: Remove trigger tag
+        if: always() && startsWith(github.ref, 'refs/tags/cleanup-')
+        run: gh api -X DELETE "repos/$GH_REPO/git/refs/tags/${GITHUB_REF_NAME}" || true
