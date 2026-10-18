@@ -163,6 +163,7 @@ const StandbyPool = {
             const r = await AutoRoute.adapter.probe({ ...c, kind: 'standby' }).catch(() => null);
             return { c, r };
           }));
+          const workingNodes = new Set(results.filter(x => x.r?.ip || RoutePolicy.good(x.r)).map(x => x.c?.proxy).filter(Boolean));
           for (const { c, r } of results) {
             if (RoutePolicy.good(r) && r.ticket) {
               this.ips.push({
@@ -176,8 +177,8 @@ const StandbyPool = {
               if (typeof NodeRoutes !== 'undefined' && NodeRoutes.cache) {
                 NodeRoutes.cache.set(RoutePolicy.key(c), { at: now(), result: r });
               }
-            } else if (c.proxyIp && typeof Pool !== 'undefined') {
-              try { void Pool.blacklistIp?.(c.proxyIp, r?.kind === 'rate-limit' ? '429 限流 · 已永久拉黑' : '热备检测不可用 · 已永久拉黑'); } catch {}
+            } else if (c.proxyIp && typeof Pool !== 'undefined' && (r?.ip || r?.kind === 'rate-limit' || workingNodes.has(c.proxy) || Pool.isNodeConfirmedAlive?.(c.proxy))) {
+              try { void Pool.blacklistIp?.(c.proxyIp, r?.kind === 'rate-limit' ? '429 限流 · 已永久拉黑' : '节点正常但热备 ProxyIP 不可用 · 已永久拉黑'); } catch {}
             }
           }
           this.ips.sort((x, y) => (x.ms || 9999) - (y.ms || 9999));
@@ -264,7 +265,7 @@ const AutoRoute = {
       networkFirst:true,
       batchSize:4,
       forceGlobalLowestLatency:()=>(this.netErrorCount||0)>2,
-      banBadIp:(c,r)=>{if(c?.proxyIp&&typeof Pool!=='undefined')void Pool.blacklistIp?.(c.proxyIp,r?.error||'检测未通过 · 已永久拉黑');},
+      banBadIp:(c,r)=>{if(c?.proxyIp&&typeof Pool!=='undefined'&&(r?.ip||r?.kind==='rate-limit'||Pool.isNodeConfirmedAlive?.(c.proxy)))void Pool.blacklistIp?.(c.proxyIp,r?.error||'节点正常但 ProxyIP 检测未通过 · 已永久拉黑');},
       standby:(first,mode,reason,groups)=>StandbyPool.take(first,mode,reason,groups),
       read:async(target)=>{
         const res=await this.adapter.read(target);
@@ -362,9 +363,12 @@ const AutoRoute = {
           this.status=r.changed?(r.standby?'已秒切热备线路：':'已切换：')+r.label+'，正在续接原对话':'当前线路服务检测通过';
           if(r.changed&&(r.mode==='ip'||reason==='error-switch')&&r.from?.proxyIp){
             const old=r.from.proxyIp;
+            const sameNode=Boolean(r.from?.proxy&&r.account?.proxy&&r.from.proxy===r.account.proxy&&old!==r.account?.proxyIp);
             try{
               await Pool.mutate(d=>{
-                if(typeof Pool.banForever==='function')Pool.banForever(d,old,'切换淘汰 · 已永久拉黑');
+                // 只有确认是同一个 VLESS 节点下换了新 ProxyIP 就恢复连通（说明节点没问题，纯粹是旧 ProxyIP 坏了），才永久拉黑旧 ProxyIP；
+                // 若是因为切换了 VLESS 节点才恢复，说明是旧节点故障，绝不误拉黑旧 ProxyIP！
+                if(sameNode&&typeof Pool.banForever==='function')Pool.banForever(d,old,'同节点下该 ProxyIP 异常 · 已永久拉黑');
                 else{const e=d.ips?.[old];if(e){e.cool=Math.max(e.cool||0,now()+Math.max(1,+d.cool||30)*60e3);e.hits=(e.hits||0)+1;}}
               });
             }catch{}
@@ -437,18 +441,20 @@ const AutoRoute = {
     const is429=rawWhy.includes('429');
     const errLabel=is429?'429 冷却中':'连接超时 · 冷却中';
     const coolUntil=now()+Math.max(10*60000,Number(why?.retryAfterMs)||(is429?30*60000:15*60000));
+    // 只有在明确确认当前 VLESS 节点存活（非节点挂掉导致的超时）时，才将当前超时的 ProxyIP 永久拉黑；否则仅标记临时冷却，交由恢复引擎确认是节点问题还是 IP 问题
+    const nodeConfirmedOk=!is429&&Boolean(typeof Pool.isNodeConfirmedAlive==='function'&&Pool.isNodeConfirmedAlive(a.proxy));
     try{
       void Pool.mutate(d=>{
-        const mark=(k,e)=>{if(!e)return;e.cool=Math.max(e.cool||0,coolUntil);e.hits=(e.hits||0)+1;e.err=errLabel;if(!is429){e.ok=false;e.fc=(e.fc||0)+1;e.at=now();}if(k){d.ban||={};d.ban[String(k).toLowerCase()]=now();d.drop||={};d.drop[String(k)]=now();e.gone=true;e.banned=true;}};
+        const mark=(k,e)=>{if(!e)return;e.cool=Math.max(e.cool||0,coolUntil);e.hits=(e.hits||0)+1;e.err=errLabel;if(!is429){e.fc=(e.fc||0)+1;e.at=now();if(nodeConfirmedOk){e.ok=false;if(k){d.ban||={};d.ban[String(k).toLowerCase()]=now();d.drop||={};d.drop[String(k)]=now();e.gone=true;e.banned=true;}}}};
         if(curPip&&d.ips?.[curPip])mark(curPip,d.ips[curPip]);
-        else if(curPip){d.ban||={};d.ban[curPip.toLowerCase()]=now();d.drop||={};d.drop[curPip]=now();}
+        else if(curPip&&nodeConfirmedOk){d.ban||={};d.ban[curPip.toLowerCase()]=now();d.drop||={};d.drop[curPip]=now();}
         for(const [k,e] of Object.entries(d.ips||{})){if(e&&(k===curPip||k===curIp||e.eg===curIp))mark(k,e);}
       }).then(()=>{try{Bus.emit('pool');}catch{}}).catch(()=>{});
     }catch{}
     try{
       if(typeof RegionIP!=='undefined'&&RegionIP.state){
         for(const st of RegionIP.state.values()){
-          for(const row of st.rows||[]){if(row.ip===curPip||row.ip===curIp){row.state='ban';row.cool=coolUntil;row.reason=errLabel;}}
+          for(const row of st.rows||[]){if(row.ip===curPip||row.ip===curIp){row.state=nodeConfirmedOk?'ban':'cool';row.cool=coolUntil;row.reason=errLabel;}}
         }
         RegionIP.refreshOpen?.();
       }
@@ -528,7 +534,8 @@ const RouteWarm = {
         .sort(([,x],[,y])=>(y.ok===true)-(x.ok===true)||(x.ms||9e9)-(y.ms||9e9)).slice(0,16).map(([k])=>k);
       if(keys.length&&this.idle(a)){
         const r=await Host.probe({link:a.proxy,pips:keys,timeout:6500}).catch(()=>null);
-        if(Array.isArray(r)&&UI.host?.account?.id===a.id)await Pool.mutate(d=>keys.forEach((k,j)=>{const res=r.find(x=>x?.pip===k)||r[j]||{};Pool.apply(d,k,res);if(!(res.ip&&res.brana))Pool.banForever?.(d,k,'检测不可用 · 已拉黑');})).catch(()=>{});
+        const nodeAlive=Array.isArray(r)&&(typeof Pool.isNodeConfirmedAlive==='function'?Pool.isNodeConfirmedAlive(a.proxy,r):r.some(x=>x&&(x.ip||x.brana)));
+        if(Array.isArray(r)&&UI.host?.account?.id===a.id)await Pool.mutate(d=>keys.forEach((k,j)=>{const res=r.find(x=>x?.pip===k)||r[j]||{};Pool.apply(d,k,res);if(!(res.ip&&res.brana)&&(nodeAlive||res.ip))Pool.banForever?.(d,k,'节点正常但该 ProxyIP 不可用 · 已拉黑');})).catch(()=>{});
       }
       if(typeof Pool!=='undefined'&&Pool.purgeImpureAndUnstable)await Pool.purgeImpureAndUnstable().catch(()=>{});
       if(typeof IPRep!=='undefined'&&IPRep.prime&&this.idle(a)){if(IPRep._pr)IPRep._pr[a.region]=0;await IPRep.prime(a.region).catch(()=>{});}

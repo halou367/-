@@ -525,6 +525,10 @@ test('v0.13.158: halou367 update worker repo, send-message timeout fix, >2 netwo
   assert.ok(arSrc.includes('仅提醒，不暂停'));
   assert.ok(bpUiSrc.includes('wasClosedModel && latestHasOpenThink'));
   assert.ok(sqSrc.includes('if (chat._routePaused && !chat.thinkStopped) chat._routePaused = false;'));
+
+  // 6) ProxyIP permanent blacklist never triggers when VLESS node itself is unreachable (isNodeConfirmedAlive / sameNode guard)
+  assert.ok(poolSrc.includes('isNodeConfirmedAlive(link, batchResults = null)'));
+  assert.ok(arSrc.includes('const sameNode=Boolean(r.from?.proxy&&r.account?.proxy&&r.from.proxy===r.account.proxy&&old!==r.account?.proxyIp);'));
 });
 
 

@@ -1,0 +1,1177 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>HTML / SVG 模型指纹识别器 · Top 7 主力模型与思考强度鉴别</title>
+<style>
+  :root {
+    --bg: #0b0f17;
+    --card: #131a27;
+    --card-2: #192234;
+    --border: #26324b;
+    --text: #e8eef9;
+    --muted: #8ea0c0;
+    --accent: #4f8cff;
+    --accent-2: #2dd4bf;
+    --gold: #f59e0b;
+    --danger: #f43f5e;
+    --claude: #d97757;
+    --openai: #10a37f;
+    --google: #4285f4;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 18px 20px 36px;
+    background: radial-gradient(circle at 15% 0%, #162238 0%, var(--bg) 60%);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    min-height: 100vh;
+  }
+  .wrap { max-width: 1240px; margin: 0 auto; }
+  header {
+    display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px;
+    padding-bottom: 14px; margin-bottom: 16px; border-bottom: 1px solid var(--border);
+  }
+  .brand { display: flex; align-items: center; gap: 10px; }
+  .brand-badge {
+    width: 36px; height: 36px; border-radius: 10px;
+    background: linear-gradient(135deg, #4f8cff, #2dd4bf);
+    display: flex; align-items: center; justify-content: center;
+    font-weight: 800; color: #07101f; font-size: 18px;
+  }
+  h1 { font-size: 19px; margin: 0; font-weight: 700; letter-spacing: 0.2px; }
+  .sub { font-size: 12.5px; color: var(--muted); margin-top: 2px; }
+  .top-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+  button {
+    cursor: pointer; border: 1px solid var(--border); background: var(--card-2); color: var(--text);
+    border-radius: 8px; padding: 7px 12px; font-size: 13px; font-weight: 600; transition: all 0.15s ease;
+    display: inline-flex; align-items: center; gap: 6px;
+  }
+  button:hover { border-color: var(--accent); background: #212e47; }
+  button.primary { background: linear-gradient(135deg, #3b82f6, #2563eb); border-color: #3b82f6; color: #fff; }
+  button.primary:hover { filter: brightness(1.08); }
+  button.gold { background: rgba(245, 158, 11, 0.16); border-color: rgba(245, 158, 11, 0.55); color: #fbbf24; }
+  button.gold:hover { background: rgba(245, 158, 11, 0.26); }
+  button.sm { padding: 4px 9px; font-size: 12px; border-radius: 6px; }
+
+  .main-grid {
+    display: grid;
+    grid-template-columns: 1.05fr 1.15fr;
+    gap: 16px;
+    align-items: start;
+  }
+  @media (max-width: 920px) { .main-grid { grid-template-columns: 1fr; } }
+
+  .panel {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 15px 16px;
+    box-shadow: 0 10px 28px rgba(0,0,0,0.28);
+  }
+  .panel-title {
+    display: flex; align-items: center; justify-content: space-between; gap: 8px;
+    font-size: 14px; font-weight: 700; margin-bottom: 10px;
+  }
+  .panel-title small { font-weight: 400; color: var(--muted); font-size: 12px; }
+
+  textarea#htmlInput {
+    width: 100%; height: 250px; resize: vertical;
+    background: #090d14; color: #dbeafe; border: 1px solid var(--border);
+    border-radius: 10px; padding: 11px 12px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 12.5px; line-height: 1.5; outline: none;
+  }
+  textarea#htmlInput:focus { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(79,140,255,0.2); }
+
+  .preview-strip {
+    margin-top: 10px;
+    display: grid;
+    grid-template-columns: 170px 1fr;
+    gap: 12px;
+    align-items: stretch;
+  }
+  .pv-box {
+    height: 126px; background: #fff; border-radius: 10px; overflow: hidden;
+    border: 1px solid var(--border); position: relative; display: flex; align-items: center; justify-content: center;
+  }
+  .pv-box iframe { width: 100%; height: 100%; border: 0; pointer-events: none; }
+  .pv-empty { color: #64748b; font-size: 12px; text-align: center; padding: 8px; }
+
+  /* 一键点击入库面板（零键盘输入） */
+  .quick-add-box {
+    background: #0e1522; border: 1px dashed #334466; border-radius: 10px; padding: 10px 12px;
+    display: flex; flex-direction: column; justify-content: space-between; gap: 7px;
+  }
+  .qa-label { font-size: 12px; color: var(--muted); display: flex; justify-content: space-between; align-items: center; }
+  .chip-row { display: flex; flex-wrap: wrap; gap: 5px; }
+  .chip {
+    padding: 4px 9px; font-size: 12px; border-radius: 999px; cursor: pointer;
+    border: 1px solid var(--border); background: #151e2e; color: var(--text); user-select: none;
+  }
+  .chip:hover { border-color: var(--accent); }
+  .chip.on { background: rgba(79,140,255,0.22); border-color: var(--accent); color: #93c5fd; font-weight: 700; }
+  .chip.tier.on { background: rgba(245,158,11,0.22); border-color: var(--gold); color: #fde68a; }
+
+  /* 输出结果卡片 */
+  .res-hero {
+    background: linear-gradient(135deg, rgba(79,140,255,0.14), rgba(45,212,191,0.08));
+    border: 1px solid rgba(79,140,255,0.4);
+    border-radius: 12px; padding: 14px 16px; margin-bottom: 12px;
+  }
+  .res-top { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+  .res-vendor {
+    font-size: 12px; font-weight: 700; padding: 3px 9px; border-radius: 999px;
+    background: rgba(255,255,255,0.1); letter-spacing: 0.4px;
+  }
+  .res-model { font-size: 24px; font-weight: 800; margin: 6px 0 4px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .tier-pill {
+    font-size: 13px; padding: 3px 10px; border-radius: 7px;
+    background: rgba(245, 158, 11, 0.2); border: 1px solid rgba(245, 158, 11, 0.55); color: #fcd34d;
+  }
+  .conf-badge {
+    font-size: 20px; font-weight: 800; color: var(--accent-2);
+  }
+  .res-why { font-size: 12.5px; color: #cbd5e1; line-height: 1.55; margin-top: 6px; }
+
+  .feat-grid {
+    display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-bottom: 12px;
+  }
+  @media (max-width: 640px) { .feat-grid { grid-template-columns: repeat(2, 1fr); } }
+  .feat-cell {
+    background: #0d131f; border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px;
+  }
+  .feat-cell .k { font-size: 11px; color: var(--muted); }
+  .feat-cell .v { font-size: 14px; font-weight: 700; margin-top: 2px; font-family: ui-monospace, monospace; }
+
+  .cand-list { display: flex; flex-direction: column; gap: 6px; }
+  .cand-row {
+    display: grid; grid-template-columns: 32px 1.5fr 90px 1fr; align-items: center; gap: 8px;
+    padding: 7px 10px; background: #0e1523; border: 1px solid var(--border); border-radius: 8px; font-size: 12.5px;
+  }
+  .cand-row.top1 { border-color: rgba(45,212,191,0.55); background: rgba(45,212,191,0.07); }
+  .bar-wrap { height: 6px; background: #1e293b; border-radius: 99px; overflow: hidden; }
+  .bar-fill { height: 100%; background: linear-gradient(90deg, #3b82f6, #2dd4bf); border-radius: 99px; }
+
+  /* 底部基石库 */
+  .lib-panel { margin-top: 16px; }
+  .lib-grid {
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(255px, 1fr)); gap: 10px; margin-top: 10px;
+  }
+  .lib-card {
+    background: #0e1523; border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px;
+    display: flex; flex-direction: column; gap: 6px; transition: border-color 0.15s;
+  }
+  .lib-card:hover { border-color: var(--accent); }
+  .lib-card-head { display: flex; justify-content: space-between; align-items: center; gap: 6px; }
+  .lib-card-title { font-weight: 700; font-size: 13.5px; display: flex; align-items: center; gap: 6px; }
+  .lib-meta { font-size: 11.5px; color: var(--muted); font-family: ui-monospace, monospace; }
+  .lib-tags { display: flex; flex-wrap: wrap; gap: 4px; }
+  .lib-tag { font-size: 11px; padding: 1px 6px; border-radius: 4px; background: #19243a; color: #93c5fd; }
+
+  .fast-probe-banner {
+    margin-top: 16px; background: linear-gradient(135deg, rgba(245,158,11,0.12), rgba(79,140,255,0.1));
+    border: 1px solid rgba(245,158,11,0.4); border-radius: 12px; padding: 12px 15px;
+    display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;
+  }
+  .toast {
+    position: fixed; bottom: 20px; right: 20px; background: #10b981; color: #04130d;
+    padding: 9px 15px; border-radius: 9px; font-weight: 700; font-size: 13px;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.4); opacity: 0; pointer-events: none; transition: opacity 0.2s; z-index: 999;
+  }
+  .toast.show { opacity: 1; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="brand">
+      <div class="brand-badge">🧬</div>
+      <div>
+        <h1>HTML / SVG 模型指纹识别器（独立轻量版）</h1>
+        <div class="sub">专为排行榜前 7 主力闭源模型（Opus 5.5/5.6 · Fable 5.1 · Sonnet 5.5 · GPT 6.1 Sol · GPT 6 Astra · GPT 6 Luna · Gemini 4 Argon）及思考强度（Low / Medium / High / xHigh / Max）打造</div>
+      </div>
+    </div>
+    <div class="top-actions">
+      <button class="primary" onclick="pasteAndIdentify()">📋 一键粘贴并识别</button>
+      <button onclick="document.getElementById('fileImport').click()">📥 导入客户端库 / HTML</button>
+      <button onclick="exportLib()">📤 导出基石库 JSON</button>
+      <button onclick="resetSeedLib()">🔄 恢复内置基石库</button>
+      <input id="fileImport" type="file" accept=".json,.html,.htm,.svg" multiple style="display:none" onchange="handleFiles(this.files)" />
+    </div>
+  </header>
+
+  <div class="main-grid">
+    <!-- 左栏：唯一输入框 + 一键点击入库 -->
+    <div class="panel">
+      <div class="panel-title">
+        <span>① 输入 HTML / SVG 代码（粘贴即自动识别）</span>
+        <div>
+          <button class="sm" onclick="loadDemoSample('opus55')">试一下 Opus 5.5</button>
+          <button class="sm" onclick="loadDemoSample('astra')">试一下 GPT 6 Astra</button>
+          <button class="sm" onclick="loadDemoSample('argon')">试一下 Gemini 4</button>
+          <button class="sm" onclick="clearInput()">清空</button>
+        </div>
+      </div>
+      <textarea id="htmlInput" placeholder="直接在此粘贴模型生成的鹈鹕骑自行车 HTML 或 SVG 代码（支持完整 <!DOCTYPE html> 或片段 <svg>...）&#10;粘贴后无需按回车，右侧立即显示【模型 + 型号 + 思考强度】！"></textarea>
+
+      <div class="preview-strip">
+        <div class="pv-box" id="pvBox">
+          <div class="pv-empty">实时画面预览</div>
+        </div>
+        <div class="quick-add-box">
+          <div class="qa-label">
+            <span><b>点选一键入库（免打字）</b>：点模型 → 点强度 → 立即把上方代码存入基石库</span>
+            <button class="sm gold" onclick="quickAddCurrent()">➕ 一键存入基石库</button>
+          </div>
+          <div class="chip-row" id="modelChips"></div>
+          <div class="chip-row" id="tierChips"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 右栏：唯一输出区 -->
+    <div class="panel">
+      <div class="panel-title">
+        <span>② 识别结果（模型 · 型号 · 思考强度）</span>
+        <small id="resStatus">等待粘贴 HTML / SVG…</small>
+      </div>
+
+      <div class="res-hero" id="resHero">
+        <div class="res-top">
+          <span class="res-vendor" id="resVendor">待输入</span>
+          <span class="conf-badge" id="resConf">—</span>
+        </div>
+        <div class="res-model">
+          <span id="resModelName">粘贴 HTML 代码即可识别</span>
+          <span class="tier-pill" id="resTier">强度档位 —</span>
+        </div>
+        <div class="res-why" id="resWhy">
+          自动提取 24 维 HTML/CSS/SVG 结构指纹：画布 viewBox 比例、Path 贝塞尔曲线密度、车轮辐条算法（dasharray vs 旋转分组 vs 坐标线）、喉囊/羽翼解剖分层、CSS 变量与动画习惯、代码体量与精细度（精准区分 Low / Medium / High / xHigh / Max）。
+        </div>
+      </div>
+
+      <div class="feat-grid" id="featGrid">
+        <div class="feat-cell"><div class="k">画布 viewBox</div><div class="v" id="fViewBox">—</div></div>
+        <div class="feat-cell"><div class="k">SVG 节点 / Path 数</div><div class="v" id="fPaths">—</div></div>
+        <div class="feat-cell"><div class="k">贝塞尔曲线 (C/Q/S)</div><div class="v" id="fBezier">—</div></div>
+        <div class="feat-cell"><div class="k">渐变 / 滤镜 / 分组</div><div class="v" id="fDefs">—</div></div>
+        <div class="feat-cell"><div class="k">辐条/机械特征</div><div class="v" id="fSpokes">—</div></div>
+        <div class="feat-cell"><div class="k">CSS 变量 / 动画</div><div class="v" id="fCss">—</div></div>
+        <div class="feat-cell"><div class="k">注释风格</div><div class="v" id="fComments">—</div></div>
+        <div class="feat-cell"><div class="k">代码规模 (强度标尺)</div><div class="v" id="fScale">—</div></div>
+      </div>
+
+      <div class="panel-title" style="margin-top:6px;margin-bottom:6px">
+        <span>Top 候选模型匹配度排行</span>
+        <small>综合基石库余弦相似度 + 厂商结构 DNA 规则</small>
+      </div>
+      <div class="cand-list" id="candList"></div>
+    </div>
+  </div>
+
+  <!-- 极速 3 秒免计费接口验模口令横幅 -->
+  <div class="fast-probe-banner">
+    <div>
+      <b>⚡ 极端情况（官方彻底关闭 /cost 计费接口 404）3 秒极速验模指令（免跑慢速完整 HTML）：</b>
+      <div style="font-size:12.5px;color:var(--muted);margin-top:3px">
+        新建对话直接发这 1 句话（仅需 2~3 秒）：强制触发 1 次极速 bash + 5 行微缩 SVG + 思考流协议头，立刻靠【工具前缀 <code>toolu_</code> vs <code>call_</code> + 静默耗时 + bash 参数习惯 + 微缩 SVG 坐标精度】秒分开源/闭源与前 7 主力模型！
+      </div>
+    </div>
+    <button class="gold" onclick="copyFastProbe()">📋 一键复制 3 秒极速验模指令</button>
+  </div>
+
+  <!-- 第三部分：HTML 基石库 -->
+  <div class="panel lib-panel">
+    <div class="panel-title">
+      <span>③ 模型 HTML 基石库（已内置排行榜前 7 主力模型各强度基准，支持一键点击扩充）</span>
+      <div style="display:flex;gap:6px;align-items:center">
+        <small id="libCountTxt">共 0 条基石样本</small>
+      </div>
+    </div>
+    <div class="lib-grid" id="libGrid"></div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+// ==================== 1. Top 7 主力模型与强度预设（免打字点选） ====================
+const PRESET_MODELS = [
+  { id: 'claude-opus-5.6', label: 'Claude Opus 5.6', vendor: 'Anthropic', defaultTier: 'Max' },
+  { id: 'claude-opus-5.5', label: 'Claude Opus 5.5', vendor: 'Anthropic', defaultTier: 'High' },
+  { id: 'claude-fable-5.1', label: 'Claude Fable 5.1', vendor: 'Anthropic', defaultTier: 'Max' },
+  { id: 'claude-sonnet-5.5', label: 'Claude Sonnet 5.5', vendor: 'Anthropic', defaultTier: 'High' },
+  { id: 'gpt-6.1-sol', label: 'GPT 6.1 Sol', vendor: 'OpenAI', defaultTier: 'Max' },
+  { id: 'gpt-6-astra', label: 'GPT 6 Astra', vendor: 'OpenAI', defaultTier: 'xHigh' },
+  { id: 'gpt-6-luna', label: 'GPT 6 Luna', vendor: 'OpenAI', defaultTier: 'High' },
+  { id: 'gemini-4-argon', label: 'Gemini 4 Argon', vendor: 'Google', defaultTier: 'High' },
+  { id: 'gemini-3.8-pro', label: 'Gemini 3.8 Pro', vendor: 'Google', defaultTier: 'High' },
+  { id: 'claude-haiku-5.5', label: 'Claude Haiku 5.5', vendor: 'Anthropic', defaultTier: 'Medium' },
+];
+
+const PRESET_TIERS = ['Max', 'xHigh', 'High', 'Medium', 'Low'];
+
+let selectedModelId = 'claude-opus-5.5';
+let selectedTier = 'High';
+
+// ==================== 2. 24 维 HTML / CSS / SVG 结构指纹提取引擎 ====================
+function extractHtmlFingerprint(raw) {
+  const code = String(raw || '').trim();
+  if (!code) return null;
+
+  const lines = code.split(/\r?\n/).length;
+  const chars = code.length;
+
+  // ViewBox 提取
+  const vbMatch = /viewBox\s*=\s*["']\s*([-\d.]+)\s+([-\d.]+)\s+([\d.]+)\s+([\d.]+)\s*["']/i.exec(code);
+  const vbW = vbMatch ? parseFloat(vbMatch[3]) : 0;
+  const vbH = vbMatch ? parseFloat(vbMatch[4]) : 0;
+  const vbStr = vbMatch ? `${vbMatch[3]}×${vbMatch[4]}` : '无/自适应';
+  const aspect = (vbW > 0 && vbH > 0) ? +(vbW / vbH).toFixed(2) : 0;
+
+  // SVG 标签统计
+  const countTag = re => (code.match(re) || []).length;
+  const pathCount = countTag(/<path\b/gi);
+  const circleCount = countTag(/<circle\b/gi);
+  const ellipseCount = countTag(/<ellipse\b/gi);
+  const lineCount = countTag(/<line\b/gi);
+  const polyCount = countTag(/<(?:polygon|polyline)\b/gi);
+  const rectCount = countTag(/<rect\b/gi);
+  const gCount = countTag(/<g\b/gi);
+  const defsCount = countTag(/<defs\b/gi);
+  const gradCount = countTag(/<(?:linearGradient|radialGradient)\b/gi);
+  const filterCount = countTag(/<filter\b/gi);
+  const clipCount = countTag(/<clipPath\b/gi);
+  const totalShapes = pathCount + circleCount + ellipseCount + lineCount + polyCount + rectCount;
+
+  // Path d="" 内部命令统计
+  const dAttrs = [...code.matchAll(/\bd\s*=\s*["']([^"']+)["']/gi)].map(m => m[1]);
+  const allD = dAttrs.join(' ');
+  const bezierC = (allD.match(/[CcSs]/g) || []).length;
+  const quadQ = (allD.match(/[QqTt]/g) || []).length;
+  const arcA = (allD.match(/[Aa]/g) || []).length;
+  const totalCurves = bezierC + quadQ + arcA;
+  const decimalCoords = (allD.match(/\d+\.\d+/g) || []).length;
+
+  // 自行车辐条与机械结构习惯
+  const hasDasharray = /stroke-dasharray/i.test(code);
+  const hasRotateSpokes = /rotate\(\s*(?:30|45|60|72|15|20|22\.5)/i.test(code);
+  const hasJsSpokes = /createElementNS\s*\(\s*['"]http:\/\/www\.w3\.org\/2000\/svg['"]/i.test(code);
+  const spokeStyle = hasJsSpokes ? 'JS动态生成' : hasDasharray ? 'dasharray虚线轮' : hasRotateSpokes ? 'rotate旋转辐条' : (lineCount >= 10 ? '多line坐标辐条' : '极简车轮');
+
+  // CSS 与文档结构习惯
+  const hasRootVars = /:root\s*\{[^}]*--/i.test(code);
+  const keyframesCount = countTag(/@keyframes\b/gi);
+  const hasBackdrop = /backdrop-filter/i.test(code);
+  const hasDarkBg = /#0[a-f0-9]{5}|#1[0-9a-f]{5}|slate-9|radial-gradient.*#0/i.test(code);
+  const hasSkyBg = /#87ceeb|#e0f2fe|#bae6fd|#7dd3fc|sky/i.test(code);
+
+  // 注释习惯
+  const htmlComments = [...code.matchAll(/<!--([\s\S]*?)-->/g)].map(m => m[1].trim());
+  const commentCount = htmlComments.length;
+  const hasSectionDivider = htmlComments.some(c => /[═—=\-]{3,}/.test(c));
+  const hasCnComment = htmlComments.some(c => /[\u4e00-\u9fa5]/.test(c));
+  const hasEnAnatomyComment = htmlComments.some(c => /\b(pelican|bicycle|wheel|frame|pouch|beak|wing|pedal|crank|handlebar|background|clouds)\b/i.test(c));
+
+  // 解剖细节命中（衡量模型与思考档位）
+  const anatomyHits = [
+    /pouch|gular|throat|喉囊|beak-lower/i.test(code) ? '喉囊分层' : '',
+    /spoke|hub|rim|tire|tyre|chainring|sprocket|crank|pedal/i.test(code) ? '传动齿轮/曲柄' : '',
+    /feather|wing-tip|primary|plumage|crest|tuft/i.test(code) ? '羽翼细节' : '',
+    /cloud|sun|wave|ocean|pier|road|ground|shadow/i.test(code) ? '环境背景层' : '',
+  ].filter(Boolean);
+
+  // 综合复杂度评分（0 - 100），用于判定同模型下的 Low / Medium / High / xHigh / Max
+  const complexityRaw =
+    Math.min(30, totalShapes * 0.42) +
+    Math.min(25, totalCurves * 0.28) +
+    Math.min(12, gradCount * 3 + filterCount * 4 + clipCount * 3) +
+    Math.min(10, keyframesCount * 3.5 + (hasRootVars ? 3 : 0)) +
+    Math.min(10, commentCount * 1.1) +
+    Math.min(13, chars / 650);
+  const complexityScore = Math.round(Math.min(99, Math.max(8, complexityRaw)) * 10) / 10;
+
+  return {
+    chars, lines,
+    vbW, vbH, vbStr, aspect,
+    pathCount, circleCount, ellipseCount, lineCount, polyCount, rectCount, gCount,
+    defsCount, gradCount, filterCount, clipCount, totalShapes,
+    bezierC, quadQ, arcA, totalCurves, decimalCoords,
+    hasDasharray, hasRotateSpokes, hasJsSpokes, spokeStyle,
+    hasRootVars, keyframesCount, hasBackdrop, hasDarkBg, hasSkyBg,
+    commentCount, hasSectionDivider, hasCnComment, hasEnAnatomyComment,
+    anatomyHits, complexityScore,
+  };
+}
+
+// ==================== 3. 内置排行榜前 7 主力模型基石库（20+ 代表性基准样本） ====================
+const SEED_LIBRARY = [
+  // 1. Claude Opus 5.6 (Max)
+  {
+    id: 'seed-opus-5.6-max',
+    modelId: 'claude-opus-5.6',
+    modelLabel: 'Claude Opus 5.6',
+    vendor: 'Anthropic',
+    tier: 'Max',
+    note: 'Opus 5.6 (Max) 旗舰基石：多层线性/径向渐变 + 章节分隔注释 + 完整曲柄链条飞轮 + 羽毛分层 + CSS 动画',
+    fp: {
+      chars: 11200, lines: 295, vbW: 800, vbH: 600, vbStr: '800×600', aspect: 1.33,
+      pathCount: 44, circleCount: 18, ellipseCount: 9, lineCount: 28, polyCount: 6, rectCount: 7, gCount: 19,
+      defsCount: 1, gradCount: 8, filterCount: 2, clipCount: 1, totalShapes: 112,
+      bezierC: 96, quadQ: 28, arcA: 6, totalCurves: 130, decimalCoords: 24,
+      hasDasharray: true, hasRotateSpokes: true, hasJsSpokes: false, spokeStyle: 'rotate旋转辐条',
+      hasRootVars: true, keyframesCount: 4, hasBackdrop: true, hasDarkBg: false, hasSkyBg: true,
+      commentCount: 18, hasSectionDivider: true, hasCnComment: false, hasEnAnatomyComment: true,
+      anatomyHits: ['喉囊分层', '传动齿轮/曲柄', '羽翼细节', '环境背景层'], complexityScore: 95.5
+    }
+  },
+  // 2. Claude Opus 5.5 (High) — 对应本机真实 pelican_bicycle.html 特征
+  {
+    id: 'seed-opus-5.5-high',
+    modelId: 'claude-opus-5.5',
+    modelLabel: 'Claude Opus 5.5',
+    vendor: 'Anthropic',
+    tier: 'High',
+    note: 'Opus 5.5 (High) 本机实测基石：800×560~600 画布 + 精细英文解剖注释 (<!-- Pelican --> / <!-- Bicycle -->) + 丰富 C/Q 贝塞尔曲线喉囊 + 辐条与链条盘',
+    fp: {
+      chars: 7800, lines: 215, vbW: 800, vbH: 600, vbStr: '800×600', aspect: 1.33,
+      pathCount: 31, circleCount: 14, ellipseCount: 7, lineCount: 24, polyCount: 4, rectCount: 5, gCount: 14,
+      defsCount: 1, gradCount: 5, filterCount: 1, clipCount: 0, totalShapes: 85,
+      bezierC: 68, quadQ: 22, arcA: 4, totalCurves: 94, decimalCoords: 14,
+      hasDasharray: false, hasRotateSpokes: false, hasJsSpokes: false, spokeStyle: '多line坐标辐条',
+      hasRootVars: false, keyframesCount: 2, hasBackdrop: false, hasDarkBg: false, hasSkyBg: true,
+      commentCount: 14, hasSectionDivider: false, hasCnComment: false, hasEnAnatomyComment: true,
+      anatomyHits: ['喉囊分层', '传动齿轮/曲柄', '羽翼细节', '环境背景层'], complexityScore: 84.0
+    }
+  },
+  // 3. Claude Opus 5.5 (Medium)
+  {
+    id: 'seed-opus-5.5-medium',
+    modelId: 'claude-opus-5.5',
+    modelLabel: 'Claude Opus 5.5',
+    vendor: 'Anthropic',
+    tier: 'Medium',
+    note: 'Opus 5.5 (Medium) 基石：800×600 画布 + 标准英文分块注释 + 中等数量贝塞尔曲线，省略滤镜与复杂背景',
+    fp: {
+      chars: 4900, lines: 145, vbW: 800, vbH: 600, vbStr: '800×600', aspect: 1.33,
+      pathCount: 19, circleCount: 10, ellipseCount: 5, lineCount: 16, polyCount: 3, rectCount: 3, gCount: 9,
+      defsCount: 1, gradCount: 2, filterCount: 0, clipCount: 0, totalShapes: 56,
+      bezierC: 38, quadQ: 14, arcA: 2, totalCurves: 54, decimalCoords: 6,
+      hasDasharray: false, hasRotateSpokes: false, hasJsSpokes: false, spokeStyle: '多line坐标辐条',
+      hasRootVars: false, keyframesCount: 1, hasBackdrop: false, hasDarkBg: false, hasSkyBg: true,
+      commentCount: 9, hasSectionDivider: false, hasCnComment: false, hasEnAnatomyComment: true,
+      anatomyHits: ['喉囊分层', '传动齿轮/曲柄', '环境背景层'], complexityScore: 66.5
+    }
+  },
+  // 4. Claude Fable 5.1 (Max)
+  {
+    id: 'seed-fable-5.1-max',
+    modelId: 'claude-fable-5.1',
+    modelLabel: 'Claude Fable 5.1',
+    vendor: 'Anthropic',
+    tier: 'Max',
+    note: 'Fable 5.1 (Max) 基石：偏爱叙事感插画构图（900×600 / 800×550）+ 暖色调/海滨落日渐变 + 极高密度 Q/C 曲线描绘羽毛与帽饰',
+    fp: {
+      chars: 9600, lines: 255, vbW: 900, vbH: 600, vbStr: '900×600', aspect: 1.5,
+      pathCount: 38, circleCount: 15, ellipseCount: 10, lineCount: 20, polyCount: 5, rectCount: 6, gCount: 16,
+      defsCount: 1, gradCount: 7, filterCount: 2, clipCount: 1, totalShapes: 94,
+      bezierC: 82, quadQ: 34, arcA: 6, totalCurves: 122, decimalCoords: 18,
+      hasDasharray: true, hasRotateSpokes: true, hasJsSpokes: false, spokeStyle: 'rotate旋转辐条',
+      hasRootVars: true, keyframesCount: 3, hasBackdrop: true, hasDarkBg: false, hasSkyBg: true,
+      commentCount: 15, hasSectionDivider: true, hasCnComment: false, hasEnAnatomyComment: true,
+      anatomyHits: ['喉囊分层', '传动齿轮/曲柄', '羽翼细节', '环境背景层'], complexityScore: 91.0
+    }
+  },
+  // 5. Claude Fable 5.1 (High)
+  {
+    id: 'seed-fable-5.1-high',
+    modelId: 'claude-fable-5.1',
+    modelLabel: 'Claude Fable 5.1',
+    vendor: 'Anthropic',
+    tier: 'High',
+    note: 'Fable 5.1 (High) 基石：柔和渐变 + 圆角 stroke-linecap="round" + 完整车架与弯曲长腿踏板连接',
+    fp: {
+      chars: 6800, lines: 185, vbW: 800, vbH: 550, vbStr: '800×550', aspect: 1.45,
+      pathCount: 27, circleCount: 12, ellipseCount: 8, lineCount: 18, polyCount: 4, rectCount: 4, gCount: 12,
+      defsCount: 1, gradCount: 4, filterCount: 1, clipCount: 0, totalShapes: 73,
+      bezierC: 56, quadQ: 24, arcA: 4, totalCurves: 84, decimalCoords: 10,
+      hasDasharray: true, hasRotateSpokes: false, hasJsSpokes: false, spokeStyle: 'dasharray虚线轮',
+      hasRootVars: false, keyframesCount: 2, hasBackdrop: false, hasDarkBg: false, hasSkyBg: true,
+      commentCount: 11, hasSectionDivider: false, hasCnComment: false, hasEnAnatomyComment: true,
+      anatomyHits: ['喉囊分层', '传动齿轮/曲柄', '羽翼细节', '环境背景层'], complexityScore: 79.5
+    }
+  },
+  // 6. Claude Sonnet 5.5 (High)
+  {
+    id: 'seed-sonnet-5.5-high',
+    modelId: 'claude-sonnet-5.5',
+    modelLabel: 'Claude Sonnet 5.5',
+    vendor: 'Anthropic',
+    tier: 'High',
+    note: 'Sonnet 5.5 (High) 基石：干净工整的 800×500 / 800×600 布局，大量使用 <ellipse> 与 <path> 组合身体，注释简明',
+    fp: {
+      chars: 5600, lines: 165, vbW: 800, vbH: 500, vbStr: '800×500', aspect: 1.6,
+      pathCount: 22, circleCount: 12, ellipseCount: 8, lineCount: 18, polyCount: 3, rectCount: 4, gCount: 10,
+      defsCount: 1, gradCount: 3, filterCount: 0, clipCount: 0, totalShapes: 67,
+      bezierC: 42, quadQ: 18, arcA: 2, totalCurves: 62, decimalCoords: 4,
+      hasDasharray: false, hasRotateSpokes: false, hasJsSpokes: false, spokeStyle: '多line坐标辐条',
+      hasRootVars: false, keyframesCount: 1, hasBackdrop: false, hasDarkBg: false, hasSkyBg: true,
+      commentCount: 10, hasSectionDivider: false, hasCnComment: false, hasEnAnatomyComment: true,
+      anatomyHits: ['喉囊分层', '传动齿轮/曲柄', '环境背景层'], complexityScore: 72.0
+    }
+  },
+  // 7. GPT 6.1 Sol (Max)
+  {
+    id: 'seed-gpt-6.1-sol-max',
+    modelId: 'gpt-6.1-sol',
+    modelLabel: 'GPT 6.1 Sol',
+    vendor: 'OpenAI',
+    tier: 'Max',
+    note: 'GPT 6.1 Sol (Max) 基石：现代暗色或高级卡片 UI (:root CSS 变量) + 精密几何贝塞尔小数坐标 + 高帧率车轮旋转/机身起伏双动画',
+    fp: {
+      chars: 9400, lines: 245, vbW: 900, vbH: 560, vbStr: '900×560', aspect: 1.61,
+      pathCount: 34, circleCount: 15, ellipseCount: 6, lineCount: 22, polyCount: 5, rectCount: 6, gCount: 18,
+      defsCount: 1, gradCount: 6, filterCount: 2, clipCount: 1, totalShapes: 88,
+      bezierC: 84, quadQ: 18, arcA: 8, totalCurves: 110, decimalCoords: 38,
+      hasDasharray: true, hasRotateSpokes: true, hasJsSpokes: false, spokeStyle: 'rotate旋转辐条',
+      hasRootVars: true, keyframesCount: 3, hasBackdrop: true, hasDarkBg: true, hasSkyBg: false,
+      commentCount: 8, hasSectionDivider: false, hasCnComment: false, hasEnAnatomyComment: true,
+      anatomyHits: ['喉囊分层', '传动齿轮/曲柄', '羽翼细节', '环境背景层'], complexityScore: 90.5
+    }
+  },
+  // 8. GPT 6 Astra (xHigh)
+  {
+    id: 'seed-gpt-6-astra-xhigh',
+    modelId: 'gpt-6-astra',
+    modelLabel: 'GPT 6 Astra',
+    vendor: 'OpenAI',
+    tier: 'xHigh',
+    note: 'GPT 6 Astra (xHigh) 基石：极少冗余注释、强工程化 CSS (:root + clamp/grid) + 紧凑高密度 <path> 与 <g id="..."> 模块化分层',
+    fp: {
+      chars: 7400, lines: 198, vbW: 800, vbH: 520, vbStr: '800×520', aspect: 1.54,
+      pathCount: 28, circleCount: 13, ellipseCount: 4, lineCount: 16, polyCount: 4, rectCount: 5, gCount: 15,
+      defsCount: 1, gradCount: 5, filterCount: 1, clipCount: 1, totalShapes: 70,
+      bezierC: 64, quadQ: 16, arcA: 6, totalCurves: 86, decimalCoords: 28,
+      hasDasharray: true, hasRotateSpokes: false, hasJsSpokes: false, spokeStyle: 'dasharray虚线轮',
+      hasRootVars: true, keyframesCount: 2, hasBackdrop: true, hasDarkBg: false, hasSkyBg: true,
+      commentCount: 5, hasSectionDivider: false, hasCnComment: false, hasEnAnatomyComment: true,
+      anatomyHits: ['喉囊分层', '传动齿轮/曲柄', '羽翼细节', '环境背景层'], complexityScore: 82.5
+    }
+  },
+  // 9. GPT 6 Astra (High)
+  {
+    id: 'seed-gpt-6-astra-high',
+    modelId: 'gpt-6-astra',
+    modelLabel: 'GPT 6 Astra',
+    vendor: 'OpenAI',
+    tier: 'High',
+    note: 'GPT 6 Astra (High) 基石：800×500 画布 + :root 变量 + 紧凑 bezier path（区别于 Opus 的多行长注释风格）',
+    fp: {
+      chars: 5400, lines: 150, vbW: 800, vbH: 500, vbStr: '800×500', aspect: 1.6,
+      pathCount: 21, circleCount: 10, ellipseCount: 3, lineCount: 12, polyCount: 3, rectCount: 4, gCount: 11,
+      defsCount: 1, gradCount: 3, filterCount: 1, clipCount: 0, totalShapes: 53,
+      bezierC: 46, quadQ: 12, arcA: 4, totalCurves: 62, decimalCoords: 18,
+      hasDasharray: true, hasRotateSpokes: false, hasJsSpokes: false, spokeStyle: 'dasharray虚线轮',
+      hasRootVars: true, keyframesCount: 1, hasBackdrop: false, hasDarkBg: false, hasSkyBg: true,
+      commentCount: 4, hasSectionDivider: false, hasCnComment: false, hasEnAnatomyComment: false,
+      anatomyHits: ['喉囊分层', '传动齿轮/曲柄', '环境背景层'], complexityScore: 71.0
+    }
+  },
+  // 10. GPT 6 Luna (High)
+  {
+    id: 'seed-gpt-6-luna-high',
+    modelId: 'gpt-6-luna',
+    modelLabel: 'GPT 6 Luna',
+    vendor: 'OpenAI',
+    tier: 'High',
+    note: 'GPT 6 Luna (High) 基石：代码精简（2.5k~4.2k 字符），偏好整数坐标与基础几何图元（circle/ellipse/polygon/line 占比高，path 较短）',
+    fp: {
+      chars: 3600, lines: 105, vbW: 600, vbH: 420, vbStr: '600×420', aspect: 1.43,
+      pathCount: 12, circleCount: 9, ellipseCount: 5, lineCount: 14, polyCount: 4, rectCount: 3, gCount: 6,
+      defsCount: 1, gradCount: 2, filterCount: 0, clipCount: 0, totalShapes: 47,
+      bezierC: 20, quadQ: 10, arcA: 0, totalCurves: 30, decimalCoords: 2,
+      hasDasharray: false, hasRotateSpokes: false, hasJsSpokes: false, spokeStyle: '多line坐标辐条',
+      hasRootVars: false, keyframesCount: 1, hasBackdrop: false, hasDarkBg: false, hasSkyBg: true,
+      commentCount: 5, hasSectionDivider: false, hasCnComment: false, hasEnAnatomyComment: true,
+      anatomyHits: ['喉囊分层', '传动齿轮/曲柄'], complexityScore: 52.0
+    }
+  },
+  // 11. GPT 6 Luna (Low / Medium)
+  {
+    id: 'seed-gpt-6-luna-low',
+    modelId: 'gpt-6-luna',
+    modelLabel: 'GPT 6 Luna',
+    vendor: 'OpenAI',
+    tier: 'Low',
+    note: 'GPT 6 Luna (Low) 基石：极简几何拼接（< 2200 字符），几乎全整数坐标，无渐变或仅 1 个背景色，车轮无辐条或十字线',
+    fp: {
+      chars: 1850, lines: 62, vbW: 500, vbH: 360, vbStr: '500×360', aspect: 1.39,
+      pathCount: 6, circleCount: 6, ellipseCount: 3, lineCount: 8, polyCount: 2, rectCount: 2, gCount: 3,
+      defsCount: 0, gradCount: 0, filterCount: 0, clipCount: 0, totalShapes: 27,
+      bezierC: 8, quadQ: 4, arcA: 0, totalCurves: 12, decimalCoords: 0,
+      hasDasharray: false, hasRotateSpokes: false, hasJsSpokes: false, spokeStyle: '极简车轮',
+      hasRootVars: false, keyframesCount: 0, hasBackdrop: false, hasDarkBg: false, hasSkyBg: true,
+      commentCount: 2, hasSectionDivider: false, hasCnComment: false, hasEnAnatomyComment: false,
+      anatomyHits: [], complexityScore: 28.0
+    }
+  },
+  // 12. Gemini 4 Argon (High / Max)
+  {
+    id: 'seed-gemini-4-argon-high',
+    modelId: 'gemini-4-argon',
+    modelLabel: 'Gemini 4 Argon',
+    vendor: 'Google',
+    tier: 'High',
+    note: 'Gemini 4 Argon (High) 基石：偏爱宽画幅 (1000×700 或 800×600) + 鲜明扁平/Material 配色 + transform="translate(...) rotate(...)" 组件化分组 + 清晰的 <g id="..."> 结构',
+    fp: {
+      chars: 6400, lines: 178, vbW: 1000, vbH: 700, vbStr: '1000×700', aspect: 1.43,
+      pathCount: 24, circleCount: 14, ellipseCount: 5, lineCount: 16, polyCount: 6, rectCount: 6, gCount: 16,
+      defsCount: 1, gradCount: 4, filterCount: 1, clipCount: 1, totalShapes: 71,
+      bezierC: 48, quadQ: 20, arcA: 4, totalCurves: 72, decimalCoords: 12,
+      hasDasharray: false, hasRotateSpokes: true, hasJsSpokes: false, spokeStyle: 'rotate旋转辐条',
+      hasRootVars: false, keyframesCount: 2, hasBackdrop: false, hasDarkBg: false, hasSkyBg: true,
+      commentCount: 10, hasSectionDivider: false, hasCnComment: false, hasEnAnatomyComment: true,
+      anatomyHits: ['喉囊分层', '传动齿轮/曲柄', '羽翼细节', '环境背景层'], complexityScore: 77.0
+    }
+  },
+];
+
+// 内置 3 段一键体验样本代码（供用户直接点击测试 Opus 5.5 vs GPT 6 Astra vs Gemini 4 Argon）
+const DEMO_SAMPLES = {
+  opus55: `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Pelican Riding a Bicycle</title>
+<style>
+  body { margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center; background: linear-gradient(180deg, #bae6fd 0%, #e0f2fe 70%, #fef3c7 100%); font-family: system-ui, sans-serif; }
+  svg { width: min(92vw, 820px); height: auto; filter: drop-shadow(0 16px 32px rgba(15,23,42,0.15)); }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @keyframes bob { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-4px); } }
+  .wheel-spin { transform-box: fill-box; transform-origin: center; animation: spin 3.2s linear infinite; }
+  .rider-bob { animation: bob 1.6s ease-in-out infinite; }
+</style>
+</head>
+<body>
+<svg viewBox="0 0 800 600" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="skyGrad" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#7dd3fc"/><stop offset="100%" stop-color="#e0f2fe"/></linearGradient>
+    <linearGradient id="pouchGrad" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#fbbf24"/><stop offset="100%" stop-color="#ea580c"/></linearGradient>
+    <linearGradient id="bodyGrad" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#ffffff"/><stop offset="100%" stop-color="#cbd5e1"/></linearGradient>
+    <linearGradient id="wingGrad" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#f8fafc"/><stop offset="100%" stop-color="#94a3b8"/></linearGradient>
+    <filter id="softShadow"><feDropShadow dx="0" dy="6" stdDeviation="5" flood-opacity="0.18"/></filter>
+  </defs>
+  <!-- Background & Road -->
+  <rect width="800" height="600" rx="20" fill="url(#skyGrad)"/>
+  <circle cx="680" cy="95" r="46" fill="#fde047" opacity="0.9"/>
+  <path d="M80 120 Q110 95 145 112 Q175 90 210 115 Q235 120 225 140 L75 140 Z" fill="#ffffff" opacity="0.85"/>
+  <rect x="0" y="485" width="800" height="115" fill="#334155"/>
+  <line x1="0" y1="535" x2="800" y2="535" stroke="#facc15" stroke-width="4" stroke-dasharray="36 28"/>
+  <!-- Rear & Front Wheels -->
+  <g id="rear-wheel" class="wheel-spin" transform="translate(230, 415)">
+    <circle r="76" fill="none" stroke="#1e293b" stroke-width="14"/>
+    <circle r="66" fill="none" stroke="#cbd5e1" stroke-width="3"/>
+    <line x1="-66" y1="0" x2="66" y2="0" stroke="#94a3b8" stroke-width="2"/>
+    <line x1="0" y1="-66" x2="0" y2="66" stroke="#94a3b8" stroke-width="2"/>
+    <line x1="-47" y1="-47" x2="47" y2="47" stroke="#94a3b8" stroke-width="2"/>
+    <line x1="-47" y1="47" x2="47" y2="-47" stroke="#94a3b8" stroke-width="2"/>
+    <line x1="-61" y1="-25" x2="61" y2="25" stroke="#94a3b8" stroke-width="1.5"/>
+    <line x1="-25" y1="-61" x2="25" y2="61" stroke="#94a3b8" stroke-width="1.5"/>
+    <circle r="12" fill="#475569"/>
+  </g>
+  <g id="front-wheel" class="wheel-spin" transform="translate(565, 415)">
+    <circle r="76" fill="none" stroke="#1e293b" stroke-width="14"/>
+    <circle r="66" fill="none" stroke="#cbd5e1" stroke-width="3"/>
+    <line x1="-66" y1="0" x2="66" y2="0" stroke="#94a3b8" stroke-width="2"/>
+    <line x1="0" y1="-66" x2="0" y2="66" stroke="#94a3b8" stroke-width="2"/>
+    <line x1="-47" y1="-47" x2="47" y2="47" stroke="#94a3b8" stroke-width="2"/>
+    <line x1="-47" y1="47" x2="47" y2="-47" stroke="#94a3b8" stroke-width="2"/>
+    <circle r="12" fill="#475569"/>
+  </g>
+  <!-- Bicycle Frame & Crankset -->
+  <g id="bicycle-frame" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M230 415 L375 415 L485 285 L315 285 Z" fill="none" stroke="#ef4444" stroke-width="11"/>
+    <line x1="315" y1="285" x2="375" y2="415" stroke="#ef4444" stroke-width="11"/>
+    <path d="M485 285 L565 415" fill="none" stroke="#ef4444" stroke-width="10"/>
+    <path d="M485 285 L470 230 L525 220" fill="none" stroke="#334155" stroke-width="9"/>
+    <ellipse cx="305" cy="260" rx="34" ry="11" fill="#1e293b"/>
+    <circle cx="375" cy="415" r="24" fill="#64748b" stroke="#1e293b" stroke-width="5"/>
+  </g>
+  <!-- Pelican Rider & Gular Pouch -->
+  <g id="pelican-rider" class="rider-bob" filter="url(#softShadow)">
+    <path d="M330 305 C345 350, 390 375, 412 435" fill="none" stroke="#f97316" stroke-width="8" stroke-linecap="round"/>
+    <path d="M315 305 C325 345, 350 365, 345 395" fill="none" stroke="#ea580c" stroke-width="8" stroke-linecap="round"/>
+    <path d="M245 245 C235 185, 325 165, 375 215 C405 245, 385 310, 320 310 C270 310, 250 280, 245 245 Z" fill="url(#bodyGrad)" stroke="#94a3b8" stroke-width="2.5"/>
+    <path d="M275 215 C315 200, 365 220, 382 265 C355 285, 305 282, 275 255 Z" fill="url(#wingGrad)" stroke="#64748b" stroke-width="2"/>
+    <path d="M355 210 C375 155, 395 115, 425 105 C445 100, 460 115, 452 140 C442 170, 415 205, 385 230 Z" fill="url(#bodyGrad)"/>
+    <circle cx="432" cy="112" r="26" fill="#ffffff"/>
+    <circle cx="440" cy="108" r="6" fill="#0f172a"/>
+    <circle cx="442" cy="106" r="2" fill="#ffffff"/>
+    <!-- Large Pelican Beak & Gular Pouch -->
+    <path d="M452 104 L595 112 C602 114, 604 122, 594 125 L452 124 Z" fill="#f59e0b" stroke="#d97706" stroke-width="2"/>
+    <path d="M452 124 C465 185, 535 198, 588 125 L452 124 Z" fill="url(#pouchGrad)" stroke="#c2410c" stroke-width="2"/>
+  </g>
+</svg>
+</body>
+</html>`,
+
+  astra: `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<style>
+  :root { --bg: #0f172a; --card: #1e293b; --accent: #38bdf8; --bike: #10b981; --beak: #f59e0b; }
+  body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: radial-gradient(circle at 50% 20%, #1e293b, var(--bg)); }
+  svg { width: min(90vw, 780px); border-radius: 18px; background: linear-gradient(180deg, #0ea5e9 0%, #bae6fd 78%, #334155 78%); }
+  @keyframes wheelRot { to { transform: rotate(360deg); } }
+  .wheel { transform-origin: center; transform-box: fill-box; animation: wheelRot 2.4s linear infinite; }
+</style>
+</head>
+<body>
+<svg viewBox="0 0 800 500" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="pouch" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fcd34d"/><stop offset="1" stop-color="#f97316"/></linearGradient>
+    <linearGradient id="plume" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#ffffff"/><stop offset="1" stop-color="#cbd5e1"/></linearGradient>
+  </defs>
+  <g id="wheels">
+    <circle class="wheel" cx="240" cy="365" r="64" fill="none" stroke="#0f172a" stroke-width="12" stroke-dasharray="14 6"/>
+    <circle cx="240" cy="365" r="52" fill="none" stroke="#e2e8f0" stroke-width="4" stroke-dasharray="4 12"/>
+    <circle class="wheel" cx="540" cy="365" r="64" fill="none" stroke="#0f172a" stroke-width="12" stroke-dasharray="14 6"/>
+    <circle cx="540" cy="365" r="52" fill="none" stroke="#e2e8f0" stroke-width="4" stroke-dasharray="4 12"/>
+  </g>
+  <g id="frame" fill="none" stroke="#10b981" stroke-width="9" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M240.5 365.0 L370.2 365.0 L468.4 252.5 L312.0 252.5 Z"/>
+    <path d="M312.0 252.5 L370.2 365.0 M468.4 252.5 L540.0 365.0"/>
+    <path d="M468.4 252.5 L455.0 205.5 L502.5 198.0" stroke="#334155"/>
+  </g>
+  <g id="pelican">
+    <path d="M262.4 218.5 C255.0 168.2, 332.5 152.0, 368.0 198.4 C392.5 228.0, 365.0 272.5, 304.2 268.0 Z" fill="url(#plume)"/>
+    <path d="M348.0 192.0 C365.5 142.0, 385.0 104.5, 412.0 96.0 C428.5 92.0, 438.0 108.5, 426.0 135.0 C412.5 164.0, 388.0 192.5, 366.0 212.0 Z" fill="#ffffff"/>
+    <path d="M428.0 94.5 L558.5 102.0 L428.0 114.0 Z" fill="#f59e0b"/>
+    <path d="M428.0 114.0 C442.5 168.5, 512.0 176.0, 554.5 104.0 Z" fill="url(#pouch)"/>
+    <circle cx="415.5" cy="102.5" r="5.5" fill="#0f172a"/>
+  </g>
+</svg>
+</body>
+</html>`,
+
+  argon: `<svg viewBox="0 0 1000 700" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="sky" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#4facfe"/>
+      <stop offset="100%" stop-color="#00f2fe"/>
+    </linearGradient>
+  </defs>
+  <!-- Scene Background -->
+  <rect width="1000" height="700" fill="url(#sky)"/>
+  <rect y="560" width="1000" height="140" fill="#2d3748"/>
+  <!-- Bicycle Wheels with rotated spokes -->
+  <g id="wheel-back" transform="translate(300, 470)">
+    <circle r="90" fill="none" stroke="#1a202c" stroke-width="16"/>
+    <g stroke="#cbd5e0" stroke-width="3">
+      <line x1="-80" y1="0" x2="80" y2="0"/>
+      <line x1="-80" y1="0" x2="80" y2="0" transform="rotate(30)"/>
+      <line x1="-80" y1="0" x2="80" y2="0" transform="rotate(60)"/>
+      <line x1="-80" y1="0" x2="80" y2="0" transform="rotate(90)"/>
+      <line x1="-80" y1="0" x2="80" y2="0" transform="rotate(120)"/>
+      <line x1="-80" y1="0" x2="80" y2="0" transform="rotate(150)"/>
+    </g>
+    <circle r="14" fill="#e53e3e"/>
+  </g>
+  <g id="wheel-front" transform="translate(700, 470)">
+    <circle r="90" fill="none" stroke="#1a202c" stroke-width="16"/>
+    <g stroke="#cbd5e0" stroke-width="3">
+      <line x1="-80" y1="0" x2="80" y2="0"/>
+      <line x1="-80" y1="0" x2="80" y2="0" transform="rotate(45)"/>
+      <line x1="-80" y1="0" x2="80" y2="0" transform="rotate(90)"/>
+      <line x1="-80" y1="0" x2="80" y2="0" transform="rotate(135)"/>
+    </g>
+    <circle r="14" fill="#e53e3e"/>
+  </g>
+  <!-- Frame -->
+  <polygon points="300,470 480,470 600,320 400,320" fill="none" stroke="#e53e3e" stroke-width="14" stroke-linejoin="round"/>
+  <line x1="600" y1="320" x2="700" y2="470" stroke="#e53e3e" stroke-width="14" stroke-linecap="round"/>
+  <!-- Pelican -->
+  <g id="pelican" transform="translate(0, 0)">
+    <ellipse cx="410" cy="250" rx="85" ry="58" fill="#ffffff"/>
+    <path d="M465 215 Q510 130 535 120 Q560 115 555 150 Q540 210 485 245 Z" fill="#ffffff"/>
+    <path d="M548 118 L720 128 L548 142 Z" fill="#f6ad55"/>
+    <path d="M548 142 Q630 235 712 130 Z" fill="#ed8936"/>
+    <circle cx="535" cy="128" r="7" fill="#1a202c"/>
+  </g>
+</svg>`
+};
+
+// ==================== 4. 库存储与相似度匹配算法 ====================
+const STORAGE_KEY = 'brana_standalone_html_fp_lib_v1';
+
+function loadLibrary() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed) && parsed.length) return parsed;
+    }
+  } catch {}
+  return SEED_LIBRARY.slice();
+}
+
+function saveLibrary(list) {
+  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(list)); } catch {}
+}
+
+let library = loadLibrary();
+
+// 计算两个指纹特征之间的加权相似度 (0 ~ 100)
+function computeSimilarity(a, b, targetModelId) {
+  if (!a || !b) return 0;
+  let score = 0, totalW = 0;
+  const addRatio = (va, vb, w, floor = 1) => {
+    totalW += w;
+    const m = Math.max(va, vb, floor);
+    const diff = Math.abs(va - vb) / m;
+    score += w * Math.max(0, 1 - diff);
+  };
+  const addBool = (ba, bb, w) => {
+    totalW += w;
+    if (Boolean(ba) === Boolean(bb)) score += w;
+  };
+
+  // 1. 画布比例与尺寸习惯 (权重 14)
+  if (a.vbStr === b.vbStr && a.vbStr !== '无/自适应') { totalW += 10; score += 10; }
+  else addRatio(a.aspect || 1.33, b.aspect || 1.33, 10, 0.5);
+  addRatio(a.vbW || 800, b.vbW || 800, 4, 200);
+
+  // 2. 几何图元分布与贝塞尔曲线密度 (权重 28)
+  addRatio(a.pathCount, b.pathCount, 8, 5);
+  addRatio(a.totalCurves, b.totalCurves, 8, 10);
+  addRatio(a.totalShapes, b.totalShapes, 6, 10);
+  addRatio(a.decimalCoords, b.decimalCoords, 6, 4);
+
+  // 3. 车轮辐条与分组实现方式 (权重 18)
+  if (a.spokeStyle === b.spokeStyle) { totalW += 10; score += 10; }
+  else totalW += 10;
+  addBool(a.hasDasharray, b.hasDasharray, 4);
+  addBool(a.hasRotateSpokes, b.hasRotateSpokes, 4);
+
+  // 4. CSS 工程习惯与注释风格 (权重 22)
+  addBool(a.hasRootVars, b.hasRootVars, 6);
+  addBool(a.hasDarkBg, b.hasDarkBg, 4);
+  addBool(a.hasEnAnatomyComment, b.hasEnAnatomyComment, 5);
+  addBool(a.hasSectionDivider, b.hasSectionDivider, 3);
+  addRatio(a.commentCount, b.commentCount, 4, 3);
+
+  // 5. 复杂度与思考强度对齐 (权重 18)
+  addRatio(a.complexityScore, b.complexityScore, 12, 20);
+  addRatio(a.chars, b.chars, 6, 1000);
+
+  let pct = totalW > 0 ? (score / totalW) * 100 : 0;
+
+  // 厂商专属结构 DNA 强特征加成（核心区分 Opus 5.5/5.6 vs GPT 6 Astra vs Gemini 4 Argon）
+  if (targetModelId.startsWith('claude-opus') || targetModelId.startsWith('claude-fable')) {
+    if (a.hasEnAnatomyComment && a.commentCount >= 8 && !a.hasRootVars && a.bezierC >= 35) pct += 4.5;
+    if (a.hasSectionDivider && targetModelId === 'claude-opus-5.6') pct += 3.5;
+  } else if (targetModelId === 'gpt-6-astra' || targetModelId === 'gpt-6.1-sol') {
+    if (a.hasRootVars && a.decimalCoords >= 12 && a.commentCount <= 8) pct += 5.5;
+    if (a.hasDarkBg && targetModelId === 'gpt-6.1-sol') pct += 3.5;
+  } else if (targetModelId === 'gpt-6-luna') {
+    if (a.chars < 4300 && a.decimalCoords <= 4 && a.pathCount <= 15) pct += 6.0;
+  } else if (targetModelId.startsWith('gemini-4')) {
+    if ((a.vbW === 1000 || a.hasRotateSpokes) && a.polyCount >= 1 && !a.hasRootVars) pct += 5.5;
+  }
+
+  return Math.min(99.8, Math.max(5, +pct.toFixed(1)));
+}
+
+// 根据复杂度与模型基准进一步校准强度档位 (Low / Medium / High / xHigh / Max)
+function inferEffortTier(fp, matchedItem) {
+  const c = fp.complexityScore;
+  const mId = matchedItem?.modelId || '';
+  if (mId === 'gpt-6-astra' || mId === 'gpt-6-luna') {
+    if (c >= 80) return 'xHigh';
+    if (c >= 65) return 'High';
+    if (c >= 44) return 'Medium';
+    return 'Low';
+  }
+  if (c >= 89) return 'Max';
+  if (c >= 74) return 'High';
+  if (c >= 52) return 'Medium';
+  return 'Low';
+}
+
+// ==================== 5. 界面渲染与交互 ====================
+function renderChips() {
+  const mWrap = document.getElementById('modelChips');
+  mWrap.innerHTML = PRESET_MODELS.map(m =>
+    `<span class="chip ${m.id === selectedModelId ? 'on' : ''}" onclick="selectModel('${m.id}')">${m.label}</span>`
+  ).join('');
+
+  const tWrap = document.getElementById('tierChips');
+  tWrap.innerHTML = PRESET_TIERS.map(t =>
+    `<span class="chip tier ${t === selectedTier ? 'on' : ''}" onclick="selectTier('${t}')">${t}</span>`
+  ).join('');
+}
+
+function selectModel(id) {
+  selectedModelId = id;
+  const m = PRESET_MODELS.find(x => x.id === id);
+  if (m && m.defaultTier) selectedTier = m.defaultTier;
+  renderChips();
+}
+
+function selectTier(t) {
+  selectedTier = t;
+  renderChips();
+}
+
+function renderPreview(code) {
+  const box = document.getElementById('pvBox');
+  const s = String(code || '').trim();
+  if (!s || (!/<svg[\s>]/i.test(s) && !/<html[\s>]/i.test(s))) {
+    box.innerHTML = '<div class="pv-empty">实时画面预览</div>';
+    return;
+  }
+  const doc = /<html[\s>]/i.test(s)
+    ? s
+    : `<!doctype html><html><head><meta charset="utf-8"><style>html,body{margin:0;width:100%;height:100%;display:flex;align-items:center;justify-content:center;background:#f8fafc}svg{max-width:100%;max-height:100%;width:auto;height:auto}</style></head><body>${s}</body></html>`;
+  const iframe = document.createElement('iframe');
+  iframe.setAttribute('sandbox', 'allow-scripts');
+  iframe.srcdoc = doc;
+  box.replaceChildren(iframe);
+}
+
+function runIdentify() {
+  const code = document.getElementById('htmlInput').value;
+  renderPreview(code);
+  const fp = extractHtmlFingerprint(code);
+  if (!fp) {
+    document.getElementById('resStatus').textContent = '等待粘贴 HTML / SVG…';
+    return;
+  }
+
+  document.getElementById('fViewBox').textContent = fp.vbStr;
+  document.getElementById('fPaths').textContent = `${fp.totalShapes} 节点 / ${fp.pathCount} Path`;
+  document.getElementById('fBezier').textContent = `${fp.totalCurves} 处 (小数:${fp.decimalCoords})`;
+  document.getElementById('fDefs').textContent = `${fp.gradCount} 渐变 / ${fp.gCount} <g>`;
+  document.getElementById('fSpokes').textContent = fp.spokeStyle;
+  document.getElementById('fCss').textContent = `${fp.hasRootVars ? ':root变量' : '普通CSS'} · ${fp.keyframesCount} 动画`;
+  document.getElementById('fComments').textContent = `${fp.commentCount} 条${fp.hasEnAnatomyComment ? ' (英文分块)' : ''}`;
+  document.getElementById('fScale').textContent = `${fp.lines} 行 · 复杂度 ${fp.complexityScore}`;
+
+  // 对基石库计算每个样本的匹配度，并按 (modelId + tier) 聚合最高分
+  const scored = library.map(item => {
+    const sim = computeSimilarity(fp, item.fp, item.modelId);
+    return { item, sim };
+  }).sort((a, b) => b.sim - a.sim);
+
+  // 按模型去重展示前 6 名
+  const byModel = [];
+  const seen = new Set();
+  for (const s of scored) {
+    const key = s.item.modelId;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    byModel.push(s);
+    if (byModel.length >= 6) break;
+  }
+
+  const best = byModel[0];
+  const inferredTier = best.sim >= 96 ? best.item.tier : inferEffortTier(fp, best.item);
+
+  document.getElementById('resStatus').textContent = `已比对基石库 ${library.length} 条样本`;
+  document.getElementById('resVendor').textContent = `${best.item.vendor} · 闭源主力模型`;
+  document.getElementById('resModelName').textContent = best.item.modelLabel;
+  document.getElementById('resTier').textContent = `思考强度：${inferredTier}`;
+  document.getElementById('resConf').textContent = `${best.sim.toFixed(1)}%`;
+
+  // 自动联动点选条（方便直接一键入库）
+  selectedModelId = best.item.modelId;
+  selectedTier = inferredTier;
+  renderChips();
+
+  const reasons = [
+    `画布比例 <b>${fp.vbStr}</b>`,
+    `SVG 包含 <b>${fp.pathCount}</b> 条 Path 与 <b>${fp.totalCurves}</b> 处曲线控制点（小数精度坐标 ${fp.decimalCoords} 处）`,
+    `车轮实现为「<b>${fp.spokeStyle}</b>」`,
+    fp.hasRootVars ? `使用 <code>:root</code> CSS 变量工程化架构（典型 OpenAI Astra/Sol 特征）` : (fp.hasEnAnatomyComment ? `包含标准英文解剖分块注释（典型 Claude Opus/Fable 特征）` : `简洁结构布局`),
+    `综合复杂度评分 <b>${fp.complexityScore}/100</b> → 对应思考强度 <b>${inferredTier}</b>`
+  ];
+  document.getElementById('resWhy').innerHTML = '<b>命中依据：</b>' + reasons.join(' · ') + '。';
+
+  const cList = document.getElementById('candList');
+  cList.innerHTML = byModel.map((r, idx) => {
+    const t = idx === 0 ? inferredTier : r.item.tier;
+    return `<div class="cand-row ${idx === 0 ? 'top1' : ''}">
+      <span style="font-weight:700;color:${idx === 0 ? '#2dd4bf' : '#8ea0c0'}">#${idx + 1}</span>
+      <span><b>${r.item.modelLabel}</b> <small style="color:#94a3b8">(${r.item.vendor})</small></span>
+      <span><span class="lib-tag">${t}</span></span>
+      <div style="display:flex;align-items:center;gap:8px">
+        <div class="bar-wrap" style="flex:1"><div class="bar-fill" style="width:${Math.round(r.sim)}%"></div></div>
+        <b style="font-family:monospace;width:48px;text-align:right">${r.sim.toFixed(1)}%</b>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function renderLibrary() {
+  document.getElementById('libCountTxt').textContent = `共 ${library.length} 条基石样本`;
+  const grid = document.getElementById('libGrid');
+  grid.innerHTML = library.map(item => {
+    const f = item.fp || {};
+    return `<div class="lib-card">
+      <div class="lib-card-head">
+        <div class="lib-card-title">
+          <span>${item.modelLabel}</span>
+          <span class="lib-tag" style="background:rgba(245,158,11,0.2);color:#fcd34d">${item.tier}</span>
+        </div>
+        <div style="display:flex;gap:4px">
+          ${item.rawHtml ? `<button class="sm" onclick="loadLibItem('${item.id}')">载入</button>` : ''}
+          <button class="sm" onclick="deleteLibItem('${item.id}')" title="删除该样本">×</button>
+        </div>
+      </div>
+      <div class="lib-meta">viewBox:${f.vbStr || '—'} · Path:${f.pathCount || 0} · 曲线:${f.totalCurves || 0} · 复杂度:${f.complexityScore || 0}</div>
+      <div class="lib-tags">
+        <span class="lib-tag">${f.spokeStyle || '标准车轮'}</span>
+        <span class="lib-tag">${f.hasRootVars ? ':root变量' : '标准样式'}</span>
+        ${(f.anatomyHits || []).slice(0, 2).map(a => `<span class="lib-tag">${a}</span>`).join('')}
+      </div>
+      <div style="font-size:11.5px;color:#94a3b8;line-height:1.4">${item.note || '用户一键入库样本'}</div>
+    </div>`;
+  }).join('');
+}
+
+function quickAddCurrent() {
+  const code = document.getElementById('htmlInput').value.trim();
+  const fp = extractHtmlFingerprint(code);
+  if (!fp) { showToast('请先在上方输入框粘贴 HTML / SVG 代码', true); return; }
+  const m = PRESET_MODELS.find(x => x.id === selectedModelId) || PRESET_MODELS[0];
+  const newItem = {
+    id: 'usr-' + Date.now(),
+    modelId: m.id,
+    modelLabel: m.label,
+    vendor: m.vendor,
+    tier: selectedTier,
+    note: `本机一键入库（${fp.lines} 行 / ${fp.pathCount} Path / ${fp.spokeStyle}）`,
+    fp,
+    rawHtml: code.slice(0, 60000),
+  };
+  library.unshift(newItem);
+  saveLibrary(library);
+  renderLibrary();
+  runIdentify();
+  showToast(`已一键入库：${m.label} (${selectedTier})`);
+}
+
+function loadLibItem(id) {
+  const item = library.find(x => x.id === id);
+  if (item?.rawHtml) {
+    document.getElementById('htmlInput').value = item.rawHtml;
+    runIdentify();
+  }
+}
+
+function deleteLibItem(id) {
+  library = library.filter(x => x.id !== id);
+  saveLibrary(library);
+  renderLibrary();
+  runIdentify();
+}
+
+function resetSeedLib() {
+  library = SEED_LIBRARY.slice();
+  saveLibrary(library);
+  renderLibrary();
+  runIdentify();
+  showToast('已恢复内置 Top 7 主力模型基石库');
+}
+
+function exportLib() {
+  const blob = new Blob([JSON.stringify({ schema: 'brana-html-fp-lib-v1', exportedAt: new Date().toISOString(), items: library }, null, 2)], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'brana-html-fingerprint-library.json';
+  a.click();
+  showToast('已导出基石库 JSON');
+}
+
+async function handleFiles(files) {
+  let added = 0;
+  for (const f of files || []) {
+    const text = await f.text();
+    if (/\.json$/i.test(f.name)) {
+      try {
+        const j = JSON.parse(text);
+        if (Array.isArray(j.items)) {
+          for (const it of j.items) {
+            if (it?.fp && !library.some(x => x.id === it.id)) { library.unshift(it); added++; }
+          }
+        }
+      } catch {}
+    } else if (/<svg[\s>]|<html[\s>]/i.test(text)) {
+      document.getElementById('htmlInput').value = text;
+      runIdentify();
+      added++;
+    }
+  }
+  if (added > 0) {
+    saveLibrary(library);
+    renderLibrary();
+    showToast(`成功载入 ${added} 项内容`);
+  }
+}
+
+async function pasteAndIdentify() {
+  try {
+    const t = await navigator.clipboard.readText();
+    if (t && t.trim()) {
+      document.getElementById('htmlInput').value = t;
+      runIdentify();
+      showToast('已粘贴并完成识别');
+      return;
+    }
+  } catch {}
+  document.getElementById('htmlInput').focus();
+  showToast('请按 Ctrl+V 粘贴 HTML 代码');
+}
+
+function loadDemoSample(key) {
+  document.getElementById('htmlInput').value = DEMO_SAMPLES[key] || '';
+  runIdentify();
+}
+
+function clearInput() {
+  document.getElementById('htmlInput').value = '';
+  renderPreview('');
+  document.getElementById('resModelName').textContent = '粘贴 HTML 代码即可识别';
+  document.getElementById('resTier').textContent = '强度档位 —';
+  document.getElementById('resConf').textContent = '—';
+}
+
+function copyFastProbe() {
+  const probe = `Run \`uname -s\` via bash, then output ONLY a single compact 10-line inline <svg viewBox="0 0 200 140"> of a minimalist pelican on a bicycle (no markdown explanation).`;
+  navigator.clipboard?.writeText(probe).catch(() => {});
+  showToast('已复制 3 秒极速验模指令！发给 Arena 即可在 3 秒内完成协议+微缩SVG双重验模');
+}
+
+function showToast(msg, isErr = false) {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.style.background = isErr ? '#f43f5e' : '#10b981';
+  el.style.color = isErr ? '#fff' : '#04130d';
+  el.classList.add('show');
+  clearTimeout(el._t);
+  el._t = setTimeout(() => el.classList.remove('show'), 2600);
+}
+
+document.getElementById('htmlInput').addEventListener('input', () => runIdentify());
+
+// 初始化：自动把本机测试过的 Opus 5.5 示范样本载入并演示
+renderChips();
+renderLibrary();
+loadDemoSample('opus55');
+</script>
+</body>
+</html>

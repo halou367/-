@@ -341,15 +341,25 @@ const Pool = {
   blacklistIp(k, why = '') {
     return this.mutate(d => this.banForever(d, k, why));
   },
+  // 判断节点本身是否已确认连通（避免因为 VLESS 节点挂掉而误把好用的 ProxyIP 拉黑）
+  isNodeConfirmedAlive(link, batchResults = null) {
+    if (Array.isArray(batchResults) && batchResults.some(x => x && (x.ip || x.brana || x.ok))) return true;
+    if (link && typeof NodeSpeed !== 'undefined' && typeof NodeSpeed.get === 'function') {
+      const ns = NodeSpeed.get(link);
+      if (ns && ns.ok === true && now() - (ns.at || 0) < 60000) return true;
+    }
+    return false;
+  },
   purgeImpureAndUnstable() {
     return this.mutate(d => {
       let n = 0;
       for (const [k, e] of Object.entries(d.ips || {})) {
         if (!e) continue;
-        const bad = e.ok === false || e.gone || (e.fc || 0) >= 1;
         const impure = typeof IPRep !== 'undefined' && !IPRep.trusted?.(k) && IPRep.score?.(k, e)?.known && (IPRep.pure ? !IPRep.pure(k, e) : IPRep.risky?.(k, e));
-        if (bad || impure) {
-          this.banForever(d, k, bad ? (e.err || '连接不可用或不稳定 · 已拉黑') : '不纯净 · 已拉黑');
+        // 只有明确不纯净，或者已拿到出口 IP（说明节点是通的）但连续失败的 ProxyIP 才永久拉黑；节点不通（无出口 IP）绝不误拉黑 ProxyIP
+        const confirmedIpBad = (e.ok === false && Boolean(e.eg) && (e.fc || 0) >= 2) || Boolean(e.banned);
+        if (impure || confirmedIpBad) {
+          this.banForever(d, k, impure ? '不纯净 · 已拉黑' : (e.err || 'ProxyIP 不可用或不稳定 · 已拉黑'));
           n++;
         }
       }
@@ -427,20 +437,34 @@ const Pool = {
       for(let i=0;i<keys.length;i+=size)queue.push(keys.slice(i,i+size));
       this.prog=state;Bus.emit('pool');
       const one=async part=>{
+        const partRes=[];
         const accept=async(k,result)=>{
           if(!live())return;
+          partRes.push({k,result});
           await this.mutate(d=>{
             if(live()&&d.ips[k]&&!d.ips[k].gone&&!this.banned(k)){
               this.apply(d,k,result);
-              if(!(result.ip&&result.brana)||(typeof IPRep!=='undefined'&&!IPRep.trusted?.(k)&&IPRep.score?.(k,d.ips[k])?.known&&!IPRep.pure?.(k,d.ips[k]))){
-                this.banForever(d,k,!(result.ip&&result.brana)?'检测不可用 · 已永久拉黑':'不纯净 · 已永久拉黑');
+              const impure=typeof IPRep!=='undefined'&&!IPRep.trusted?.(k)&&IPRep.score?.(k,d.ips[k])?.known&&!IPRep.pure?.(k,d.ips[k]);
+              if(impure||(result?.ip&&!result?.brana)){
+                this.banForever(d,k,impure?'不纯净 · 已永久拉黑':'ProxyIP 不可用 · 已永久拉黑');
               }
             }
           });
           if(!live()||completed.has(k))return;completed.add(k);done++;if(!(result.ip&&result.brana))failed++;
           Object.assign(state,{done,failed});Bus.emit('pool');onProg?.(done,keys.length);
         };
-        return this.streamProbe(part,{link,timeout:9000,signal:options.signal,cancelled:()=>!live(),onItem:accept});
+        const r=await this.streamProbe(part,{link,timeout:9000,signal:options.signal,cancelled:()=>!live(),onItem:accept});
+        // 只有确认当前节点是通的（同批有其它 IP 连通，或节点测速通过），才把同批不通的 ProxyIP 永久拉黑；若整批全挂则说明是节点问题，不拉黑 ProxyIP
+        if(live()&&Array.isArray(r)&&this.isNodeConfirmedAlive(link,r)){
+          await this.mutate(d=>{
+            for(const {k,result} of partRes){
+              if(!(result?.ip&&result?.brana)&&d.ips[k]&&!this.banned(k)){
+                this.banForever(d,k,'节点正常但该 ProxyIP 不通 · 已永久拉黑');
+              }
+            }
+          });
+        }
+        return r;
       };
       const worker=async()=>{while(queue.length&&!fatal&&live()){
         const part=queue.shift();let r=await one(part);if(!live())return;
@@ -571,11 +595,14 @@ const Pool = {
         return { ok: false, error: r.error };
       }
       const res = cands.map((k, j) => [k, Array.isArray(r) ? (r.find(x => x.pip === k) || r[j] || {}) : { error: r?.error || '检测失败' }]);
+      const nodeAliveForBatch = this.isNodeConfirmedAlive(link, Array.isArray(r) ? r : null);
       await this.mutate(d => {
         for (const [k, x] of res) {
           this.apply(d, k, x);
           if (!(x.ip && x.brana)) {
-            this.banForever(d, k, '检测不可用 · 已永久拉黑');
+            if (nodeAliveForBatch || x.ip) {
+              this.banForever(d, k, '节点正常但该 ProxyIP 不可用 · 已永久拉黑');
+            }
           } else if (x.loc && x.loc !== cc && d.ips[k]) {
             d.ips[k].err = '出口地区是 ' + x.loc;
           }
