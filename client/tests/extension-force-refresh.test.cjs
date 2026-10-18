@@ -1,0 +1,7 @@
+'use strict';
+const test=require('node:test'),assert=require('node:assert/strict'),{EventEmitter}=require('node:events');
+const {loadURLAlive}=require('../src/runtime-navigation');
+function fake(){const wc=new EventEmitter();wc.isDestroyed=()=>false;wc.getURL=()=> 'https://example.invalid/path?q=1#fragment';wc.stop=()=>{};return wc;}
+test('explicit same-target refresh performs a real reload instead of hash-only navigation',async()=>{const wc=fake();let reloads=0,loads=0;wc.loadURL=async()=>{loads++;};wc.reloadIgnoringCache=()=>{reloads++;setImmediate(()=>wc.emit('did-finish-load'));};await loadURLAlive(wc,wc.getURL(),1000,{forceReload:true});assert.equal(reloads,1);assert.equal(loads,0);assert.equal(wc.listenerCount('did-fail-load'),0);});
+test('a changed target still uses full loadURL even when refresh was requested',async()=>{const wc=fake();let target;wc.loadURL=async url=>{target=url;};wc.reloadIgnoringCache=()=>{throw Error('not expected');};await loadURLAlive(wc,'https://example.invalid/new?q=2#x',1000,{forceReload:true});assert.equal(target,'https://example.invalid/new?q=2#x');});
+test('reload failures reject rather than claiming a refresh succeeded',async()=>{const wc=fake();wc.reloadIgnoringCache=()=>setImmediate(()=>wc.emit('did-fail-load',{},-105,'ERR_NAME_NOT_RESOLVED',wc.getURL(),true));await assert.rejects(loadURLAlive(wc,wc.getURL(),1000,{forceReload:true}),/ERR_NAME_NOT_RESOLVED/);});

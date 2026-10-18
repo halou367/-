@@ -1,0 +1,292 @@
+name: Brana AI
+
+# 标签构建直接上传 Release；手动 Run 保留经验证的安装包到 Actions Artifacts（7 天）。
+# main 普通提交不触发构建，避免占用 Actions 存储配额。
+on:
+  push:
+    tags: ['client-v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: write
+
+# GH_TOKEN 只给用 gh 的步骤（electron-builder 看到 GH_TOKEN 会去碰 GitHub 发布配置）
+env:
+  GH_REPO: ${{ github.repository }}
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - run: node client/scripts/build-probe.js
+      - run: npm install --prefix client --ignore-scripts --no-audit --no-fund
+      - run: node client/scripts/bundle.js
+      - run: node --check client/gen/ui.bundle.js
+      - run: npm test --prefix client
+      - run: npm test --prefix packages/core-metrics
+      - name: Verify complete browser bundle and isolated native previews
+        shell: bash
+        run: |
+          set -e
+          npm install --prefix "$RUNNER_TEMP/brana-ui-check" --no-audit --no-fund playwright@1.63.0 electron@33.4.11
+          "$RUNNER_TEMP/brana-ui-check/node_modules/.bin/playwright" install --with-deps chromium
+          sudo apt-get install -y xvfb libgtk-3-0t64
+          export NODE_PATH="$RUNNER_TEMP/brana-ui-check/node_modules"
+          node client/scripts/check-connection-browser.cjs
+          node client/scripts/check-auth-browser.cjs
+          node client/scripts/check-node-browser.cjs
+          node client/scripts/check-route-editors-browser.cjs
+          node client/scripts/check-history-browser.cjs
+          node client/scripts/check-workspace-browser.cjs
+          xvfb-run -a "$RUNNER_TEMP/brana-ui-check/node_modules/.bin/electron" client/scripts/check-workspace-electron.cjs --no-sandbox
+          node client/scripts/check-draw-titles-browser.cjs
+          node client/scripts/check-html-preview-browser.cjs
+          node client/scripts/check-interactive-card-browser.cjs
+          node client/scripts/check-browser-mode-browser.cjs
+          node client/scripts/check-extensions-toolbar-browser.cjs
+          node client/scripts/check-bookmarks-browser.cjs
+          node client/scripts/check-offline-modes-browser.cjs
+          node client/scripts/check-gacha-captcha-browser.cjs
+          xvfb-run -a "$RUNNER_TEMP/brana-ui-check/node_modules/.bin/electron" --no-sandbox client/scripts/check-privacy-electron.cjs
+          xvfb-run -a "$RUNNER_TEMP/brana-ui-check/node_modules/.bin/electron" --no-sandbox client/scripts/check-runtime-electron.cjs
+          xvfb-run -a "$RUNNER_TEMP/brana-ui-check/node_modules/.bin/electron" --no-sandbox client/scripts/check-extensions-electron.cjs
+          xvfb-run -a "$RUNNER_TEMP/brana-ui-check/node_modules/.bin/electron" --no-sandbox client/scripts/check-extension-storage-electron.cjs
+          xvfb-run -a "$RUNNER_TEMP/brana-ui-check/node_modules/.bin/electron" --no-sandbox client/scripts/check-browser-chrome-electron.cjs
+          xvfb-run -a "$RUNNER_TEMP/brana-ui-check/node_modules/.bin/electron" --no-sandbox client/scripts/check-browser-navigation-electron.cjs
+          xvfb-run -a "$RUNNER_TEMP/brana-ui-check/node_modules/.bin/electron" --no-sandbox client/scripts/check-browser-viewport-electron.cjs
+          xvfb-run -a "$RUNNER_TEMP/brana-ui-check/node_modules/.bin/electron" --no-sandbox client/scripts/check-auth-route-electron.cjs
+          xvfb-run -a "$RUNNER_TEMP/brana-ui-check/node_modules/.bin/electron" --no-sandbox client/scripts/check-multiwindow-electron.cjs
+          export BRANA_GBROWSER="$(node -p "require('playwright').chromium.executablePath()")"
+          xvfb-run -a node client/scripts/check-gbrowser-privacy.cjs
+  prep:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Create draft release
+        if: startsWith(github.ref, 'refs/tags/client-v')
+        env: { GH_TOKEN: '${{ github.token }}' }
+        run: |
+          TAG=${GITHUB_REF_NAME}
+          if [ -f "client/notes/${TAG}.md" ]; then cp "client/notes/${TAG}.md" notes.md; else echo "Brana AI ${TAG}" > notes.md; fi
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            IS_DRAFT=$(gh release view "$TAG" --json isDraft -q .isDraft)
+            ASSET_COUNT=$(gh release view "$TAG" --json assets -q '.assets | length')
+            if [ "$IS_DRAFT" = "false" ] && [ "$ASSET_COUNT" -ge 2 ]; then
+              echo "Release $TAG is already published with $ASSET_COUNT assets; skipping draft revert."
+            else
+              gh release edit "$TAG" --draft=true --notes-file notes.md
+            fi
+          else
+            gh release create "$TAG" --draft --title "Brana AI $TAG" --notes-file notes.md --verify-tag
+          fi
+
+  windows:
+    needs: [prep]
+    runs-on: windows-latest
+    outputs:
+      sha: ${{ steps.up.outputs.sha }}
+    defaults: { run: { working-directory: client } }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - run: npm install --no-audit --no-fund
+      - run: node node_modules/electron/install.js
+      - run: node scripts/bundle.js
+      - name: Verify real Windows runtime and crash recovery
+        shell: pwsh
+        timeout-minutes: 4
+        run: |
+          foreach ($script in @('scripts/check-privacy-electron.cjs', 'scripts/check-runtime-electron.cjs', 'scripts/check-auth-route-electron.cjs', 'scripts/check-extension-storage-electron.cjs', 'scripts/check-browser-chrome-electron.cjs', 'scripts/check-browser-navigation-electron.cjs', 'scripts/check-browser-viewport-electron.cjs')) {
+            $p = Start-Process -FilePath (Resolve-Path 'node_modules/electron/dist/electron.exe') -ArgumentList '--no-sandbox', $script -NoNewWindow -Wait -PassThru
+            if ($p.ExitCode -ne 0) { throw "Windows runtime regression failed ($script): $($p.ExitCode)" }
+          }
+      - name: Bundle xray core (VLESS)
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path bin | Out-Null
+          Invoke-WebRequest -Uri https://github.com/XTLS/Xray-core/releases/latest/download/Xray-windows-64.zip -OutFile xray.zip
+          Expand-Archive xray.zip -DestinationPath bin -Force
+          Remove-Item xray.zip
+          if (!(Test-Path bin/xray.exe)) { throw 'xray.exe missing' }
+          bin/xray.exe version
+          $env:BRANA_XRAY = (Resolve-Path bin/xray.exe).Path
+          node scripts/check-proxy-dns.cjs
+          if ($LASTEXITCODE) { throw 'proxy DNS regression failed' }
+      # 只打安装版（便携版已停止制作）
+      - name: Build installer (NSIS)
+        shell: pwsh
+        run: |
+          npx electron-builder --win nsis --x64 --publish never 2>&1 | Tee-Object -FilePath nsis.log
+          if ($LASTEXITCODE) { Get-Content nsis.log -Tail 25 | ForEach-Object { "::error title=nsis::$_" }; throw 'nsis build failed' }
+          New-Item -ItemType Directory -Force -Path pkg | Out-Null
+          Move-Item release/BranaAi-Setup-*.exe pkg/
+        env: { CSC_IDENTITY_AUTO_DISCOVERY: 'false' }
+      # 发布前自检：CRC 与安装器启动时的完整性检查同一算法；再真的静默安装 / 卸载一遍
+      - name: Verify installers
+        shell: pwsh
+        run: |
+          $exes = @((Get-ChildItem pkg/*.exe).FullName)   # 只有一个安装包时也保持数组，免得 @exes 把路径拆成单个字符
+          if ($exes.Count -ne 1) { throw "expected 1 exe, got $($exes.Count)" }
+          node scripts/nsis-check.js @exes
+          if ($LASTEXITCODE) { throw 'installer integrity check failed' }
+          $v = node -p "require('./package.json').version"
+          $dir = Join-Path $env:RUNNER_TEMP 'BranaAiTest'
+          $p = Start-Process -FilePath (Resolve-Path "pkg/BranaAi-Setup-$v.exe") -ArgumentList '/S', "/D=$dir" -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "silent install exit code $($p.ExitCode)" }
+          if (!(Test-Path "$dir/Brana AI.exe")) { throw 'installed app exe missing' }
+          if (!(Test-Path "$dir/resources/bin/xray.exe")) { throw 'installed xray.exe missing' }
+          if (!(Test-Path "$dir/resources/app.asar")) { throw 'installed app.asar missing' }
+          # Exercise the installed app beyond its 60-second background refresh interval.
+          # A fresh profile uses the unavailable loopback proxy, not a live account or direct route.
+          $profile = Join-Path $env:RUNNER_TEMP 'BranaAiInstalledProfile'
+          $appProcess = Start-Process -FilePath "$dir/Brana AI.exe" -ArgumentList "--user-data-dir=$profile" -PassThru
+          try {
+            Start-Sleep -Seconds 70
+            $appProcess.Refresh()
+            if ($appProcess.HasExited) { throw "installed app exited during idle smoke test: $($appProcess.ExitCode)" }
+            $logFile = Join-Path $profile 'logs/runtime.jsonl'
+            if (!(Test-Path $logFile)) { throw 'installed app did not initialize local runtime diagnostics' }
+            if (Select-String -Path $logFile -Pattern '"event":"(startup-failed|main-exception|window-open-failed)"' -Quiet) { throw 'installed app reported a startup failure' }
+          } finally {
+            if (!$appProcess.HasExited) { taskkill /F /T /PID $appProcess.Id | Out-Null }
+          }
+          $u = Get-ChildItem $dir -Filter 'Uninstall*.exe' | Select-Object -First 1
+          if (!$u) { throw 'uninstaller missing' }
+          node scripts/nsis-check.js $u.FullName
+          if ($LASTEXITCODE) { throw 'uninstaller integrity check failed' }
+          $p = Start-Process -FilePath $u.FullName -ArgumentList '/S', "_?=$dir" -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "silent uninstall exit code $($p.ExitCode)" }
+          if (Test-Path "$dir/Brana AI.exe") { throw 'uninstall left the app behind' }
+          $hashes = Get-FileHash pkg/*.exe -Algorithm SHA256 | ForEach-Object { "$($_.Hash.ToLower())  $(Split-Path $_.Path -Leaf)" }
+          $hashes | Write-Output
+          $hashes | Set-Content pkg/SHA256SUMS.txt -Encoding utf8
+      - name: Retain manual Windows installer
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: BranaAi-Windows-${{ github.run_number }}
+          path: |
+            client/pkg/*.exe
+            client/pkg/SHA256SUMS.txt
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
+      - name: Upload to release
+        id: up
+        if: startsWith(github.ref, 'refs/tags/client-v')
+        env: { GH_TOKEN: '${{ github.token }}' }
+        shell: pwsh
+        run: |
+          $files = @((Get-ChildItem pkg/*.exe).FullName)
+          gh release upload $env:GITHUB_REF_NAME @files --clobber
+          if ($LASTEXITCODE) { throw 'upload failed' }
+          $sha = (Get-FileHash pkg/*.exe -Algorithm SHA256 | ForEach-Object { "$($_.Hash.ToLower())  $(Split-Path $_.Path -Leaf)" }) -join ';'
+          "sha=$sha" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+  android:
+    needs: [prep]
+    runs-on: ubuntu-latest
+    outputs:
+      sha: ${{ steps.up.outputs.sha }}
+    defaults: { run: { working-directory: client } }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: 17 }
+      - uses: gradle/actions/setup-gradle@v4
+        with: { gradle-version: '8.9' }
+      - run: node scripts/bundle.js
+      - name: Bundle xray core (VLESS, arm64-v8a + x86_64)
+        shell: bash
+        run: |
+          set -e
+          for pair in "arm64-v8a:arm64-v8a" "amd64:x86_64"; do
+            src=${pair%%:*}; abi=${pair##*:}
+            curl -fsSL -o x.zip https://github.com/XTLS/Xray-core/releases/latest/download/Xray-android-${src}.zip
+            mkdir -p xr && unzip -o -q x.zip xray -d xr
+            mkdir -p android/app/src/main/jniLibs/${abi}
+            mv xr/xray android/app/src/main/jniLibs/${abi}/libxray.so
+            rm -rf xr x.zip
+          done
+          ls -la android/app/src/main/jniLibs/*
+      - name: Build APK
+        working-directory: client/android
+        shell: bash
+        run: |
+          set -o pipefail
+          gradle assembleRelease --no-daemon --stacktrace 2>&1 | tee build.log || {
+            grep -E "error:|ERROR|FAILURE|What went wrong|Exception" -A3 build.log | head -60 | sed 's/%/%25/g' | awk 'BEGIN{ORS="%0A"}{print}' | sed 's/^/::error title=gradle::/'
+            echo
+            exit 1
+          }
+          VER=$(node -p "require('../package.json').version")
+          mkdir -p ../release
+          cp app/build/outputs/apk/release/app-release.apk ../release/BranaAi-${VER}.apk
+      - name: Verify APK and write checksums
+        shell: bash
+        run: |
+          set -e
+          for f in release/*.apk; do unzip -tq "$f"; done
+          (cd release && sha256sum *.apk > SHA256SUMS.txt)
+      - name: Retain manual Android package
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: BranaAi-Android-${{ github.run_number }}
+          path: |
+            client/release/*.apk
+            client/release/SHA256SUMS.txt
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
+      - name: Upload to release
+        id: up
+        if: startsWith(github.ref, 'refs/tags/client-v')
+        env: { GH_TOKEN: '${{ github.token }}' }
+        shell: bash
+        run: |
+          set -e
+          gh release upload "$GITHUB_REF_NAME" release/*.apk --clobber
+          echo "sha=$(cd release && sha256sum *.apk | paste -sd ';')" >> "$GITHUB_OUTPUT"
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/client-v')
+    needs: [windows, android]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WSHA: ${{ needs.windows.outputs.sha }}
+          ASHA: ${{ needs.android.outputs.sha }}
+        run: |
+          set -e
+          TAG=${GITHUB_REF_NAME}
+          n=$(gh release view "$TAG" --json assets --jq '[.assets[].name | select(test("\\.(exe|apk)$"))] | length')
+          echo "assets: $n"; [ "$n" -ge 2 ] || { echo "::error::release is missing files ($n)"; exit 1; }
+          if [ -f "client/notes/${TAG}.md" ]; then cp "client/notes/${TAG}.md" notes.md; else echo "Brana AI ${TAG}" > notes.md; fi
+          {
+            echo
+            echo '## 文件校验（SHA256）'
+            echo '下载后可以在 PowerShell 里用 `Get-FileHash 文件名` 对照，不一致说明没下完整，重新下载即可。'
+            echo
+            echo '```'
+            echo "$WSHA" | tr ';' '\n' | sed 's/\r//g; /^$/d'
+            echo "$ASHA" | tr ';' '\n' | sed '/^$/d'
+            echo '```'
+          } >> notes.md
+          # 测试版（标签带 -beta / -rc 等）：发布成 Pre-release，不会变成「最新版本」，只有输入测试版口令才能下载
+          # 只看版本号部分（标签本身的 client-v 前缀里就有 -）
+          if echo "${TAG#client-v}" | grep -q -- '-'; then
+            gh release edit "$TAG" --draft=false --prerelease --latest=false --notes-file notes.md
+          else
+            gh release edit "$TAG" --draft=false --prerelease=false --latest --notes-file notes.md
+          fi

@@ -1,0 +1,21 @@
+{
+  "provenance": "Independent Python hashlib PBKDF2 + cryptography 46.0.3 AESGCM; fixed bit-field packing",
+  "phrase": "1326565",
+  "sid": "fixed-sid",
+  "payload": [
+    2,
+    "gpt-6-astra",
+    0.997,
+    191.7,
+    31.4,
+    1791080000123,
+    "",
+    "high",
+    "fingerprint",
+    1791080000123
+  ],
+  "plain_hex": "029f941df4013a68412bfa9ed5",
+  "salt_hex": "0001020304050607",
+  "iv_hex": "101112131415161718191a1b",
+  "title": "Qz aaaazo xkwxoc oiuvzz wkmrvk tsjhem furlan lwecxv ymidgc lyknex wjudps jcwaji pmwknd qvbemh lalvtc"
+}

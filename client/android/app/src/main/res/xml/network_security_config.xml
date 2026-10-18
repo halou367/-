@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 默认只允许 HTTPS；唯一例外 ip-api.com（免费的 IP 信誉批量查询只有 HTTP，只发 IP 列表、不带任何账号信息） -->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false" />
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">ip-api.com</domain>
+    </domain-config>
+</network-security-config>

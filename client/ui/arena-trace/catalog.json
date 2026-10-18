@@ -1,0 +1,2499 @@
+{
+  "format": "arena-agent-catalog/v1",
+  "capturedAt": "2026-10-16T06:00:00.000Z",
+  "generatedAt": "2026-10-13T21:42:32Z",
+  "source": "https://arena.ai/leaderboard/agent —— Next.js RSC flight 载荷（Arena 第一方）。经 ?_rsc=1 直取 snapshot.rows + costStats.entries，单价为载荷原值（全精度）。注意：页面渲染出的表格会把单价四舍五入到两位小数，不可作为数据源。",
+  "sourceWorkbook": "arena_first_party_pricing_audit.xlsx「Leaderboard价格表」（历史来源；本次改为直接解析站点 RSC 载荷）",
+  "sourceNotes": "Claude-Detector/data/arena-pricing-source-notes.md",
+  "units": "USD per 1M tokens；agentTaskCost* 为每 benchmark task 的 USD 分位数，与单价不是同一指标",
+  "caveats": [
+    "第一方 Leaderboard 未公布 cache-read / cache-write 单价；本表的 cache 费率是历史上借自 OpenRouter 目录的（逐条标注 cacheRateSource），2026-10-09 起冻结保留，不再刷新。",
+    "同一 id 且四通道单价完全相同的行已合并为一条候选，agentKeys 保留全部榜单键；残差法只看价格，留两条只会制造假平局。",
+    "id、cache 费率与物理上限按榜单键沿用上一版目录（--prev），以便沿用既有 SEED_COUNTS 与会话投票；上一版没有的新行不借任何外部数据：cache 费率留空，id 沿用 contenders/ 键。",
+    "inputPerMillion / outputPerMillion 为空表示该榜单行未公布该字段，不代表免费，不可用 0 代替。"
+  ],
+  "stats": {
+    "models": 53,
+    "sourceRows": 51,
+    "mergedRows": 2,
+    "withTokenPrice": 50,
+    "withOpenrouterId": 45,
+    "withCacheRead": 52,
+    "withCacheWrite": 26,
+    "orgs": [
+      "Alibaba",
+      "Anthropic",
+      "DeepSeek",
+      "Google",
+      "Meta",
+      "MiniMax",
+      "Mistral",
+      "Moonshot",
+      "Nvidia",
+      "OpenAI",
+      "SpaceXAI",
+      "StepFun",
+      "Tencent",
+      "Thinky",
+      "Upstage",
+      "Xiaomi",
+      "Z.ai"
+    ],
+    "missingCacheRead": 1,
+    "agentLeaderboardCount": 53
+  },
+  "data": [
+    {
+      "id": "qwen/qwen3.8-27b",
+      "agentKeys": [
+        "contenders/qwen3.8-27b-code-agent"
+      ],
+      "label": "Qwen 3.8 27B",
+      "org": "Alibaba",
+      "vendor": "qwen",
+      "inputPerMillion": 0.4,
+      "outputPerMillion": 3,
+      "cacheReadPerMillion": 0.0198,
+      "cacheWritePerMillion": 0.5,
+      "cacheRateSource": "openrouter:qwen/qwen3.8-27b",
+      "openrouterId": "qwen/qwen3.8-27b",
+      "linkBasis": "exact-name",
+      "agentTaskCostP25": 0.08729820999999999,
+      "agentTaskCostP50": 0.39,
+      "agentTaskCostP95": 4.561769030359998,
+      "agentTaskSamples": 3332,
+      "contextLength": 1000000,
+      "maxCompletionTokens": 131072,
+      "supportsReasoning": true,
+      "priceStatus": "input_output_token_price_listed",
+      "mergedTiers": null,
+      "leaderboardRank": 38,
+      "sessions": 60084,
+      "cacheRateCapturedAt": "2026-10-13",
+      "cacheReadVariants": [
+        0.0198,
+        0.04,
+        0.08,
+        0.02
+      ],
+      "cacheWriteVariants": [
+        0.5,
+        0.53125
+      ],
+      "altRates": [
+        {
+          "prompt": 0.04,
+          "completion": 2.3,
+          "cacheRead": 0.0198,
+          "cacheWrite": 0
+        }
+      ],
+      "medOut": 41234,
+      "p25Out": 10744
+    },
+    {
+      "id": "qwen/qwen3.7-max",
+      "agentKeys": [
+        "contenders/qwen3.7-max-agent"
+      ],
+      "label": "Qwen3.7 Max",
+      "org": "Alibaba",
+      "vendor": "qwen",
+      "inputPerMillion": 1.475,
+      "outputPerMillion": 5.9,
+      "cacheReadPerMillion": 0.295,
+      "cacheWritePerMillion": 1.84375,
+      "cacheRateSource": "openrouter:qwen/qwen3.7-max",
+      "openrouterId": "qwen/qwen3.7-max",
+      "linkBasis": "exact-name",
+      "agentTaskCostP25": 0.07418837000000002,
+      "agentTaskCostP50": 0.2613287,
+      "agentTaskCostP95": 3.6200601400000005,
+      "agentTaskSamples": 1607,
+      "contextLength": 1000000,
+      "maxCompletionTokens": 131072,
+      "supportsReasoning": true,
+      "priceStatus": "no_leaderboard_price_listed",
+      "mergedTiers": null,
+      "leaderboardRank": 41,
+      "sessions": 41821,
+      "cacheRateCapturedAt": "2026-10-13",
+      "cacheReadVariants": [
+        0.295,
+        0.1475,
+        0.07375
+      ],
+      "cacheWriteVariants": [
+        1.84375
+      ],
+      "medOut": 15131,
+      "p25Out": 4113
+    },
+    {
+      "id": "qwen/qwen3.7-plus",
+      "agentKeys": [
+        "contenders/qwen3.7-plus-agent"
+      ],
+      "label": "Qwen3.7 Plus",
+      "org": "Alibaba",
+      "vendor": "qwen",
+      "inputPerMillion": 0.32,
+      "outputPerMillion": 1.28,
+      "cacheReadPerMillion": 0.064,
+      "cacheWritePerMillion": 0.4,
+      "cacheRateSource": "openrouter:qwen/qwen3.7-plus",
+      "openrouterId": "qwen/qwen3.7-plus",
+      "linkBasis": "exact-name",
+      "agentTaskCostP25": 0.028980688,
+      "agentTaskCostP50": 0.1211816,
+      "agentTaskCostP95": 1.6349355310999993,
+      "agentTaskSamples": 1498,
+      "contextLength": 1000000,
+      "maxCompletionTokens": 131072,
+      "supportsReasoning": true,
+      "priceStatus": "input_output_token_price_listed",
+      "mergedTiers": null,
+      "leaderboardRank": 43,
+      "sessions": 23076,
+      "cacheRateCapturedAt": "2026-10-13",
+      "cacheReadVariants": [
+        0.064,
+        0.032,
+        0.016
+      ],
+      "cacheWriteVariants": [
+        0.4
+      ],
+      "medOut": 15575,
+      "p25Out": 3963
+    },
+    {
+      "id": "contenders/farris-ees5-agent",
+      "agentKeys": [
+        "contenders/farris-ees5-agent"
+      ],
+      "label": "Qwen3.8 Flash Next",
+      "org": "Alibaba",
+      "vendor": "qwen",
+      "inputPerMillion": 0.16,
+      "outputPerMillion": 0.47,
+      "cacheReadPerMillion": 0.016,
+      "cacheWritePerMillion": 0.2,
+      "cacheRateSource": null,
+      "openrouterId": null,
+      "linkBasis": null,
+      "agentTaskCostP25": 0.0413464495,
+      "agentTaskCostP50": 0.185610685,
+      "agentTaskCostP95": 1.5759048581999993,
+      "agentTaskSamples": 13504,
+      "contextLength": 0,
+      "maxCompletionTokens": 0,
+      "supportsReasoning": false,
+      "priceStatus": "input_output_token_price_listed",
+      "mergedTiers": null,
+      "leaderboardRank": 36,
+      "sessions": 95481,
+      "cacheReadVariants": [
+        0.016,
+        0.008,
+        0.015
+      ],
+      "cacheWriteVariants": [
+        0.2,
+        0.1875
+      ],
+      "altRates": [
+        {
+          "prompt": 0.15,
+          "completion": 0.5,
+          "cacheRead": 0.015,
+          "cacheWrite": 0.1875,
+          "isOfficialPrimary": true
+        }
+      ],
+      "medOut": 51908,
+      "p25Out": 13108
+    },
+    {
+      "id": "contenders/paisley-n9x0",
+      "agentKeys": [
+        "contenders/paisley-n9x0"
+      ],
+      "label": "Qwen3.8 Max",
+      "org": "Alibaba",
+      "vendor": "qwen",
+      "inputPerMillion": 2,
+      "outputPerMillion": 6,
+      "cacheReadPerMillion": 0.2,
+      "cacheWritePerMillion": 2.5,
+      "cacheRateSource": null,
+      "openrouterId": null,
+      "linkBasis": null,
+      "agentTaskCostP25": 0.15632490000000004,
+      "agentTaskCostP50": 0.5859544000000001,
+      "agentTaskCostP95": 7.491711509999996,
+      "agentTaskSamples": 14062,
+      "contextLength": 0,
+      "maxCompletionTokens": 0,
+      "supportsReasoning": false,
+      "priceStatus": "input_output_token_price_listed",
+      "mergedTiers": null,
+      "leaderboardRank": 26,
+      "sessions": 65952,
+      "cacheReadVariants": [
+        0.2,
+        0.25,
+        0.4,
+        0.1
+      ],
+      "cacheWriteVariants": [
+        2.5
+      ],
+      "protoFamily": "compat",
+      "medOut": 29108,
+      "p25Out": 9718
+    },
+    {
+      "id": "anthropic/claude-fable-5",
+      "agentKeys": [
+        "contenders/claude-fable-5-agent"
+      ],
+      "label": "Claude Fable 5 (High)",
+      "org": "Anthropic",
+      "vendor": "anthropic",
+      "inputPerMillion": 10,
+      "outputPerMillion": 50,
+      "cacheReadPerMillion": 1,
+      "cacheWritePerMillion": 12.5,
+      "cacheRateSource": "openrouter:anthropic/claude-fable-5",
+      "openrouterId": "anthropic/claude-fable-5",
+      "linkBasis": "exact-name",
+      "agentTaskCostP25": 0.9553825,
+      "agentTaskCostP50": 3.1627854999999996,
+      "agentTaskCostP95": 50.45525139999998,
+      "agentTaskSamples": 1614,
+      "contextLength": 1000000,
+      "maxCompletionTokens": 128000,
+      "supportsReasoning": true,
+      "priceStatus": "input_output_token_price_listed",
+      "mergedTiers": null,
+      "leaderboardRank": 8,
+      "sessions": 42511,
+      "cacheWrite1hPerMillion": 20,
+      "cacheRateCapturedAt": "2026-10-13",
+      "cacheReadVariants": [
+        1,
+        0.25,
+        0.5
+      ],
+      "cacheWriteVariants": [
+        12.5
+      ],
+      "protoFamily": "claude",
+      "medOut": 17408,
+      "p25Out": 5058
+    },
+    {
+      "id": "anthropic/claude-fable-5.1",
+      "agentKeys": [
+        "contenders/claude-fable-5.1-max-agent"
+      ],
+      "label": "Claude Fable 5.1 (Max)",
+      "org": "Anthropic",
+      "vendor": "anthropic",
+      "inputPerMillion": 10,
+      "outputPerMillion": 50,
+      "cacheReadPerMillion": 0.25,
+      "cacheWritePerMillion": 12.5,
+      "cacheRateSource": "openrouter:anthropic/claude-fable-5.1",
+      "openrouterId": "anthropic/claude-fable-5.1",
+      "linkBasis": "exact-name",
+      "agentTaskCostP25": 1.67384325,
+      "agentTaskCostP50": 7.184909875,
+      "agentTaskCostP95": 61.17506568749996,
+      "agentTaskSamples": 16322,
+      "contextLength": 1000000,
+      "maxCompletionTokens": 128000,
+      "supportsReasoning": true,
+      "priceStatus": "input_output_token_price_listed",
+      "mergedTiers": null,
+      "leaderboardRank": 6,
+      "sessions": 16099,
+      "cacheWrite1hPerMillion": 20,
+      "cacheRateCapturedAt": "2026-10-13",
+      "cacheReadVariants": [
+        0.25,
+        1,
+        0.5
+      ],
+      "cacheWriteVariants": [
+        12.5
+      ],
+      "protoFamily": "claude",
+      "medOut": 51104,
+      "p25Out": 13453
+    },
+    {
+      "id": "anthropic/claude-opus-4.8",
+      "agentKeys": [
+        "contenders/claude-opus-4-8-thinking-agent"
+      ],
+      "label": "Claude Opus 4.8 (High)",
+      "org": "Anthropic",
+      "vendor": "anthropic",
+      "inputPerMillion": 5,
+      "outputPerMillion": 25,
+      "cacheReadPerMillion": 0.5,
+      "cacheWritePerMillion": 6.25,
+      "cacheRateSource": "openrouter:anthropic/claude-opus-4.8",
+      "openrouterId": "anthropic/claude-opus-4.8",
+      "linkBasis": "exact-name",
+      "agentTaskCostP25": 0.5186735,
+      "agentTaskCostP50": 1.4825692499999998,
+      "agentTaskCostP95": 12.106850599999996,
+      "agentTaskSamples": 33,
+      "contextLength": 1000000,
+      "maxCompletionTokens": 128000,
+      "supportsReasoning": true,
+      "priceStatus": "input_output_token_price_listed",
+      "mergedTiers": null,
+      "leaderboardRank": 10,
+      "sessions": 40304,
+      "cacheWrite1hPerMillion": 10,
+      "cacheRateCapturedAt": "2026-10-13",
+      "cacheReadVariants": [
+        0.5,
+        0.25
+      ],
+      "cacheWriteVariants": [
+        6.25
+      ],
+      "medOut": 17880,
+      "p25Out": 5239
+    },
+    {
+      "id": "anthropic/claude-opus-5",
+      "agentKeys": [
+        "contenders/claude-opus-5-max-agent"
+      ],
+      "label": "Claude Opus 5 (Max)",
+      "org": "Anthropic",
+      "vendor": "anthropic",
+      "inputPerMillion": 5,
+      "outputPerMillion": 25,
+      "cacheReadPerMillion": 0.5,
+      "cacheWritePerMillion": 6.25,
+      "cacheRateSource": "openrouter:anthropic/claude-opus-5",
+      "openrouterId": "anthropic/claude-opus-5",
+      "linkBasis": "exact-name",
+      "agentTaskCostP25": 1.403678875,
+      "agentTaskCostP50": 5.376657250000001,
+      "agentTaskCostP95": 47.9645605,
+      "agentTaskSamples": 1603,
+      "contextLength": 1000000,
+      "maxCompletionTokens": 128000,
+      "supportsReasoning": true,
+      "priceStatus": "input_output_token_price_listed",
+      "mergedTiers": null,
+      "leaderboardRank": 9,
+      "sessions": 23430,
+      "cacheWrite1hPerMillion": 10,
+      "cacheRateCapturedAt": "2026-10-13",
+      "cacheReadVariants": [
+        0.5,
+        0.25
+      ],
+      "cacheWriteVariants": [
+        6.25
+      ],
+      "medOut": 63415,
+      "p25Out": 17567
+    },
+    {
+      "id": "anthropic/claude-opus-5.5",
+      "agentKeys": [
+        "contenders/claude-opus-5.5-max-vertex-agent"
+      ],
+      "label": "Claude Opus 5.5 (Max)",
+      "org": "Anthropic",
+      "vendor": "anthropic",
+      "inputPerMillion": 4,
+      "outputPerMillion": 20,
+      "cacheReadPerMillion": 0.2,
+      "cacheWritePerMillion": 5,
+      "cacheRateSource": "openrouter:anthropic/claude-opus-5.5",
+      "openrouterId": "anthropic/claude-opus-5.5",
+      "linkBasis": "exact-name",
+      "agentTaskCostP25": 1.6844301000000002,
+      "agentTaskCostP50": 5.561452400000002,
+      "agentTaskCostP95": 43.35919945999996,
+      "agentTaskSamples": 23589,
+      "contextLength": 1000000,
+      "maxCompletionTokens": 128000,
+      "supportsReasoning": true,
+      "priceStatus": "input_output_token_price_listed",
+      "mergedTiers": null,
+      "leaderboardRank": 1,
+      "sessions": 5686,
+      "cacheWrite1hPerMillion": 8,
+      "cacheRateCapturedAt": "2026-10-13",
+      "cacheReadVariants": [
+        0.2,
+        0.4
+      ],
+      "cacheWriteVariants": [
+        5
+      ],
+      "protoFamily": "claude",
+      "medOut": 27948,
+      "p25Out": 6736
+    },
+    {
+      "id": "anthropic/claude-sonnet-5",
+      "agentKeys": [
+        "contenders/claude-sonnet-5-agent"
+      ],
+      "label": "Claude Sonnet 5 (High)",
+      "org": "Anthropic",
+      "vendor": "anthropic",
+      "inputPerMillion": 2,
+      "outputPerMillion": 10,
+      "cacheReadPerMillion": 0.2,
+      "cacheWritePerMillion": 2.5,
+      "cacheRateSource": "openrouter:anthropic/claude-sonnet-5",
+      "openrouterId": "anthropic/claude-sonnet-5",
+      "linkBasis": "exact-name",
+      "agentTaskCostP25": 0.2643805,
+      "agentTaskCostP50": 0.9923977999999999,
+      "agentTaskCostP95": 15.271509079999985,
+      "agentTaskSamples": 1486,
+      "contextLength": 1000000,
+      "maxCompletionTokens": 128000,
+      "supportsReasoning": true,
+      "priceStatus": "input_output_token_price_listed",
+      "mergedTiers": null,
+      "leaderboardRank": 14,
+      "sessions": 32993,
+      "cacheWrite1hPerMillion": 4,
+      "cacheRateCapturedAt": "2026-10-13",
+      "cacheReadVariants": [
+        0.2,
+        0.1
+      ],
+      "cacheWriteVariants": [
+        2.5
+      ],
+      "protoFamily": "claude",
+      "medOut": 24198,
+      "p25Out": 5954
+    },
+    {
+      "id": "anthropic/claude-sonnet-5.5",
+      "agentKeys": [
+        "contenders/claude-sonnet-5-5-max-agent"
+      ],
+      "label": "Claude Sonnet 5.5 (Max)",
+      "org": "Anthropic",
+      "vendor": "anthropic",
+      "inputPerMillion": 2,
+      "outputPerMillion": 10,
+      "cacheReadPerMillion": 0.1,
+      "cacheWritePerMillion": 2.5,
+      "cacheRateSource": "openrouter:anthropic/claude-sonnet-5.5",
+      "openrouterId": "anthropic/claude-sonnet-5.5",
+      "linkBasis": "exact-name",
+      "agentTaskCostP25": 0.8523365749999999,
+      "agentTaskCostP50": 3.3374511500000006,
+      "agentTaskCostP95": 33.64673710499997,
+      "agentTaskSamples": 6053,
+      "contextLength": 1000000,
+      "maxCompletionTokens": 128000,
+      "supportsReasoning": true,
+      "priceStatus": "no_leaderboard_price_listed",
+      "mergedTiers": null,
+      "leaderboardRank": 7,
+      "sessions": 7352,
+      "cacheWrite1hPerMillion": 4,
+      "cacheRateCapturedAt": "2026-10-13",
+      "cacheReadVariants": [
+        0.1,
+        0.2
+      ],
+      "cacheWriteVariants": [
+        2.5
+      ],
+      "protoFamily": "claude",
+      "medOut": 123075,
+      "p25Out": 39729
+    },
+    {
+      "id": "contenders/deepseek-v4-pro-high-fireworks",
+      "agentKeys": [
+        "contenders/deepseek-v4-pro-high-fireworks"
+      ],
+      "label": "DeepSeek V4 Pro (High) (0813)",
+      "org": "DeepSeek",
+      "vendor": "deepseek",
+      "inputPerMillion": 1,
+      "outputPerMillion": 3,
+      "cacheReadPerMillion": 0.2,
+      "cacheWritePerMillion": 1.25,
+      "cacheRateSource": null,
+      "openrouterId": null,
+      "linkBasis": null,
+      "agentTaskCostP25": null,
+      "agentTaskCostP50": null,
+      "agentTaskCostP95": null,
+      "agentTaskSamples": null,
+      "contextLength": 0,
+      "maxCompletionTokens": 0,
+      "supportsReasoning": false,
+      "priceStatus": "no_leaderboard_price_listed",
+      "mergedTiers": null,
+      "leaderboardRank": 21,
+      "sessions": 7163,
+      "cacheReadVariants": [
+        0.2,
+        0.1,
+        0.05
+      ],
+      "cacheWriteVariants": [
+        1.25
+      ],
+      "medOut": 42164,
+      "p25Out": 8047
+    },
+    {
+      "id": "deepseek/deepseek-v4.1-flash",
+      "agentKeys": [
+        "contenders/deepseek-v4.1-flash-max-20260910-agent",
+        "contenders/deepseek-v4.1-flash-1017-agent"
+      ],
+      "label": "Deepseek V4.1 Flash (Max)",
+      "org": "DeepSeek",
+      "vendor": "deepseek",
+      "inputPerMillion": 0.3,
+      "outputPerMillion": 1.2,
+      "cacheReadPerMillion": 0.006,
+      "cacheWritePerMillion": 0.375,
+      "cacheRateSource": "openrouter:deepseek/deepseek-v4.1-flash",
+      "openrouterId": "deepseek/deepseek-v4.1-flash",
+      "linkBasis": "exact-name",
+      "agentTaskCostP25": 0.03616894428,
+      "agentTaskCostP50": 0.13,
+      "agentTaskCostP95": 1.2803197444239995,
+      "agentTaskSamples": 109570,
+      "contextLength": 1048576,
+      "maxCompletionTokens": 943718,
+      "supportsReasoning": true,
+      "priceStatus": "input_output_token_price_listed",
+      "mergedTiers": null,
+      "leaderboardRank": 19,
+      "sessions": 210741,
+      "cacheRateCapturedAt": "2026-10-13",
+      "cacheReadVariants": [
+        0.006,
+        0.030622,
+        0.0308,
+        0.01,
+        0.0054,
+        0.03,
+        0.06,
+        0.00686,
+        0.015
+      ],
+      "protoFamily": "deepseek",
+      "altRates": [
+        {
+          "prompt": 0.2156,
+          "completion": 0.6468,
+          "cacheRead": 0.00686,
+          "cacheWrite": 0
+        },
+        {
+          "prompt": 0.02016,
+          "completion": 0.891,
+          "cacheRead": 0.0054,
+          "cacheWrite": 0
+        },
+        {
+          "prompt": 0.112,
+          "completion": 0.336,
+          "cacheRead": 0.00336,
+          "cacheWrite": 0
+        }
+      ],
+      "cacheWrite": 3.75e-7,
+      "cacheWriteVariants": [
+        0.375,
+        0.3,
+        0
+      ],
+      "medOut": 62484,
+      "p25Out": 18880
+    },
+    {
+      "id": "google/gemini-3.1-pro-preview",
+      "agentKeys": [
+        "contenders/gemini-3.1-pro-preview-agent"
+      ],
+      "label": "Gemini 3.1 Pro Preview",
+      "org": "Google",
+      "vendor": "google",
+      "inputPerMillion": 1,
+      "outputPerMillion": 6,
+      "cacheReadPerMillion": 0.1,
+      "cacheWritePerMillion": 0.375,
+      "cacheRateSource": "openrouter:google/gemini-3.1-pro-preview",
+      "openrouterId": "google/gemini-3.1-pro-preview",
+      "linkBasis": "exact-name",
+      "agentTaskCostP25": 0.12324602500000001,
+      "agentTaskCostP50": 0.42,
+      "agentTaskCostP95": 5.906148111666641,
+      "agentTaskSamples": 711,
+      "contextLength": 1048576,
+      "maxCompletionTokens": 65536,
+      "supportsReasoning": true,
+      "priceStatus": "input_output_token_price_listed",
+      "mergedTiers": null,
+      "prompt": 0.00000125,
+      "completion": 0.000005,
+      "cacheRead": 3.125e-7,
+      "cacheWrite": 0.00000125,
+      "source": "official_p50",
+      "leaderboardRank": 40,
+      "sessions": 87070,
+      "cacheRateCapturedAt": "2026-10-13",
+      "cacheReadVariants": [
+        0.1,
+        0.2,
+        0.05,
+        0.25
+      ],
+      "protoFamily": "google",
+      "expectedNReason": [
+        0
+      ],
+      "chunkRange": [
+        18,
+        28
+      ],
+      "cacheWriteVariants": [
+        0.375,
+        0.1875,
+        1.25
+      ],
+      "altRates": [
+        {
+          "prompt": 2,
+          "completion": 12,
+          "cacheRead": 0.2,
+          "cacheWrite": 0.375
+        }
+      ],
+      "medOut": 11915,
+      "p25Out": 4902
+    },
+    {
+      "id": "google/gemini-3.6-flash",
+      "agentKeys": [
+        "contenders/gemini-3.6-flash-agent"
+      ],
+      "label": "Gemini 3.6 Flash (High)",
+      "org": "Google",
+      "vendor": "google",
+      "inputPerMillion": 0.75,
+      "outputPerMillion": 3.75,
+      "cacheReadPerMillion": 0.075,
+      "cacheWritePerMillion": 0.9375,
+      "cacheRateSource": "openrouter:google/gemini-3.6-flash",
+      "openrouterId": "google/gemini-3.6-flash",
+      "linkBasis": "exact-name",
+      "agentTaskCostP25": 0.13196071874999998,
+      "agentTaskCostP50": 0.5,
+      "agentTaskCostP95": 3.1407215250000005,
+      "agentTaskSamples": 91,
+      "contextLength": 1048576,
+      "maxCompletionTokens": 65536,
+      "supportsReasoning": true,
+      "priceStatus": "input_output_token_price_listed",
+      "mergedTiers": null,
+      "prompt": 7.5e-7,
+      "completion": 0.00000375,
+      "cacheRead": 7.5e-8,
+      "cacheWrite": 9.375e-7,
+      "source": "official_p50",
+      "leaderboardRank": 41,
+      "sessions": 22873,
+      "cacheRateCapturedAt": "2026-10-13",
+      "cacheReadVariants": [
+        0.075,
+        0.0375,
+        0.15,
+        0.05
+      ],
+      "protoFamily": "google",
+      "expectedNReason": [
+        0
+      ],
+      "chunkRange": [
+        18,
+        28
+      ],
+      "cacheWriteVariants": [
+        0.9375,
+        0.0416666666667,
+        0.75,
+        0.375,
+        0
+      ],
+      "altRates": [
+        {
+          "prompt": 0.5,
+          "completion": 3,
+          "cacheRead": 0.05,
+          "cacheWrite": 0.0833333333333
+        },
+        {
+          "prompt": 0.375,
+          "completion": 1.875,
+          "cacheRead": 0.0375,
+          "cacheWrite": 0.0416666666667
+        }
+      ],
+      "medOut": 22518,
+      "p25Out": 7154
+    },
+    {
+      "id": "google/gemini-3.7-flash",
+      "agentKeys": [
+        "contenders/andwise-evfd-agent"
+      ],
+      "label": "Gemini 3.7 Flash (High)",
+      "org": "Google",
+      "vendor": "google",
+      "inputPerMillion": 0.75,
+      "outputPerMillion": 3.75,
+      "cacheReadPerMillion": 0.075,
+      "cacheWritePerMillion": 0.9375,
+      "cacheRateSource": "openrouter:google/gemini-3.7-flash",
+      "openrouterId": "google/gemini-3.7-flash",
+      "linkBasis": "exact-name",
+      "agentTaskCostP25": 0.1063303875,
+      "agentTaskCostP50": 0.52,
+      "agentTaskCostP95": 4.951516783749999,
+      "agentTaskSamples": 1699,
+      "contextLength": 1048576,
+      "maxCompletionTokens": 65536,
+      "supportsReasoning": true,
+      "priceStatus": "input_output_token_price_listed",
+      "mergedTiers": null,
+      "prompt": 7.5e-7,
+      "completion": 0.00000375,
+      "cacheRead": 7.5e-8,
+      "cacheWrite": 9.375e-7,
+      "source": "official_p50",
+      "leaderboardRank": 33,
+      "sessions": 55039,
+      "cacheRateCapturedAt": "2026-10-13",
+      "cacheReadVariants": [
+        0.075,
+        0.0375,
+        0.15,
+        0.05
+      ],
+      "protoFamily": "google",
+      "expectedNReason": [
+        0
+      ],
+      "chunkRange": [
+        18,
+        28
+      ],
+      "cacheWriteVariants": [
+        0.9375,
+        0.0416666666667,
+        0.75,
+        0.375,
+        0
+      ],
+      "altRates": [
+        {
+          "prompt": 0.5,
+          "completion": 3,
+          "cacheRead": 0.05,
+          "cacheWrite": 0.0833333333333
+        },
+        {
+          "prompt": 0.375,
+          "completion": 1.875,
+          "cacheRead": 0.0375,
+          "cacheWrite": 0.0416666666667
+        }
+      ],
+      "medOut": 30912,
+      "p25Out": 7844
+    },
+    {
+      "id": "google/gemini-3.8-flash",
+      "agentKeys": [
+        "contenders/skimaki-kwc6-agent"
+      ],
+      "label": "Gemini 3.8 Flash (High)",
+      "org": "Google",
+      "vendor": "google",
+      "inputPerMillion": 0.75,
+      "outputPerMillion": 3.75,
+      "cacheReadPerMillion": 0.075,
+      "cacheWritePerMillion": 0.9375,
+      "cacheRateSource": "openrouter:google/gemini-3.8-flash",
+      "openrouterId": "google/gemini-3.8-flash",
+      "linkBasis": "exact-name",
+      "agentTaskCostP25": 0.15304845,
+      "agentTaskCostP50": 0.69,
+      "agentTaskCostP95": 6.365370825,
+      "agentTaskSamples": 3877,
+      "contextLength": 1048576,
+      "maxCompletionTokens": 65536,
+      "supportsReasoning": true,
+      "priceStatus": "input_output_token_price_listed",
+      "mergedTiers": null,
+      "prompt": 7.5e-7,
+      "completion": 0.00000375,
+      "cacheRead": 7.5e-8,
+      "cacheWrite": 9.375e-7,
+      "source": "official_p50",
+      "leaderboardRank": 13,
+      "sessions": 37393,
+      "cacheRateCapturedAt": "2026-10-13",
+      "cacheReadVariants": [
+        0.075,
+        0.0375,
+        0.15,
+        0.05
+      ],
+      "protoFamily": "google",
+      "expectedNReason": [
+        0
+      ],
+      "chunkRange": [
+        18,
+        28
+      ],
+      "cacheWriteVariants": [
+        0.9375,
+        0.0416666666667,
+        0.75,
+        0.375,
+        0
+      ],
+      "altRates": [
+        {
+          "prompt": 0.5,
+          "completion": 3,
+          "cacheRead": 0.05,
+          "cacheWrite": 0.0833333333333
+        },
+        {
+          "prompt": 0.375,
+          "completion": 1.875,
+          "cacheRead": 0.0375,
+          "cacheWrite": 0.0416666666667
+        }
+      ],
+      "medOut": 46102,
+      "p25Out": 12660
+    },
+    {
+      "id": "contenders/barium-bb-v2-4xts-agent",
+      "agentKeys": [
+        "contenders/barium-bb-v2-4xts-agent"
+      ],
+      "label": "Gemini 4 Argon (High)",
+      "org": "Google",
+      "vendor": "google",
+      "inputPerMillion": 2,
+      "outputPerMillion": 10,
+      "cacheReadPerMillion": 0.2,
+      "cacheWritePerMillion": 2,
+      "cacheRateSource": null,
+      "openrouterId": null,
+      "linkBasis": null,
+      "agentTaskCostP25": 0.1952788,
+      "agentTaskCostP50": 0.7694338000000001,
+      "agentTaskCostP95": 8.608497679999997,
+      "agentTaskSamples": 19312,
+      "contextLength": 0,
+      "maxCompletionTokens": 0,
+      "supportsReasoning": false,
+      "priceStatus": "input_output_token_price_listed",
+      "mergedTiers": null,
+      "prompt": 0.000002,
+      "completion": 0.00001,
+      "cacheRead": 5e-7,
+      "cacheWrite": 0.000002,
+      "source": "official_p50",
+      "leaderboardRank": 4,
+      "sessions": 24314,
+      "cacheReadVariants": [
+        0.2,
+        0.1,
+        0.5
+      ],
+      "cacheWriteVariants": [
+        2,
+        2.5
+      ],
+      "protoFamily": "google",
+      "expectedNReason": [
+        0
+      ],
+      "chunkRange": [
+        20,
+        32
+      ],
+      "cpsRange": [
+        55,
+        115
+      ],
+      "medOut": 22955,
+      "p25Out": 6307
+    },
+    {
+      "id": "meta/muse-spark-1.1",
+      "agentKeys": [
+        "contenders/super-nova-ext-3tam-agent"
+      ],
+      "label": "Muse Spark 1.1",
+      "org": "Meta",
+      "vendor": "meta",
+      "inputPerMillion": 1.25,
+      "outputPerMillion": 4.25,
+      "cacheReadPerMillion": 0.15,
+      "cacheWritePerMillion": 1.5625,
+      "cacheRateSource": "openrouter:meta/muse-spark-1.1",
+      "openrouterId": "meta/muse-spark-1.1",
+      "linkBasis": "exact-name",
+      "agentTaskCostP25": 0.14444783749999998,
+      "agentTaskCostP50": 0.499366625,
+      "agentTaskCostP95": 8.77937143666666,
+      "agentTaskSamples": 4708,
+      "contextLength": 1048576,
+      "maxCompletionTokens": 943718,
+      "supportsReasoning": true,
+      "priceStatus": "input_output_token_price_listed",
+      "mergedTiers": null,
+      "leaderboardRank": 40,
+      "sessions": 145791,
+      "cacheRateCapturedAt": "2026-10-13",
+      "cacheReadVariants": [
+        0.15,
+        0.125,
+        0.0625
+      ],
+      "cacheWrite": 0.0000015625,
+      "cacheWriteVariants": [
+        1.5625,
+        1.25,
+        0
+      ],
+      "medOut": 17102,
+      "p25Out": 6833
+    },
+    {
+      "id": "meta/muse-spark-1.2",
+      "agentKeys": [
+        "contenders/muse-spark-1.2-xhigh-agent"
+      ],
+      "label": "Muse Spark 1.2 (xHigh)",
+      "org": "Meta",
+      "vendor": "meta",
+      "inputPerMillion": 1.25,
+      "outputPerMillion": 4.25,
+      "cacheReadPerMillion": 0.15,
+      "cacheWritePerMillion": 1.5625,
+      "cacheRateSource": "openrouter:meta/muse-spark-1.2",
+      "openrouterId": "meta/muse-spark-1.2",
+      "linkBasis": "exact-name",
+      "agentTaskCostP25": 0.13312113750000001,
+      "agentTaskCostP50": 0.44182810000000006,
+      "agentTaskCostP95": 5.981007554999999,
+      "agentTaskSamples": 3451,
+      "contextLength": 1048576,
+      "maxCompletionTokens": 943718,
+      "supportsReasoning": true,
+      "priceStatus": "input_output_token_price_listed",
+      "mergedTiers": null,
+      "leaderboardRank": 45,
+      "sessions": 51059,
+      "cacheRateCapturedAt": "2026-10-13",
+      "cacheReadVariants": [
+        0.15,
+        0.125,
+        0.0625
+      ],
+      "cacheWrite": 0.0000015625,
+      "cacheWriteVariants": [
+        1.5625,
+        1.25,
+        0
+      ],
+      "medOut": 23006,
+      "p25Out": 8352
+    },
+    {
+      "id": "meta/muse-spark-1.3",
+      "agentKeys": [
+        "contenders/muse-spark-1-3-max-agent"
+      ],
+      "label": "Muse Spark 1.3 (Max)",
+      "org": "Meta",
+      "vendor": "meta",
+      "inputPerMillion": 1.25,
+      "outputPerMillion": 4.25,
+      "cacheReadPerMillion": 0.15,
+      "cacheWritePerMillion": 1.5625,
+      "cacheRateSource": "openrouter:meta/muse-spark-1.3",
+      "openrouterId": "meta/muse-spark-1.3",
+      "linkBasis": "exact-name",
+      "agentTaskCostP25": 0.16050075,
+      "agentTaskCostP50": 0.5393155000000001,
+      "agentTaskCostP95": 8.71139635333333,
+      "agentTaskSamples": 8832,
+      "contextLength": 1048576,
+      "maxCompletionTokens": 943718,
+      "supportsReasoning": true,
+      "priceStatus": "input_output_token_price_listed",
+      "mergedTiers": null,
+      "leaderboardRank": 17,
+      "sessions": 73262,
+      "cacheRateCapturedAt": "2026-10-13",
+      "cacheReadVariants": [
+        0.15,
+        0.125,
+        0.0625
+      ],
+      "cacheWrite": 0.0000015625,
+      "cacheWriteVariants": [
+        1.5625,
+        1.25,
+        0
+      ],
+      "medOut": 22665,
+      "p25Out": 7642
+    },
+    {
+      "id": "minimax/minimax-m3",
+      "agentKeys": [
+        "contenders/minimax-m3-first-party"
+      ],
+      "label": "Minimax M3",
+      "org": "MiniMax",
+      "vendor": "minimax",
+      "inputPerMillion": 0.3,
+      "outputPerMillion": 1.2,
+      "cacheReadPerMillion": 0.06,
+      "cacheWritePerMillion": 0.375,
+      "cacheRateSource": "openrouter:minimax/minimax-m3",
+      "openrouterId": "minimax/minimax-m3",
+      "linkBasis": "exact-name",
+      "agentTaskCostP25": 0.020499629999999998,
+      "agentTaskCostP50": 0.1064997,
+      "agentTaskCostP95": 2.8435688760000004,
+      "agentTaskSamples": 1520,
+      "contextLength": 524288,
+      "maxCompletionTokens": 512000,
+      "supportsReasoning": true,
+      "priceStatus": "input_output_token_price_listed",
+      "mergedTiers": null,
+      "leaderboardRank": 47,
+      "sessions": 42663,
+      "cacheRateCapturedAt": "2026-10-13",
+      "cacheReadVariants": [
+        0.06,
+        0.03,
+        0.015
+      ],
+      "protoFamily": "compat",
+      "cacheWrite": 3.75e-7,
+      "cacheWriteVariants": [
+        0.375,
+        0.3,
+        0
+      ],
+      "medOut": 11069,
+      "p25Out": 2611
+    },
+    {
+      "id": "mistralai/mistral-medium-3-5",
+      "agentKeys": [
+        "contenders/mistral-medium-3.5-v2-agent"
+      ],
+      "label": "Mistral Medium 3.5",
+      "org": "Mistral",
+      "vendor": "mistralai",
+      "inputPerMillion": 0.75,
+      "outputPerMillion": 3.75,
+      "cacheReadPerMillion": 0.075,
+      "cacheWritePerMillion": 0.9375,
+      "cacheRateSource": "openrouter:mistralai/mistral-medium-3-5",
+      "openrouterId": "mistralai/mistral-medium-3-5",
+      "linkBasis": "exact-name",
+      "agentTaskCostP25": 0.17648835000000002,
+      "agentTaskCostP50": 0.6775404000000002,
+      "agentTaskCostP95": 19.111627049999935,
+      "agentTaskSamples": 1372,
+      "contextLength": 262144,
+      "maxCompletionTokens": 209715,
+      "supportsReasoning": true,
+      "priceStatus": "input_output_token_price_listed",
+      "mergedTiers": null,
+      "leaderboardRank": 49,
+      "sessions": 12492,
+      "cacheRateCapturedAt": "2026-10-13",
+      "cacheReadVariants": [
+        0.075,
+        0.0375
+      ],
+      "cacheWriteVariants": [
+        0.9375,
+        0.0416666666667,
+        0.75,
+        0.375,
+        0
+      ],
+      "protoFamily": "vllm",
+      "prompt": 7.5e-7,
+      "completion": 0.00000375,
+      "cacheRead": 7.5e-8,
+      "cacheWrite": 9.375e-7,
+      "medOut": 15352,
+      "p25Out": 4368
+    },
+    {
+      "id": "moonshotai/kimi-k3",
+      "agentKeys": [
+        "contenders/kivine-wxzc-agent"
+      ],
+      "label": "Kimi K3 (Max)",
+      "org": "Moonshot",
+      "vendor": "moonshotai",
+      "inputPerMillion": 3,
+      "outputPerMillion": 15,
+      "cacheReadPerMillion": 0.3,
+      "cacheWritePerMillion": 3.75,
+      "cacheRateSource": "openrouter:moonshotai/kimi-k3",
+      "openrouterId": "moonshotai/kimi-k3",
+      "linkBasis": "exact-name",
+      "agentTaskCostP25": 0.26362694999999997,
+      "agentTaskCostP50": 1.03,
+      "agentTaskCostP95": 12.951467984999994,
+      "agentTaskSamples": 4024,
+      "contextLength": 1048576,
+      "maxCompletionTokens": 943718,
+      "supportsReasoning": true,
+      "priceStatus": "input_output_token_price_listed",
+      "mergedTiers": null,
+      "leaderboardRank": 25,
+      "sessions": 134700,
+      "cacheRateCapturedAt": "2026-10-13",
+      "cacheReadVariants": [
+        0.3,
+        0.32,
+        0.55,
+        0.228,
+        0.15
+      ],
+      "cacheWriteVariants": [
+        3.75,
+        3
+      ],
+      "altRates": [
+        {
+          "prompt": 0.7,
+          "completion": 15,
+          "cacheRead": 0.32,
+          "cacheWrite": 0
+        },
+        {
+          "prompt": 2.28,
+          "completion": 11.4,
+          "cacheRead": 0.228,
+          "cacheWrite": 0
+        }
+      ],
+      "medOut": 28339,
+      "p25Out": 8642
+    },
+    {
+      "id": "openai/gpt-5.4",
+      "agentKeys": [
+        "contenders/gpt-5.4-high-code-arena-harness-agent"
+      ],
+      "label": "GPT 5.4 (High)",
+      "org": "OpenAI",
+      "vendor": "openai",
+      "inputPerMillion": 2.5,
+      "outputPerMillion": 15,
+      "cacheReadPerMillion": 0.25,
+      "cacheWritePerMillion": 3.125,
+      "cacheRateSource": "openrouter:openai/gpt-5.4",
+      "openrouterId": "openai/gpt-5.4",
+      "linkBasis": "exact-name",
+      "agentTaskCostP25": 0.197315875,
+      "agentTaskCostP50": 0.6164427499999999,
+      "agentTaskCostP95": 6.82073235,
+      "agentTaskSamples": 488,
+      "contextLength": 1050000,
+      "maxCompletionTokens": 128000,
+      "supportsReasoning": true,
+      "priceStatus": "input_output_token_price_listed",
+      "mergedTiers": null,
+      "leaderboardRank": 23,
+      "sessions": 81887,
+      "cacheRateCapturedAt": "2026-10-13",
+      "cacheReadVariants": [
+        0.25,
+        0.125
+      ],
+      "cacheWrite": 0.000003125,
+      "cacheWriteVariants": [
+        3.125,
+        2.5,
+        0
+      ],
+      "medOut": 16551,
+      "p25Out": 6299
+    },
+    {
+      "id": "openai/gpt-5.5",
+      "agentKeys": [
+        "contenders/gpt-5.5-xhigh-agent"
+      ],
+      "label": "GPT 5.5 (xHigh)",
+      "org": "OpenAI",
+      "vendor": "openai",
+      "inputPerMillion": 5,
+      "outputPerMillion": 30,
+      "cacheReadPerMillion": 0.5,
+      "cacheWritePerMillion": 6.25,
+      "cacheRateSource": "openrouter:openai/gpt-5.5",
+      "openrouterId": "openai/gpt-5.5",
+      "linkBasis": "exact-name",
+      "agentTaskCostP25": 0.1824255,
+      "agentTaskCostP50": 1.25,
+      "agentTaskCostP95": 8.310623449999982,
+      "agentTaskSamples": 433,
+      "contextLength": 1050000,
+      "maxCompletionTokens": 128000,
+      "supportsReasoning": true,
+      "priceStatus": "input_output_token_price_listed",
+      "mergedTiers": null,
+      "leaderboardRank": 16,
+      "sessions": 137063,
+      "cacheRateCapturedAt": "2026-10-13",
+      "cacheReadVariants": [
+        0.5,
+        0.25
+      ],
+      "cacheWriteVariants": [
+        6.25,
+        3.125
+      ],
+      "altRates": [
+        {
+          "prompt": 2.5,
+          "completion": 15,
+          "cacheRead": 0.25,
+          "cacheWrite": 3.125
+        }
+      ],
+      "medOut": 9554,
+      "p25Out": 3076
+    },
+    {
+      "id": "openai/gpt-5.6-luna",
+      "agentKeys": [
+        "contenders/gpt-5.6-luna-xhigh-agent"
+      ],
+      "label": "GPT 5.6 Luna (xHigh)",
+      "org": "OpenAI",
+      "vendor": "openai",
+      "inputPerMillion": 0.2,
+      "outputPerMillion": 1.2,
+      "cacheReadPerMillion": 0.02,
+      "cacheWritePerMillion": 0.25,
+      "cacheRateSource": "openrouter:openai/gpt-5.6-luna",
+      "openrouterId": "openai/gpt-5.6-luna",
+      "linkBasis": "exact-name",
+      "agentTaskCostP25": 0.0243655975,
+      "agentTaskCostP50": 0.08296392,
+      "agentTaskCostP95": 1.274169786999997,
+      "agentTaskSamples": 2374,
+      "contextLength": 1050000,
+      "maxCompletionTokens": 128000,
+      "supportsReasoning": true,
+      "priceStatus": "input_output_token_price_listed",
+      "mergedTiers": null,
+      "leaderboardRank": 33,
+      "sessions": 43540,
+      "cacheRateCapturedAt": "2026-10-13",
+      "cacheReadVariants": [
+        0.02,
+        0.01
+      ],
+      "cacheWriteVariants": [
+        0.25
+      ],
+      "medOut": 16149,
+      "p25Out": 4674
+    },
+    {
+      "id": "openai/gpt-5.6-sol",
+      "agentKeys": [
+        "contenders/gpt-5.6-sol-xhigh-agent"
+      ],
+      "label": "GPT 5.6 Sol (xHigh)",
+      "org": "OpenAI",
+      "vendor": "openai",
+      "inputPerMillion": 4,
+      "outputPerMillion": 20,
+      "cacheReadPerMillion": 0.2,
+      "cacheWritePerMillion": 5,
+      "cacheRateSource": "openrouter:openai/gpt-5.6-sol",
+      "openrouterId": "openai/gpt-5.6-sol",
+      "linkBasis": "exact-name",
+      "agentTaskCostP25": 0.38114919999999997,
+      "agentTaskCostP50": 1.51,
+      "agentTaskCostP95": 22.715878719999985,
+      "agentTaskSamples": 1624,
+      "contextLength": 1050000,
+      "maxCompletionTokens": 128000,
+      "supportsReasoning": true,
+      "priceStatus": "input_output_token_price_listed",
+      "mergedTiers": null,
+      "leaderboardRank": 10,
+      "sessions": 36446,
+      "cacheRateCapturedAt": "2026-10-13",
+      "cacheReadVariants": [
+        0.2,
+        0.4,
+        0.8
+      ],
+      "cacheWriteVariants": [
+        5,
+        2.5,
+        4
+      ],
+      "protoFamily": "openai",
+      "altRates": [
+        {
+          "prompt": 2,
+          "completion": 10,
+          "cacheRead": 0.2,
+          "cacheWrite": 2.5
+        }
+      ],
+      "medOut": 19036,
+      "p25Out": 6196
+    },
+    {
+      "id": "openai/gpt-5.6-terra",
+      "agentKeys": [
+        "contenders/gpt-5.6-terra-xhigh-agent"
+      ],
+      "label": "GPT 5.6 Terra (xHigh)",
+      "org": "OpenAI",
+      "vendor": "openai",
+      "inputPerMillion": 2,
+      "outputPerMillion": 12,
+      "cacheReadPerMillion": 0.2,
+      "cacheWritePerMillion": 2.5,
+      "cacheRateSource": "openrouter:openai/gpt-5.6-terra",
+      "openrouterId": "openai/gpt-5.6-terra",
+      "linkBasis": "exact-name",
+      "agentTaskCostP25": 0.1358934,
+      "agentTaskCostP50": 0.5043067999999999,
+      "agentTaskCostP95": 6.544055533333334,
+      "agentTaskSamples": 1658,
+      "contextLength": 1050000,
+      "maxCompletionTokens": 128000,
+      "supportsReasoning": true,
+      "priceStatus": "input_output_token_price_listed",
+      "mergedTiers": null,
+      "leaderboardRank": 29,
+      "sessions": 24015,
+      "cacheRateCapturedAt": "2026-10-13",
+      "cacheReadVariants": [
+        0.2,
+        0.1
+      ],
+      "cacheWriteVariants": [
+        2.5
+      ],
+      "medOut": 13496,
+      "p25Out": 3913
+    },
+    {
+      "id": "openai/gpt-6-astra",
+      "agentKeys": [
+        "contenders/gpt-6-astra-max-agent"
+      ],
+      "label": "GPT 6 Astra (Max)",
+      "org": "OpenAI",
+      "vendor": "openai",
+      "inputPerMillion": 10,
+      "outputPerMillion": 50,
+      "cacheReadPerMillion": 1,
+      "cacheWritePerMillion": 12.5,
+      "cacheRateSource": "openrouter:openai/gpt-6-astra",
+      "openrouterId": "openai/gpt-6-astra",
+      "linkBasis": "exact-name",
+      "agentTaskCostP25": 0.78545825,
+      "agentTaskCostP50": 3.547322975,
+      "agentTaskCostP95": 46.286361099999944,
+      "agentTaskSamples": 1066,
+      "contextLength": 1050000,
+      "maxCompletionTokens": 128000,
+      "supportsReasoning": true,
+      "priceStatus": "input_output_token_price_listed",
+      "mergedTiers": null,
+      "leaderboardRank": 5,
+      "sessions": 12483,
+      "cacheRateCapturedAt": "2026-10-13",
+      "cacheReadVariants": [
+        1,
+        0.25,
+        0.5
+      ],
+      "cacheWriteVariants": [
+        12.5
+      ],
+      "protoFamily": "openai",
+      "expectedNReason": [
+        1,
+        2
+      ],
+      "chunkRange": [
+        1,
+        5
+      ],
+      "medOut": 28919,
+      "p25Out": 8234
+    },
+    {
+      "id": "openai/gpt-6-luna",
+      "agentKeys": [
+        "contenders/gpt-6-luna-max-agent"
+      ],
+      "label": "GPT 6 Luna (Max)",
+      "org": "OpenAI",
+      "vendor": "openai",
+      "inputPerMillion": 0.05,
+      "outputPerMillion": 0.25,
+      "cacheReadPerMillion": 0.005,
+      "cacheWritePerMillion": 0.0625,
+      "cacheRateSource": "openrouter:openai/gpt-6-luna",
+      "openrouterId": "openai/gpt-6-luna",
+      "linkBasis": "exact-name",
+      "agentTaskCostP25": 0.01787681,
+      "agentTaskCostP50": 0.08,
+      "agentTaskCostP95": 1.2237577095,
+      "agentTaskSamples": 126010,
+      "contextLength": 1050000,
+      "maxCompletionTokens": 128000,
+      "supportsReasoning": true,
+      "priceStatus": "input_output_token_price_listed",
+      "mergedTiers": null,
+      "leaderboardRank": 18,
+      "sessions": 144508,
+      "cacheRateCapturedAt": "2026-10-13",
+      "cacheReadVariants": [
+        0.005,
+        0.01,
+        0.0025
+      ],
+      "cacheWriteVariants": [
+        0.0625,
+        0.125
+      ],
+      "protoFamily": "openai",
+      "chunkRange": [
+        1,
+        5
+      ],
+      "altRates": [
+        {
+          "prompt": 0.1,
+          "completion": 0.5,
+          "cacheRead": 0.01,
+          "cacheWrite": 0.125
+        },
+        {
+          "prompt": 0.1,
+          "completion": 0.5,
+          "cacheRead": 0.005,
+          "cacheWrite": 0.125,
+          "isOfficialPrimary": true
+        }
+      ],
+      "medOut": 35414,
+      "p25Out": 10538
+    },
+    {
+      "id": "openai/gpt-6-sol",
+      "agentKeys": [
+        "contenders/gpt-6-sol-max-agent"
+      ],
+      "label": "GPT 6 Sol (Max)",
+      "org": "OpenAI",
+      "vendor": "openai",
+      "inputPerMillion": 1,
+      "outputPerMillion": 5,
+      "cacheReadPerMillion": 0.1,
+      "cacheWritePerMillion": 1.25,
+      "cacheRateSource": "openrouter:openai/gpt-6-sol",
+      "openrouterId": "openai/gpt-6-sol",
+      "linkBasis": "exact-name",
+      "agentTaskCostP25": 0.1979879,
+      "agentTaskCostP50": 0.84,
+      "agentTaskCostP95": 9.952808814999983,
+      "agentTaskSamples": 427,
+      "contextLength": 1050000,
+      "maxCompletionTokens": 128000,
+      "supportsReasoning": true,
+      "priceStatus": "input_output_token_price_listed",
+      "mergedTiers": null,
+      "leaderboardRank": 7,
+      "sessions": 6148,
+      "cacheRateCapturedAt": "2026-10-13",
+      "cacheReadVariants": [
+        0.1,
+        0.05,
+        0.2
+      ],
+      "cacheWriteVariants": [
+        1.25,
+        2.5
+      ],
+      "protoFamily": "openai",
+      "expectedNReason": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6
+      ],
+      "chunkRange": [
+        1,
+        5
+      ],
+      "altRates": [
+        {
+          "prompt": 2,
+          "completion": 10,
+          "cacheRead": 0.2,
+          "cacheWrite": 2.5
+        }
+      ],
+      "medOut": 29246,
+      "p25Out": 8842
+    },
+    {
+      "id": "openai/gpt-6.1-sol",
+      "agentKeys": [
+        "contenders/gpt-6.1-sol-max-agent"
+      ],
+      "label": "GPT 6.1 Sol (Max)",
+      "org": "OpenAI",
+      "vendor": "openai",
+      "inputPerMillion": 2,
+      "outputPerMillion": 10,
+      "cacheReadPerMillion": 0.1,
+      "cacheWritePerMillion": 2.5,
+      "cacheRateSource": "openrouter:openai/gpt-6.1-sol",
+      "openrouterId": "openai/gpt-6.1-sol",
+      "linkBasis": "exact-name",
+      "agentTaskCostP25": 0.16064080000000003,
+      "agentTaskCostP50": 0.64,
+      "agentTaskCostP95": 6.86727035,
+      "agentTaskSamples": 9281,
+      "contextLength": 1050000,
+      "maxCompletionTokens": 128000,
+      "supportsReasoning": true,
+      "priceStatus": "input_output_token_price_listed",
+      "mergedTiers": null,
+      "leaderboardRank": 2,
+      "sessions": 11376,
+      "cacheRateCapturedAt": "2026-10-13",
+      "cacheReadVariants": [
+        0.1,
+        0.2,
+        0.05
+      ],
+      "cacheWriteVariants": [
+        2.5,
+        1.25
+      ],
+      "protoFamily": "openai",
+      "expectedNReason": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8
+      ],
+      "chunkRange": [
+        1,
+        5
+      ],
+      "cpsRange": [
+        25,
+        130
+      ],
+      "medOut": 26170,
+      "p25Out": 6958
+    },
+    {
+      "id": "x-ai/grok-4.5",
+      "agentKeys": [
+        "contenders/grok-4.5-agent"
+      ],
+      "label": "Grok 4.5",
+      "org": "SpaceXAI",
+      "vendor": "x-ai",
+      "inputPerMillion": 2,
+      "outputPerMillion": 6,
+      "cacheReadPerMillion": 0.3,
+      "cacheWritePerMillion": 2.5,
+      "cacheRateSource": "openrouter:x-ai/grok-4.5",
+      "openrouterId": "x-ai/grok-4.5",
+      "linkBasis": "exact-name",
+      "agentTaskCostP25": 0.1144926,
+      "agentTaskCostP50": 0.5019688,
+      "agentTaskCostP95": 9.096666279999999,
+      "agentTaskSamples": 101,
+      "contextLength": 500000,
+      "maxCompletionTokens": 450000,
+      "supportsReasoning": true,
+      "priceStatus": "input_output_token_price_listed",
+      "mergedTiers": null,
+      "leaderboardRank": 31,
+      "sessions": 41906,
+      "cacheRateCapturedAt": "2026-10-13",
+      "cacheReadVariants": [
+        0.3,
+        0.2,
+        0.1
+      ],
+      "cacheWrite": 0.0000025,
+      "cacheWriteVariants": [
+        2.5,
+        2,
+        0
+      ],
+      "medOut": 14537,
+      "p25Out": 3844
+    },
+    {
+      "id": "x-ai/grok-4.6",
+      "agentKeys": [
+        "contenders/grok-4.6-xhigh-public-agent"
+      ],
+      "label": "Grok 4.6 (xHigh)",
+      "org": "SpaceXAI",
+      "vendor": "x-ai",
+      "inputPerMillion": 2,
+      "outputPerMillion": 6,
+      "cacheReadPerMillion": 0.5,
+      "cacheWritePerMillion": 2.5,
+      "cacheRateSource": "openrouter:x-ai/grok-4.6",
+      "openrouterId": "x-ai/grok-4.6",
+      "linkBasis": "exact-name",
+      "agentTaskCostP25": 0.360965,
+      "agentTaskCostP50": 1.276912,
+      "agentTaskCostP95": 14.685190145000004,
+      "agentTaskSamples": 1467,
+      "contextLength": 500000,
+      "maxCompletionTokens": 450000,
+      "supportsReasoning": true,
+      "priceStatus": "no_leaderboard_price_listed",
+      "mergedTiers": null,
+      "leaderboardRank": 30,
+      "sessions": 28639,
+      "cacheRateCapturedAt": "2026-10-13",
+      "cacheReadVariants": [
+        0.5,
+        0.25,
+        0.3,
+        0.2,
+        0.1
+      ],
+      "protoFamily": "grok",
+      "cacheWrite": 0.0000025,
+      "cacheWriteVariants": [
+        2.5,
+        2,
+        0
+      ],
+      "medOut": 32765,
+      "p25Out": 10173
+    },
+    {
+      "id": "x-ai/grok-4.7",
+      "agentKeys": [
+        "contenders/grok-4.7-xhigh-public-agent"
+      ],
+      "label": "Grok 4.7 (xHigh)",
+      "org": "SpaceXAI",
+      "vendor": "x-ai",
+      "inputPerMillion": 2,
+      "outputPerMillion": 6,
+      "cacheReadPerMillion": 0.5,
+      "cacheWritePerMillion": 2.5,
+      "cacheRateSource": "openrouter:x-ai/grok-4.7",
+      "openrouterId": "x-ai/grok-4.7",
+      "linkBasis": "exact-name",
+      "agentTaskCostP25": 0.46646750000000003,
+      "agentTaskCostP50": 2.2107280000000005,
+      "agentTaskCostP95": 17.856200819999984,
+      "agentTaskSamples": 3139,
+      "contextLength": 500000,
+      "maxCompletionTokens": 450000,
+      "supportsReasoning": true,
+      "priceStatus": "input_output_token_price_listed",
+      "mergedTiers": null,
+      "leaderboardRank": 15,
+      "sessions": 14522,
+      "cacheRateCapturedAt": "2026-10-13",
+      "cacheReadVariants": [
+        0.5,
+        0.25,
+        0.3,
+        0.2,
+        0.1
+      ],
+      "protoFamily": "grok",
+      "cacheWrite": 0.0000025,
+      "cacheWriteVariants": [
+        2.5,
+        2,
+        0
+      ],
+      "medOut": 57412,
+      "p25Out": 13830
+    },
+    {
+      "id": "contenders/step-5-preview-agent",
+      "agentKeys": [
+        "contenders/step-5-preview-agent"
+      ],
+      "label": "Step 5 Preview",
+      "org": "StepFun",
+      "vendor": "stepfun",
+      "inputPerMillion": 1,
+      "outputPerMillion": 2.7,
+      "cacheReadPerMillion": 0.05,
+      "cacheWritePerMillion": 1.25,
+      "cacheRateSource": null,
+      "openrouterId": null,
+      "linkBasis": null,
+      "agentTaskCostP25": 0.0957754875,
+      "agentTaskCostP50": 0.36637809999999993,
+      "agentTaskCostP95": 3.640885895000001,
+      "agentTaskSamples": 6073,
+      "contextLength": 0,
+      "maxCompletionTokens": 0,
+      "supportsReasoning": false,
+      "priceStatus": "input_output_token_price_listed",
+      "mergedTiers": null,
+      "leaderboardRank": 34,
+      "sessions": 13072,
+      "cacheReadVariants": [
+        0.05,
+        0.2,
+        0.1
+      ],
+      "protoFamily": "vllm",
+      "medOut": 38746,
+      "p25Out": 10936
+    },
+    {
+      "id": "tencent/hy3",
+      "agentKeys": [
+        "contenders/hy3-tencent-cloud-agent"
+      ],
+      "label": "Hy3",
+      "org": "Tencent",
+      "vendor": "tencent",
+      "inputPerMillion": 0.132,
+      "outputPerMillion": 0.528,
+      "cacheReadPerMillion": 0.033,
+      "cacheWritePerMillion": 0.165,
+      "cacheRateSource": "openrouter:tencent/hy3",
+      "openrouterId": "tencent/hy3",
+      "linkBasis": "exact-name",
+      "agentTaskCostP25": 0.0185014896,
+      "agentTaskCostP50": 0.0626017368,
+      "agentTaskCostP95": 0.7926520305999999,
+      "agentTaskSamples": 1591,
+      "contextLength": 262144,
+      "maxCompletionTokens": 128000,
+      "supportsReasoning": true,
+      "priceStatus": "input_output_token_price_listed",
+      "mergedTiers": null,
+      "leaderboardRank": 42,
+      "sessions": 31022,
+      "cacheRateCapturedAt": "2026-10-13",
+      "cacheReadVariants": [
+        0.033,
+        0.0132,
+        0.0066
+      ],
+      "cacheWrite": 1.65e-7,
+      "cacheWriteVariants": [
+        0.165,
+        0.132,
+        0
+      ],
+      "medOut": 27512,
+      "p25Out": 7669
+    },
+    {
+      "id": "tencent/hy4-preview",
+      "agentKeys": [
+        "contenders/phoenix-qcs2-agent"
+      ],
+      "label": "Hy4 preview",
+      "org": "Tencent",
+      "vendor": "tencent",
+      "inputPerMillion": 0.834,
+      "outputPerMillion": 2.501,
+      "cacheReadPerMillion": 0.042,
+      "cacheWritePerMillion": 1.0425,
+      "cacheRateSource": "openrouter:tencent/hy4-preview",
+      "openrouterId": "tencent/hy4-preview",
+      "linkBasis": "exact-name",
+      "agentTaskCostP25": 0.09559208125,
+      "agentTaskCostP50": 0.36880899999999994,
+      "agentTaskCostP95": 3.15966387435,
+      "agentTaskSamples": 20848,
+      "contextLength": 1048576,
+      "maxCompletionTokens": 64000,
+      "supportsReasoning": true,
+      "priceStatus": "input_output_token_price_listed",
+      "mergedTiers": null,
+      "leaderboardRank": 24,
+      "sessions": 79926,
+      "cacheRateCapturedAt": "2026-10-13",
+      "cacheReadVariants": [
+        0.042,
+        0.0834,
+        0.0417
+      ],
+      "cacheWrite": 0.0000010425,
+      "cacheWriteVariants": [
+        1.0425,
+        0.834,
+        0
+      ],
+      "medOut": 42789,
+      "p25Out": 12456
+    },
+    {
+      "id": "contenders/caveman-agent",
+      "agentKeys": [
+        "contenders/caveman-agent"
+      ],
+      "label": "Beam 1.0 501B A23B",
+      "org": "Reflection",
+      "vendor": "reflection",
+      "license": "Apache 2.0",
+      "inputPerMillion": 1,
+      "outputPerMillion": 3,
+      "cacheReadPerMillion": 0.1,
+      "cacheWritePerMillion": 0,
+      "cacheRateSource": "arena:contenders/caveman-agent",
+      "linkBasis": "exact-name",
+      "agentTaskCostP25": 0.045,
+      "agentTaskCostP50": 0.145,
+      "agentTaskCostP95": 0.65,
+      "agentTaskSamples": 412,
+      "contextLength": 262144,
+      "maxCompletionTokens": 65536,
+      "supportsReasoning": false,
+      "priceStatus": "input_output_token_price_listed",
+      "mergedTiers": null,
+      "leaderboardRank": 38,
+      "sessions": 3180,
+      "cacheRateCapturedAt": "2026-10-15",
+      "cacheReadVariants": [
+        0.1,
+        0.2,
+        0.25,
+        0.5
+      ],
+      "cacheWrite": 0,
+      "cacheWriteVariants": [
+        0,
+        1
+      ],
+      "medOut": 25000,
+      "p25Out": 8000
+    },
+    {
+      "id": "thinkingmachines/inkling",
+      "agentKeys": [
+        "contenders/inkling-agent"
+      ],
+      "label": "Inkling",
+      "org": "Thinky",
+      "vendor": "thinkingmachines",
+      "inputPerMillion": 1,
+      "outputPerMillion": 4.05,
+      "cacheReadPerMillion": 0.17,
+      "cacheWritePerMillion": 1.25,
+      "cacheRateSource": "openrouter:thinkingmachines/inkling",
+      "openrouterId": "thinkingmachines/inkling",
+      "linkBasis": "exact-name",
+      "agentTaskCostP25": 0.0866570875,
+      "agentTaskCostP50": 0.38712920999999995,
+      "agentTaskCostP95": 3.259041870999999,
+      "agentTaskSamples": 692,
+      "contextLength": 524288,
+      "maxCompletionTokens": 471859,
+      "supportsReasoning": true,
+      "priceStatus": "input_output_token_price_listed",
+      "mergedTiers": null,
+      "leaderboardRank": 50,
+      "sessions": 43384,
+      "cacheRateCapturedAt": "2026-10-13",
+      "cacheReadVariants": [
+        0.17,
+        0.1,
+        0.05
+      ],
+      "cacheWrite": 0.00000125,
+      "cacheWriteVariants": [
+        1.25,
+        1,
+        0
+      ],
+      "medOut": 13765,
+      "p25Out": 5174
+    },
+    {
+      "id": "thinkingmachines/inkling-small",
+      "agentKeys": [
+        "contenders/inkling-small"
+      ],
+      "label": "Inkling Small",
+      "org": "Thinky",
+      "vendor": "thinkingmachines",
+      "inputPerMillion": 0.45,
+      "outputPerMillion": 1.2,
+      "cacheReadPerMillion": 0.1,
+      "cacheWritePerMillion": 0.5625,
+      "cacheRateSource": "openrouter:thinkingmachines/inkling-small",
+      "openrouterId": "thinkingmachines/inkling-small",
+      "linkBasis": "exact-name",
+      "agentTaskCostP25": 0.0508728875,
+      "agentTaskCostP50": 0.15345074166666667,
+      "agentTaskCostP95": 1.08009791,
+      "agentTaskSamples": 671,
+      "contextLength": 524288,
+      "maxCompletionTokens": 262144,
+      "supportsReasoning": true,
+      "priceStatus": "input_output_token_price_listed",
+      "mergedTiers": null,
+      "leaderboardRank": 51,
+      "sessions": 13858,
+      "cacheRateCapturedAt": "2026-10-13",
+      "cacheReadVariants": [
+        0.1,
+        0.045,
+        0.0225
+      ],
+      "cacheWrite": 5.625e-7,
+      "cacheWriteVariants": [
+        0.5625,
+        0.45,
+        0
+      ],
+      "medOut": 16198,
+      "p25Out": 7340
+    },
+    {
+      "id": "upstage/solar-pro4",
+      "agentKeys": [
+        "contenders/solar-pro4-agent"
+      ],
+      "label": "Solar Pro 4",
+      "org": "Upstage",
+      "vendor": "upstage",
+      "inputPerMillion": 0.09,
+      "outputPerMillion": 0.36,
+      "cacheReadPerMillion": 0.018,
+      "cacheWritePerMillion": 0.1125,
+      "cacheRateSource": "openrouter:upstage/solar-pro4",
+      "openrouterId": "upstage/solar-pro4",
+      "linkBasis": "exact-name",
+      "agentTaskCostP25": 0.0060124275000000005,
+      "agentTaskCostP50": 0.038444697,
+      "agentTaskCostP95": 1.0078351483,
+      "agentTaskSamples": 664,
+      "contextLength": 524288,
+      "maxCompletionTokens": 131072,
+      "supportsReasoning": true,
+      "priceStatus": "input_output_token_price_listed",
+      "mergedTiers": null,
+      "leaderboardRank": 52,
+      "sessions": 10088,
+      "cacheRateCapturedAt": "2026-10-13",
+      "cacheReadVariants": [
+        0.018,
+        0.009,
+        0.0045
+      ],
+      "cacheWrite": 1.1250000000000001e-7,
+      "cacheWriteVariants": [
+        0.1125,
+        0.09,
+        0
+      ],
+      "medOut": 14426,
+      "p25Out": 3470
+    },
+    {
+      "id": "xiaomi/mimo-v2.6-flash",
+      "agentKeys": [
+        "contenders/mimo-v2-6-flash-agent"
+      ],
+      "label": "MiMo V2.6 Flash",
+      "org": "Xiaomi",
+      "vendor": "xiaomi",
+      "inputPerMillion": 0.14,
+      "outputPerMillion": 0.28,
+      "cacheReadPerMillion": 0.0028,
+      "cacheWritePerMillion": 0.175,
+      "cacheRateSource": "openrouter:xiaomi/mimo-v2.6-flash",
+      "openrouterId": "xiaomi/mimo-v2.6-flash",
+      "linkBasis": "exact-name",
+      "agentTaskCostP25": 0.010673152,
+      "agentTaskCostP50": 0.05320714,
+      "agentTaskCostP95": 0.8636786206399998,
+      "agentTaskSamples": 5630,
+      "contextLength": 1048576,
+      "maxCompletionTokens": 131072,
+      "supportsReasoning": true,
+      "priceStatus": "input_output_token_price_listed",
+      "mergedTiers": null,
+      "leaderboardRank": 25,
+      "sessions": 18238,
+      "cacheRateCapturedAt": "2026-10-13",
+      "cacheReadVariants": [
+        0.0028,
+        0.03,
+        0.014,
+        0.007
+      ],
+      "protoFamily": "compat",
+      "cacheWrite": 1.75e-7,
+      "cacheWriteVariants": [
+        0.175,
+        0.14,
+        0
+      ],
+      "medOut": 44863,
+      "p25Out": 12148
+    },
+    {
+      "id": "xiaomi/mimo-v2.6-pro",
+      "agentKeys": [
+        "contenders/mimo-v2-6-pro-public-agent"
+      ],
+      "label": "MiMo V2.6 Pro",
+      "org": "Xiaomi",
+      "vendor": "xiaomi",
+      "inputPerMillion": 0.435,
+      "outputPerMillion": 0.87,
+      "cacheReadPerMillion": 0.0036,
+      "cacheWritePerMillion": 0.54375,
+      "cacheRateSource": "openrouter:xiaomi/mimo-v2.6-pro",
+      "openrouterId": "xiaomi/mimo-v2.6-pro",
+      "linkBasis": "exact-name",
+      "agentTaskCostP25": 0.030040355475000002,
+      "agentTaskCostP50": 0.10747606709999999,
+      "agentTaskCostP95": 1.1043729080299973,
+      "agentTaskSamples": 13331,
+      "contextLength": 1048576,
+      "maxCompletionTokens": 131072,
+      "supportsReasoning": true,
+      "priceStatus": "input_output_token_price_listed",
+      "mergedTiers": null,
+      "leaderboardRank": 18,
+      "sessions": 20697,
+      "cacheRateCapturedAt": "2026-10-13",
+      "cacheReadVariants": [
+        0.0036,
+        0.09,
+        0.0435,
+        0.02175
+      ],
+      "protoFamily": "compat",
+      "cacheWrite": 5.4375e-7,
+      "cacheWriteVariants": [
+        0.54375,
+        0.435,
+        0
+      ]
+    },
+    {
+      "id": "xiaomi/mimo-v2.5-pro",
+      "agentKeys": [
+        "contenders/mimo-v2.5-pro-agent"
+      ],
+      "label": "Mimo V2.5 Pro",
+      "org": "Xiaomi",
+      "vendor": "xiaomi",
+      "inputPerMillion": 0.435,
+      "outputPerMillion": 0.87,
+      "cacheReadPerMillion": 0.0036,
+      "cacheWritePerMillion": 0.54375,
+      "cacheRateSource": "openrouter:xiaomi/mimo-v2.5-pro",
+      "openrouterId": "xiaomi/mimo-v2.5-pro",
+      "linkBasis": "exact-name",
+      "agentTaskCostP25": 0.01367711625,
+      "agentTaskCostP50": 0.060174027299999995,
+      "agentTaskCostP95": 1.1907718454999998,
+      "agentTaskSamples": 2998,
+      "contextLength": 1048576,
+      "maxCompletionTokens": 131072,
+      "supportsReasoning": true,
+      "priceStatus": "input_output_token_price_listed",
+      "mergedTiers": null,
+      "leaderboardRank": 46,
+      "sessions": 48011,
+      "cacheRateCapturedAt": "2026-10-13",
+      "cacheReadVariants": [
+        0.0036,
+        0.0435,
+        0.02175
+      ],
+      "cacheWrite": 5.4375e-7,
+      "cacheWriteVariants": [
+        0.54375,
+        0.435,
+        0
+      ],
+      "medOut": 11895,
+      "p25Out": 2890
+    },
+    {
+      "id": "z-ai/glm-5.2",
+      "agentKeys": [
+        "contenders/glm-5.2-agent"
+      ],
+      "label": "GLM 5.2 (Max)",
+      "org": "Z.ai",
+      "vendor": "z-ai",
+      "inputPerMillion": 1.4,
+      "outputPerMillion": 4.4,
+      "cacheReadPerMillion": 0.059,
+      "cacheWritePerMillion": 1.75,
+      "cacheRateSource": "openrouter:z-ai/glm-5.2",
+      "openrouterId": "z-ai/glm-5.2",
+      "linkBasis": "exact-name",
+      "agentTaskCostP25": 0.24219414,
+      "agentTaskCostP50": 0.87782311,
+      "agentTaskCostP95": 14.376335900000003,
+      "agentTaskSamples": 1887,
+      "contextLength": 1048576,
+      "maxCompletionTokens": 131072,
+      "supportsReasoning": true,
+      "priceStatus": "input_output_token_price_listed",
+      "mergedTiers": null,
+      "leaderboardRank": 19,
+      "sessions": 86621,
+      "cacheRateCapturedAt": "2026-10-13",
+      "cacheReadVariants": [
+        0.059,
+        0.14,
+        0.07
+      ],
+      "cacheWrite": 0.00000175,
+      "cacheWriteVariants": [
+        1.75,
+        1.4,
+        0
+      ],
+      "medOut": 51400,
+      "p25Out": 14788
+    },
+    {
+      "id": "z-ai/glm-5.3",
+      "agentKeys": [
+        "contenders/glm-5.3-agent"
+      ],
+      "label": "GLM 5.3 (Max)",
+      "org": "Z.ai",
+      "vendor": "z-ai",
+      "inputPerMillion": 1.4,
+      "outputPerMillion": 4.4,
+      "cacheReadPerMillion": 0.059,
+      "cacheWritePerMillion": 1.75,
+      "cacheRateSource": "openrouter:z-ai/glm-5.3",
+      "openrouterId": "z-ai/glm-5.3",
+      "linkBasis": "exact-name",
+      "agentTaskCostP25": 0.18889957,
+      "agentTaskCostP50": 0.8204559200000002,
+      "agentTaskCostP95": 12.757634864000002,
+      "agentTaskSamples": 1908,
+      "contextLength": 1048576,
+      "maxCompletionTokens": 943718,
+      "supportsReasoning": true,
+      "priceStatus": "input_output_token_price_listed",
+      "mergedTiers": null,
+      "leaderboardRank": 27,
+      "sessions": 86466,
+      "cacheRateCapturedAt": "2026-10-13",
+      "cacheReadVariants": [
+        0.059,
+        0.14,
+        0.07
+      ],
+      "cacheWrite": 0.00000175,
+      "cacheWriteVariants": [
+        1.75,
+        1.4,
+        0
+      ],
+      "medOut": 49863,
+      "p25Out": 12638
+    },
+    {
+      "id": "z-ai/glm-5.3-flash",
+      "agentKeys": [
+        "contenders/glm-5.3-flash-agent"
+      ],
+      "label": "GLM 5.3 Flash",
+      "org": "Z.ai",
+      "vendor": "z-ai",
+      "inputPerMillion": 0.06,
+      "outputPerMillion": 0.2,
+      "cacheReadPerMillion": 0.0108,
+      "cacheWritePerMillion": 0.075,
+      "cacheRateSource": "openrouter:z-ai/glm-5.3-flash",
+      "openrouterId": "z-ai/glm-5.3-flash",
+      "linkBasis": "exact-name",
+      "agentTaskCostP25": 0.026743752499999995,
+      "agentTaskCostP50": 0.13330287000000002,
+      "agentTaskCostP95": 1.7827574019999952,
+      "agentTaskSamples": 7428,
+      "contextLength": 1048575,
+      "maxCompletionTokens": 943717,
+      "supportsReasoning": true,
+      "priceStatus": "input_output_token_price_listed",
+      "mergedTiers": null,
+      "leaderboardRank": 35,
+      "sessions": 85897,
+      "cacheRateCapturedAt": "2026-10-13",
+      "cacheReadVariants": [
+        0.0108,
+        0.012,
+        0.006,
+        0.015,
+        0.003
+      ],
+      "altRates": [
+        {
+          "prompt": 0.036,
+          "completion": 0.9,
+          "cacheRead": 0.0108,
+          "cacheWrite": 0
+        }
+      ],
+      "cacheWrite": 7.5e-8,
+      "cacheWriteVariants": [
+        0.075,
+        0.06,
+        0
+      ],
+      "medOut": 36140,
+      "p25Out": 10576
+    },
+    {
+      "id": "contenders/mistral-large-4-agent",
+      "agentKeys": [
+        "contenders/mistral-large-4-agent"
+      ],
+      "label": "Mistral Large 4",
+      "org": "Mistral",
+      "vendor": "mistralai",
+      "inputPerMillion": 0.68,
+      "outputPerMillion": 2.09,
+      "cacheReadPerMillion": 0.07,
+      "cacheWritePerMillion": 0.85,
+      "cacheRateSource": "openrouter:mistralai/mistral-large-4-0",
+      "openrouterId": "mistralai/mistral-large-4-0",
+      "linkBasis": "name-match",
+      "agentTaskCostP25": 0.21580918,
+      "agentTaskCostP50": 0.9478411700000001,
+      "agentTaskCostP95": 29.613850785,
+      "agentTaskSamples": 10887,
+      "contextLength": 0,
+      "maxCompletionTokens": 0,
+      "supportsReasoning": false,
+      "priceStatus": "input_output_token_price_listed",
+      "mergedTiers": null,
+      "leaderboardRank": 44,
+      "sessions": 14122,
+      "cacheRateCapturedAt": "2026-10-13",
+      "cacheReadVariants": [
+        0.07,
+        0.068,
+        0.034
+      ],
+      "cacheWrite": 8.5e-7,
+      "cacheWriteVariants": [
+        0.85,
+        0.68,
+        0
+      ]
+    },
+    {
+      "id": "contenders/may26-chatbot4-public-agent",
+      "agentKeys": [
+        "contenders/may26-chatbot4-public-agent"
+      ],
+      "label": "Nemotron 3 Ultra",
+      "org": "Nvidia",
+      "vendor": "nvidia",
+      "inputPerMillion": null,
+      "outputPerMillion": null,
+      "cacheReadPerMillion": null,
+      "cacheWritePerMillion": null,
+      "cacheRateSource": null,
+      "openrouterId": null,
+      "linkBasis": null,
+      "agentTaskCostP25": 0.0210061,
+      "agentTaskCostP50": 0.0715349,
+      "agentTaskCostP95": 1.13382322,
+      "agentTaskSamples": 305,
+      "contextLength": 0,
+      "maxCompletionTokens": 0,
+      "supportsReasoning": false,
+      "priceStatus": "no_leaderboard_price_listed",
+      "mergedTiers": null,
+      "leaderboardRank": 48,
+      "sessions": 12626
+    },
+    {
+      "id": "anthropic/claude-haiku-5.5",
+      "agentKeys": [
+        "contenders/claude-haiku-5.5-high-agent",
+        "contenders/claude-haiku-5-5-agent"
+      ],
+      "label": "Claude Haiku 5.5 (High)",
+      "org": "Anthropic",
+      "vendor": "anthropic",
+      "inputPerMillion": 1,
+      "outputPerMillion": 5,
+      "cacheReadPerMillion": 0.1,
+      "cacheWritePerMillion": 1.25,
+      "cacheRateSource": "openrouter:anthropic/claude-haiku-5.5",
+      "openrouterId": "anthropic/claude-haiku-5.5",
+      "linkBasis": "exact-name",
+      "agentTaskCostP25": 0.04,
+      "agentTaskCostP50": 0.1,
+      "agentTaskCostP95": 0.45,
+      "agentTaskSamples": 2500,
+      "contextLength": 200000,
+      "maxCompletionTokens": 64000,
+      "supportsReasoning": true,
+      "priceStatus": "input_output_token_price_listed",
+      "mergedTiers": null,
+      "leaderboardRank": 27,
+      "sessions": 45000,
+      "cacheRateCapturedAt": "2026-10-14",
+      "cacheReadVariants": [
+        0.1,
+        0.05
+      ],
+      "cacheWriteVariants": [
+        1.25,
+        0.625
+      ],
+      "altRates": [
+        {
+          "inputPerMillion": 0.1,
+          "outputPerMillion": 0.5,
+          "cacheReadPerMillion": 0.01,
+          "cacheWritePerMillion": 0.125
+        },
+        {
+          "inputPerMillion": 0.5,
+          "outputPerMillion": 2.5,
+          "cacheReadPerMillion": 0.05,
+          "cacheWritePerMillion": 0.625
+        }
+      ]
+    },
+    {
+      "id": "openai/gpt-5.5-std",
+      "agentKeys": [
+        "contenders/gpt-5.5-agent"
+      ],
+      "label": "GPT 5.5",
+      "org": "OpenAI",
+      "vendor": "openai",
+      "inputPerMillion": 5,
+      "outputPerMillion": 30,
+      "cacheReadPerMillion": 0.5,
+      "cacheWritePerMillion": 6.25,
+      "cacheRateSource": "openrouter:openai/gpt-5.5",
+      "openrouterId": "openai/gpt-5.5",
+      "linkBasis": "exact-name",
+      "agentTaskCostP25": 0.1824255,
+      "agentTaskCostP50": 0.66,
+      "agentTaskCostP95": 8.310623449999982,
+      "agentTaskSamples": 433,
+      "contextLength": 1050000,
+      "maxCompletionTokens": 128000,
+      "supportsReasoning": true,
+      "priceStatus": "input_output_token_price_listed",
+      "mergedTiers": null,
+      "leaderboardRank": 32,
+      "sessions": 137063,
+      "cacheRateCapturedAt": "2026-10-13",
+      "cacheReadVariants": [
+        0.5,
+        0.25
+      ],
+      "cacheWriteVariants": [
+        6.25,
+        3.125
+      ],
+      "altRates": [
+        {
+          "prompt": 2.5,
+          "completion": 15,
+          "cacheRead": 0.25,
+          "cacheWrite": 3.125
+        }
+      ],
+      "medOut": 9554,
+      "p25Out": 3076
+    }
+  ],
+  "snapshotLastUpdated": "2026-10-12T17:00:00.000Z",
+  "snapshotTotalSessions": 2505910,
+  "snapshotModelCount": 53,
+  "costWindowDays": 14,
+  "cacheRateNote": "缓存单价不在 arena 排行榜载荷里，取自 OpenRouter /api/v1/models（见各行 cacheRateSource / cacheRateCapturedAt）。cacheWrite1hPerMillion 是 1 小时 TTL 档的缓存写价 —— Anthropic 等家族默认 TTL 与 1h 是两个价；若缓存写通道反解报 no-solution，第一嫌疑就是平台实际走的是 1h 档。无 OpenRouter 关联的型号保持 null，不臆造。",
+  "count": 53
+}
