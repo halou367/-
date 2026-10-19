@@ -57,15 +57,31 @@ const Pool = {
   d: null, dns: new Map(), job: null, prog: null, chain: Promise.resolve(),
   blank: () => ({ v: 1, node: '', cool: 30, auto: true, src: [], ips: {} }),
   // 默认域名：新装直接带上；老用户升级后补上缺的（只补一次，之后自己删掉的不会再加回来）→ 后台解析，有节点就顺便检测新 IP
+  untestedKeys() {
+    return this.entries().filter(([k, e]) => e && !e.gone && !this.banned(k) && e.ok == null).map(([k]) => k);
+  },
   async seed() {
     if (typeof window !== 'undefined' && (window.__routeFixture || window.__fixture)) return;
     if (this._seeding) return; this._seeding = true;
     try {
       await this.load();
+      await this.purgeImpureAndUnstable().catch(() => {});
       const add = await this.mutate(d => { if ((d.dv || 0) >= DEFAULT_PIP_V) return null; d.dv = DEFAULT_PIP_V; const a = DEFAULT_PIP_SRC.filter(l => !d.src.includes(l)); d.src.push(...a); return a; });
-      if (!add?.length) { if (!this.d.dom && this.domains().length && this.link() && Host.probe) await this.probeDomains().catch(() => {}); return; }   // 老用户：补一次域名级检测
-      const r = await this.importText(add.join('\n'));
-      if (this.link() && Host.probe) { if (r.doms.length) await this.probeDomains(r.doms).catch(() => {}); if (r.todo.length) await this.probe(r.todo).catch(() => {}); }
+      if (add?.length) {
+        const r = await this.importText(add.join('\n'));
+        if (this.link() && Host.probe) {
+          if (r.doms.length) await this.probeDomains(r.doms).catch(() => {});
+          if (r.todo.length) await this.probe(r.todo).catch(() => {});
+        }
+      } else if (!this.d.dom && this.domains().length && this.link() && Host.probe) {
+        await this.probeDomains().catch(() => {});
+      }
+      // 断点续扫：上次客户端关闭时未测完的待测 IP（ok == null），启动后自动从剩余部分继续后台全量扫描，已测过的绝不重复测
+      const pending = this.untestedKeys();
+      if (pending.length && this.link() && Host.probe) {
+        await this.probe(pending).catch(() => {});
+        if (this.domains().length) await this.domSummarize(this.domains()).catch(() => {});
+      }
     } catch {} finally { this._seeding = false; }
   },
   async load(force) {
@@ -163,9 +179,19 @@ const Pool = {
     return this.mutate(d => {
       if(!live())return {added:[],removed:0,cancelled:true};
       const added = []; let removed = 0; const want = new Set(ips.map(ip => ip + (p.port ? ':' + p.port : '')));
-      const DROP = 30 * 864e5;   // 手动移除 / 一键清除过的 IP：30 天内重新解析也不加回
-      for (const k of want) { const low = k.toLowerCase(), e = d.ips[k]; if (d.ban?.[low] || (!e && ((d.drop?.[k] && now() - d.drop[k] < DROP) || (d.drop?.[low] && now() - d.drop[low] < DROP)))) continue; if (!e) { d.ips[k] = { ip: k.split(':')[0], port: p.port, src: p.line }; added.push(k); } else if (!e.banned && !d.ban?.[low]) { if (!e.src) e.src = p.line; e.gone = false; } }
-      for (const [k, e] of Object.entries(d.ips)) if (e.src === p.line && !want.has(k)) { if (used.has(k)) e.gone = true; else delete d.ips[k]; removed++; }
+      // 永久拉黑 / 淘汰过的 IP（ban / drop / banEg）：永远不再加回池子，保证只留纯净 IP
+      for (const k of want) {
+        const low = k.toLowerCase(), rawIp = k.split(':')[0].toLowerCase(), e = d.ips[k];
+        if (d.ban?.[low] || d.ban?.[rawIp] || d.banEg?.[rawIp] || (!e && (d.drop?.[k] || d.drop?.[low] || d.drop?.[rawIp]))) continue;
+        if (!e) { d.ips[k] = { ip: k.split(':')[0], port: p.port, src: p.line }; added.push(k); }
+        else if (!e.banned && !d.ban?.[low]) { if (!e.src) e.src = p.line; e.gone = false; }
+      }
+      for (const [k, e] of Object.entries(d.ips)) if (e.src === p.line && !want.has(k)) {
+        // 已实测纯净的 IP 或正在等待首轮扫描的 IP 不因 DNS 轮询变化而误删，一直保留到 6 小时复检确认不可用为止
+        if ((e.ok === true && typeof IPRep !== 'undefined' && IPRep.pure?.(k, e)) || e.ok === null) continue;
+        if (used.has(k)) e.gone = true; else delete d.ips[k];
+        removed++;
+      }
       return { added, removed, total: want.size };
     });
   },
@@ -197,9 +223,9 @@ const Pool = {
       for (const tok of line.split(/[,，;；\s|]+/)) if (tok) put(tok);
     }
     if (!out.size) for (const m of t.matchAll(/(?:(?:socks5|https?|turn|sstp):\/\/[^\s"'<>,;|\\]+)|\b\d{1,3}(?:\.\d{1,3}){3}(?::\d{1,5})?\b/gi)) put(m[0]);
-    return [...out.values()].slice(0, 2500);
+    return [...out.values()].slice(0, 100000);
   },
-  // 拉取一个 API 来源：新出口加入（待检测），内容里没了的移除（有账号在用的先标记 gone）；拉取失败 / 内容为空不动现有的
+  // 拉取一个 API 来源：新出口加入（待检测），内容里没了的移除（已验证纯净的保留，有账号在用的先标记 gone）；拉取失败 / 内容为空不动现有的
   async refreshApi(line, force, options = {}) {
     const live=()=>!options.cancelled?.();
     await this.load();if(!live())return {added:[],removed:0,cancelled:true};
@@ -212,25 +238,49 @@ const Pool = {
     const used = this.usedMap(), apiCc = this.sourceRegionHint(line);
     return this.mutate(d => {
       if(!live())return {added:[],removed:0,cancelled:true};
-      const added = []; let removed = 0; const want = new Set(items.map(p => p.line)), DROP = 30 * 864e5;
-      for (const p of items) { const k = p.line, low = k.toLowerCase(), e = d.ips[k], loc = p.loc || apiCc || ''; if (d.ban?.[low] || (!e && ((d.drop?.[k] && now() - d.drop[k] < DROP) || (d.drop?.[low] && now() - d.drop[low] < DROP)))) continue; if (!e) { d.ips[k] = { ip: p.host, port: p.port, src: line, ...(loc ? { loc } : {}), ...(p.chain ? { chain: p.chain } : {}) }; added.push(k); } else if (!e.banned && !d.ban?.[low]) { if (!e.src) e.src = line; if (loc && !e.loc) e.loc = loc; e.gone = false; } }
-      for (const [k, e] of Object.entries(d.ips)) if (e.src === line && !want.has(k)) { if (used.has(k.toLowerCase()) || used.has(k)) e.gone = true; else delete d.ips[k]; removed++; }
+      const added = []; let removed = 0; const want = new Set(items.map(p => p.line));
+      // 永久拉黑 / 淘汰过的 IP（ban / drop / banEg）：永远不再加回池子
+      for (const p of items) {
+        const k = p.line, low = k.toLowerCase(), rawIp = String(p.host || '').toLowerCase(), e = d.ips[k], loc = p.loc || apiCc || '';
+        if (d.ban?.[low] || (rawIp && d.ban?.[rawIp]) || (rawIp && d.banEg?.[rawIp]) || (!e && (d.drop?.[k] || d.drop?.[low] || (rawIp && d.drop?.[rawIp])))) continue;
+        if (!e) { d.ips[k] = { ip: p.host, port: p.port, src: line, ...(loc ? { loc } : {}), ...(p.chain ? { chain: p.chain } : {}) }; added.push(k); }
+        else if (!e.banned && !d.ban?.[low]) { if (!e.src) e.src = line; if (loc && !e.loc) e.loc = loc; e.gone = false; }
+      }
+      for (const [k, e] of Object.entries(d.ips)) if (e.src === line && !want.has(k)) {
+        if (e.ok === true && typeof IPRep !== 'undefined' && IPRep.pure?.(k, e)) continue;
+        if (used.has(k.toLowerCase()) || used.has(k)) e.gone = true; else delete d.ips[k];
+        removed++;
+      }
       d.api ||= {}; const old = d.api[line] || {};
       d.api[line] = { at: now(), tried: now(), n: want.size, err: '', ch: added.length || removed ? now() : (old.ch || now()), via: r.via || '' };
       return { added, removed, total: want.size };
     });
   },
-  // 导入：返回新加入、需要检测的 key
+  // 导入：返回新加入、需要检测的 key（含直接填的 IP、API 解析出的全部 IP、域名解析出的全部 IP）
   async importText(text, onStep) {
     const lines = this.split(text), bad = [], fresh = [], apiErr = [];
     for (const l of lines) { const p = this.parse(l); if (!p) bad.push(l); else fresh.push(p); }
-    await this.mutate(d => { for (const p of fresh) { if (!d.src.includes(p.line)) d.src.push(p.line); if ((p.ip || p.chain) && !d.ips[p.line]) d.ips[p.line] = { ip: p.host, port: p.port, src: '', ...(p.chain ? { chain: p.chain } : {}) }; } });
-    // 只有直接填的 IP 才逐个检测；域名只解析，随后每个域名测 1 个 IP（probeDomains），选了地区再按需测更多
+    await this.mutate(d => {
+      for (const p of fresh) {
+        const low = p.line.toLowerCase();
+        if ((p.ip || p.chain) && (d.ban?.[low] || d.drop?.[p.line] || d.drop?.[low])) continue;
+        if (!d.src.includes(p.line)) d.src.push(p.line);
+        if ((p.ip || p.chain) && !d.ips[p.line]) d.ips[p.line] = { ip: p.host, port: p.port, src: '', ...(p.chain ? { chain: p.chain } : {}) };
+      }
+    });
     const todo = fresh.filter(p => p.ip || p.chain).map(p => p.line).filter(k => this.d.ips[k] && this.d.ips[k].ok == null);
     const doms = [...new Set(fresh.filter(p => !p.ip && !p.chain && !p.api).map(p => p.line))], okDoms = [];
     for (const l of [...new Set(fresh.filter(p => p.api).map(p => p.line))]) { onStep?.('拉取 API：' + l); const r = await this.refreshApi(l, true); if (r.err) apiErr.push(l + '：' + r.err); else todo.push(...this.entries().filter(([, e]) => e.src === l && !e.gone && e.ok == null).map(([k]) => k)); }
     let i = 0;
-    for (const l of doms) { onStep?.('解析域名 ' + (++i) + '/' + doms.length + '：' + l); const r = await this.refreshSrc(l, true); if (r.err) bad.push(l + '（解析失败）'); else okDoms.push(l); }
+    for (const l of doms) {
+      onStep?.('解析域名 ' + (++i) + '/' + doms.length + '：' + l);
+      const r = await this.refreshSrc(l, true);
+      if (r.err) bad.push(l + '（解析失败）');
+      else {
+        okDoms.push(l);
+        todo.push(...this.entries().filter(([, e]) => e.src === l && !e.gone && e.ok == null).map(([k]) => k));
+      }
+    }
     return { todo: [...new Set(todo)], doms: okDoms, bad, apiErr, lines: fresh.length };
   },
   // 域名对应的国家：先看实测结果，其次看域名里的国家代码或 EdgeTunnel 机房代码（proxyip.jp.xxx / nrt.proxyip.xxx → JP）
@@ -312,18 +362,22 @@ const Pool = {
     return this.mutate(d => { d.src = d.src.filter(x => x !== line); if (d.api) delete d.api[line]; for (const [k, e] of Object.entries(d.ips)) if (k === line || e.src === line) delete d.ips[k]; });
   },
   removeKey(k) { return this.mutate(d => { const e = d.ips[k]; delete d.ips[k]; if (e && !e.src) d.src = d.src.filter(x => x !== k); else if (e?.src) { d.drop ||= {}; d.drop[k] = now(); } }); },
-  // 一键清除高风险 IP（纯净度低于阈值、未信任）；正在被账号使用的跳过（自动过滤会在空闲时给它换干净的）
+  // 一键清除非纯净 / 高风险 IP（高风险 < 50 分，以及来源池中 50-74 分「一般」IP 一律永久拉黑剔除，只留 ≥ 75 分纯净 IP）
   clearRisk() {
     const used = this.usedMap();
     return this.mutate(d => {
-      let n = 0, skip = 0; d.drop ||= {};
+      let n = 0, skip = 0; d.ban ||= {}; d.drop ||= {}; d.banEg ||= {};
       for (const [k, e] of Object.entries(d.ips)) {
-        if (e.ok !== true || e.gone || !IPRep.risky(k, e)) continue;
-        if (used.has(k.toLowerCase()) || used.has(k)) { d.ban ||= {}; d.ban[k.toLowerCase()] = now(); skip++; continue; }   // 正在用的：拉黑（不再分配），账号空闲时自动换走
+        if (e.ok !== true || e.gone) continue;
+        const isBad = IPRep.risky(k, e) || (Boolean(e.src) && Boolean(IPRep.impure?.(k, e)));
+        if (!isBad) continue;
+        const low = k.toLowerCase(), eg = String(e.eg || '').trim().toLowerCase();
+        d.ban[low] = now(); d.drop[k] = now(); d.drop[low] = now();
+        if (eg && /^\d+\.\d+\.\d+\.\d+$/.test(eg)) d.banEg[eg] = now();
+        if (used.has(low) || used.has(k)) { skip++; continue; }   // 正在用的：拉黑（不再分配），账号空闲时自动换走
         delete d.ips[k]; n++;
-        if (!e.src) d.src = d.src.filter(x => x !== k); else d.drop[k] = now();
+        if (!e.src) d.src = d.src.filter(x => x !== k);
       }
-      for (const [k, t] of Object.entries(d.drop)) if (now() - t > 30 * 864e5) delete d.drop[k];
       return { n, skip };
     });
   },
@@ -346,7 +400,7 @@ const Pool = {
     const used = this.usedMap();
     return this.mutate(d => { let n = 0; d.ban ||= {}; d.drop ||= {}; for (const [k, e] of Object.entries(d.ips)) if ((e.ok === false || e.gone) && !used.has(k)) { d.ban[k.toLowerCase()] = now(); d.drop[k] = now(); delete d.ips[k]; if (!e.src) d.src = d.src.filter(x => x !== k); n++; } return n; });
   },
-  // 永久拉黑不可用 / 不稳定 / 不纯净的 ProxyIP：直接写入 ban 与 drop，从池子剔除，以后绝不再分配也不再检测
+  // 永久拉黑不可用 / 不稳定 / 不纯净（含一般与高风险）的 ProxyIP：直接写入 ban、drop 与 banEg，从池子剔除，以后绝不再分配也不再检测
   banForever(d, k, why = '') {
     if (!d || !k) return false;
     const s = String(k).trim(), low = s.toLowerCase();
@@ -356,6 +410,8 @@ const Pool = {
     const used = this.usedMap?.() || new Map();
     const e = d.ips?.[s];
     if (e) {
+      const eg = String(e.eg || '').trim().toLowerCase();
+      if (eg && /^\d+\.\d+\.\d+\.\d+$/.test(eg)) { d.banEg ||= {}; d.banEg[eg] = now(); }
       e.ok = false; e.gone = true; e.banned = true; e.fc = (e.fc || 0) + 1;
       if (why) e.err = why;
       if (!used.has(low) && !used.has(s)) {
@@ -382,11 +438,11 @@ const Pool = {
       let n = 0;
       for (const [k, e] of Object.entries(d.ips || {})) {
         if (!e) continue;
-        const impure = typeof IPRep !== 'undefined' && !IPRep.trusted?.(k) && Boolean(IPRep.risky?.(k, e));
-        // 只有明确高风险不纯净，或者已拿到出口 IP（说明节点是通的）但连续多次失败的 ProxyIP 才永久拉黑；节点不通（无出口 IP）绝不误拉黑 ProxyIP
-        const confirmedIpBad = (e.ok === false && Boolean(e.eg) && (e.fc || 0) >= 3) || Boolean(e.banned);
+        const impure = typeof IPRep !== 'undefined' && !IPRep.trusted?.(k) && Boolean(IPRep.impure ? IPRep.impure(k, e) : IPRep.risky?.(k, e));
+        // 只要是非纯净（一般 50-74 或高风险 < 50），或者已确认不通的 ProxyIP，一律永久拉黑并从池中剔除，保证池中只留纯净 IP
+        const confirmedIpBad = (e.ok === false && Boolean(e.eg) && (e.fc || 0) >= 1) || Boolean(e.banned);
         if (impure || confirmedIpBad) {
-          this.banForever(d, k, impure ? '高风险不纯净 · 已拉黑' : (e.err || 'ProxyIP 不可用或不稳定 · 已拉黑'));
+          this.banForever(d, k, impure ? '非纯净（一般/高风险） · 已永久拉黑' : (e.err || 'ProxyIP 不可用或不稳定 · 已永久拉黑'));
           n++;
         }
       }
@@ -457,14 +513,29 @@ const Pool = {
   },
   async probe(keys, onProg, options = {}) {
     keys=[...new Set(keys)].filter(k=>this.d.ips[k]&&!this.d.ips[k].gone&&!this.banned(k)&&this.d.ips[k].ok!==false);if(!keys.length)return {done:0};
+    // 如果后台全量扫描正在进行且未指定独立取消信号，直接将新 IP 动态并入当前扫描队列，绝不打断或重头再来
+    if(this._activeScan&&!options.signal&&this.job){
+      const act=this._activeScan,fresh=keys.filter(k=>!act.seenKeys.has(k));
+      if(fresh.length){
+        for(const k of fresh)act.seenKeys.add(k);
+        for(let i=0;i<fresh.length;i+=act.size)act.queue.push(fresh.slice(i,i+act.size));
+        act.state.total+=fresh.length;
+        if(onProg)act.callbacks.push(onProg);
+        Bus.emit('pool');
+      }
+      return this.job;
+    }
     const run=async()=>{
       let link=this.link(),done=0,failed=0,fatal='',foDone=false;
-      const live=()=>!options.signal?.aborted&&this.link()===link;
+      const live=()=>!options.signal?.aborted&&Boolean(this.link()||link);
       if(!live())return {done:0,cancelled:true};
-      const size=Host.onProbeProgress?32:4,queue=[],completed=new Set(),state={done:0,total:keys.length,failed:0,started:now()};
+      const size=Host.onProbeProgress?32:4,queue=[],completed=new Set(),seenKeys=new Set(keys),callbacks=onProg?[onProg]:[];
+      const state={done:0,total:keys.length,failed:0,started:now()};
       for(let i=0;i<keys.length;i+=size)queue.push(keys.slice(i,i+size));
+      this._activeScan={size,queue,seenKeys,state,callbacks};
       this.prog=state;Bus.emit('pool');
       const one=async part=>{
+        const curLink=this.link();if(curLink)link=curLink;
         const partRes=[];
         const accept=async(k,result)=>{
           if(!live())return;
@@ -472,25 +543,31 @@ const Pool = {
           await this.mutate(d=>{
             if(live()&&d.ips[k]&&!d.ips[k].gone&&!this.banned(k)){
               this.apply(d,k,result);
-              const risky=typeof IPRep!=='undefined'&&!IPRep.trusted?.(k)&&IPRep.risky?.(k,d.ips[k]);
-              if(risky||(result?.ip&&!result?.brana&&(d.ips[k].fc||0)>=3)){
-                this.banForever(d,k,risky?'高风险不纯净 · 已永久拉黑':'ProxyIP 不可用 · 已永久拉黑');
+              const impure=typeof IPRep!=='undefined'&&!IPRep.trusted?.(k)&&(IPRep.impure?IPRep.impure(k,d.ips[k]):IPRep.risky?.(k,d.ips[k]));
+              if(impure||(result?.ip&&!result?.brana)){
+                this.banForever(d,k,impure?'非纯净（一般/高风险） · 已永久拉黑':'ProxyIP 不可用 · 已永久拉黑');
               }
             }
           });
           if(!live()||completed.has(k))return;completed.add(k);done++;if(!(result.ip&&result.brana))failed++;
-          Object.assign(state,{done,failed});Bus.emit('pool');onProg?.(done,keys.length);
+          Object.assign(state,{done,failed});Bus.emit('pool');
+          for(const cb of callbacks){try{cb(done,state.total);}catch{}}
         };
         const r=await this.streamProbe(part,{link,timeout:9000,signal:options.signal,cancelled:()=>!live(),onItem:accept});
-        // 只有确认当前节点是通的（同批有其它 IP 连通，或节点测速通过），且该 IP 已连续多次失败，才永久拉黑；若整批全挂则说明是节点问题，不拉黑 ProxyIP
+        // 确认当前节点是通的（同批有其它 IP 连通，或节点测速通过）时：不通的、一般（50-74）的、高风险（<50）的一律当场永久拉黑剔除，绝不留到下一轮重测
         if(live()&&Array.isArray(r)&&this.isNodeConfirmedAlive(link,r)){
           await this.mutate(d=>{
             for(const {k,result} of partRes){
-              if(!(result?.ip&&result?.brana)&&d.ips[k]&&(d.ips[k].fc||0)>=3&&!this.banned(k)){
-                this.banForever(d,k,'节点正常但该 ProxyIP 连续不通 · 已永久拉黑');
+              if(!(result?.ip&&result?.brana)&&d.ips[k]&&!this.banned(k)){
+                this.banForever(d,k,'节点正常但该 ProxyIP 不可用 · 已永久拉黑');
               }
             }
           });
+        }
+        // 同批连通但尚未拿到纯净度评分的出口：立即批量补评并清理一般/高风险 IP，确保每批测完留在池里的 100% 是纯净 IP
+        if(live()&&typeof IPRep!=='undefined'&&Host.fetchText){
+          const unrated=part.filter(k=>{const e=this.d?.ips?.[k];return e&&e.ok===true&&!e.gone&&!this.banned(k)&&!IPRep.trusted?.(k)&&!IPRep.score(k,e).known;});
+          if(unrated.length){await IPRep.rate(unrated).catch(()=>{});await this.purgeImpureAndUnstable().catch(()=>{});}
         }
         return r;
       };
@@ -503,8 +580,8 @@ const Pool = {
         }
         if(!Array.isArray(r))fatal=r?.error||'检测失败';
       }};
-      try{await Promise.all(Array.from({length:Math.min(2,queue.length)},worker));if(!live())return {done,cancelled:true};if(fatal)throw Error(fatal);return {done};}
-      finally{if(this.prog===state){this.prog=null;Bus.emit('pool');}}
+      try{await Promise.all(Array.from({length:Math.min(4,queue.length)},worker));if(!live())return {done,cancelled:true};if(fatal)throw Error(fatal);return {done};}
+      finally{if(this._activeScan?.state===state)this._activeScan=null;if(this.prog===state){this.prog=null;Bus.emit('pool');}}
     };
     const scheduled=(this.job||Promise.resolve()).catch(()=>{}).then(run);
     const tracked=scheduled.finally(()=>{if(this.job===tracked)this.job=null;});this.job=tracked;return tracked;
@@ -528,8 +605,15 @@ const Pool = {
     return m.get(low) || m.get(String(this.parse(k)?.host || '').toLowerCase()) || (e?.eg && m.get(String(e.eg).toLowerCase())) || null;
   },
   cooling: e => (e.cool || 0) > now(),
-  // 黑名单（手动拉黑的高风险 IP）：永远不分配；单独存，IP 从域名解析里消失再出现也还记得
-  banned(k) { return !!this.d?.ban?.[String(k).toLowerCase()]; },
+  // 黑名单（手动或自动永久拉黑的非纯净/失效 IP）：永远不分配；单独存，IP 从域名或 API 里消失再出现也永久拦截
+  banned(k) {
+    const low = String(k || '').trim().toLowerCase();
+    if (!low) return false;
+    if (this.d?.ban?.[low]) return true;
+    const eg = String(this.d?.ips?.[k]?.eg || '').trim().toLowerCase();
+    if (eg && this.d?.banEg?.[eg]) return true;
+    return false;
+  },
   setBan(k, on) { return this.mutate(d => { d.ban ||= {}; const x = String(k).toLowerCase(); if (on) d.ban[x] = now(); else delete d.ban[x]; }); },
   state(k, e, exceptId) {
     if (this.banned(k)) return 'ban';
@@ -564,7 +648,7 @@ const Pool = {
   },
   avail(cc, exceptId, exclude) {
     return this.entries().filter(([k, e]) => e.loc === cc && this.state(k, e, exceptId) === 'ok' && !(exclude && exclude.has(k)))
-      .sort((a, b) => IPRep.rank(...b) - IPRep.rank(...a) || (a[1].used || 0) - (b[1].used || 0) || (a[1].ms || 9e9) - (b[1].ms || 9e9)).map(([k]) => k);   // 先纯净度档位，再轮流用、再延迟
+      .sort((a, b) => IPRep.rank(...b) - IPRep.rank(...a) || (a[1].used || 0) - (b[1].used || 0)).map(([k]) => k);   // 先纯净度档位，再按最久未使用轮流用，不按最低延迟锁死同一个 IP
   },
   // 跨所有国家挑选纯净、稳定、可用的最低延迟 ProxyIP（超过 2 次网络问题时直接用全库最低延迟可用 IP）
   availAllPureLowestLatency(exceptId, exclude) {
@@ -607,15 +691,19 @@ const Pool = {
       if (prefer && !tried.has(prefer) && this.d.ips[prefer] && this.state(prefer, this.d.ips[prefer], a.id) === 'ok') cands = [prefer, ...cands.filter(k => k !== prefer)];
       cands = cands.slice(0, 3);
       if (!cands.length || (fails >= 3 && !healed)) {
-        if (fills < 3) { fills++; if (fails >= 3) { healed = true; fails = 0; } log?.(regionLabel(cc) + '：解析这个地区的域名，按需检测新 IP…'); const n = await this.fill(cc, { want: 3, log }).catch(() => 0); if (n || this.avail(cc, a.id, tried).length) continue; }
+        if (!this.prog && fills < 1 && !this.avail(cc, a.id, tried).length) { fills++; if (fails >= 3) { healed = true; fails = 0; } log?.(regionLabel(cc) + '：按需补充候选 IP…'); const n = await this.fill(cc, { want: 3, log }).catch(() => 0); if (n || this.avail(cc, a.id, tried).length) continue; }
         if (!healed) healed = true;
-        // 解析、检测过还是一个都不通：多半是节点坏了 → 自动换节点，再从头挑一次
+        // 检测过还是一个都不通：多半是节点坏了 → 自动换节点，再从头挑一次
         if (!foTried && fails >= 3 && Nodes.list.length > 1) { foTried = true; const f = await this.failover({ log }); if (f.ok) { tried.clear(); exclude.forEach(k => tried.add(k)); fails = 0; healed = false; continue; } }
         break;
       }
       cands.forEach(k => tried.add(k));
-      for (const src of new Set(cands.map(k => this.d.ips[k]?.src).filter(Boolean))) await this.refreshSrc(src);
-      if (typeof IPRep !== 'undefined' && IPRep.rate) { await IPRep.rate(cands).catch(() => {}); cands = cands.filter(k => this.d.ips[k] && this.state(k, this.d.ips[k], a.id) === 'ok'); }   // 先评估纯净度：高风险的直接拉黑删除，绝不切换过去
+      // 切换 IP 直接在已验证纯净池中秒切，不再重新解析域名来源
+      if (typeof IPRep !== 'undefined' && IPRep.rate) {
+        const unrated = cands.filter(k => this.d.ips[k] && !IPRep.score(k, this.d.ips[k]).known);
+        if (unrated.length) await IPRep.rate(unrated).catch(() => {});
+        cands = cands.filter(k => this.d.ips[k] && this.state(k, this.d.ips[k], a.id) === 'ok');
+      }
       cands = cands.filter(k => this.d.ips[k] && !this.d.ips[k].gone); if (!cands.length) continue;
       const r = ownRoute ? await Host.probe({ link, pips: cands, timeout: 7000 }) : await this.hostProbe(cands, 7000), link2 = ownRoute ? link : this.link();
       if (!Array.isArray(r) && /节点|xray|平台/.test(r?.error || '')) {
@@ -1227,19 +1315,22 @@ const ProxySet = {
     const say = (t, kind = '') => {
       S.msg=t;status.className='ps-status '+kind;
       const progress=kind==='busy'&&Pool.prog?h('progress',{max:Math.max(1,Pool.prog.total),value:Pool.prog.done,'aria-label':'ProxyIP 检测进度'}):null;
-      const stop=kind==='busy'&&S.probeController?h('button',{type:'button',class:'btn ghost sm pool-stop',onclick:()=>{S.probeController?.abort();say('已停止检测，已完成结果保留。');}},'停止检测'):null;
-      status.replaceChildren(...K(...(kind==='busy'?[h('i',{class:'spin'})]:[]),t,progress,stop));
+      status.replaceChildren(...K(...(kind==='busy'?[h('i',{class:'spin'})]:[]),t,progress));
     };
     async function runProbe(keys,label){
       if(!Pool.node()){say('先选择 VLESS 节点再检测','bad');return;}
       if(!keys.length){say('没有需要检测的 IP');return;}
-      S.probeController?.abort();const ctl=S.probeController=new AbortController();
-      say(label+' 0/'+keys.length+'…','busy');
-      try{const r=await Pool.probe(keys,(d,t)=>{if(S.probeController!==ctl||ctl.signal.aborted)return;const good=keys.filter(k=>Pool.d.ips[k]?.ok&&!Pool.d.ips[k]?.gone).length;say(label+' '+d+'/'+t+' · 连通 '+good+' · 剩余 '+(t-d),'busy');},{signal:ctl.signal,allowFailover:false});
-        if(S.probeController!==ctl)return;const ok=keys.filter(k=>Pool.d.ips[k]?.ok).length;
-        say(r?.cancelled?'已停止检测，已完成结果保留。':'检测完成：'+ok+'/'+keys.length+' 连通；纯净度另见列表标注。',r?.cancelled?'':ok?'ok':'bad');
-      }catch(e){if(S.probeController===ctl&&!ctl.signal.aborted)say(cleanErr(e),'bad');}
-      finally{if(S.probeController===ctl)S.probeController=null;}
+      // 后台持续全量扫描：不绑定弹窗生命周期、不中断已有扫描，新导入的 IP 自动并入后台队列直至全部测完
+      say(label+' 0/'+keys.length+'（后台持续扫描，关闭窗口不影响进度）…','busy');
+      try{
+        const r=await Pool.probe(keys,(d,t)=>{
+          const pureCnt=Pool.entries().filter(([k,e])=>e?.ok===true&&!e.gone&&!Pool.banned(k)&&(typeof IPRep==='undefined'||!IPRep.pure||IPRep.pure(k,e))).length;
+          say(label+' '+d+'/'+t+' · 已留存纯净 '+pureCnt+' 个 · 剩余 '+Math.max(0,t-d),'busy');
+        },{allowFailover:false});
+        await Pool.purgeImpureAndUnstable().catch(()=>{});
+        const pureCnt=Pool.entries().filter(([k,e])=>e?.ok===true&&!e.gone&&!Pool.banned(k)&&(typeof IPRep==='undefined'||!IPRep.pure||IPRep.pure(k,e))).length;
+        say(r?.cancelled?'检测已暂停，已完成结果保留。':'全量检测完成：当前池中留存纯净可用 IP '+pureCnt+' 个（一般/高风险/不通均已永久拉黑剔除）',r?.cancelled?'':pureCnt?'ok':'bad');
+      }catch(e){say(cleanErr(e),'bad');}
     }
     // 输入框 = 来源列表（Pool.d.src）+ 无法识别的行（不生效，留着方便改）
     S.bad = []; S.dirty = false;
@@ -1514,43 +1605,45 @@ const RegionAdvisor = {
 if (!globalThis.__BRANA_OFFLINE__) setInterval(() => { RegionAdvisor.check().catch(() => {}); }, 10 * 60e3);
 if (!globalThis.__BRANA_OFFLINE__) setTimeout(() => { RegionAdvisor.check().catch(() => {}); }, 3 * 60e3);
 
-// ---------- IP 库自动维护：空闲时每 4 小时（超过 6 小时没做、又没有对话在跑时也做）重新解析所有域名 + 检测；某个域名失效过多时立即修复 ----------
+// ---------- IP 库自动维护：每 6 小时后台静默增量更新一次（拉黑的绝不回来、一般与高风险永久淘汰，池内只留纯净 IP）；未完成的首轮扫描自动断点续扫 ----------
 const PoolMaint = {
-  EVERY: 4 * 3600e3, MAXGAP: 6 * 3600e3, input: now(), running: false,
-  quiet() { return !document.querySelector('.modal-back:not(.anc-gh).pset') && ![...Chats.values()].some(c => c.busy) && !(typeof Gacha !== 'undefined' && Gacha.busy?.()); },
+  EVERY: 6 * 3600e3, MAXGAP: 6 * 3600e3, input: now(), running: false,
+  quiet() { return ![...Chats.values()].some(c => c.busy) && !(typeof Gacha !== 'undefined' && Gacha.busy?.()); },
   idle() { return (document.hidden || now() - this.input > 120e3) && this.quiet(); },
   async tick() {
     if (this.running || navigator.onLine === false) return;
     try { await Nodes.load(); await Pool.load(true); } catch { return; }
-    if (!Pool.link() || !Host.probe || !Pool.entries().length) return;
-    const d = Pool.d, bySrc = {};
-    for (const [, e] of Pool.entries()) if (e.src && !e.gone && e.ok != null) { const x = bySrc[e.src] ||= { n: 0, ok: 0 }; x.n++; if (e.ok) x.ok++; }
-    const sick = Object.entries(bySrc).filter(([l, x]) => x.n >= 5 && x.ok / x.n < 0.4 && now() - ((d.srcAt || {})[l] || 0) > 30 * 60e3).map(([l]) => l);
-    const gap = now() - (d.mt || 0), due = gap > this.EVERY;
-    if (!sick.length && !due) return;
-    if (!this.idle() && !(gap > this.MAXGAP && this.quiet())) return;
-    const go = await Pool.mutate(d => { d.srcAt ||= {}; let full = false; if (due && now() - (d.mt || 0) > this.EVERY) { d.mt = now(); full = true; } else if (!sick.length) return 0; for (const l of sick) d.srcAt[l] = now(); return full ? 2 : 1; });
+    await Pool.purgeImpureAndUnstable().catch(() => {});
+    if (!Pool.link() || !Host.probe) return;
+    // 若有未测完的待检 IP（如上次关闭客户端前未扫完的剩余部分），后台自动继续扫描
+    const pending = Pool.untestedKeys();
+    if (pending.length && !Pool.prog) {
+      void Pool.probe(pending).then(() => Pool.purgeImpureAndUnstable()).catch(() => {});
+    }
+    if (!Pool.entries().length && !Pool.d?.src?.length) return;
+    const d = Pool.d, gap = now() - (d.mt || 0), due = gap >= this.EVERY;
+    if (!due) return;
+    const go = await Pool.mutate(d => { if (now() - (d.mt || 0) < this.EVERY) return 0; d.mt = now(); return 1; });
     if (!go) return;
     this.running = true; Bus.emit('pool');
     try {
-      const full = go === 2, srcs = full ? Pool.d.src.filter(l => Pool.isSrc(l)) : sick;
+      const srcs = Pool.d.src.filter(l => Pool.isSrc(l));
       for (const l of srcs) await Pool.refreshSrc(l, true).catch(() => {});
-      // 只测：每个域名 1 个代表 IP + 账号正在用的 IP + 每个地区最多 3 个已知可用的旧结果（不再全量检测几百个 IP）
-      await Pool.probeDomains(srcs).catch(() => {});
-      const inUse = new Set([...Pool.usedMap().keys()]), per = {};
-      const keys = Pool.entries().filter(([k, e]) => !e.gone && (full || srcs.includes(e.src)) && (inUse.has(k.toLowerCase()) || (e.ok === true && e.loc && now() - (e.at || 0) > 3 * 3600e3 && (per[e.loc] = (per[e.loc] || 0) + 1) <= 3))).map(([k]) => k);
+      const keys = Pool.entries()
+        .filter(([k, e]) => e && !e.gone && !Pool.banned(k) && (e.ok == null || now() - (e.at || 0) >= this.EVERY))
+        .map(([k]) => k);
       if (keys.length) await Pool.probe(keys).catch(() => {});
-      const used = Pool.usedMap();
-      await Pool.mutate(d => { for (const [k, e] of Object.entries(d.ips)) if ((e.fc || 0) >= 3 && e.src && !used.has(k.toLowerCase())) delete d.ips[k]; });
+      await Pool.purgeImpureAndUnstable().catch(() => {});
+      if (Pool.domains().length) await Pool.domSummarize(Pool.domains()).catch(() => {});
     } finally { this.running = false; Bus.emit('pool'); }
   },
 };
 for (const ev of ['pointerdown', 'keydown', 'wheel', 'touchstart']) addEventListener(ev, () => { PoolMaint.input = now(); }, { capture: true, passive: true });
-if (!globalThis.__BRANA_OFFLINE__) setTimeout(() => { PoolMaint.tick().catch(() => {}); setInterval(() => PoolMaint.tick().catch(() => {}), 5 * 60e3); }, 90e3);
+if (!globalThis.__BRANA_OFFLINE__) setTimeout(() => { PoolMaint.tick().catch(() => {}); setInterval(() => PoolMaint.tick().catch(() => {}), 5 * 60e3); }, 30e3);
 
-// API 来源自动更新：每 30 分钟拉一次（内容变了 → 新出口加入并检测、没了的移除；拉取失败不动现有的）
+// API 来源自动更新：每 6 小时拉取一次（已拉黑/不纯净的永久跳过不加回，只把新出现的候选加入后台检测，始终只留纯净 IP）
 const ApiMaint = {
-  running: false,
+  EVERY: 6 * 3600e3, running: false,
   async tick(force) {
     if (this.running || navigator.onLine === false) return;
     try { await Pool.load(true); } catch { return; }
@@ -1558,8 +1651,9 @@ const ApiMaint = {
     this.running = true;
     try {
       const add = [];
-      for (const l of ls) { if (!force && now() - (Pool.d.api?.[l]?.tried || 0) < 25 * 60e3) continue; const r = await Pool.refreshApi(l, true).catch(() => null); if (r?.added?.length) add.push(...r.added); }
-      if (add.length && Pool.link() && Host.probe && PoolMaint.quiet()) await Pool.probe(add.slice(0, 200)).catch(() => {});
+      for (const l of ls) { if (!force && now() - (Pool.d.api?.[l]?.tried || 0) < this.EVERY) continue; const r = await Pool.refreshApi(l, true).catch(() => null); if (r?.added?.length) add.push(...r.added); }
+      if (add.length && Pool.link() && Host.probe) await Pool.probe(add).catch(() => {});
+      await Pool.purgeImpureAndUnstable().catch(() => {});
     } finally { this.running = false; Bus.emit('pool'); }
   },
 };

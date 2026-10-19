@@ -169,25 +169,38 @@ const IPRep = {
     if (!r.known && Host.fetchText) { await this.rate([], [eg]).catch(() => {}); r = sc(); }
     if (!r.known) return { ok: false, error: '出口 IP ' + pip + ' 暂时无法评估纯净度（评估服务没有结果），只能使用已确认纯净的 IP' };
     if (r.s >= this.PURE) return { ok: true, s: r.s, known: true };
-    if (r.s >= this.TH) return { ok: false, s: r.s, error: '出口 IP ' + pip + ' 纯净度 ' + r.s + ' 分（一般），只能使用纯净（≥ ' + this.PURE + ' 分）的 IP' };
     const used = Pool.usedMap(), x = pip.toLowerCase();
-    await Pool.mutate(d => { d.ban ||= {}; d.ban[x] = now(); if (d.ips[pip] && !used.has(x)) { const e = d.ips[pip]; delete d.ips[pip]; if (!e.src) d.src = (d.src || []).filter(y => y !== pip); else { d.drop ||= {}; d.drop[pip] = now(); } } }).catch(() => {});
+    if (r.s >= this.TH) {
+      if (Pool.d?.ips?.[pip]?.src) {
+        await Pool.mutate(d => {
+          if (typeof Pool.banForever === 'function') Pool.banForever(d, pip, '纯净度一般（' + r.s + ' 分）· 已永久拉黑');
+          else { d.ban ||= {}; d.ban[x] = now(); d.drop ||= {}; d.drop[pip] = now(); if (d.ips[pip] && !used.has(x)) delete d.ips[pip]; }
+        }).catch(() => {});
+        Bus.emit('pool');
+      }
+      return { ok: false, s: r.s, error: '出口 IP ' + pip + ' 纯净度 ' + r.s + ' 分（一般），只能使用纯净（≥ ' + this.PURE + ' 分）的 IP' };
+    }
+    await Pool.mutate(d => {
+      if (typeof Pool.banForever === 'function') Pool.banForever(d, pip, '高风险（' + r.s + ' 分）· 已永久拉黑');
+      else { d.ban ||= {}; d.ban[x] = now(); if (d.ips[pip] && !used.has(x)) { const e = d.ips[pip]; delete d.ips[pip]; if (!e.src) d.src = (d.src || []).filter(y => y !== pip); else { d.drop ||= {}; d.drop[pip] = now(); } } }
+    }).catch(() => {});
     Bus.emit('pool');
     return { ok: false, s: r.s, error: '出口 IP ' + pip + (eg !== pip ? '（' + eg + '）' : '') + ' 纯净度 ' + r.s + ' 分，属于高风险，已拉黑并删除' };
   },
   // 可选 / 可应用的必须是「已评估且纯净」（≥ PURE 分）；手动「信任」的除外。未评估、一般、高风险一律不作为选项
   pure(k, e) { if (this.trusted(k)) return true; const r = this.score(k, e); return r.known && r.s >= this.PURE; },
-  // 打开地区 / 出口选择时：立刻评估这个地区还没评估的 IP（ip-api / proxycheck，不够再经隧道重测取 IPPure），纯净的不够就再测新 IP
+  // 非纯净判定（< 75 分，含「一般 50-74」与「高风险 < 50」）：在池扫描与自动清理中一律永久拉黑并剔除，保证池中只留纯净 IP
+  impure(k, e) { if (!this.on() || this.trusted(k)) return false; const r = this.score(k, e); return r.known && r.s < this.PURE; },
+  // 打开地区 / 出口选择时：若已有纯净 IP 或后台全量扫描正在进行，直接复用现有纯净池，不阻塞也不触发重扫
   async prime(cc) {
-    if (!cc || typeof Pool === 'undefined') return; this._pr ||= {};
-    if (now() - (this._pr[cc] || 0) < 60e3) return; this._pr[cc] = now();
+    if (!cc || typeof Pool === 'undefined' || Pool.prog) return; this._pr ||= {};
+    if (now() - (this._pr[cc] || 0) < 600e3) return; this._pr[cc] = now();
     try {
       await Pool.load();
       const ks = () => Pool.entries().filter(([k, e]) => e.loc === cc && !e.gone && e.ok === true && !Pool.banned(k) && !this.trusted(k));
+      if (ks().some(([k, e]) => this.pure(k, e))) return;
       const unk = () => ks().filter(([k, e]) => !this.score(k, e).known).map(([k]) => k);
       let u = unk(); if (u.length && Host.fetchText) await this.rate(u.slice(0, 25)).catch(() => {});
-      u = unk(); if (u.length && Pool.link?.() && Host.probe) await Pool.probe(u.slice(0, 32)).catch(() => {});
-      if (ks().filter(([k, e]) => this.pure(k, e)).length < 3 && Pool.fill) await Pool.fill(cc, { want: 5 }).catch(() => {});
     } catch {} finally { Bus.emit('pool'); }
   },
   risky(k, e) { if (!this.on() || this.trusted(k)) return false; const r = this.score(k, e); return r.known && r.s < this.TH; },

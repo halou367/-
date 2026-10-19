@@ -99,13 +99,15 @@ function createAccountSignIn({ find, password, session, prepare, syncCookies, sa
         NetPolicy.sessionValue(data);
       } catch (e) { throw AuthFlow.sessionError(e); }
       const user = AuthFlow.loginIdentity(data.user, signedIn.user);
+      const richEmail = AuthFlow.pickRichEmail(expected || a.email || a.name, user.email);
+      user.email = richEmail;
       current();
       await finish?.(a, user, ses, lease); current();
       const previous = { noAuto: a.noAuto, status: a.status };
-      a.noAuto = false; a.status = { ...(a.status || {}), loggedIn: true, me: user.email, at: Date.now() };
+      a.noAuto = false; a.status = { ...(a.status || {}), loggedIn: true, me: richEmail, at: Date.now() };
       try { save(); } catch (e) { a.noAuto = previous.noAuto; a.status = previous.status; throw e; }
       navigate?.(a);
-      return { ok: true, email: user.email, ip: a.status.ip || '' };
+      return { ok: true, email: richEmail, ip: a.status.ip || '' };
     } catch (e) {
       // 密码登录没有「等邮件」这一步：失败就把认证环境锁放掉，不留一个必须手动取消的任务
       if (lease) { try { await release?.(a, lease); } catch {} }
@@ -333,14 +335,15 @@ function createAccountTokenRegistrar({ find, password, setPassword, session, pre
           if (loginResp && syncCookies) await syncCookies(ses, loginResp);
           const meNow = await readMeUser(ses);
           const verifiedUser = AuthFlow.loginIdentity(meNow || signedIn.user, signedIn.user);
-          a.email = expected;
-          a.name = a.name && !/^账号 ?\d*$/.test(a.name) ? a.name : expected;
+          const richEmail = AuthFlow.pickRichEmail(expected || a.email || a.name, verifiedUser.email);
+          a.email = richEmail;
+          a.name = a.name && !/^账号 ?\d*$/.test(a.name) ? a.name : richEmail;
           setPassword?.(a, secret);
           a.noAuto = false;
-          a.status = { ...(a.status || {}), loggedIn: true, me: verifiedUser.email, ip, loc, at: Date.now() };
+          a.status = { ...(a.status || {}), loggedIn: true, me: richEmail, ip, loc, at: Date.now() };
           save();
           navigate?.(a);
-          return { ok: true, email: verifiedUser.email, ip, loc, mode: 'login' };
+          return { ok: true, email: richEmail, ip, loc, mode: 'login' };
         } catch (loginErr) {
           // Password not set or different: send password reset email
           let resetResp;
@@ -438,14 +441,15 @@ function createAccountTokenRegistrar({ find, password, setPassword, session, pre
       user = (await readMeUser(ses)) || signedIn.user;
     }
     const checked = AuthFlow.identity(user, expected);
-    a.email = expected;
-    a.name = a.name && !/^账号 ?\d*$/.test(a.name) ? a.name : expected;
+    const richEmail = AuthFlow.pickRichEmail(expected || a.email || a.name, checked.email);
+    a.email = richEmail;
+    a.name = a.name && !/^账号 ?\d*$/.test(a.name) ? a.name : richEmail;
     setPassword?.(a, secret);
     a.noAuto = false;
-    a.status = { ...(a.status || {}), loggedIn: true, me: checked.email, ip, loc, at: Date.now() };
+    a.status = { ...(a.status || {}), loggedIn: true, me: richEmail, ip, loc, at: Date.now() };
     save();
     navigate?.(a);
-    return { ok: true, email: checked.email, ip, loc, mode: 'signup' };
+    return { ok: true, email: richEmail, ip, loc, mode: 'signup' };
   }
 
   return (id, opt) => {

@@ -88,6 +88,7 @@ const RegionIP = {
           if(saved?.error)throw Error(saved.error);
           const info=await Host.info();if(info?.account?.id!==a.id||this.norm(info.account.proxyIp)!==this.norm(k)||info.account.region!==a.region||info.account.proxy!==a.proxy)throw Error('宿主未确认新 IP 配置');
           UI.host=info;
+          if(typeof AutoRoute!=='undefined')AutoRoute.noteManualRoute?.(600000);
           try {await Pool.mutate(d=>{if(d.ips[k])d.ips[k].used=now();});}catch{}
           await sleep(800);if(IP.polling)await IP.polling;const at=now();await IP.poll();
           const verified=!IP.err&&IP.at>=at&&IP.loc===a.region&&this.norm(IP.ip)!==oldExit&&this.norm(IP.ip)===this.norm(x.ip);
@@ -174,7 +175,7 @@ const RegionIP = {
     if(this.view&&!this.view.back.isConnected&&!this.busy)this.close();
     if(this.view){if(opts?.offlineAlert)this.view.offlineAlert=true;this.paint();this.view.back.querySelector('.rip-x')?.focus();return;}
     const v=this.view={account:UI.host?.account||{},owner:UI.host?.account?.id||'',loading:false,error:'',message:'',closed:false,offlineAlert:!!opts?.offlineAlert};
-    if(typeof IPRep!=='undefined'&&IPRep.prime)void IPRep.prime(v.account.region||IP.loc);   // 打开即评估这个地区未评估的 IP，纯净的实时加入列表
+    if(typeof IPRep!=='undefined'&&IPRep.prime&&!(typeof Pool!=='undefined'&&Pool.prog))void IPRep.prime(v.account.region||IP.loc);
     v.back=h('div',{class:'modal-back region-ip-back',onclick:e=>{if(e.target===v.back)this.close();}});
     v.title=h('div',{class:'modal-h rip-title',id:'region-ip-title'},'当前 IP');v.ipline=h('div',{class:'rip-ip'});v.chips=h('div',{class:'rip-chips'});v.info=h('div',{class:'rip-info'});v.list=h('div',{class:'rip-list',role:'list','aria-label':'当前地区 IP 列表'});v.status=h('div',{class:'rip-status',role:'status','aria-live':'polite'});
     v.refresh=h('button',{class:'btn ghost sm rip-refresh',onclick:()=>void this.reload(true)},icon('refresh'),'刷新 ProxyIP 列表');

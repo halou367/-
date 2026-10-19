@@ -49,7 +49,7 @@ test('3. Export Fingerprint and Export Tool Calls are right-aligned icon buttons
   assert.match(dockJs, /class: 'mc-foot-acts'/);
   assert.match(dockJs, /icon\('fingerprint'\)/);
   assert.match(dockJs, /icon\('tool'\)/);
-  assert.match(dockJs, /'aria-label': '导出指纹'/);
+  assert.match(dockJs, /'aria-label': '习惯库'/);
   assert.match(dockJs, /'aria-label': '导出调用工具'/);
 });
 

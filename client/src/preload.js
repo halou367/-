@@ -57,7 +57,7 @@ if(window.top===window&&['https:','chrome-extension:'].includes(location.protoco
 if ((location.origin === 'https://arena.ai' || location.protocol === 'file:') && window.top === window) {
   const call = (ch, ...a) => ipcRenderer.invoke('host:' + ch, ...a);
   contextBridge.exposeInMainWorld('BranaHost', {
-    platform: 'desktop', extensionCompatibilityTest: (() => { try { return Boolean(require('../package.json').extensionCompatibilityTest); } catch { return false; } })(),
+    platform: 'desktop', extensionCompatibilityTest: (() => { try { const p = require('../package.json'); return Boolean(p.extensionCompatibilityTest || p.name === 'brana-ai-extension-test' || /-beta\b/i.test(String(p.version || ''))); } catch { return false; } })(),
     info: () => call('info'),
     listAccounts: lite => call('listAccounts', !!lite),
     saveAccount: a => call('saveAccount', a),
@@ -99,6 +99,7 @@ if ((location.origin === 'https://arena.ai' || location.protocol === 'file:') &&
     noteAccount: o => call('noteAccount', o),
     fingerprintStore: (op, revision, payload) => call('fingerprintStore', op, revision, payload),
     shared: (k, v) => v === undefined ? call('shared', k) : call('shared', k, v),
+    setShared: (k, v) => call('shared', k, v),
     strMerge: p => call('strMerge', p),
     calMerge: p => call('calMerge', p),
     exportAccounts: () => call('exportAccounts'),

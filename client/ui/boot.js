@@ -640,13 +640,17 @@ async function init() {
   let verification = null;
   try { verification = AuthFlow.verificationIntent(JSON.parse(localStorage.getItem('anc-auth') || 'null'), UI.host?.account); } catch {}
   const expectedEmail = verification?.email || AuthEnv.state?.email || UI.host?.account?.email || '';
-  const canonEmail = e => { const raw = String(e || '').trim().toLowerCase(); const [l, d] = raw.split('@'); return d ? l.replace(/\+.*$/, '').replace(/\./g, '') + '@' + d : raw; };
-  const sameAcctEmail = (a, b) => AuthFlow.sameEmail(a, b) || (canonEmail(a) && canonEmail(a) === canonEmail(b));
+  const canonEmail = e => { const raw = String(e || '').trim().toLowerCase(); const [l, d] = raw.split('@'); return d ? l.replace(/\+.*$/, '').replace(/[.,\-_]/g, '') + '@' + d : raw; };
+  const sameAcctEmail = (a, b) => AuthFlow.sameEmail(a, b) || AuthFlow.sameMailbox?.(a, b) || (canonEmail(a) && canonEmail(a) === canonEmail(b));
   const checkedUser = user => {
     if (!Auth.real(user)) return null;
     const mustMatch = verification || (AuthEnv.state?.locked && AuthEnv.state.kind !== 'login');
     const target = mustMatch && !sameAcctEmail(user.email, expectedEmail) ? expectedEmail : user.email;
-    return AuthFlow.identity(user, target);
+    const checked = AuthFlow.identity(user, target);
+    if (checked && typeof checked === 'object') {
+      checked.email = AuthFlow.pickRichEmail(UI.host?.account?.email || expectedEmail || UI.host?.account?.name, checked.email);
+    }
+    return checked;
   };
   // 秒开：上次登录过的账号先用本地缓存把界面（标签页 / 对话列表 / 对话内容缓存）画出来，同时后台核对登录状态
   // （切换账号、冷启动时不再白屏等网络；核对失败再换成登录页）
@@ -738,10 +742,12 @@ async function init() {
   }
   if (verification && UI.me) {
     const a = UI.host?.account || {};
+    const richEmail = AuthFlow.pickRichEmail(a.email || verification?.email || a.name, UI.me.email);
+    UI.me.email = richEmail;
     try {
-      const saved = await Host.saveAccount({ id: a.id, email: UI.me.email,
-        name: !a.name || a.name === a.email || /^账号 ?\d*$/.test(a.name) ? UI.me.email : a.name,
-        ...(!sameAcctEmail(a.email, UI.me.email) ? { clearPassword: true } : {}) });
+      const saved = await Host.saveAccount({ id: a.id, email: richEmail,
+        name: !a.name || a.name === a.email || /^账号 ?\d*$/.test(a.name) ? richEmail : a.name,
+        ...(!sameAcctEmail(a.email, richEmail) ? { clearPassword: true } : {}) });
       if (!saved?.id || saved.error) throw new Error(saved?.error || '保存账号失败');
       UI.host = await Host.info();
       localStorage.removeItem('anc-auth'); localStorage.removeItem('anc-auth-email');
@@ -749,25 +755,28 @@ async function init() {
   }
   UI.authed = true; UI.renderAcct();
   // 在网页里（网页注册 / 网页登录 / 令牌链接跳转 / 浏览器模式）登录成功、回到客户端后，把邮箱与网页填写/预设的密码记到这个账号上（代理 / 地区 / 节点原样保留）
-  { const c = UI.host?.account || {};
-    if (c.id && ((!c.email && UI.me?.email) || (!c.hasPassword && UI.me?.email)) && !/[?&]glogin=1/.test(location.search)) (async () => {
+  { const c = UI.host?.account || {}, hasSavedPw = Boolean(c.hasPw || c.hasPassword);
+    const richEmail = AuthFlow.pickRichEmail(c.email || c.name, UI.me?.email);
+    if (UI.me && richEmail) UI.me.email = richEmail;
+    if (c.id && ((!c.email && UI.me?.email) || (!hasSavedPw && UI.me?.email)) && !/[?&]glogin=1/.test(location.search)) (async () => {
       let stashedPw = '';
       try { stashedPw = localStorage.getItem('anc-regpw') || ''; } catch {}
       if (!stashedPw && typeof Host.shared === 'function') try { const r = await Host.shared('regpw@' + c.id); if (r?.pw) stashedPw = r.pw; } catch {}
       if (!stashedPw && typeof MailToken !== 'undefined') try { const t = await MailToken.load(c.id); if (t?.password) stashedPw = t.password; } catch {}
-      if (c.email && (!stashedPw || c.hasPassword)) return;
+      if (c.email && (!stashedPw || hasSavedPw)) return;
+      const finalEmail = AuthFlow.pickRichEmail(c.email || c.name, richEmail);
       await Host.saveAccount({
         id: c.id,
-        name: c.name && c.name !== WEBREG_NAME && c.name !== GOOGLE_NAME && !/^账号 ?\d*$/.test(c.name) ? c.name : UI.me.email,
-        email: UI.me.email,
-        ...(stashedPw && !c.hasPassword ? { password: stashedPw } : {}),
+        name: c.name && c.name !== WEBREG_NAME && c.name !== GOOGLE_NAME && !/^账号 ?\d*$/.test(c.name) ? c.name : finalEmail,
+        email: finalEmail,
+        ...(stashedPw && !hasSavedPw ? { password: stashedPw } : {}),
         proxy: c.proxy ?? '', proxyIp: c.proxyIp ?? '', nodeId: c.nodeId, region: c.region,
       });
-      try { await Host.noteAccount?.({ email: UI.me.email, loggedIn: true }); } catch {}
+      try { await Host.noteAccount?.({ email: finalEmail, loggedIn: true }); } catch {}
       try { localStorage.removeItem('anc-regpw'); } catch {}
       UI.host = await Host.info().catch(() => UI.host);
       UI.renderAcct();
-      if (!c.email) toast('账号已记录：' + UI.me.email);
+      if (!c.email) toast('账号已记录：' + finalEmail);
     })().catch(() => {}); }
   // Google 登录回来（?glogin=1）：登录上了就把邮箱记到这个账号上（代理 / 地区原样保留，不动密码）；没登录上就回登录页说明原因
   const gback = /[?&]glogin=1/.test(location.search), gfail = new URLSearchParams(location.search).get('gfail');
@@ -776,8 +785,10 @@ async function init() {
     try { history.replaceState(null, '', location.pathname); } catch {}
     Store.del?.('glogin');
     const c = UI.host?.account || {};
-    if (UI.me?.email) Promise.resolve(Host.saveAccount({ id: c.id, name: c.name && !/^账号 ?\d*$/.test(c.name) && c.name !== c.email && c.name !== GOOGLE_NAME ? c.name : UI.me.email, email: UI.me.email, proxy: c.proxy ?? '', proxyIp: c.proxyIp ?? '', nodeId: c.nodeId, region: c.region }))
-      .then(async () => { UI.host = await Host.info().catch(() => UI.host); UI.renderAcct(); toast('已用 Google 登录：' + UI.me.email); })
+    const richEmail = AuthFlow.pickRichEmail(c.email || c.name, UI.me?.email);
+    if (UI.me && richEmail) UI.me.email = richEmail;
+    if (richEmail) Promise.resolve(Host.saveAccount({ id: c.id, name: c.name && !/^账号 ?\d*$/.test(c.name) && c.name !== c.email && c.name !== GOOGLE_NAME ? c.name : richEmail, email: richEmail, proxy: c.proxy ?? '', proxyIp: c.proxyIp ?? '', nodeId: c.nodeId, region: c.region }))
+      .then(async () => { UI.host = await Host.info().catch(() => UI.host); UI.renderAcct(); toast('已用 Google 登录：' + richEmail); })
       .catch(e => toast('已用 Google 登录，但保存账号信息失败：' + cleanErr(e)));
   }
   // 账号菜单里点了「抽卡」：这个窗口是为后台抽卡打开的（隐藏窗口），登录后直接开始抽
@@ -802,6 +813,14 @@ async function init() {
       Prefs.acctCheckHours = m.acctCheckHours;
       Store.set('prefs', Prefs);
       try { if (typeof AccountPicker !== 'undefined' && AccountPicker.startCheckTimer) AccountPicker.startCheckTimer(false); } catch {}
+    }
+    if (m?.pinDpl !== undefined || m?.autoCostDpl !== undefined) {
+      if (m.pinDpl) Prefs.pinDpl = m.pinDpl; else delete Prefs.pinDpl;
+      if (m.autoCostDpl) Prefs.autoCostDpl = m.autoCostDpl;
+      Store.set('prefs', Prefs);
+      try { Pin.initSmartPool?.(); Pin.ensure?.(true); } catch {}
+      try { BillingProbe?.setSkewDpl?.(m.pinDpl || m.autoCostDpl || Pin.dpl(), Boolean(m.pinDpl)); } catch {}
+      try { Bus.emit('pin'); } catch {}
     }
     if (m?.pelshotsSync) {
       try { if (typeof PelicanShots !== 'undefined' && PelicanShots.pull) void PelicanShots.pull(false, true); } catch {}

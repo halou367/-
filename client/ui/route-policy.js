@@ -55,7 +55,7 @@ const RoutePolicy = (() => {
     return { same:same.slice(0,8), other:other.slice(0,8), home, occupiedRegions };
   }
   class Engine {
-    constructor(io) { this.io=io;this.job=null;this.next=0;this.cursor=0;this.health=new Map();this.failures=0;this.netProblemCount=0;this.last=''; }
+    constructor(io) { this.io=io;this.job=null;this.next=0;this.cursor=0;this.health=new Map();this.recentIps=new Map();this.failures=0;this.netProblemCount=0;this.last=''; }
     run(reason='network', force=false) {
       if(this.job)return this.job;
       if(!force&&this.now()<this.next)return Promise.resolve({ok:false,cooldown:true});
@@ -74,15 +74,21 @@ const RoutePolicy = (() => {
       const owned=takenIps(first.accounts,a.id,first.pool||{});
       const occupied=new Set((first.accounts||[]).filter(x=>x.id!==a.id&&/^vless:/i.test(x.proxy||'')).map(x=>x.region).filter(Boolean));
       const pool=first.pool||{},cur=String(a.proxyIp||'').toLowerCase();
-      const forceGlobalLowest=Boolean((this.netProblemCount||0)>2||this.io.forceGlobalLowestLatency?.());
-      const effMs=([,e])=>(e.ms||260)-(this.io.networkFirst&&!forceGlobalLowest&&e.loc===home?35:0);
-      const ips=Object.entries(pool.ips||{}).filter(([k,e])=>e&&!e.gone&&k.toLowerCase()!==cur&&!pool.ban?.[k.toLowerCase()]&&!owned.has(k,e)&&!(e.cool>at)&&e.ok!==false&&reputationOK(pool,k,e,at)).sort((x,y)=>(this.io.networkFirst&&!forceGlobalLowest)?effMs(x)-effMs(y):(x[1].ms||99999)-(y[1].ms||99999));
-      const globalLowestIps=Object.entries(pool.ips||{}).filter(([k,e])=>e&&!e.gone&&k.toLowerCase()!==cur&&!pool.ban?.[k.toLowerCase()]&&!owned.has(k,e)&&!(e.cool>at)&&e.ok!==false&&reputationOK(pool,k,e,at)).sort((x,y)=>(x[1].ms||99999)-(y[1].ms||99999));
+      const forceGlobalLowest=Boolean(this.io.forceGlobalLowestLatency?.());
+      const baseEntries=Object.entries(pool.ips||{}).filter(([k,e])=>e&&!e.gone&&k.toLowerCase()!==cur&&!pool.ban?.[k.toLowerCase()]&&!owned.has(k,e)&&!(e.cool>at)&&e.ok!==false&&reputationOK(pool,k,e,at));
+      const nonRecentEntries=baseEntries.filter(([k])=>!((this.recentIps?.get(k.toLowerCase())||0)>at));
+      const activeEntries=nonRecentEntries.length?nonRecentEntries:baseEntries;
+      // 不按最低延迟反复优选同一个 IP，优先同地区、故障少、最久未使用的可用纯净 IP 并按游标轮换
+      const ips=activeEntries.slice().sort((x,y)=>((y[1].loc===home?1:0)-(x[1].loc===home?1:0))||((x[1].fc||0)-(y[1].fc||0))||((x[1].used||0)-(y[1].used||0)));
+      const globalLowestIps=activeEntries.slice().sort((x,y)=>(x[1].ms||99999)-(y[1].ms||99999));
       const seen=new Set([key(a)]),uniq=list=>list.filter(c=>{const k=key(c);if(seen.has(k))return false;seen.add(k);return true;});
       const local=ips.filter(([,e])=>e.loc===home);
+      if(local.length>1&&this.cursor>0){const off=this.cursor%local.length;local.push(...local.splice(0,off));}
       const awayFree=ips.filter(([,e])=>e.loc&&e.loc!==home&&!occupied.has(e.loc));
       const awayAll=ips.filter(([,e])=>e.loc&&e.loc!==home);
       const away=awayFree.length?awayFree:(this.io.allowCrossRegionEscape?awayAll:[]);
+      if(away.length>1&&this.cursor>0){const off=this.cursor%away.length;away.push(...away.splice(0,off));}
+      const rotIps=[...local,...away];
       const viaNode=(n,[k,e],extra={})=>({proxy:n.proxy,proxyIp:k,nodeId:n.id,region:e.loc||'',kind:'node',...(e.loc&&e.loc!==home?{crossRegion:true}:{}),...extra});
       const others=ns.filter(n=>n.proxy!==a.proxy&&!(a.nodeId&&n.id===a.nodeId));   // 同一节点的链接文本可能不同（名字参数等）：按 id 也排除
       if(ns.length>1){const off=this.cursor%others.length||0;others.push(...others.splice(0,off));}
@@ -91,15 +97,15 @@ const RoutePolicy = (() => {
       const curNode=/^vless:/i.test(a.proxy||'')?{id:a.nodeId||'',proxy:a.proxy}:null;
       const curNodeBad=Boolean(this.io.networkFirst&&curNode&&this.io.speed&&(()=>{try{return this.io.speed(curNode)?.ok===false;}catch{return false;}})());
       const globalLowestStage=forceGlobalLowest&&(curNode||others[0])?uniq(globalLowestIps.slice(0,8).map(x=>viaNode((!curNodeBad&&curNode)||others[0]||curNode,x))):null;
-      const netFirstList=this.io.networkFirst&&curNode?uniq(ips.slice(0,4).map(x=>viaNode(curNode,x))):null;
-      const bestOtherNodeIps=this.io.networkFirst?uniq(others.slice(0,4).flatMap(n=>ips.slice(0,2).map(x=>viaNode(n,x)))):null;
+      const netFirstList=this.io.networkFirst&&curNode?uniq(rotIps.slice(0,4).map(x=>viaNode(curNode,x))):null;
+      const bestOtherNodeIps=this.io.networkFirst?uniq(others.slice(0,4).flatMap(n=>rotIps.slice(0,2).map(x=>viaNode(n,x)))):null;
       if(mode==='ip'){
         if(!curNode)return {stages:[],home,occupied,noIp:true};
         return {home,occupied,stages:[
           ...(globalLowestStage?.length?[['全库最低延迟可用纯净 ProxyIP',globalLowestStage]]:[]),
-          ...(curNodeBad&&bestOtherNodeIps?.length?[['最优其他节点 + 纯净 ProxyIP',bestOtherNodeIps]]:[]),
-          ...(netFirstList&&netFirstList.length?[['网络优先最优 ProxyIP',netFirstList]]:[]),
-          ...(!curNodeBad&&bestOtherNodeIps?.length?[['最优其他节点 + 纯净 ProxyIP',bestOtherNodeIps]]:[]),
+          ...(curNodeBad&&bestOtherNodeIps?.length?[['其他可用节点 + 纯净 ProxyIP',bestOtherNodeIps]]:[]),
+          ...(netFirstList&&netFirstList.length?[['同地区可用纯净 ProxyIP',netFirstList]]:[]),
+          ...(!curNodeBad&&bestOtherNodeIps?.length?[['其他可用节点 + 纯净 ProxyIP',bestOtherNodeIps]]:[]),
           ['同地区其他 ProxyIP',uniq(local.slice(0,8).map(x=>viaNode(curNode,x)))],
           ['其他地区 ProxyIP',uniq(away.slice(0,6).map(x=>viaNode(curNode,x,{crossRegion:true})))],
           ['其他节点 + 新 ProxyIP',uniq(others.slice(0,4).flatMap(n=>local.slice(0,2).map(x=>viaNode(n,x))))],
@@ -125,7 +131,7 @@ const RoutePolicy = (() => {
       ]};
       return {home,occupied,stages:[
         ...(globalLowestStage?.length?[['全库最低延迟可用纯净 ProxyIP',globalLowestStage]]:[]),
-        ...(netFirstList&&netFirstList.length?[['当前节点 + 网络优先 ProxyIP',netFirstList.slice(0,6)]]:[]),
+        ...(netFirstList&&netFirstList.length?[['当前节点 + 同地区可用 ProxyIP',netFirstList.slice(0,6)]]:[]),
         ['其他节点（保留当前 ProxyIP）',uniq(others.slice(0,8).map(n=>({proxy:n.proxy,nodeId:n.id,...keep,kind:'node'})))],
         ['其他节点 + 同地区 ProxyIP',uniq(others.slice(0,4).flatMap(n=>local.slice(0,2).map(x=>viaNode(n,x))))],
         ['当前节点 + 同地区其他 ProxyIP',curNode?uniq(local.slice(0,3).map(x=>viaNode(curNode,x))):[]],
@@ -155,6 +161,7 @@ const RoutePolicy = (() => {
         if(this.io.cancelled?.())return {ok:false,cancelled:true};
       }
       this.netProblemCount=(this.netProblemCount||0)+1;
+      if(a.proxyIp)this.recentIps.set(String(a.proxyIp).toLowerCase(),this.now()+600000);
       const groups=this.plan(first,mode,this.now());this.cursor++;
       if(groups.noIp)return {ok:false,error:'当前不是「节点 + ProxyIP」连接，无法自动更换出口 IP'};
       // ① 热备兜底库秒切（0 等待）：日常与抽卡期间已预检好第二 IP / 备用节点并签发好凭证，报错立刻顶上，无需等待现场测速；若备用也失效则继续试下一个或转现场并发检测
@@ -169,7 +176,8 @@ const RoutePolicy = (() => {
           this.io.progress?.('秒切热备线路 '+label);
           const applied=await this.io.apply({id:owner,expected,expectedConfig,expectedMode:strategy,route,ticket:sr.ticket}).catch(()=>null);
           if(applied?.ok){
-            this.failures=0;this.next=this.now()+5000;this.last=label;
+            if(sw.proxyIp)this.recentIps.set(String(sw.proxyIp).toLowerCase(),this.now()+600000);
+            this.failures=0;this.next=this.now()+30000;this.last=label;
             return {ok:true,changed:true,standby:true,mode,from:expected,account:applied.account,probe:sr,label};
           }
         }
@@ -177,6 +185,7 @@ const RoutePolicy = (() => {
       const valid=(c,r)=>good(r)&&(this.io.allowCrossRegionEscape?Boolean(r.loc):(strategy!=='node'||!a.region||r.loc===a.region)&&!groups.occupied.has(r.loc))&&reputationOK(withProbe(first.pool||{},r),c.proxyIp||r.ip,{eg:r.ip},this.now());
       let winner=null,result=null,limitedN=0;
       const batchSize=this.io.allowCrossRegionEscape?(this.io.batchSize||4):2;
+      const forceGlobalLowest=Boolean(this.io.forceGlobalLowestLatency?.());
       for(const [stage,list] of groups.stages){
         for(let i=0;i<list.length&&!winner;i+=batchSize){
           if(this.io.cancelled?.())return {ok:false,cancelled:true};
@@ -189,7 +198,8 @@ const RoutePolicy = (() => {
               try{this.io.banBadIp?.(x.c,x.r);}catch{}
             }
           }
-          const best=measured.filter(x=>valid(x.c,x.r)).sort((x,y)=>(x.r.ms||99999)-(y.r.ms||99999))[0];
+          const validList=measured.filter(x=>valid(x.c,x.r));
+          const best=forceGlobalLowest?validList.sort((x,y)=>(x.r.ms||99999)-(y.r.ms||99999))[0]:validList[0];
           if(best){winner=best.c;result=best.r;}
         }
         if(winner)break;
@@ -198,7 +208,7 @@ const RoutePolicy = (() => {
         this.io.progress?.('检测本地代理 7890 / 18080 等端口');
         const local=await this.io.local(ports).catch(()=>[]);
         const list=local.map(x=>({...x,proxy:/^127\.0\.0\.1:\d+$/.test(x.proxy||'')?'http://'+x.proxy:x.proxy})).sort((x,y)=>(x.ms||99999)-(y.ms||99999)).filter(x=>/^socks5?:\/\/127\.0\.0\.1:\d+$|^http:\/\/127\.0\.0\.1:\d+$/.test(x.proxy||'')&&x.proxy!==a.proxy).slice(0,6);
-        for(let i=0;i<list.length;i+=2){if(this.io.cancelled?.())return {ok:false,cancelled:true};const cs=list.slice(i,i+2).map(x=>({proxy:x.proxy,proxyIp:'',nodeId:'',region:'',kind:'local'}));const rs=await Promise.all(cs.map(async c=>({c,r:await this.probe(c)})));const best=rs.filter(x=>good(x.r)&&reputationOK(withProbe(first.pool||{},x.r),x.r.ip,{eg:x.r.ip},this.now())).sort((x,y)=>(x.r.ms||99999)-(y.r.ms||99999))[0];if(best){winner=best.c;result=best.r;break;}}
+        for(let i=0;i<list.length;i+=2){if(this.io.cancelled?.())return {ok:false,cancelled:true};const cs=list.slice(i,i+2).map(x=>({proxy:x.proxy,proxyIp:'',nodeId:'',region:'',kind:'local'}));const rs=await Promise.all(cs.map(async c=>({c,r:await this.probe(c)})));const best=rs.filter(x=>good(x.r)&&reputationOK(withProbe(first.pool||{},x.r),x.r.ip,{eg:x.r.ip},this.now()))[0];if(best){winner=best.c;result=best.r;break;}}
       }
       if(!winner){this.failures++;this.next=this.now()+Math.min(120000,15000*2**Math.min(this.failures,3));return {ok:false,limited:limitedN>0,error:limitedN&&mode==='ip'?'已检测的候选出口也被限流（429），稍后继续换':mode==='ip'?'没有可用的其他 ProxyIP（都在冷却、占用或检测未通过），保留原配置':(strategy==='node'?'其他节点和同地区 ProxyIP 都未通过检测；节点模式不换地区，不退回其他代理或直连':'本轮候选节点与本地代理均未通过服务检测，保留原配置，稍后重试')};}
       const nextReg=result.loc||winner.region;
@@ -218,7 +228,8 @@ const RoutePolicy = (() => {
       this.io.progress?.('应用已验证线路并续接对话');
       const applied=await this.io.apply({id:owner,expected,expectedConfig,expectedMode:strategy,route,ticket:result.ticket});
       if(!applied?.ok)throw Error(applied?.error||'线路应用未确认');
-      this.failures=0;this.next=this.now()+(this.io.allowCrossRegionEscape?5000:20000);this.last=label;
+      if(winner.proxyIp)this.recentIps.set(String(winner.proxyIp).toLowerCase(),this.now()+600000);
+      this.failures=0;this.next=this.now()+(this.io.allowCrossRegionEscape?30000:20000);this.last=label;
       return {ok:true,changed:true,mode,from:expected,account:applied.account,probe:result,label};
     }
   }

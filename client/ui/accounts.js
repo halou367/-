@@ -52,13 +52,13 @@ function parseAccounts(text) {
   if (j) list = (Array.isArray(j) ? j : Array.isArray(j.accounts) ? j.accounts : []).map(a => ({ email: a.email, password: a.password || a.pw || '', proxy: a.proxy || '', proxyIp: a.proxyIp || '', region: a.region || '', nodeId: a.nodeId || '', name: a.name || '', ...(typeof a.remark === 'string' ? { remark: a.remark } : {}), cookies: Array.isArray(a.cookies) ? a.cookies.filter(c => c && /^arena-auth-prod-v1(\.\d+)?$/.test(String(c.name || '')) && typeof c.value === 'string') : [] }));
   else for (const raw of text.split(/\r?\n/)) {
     const line = raw.replace(/-{4,}/g, ' ').trim(); if (!line) continue;
-    const m = /^([^\s@:|,;]+@[^\s@:|,;]+\.[^\s@:|,;]+)(?:\s*[\t :|,;]\s*(.*))?$/.exec(line); if (!m) continue;
+    const m = /^([^\s@:|;]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,})(?:\s*[\t :|,;]\s*(.*))?$/.exec(line); if (!m) continue;
     let rest = (m[2] || '').trim(), proxy = '';
     const parts = rest.split(/\s+|\t|\|/); if (parts.length > 1 && (PROXY_RE.test(parts.at(-1)) || isVless(parts.at(-1)) || isDirectP(parts.at(-1)))) { proxy = parts.pop(); rest = rest.slice(0, rest.lastIndexOf(proxy)).trim().replace(/[\s|,;]+$/, ''); }
     list.push({ email: m[1], password: rest, proxy, name: '', cookies: [] });
   }
   const by = new Map();
-  for (const a of list) { const k = String(a.email || '').trim().toLowerCase(); if (!EMAIL_RE.test(k)) continue; const o = by.get(k) || {}; by.set(k, { ...o, ...a, email: String(a.email).trim(), password: a.password || o.password || '', proxy: a.proxy || o.proxy || '', proxyIp: a.proxyIp || o.proxyIp || '', region: a.region || o.region || '', nodeId: a.nodeId || o.nodeId || '', cookies: a.cookies?.length ? a.cookies : o.cookies || [] }); }
+  for (const a of list) { const k = AuthFlow.canonMailbox ? AuthFlow.canonMailbox(a.email) : String(a.email || '').trim().toLowerCase(); if (!EMAIL_RE.test(String(a.email || '').trim())) continue; const o = by.get(k) || {}; const richEmail = AuthFlow.pickRichEmail ? AuthFlow.pickRichEmail(o.email || a.name, a.email) : String(a.email).trim(); by.set(k, { ...o, ...a, email: richEmail, password: a.password || o.password || '', proxy: a.proxy || o.proxy || '', proxyIp: a.proxyIp || o.proxyIp || '', region: a.region || o.region || '', nodeId: a.nodeId || o.nodeId || '', cookies: a.cookies?.length ? a.cookies : o.cookies || [] }); }
   const out = [...by.values()];
   return out.length ? { list: out } : { error: '没有识别到账号。支持：导出的账号合集，或每行「邮箱 密码 [代理]」' };
 }
@@ -295,14 +295,16 @@ Object.assign(UI, {
       if (Auth.real(me?.user)) try { AuthFlow.loginIdentity(me.user); } catch (e) { err = e; me = null; }
       if (Auth.real(me?.user)) {
         try {
+          const richEmail = AuthFlow.pickRichEmail(email.value || draft.email || a.email || a.name, me.user.email);
+          me.user.email = richEmail;
           await AuthEnv.finish(me.user);
-          const saved = await Host.saveAccount({ id: a.id, email: me.user.email,
-            ...(!AuthFlow.sameEmail(a.email, me.user.email) ? { clearPassword: true } : {}) });
+          const saved = await Host.saveAccount({ id: a.id, email: richEmail,
+            ...(!AuthFlow.sameMailbox(a.email, me.user.email) ? { clearPassword: true } : {}) });
           if (!saved?.id || saved.error) throw new Error(saved?.error || '保存未确认');
           if (!current()) return;
           this.authDrafts.clear(a);
           try { localStorage.removeItem('anc-auth'); localStorage.removeItem('anc-auth-email'); } catch {}
-          msg.textContent = '已登录（' + me.user.email + '），正在进入…'; msg.className = 'lmsg ok';
+          msg.textContent = '已登录（' + richEmail + '），正在进入…'; msg.className = 'lmsg ok';
           setTimeout(() => { if (current()) location.reload(); }, 300); return;
         } catch (e) { err = new Error('身份已核对，但本地账号信息保存失败：' + cleanErr(e)); }
       }
@@ -1044,7 +1046,7 @@ Object.assign(UI, {
           else if (t !== null) { ipEl.textContent = t?.error || '不可用'; if (!await Dialog.confirm({ title: '新代理测试失败', text: `${t?.error || '不可用'}\n保存后当前窗口会断开连接，确定仍然保存？`, ok: '仍然保存', danger: true })) return false; }
         }
         const fpCh = fpDirty && fp;
-        try { const fields = { id: a.id, name: email.value.trim() || a.name || '账号', email: email.value.trim(), ...(pw.inp.value !== initialPassword ? { password: pw.inp.value } : {}), ...(fpCh ? { fp } : {}) }; const saved = pf.save ? await pf.save(fields) : await Host.saveAccount({ ...fields, proxy: np, proxyIp: npi, nodeId: pf.nodeId, region: pf.region, ...(pf.routeMode ? RouteState.prefs(pf.routeMode) : {}) }); if (!saved?.id || saved.error) throw Error(saved?.error || '保存未确认'); initialPassword = pw.inp.value; Object.assign(a, saved || {}); if (saved?.fp) { fp = { ...saved.fp }; fpSum.textContent = fpLine(fp); } fpDirty = false; }
+        try { const fields = { id: a.id, name: email.value.trim() || a.name || '账号', email: email.value.trim(), manualEmailEdit: true, ...(pw.inp.value !== initialPassword ? { password: pw.inp.value } : {}), ...(fpCh ? { fp } : {}) }; const saved = pf.save ? await pf.save(fields) : await Host.saveAccount({ ...fields, proxy: np, proxyIp: npi, nodeId: pf.nodeId, region: pf.region, ...(pf.routeMode ? RouteState.prefs(pf.routeMode) : {}) }); if (!saved?.id || saved.error) throw Error(saved?.error || '保存未确认'); initialPassword = pw.inp.value; Object.assign(a, saved || {}); if (saved?.fp) { fp = { ...saved.fp }; fpSum.textContent = fpLine(fp); } fpDirty = false; }
         catch (e) { toast(cleanErr(e), 'err'); return false; }
         if (isCur) { this.host = await Host.info(); this.renderAcct(); IP.poll(); }
         if (isCur && fpCh && await Dialog.confirm({ title: '指纹已更新', text: '新指纹在重新载入页面后生效。现在重新载入？', ok: '重新载入' })) setTimeout(() => location.reload(), 200);

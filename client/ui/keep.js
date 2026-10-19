@@ -5,7 +5,7 @@ const KeepAlive = (() => {
   const ASK_TOOL = /(^|[-_])(ask|question|confirm|approval|approve|choice|choose|select|form|clarif|human|user[-_]?input|request[-_]?input)/i;
   const MID_TOOL = /(^|[-_])(read|read_file|bash|shell|exec|edit|edit_file|write|write_file|search|web_search|fetch|fetch_page|grep|glob|ls|list_dir|find|cat|python|node)/i;
   const LIMITED = /429|rate.?limit|too many|限流|频繁|quota|额度|recaptcha|captcha|人机验证|unauthori|401|403/i;
-  const OFFICIAL_ERR = /\bFailed query:\s*select\b|\bagentic_session_nodes\b|The AI took too long to respond|官方服务响应超时|An error occurred while generating|Something went wrong\.?\s*Please try again|Internal server error|database error|drizzle|postgres|deadlock detected|connection terminated unexpectedly|upstream.*(?:error|timeout|reset)|model.*(?:overloaded|timed out|unavailable)|service unavailable|bad gateway|gateway timeout/i;
+  const OFFICIAL_ERR = /\bFailed query:\s*select\b|\bagentic_session_nodes\b|The AI took too long to respond|The AI service rejected this request|官方服务响应超时|官方服务拒绝请求|An error occurred while generating|Something went wrong\.?\s*Please try again|Internal server error|database error|drizzle|postgres|deadlock detected|connection terminated unexpectedly|upstream.*(?:error|timeout|reset)|model.*(?:overloaded|timed out|unavailable)|service unavailable|bad gateway|gateway timeout/i;
   const on = () => Prefs.keepAlive !== false;
   const S = c => c._ka ||= { plan: null, cancelled: new Set(), hist: [], paused: 0, reconAt: 0, recon: 0, sig: '', sigAt: now(), errSeen: 0, fakeSeen: 0, stallSeen: 0, autoContCount: 0, lastToolCount: 0, tools: new Map(), noStreamAt: 0, turnAt: 0 };
   const visible = c => !document.hidden && UI.els?.chat === c;
@@ -73,11 +73,27 @@ const KeepAlive = (() => {
     if (c.endStop || c.stopReq) return null;
     const msgs = c.messages || [];
     const tail = msgs.at(-1);
-    const errOnlyTail = !!(tail?.role === 'assistant' && Array.isArray(tail.parts) && tail.parts.length > 0 && tail.parts.every(p => p && (p.type === 'error' || p.type === 'step-start')));
-    const lastUser = errOnlyTail ? msgs.at(-2) : (tail?.role === 'user' ? tail : null);
+    const errOnlyTail = !!(tail?.role === 'assistant' && ((typeof isDeadAssistantMsg === 'function' && isDeadAssistantMsg(tail)) || (Array.isArray(tail.parts) && tail.parts.length > 0 && tail.parts.every(p => p && (p.type === 'error' || p.type === 'step-start')))));
+    let lastUser = errOnlyTail ? msgs.at(-2) : (tail?.role === 'user' ? tail : null);
+    let lastHealthyIdx = -1;
+    for (let i = msgs.length - 1; i >= 0; i--) {
+      const m = msgs[i];
+      if (m && m.role === 'assistant' && !(typeof isDeadAssistantMsg === 'function' ? isDeadAssistantMsg(m) : (Array.isArray(m.parts) && m.parts.every(p => p && (p.type === 'error' || p.type === 'step-start'))))) {
+        lastHealthyIdx = i;
+        break;
+      }
+    }
+    const deadUsers = msgs.slice(lastHealthyIdx + 1).filter(m => m && m.role === 'user');
+    const getText = u => (u?.parts || []).filter(p => p && p.type === 'text').map(p => p.text || '').join('\n').trim();
+    const isContinueFiller = u => /^(?:继续|continue|go on|keep going|接着|继续执行)[。.!！?？\s]*$/i.test(getText(u)) && !(u?.metadata?.uploads?.length > 0);
+    if (deadUsers.length > 1) {
+      const picked = [...deadUsers].reverse().find(u => !isContinueFiller(u) && (getText(u) || u?.metadata?.uploads?.length > 0));
+      if (picked) lastUser = picked;
+    }
     if (!lastUser || lastUser.role !== 'user') return null;
-    if ((lastUser._officialErrAutoResent || 0) >= 1) return null;
-    const partErr = errOnlyTail ? tail.parts.find(p => p?.type === 'error') : null;
+    const maxResent = deadUsers.length ? deadUsers.reduce((mx, u) => Math.max(mx, Number(u?._officialErrAutoResent) || 0), 0) : (lastUser._officialErrAutoResent || 0);
+    if (maxResent >= 1) return null;
+    const partErr = errOnlyTail && Array.isArray(tail?.parts) ? tail.parts.find(p => p?.type === 'error') : null;
     const errTxt = String(c.errText || c.error || partErr?.rawText || partErr?.text || '').trim();
     if (!errTxt || LIMITED.test(errTxt)) return null;
     const isOfficial = (typeof isOfficialTransientError === 'function' && isOfficialTransientError(errTxt)) || OFFICIAL_ERR.test(errTxt);
@@ -162,14 +178,17 @@ const KeepAlive = (() => {
       }
       const info = canAutoResendOfficialError(c);
       if (!info) return;
-      const { lastUser, errTail, origText } = info;
+      const pruned = typeof pruneDeadTailTurns === 'function' ? pruneDeadTailTurns(c) : null;
+      const lastUser = pruned?.lastUser || info.lastUser;
+      const origText = pruned?.origText || info.origText;
+      const errTail = info.errTail;
       lastUser._officialErrAutoResent = (lastUser._officialErrAutoResent || 0) + 1;
       lastUser._streamRejected = true;
-      if (errTail && c.messages.at(-1) === errTail) c.messages.pop();
+      if (!pruned && errTail && c.messages.at(-1) === errTail) c.messages.pop();
       c.error = null;
       c.errText = '';
       c._officialTurnErrAt = 0;
-      log(c, '检测到官方服务报错，已自动重新发送原文（第 ' + lastUser._officialErrAutoResent + ' 次）');
+      log(c, '检测到官方服务报错，已清理死节点并回退至上一正常节点自动重发原文（第 ' + lastUser._officialErrAutoResent + ' 次）');
       try {
         await c.send(origText, { files: lastUser.metadata?.uploads, retryOf: lastUser, officialAutoResend: true });
       } catch (e) {

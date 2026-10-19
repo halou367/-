@@ -439,6 +439,182 @@
       }
     } catch {}
   })();
+  // 浏览器模式（arena.ai）死节点回退与工作区分支重置救活器：拦截 /ai-proxy/realtime/v1/sessions/:id/in 并注入红条一键救活按钮
+  (() => {
+    try {
+      if (!/(^|\.)arena\.ai$/i.test(location.hostname)) return;
+      const origFetch = window.fetch ? window.fetch.bind(window) : null;
+      if (!origFetch || window.fetch.__ancRescueWrapped) return;
+      const isDeadAsst = m => {
+        if (!m || m.role !== 'assistant') return false;
+        if (m.metadata?.openThinkStopped || m.metadata?.aborted || m.metadata?.feedback?.interruption === 'stop') return true;
+        const pts = Array.isArray(m.parts) ? m.parts : [];
+        if (!pts.length) return true;
+        if (pts.some(p => p?.type === 'error')) return true;
+        return !pts.some(p => p && ((p.type === 'text' && String(p.text || '').trim().length > 0) || (p.type === 'reasoning' && String(p.text || '').trim().length > 0) || p.toolCallId || String(p.type || '').startsWith('tool-') || p.type === 'dynamic-tool' || p.type === 'file'));
+      };
+      const pickFirstHealthyParent = msgs => {
+        if (!Array.isArray(msgs) || !msgs.length) return null;
+        for (let i = 0; i < msgs.length; i++) {
+          const u = msgs[i];
+          if (!u || u.role !== 'user') continue;
+          const uid = String(u.metadata?.nodeId || u.id || '');
+          for (let j = i + 1; j < msgs.length; j++) {
+            const m = msgs[j];
+            if (!m) continue;
+            if (m.role === 'user') break;
+            if (m.role === 'assistant' && !isDeadAsst(m)) return uid || null;
+          }
+        }
+        return null;
+      };
+      const pickHealthyParent = (msgs, rejectedSet) => {
+        if (!Array.isArray(msgs) || !msgs.length) return null;
+        for (let i = msgs.length - 1; i >= 0; i--) {
+          const u = msgs[i];
+          if (!u || u.role !== 'user') continue;
+          const uid = String(u.metadata?.nodeId || u.id || '');
+          if (rejectedSet && uid && (rejectedSet.has(uid) || rejectedSet.has(String(u.id || '')))) continue;
+          let hasHealthy = false;
+          for (let j = i + 1; j < msgs.length; j++) {
+            const m = msgs[j];
+            if (!m) continue;
+            if (m.role === 'user') break;
+            if (m.role === 'assistant' && !isDeadAsst(m)) { hasHealthy = true; break; }
+          }
+          if (hasHealthy) return uid || null;
+        }
+        return null;
+      };
+      const hasRejectedBannerOnPage = () => {
+        try { return /The AI service rejected this request/i.test(document.body?.innerText || ''); } catch { return false; }
+      };
+      const wrappedFetch = async function (input, init) {
+        try {
+          const url = typeof input === 'string' ? input : (input?.url || '');
+          const m = /\/ai-proxy\/realtime\/v1\/sessions\/([^/?#]+)\/in\b/.exec(url);
+          if (m && init && String(init.method || 'GET').toUpperCase() === 'POST' && typeof init.body === 'string') {
+            const chatId = decodeURIComponent(m[1]);
+            const parsed = JSON.parse(init.body);
+            const uMsg = parsed?.payload?.message;
+            if (uMsg && uMsg.role === 'user') {
+              let shouldReloadAfter = false;
+              if (window.__ancResetWsNext) {
+                window.__ancResetWsNext = false;
+                let firstHealthyId = null;
+                try {
+                  const r = await origFetch('/api/chat/' + encodeURIComponent(chatId), { credentials: 'same-origin', cache: 'no-store' });
+                  if (r.ok) {
+                    const j = await r.json();
+                    firstHealthyId = pickFirstHealthyParent(j?.messages || []);
+                  }
+                } catch {}
+                uMsg.metadata = { ...(uMsg.metadata || {}), lastUserMessageId: firstHealthyId, manifestNodeId: null };
+                shouldReloadAfter = true;
+              } else if (window.__ancOverrideParentId !== undefined) {
+                const ov = window.__ancOverrideParentId;
+                window.__ancOverrideParentId = undefined;
+                uMsg.metadata = { ...(uMsg.metadata || {}), lastUserMessageId: ov, manifestNodeId: null };
+                shouldReloadAfter = true;
+              } else if (hasRejectedBannerOnPage()) {
+                try {
+                  const r = await origFetch('/api/chat/' + encodeURIComponent(chatId), { credentials: 'same-origin', cache: 'no-store' });
+                  if (r.ok) {
+                    const j = await r.json();
+                    const healthyId = pickHealthyParent(j?.messages || [], window.__ancRejectedSet);
+                    uMsg.metadata = { ...(uMsg.metadata || {}), lastUserMessageId: healthyId, manifestNodeId: null };
+                    shouldReloadAfter = true;
+                  }
+                } catch {}
+              }
+              init = { ...init, body: JSON.stringify(parsed) };
+              const res = await origFetch(input, init);
+              if (res.ok && shouldReloadAfter) {
+                setTimeout(() => { try { location.reload(); } catch {} }, 1800);
+              }
+              return res;
+            }
+          }
+        } catch {}
+        return origFetch(input, init);
+      };
+      wrappedFetch.__ancRescueWrapped = true;
+      window.fetch = wrappedFetch;
+
+      const scanRescueBanner = () => {
+        if (!document.body) return;
+        const chatM = /\/(?:chat|c|agent)\/([0-9a-f-]{20,})/i.exec(location.pathname);
+        const chatId = chatM ? chatM[1] : '';
+        const divs = document.body.querySelectorAll('div,p,span');
+        for (const el of divs) {
+          if (el.dataset?.ancRescue) continue;
+          if (el.children.length > 2) continue;
+          const t = String(el.textContent || '').trim();
+          if (!/^The AI service rejected this request\./i.test(t)) continue;
+          const box = el.closest('div') || el;
+          if (box.dataset.ancRescue) continue;
+          box.dataset.ancRescue = '1';
+          const bar = mk('div', '', {});
+          bar.style.cssText = 'display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:8px;padding-top:8px;border-top:1px solid rgba(255,120,120,0.25);font-size:12px;';
+          const tip = mk('span', '', { textContent: '死节点/工作区满载自救：' });
+          tip.style.cssText = 'opacity:0.9;font-weight:600;';
+          const mkBtn = (label, onClick) => {
+            const b = mk('button', '', { type: 'button', textContent: label });
+            b.style.cssText = 'padding:4px 10px;border-radius:6px;border:1px solid rgba(255,140,140,0.45);background:rgba(255,255,255,0.08);color:inherit;cursor:pointer;font-size:12px;font-weight:600;width:auto;height:auto;line-height:1.4;';
+            b.onclick = onClick;
+            return b;
+          };
+          const bRewind = mkBtn('⏪ 回退上一正常节点', async () => {
+            if (!chatId) { tip.textContent = '请切回客户端模式执行回退'; return; }
+            bRewind.disabled = true;
+            try {
+              const r = await origFetch('/api/chat/' + encodeURIComponent(chatId), { credentials: 'same-origin', cache: 'no-store' });
+              const j = await r.json();
+              const rej = (window.__ancRejectedSet ||= new Set());
+              const cur = pickHealthyParent(j?.messages || [], rej);
+              if (cur && bRewind.dataset.stepped === '1') {
+                rej.add(cur);
+              }
+              bRewind.dataset.stepped = '1';
+              const nextHealthy = pickHealthyParent(j?.messages || [], rej);
+              window.__ancOverrideParentId = nextHealthy;
+              tip.textContent = nextHealthy ? '✓ 已跳过死节点并回退至正常节点，请直接在下方输入框发消息' : '✓ 已回退至对话起点，请直接在下方输入框发消息';
+            } catch {
+              window.__ancOverrideParentId = null;
+              tip.textContent = '✓ 已设为回退模式，请直接在下方输入框发消息';
+            } finally {
+              bRewind.disabled = false;
+            }
+          });
+          const bReset = mkBtn('🧹 重置工作区救活（保留模型）', () => {
+            window.__ancResetWsNext = true;
+            tip.textContent = '✓ 已开启全新空工作区分支（保留当前模型），请在下方输入框随便发一句话即可救活！';
+          });
+          const bZip = mkBtn('📦 下载工作区 ZIP', async () => {
+            if (!chatId) return;
+            bZip.disabled = true;
+            try {
+              const r = await origFetch('/api/chat/' + encodeURIComponent(chatId) + '/workspace/latest?includeManifest=true', { credentials: 'same-origin' });
+              const j = await r.json();
+              if (j?.manifestNodeId && window.__ancDownloadUrl) {
+                window.__ancDownloadUrl(location.origin + '/api/chat/' + encodeURIComponent(chatId) + '/workspace/' + encodeURIComponent(j.manifestNodeId) + '/download', '', 'application/zip');
+                tip.textContent = '✓ 正在打包下载工作区 ZIP…';
+              } else {
+                tip.textContent = '当前对话暂无可下载的工作区文件';
+              }
+            } catch {
+              tip.textContent = '读取工作区失败';
+            } finally {
+              bZip.disabled = false;
+            }
+          });
+          bar.append(tip, bRewind, bReset, bZip);
+          box.append(bar);
+        }
+      };
+      setInterval(scanRescueBanner, 1200);
+    } catch {}
+  })();
   // Lightweight footer appears with the page; the full client footer replaces it once ready.
   let earlyFoot=null;
   if(window.__ancEarlyFooter){

@@ -3,8 +3,39 @@ const AuthFlow = (() => {
   const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
   const email = value => String(value || '').trim();
   const emailKey = value => email(value).toLowerCase();
+  const canonMailbox = value => {
+    const raw = emailKey(value);
+    const [local, domain] = raw.split('@');
+    return domain ? local.replace(/\+.*$/, '').replace(/[.,\-_]/g, '') + '@' + domain : raw;
+  };
+  const isFixtureEmail = value => /@example\.invalid$/i.test(email(value));
+  const sameMailbox = (a, b) => {
+    const ka = emailKey(a), kb = emailKey(b);
+    if (!ka || !kb) return false;
+    if (ka === kb) return true;
+    if (isFixtureEmail(a) || isFixtureEmail(b)) return false;
+    const ca = canonMailbox(a), cb = canonMailbox(b);
+    return Boolean(ca && ca === cb);
+  };
+  const pickRichEmail = (savedEmail, serverEmail) => {
+    const s = email(savedEmail);
+    const m = email(serverEmail);
+    if (!s || !EMAIL.test(s)) return m || s;
+    if (!m || !EMAIL.test(m)) return s;
+    if (sameMailbox(s, m)) {
+      const sPunct = (s.split('@')[0].match(/[.,\-_+]/g) || []).length;
+      const mPunct = (m.split('@')[0].match(/[.,\-_+]/g) || []).length;
+      return sPunct >= mPunct ? s : m;
+    }
+    return m;
+  };
   const fail = (code, message, extra = {}) => Object.assign(new Error(message), { code, ...extra });
-  const sameEmail = (a, b) => !!email(a) && emailKey(a) === emailKey(b);
+  const sameEmail = (a, b) => {
+    if (!email(a) || !email(b)) return false;
+    if (emailKey(a) === emailKey(b)) return true;
+    if (isFixtureEmail(a) || isFixtureEmail(b)) return false;
+    return sameMailbox(a, b);
+  };
   function identity(user, expected) {
     if (!user || typeof user !== 'object' || Array.isArray(user) || !EMAIL.test(email(user.email)))
       throw fail('AUTH_SESSION_MISSING', '尚未确认登录会话，请完成网页登录或刷新账号状态；这不等于 Cookie 被拦截');
@@ -119,6 +150,6 @@ const AuthFlow = (() => {
       return data;
     };
   }
-  return { EMAIL, email, sameEmail, identity, loginIdentity, sessionError, signupIntent, verificationIntent, authURL, createDrafts, createPoster };
+  return { EMAIL, email, canonMailbox, sameMailbox, pickRichEmail, sameEmail, identity, loginIdentity, sessionError, signupIntent, verificationIntent, authURL, createDrafts, createPoster };
 })();
 if (typeof module !== 'undefined' && module.exports) module.exports = AuthFlow;

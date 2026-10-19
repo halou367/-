@@ -91,27 +91,56 @@ const _extFetch = (u, o) => {
   const uStr = typeof u === 'string' ? u : (u?.url || String(u || ''));
   const mCost = /\/api\/chat\/([0-9a-f-]{20,})\/cost\b/i.exec(uStr);
   if (!mCost) return _doExtFetch(u, o);
+  try { window.__ancPin?.ensureBillingFlags?.(false); } catch {}
+  const activeDpl = (typeof window !== 'undefined' && window.__ancPin?.dpl?.()) || 'dpl_3UbNvzoXfT6iNZqgBa7GjsGeKLaT';
+  const mDpl = /[?&]dpl=(dpl_[A-Za-z0-9]{16,48})\b/i.exec(uStr);
+  const effDpl = (mDpl && mDpl[1] !== 'dpl_HAxwrhqRf48UW1Hf4MDQquRXSs7x') ? mDpl[1] : activeDpl;
+  const effU = uStr.replace(/([?&])dpl=dpl_[A-Za-z0-9]{16,48}(?:&|$)/gi, (m, p1) => (m.endsWith('&') ? p1 : '')).replace(/[?&]$/, '');
+  const effHeaders = Object.assign(
+    { 'x-deployment-id': effDpl },
+    (o && o.headers && typeof o.headers === 'object') ? o.headers : {}
+  );
+  delete effHeaders['x-arena-web-deployment'];
+  const effOpts = Object.assign({}, o || {}, { headers: effHeaders });
   const sid = mCost[1].toLowerCase();
+  const cacheKey = sid + ':' + effDpl;
   const tNow = now();
-  let c = _costFetchCache.get(sid);
-  if (!c) { c = { pending: null, at: 0, backoffUntil: 0, snap: null }; _costFetchCache.set(sid, c); }
+  let c = _costFetchCache.get(cacheKey) || _costFetchCache.get(sid);
+  if (!c) { c = { pending: null, at: 0, backoffUntil: 0, snap: null }; }
+  _costFetchCache.set(cacheKey, c);
   if (c.pending) return c.pending.then(s => new Response(s.body, { status: s.status, statusText: s.statusText, headers: s.headers }));
   if (c.snap && ((c.snap.status === 200 && tNow - c.at < 4000) || (tNow < c.backoffUntil))) {
     return Promise.resolve(new Response(c.snap.body, { status: c.snap.status, statusText: c.snap.statusText, headers: c.snap.headers }));
   }
-  const p = _doExtFetch(u, o).then(async r => {
+  const runOnce = (targetU, targetO) => _doExtFetch(targetU, targetO).then(async r => {
     const body = await r.clone().text().catch(() => '');
     const headers = {};
     try { r.headers?.forEach?.((v, k) => { headers[k] = v; }); } catch {}
-    const snap = { body, status: r.status, statusText: r.statusText || '', headers };
-    if (r.status === 200 && body.includes('"messages"')) {
+    return { body, status: r.status, statusText: r.statusText || '', headers };
+  });
+  const p = runOnce(effU, effOpts).then(async snap => {
+    // 403/409 单次重放恢复：自愈覆写后立即重放一次
+    if (snap.status === 403 || snap.status === 409) {
+      try { window.__ancPin?.ensure?.(true); } catch {}
+      const replayDpl = 'dpl_3UbNvzoXfT6iNZqgBa7GjsGeKLaT';
+      const replayHeaders = Object.assign({}, effHeaders, { 'x-deployment-id': replayDpl });
+      delete replayHeaders['x-arena-web-deployment'];
+      const replayOpts = Object.assign({}, effOpts, { headers: replayHeaders });
+      snap = await runOnce(effU, replayOpts);
+    }
+    if (snap.status === 200 && snap.body.includes('"messages"')) {
       c.snap = snap;
       c.at = now();
       c.backoffUntil = 0;
-    } else if (r.status === 429 || r.status === 403) {
+      _costFetchCache.set(sid, c);
+    } else if (snap.status === 429) {
       c.snap = snap;
       c.at = now();
-      c.backoffUntil = now() + (r.status === 429 ? 45000 : 60000);
+      c.backoffUntil = now() + 45000;
+    } else if (snap.status === 403) {
+      c.snap = snap;
+      c.at = now();
+      c.backoffUntil = now() + 15000;
     }
     return snap;
   }).finally(() => { c.pending = null; });
@@ -182,6 +211,19 @@ function getOrCreateVisitId() {
       const sec = location.protocol === 'https:' ? '; Secure' : '';
       const dom = location.hostname === 'arena.ai' || String(location.hostname || '').endsWith('.arena.ai') ? '; Domain=.arena.ai' : '';
       document.cookie = `arena_visit_id=${encodeURIComponent(JSON.stringify(_visitState))}; Path=/; SameSite=Lax; Max-Age=1800${sec}${dom}`;
+    } catch {}
+  }
+  return _visitState.id;
+}
+function rotateVisitId() {
+  const t = now();
+  _visitState = { id: uuid7(), started: t - Math.floor(18000 + Math.random() * 75000), lastSeen: t };
+  if (typeof document !== 'undefined' && typeof location !== 'undefined') {
+    try {
+      const sec = location.protocol === 'https:' ? '; Secure' : '';
+      const dom = location.hostname === 'arena.ai' || String(location.hostname || '').endsWith('.arena.ai') ? '; Domain=.arena.ai' : '';
+      document.cookie = `arena_visit_id=${encodeURIComponent(JSON.stringify(_visitState))}; Path=/; SameSite=Lax; Max-Age=1800${sec}${dom}`;
+      document.cookie = `__cf_bm=; Path=/; Max-Age=0${sec}${dom}`;
     } catch {}
   }
   return _visitState.id;
@@ -266,9 +308,9 @@ const Host = (() => {
         let id;
         try { id = A.protoFetchStart(String(path || ''), JSON.stringify(options || {})); if (!id) return { ok: false, status: 0, error: 'ANDROID_PROTO_NO_JOB' }; }
         catch (e) { return { ok: false, status: 0, error: String(e?.message || e) }; }
-        const maxPolls = Math.max(40, Math.ceil((Number(options?.timeoutMs) || 20000) / 150));
+        const maxPolls = Math.max(80, Math.ceil((Number(options?.timeoutMs) || 20000) / 80));
         for (let i = 0; i < maxPolls; i++) {
-          await sleep(150);
+          await sleep(i < 6 ? 25 : i < 18 ? 50 : 100);
           let r;
           try { r = A.probeGet(id); } catch (e) { return { ok: false, status: 0, error: String(e?.message || e) }; }
           if (r) { try { return JSON.parse(r); } catch { return { ok: false, status: 0, error: 'PARSE_ERROR' }; } }
@@ -330,11 +372,13 @@ const savePrefs = () => Shared.push('prefs', Prefs);
 // cookie 只是公开的部署编号，和账号无关；每个账号的 cookie 各自写入。旧部署被 Brana 删掉后自动失效，只能跟随新版。
 const Pin = {
   NAME: '__vdpl',
+  // Alive skew target: dpl_3UbNvzoXfT6iNZqgBa7GjsGeKLaT -> dpl_BcGa9YULV843didEQWsFTd5taD4h (fallback dpl_HAxwrhqRf48UW1Hf4MDQquRXSs7x / dpl_8c25ZvCYXszwFU4s19PErXPLVCzn)
+  ACTIVE_COST_DPL: 'dpl_3UbNvzoXfT6iNZqgBa7GjsGeKLaT',
+  COST_DPL: 'dpl_HAxwrhqRf48UW1Hf4MDQquRXSs7x',
   LEGACY: 'dpl_HAxwrhqRf48UW1Hf4MDQquRXSs7x',
   POOL: [
+    'dpl_3UbNvzoXfT6iNZqgBa7GjsGeKLaT',
     'dpl_HAxwrhqRf48UW1Hf4MDQquRXSs7x',
-    'dpl_4NhYCxHezktNSfr9x2GMwqJnbJPa',
-    'dpl_Gxhd5ZSm5y3NhjeyXwjCYo8o3ADC',
   ],
   ENDPOINTS: [
     '/api/chat/{sid}/cost?includeSession=true',
@@ -342,14 +386,43 @@ const Pin = {
     '/api/evaluation/{sid}/cost?includeSession=true',
     '/api/evaluation/{sid}/cost',
   ],
-  EXPIRED: new Set(['dpl_DaEk6YQDh7utsYDiEtpTgeRc5jct', 'dpl_6gJxa2MLrLxAx6KcYkVgvMmbV2EA', 'dpl_D2yWTJ2pjpQeiwvqpbtqDTpsZnY4', 'dpl_8c25ZvCYXszwFU4s19PErXPLVCzn', 'dpl_2W47bX6FpYa8XrFCCjzBA2JNNZ4V', 'dpl_BieRM8wzCXHw6R6ToLUsTdhu4ZBZ']),
-  COST_TRIGGER: '20261017.17',
+  EXPIRED: new Set(['dpl_DaEk6YQDh7utsYDiEtpTgeRc5jct', 'dpl_HAxwrhqRf48UW1Hf4MDQquRXSs7x', 'dpl_ESfaucDQhCnPyQUz9QQZg82hdgNT', 'dpl_9gD8cB3xQ7eTwzU2jLmVpR5kHs1Y', 'dpl_4NhYCxHezktNSfr9x2GMwqJnbJPa', 'dpl_Gxhd5ZSm5y3NhjeyXwjCYo8o3ADC', 'dpl_6gJxa2MLrLxAx6KcYkVgvMmbV2EA', 'dpl_D2yWTJ2pjpQeiwvqpbtqDTpsZnY4', 'dpl_2W47bX6FpYa8XrFCCjzBA2JNNZ4V', 'dpl_BieRM8wzCXHw6R6ToLUsTdhu4ZBZ']),
+  COST_TRIGGER: '20261017.19',
   TRIGGER: '20260930.5',
+  OVERRIDES: { 'credit-system-m1': 'cost-shown', 'credit-system-m2': 'limits-enabled' },
   trigger: '', apiDpl: '', at: 0, fellBack: '',
+  extractDpl(raw) {
+    const s = String(raw || '').trim();
+    if (!s) return '';
+    if (/^dpl_[A-Za-z0-9]{16,48}$/.test(s)) return s;
+    const m = /\b(dpl_[A-Za-z0-9]{16,48})\b/.exec(s);
+    return m ? m[1] : '';
+  },
+  lockedDpl() {
+    try { return this.extractDpl(Prefs?.pinDpl); } catch { return ''; }
+  },
   initSmartPool() {
     try {
+      const locked = this.lockedDpl();
+      if (locked && Prefs.pinDpl !== locked) Prefs.pinDpl = locked;
+      const defaultDpl = 'dpl_3UbNvzoXfT6iNZqgBa7GjsGeKLaT';
+      this.COST_DPL = 'dpl_3UbNvzoXfT6iNZqgBa7GjsGeKLaT';
+      if (locked) this.COST_DPL = locked;
+      const protectedDpls = new Set([defaultDpl, 'dpl_BcGa9YULV843didEQWsFTd5taD4h', ...(locked ? [locked] : [])]);
       if (Array.isArray(Prefs.expiredCostDpls)) {
-        for (const x of Prefs.expiredCostDpls) if (/^dpl_[A-Za-z0-9]{16,48}$/.test(String(x || ''))) this.EXPIRED.add(String(x));
+        const cleaned = Prefs.expiredCostDpls.filter(x => !protectedDpls.has(String(x || '').trim()));
+        if (cleaned.length !== Prefs.expiredCostDpls.length) Prefs.expiredCostDpls = cleaned;
+        for (const x of cleaned) if (/^dpl_[A-Za-z0-9]{16,48}$/.test(String(x || ''))) this.EXPIRED.add(String(x));
+      }
+      for (const p of protectedDpls) this.EXPIRED.delete(p);
+      for (const exp of ['dpl_HAxwrhqRf48UW1Hf4MDQquRXSs7x', 'dpl_ESfaucDQhCnPyQUz9QQZg82hdgNT', 'dpl_9gD8cB3xQ7eTwzU2jLmVpR5kHs1Y', 'dpl_4NhYCxHezktNSfr9x2GMwqJnbJPa', 'dpl_Gxhd5ZSm5y3NhjeyXwjCYo8o3ADC']) {
+        if (exp !== locked) this.EXPIRED.add(exp);
+      }
+      if (locked) {
+        this.EXPIRED.delete(locked);
+        Prefs.autoCostDpl = locked;
+      } else if (Prefs.autoCostDpl && !protectedDpls.has(String(Prefs.autoCostDpl).trim())) {
+        Prefs.autoCostDpl = defaultDpl;
       }
       if (Array.isArray(Prefs.autoCostPool)) {
         for (const x of Prefs.autoCostPool.slice().reverse()) {
@@ -359,11 +432,9 @@ const Pin = {
           }
         }
       }
-      if (Prefs.autoCostDpl && /^dpl_[A-Za-z0-9]{16,48}$/.test(String(Prefs.autoCostDpl)) && !this.EXPIRED.has(String(Prefs.autoCostDpl))) {
-        const id = String(Prefs.autoCostDpl).trim();
-        this.LEGACY = id;
-        this.POOL = [id, ...this.POOL.filter(y => y !== id)];
-      }
+      const primary = locked || (Prefs.autoCostDpl && /^dpl_[A-Za-z0-9]{16,48}$/.test(String(Prefs.autoCostDpl)) && !this.EXPIRED.has(String(Prefs.autoCostDpl)) ? String(Prefs.autoCostDpl).trim() : this.COST_DPL);
+      this.LEGACY = primary;
+      this.POOL = [primary, defaultDpl, ...this.POOL.filter(y => y !== primary && y !== defaultDpl)];
       if (Prefs.autoCostEndpoint && typeof Prefs.autoCostEndpoint === 'string' && Prefs.autoCostEndpoint.includes('{sid}')) {
         this.ENDPOINTS = [Prefs.autoCostEndpoint, ...this.ENDPOINTS.filter(e => e !== Prefs.autoCostEndpoint)];
       }
@@ -375,23 +446,78 @@ const Pin = {
   hold(on = true) { try { if (on) localStorage.setItem('anc-pin-hold', String(now() + 30 * 60e3)); else localStorage.removeItem('anc-pin-hold'); } catch {} if (on) this.drop(); else this.ensure(true); },
   held() { try { return +localStorage.getItem('anc-pin-hold') > now(); } catch { return false; } },
   dpl() {
-    if (Prefs.autoCostDpl && this.EXPIRED.has(String(Prefs.autoCostDpl).trim())) {
-      try { delete Prefs.autoCostDpl; if (typeof savePrefs === 'function') savePrefs(); } catch {}
+    const locked = this.lockedDpl();
+    if (locked) {
+      this.EXPIRED.delete(locked);
+      return locked;
     }
-    const d = String(Prefs.pinDpl || Prefs.autoCostDpl || '').trim();
-    if (d && this.EXPIRED.has(d)) { try { delete Prefs.pinDpl; delete Prefs.autoCostDpl; if (typeof savePrefs === 'function') savePrefs(); } catch {} return this.LEGACY; }
-    return /^dpl_[A-Za-z0-9]{16,48}$/.test(d) ? d : this.LEGACY;
+    if (Prefs.autoCostDpl && this.EXPIRED.has(String(Prefs.autoCostDpl).trim())) {
+      try { Prefs.autoCostDpl = this.COST_DPL; if (typeof savePrefs === 'function') savePrefs(); } catch {}
+    }
+    const d = String(Prefs.autoCostDpl || '').trim();
+    if (d && this.EXPIRED.has(d)) { try { Prefs.autoCostDpl = this.COST_DPL; if (typeof savePrefs === 'function') savePrefs(); } catch {} return this.COST_DPL; }
+    return /^dpl_[A-Za-z0-9]{16,48}$/.test(d) ? d : (this.COST_DPL || this.LEGACY);
   },
   vals() { try { return document.cookie.split(/;\s*/).filter(x => x.startsWith(this.NAME + '=')).map(x => x.slice(this.NAME.length + 1)); } catch { return []; } },
   drop() { for (const dm of ['', '; domain=arena.ai', '; domain=.arena.ai']) try { document.cookie = this.NAME + '=; path=/; max-age=0; secure' + dm; } catch {} },
   ck: 0,
+  // 6层幂等自愈注入：localStorage PostHog flags + ph-toolbar-overrides Cookie + arena_build_bucket=stable + window.posthog.featureFlags.override + __vdpl
+  ensureBillingFlags(force = false) {
+    if (typeof location === 'undefined' || location.hostname !== 'arena.ai') return;
+    try {
+      const ov = this.OVERRIDES || { 'credit-system-m1': 'cost-shown', 'credit-system-m2': 'limits-enabled' };
+      // 1. localStorage PostHog 持久化对象深度合并
+      let patchedLs = false;
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (!k || !/^ph_.*_posthog$/.test(k)) continue;
+        try {
+          const obj = JSON.parse(localStorage.getItem(k) || '{}');
+          if (obj && typeof obj === 'object') {
+            const cur = obj.$override_feature_flags || {};
+            if (force || cur['credit-system-m1'] !== 'cost-shown' || cur['credit-system-m2'] !== 'limits-enabled') {
+              obj.$override_feature_flags = Object.assign({}, cur, ov);
+              localStorage.setItem(k, JSON.stringify(obj));
+            }
+            patchedLs = true;
+          }
+        } catch {}
+      }
+      if (!patchedLs) {
+        const fbKey = 'ph_phc_arena_posthog';
+        try {
+          const obj = JSON.parse(localStorage.getItem(fbKey) || '{}');
+          const cur = obj.$override_feature_flags || {};
+          if (force || cur['credit-system-m1'] !== 'cost-shown' || cur['credit-system-m2'] !== 'limits-enabled') {
+            obj.$override_feature_flags = Object.assign({}, cur, ov);
+            localStorage.setItem(fbKey, JSON.stringify(obj));
+          }
+        } catch {}
+      }
+      // 2. ph-toolbar-overrides Cookie + arena_build_bucket=stable
+      const rawCookie = String(document.cookie || '');
+      const hasPhOk = rawCookie.includes('ph-toolbar-overrides=') && rawCookie.includes('cost-shown') && rawCookie.includes('limits-enabled');
+      if (force || !hasPhOk) {
+        const val = encodeURIComponent(JSON.stringify(ov));
+        document.cookie = `ph-toolbar-overrides=${val}; path=/; max-age=2592000; SameSite=Lax; Secure`;
+      }
+      if (force || !/(?:^|;\s*)arena_build_bucket=stable(?:;|$)/.test(rawCookie)) {
+        document.cookie = 'arena_build_bucket=stable; path=/; max-age=31536000; SameSite=Lax; Secure';
+      }
+      // 3. PostHog 运行时实例直接注入
+      if (typeof window !== 'undefined' && window.posthog?.featureFlags?.override) {
+        try { window.posthog.featureFlags.override(ov); } catch {}
+      }
+    } catch {}
+  },
   ensure(force) {
     if (location.hostname !== 'arena.ai') return;
     if (!force && now() - this.ck < 2000) return; this.ck = now();
+    this.ensureBillingFlags(Boolean(force));
     const v = this.vals();
     if (!this.on()) { if (v.length) this.drop(); return; }
-    const d = this.dpl(); if (v.length === 1 && v[0] === d) return;
-    if (v.length) this.drop();
+    const d = this.dpl(); if (!force && v.length === 1 && v[0] === d) return;
+    if (v.length && (v.length > 1 || v[0] !== d)) this.drop();
     try { document.cookie = `${this.NAME}=${d}; path=/; max-age=31536000; secure; samesite=lax`; } catch {}
   },
   // 20260930.5 及更早 = 旧版（有运行令牌）；20261017.17 及更早 = 计费兼容版（支持 /cost 四通道账单）
@@ -400,15 +526,16 @@ const Pin = {
   learnDpl(d, verifiedCost = false) {
     const id = String(d || '').trim();
     if (!/^dpl_[A-Za-z0-9]{16,48}$/.test(id)) return;
+    const locked = this.lockedDpl();
     if (verifiedCost) {
       this.EXPIRED.delete(id);
-      this.POOL = [id, ...this.POOL.filter(x => x !== id)];
-      this.LEGACY = id;
+      const head = locked || id;
+      this.POOL = [head, id, ...this.POOL.filter(x => x !== head && x !== id)];
+      this.LEGACY = head;
       try {
         if (typeof Prefs === 'object') {
           let dirty = false;
-          if (Prefs.autoCostDpl !== id) { Prefs.autoCostDpl = id; dirty = true; }
-          if (Prefs.pinDpl && this.EXPIRED.has(String(Prefs.pinDpl).trim())) { delete Prefs.pinDpl; dirty = true; }
+          if (!locked && Prefs.autoCostDpl !== id) { Prefs.autoCostDpl = id; dirty = true; }
           const nextPool = this.POOL.filter(x => !this.EXPIRED.has(x)).slice(0, 16);
           if (JSON.stringify(Prefs.autoCostPool) !== JSON.stringify(nextPool)) { Prefs.autoCostPool = nextPool; dirty = true; }
           if (dirty && typeof savePrefs === 'function') savePrefs();
@@ -422,24 +549,58 @@ const Pin = {
   },
   markBadDpl(d) {
     const id = String(d || '').trim();
-    if (!/^dpl_[A-Za-z0-9]{16,48}$/.test(id)) return;
+    const locked = this.lockedDpl();
+    if (!/^dpl_[A-Za-z0-9]{16,48}$/.test(id) || id === 'dpl_3UbNvzoXfT6iNZqgBa7GjsGeKLaT' || (locked && id === locked)) return;
     this.EXPIRED.add(id);
     const remaining = this.POOL.filter(x => x !== id && !this.EXPIRED.has(x));
     if (remaining.length > 0) this.POOL = remaining;
     if (this.LEGACY === id) {
-      this.LEGACY = remaining[0] || 'dpl_4NhYCxHezktNSfr9x2GMwqJnbJPa';
+      this.LEGACY = locked || remaining[0] || 'dpl_3UbNvzoXfT6iNZqgBa7GjsGeKLaT';
     }
     try {
       if (typeof Prefs === 'object') {
         let dirty = false;
-        if (Prefs.autoCostDpl === id) { delete Prefs.autoCostDpl; dirty = true; }
-        if (Prefs.pinDpl === id) { delete Prefs.pinDpl; dirty = true; }
+        if (!locked && Prefs.autoCostDpl === id) { delete Prefs.autoCostDpl; dirty = true; }
         const expArr = [...this.EXPIRED].slice(-40);
         if (JSON.stringify(Prefs.expiredCostDpls) !== JSON.stringify(expArr)) { Prefs.expiredCostDpls = expArr; dirty = true; }
         if (dirty && typeof savePrefs === 'function') savePrefs();
       }
     } catch {}
     this.ensure(true);
+  },
+  lockCostDpl(rawInput) {
+    const trimmed = String(rawInput || '').trim();
+    if (!trimmed) {
+      delete Prefs.pinDpl;
+      Prefs.autoCostDpl = 'dpl_3UbNvzoXfT6iNZqgBa7GjsGeKLaT';
+      this.initSmartPool();
+      try { if (typeof _costFetchCache !== 'undefined') _costFetchCache.clear(); } catch {}
+      if (typeof savePrefs === 'function') savePrefs();
+      this.fellBack = '';
+      this.ensure(true);
+      try { if (typeof BillingProbe !== 'undefined' && typeof BillingProbe.setSkewDpl === 'function') BillingProbe.setSkewDpl(this.dpl(), false); } catch {}
+      Bus.emit('pin');
+      return { ok: true, locked: false, dpl: this.dpl() };
+    }
+    const dpl = this.extractDpl(trimmed);
+    if (!dpl) return { ok: false, error: '部署编号格式不对（应为 dpl_ 开头的 20~52 位编号，或包含 dpl_ 的链接）' };
+    this.EXPIRED.delete(dpl);
+    if (Array.isArray(Prefs.expiredCostDpls)) {
+      Prefs.expiredCostDpls = Prefs.expiredCostDpls.filter(x => x !== dpl);
+    }
+    Prefs.pinDpl = dpl;
+    Prefs.autoCostDpl = dpl;
+    this.COST_DPL = dpl;
+    this.LEGACY = dpl;
+    this.POOL = [dpl, 'dpl_3UbNvzoXfT6iNZqgBa7GjsGeKLaT', ...this.POOL.filter(x => x !== dpl && x !== 'dpl_3UbNvzoXfT6iNZqgBa7GjsGeKLaT')];
+    Prefs.autoCostPool = this.POOL.filter(x => !this.EXPIRED.has(x)).slice(0, 12);
+    try { if (typeof _costFetchCache !== 'undefined') _costFetchCache.clear(); } catch {}
+    if (typeof savePrefs === 'function') savePrefs();
+    this.fellBack = '';
+    this.ensure(true);
+    try { if (typeof BillingProbe !== 'undefined' && typeof BillingProbe.setSkewDpl === 'function') BillingProbe.setSkewDpl(dpl, true); } catch {}
+    Bus.emit('pin');
+    return { ok: true, locked: true, dpl };
   },
   learnEndpoint(tpl, verified = false) {
     const s = String(tpl || '').trim();
@@ -486,7 +647,8 @@ const Pin = {
     const d = r.headers.get('x-arena-api-deployment');
     if (d) {
       this.apiDpl = d;
-      this.EXPIRED.add(d);
+      if (r.status === 403 && d !== this.COST_DPL && d !== 'dpl_BcGa9YULV843didEQWsFTd5taD4h' && d !== 'dpl_9gD8cB3xQ7eTwzU2jLmVpR5kHs1Y') this.EXPIRED.add(d);
+      else if (/\/cost\b/i.test(String(u || '')) && r.status === 200) this.learnDpl(d, false);
     }
     // 旧接口不接受当前请求（409 refresh_required）：这次运行改跟随新版，保证能正常发消息
     if (r.status === 409 && this.on()) r.clone().text().then(x => { if (/refresh_required/i.test(x)) this.fallback('旧部署要求刷新（409 refresh_required）'); }).catch(() => {});
@@ -498,7 +660,17 @@ const Pin = {
     try { await Pulse.poll(); } catch {} // Version checks share the same quota request/cooldown.
     Bus.emit('pin'); return this.trigger;
   },
-  set(p) { Object.assign(Prefs, p); savePrefs(); this.fellBack = ''; this.trigger = ''; this.ensure(true); Bus.emit('pin'); return this.check(); },
+  set(p) {
+    if (p && Object.hasOwn(p, 'pinDpl')) {
+      const rest = { ...p };
+      delete rest.pinDpl;
+      if (Object.keys(rest).length) Object.assign(Prefs, rest);
+      this.lockCostDpl(p.pinDpl);
+      this.trigger = '';
+      return this.check();
+    }
+    Object.assign(Prefs, p); savePrefs(); this.fellBack = ''; this.trigger = ''; this.ensure(true); Bus.emit('pin'); return this.check();
+  },
   status() {
     if (Prefs.pinOn === false) return { st: 'off', text: '已关闭 · 跟随最新版本（新对话读不到运行令牌，只能按回复格式推测型号）' };
     if (this.fellBack) return { st: 'bad', text: '暂时失效 · ' + this.fellBack + '（关掉再打开或重启后重试）' };
@@ -509,7 +681,13 @@ const Pin = {
   },
 };
 window.__ancPin = Pin;
-try { Pin.initSmartPool(); } catch {}
+try { Pin.initSmartPool(); Pin.ensureBillingFlags(true); } catch {}
+// 10秒定时自愈守护（纯本地只读检查 localStorage PostHog 覆盖、ph-toolbar-overrides Cookie、arena_build_bucket=stable 与 __vdpl，零网络请求）
+if (typeof window !== 'undefined' && !window.__ancCostWatchdog) {
+  window.__ancCostWatchdog = setInterval(() => {
+    try { if (location.hostname === 'arena.ai') Pin.ensure(false); } catch {}
+  }, 10000);
+}
 // 官网页面（浏览器模式 / 网页注册 / 邮件验证链接）里：认证页面、或页面自己发注册 / 登录 / 验证请求时不固定旧部署——
 // 否则注册邮件由旧部署发出、验证链接和「Create password」又由另一个部署处理，就会报 Session expired or not found
 Pin.authUrl = u => { try { const x = new URL(String(u), location.href); return x.hostname === 'auth.arena.ai' || (x.hostname === 'arena.ai' && (/^\/(?:auth|login|signup|sign-up|sign-in|reset-password|verify|onboarding|create-password)/i.test(x.pathname) || /[?&](?:code|auth|token_hash|token)=/i.test(x.search))); } catch { return false; } };
@@ -556,19 +734,27 @@ const Models = {
     const raw = Store.get('models', {}) || {};
     let dirty = false;
     for (const [k, m] of Object.entries(raw)) {
-      if (m && m.pendingConfirm) {
+      if (m && (m.pendingConfirm || (m.guess && (m.habitInferred || m.reverseInferred || m.billingProbe || m.userCorrected)))) {
         if (Array.isArray(m.candidates) && m.candidates.length > 0) {
           const s0 = Number(m.candidates[0]?.score ?? m.candidates[0]?.confidence ?? 0);
           const s1 = Number(m.candidates[1]?.score ?? m.candidates[1]?.confidence ?? -1);
           if (m.candidates.length === 1 || s0.toFixed(1) !== s1.toFixed(1)) {
             m.name = m.candidates[0].id || m.candidateName || m.reverseLabel || m.name || '';
             m.pendingConfirm = false;
+            m.guess = false;
             dirty = true;
           }
-        } else if (!m.name && (m.candidateName || m.reverseLabel)) {
-          m.name = m.candidateName || m.reverseLabel;
-          m.pendingConfirm = false;
-          dirty = true;
+        } else {
+          const validName = (m.name && !/^(未识别|未知型号|待定)$/.test(String(m.name).trim())) ? m.name : (m.candidateName || m.reverseLabel || '');
+          if (validName && !/^(未识别|未知型号|待定)$/.test(String(validName).trim())) {
+            m.name = validName;
+            m.pendingConfirm = false;
+            if (m.habitInferred || m.reverseInferred || m.billingProbe || m.userCorrected) {
+              m.guess = false;
+              if (Number(m.reverseMatch ?? m.confidence ?? 0) >= 75) m.sure = true;
+            }
+            dirty = true;
+          }
         }
       }
     }
@@ -576,7 +762,18 @@ const Models = {
     return raw;
   })(),
   get(sid) { return this.all[sid] || null; },
-  set(sid, v) { if (v && typeof v.name === 'string' && typeof Strength !== 'undefined' && Strength.foldVer) v = { ...v, name: Strength.canon ? Strength.canon(v.name) : Strength.foldVer(v.name) }; this.all[sid] = { ...v, at: now() }; const ks = Object.keys(this.all); if (ks.length > 3000) for (const k of ks.slice(0, ks.length - 3000)) delete this.all[k]; Store.set('models', this.all); Bus.emit('models', sid); },
+  set(sid, v) { if (v && typeof v.name === 'string' && typeof Strength !== 'undefined' && Strength.foldVer) {
+      v = { ...v, name: Strength.canon ? Strength.canon(v.name) : Strength.foldVer(v.name) };
+    }
+    if (v && v.name && !/^(未识别|未知型号|待定)$/.test(String(v.name).trim()) && (v.habitInferred || v.reverseInferred || v.billingProbe || v.userCorrected)) {
+      v = { ...v, pendingConfirm: false, guess: false };
+    }
+    this.all[sid] = { ...v, at: now() };
+    const ks = Object.keys(this.all);
+    if (ks.length > 3000) for (const k of ks.slice(0, ks.length - 3000)) delete this.all[k];
+    Store.set('models', this.all);
+    Bus.emit('models', sid);
+  },
 };
 
 // ---------- 国旗：国家 / 地区代码前面加小国旗（US → 🇺🇸 US）----------
@@ -620,16 +817,32 @@ const ReadLimit = {
 async function api(path, opt = {}) {
   const init = { credentials: 'same-origin', cache: 'no-store', ...opt, headers: { ...(opt.json !== undefined ? { 'Content-Type': 'application/json' } : {}), ...(opt.headers || {}) } };
   if (opt.json !== undefined) { init.body = JSON.stringify(opt.json); init.method = init.method || 'POST'; delete init.json; }
-  delete init.noRelogin; delete init.timeout; delete init.bg;
+  const retryCnt = Number(opt._retryCount) || (opt._retried ? 1 : 0);
+  delete init.noRelogin; delete init.timeout; delete init.bg; delete init._retried; delete init._retryCount; delete init._retried409;
   const mark = NetHealth.mark(), read = /^(GET|HEAD)$/i.test(init.method || 'GET');
   const isCost = /\/api\/chat\/[^/]+\/cost\b/i.test(path);
+  if (!isCost && typeof Pin !== 'undefined' && typeof Pin.on === 'function' && !Pin.on() && typeof document !== 'undefined' && String(document.cookie || '').includes('__vdpl=')) {
+    try { Pin.drop(); } catch {}
+  }
   if (read && /^\/api\//.test(path)) await ReadLimit.take(!!opt.bg);
   const fault = e => { if (!opt.signal?.aborted && NetHealth.failed(e, mark)) Bus.emit('neterr', path); };
   let res, text;
   try {
     await NetPolicy.deadline(async signal => { res = await rawFetch(path, { ...init, signal }); text = await res.text(); },
       { timeout: opt.timeout ?? (read ? NetPolicy.READ_MS : 0), signal: opt.signal });
-  } catch (e) { fault(e); throw e; }
+  } catch (e) {
+    if (read && !isCost && retryCnt < 2 && !opt.signal?.aborted && typeof Host !== 'undefined' && typeof Host.info === 'function' && !e?.status && (e?.routeTimeout || /failed to fetch|fetch failed|network|ERR_|socket|eof|reset|closed/i.test(String(e?.message || e)))) {
+      if (e?.routeTimeout && typeof AutoRoute !== 'undefined' && AutoRoute.onErrorSwitch) void AutoRoute.onErrorSwitch(e, path);
+      const isSwitching = () => (typeof NodeRoutes !== 'undefined' && NodeRoutes.manual > 0) || (typeof AutoRoute !== 'undefined' && AutoRoute.busy) || (typeof Pool !== 'undefined' && Pool.switching?.size > 0);
+      if (isSwitching()) {
+        for (let w = 0; w < 8 && isSwitching() && !opt.signal?.aborted; w++) await new Promise(r => setTimeout(r, 250));
+      }
+      await new Promise(r => setTimeout(r, retryCnt === 0 ? 500 : 900));
+      if (!opt.signal?.aborted) return api(path, { ...opt, _retried: true, _retryCount: retryCnt + 1 });
+    }
+    fault(e);
+    throw e;
+  }
   // HTML/challenge responses are not JSON, connectivity proof, or proof of logout.
   const html = /text\/html/i.test(res.headers?.get?.('content-type') || '') || /^\s*(?:<!doctype\s+html|<html\b|<head\b|<body\b)/i.test(text);
   if (html) {
@@ -642,16 +855,18 @@ async function api(path, opt = {}) {
     throw Object.assign(new HttpError(res.status, 'Brana 返回了网页或验证页面，请用网页登录检查', res), { responseFormat: true });
   }
   if (res.status === 401 && !opt.noRelogin && await Auth.relogin()) return api(path, { ...opt, noRelogin: true });
+  if (res.status === 409 && !isCost && !opt._retried409 && typeof Pin !== 'undefined' && typeof Pin.drop === 'function') {
+    try { Pin.drop(); } catch {}
+    return api(path, { ...opt, _retried409: true });
+  }
   if (!res.ok) {
     let msg = text; try { const j = JSON.parse(text); msg = j.error?.message || j.error || j.message || text; if (typeof msg !== 'string') msg = JSON.stringify(msg); } catch {}
     const error = new HttpError(res.status, msg, res); fault(error);
-    // 遇到 429 / 401 / 403 / 404 / 408 / 5xx：交由 AutoRoute 冷却当前异常 IP 并立即启用热备秒切
+    // 429 / 404 不触发自动换 IP（防止把用户手动选择的未限流 IP 误切换走）；仅网关/传输故障才交由 AutoRoute
     const ipLimited = !isCost && res.status === 429 && (read || /^\/(?:api|nextjs-api)\//.test(path));
     if (ipLimited) error.ipLimited = true;
-    if (!isCost && res.status === 429 && /^\/api\/chat\//.test(path)) IPRep.note('l');
     const prevRl = ReadLimit.until; if (res.status === 429 && (read || /^\/api\/chat\//.test(path))) ReadLimit.hit(error.retryAfterMs); if (isCost) ReadLimit.until = prevRl;
-    if (!isCost && res.status === 429 && /^\/(?:nextjs-api\/stream|api\/chat)\b/.test(path)) Bus.emit('limited', { path, ip: ipLimited, retryAfterMs: NetPolicy.retryAfter(res.headers?.get('retry-after')) });
-    if (!isCost && typeof AutoRoute !== 'undefined' && AutoRoute.onErrorSwitch && [401, 403, 404, 408, 429, 500, 502, 503, 504, 520, 522, 524].includes(res.status)) void AutoRoute.onErrorSwitch(error, path);
+    if (!isCost && typeof AutoRoute !== 'undefined' && AutoRoute.onErrorSwitch && [408, 500, 502, 503, 504, 520, 522, 524].includes(res.status)) void AutoRoute.onErrorSwitch(error, path);
     throw error;
   }
   let value; try { value = text ? JSON.parse(text) : null; } catch { value = text; }
@@ -691,7 +906,11 @@ const Auth = {
       let me;
       try { me = await api('/api/me', { noRelogin: true }); }
       catch (e) { throw AuthFlow.sessionError(e); }
-      return await AuthEnv.finish(AuthFlow.loginIdentity(me?.user, signedIn.user), environment);
+      const liveUser = AuthFlow.loginIdentity(me?.user, signedIn.user);
+      if (liveUser && typeof liveUser === 'object') {
+        liveUser.email = AuthFlow.pickRichEmail(email, liveUser.email);
+      }
+      return await AuthEnv.finish(liveUser, environment);
     } catch (e) { await AuthEnv.drop(); throw e; }   // 登录失败：放掉认证环境锁，下次直接重试
     finally { this.interactive = false; AuthEnv.operations--; AuthEnv.paint(); }
   },
@@ -1378,7 +1597,8 @@ const MsgCache = (() => {
     const d = await db(); if (!d) return;
     const { msgs, js } = compactMsgs(chat.messages || []);
     if (js.length > CAP || !msgs.length) return;
-    try { d.transaction('c', 'readwrite').objectStore('c').put({ at: now(), messages: JSON.parse(js), more: chat.hasMore || msgs.length < chat.messages.length, lastSeq: chat.lastSeq || null, token: chat.token || null, tokenExp: chat.tokenExp || 0 }, chat.sid); } catch { return; }
+    const histUpdatedAt = (typeof History !== 'undefined' && History.byId?.(chat.sid)?.updatedAt) || null;
+    try { d.transaction('c', 'readwrite').objectStore('c').put({ at: now(), histUpdatedAt, messages: JSON.parse(js), more: chat.hasMore || msgs.length < chat.messages.length, lastSeq: chat.lastSeq || null, token: chat.token || null, tokenExp: chat.tokenExp || 0 }, chat.sid); } catch { return; }
     const ix = idx(); ix[chat.sid] = now(); const ks = Object.keys(ix);
     if (ks.length > MAX) { const old = ks.sort((a, b) => ix[a] - ix[b]).slice(0, ks.length - MAX); for (const k of old) delete ix[k]; del(old); }
     Store.set('mc:idx', ix);
@@ -1407,6 +1627,8 @@ class Chat {
   // 鼠标移到侧栏卡片上就先把对话内容拉下来，点开时直接用（30 秒内有效）
   prefetch() {
     if (this.loaded || this.loading || this._preP || (this._pre && now() - this._pre.at < 30000) || now() - (this._preAt || 0) < 180000) return;   // 同一个对话 3 分钟内只预读一次（鼠标反复划过不重复下载）
+    const curSid = typeof Tabs !== 'undefined' ? Tabs.cur?.sid : null;
+    if (curSid && curSid !== this.sid && Chats.get(curSid)?.loading) return;   // 当前正点开的对话在加载中：暂停预读让路
     if (!ReadLimit.canPrefetch()) return;   // 限流中 / 已有一条预读在途 / 离上一条太近：跳过，点开时再正常加载
     ReadLimit.inflight++; ReadLimit.lastAt = now(); this._preAt = now();
     this._preP = api('/api/chat/' + this.sid, { timeout: 30000, bg: true }).then(c => { this._pre = { c, at: now() }; return c; }).finally(() => { this._preP = null; ReadLimit.inflight = Math.max(0, ReadLimit.inflight - 1); });
@@ -1449,16 +1671,20 @@ class Chat {
   }
   load(force) {
     if (this.loaded && !force) return Promise.resolve();
-    // 秒开（含从浏览器模式切回 Scheme B）：先显示本地缓存并恢复 lastSeq，后台静默增量对账，不再整页阻塞重刷
+    // 秒开（含从浏览器模式切回 Scheme B 及常规点击）：先显示本地缓存并恢复 lastSeq；若历史 updatedAt 未变或刚缓存过，直接 0ms 完成加载并转后台静默对账
     if (!this.messages.length && !this.gacha) MsgCache.get(this.sid).then(x => {
       if (x?.messages?.length && !this.loaded && !this.messages.length) {
         this.messages = x.messages.map(m => ({ ...m, v: 0 }));
         this.cached = true; this.hasMore = !!x.more;
         if (x.lastSeq && !this.lastSeq) this.lastSeq = String(x.lastSeq);
         if (x.token && !this.token && (x.tokenExp || 0) > now() + 30000) { this.token = x.token; this.tokenExp = x.tokenExp; }
-        if (!force && window.__ANC_FAST_RETURN && now() - (x.at || 0) < 30 * 60e3) {
-          this.cached = false; this.loaded = true; this.emit();
-          setTimeout(() => { if (this.loaded) this.quickSync(true); }, 20);
+        const histRow = typeof History !== 'undefined' ? History.byId?.(this.sid) : null;
+        const lastCached = x.messages.at(-1);
+        const isIdleComplete = lastCached?.role === 'assistant' && !lastCached?.metadata?.pending && !this.busy;
+        const isUnchangedByHist = Boolean(isIdleComplete && histRow?.updatedAt && x.histUpdatedAt && histRow.updatedAt === x.histUpdatedAt);
+        if (!force && (isUnchangedByHist || (window.__ANC_FAST_RETURN && now() - (x.at || 0) < 30 * 60e3))) {
+          this.cached = false; this.loaded = true; this.error = null; this._lastSyncedHistAt = histRow?.updatedAt || x.histUpdatedAt || null; this.emit();
+          if (!isUnchangedByHist) setTimeout(() => { if (this.loaded) this.quickSync(true); }, 20);
           return;
         }
         this.emit();
@@ -1477,15 +1703,43 @@ class Chat {
     }
     return this.loading ||= (async () => {
       try {
+        if (!force && !this.gacha && !this.messages.length) {
+          const x = await MsgCache.get(this.sid).catch(() => null);
+          if (x?.messages?.length && !this.messages.length) {
+            this.messages = x.messages.map(m => ({ ...m, v: 0 }));
+            this.cached = true; this.hasMore = !!x.more;
+            if (x.lastSeq && !this.lastSeq) this.lastSeq = String(x.lastSeq);
+            if (x.token && !this.token && (x.tokenExp || 0) > now() + 30000) { this.token = x.token; this.tokenExp = x.tokenExp; }
+            const histRow = typeof History !== 'undefined' ? History.byId?.(this.sid) : null;
+            const lastCached = x.messages.at(-1);
+            const isIdleComplete = lastCached?.role === 'assistant' && !lastCached?.metadata?.pending && !this.busy;
+            const isUnchangedByHist = Boolean(isIdleComplete && histRow?.updatedAt && x.histUpdatedAt && histRow.updatedAt === x.histUpdatedAt);
+            if (isUnchangedByHist) {
+              this.cached = false; this.loaded = true; this.error = null; this._lastSyncedHistAt = histRow.updatedAt; this.emit();
+              return;
+            }
+            this.emit();
+          }
+        }
         let c = null;
-        if (!force && this._pre && now() - this._pre.at < 3000 && this._pre.c?.messages?.at(-1)?.role !== 'user') c = this._pre.c;
+        if (!force && this._pre && now() - this._pre.at < 30000 && this._pre.c?.messages?.at(-1)?.role !== 'user') c = this._pre.c;
         else if (!force && this._preP) c = await this._preP.catch(() => null);
         this._pre = null;
-        // 429：按 Retry-After（没有就指数退避）自动等一会儿再试几次，不再一次限流就直接报「加载失败」；等待太久（>60 秒）的不硬等
-        // 不换出口 IP：换 IP 只能暂时躲开，请求量不降很快又会被限流，而且会打断正在进行的实时连接
-        for (let waits = 0; !c;) {
-          try { c = await api('/api/chat/' + this.sid, { timeout: 30000 }); }
-          catch (e) {
+        // 429：按 Retry-After（没有就指数退避）自动等一会儿再试几次，不再一次限流就直接报「加载失败」；半死连接 6.5 秒首包快速重连，不再傻等 30 秒
+        for (let waits = 0, netWaits = 0, fastRetried = false; !c;) {
+          try {
+            const reqTimeout = (waits === 0 && netWaits === 0 && !fastRetried) ? 6500 : 22000;
+            c = await api('/api/chat/' + this.sid, { timeout: reqTimeout });
+          } catch (e) {
+            if (!fastRetried && waits === 0 && netWaits === 0 && !e?.status && (e?.routeTimeout || /超时|failed to fetch|fetch failed|network|ERR_|socket|eof|reset|closed/i.test(String(e?.message || e)))) {
+              fastRetried = true;
+              continue;
+            }
+            if (!e?.status && netWaits < 2 && /failed to fetch|fetch failed|network|ERR_|socket|eof|reset|closed/i.test(String(e?.message || e))) {
+              netWaits++;
+              await sleep(800 * netWaits);
+              continue;
+            }
             if (e?.status !== 429) throw e;
             if (waits >= 3 || (e.retryAfterMs || 0) > 60000) throw e;
             const wait = Math.round(Math.max(e.retryAfterMs || 0, 3000 * 2 ** waits) * (0.9 + Math.random() * 0.2)); waits++;
@@ -1496,7 +1750,7 @@ class Chat {
         // 打开对话时顺便同步列表里的名称（别的设备改名 / 校准后，不用来回切换多次才更新）
         { const t = c?.title ?? c?.chat?.title, row = typeof History !== 'undefined' ? History.byId(this.sid) : null; if (typeof t === 'string' && t && row && row.title !== t) { row.title = t; delete row.localTitle; History.saveSoon(); Bus.emit('history'); } }
         // 加载期间自己刚发出的消息（服务端还没有）保留在末尾，不被覆盖；替换掉缓存内容时强制重绘
-        const srv = (c.messages || []).map(m => ({ ...m, v: wasCached ? 1 : 0 })), ids = new Set(srv.map(m => m.id));
+        const srv = (c.messages || []).filter(m => !this._prunedDeadMsgIds?.has?.(m?.id)).map(m => ({ ...m, v: wasCached ? 1 : 0 })), ids = new Set(srv.map(m => m.id));
         if (this.messages.length && !wasCached && typeof this.mergeServer === 'function') this.mergeServer(srv, this.live);
         else { const byOld = new Map(this.messages.filter(m => m?.id).map(m => [m.id, m])); this.messages = [...srv.map(m => { const o = byOld.get(m.id); return o && (o._fmt || o._sseMeta) ? { ...m, _fmt: o._fmt, _sseMeta: o._sseMeta } : m; }), ...this.messages.filter(m => m._local && !ids.has(m.id))]; }
         this.hasMore = !!c.pagination?.hasMore; this.cursor = c.pagination?.cursor || null;
@@ -1504,15 +1758,23 @@ class Chat {
         const sending = this.busy && this.messages.some(m => m._local);   // 载入完成前就发了消息：别打乱发送流程
         if (!(sending && this.awaitId)) this.lastSeq = c.lastEventId != null ? String(c.lastEventId) : null;
         this.loaded = true; this.error = null;
+        try {
+          if (typeof healChatModelAndBranch === 'function') healChatModelAndBranch(this);
+          if (this.hasMore && this.cursor && typeof findHealthyLastUser === 'function' && !findHealthyLastUser(this.messages) && typeof ensureHealthyHistoryLoaded === 'function') {
+            void ensureHealthyHistoryLoaded(this).then(() => {
+              try { if (typeof healChatModelAndBranch === 'function') healChatModelAndBranch(this); } catch {}
+            }).catch(() => {});
+          }
+        } catch {}
         try { ExtCompat.replayChat(this); } catch {}
         const last = srv.at(-1); // a failed local input is not evidence that the server is generating
         // 停在提问卡片上等回答的那条也是 pending：它不是「正在回复」，不能当成忙（否则提交按钮一直不可用）
         const pend = !!last && (last.role === 'user' || last.metadata?.pending) && !(last.role === 'assistant' && Hitl.idleWait(this));
         for (const m of this.messages) if (m?.role === 'assistant' && m.metadata?.pending && (!pend || m !== last)) m.metadata = { ...m.metadata, pending: false };
-        if (sending) this.srvBusy = pend; else if (pend) this.status = 'streaming'; else if (!this.live) this.status = 'idle';
+        if (sending) this.srvBusy = pend; else if (pend) this.status = 'streaming'; else if (!this.live) { this.status = 'idle'; this._lastSyncedHistAt = (typeof History !== 'undefined' && History.byId?.(this.sid)?.updatedAt) || null; }
         this.emit();
-        // 刷新 / 重新载入时服务器上有一轮正在跑：从这一轮的开头重放（而不是从最新位置接上），否则刷新前已经输出的几步会被「吞掉」
-        if (pend && !sending && !this.gacha) { this.lastSeq = c.lastEventId != null ? String(Math.max(0, +c.lastEventId - 4000)) : null; await this.drain(2500, { keepIfFinished: true }).catch(() => null); if (this.lastSeq == null && c.lastEventId != null) this.lastSeq = String(c.lastEventId); }
+        // 刷新 / 重新载入时服务器上有一轮正在跑：快速补齐（700ms 上限，不阻塞实时流连接）
+        if (pend && !sending && !this.gacha) { this.lastSeq = c.lastEventId != null ? String(Math.max(0, +c.lastEventId - 4000)) : null; await Promise.race([this.drain(2500, { keepIfFinished: true }).catch(() => null), sleep(700)]); if (this.lastSeq == null && c.lastEventId != null) this.lastSeq = String(c.lastEventId); }
         this.stream({ peek: !pend || sending });
         // 更早的消息不再打开就全部拉下来（以前一个长对话会连发几十上百个请求）：滚动到顶部 / 点「加载更早的消息」时才加载，和网页一致
         if (!this.hasMore) setTimeout(() => { try { FingerprintReview?.auto?.(this); } catch {} }, 600);   // 没有指纹信息的对话：按历史里的指纹测试自动校准
@@ -1524,8 +1786,10 @@ class Chat {
             this.hasMore = !!cached.more;
           }
         }
-        if (this.messages.length && (typeof window !== 'undefined' && window.__BRANA_BROWSE_MODE || e?.status === 401 || e?.status === 403 || e?.net)) {
-          this.cached = false; this.loaded = true; this.error = null; this.emit(); return;
+        if (this.messages.length && (typeof window !== 'undefined' && window.__BRANA_BROWSE_MODE || e?.status === 401 || e?.status === 403 || e?.net || e?.routeTimeout || !e?.status)) {
+          this.cached = false; this.loaded = true; this.error = null; this.emit();
+          setTimeout(() => { if (this.loaded && !this.busy) this.quickSync?.(true); }, 3500);
+          return;
         }
         this.error = e.status === 404 ? '对话不存在或已删除' : e.status === 429 ? '加载失败：请求过于频繁（429），已按服务器要求等待重试仍被限流' + ((e.retryAfterMs || 0) > 0 ? '，服务端要求等待约 ' + Math.ceil(e.retryAfterMs / 1000) + ' 秒' : '') + '；稍等一会儿点刷新' : '加载失败：' + e.message; this.emit(); throw e;
       }
@@ -1686,10 +1950,17 @@ class Chat {
       const vid = typeof getOrCreateVisitId === 'function' ? getOrCreateVisitId() : (typeof VISIT === 'string' && VISIT ? VISIT : 'local');
       const fnv = s => { let h = 0x811c9dc5; for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 0x1000193) >>> 0; } return (h ^ (h >>> 16)) & 65535; };
       const salt = 48664;
+      const len = Math.max(1, Math.min(255, Number(textLen) || 8));
+      const kd = Math.min(15, Math.max(2, Math.min(len, 3 + Math.floor(Math.random() * 8))));
+      const ku = Math.min(15, Math.max(2, kd));
+      const inp = Math.min(15, Math.max(2, kd));
+      const ptr = 2 + Math.floor(Math.random() * 5);
+      const edit = Math.floor(Math.random() * 3);
+      const dwell = Math.min(65535, 1400 + len * (65 + Math.floor(Math.random() * 55)) + Math.floor(Math.random() * 1800));
       const layout = [
-        [2, kind === 'button' ? 1 : 0], [2, 2], [4, 0],
-        [8, Math.max(1, Math.min(255, Number(textLen) || 8))], [4, 0], [4, 0],
-        [1, 0], [1, 0], [4, 0], [3, 0], [1, 0], [16, 0],
+        [2, kind === 'button' ? 1 : 0], [2, 2], [4, edit],
+        [8, len], [4, kd], [4, ku],
+        [1, 1], [1, 0], [4, inp], [3, ptr], [1, 1], [16, dwell],
         [3, kind === 'button' ? 3 : 0], [2, kind === 'button' ? 1 : 0], [2, 1],
         [2, 1], [2, 0], [2, 0], [1, 0],
         [16, fnv(String(vid || 'local'))], [16, Math.floor(now() / 60000) & 65535]
@@ -1728,6 +1999,10 @@ class Chat {
       return this.skipHitlSend(text, opt);
     }
     if (this.busy) throw new Error('上一轮还在进行中');
+    if (!this.gacha && !opt.autoContinue && (this.thinkStopped || this.routedThink || this._hadOpenThinkStop || (this.messages || []).some(m => m?.metadata?.openThinkStopped || (m?.role === 'assistant' && (m?.parts || []).some(p => p?.type === 'reasoning' && /[^\s.…·。]/.test(String(p.text || ''))))))) {
+      this._hadOpenThinkStop = true;
+      this._allowOpenThink = true;
+    }
     const wasMidStall = !!(opt.autoContinue || opt.officialAutoResend || opt.retryOf?._streamRejected || this.fakeEnd || this.midTurnStall || (typeof KeepAlive !== 'undefined' && KeepAlive.isMidTurnStalled?.(this)));
     clearTimeout(this.tailT);
     if (this.streaming) { try { this.ctl?.abort(); } catch {} this.streaming = false; this.ctl = null; }
@@ -1780,9 +2055,24 @@ class Chat {
       await this.settle();
       this.awaitFrom = this.sentAt;
       this.awaitId = msg.id; this.wakes = 0; this.baseSeq = this.lastSeq;
-      const prevUser = [...this.messages].filter(m => m && m !== msg && m.role === 'user' && !m.failed).at(-1);
-      const lastUserMessageId = prevUser ? (prevUser.metadata?.nodeId || prevUser.id || null) : null;
-      const msgMeta = msg.metadata?.uploads ? (lastUserMessageId ? { ...msg.metadata, lastUserMessageId } : msg.metadata) : (lastUserMessageId ? { lastUserMessageId } : null);
+      const forceResetWs = !!this._forceResetWorkspaceBranch;
+      const explicitTargetId = this._resetBranchTargetUserId || null;
+      if (forceResetWs) {
+        this._forceResetWorkspaceBranch = false;
+        this._resetBranchTargetUserId = null;
+        this._rejectedHealthyNodeIds?.clear?.();
+      }
+      if (!explicitTargetId && this.hasMore && this.cursor && typeof findHealthyLastUser === 'function' && !findHealthyLastUser(this.messages, msg, this._rejectedHealthyNodeIds) && typeof ensureHealthyHistoryLoaded === 'function') {
+        await ensureHealthyHistoryLoaded(this).catch(() => {});
+      }
+      const prevUser = typeof findHealthyLastUser === 'function'
+        ? findHealthyLastUser(this.messages, msg, this._rejectedHealthyNodeIds)
+        : [...this.messages].filter(m => m && m !== msg && m.role === 'user' && !m.failed).at(-1);
+      const lastUserMessageId = explicitTargetId || (prevUser ? (prevUser.metadata?.nodeId || prevUser.id || null) : null);
+      this._lastSentParentUserId = lastUserMessageId;
+      const msgMeta = forceResetWs
+        ? (msg.metadata?.uploads ? { ...msg.metadata, lastUserMessageId, manifestNodeId: null } : { lastUserMessageId, manifestNodeId: null })
+        : (msg.metadata?.uploads ? (lastUserMessageId ? { ...msg.metadata, lastUserMessageId } : msg.metadata) : (lastUserMessageId ? { lastUserMessageId } : null));
       const tLen = String(text || '').length || 8;
       const body = (a, b) => ({ kind: 'message', payload: { message: { parts: msg.parts, id: msg.id, role: 'user', ...(msgMeta ? { metadata: msgMeta } : {}) }, chatId: this.sid, trigger: 'submit-message', messageId: msg.id, metadata: this.metadata(msg.id, a, b, tLen) } });
       // 兜底「重新发送」用：同一条消息（同一个 id）、新的人机验证令牌
@@ -1939,12 +2229,14 @@ class Chat {
   // 突然出现有内容的思考时按用户开关停止；这不能证明开源或改派，已知闭源不误触发。一开始就有思考的对话不停。
   thinkGuard(p) {
     if ((typeof ThinkingStatus !== 'undefined' && ThinkingStatus.isClosed(this)) || (typeof Fingerprint !== 'undefined' && Fingerprint.isClosedSourceStream?.(this))) return;
-    if (Fingerprint.isRunning(this) || Prefs.thinkStop === false || this.stopReq || this.thinkStopped || !this.busy) return;
+    if (Fingerprint.isRunning(this) || Prefs.thinkStop === false || this._allowOpenThink || this._hadOpenThinkStop || this.stopReq || this.thinkStopped || !this.busy) return;
+    if ((this.live?.parts || []).some(lp => lp && lp.toolCallId && lp.state === 'output-available')) return;
     const priorMsgs = (this.messages || []).filter(m => m && m.role === 'assistant' && m !== this.live && !m.metadata?.pending);
     let priorHadClosed = false, priorHadOpenThink = false;
     const mName = String((typeof Models !== 'undefined' && Models.get(this.sid)?.name) || this._routeBaseline?.label || '');
     if (mName && !/开源|compat|qwen|deepseek|glm|kimi|minimax|llama|mistral|nemotron|inkling|beam|caveman|gemma/i.test(mName)) priorHadClosed = true;
     for (const pm of priorMsgs) {
+      if (pm?.metadata?.openThinkStopped) priorHadOpenThink = true;
       for (const pp of pm.parts || []) {
         if (pp.type === 'reasoning') {
           if (/[^\s.…·。]/.test(String(pp.text || ''))) priorHadOpenThink = true;
@@ -1953,8 +2245,17 @@ class Chat {
         if (pp.toolCallId && /^(?:toolu_|srvtoolu_|call_)/i.test(pp.toolCallId)) priorHadClosed = true;
       }
     }
-    if (priorHadOpenThink && !priorHadClosed && !this.gacha) return;
-    this.thinkStopped = true; this.routedThink = true; this._routePaused = true;
+    if (priorHadOpenThink && !this.gacha) {
+      this._allowOpenThink = true;
+      if (!priorHadClosed && typeof BillingProbe !== 'undefined' && typeof BillingProbe.markAsOpenSourceModel === 'function') {
+        try { BillingProbe.markAsOpenSourceModel(this); } catch {}
+      }
+      return;
+    }
+    if (!priorHadClosed && typeof BillingProbe !== 'undefined' && typeof BillingProbe.markAsOpenSourceModel === 'function') {
+      try { BillingProbe.markAsOpenSourceModel(this); } catch {}
+    }
+    this.thinkStopped = true; this.routedThink = true; this._routePaused = true; this._hadOpenThinkStop = true;
     if (this.live) this.live.metadata = { ...(this.live.metadata || {}), openThinkStopped: true };
     this.phase = '出现开源思考（路由开源模型），自动暂停';
     Trace.note?.(this.sid, '出现开源思考（路由开源模型），已立即自动暂停', 'warn');
@@ -2630,7 +2931,7 @@ class Chat {
       case 'text-start': case 'reasoning-start': {
         // 抽卡：正文后出现可见思考时按开关停止；不把它当作改派证明，已知闭源除外
         const p = { type: t.split('-')[0], text: '', state: 'streaming', ...(ch.id != null ? { id: String(ch.id) } : {}) }; P.push(p); this.parts.set(t[0] + ':' + ch.id, p); this.phase = t === 'text-start' ? '输出中' : '思考中'; break; }
-      case 'text-delta': case 'reasoning-delta': { let p = find(t[0] + ':' + ch.id); if (!p) { p = { type: t.split('-')[0], text: '', state: 'streaming', ...(ch.id != null ? { id: String(ch.id) } : {}) }; P.push(p); this.parts.set(t[0] + ':' + ch.id, p); } if (p.type === 'reasoning' && /[^\s.…·。]/.test(String(ch.delta || ''))) { const firstVis = !/[^\s.…·。]/.test(p.text); const isClosed = (typeof ThinkingStatus !== 'undefined' && ThinkingStatus.isClosed(this)) || (typeof Fingerprint !== 'undefined' && Fingerprint.isClosedSourceStream?.(this)); if (!isClosed) { if (firstVis) this.thinkGuard(p); try { if (this.gacha?.skipCompatThinking && typeof Fingerprint !== 'undefined') Fingerprint.maybeStopCompat?.(this); } catch {} if (firstVis && this.gacha?.stopThink && !this.stopReq && P.some(x => x !== p && x.type === 'text' && String(x.text || '').trim())) { this.thinkStopped = true; this.routedThink = true; if (this.live) this.live.metadata = { ...(this.live.metadata || {}), openThinkStopped: true }; setTimeout(() => this.stop(), 0); } } } p.text += ch.delta || ''; if (t === 'text-delta') this.checkMidStreamRoute(t, ch); break; }
+      case 'text-delta': case 'reasoning-delta': { let p = find(t[0] + ':' + ch.id); if (!p) { p = { type: t.split('-')[0], text: '', state: 'streaming', ...(ch.id != null ? { id: String(ch.id) } : {}) }; P.push(p); this.parts.set(t[0] + ':' + ch.id, p); } if (p.type === 'reasoning' && /[^\s.…·。]/.test(String(ch.delta || ''))) { const firstVis = !/[^\s.…·。]/.test(p.text); const isClosed = (typeof ThinkingStatus !== 'undefined' && ThinkingStatus.isClosed(this)) || (typeof Fingerprint !== 'undefined' && Fingerprint.isClosedSourceStream?.(this)); if (!isClosed) { if (firstVis) { this.thinkGuard(p); try { if (typeof BillingProbe !== 'undefined' && typeof BillingProbe.markAsOpenSourceModel === 'function') BillingProbe.markAsOpenSourceModel(this); } catch {} } try { if (this.gacha?.skipCompatThinking && typeof Fingerprint !== 'undefined') Fingerprint.maybeStopCompat?.(this); } catch {} if (firstVis && this.gacha?.stopThink && !this.stopReq && P.some(x => x !== p && x.type === 'text' && String(x.text || '').trim())) { this.thinkStopped = true; this.routedThink = true; if (this.live) this.live.metadata = { ...(this.live.metadata || {}), openThinkStopped: true }; setTimeout(() => this.stop(), 0); } } } p.text += ch.delta || ''; if (t === 'text-delta') this.checkMidStreamRoute(t, ch); break; }
       case 'text-end': case 'reasoning-end': { const p = find(t[0] + ':' + ch.id); if (p) p.state = 'done'; break; }
       case 'tool-input-start': { const p = { type: ch.dynamic ? 'dynamic-tool' : 'tool-' + ch.toolName, toolName: ch.toolName, toolCallId: ch.toolCallId, state: 'input-streaming', inputText: '', _startAt: this.recTs || now() }; P.push(p); this.parts.set('tool:' + ch.toolCallId, p); this.phase = '调用 ' + ch.toolName; this.checkMidStreamRoute(t, ch); break; }
       case 'tool-input-delta': { const p = find('tool:' + ch.toolCallId); if (p) p.inputText += ch.inputTextDelta || ''; break; }
@@ -2683,6 +2984,9 @@ class Chat {
         this._officialTurnErrAt = isOfficial ? this.errAt : 0;
         const lastU = [...this.messages].filter(x => x && x.role === 'user').at(-1);
         if (lastU) lastU._streamRejected = true;
+        if (/The AI service rejected this request/i.test(rawErr) && this._lastSentParentUserId) {
+          (this._rejectedHealthyNodeIds ||= new Set()).add(String(this._lastSentParentUserId));
+        }
         if (this.busy && !this.stopReq) {
           clearTimeout(this._errTurnT);
           const errMsg = m;
@@ -2792,9 +3096,10 @@ class Chat {
   guessModel(g) {
     // Format guesses are intermediate evidence during fingerprint tests, not a display identity.
     // Keep collecting fmt/fmtGuess (including the thinking-skip guard), but publish only the final fingerprint.
-    if (this.gacha?.fingerprint || this.gacha?.mode === 'autoqa' || (typeof Fingerprint !== 'undefined' && Fingerprint.isRunning(this))) return null;
+    if (this.gacha?.fingerprint || this.gacha?.mode === 'autoqa' || this.gacha?.mode === 'habit' || (typeof Fingerprint !== 'undefined' && Fingerprint.isRunning(this))) return null;
     try {
-      const openThink = (typeof ThinkingStatus !== 'undefined' && ThinkingStatus.of?.(this)?.kind === 'open') || Number(this.fmt?.rChars) > 0;
+      const tsKind = typeof ThinkingStatus !== 'undefined' ? ThinkingStatus.of?.(this)?.kind : null;
+      const openThink = tsKind === 'compat-thinking' || tsKind === 'open' || (tsKind !== 'closed-thinking' && !this.thinkStopped && !this.routedThink && Number(this.fmt?.rChars) > 0);
       const live = this.fmt && (this.fmt.ids.length || this.fmt.toolIds?.length || openThink);
       g = g || (live ? Fmt.guess({ ...this.fmt, done: true }) : null);
       if (openThink && (!g || ['gpt', 'claude', 'gemini', 'grok'].includes(g.fam))) {
@@ -2802,7 +3107,7 @@ class Chat {
       }
       if (!g) return null;
       const old = Models.get(this.sid);
-      const oldClosedOnOpen = openThink && old && /^(gpt|claude|gemini|grok|compat)/i.test(String(old.name || ''));
+      const oldClosedOnOpen = openThink && tsKind !== 'closed-thinking' && !this.thinkStopped && !this.routedThink && old && /^(gpt|claude|gemini|grok|compat)/i.test(String(old.name || ''));
       if (!oldClosedOnOpen && (old?.fingerprint || old?.reverseInferred || old?.billingProbe || old?.pendingConfirm || (old && old.name && !old.guess))) return null;
       const lastUser = [...(this.messages || [])].reverse().find(x => x?.role === 'user'), std = Fmt.stdPrompt?.((lastUser?.parts || []).filter(p => p.type === 'text').map(p => p.text || '').join('\n'));
       const est = g.est || (live && !this.busy ? Fmt.est(this.fmt, g.fam, std) : null) || (old?.guess && old.name === Fmt.NAME[g.fam] ? old.est : null);
@@ -2942,7 +3247,7 @@ Object.assign(Chat.prototype, {
   unwatch() { this.wGen = (this.wGen || 0) + 1; this.watching = false; try { this.wCtl?.abort(); } catch {} this.wCtl = null; },
   // 服务器上的消息合并进来：本地已有且内容一样的保持原对象（不重绘），变了的换成新的，本地还没发出去的保留在末尾
   mergeServer(list, keep) {
-    const rawSrv = list || []; if (!rawSrv.length) return false;
+    const rawSrv = (list || []).filter(m => !this._prunedDeadMsgIds?.has?.(m?.id)); if (!rawSrv.length) return false;
     const uText = m => m?.role === 'user' ? (m.parts || []).filter(p => p?.type === 'text').map(p => String(p.text || '')).join('\n').replace(/\s+/g, ' ').trim() : '';
     const isErrOnlyAsst = m => m?.role === 'assistant' && Array.isArray(m.parts) && m.parts.length > 0 && m.parts.every(p => p && (p.type === 'error' || p.type === 'step-start'));
     const srv = [];
@@ -3137,9 +3442,13 @@ Object.assign(Chat.prototype, {
           if (this.remoteSync) void this.remoteSync({ seq: baseSeq, rewind: true, pend: true });
           return true;
         }
-        if (!ch) return false;
+        if (!ch) {
+          this._lastSyncedHistAt = (typeof History !== 'undefined' && History.byId?.(this.sid)?.updatedAt) || this._lastSyncedHistAt || null;
+          return false;
+        }
         // 服务器已经停下：位置跟到快照，空闲监听不会再把这一轮当成「别处新开的」重放一遍
         if (!last?.metadata?.pending && c.lastEventId != null) { this.lastSeq = String(c.lastEventId); this.fence = +c.lastEventId; }
+        this._lastSyncedHistAt = (typeof History !== 'undefined' && History.byId?.(this.sid)?.updatedAt) || null;
         this.messages.forEach(m => { if (m.parts?.some(p => p.toolCallId && Hitl.name(p))) m.v = (m.v || 0) + 1; });
         this.saveCache?.();
         this.emit(); return true;
@@ -3170,13 +3479,18 @@ Object.assign(Chat.prototype, {
   // 前台对话的对账节奏（Sync 每 3 秒调一次）：空闲 20 秒一次；输出中超过 10 秒没有新记录，每 10 秒一次。若末尾是未回复的用户消息或未完成回复则 2.5 秒一次。
   tickConverge() {
     if (document.hidden || this.gacha || !this.loaded || this.loading || this.convP || this.syncing || ReadLimit.active()) return;
+    const fgSid = typeof Tabs !== 'undefined' ? Tabs.cur?.sid : null;
+    if (fgSid && Chats.get(fgSid)?.loading) return;
     const t = now(); if (!this.convAt) { this.convAt = t; return; }
     if (this.live) { this.convGap = 0; if ((this.recAt || 0) > this.convAt) this.liveGap = 0; const lg = this.liveGap || 10000; if (t - (this.recAt || 0) > lg && t - this.convAt > lg) { this.liveGap = Math.min(60000, lg * 2); this.converge(); } return; }
     if (this.busy || this.streaming) { this.convGap = 0; return; }
     const lastMsg = this.messages.at(-1);
     const waitReply = !!lastMsg && (lastMsg.role === 'user' || lastMsg.metadata?.pending) && !Hitl.idleWait(this);
-    const gap = waitReply ? 2500 : (this.convGap || 20000), cap = this.watching && !this.wFails ? 900000 : 300000;
-    if (t - this.convAt > gap) void this.converge().then(ch => { this.convGap = (ch || waitReply) ? (waitReply ? 2500 : 20000) : Math.min(cap, gap * 2); }, () => { this.convGap = Math.min(cap, gap * 2); });
+    const curHistAt = (typeof History !== 'undefined' && History.byId?.(this.sid)?.updatedAt) || null;
+    const idleUnchanged = !waitReply && curHistAt && this._lastSyncedHistAt && curHistAt === this._lastSyncedHistAt;
+    const baseGap = waitReply ? 2500 : (idleUnchanged ? 120000 : 20000);
+    const gap = waitReply ? 2500 : Math.max(baseGap, this.convGap || baseGap), cap = this.watching && !this.wFails ? 900000 : 300000;
+    if (t - this.convAt > gap) void this.converge().then(ch => { this.convGap = (ch || waitReply) ? (waitReply ? 2500 : baseGap) : Math.min(cap, gap * 2); }, () => { this.convGap = Math.min(cap, gap * 2); });
   },
   quickSync(force = false) {
     if (!this.loaded || this.loading || this.sending || this.sid.startsWith('local-') || window.__BRANA_BROWSE_MODE) return;
@@ -3322,7 +3636,7 @@ function isOfficialTransientError(raw) {
   const s = String(raw || '').trim();
   if (!s) return false;
   if (/429|rate.?limit|too many|限流|频繁|quota|额度|recaptcha|captcha|人机验证|prompt failed|unauthori|401|403/i.test(s)) return false;
-  return /\bFailed query:\s*select\b|\bagentic_session_nodes\b|The AI took too long to respond|An error occurred while generating|Something went wrong\.?\s*Please try again|Internal server error|database error|drizzle|postgres|deadlock detected|connection terminated unexpectedly|upstream.*(?:error|timeout|reset)|model.*(?:overloaded|timed out|unavailable)|service unavailable|bad gateway|gateway timeout/i.test(s);
+  return /\bFailed query:\s*select\b|\bagentic_session_nodes\b|The AI took too long to respond|The AI service rejected this request|An error occurred while generating|Something went wrong\.?\s*Please try again|Internal server error|database error|drizzle|postgres|deadlock detected|connection terminated unexpectedly|upstream.*(?:error|timeout|reset)|model.*(?:overloaded|timed out|unavailable)|service unavailable|bad gateway|gateway timeout/i.test(s);
 }
 function formatOfficialErrorText(raw) {
   const s = String(raw || '').trim();
@@ -3333,12 +3647,257 @@ function formatOfficialErrorText(raw) {
   if (/^The AI took too long to respond\.?(?:\s*Please try again\.?)?$/i.test(s)) {
     return '官方服务响应超时（The AI took too long to respond. Please try again.）';
   }
+  if (/The AI service rejected this request/i.test(s)) {
+    return '官方服务拒绝请求：存在空回复死节点或上下文超限，已自动回退至上一正常节点重发（The AI service rejected this request.）';
+  }
   return s;
+}
+function isOpenCandidateName(s) {
+  const id = String(s || '').toLowerCase();
+  if (!id) return false;
+  const vid = (typeof Brand !== 'undefined' && typeof Brand.of === 'function') ? Brand.of(id) : '';
+  if (['deepseek', 'qwen', 'zhipu', 'moonshot', 'minimax', 'mistral', 'meta', 'stepfun', 'tencent', 'xiaomi', 'compat'].includes(vid)) return true;
+  return /qwen|farris|paisley|deepseek|v4\.1|v3\.[12]|\br[12]-|glm|mimo|minimax|\bm[23]\.[0-9]|kimi|\bk2\.[0-9]|moonshot|mistral|hy3|hy4|hunyuan|step-5|stepfun|gpt-oss|llama|nemotron|beam|caveman|reflection|inkling|thinky|thinking-?machines|may26-chatbot4|\b\d+b[-_\s]+a\d+b\b|开源|国产|compat/i.test(id);
+}
+function hasSubstantiveAssistantWork(m) {
+  if (!m || m.role !== 'assistant') return false;
+  const parts = Array.isArray(m.parts) ? m.parts : [];
+  if (parts.some(p => p && p.type === 'text' && String(p.text || '').trim().length > 0)) return true;
+  if (parts.some(p => p && (p.toolCallId || String(p.type || '').startsWith('tool-') || p.type === 'dynamic-tool') && p.state === 'output-available' && p.output?.status !== 'aborted' && p.output?.status !== 'error')) return true;
+  return false;
+}
+function isDeadAssistantMsg(m) {
+  if (!m || m.role !== 'assistant') return false;
+  if (hasSubstantiveAssistantWork(m)) return false;
+  if (m.metadata?.openThinkStopped || m.metadata?.aborted || m.metadata?.feedback?.interruption === 'stop' || m.metadata?.error) return true;
+  if (m._routePivotRole === 'next' && m._turnModelLabel && isOpenCandidateName(m._turnModelLabel)) return true;
+  const parts = Array.isArray(m.parts) ? m.parts : [];
+  if (!parts.length) return true;
+  if (parts.some(p => p?.type === 'error')) return true;
+  const hasText = parts.some(p => p && p.type === 'text' && String(p.text || '').trim().length > 0);
+  const toolParts = parts.filter(p => p && (p.toolCallId || String(p.type || '').startsWith('tool-') || p.type === 'dynamic-tool'));
+  if (!hasText && toolParts.length > 0 && toolParts.every(p => p.state === 'output-error' || p.state === 'input-available' || p.state === 'input-streaming' || p.output?.status === 'aborted')) return true;
+  return !parts.some(p => p && (
+    (p.type === 'text' && String(p.text || '').trim().length > 0) ||
+    (p.type === 'reasoning' && String(p.text || '').trim().length > 0) ||
+    p.toolCallId ||
+    String(p.type || '').startsWith('tool-') ||
+    p.type === 'dynamic-tool' ||
+    p.type === 'file' ||
+    String(p.type || '').startsWith('source-')
+  ));
+}
+async function ensureHealthyHistoryLoaded(chat, maxPages = 8) {
+  if (!chat || typeof chat.loadOlder !== 'function') return;
+  for (let page = 0; page < maxPages; page++) {
+    if (!chat.hasMore || !chat.cursor) break;
+    if (findHealthyLastUser(chat.messages, null, chat._rejectedHealthyNodeIds)) break;
+    const prevCursor = chat.cursor;
+    await chat.loadOlder(true).catch(() => {});
+    if (chat.cursor === prevCursor) break;
+  }
+}
+function findFirstHealthyUser(msgs) {
+  if (!Array.isArray(msgs) || !msgs.length) return null;
+  for (let i = 0; i < msgs.length; i++) {
+    const u = msgs[i];
+    if (!u || u.role !== 'user' || u.failed || u._streamRejected) continue;
+    for (let j = i + 1; j < msgs.length; j++) {
+      const m = msgs[j];
+      if (!m) continue;
+      if (m.role === 'user') break;
+      if (m.role === 'assistant' && !isDeadAssistantMsg(m)) return u;
+    }
+  }
+  return null;
+}
+function findHealthyLastUser(msgs, excludeMsg = null, rejectedSet = null) {
+  if (!Array.isArray(msgs) || !msgs.length) return null;
+  let end = excludeMsg ? msgs.indexOf(excludeMsg) : -1;
+  if (end < 0) end = msgs.length;
+  let fallbackUser = null;
+  let sawDeadTail = false;
+  for (let i = end - 1; i >= 0; i--) {
+    const u = msgs[i];
+    const uKey = u ? String(u.metadata?.nodeId || u.id || '') : '';
+    const isRejectedNode = !!(rejectedSet && typeof rejectedSet.has === 'function' && uKey && (rejectedSet.has(uKey) || rejectedSet.has(String(u.id || ''))));
+    if (!u || u === excludeMsg || u.role !== 'user' || u.failed || u._streamRejected || isRejectedNode) {
+      if (u && u !== excludeMsg && (u.failed || u._streamRejected || isRejectedNode || (u.role === 'assistant' && isDeadAssistantMsg(u)))) sawDeadTail = true;
+      continue;
+    }
+    let hasAssistant = false, hasHealthyAssistant = false;
+    for (let j = i + 1; j < end; j++) {
+      const m = msgs[j];
+      if (!m) continue;
+      if (m.role === 'user') break;
+      if (m.role === 'assistant') {
+        hasAssistant = true;
+        if (!isDeadAssistantMsg(m)) { hasHealthyAssistant = true; break; }
+      }
+    }
+    if (hasHealthyAssistant) return u;
+    if (hasAssistant && !hasHealthyAssistant) {
+      sawDeadTail = true;
+      continue;
+    }
+    if (!hasAssistant && !sawDeadTail && !fallbackUser && i === end - 1) {
+      fallbackUser = u;
+    } else {
+      sawDeadTail = true;
+    }
+  }
+  return fallbackUser;
+}
+function rebuildChatFmtFromMessages(chat) {
+  if (!chat) return;
+  const nf = typeof Fmt !== 'undefined' && Fmt.fresh ? Fmt.fresh() : { ids: [], toolIds: [], rBlocks: 0, rChars: 0, rHead: '', tBlocks: 0, tChars: 0, head: '' };
+  const msgs = Array.isArray(chat.messages) ? chat.messages : [];
+  const healthyAsst = msgs.filter(m => m && m.role === 'assistant' && !isDeadAssistantMsg(m));
+  const msgHasVis = m => (m?.parts || []).some(p => p?.type === 'reasoning' && (typeof ThinkingStatus !== 'undefined' && ThinkingStatus.visible ? ThinkingStatus.visible(p) : /[^\s.…·。]/.test(String(p.text || ''))));
+  const firstIsClosed = healthyAsst.length > 0 && !msgHasVis(healthyAsst[0]) && (healthyAsst[0].parts || []).some(p => p?.type === 'reasoning' || /^(?:toolu_|srvtoolu_|call_)/i.test(String(p?.toolCallId || '')));
+  for (const m of healthyAsst) {
+    if (firstIsClosed && msgHasVis(m)) break;
+    for (const p of m.parts || []) {
+      if (!p) continue;
+      if (p.toolCallId && nf.toolIds.length < 16) nf.toolIds.push(String(p.toolCallId));
+      if (p.type === 'reasoning') {
+        nf.rBlocks = (nf.rBlocks || 0) + 1;
+        if (p.id && nf.ids.length < 16) nf.ids.push(['r', String(p.id)]);
+        const vis = typeof ThinkingStatus !== 'undefined' && ThinkingStatus.visible ? ThinkingStatus.visible(p) : Boolean(String(p.text || '').trim());
+        if (vis) {
+          const rt = String(p.text || '');
+          nf.rChars = (nf.rChars || 0) + rt.length;
+          if ((nf.rHead || '').length < 400) nf.rHead = (nf.rHead || '') + rt.slice(0, 400 - (nf.rHead || '').length);
+        }
+      } else if (p.type === 'text') {
+        nf.tBlocks = (nf.tBlocks || 0) + 1;
+        if (p.id && nf.ids.length < 16) nf.ids.push(['t', String(p.id)]);
+        const tt = String(p.text || '');
+        nf.tChars = (nf.tChars || 0) + tt.length;
+        if ((nf.head || '').length < 400) nf.head = (nf.head || '') + tt.slice(0, 400 - (nf.head || '').length);
+      }
+    }
+  }
+  chat.fmt = nf;
+}
+function healChatModelAndBranch(chat, opt = {}) {
+  if (!chat?.sid) return null;
+  let pruned = null;
+  if (opt.pruneTail) {
+    pruned = pruneDeadTailTurns(chat);
+  }
+  chat.thinkStopped = false;
+  chat.routedThink = false;
+  chat._routePaused = false;
+  rebuildChatFmtFromMessages(chat);
+  const tsKind = typeof ThinkingStatus !== 'undefined' ? ThinkingStatus.of?.(chat)?.kind : null;
+  const curM = typeof Models !== 'undefined' ? Models.get(chat.sid) : null;
+  const curName = String(curM?.name || curM?.reverseLabel || '').trim();
+  const isPollutedOpen = curM && (curName === '开源模型' || curM.fam === 'compat' || isOpenCandidateName(curName) || isOpenCandidateName(curM.reverseCandidateId)) && tsKind !== 'compat-thinking';
+  const preRouteClosed = String(curM?.routeFrom || chat._routeBaseline?.label || '').trim();
+  const hasClosedEvidence = tsKind === 'closed-thinking' || (chat.fmt?.toolIds || []).some(id => /^(?:toolu_|srvtoolu_|call_)/i.test(String(id || ''))) || (preRouteClosed && !isOpenCandidateName(preRouteClosed));
+  if (isPollutedOpen && (hasClosedEvidence || opt.pruneTail)) {
+    if (preRouteClosed && !isOpenCandidateName(preRouteClosed)) {
+      const restored = {
+        ...curM,
+        name: preRouteClosed,
+        candidateName: preRouteClosed,
+        reverseLabel: preRouteClosed,
+        routed: false,
+        sure: true,
+        guess: false,
+      };
+      delete restored.routeType;
+      delete restored.routeFrom;
+      delete restored.routeTo;
+      delete restored.lastRouteNotice;
+      delete restored.routeNotices;
+      Models.set(chat.sid, restored);
+      try { Bus.emit('model', chat, restored); } catch {}
+    } else {
+      try {
+        if (typeof Models.del === 'function') Models.del(chat.sid);
+        else { delete Models.map?.[chat.sid]; Models.save?.(); }
+      } catch {}
+      try { chat.guessModel?.(); } catch {}
+    }
+    try {
+      if (typeof BillingProbe !== 'undefined') {
+        if (typeof BillingProbe.invalidateAndRefresh === 'function') void BillingProbe.invalidateAndRefresh(chat);
+        else if (typeof BillingProbe.schedule === 'function') BillingProbe.schedule(chat, 10);
+      }
+    } catch {}
+  } else if (opt.pruneTail && typeof BillingProbe !== 'undefined') {
+    try {
+      if (typeof BillingProbe.invalidateAndRefresh === 'function') void BillingProbe.invalidateAndRefresh(chat);
+      else if (typeof BillingProbe.schedule === 'function') BillingProbe.schedule(chat, 10);
+    } catch {}
+  }
+  try { chat.emit?.(); } catch {}
+  return pruned;
+}
+function pruneDeadTailTurns(chat) {
+  const msgs = chat?.messages;
+  if (!Array.isArray(msgs) || !msgs.length) return null;
+  if (msgs.some(m => m?.metadata?.openThinkStopped || (m?.role === 'assistant' && (m?.parts || []).some(p => p?.type === 'reasoning' && /[^\s.…·。]/.test(String(p.text || '')))))) {
+    chat._hadOpenThinkStop = true;
+    chat._allowOpenThink = true;
+  }
+  const rej = chat?._rejectedHealthyNodeIds;
+  const healthyU = findHealthyLastUser(msgs, null, rej);
+  let lastHealthyIdx = -1;
+  if (healthyU) {
+    const uIdx = msgs.indexOf(healthyU);
+    if (uIdx >= 0) {
+      lastHealthyIdx = uIdx;
+      for (let j = uIdx + 1; j < msgs.length; j++) {
+        const m = msgs[j];
+        if (!m) continue;
+        if (m.role === 'user') break;
+        if (m.role === 'assistant' && !isDeadAssistantMsg(m)) lastHealthyIdx = j;
+      }
+    }
+  }
+  const tailSlice = msgs.slice(lastHealthyIdx + 1);
+  if (!tailSlice.length) return null;
+  const hasDeadEvidence = tailSlice.some(m => m && (
+    (m.role === 'assistant' && isDeadAssistantMsg(m)) ||
+    (m.role === 'user' && (m.failed || m._streamRejected || m.metadata?.error || (rej?.has?.(String(m.metadata?.nodeId || m.id || '')))))
+  )) || tailSlice.filter(m => m && m.role === 'user').length > 1;
+  if (!hasDeadEvidence) return null;
+  const deadUsers = tailSlice.filter(m => m && m.role === 'user');
+  if (!deadUsers.length) {
+    const prunedSet = (chat._prunedDeadMsgIds ||= new Set());
+    for (const m of tailSlice) if (m?.id) prunedSet.add(m.id);
+    msgs.splice(lastHealthyIdx + 1);
+    return { lastUser: null, origText: '', prunedCount: tailSlice.length };
+  }
+  const getText = u => (u?.parts || []).filter(p => p && p.type === 'text').map(p => p.text || '').join('\n').trim();
+  const isContinueFiller = u => /^(?:继续|continue|go on|keep going|接着|继续执行)[。.!！?？\s]*$/i.test(getText(u)) && !(u?.metadata?.uploads?.length > 0);
+  const pickedUser = [...deadUsers].reverse().find(u => !isContinueFiller(u) && (getText(u) || u?.metadata?.uploads?.length > 0)) || deadUsers.at(-1);
+  const maxResent = deadUsers.reduce((mx, u) => Math.max(mx, Number(u?._officialErrAutoResent) || 0), 0);
+  pickedUser._officialErrAutoResent = maxResent;
+  pickedUser._streamRejected = true;
+  const prunedSet = (chat._prunedDeadMsgIds ||= new Set());
+  for (const m of tailSlice) if (m?.id) prunedSet.add(m.id);
+  msgs.splice(lastHealthyIdx + 1);
+  return {
+    lastUser: pickedUser,
+    origText: getText(pickedUser),
+    prunedCount: tailSlice.length,
+  };
 }
 try {
   if (typeof window !== 'undefined') {
     window.isOfficialTransientError = isOfficialTransientError;
     window.formatOfficialErrorText = formatOfficialErrorText;
+    window.isOpenCandidateName = isOpenCandidateName;
+    window.isDeadAssistantMsg = isDeadAssistantMsg;
+    window.ensureHealthyHistoryLoaded = ensureHealthyHistoryLoaded;
+    window.findFirstHealthyUser = findFirstHealthyUser;
+    window.findHealthyLastUser = findHealthyLastUser;
+    window.pruneDeadTailTurns = pruneDeadTailTurns;
+    window.healChatModelAndBranch = healChatModelAndBranch;
   }
 } catch {}
 function packClientInteraction(textLen = 8, kind = 'enter') {
@@ -3346,10 +3905,17 @@ function packClientInteraction(textLen = 8, kind = 'enter') {
     const vid = typeof getOrCreateVisitId === 'function' ? getOrCreateVisitId() : (typeof VISIT === 'string' && VISIT ? VISIT : 'local');
     const fnv = s => { let h = 0x811c9dc5; for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 0x1000193) >>> 0; } return (h ^ (h >>> 16)) & 65535; };
     const salt = 48664;
+    const len = Math.max(1, Math.min(255, Number(textLen) || 8));
+    const kd = Math.min(15, Math.max(2, Math.min(len, 3 + Math.floor(Math.random() * 8))));
+    const ku = Math.min(15, Math.max(2, kd));
+    const inp = Math.min(15, Math.max(2, kd));
+    const ptr = 2 + Math.floor(Math.random() * 5);
+    const edit = Math.floor(Math.random() * 3);
+    const dwell = Math.min(65535, 1400 + len * (65 + Math.floor(Math.random() * 55)) + Math.floor(Math.random() * 1800));
     const layout = [
-      [2, kind === 'button' ? 1 : 0], [2, 2], [4, 0],
-      [8, Math.max(1, Math.min(255, Number(textLen) || 8))], [4, 0], [4, 0],
-      [1, 0], [1, 0], [4, 0], [3, 0], [1, 0], [16, 0],
+      [2, kind === 'button' ? 1 : 0], [2, 2], [4, edit],
+      [8, len], [4, kd], [4, ku],
+      [1, 1], [1, 0], [4, inp], [3, ptr], [1, 1], [16, dwell],
       [3, kind === 'button' ? 3 : 0], [2, kind === 'button' ? 1 : 0], [2, 1],
       [2, 1], [2, 0], [2, 0], [1, 0],
       [16, fnv(String(vid || 'local'))], [16, Math.floor(now() / 60000) & 65535]
@@ -3388,7 +3954,7 @@ const CREATE_ACTION = 'agentic_chat_submit';
 async function createChat0(text, opt = {}) {
   const id = uuid7(), msg = { id, role: 'user', parts: [{ type: 'text', text }] };
   const um = Uploads.meta(opt.files, null); if (um) msg.metadata = um;
-  const cx = packClientInteraction(String(text || '').length || 8);
+  const cx = packClientInteraction(String(text || '').length || 8, Math.random() < 0.45 ? 'button' : 'enter');
   const body = { message: msg, timezone: currentTimezone(), ...(cx ? { cx } : {}) };
   if (!opt.gacha && typeof Connectors !== 'undefined') { const c = Connectors.active(); if (c.length) body.enabledConnectors = c; }   // 和官方一样：新对话带上已启用的连接器（抽卡不带）
   if (opt.v2) { body.recaptchaV2Token = opt.v2; body.recaptchaV3Token = null; }
@@ -3397,7 +3963,7 @@ async function createChat0(text, opt = {}) {
   // 同一个请求（同一条消息 id、同一个 attempt id）自动重发：
   //   409「This chat request is still in progress. Retry the same request.」= 服务器还在处理上一次的同一个请求 → 等一下原样重发，拿到的就是那次的结果；
   //   500 / 502 / 503 / 504、超时、网络断开 → 退避后原样重发（服务器按消息 id 去重，不会多建对话）
-  let res; const att = uuid7(), t0 = now(); let relog = false, escalated = false, n409 = 0, n5xx = 0, nNet = 0;
+  let res; let att = uuid7(); const t0 = now(); let relog = false, escalated = false, rotated429 = false, n409 = 0, n5xx = 0, nNet = 0;
   for (;;) {
     const ctl = new AbortController(), tm = setTimeout(() => ctl.abort(), 45000);
     let err = null;
@@ -3425,13 +3991,30 @@ async function createChat0(text, opt = {}) {
         body.recaptchaV2Token = tok; body.recaptchaV3Token = null; continue;
       }
     }
+    // 429 速率限制（非重复指令）：不切换用户当前 IP，先轮换会话指纹（arena_visit_id + cx 交互特征 + 新 reCAPTCHA v3 令牌）原地绕过重试一次
+    if (res.status === 429 && !rotated429 && left > 12000) {
+      const t429 = await res.clone().text().catch(() => '');
+      if (!promptFailed(429, t429) && !/verification required/i.test(t429)) {
+        rotated429 = true;
+        try { rotateVisitId(); } catch {}
+        msg.id = uuid7();
+        att = uuid7();
+        const freshCx = packClientInteraction(String(text || '').length || 8, Math.random() < 0.5 ? 'button' : 'enter');
+        if (freshCx) body.cx = freshCx;
+        if (!opt.v2) body.recaptchaV3Token = await Recaptcha.v3(CREATE_ACTION).catch(() => body.recaptchaV3Token);
+        const waitMs = 2600 + Math.floor(Math.random() * 1400);
+        opt.onRetry?.('触发 429 速率限制，正在轮换会话指纹原地绕过重试（不切换当前 IP）…');
+        await sleep(waitMs);
+        continue;
+      }
+    }
     if ([500, 502, 503, 504, 520, 522, 524].includes(res.status) && ++n5xx <= 3 && left > 10000) { if (typeof AutoRoute !== 'undefined' && AutoRoute.onErrorSwitch) await AutoRoute.onErrorSwitch({ status: res.status }, 'create-chat').catch(() => null); opt.onRetry?.('服务器临时错误（HTTP ' + res.status + '），已秒切备用线路并重发（第 ' + n5xx + ' 次）'); await res.text().catch(() => {}); await sleep(900 * n5xx); continue; }
     break;
   }
   const t = await res.text(), pf = promptFailed(res.status, t);
   if (!pf) Quota.note(res);   // 重复指令的 429 不是新对话额度限流，不能记成「1 分钟后再试」
-  // 纯净度实测：v3 直接通过 / 被要求人机验证 / 429，按当前出口 IP 记下来
-  if (res.ok) { if (body.recaptchaV3Token) IPRep.note('ok'); } else if (res.status === 403 && /recaptcha/i.test(t)) { if (!opt.v2) IPRep.note('rc'); if (typeof AutoRoute !== 'undefined' && AutoRoute.onErrorSwitch) void AutoRoute.onErrorSwitch({ status: 403 }, 'create-chat'); } else if (res.status === 429 && !pf) { IPRep.note('l'); Bus.emit('limited', { path: 'create-chat', ip: true, retryAfterMs: NetPolicy.retryAfter(res.headers?.get('retry-after')) }); if (typeof AutoRoute !== 'undefined' && AutoRoute.onErrorSwitch) void AutoRoute.onErrorSwitch({ status: 429, ipLimited: true, retryAfterMs: NetPolicy.retryAfter(res.headers?.get('retry-after')) }, 'create-chat'); } else if (!res.ok && typeof AutoRoute !== 'undefined' && AutoRoute.onErrorSwitch && [401, 403, 404, 408].includes(res.status)) { void AutoRoute.onErrorSwitch({ status: res.status }, 'create-chat'); }
+  // 纯净度实测：v3 直接通过 / 被要求人机验证；429 保持当前出口原地冷却，不再自动换走用户已选的未限流 IP
+  if (res.ok) { if (body.recaptchaV3Token) IPRep.note('ok'); } else if (res.status === 403 && /recaptcha/i.test(t)) { if (!opt.v2) IPRep.note('rc'); } else if (!res.ok && typeof AutoRoute !== 'undefined' && AutoRoute.onErrorSwitch && [408].includes(res.status)) { void AutoRoute.onErrorSwitch({ status: res.status }, 'create-chat'); }
   if (!res.ok) { let m = t; try { m = JSON.parse(t).error || t; } catch {} if (typeof m !== 'string') m = JSON.stringify(m); throw new HttpError(res.status, m, res); }
   const sid = JSON.parse(t).id; if (!sid) throw new Error('create-chat 没有返回对话 ID');
   const c = chatOf(sid);

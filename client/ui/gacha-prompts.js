@@ -86,20 +86,47 @@ const GachaPrompts = (() => {
     const count = minW + randomInt(Math.max(1, maxW - minW + 1));
     return sampleWords(AUTOQA_WORDS, count).join(' ');
   }
+  function habit() {
+    // 极速两步微缩探针：不指定 write_file 工具名、不写死文件名格式（自然暴露下划线/连字符与 bash/write 偏好），
+    // 通过「保存 35~45 行 HTML+SVG 微缩徽章 + 1 条终端命令核对行数/字节数 + 中文加粗要点简述」在单轮 6~10 秒内点亮全部 20 维习惯特征
+    return unique('gacha:habit-prompts:v1', () => {
+      const words = sampleWords(AUTOQA_WORDS, 3);
+      const num = 10 + randomInt(89);
+      const themePair = `${words[0]} / ${words[1]}`;
+      const badgeTitle = `${words[0].toUpperCase()} · ${words[2].toUpperCase()} #${num}`;
+      const svgScene = pick([
+        '内联一个极简 2D 动态 SVG 状态徽章（仅用 3～4 个基础几何图形如圆环、指针或脉冲点，带平滑循环动效）',
+        '包含一个轻量 2D 动态内联 SVG 几何图标（最多 3～4 个基础 SVG 图元，呈现旋转、呼吸或脉冲动画）',
+        '绘制一个紧凑型 2D 动态内联 SVG 指示器（控制在 3～4 个简单几何标签以内，带连续柔和过渡动效）',
+        '嵌入一个精简 2D 动态内联 SVG 徽标（仅含 3～4 个基础几何形状与循环动画）'
+      ]);
+      const step1 = pick([
+        `请在工作区创建并保存一个自包含的单文件 \`.html\` 卡片（文件名自拟，需包含主题词 ${themePair}），页面展示标题「${badgeTitle}」并${svgScene}，整个 HTML 文件控制在 35～45 行以内。`,
+        `请在工作区中保存一个独立的单文件 \`.html\` 微缩面板（文件名请结合主题词 ${themePair} 自拟），渲染代号「${badgeTitle}」并${svgScene}，总代码保持在 35～45 行以内。`,
+        `请生成一个自包含的 \`.html\` 徽章文件保存到工作区（文件名由你根据主题词 ${themePair} 自由命名），显示标签「${badgeTitle}」并${svgScene}，全文严格控制在 35～45 行以内。`
+      ]);
+      const step2 = pick([
+        '保存后请执行一条最简单的终端命令查看该文件的行数或字节数以确认落盘，最后用中文列出 2～3 条简短的加粗要点总结你的设计与动效实现。',
+        '文件生成后请运行一条轻量终端命令核对文件大小或行数，随后在回复中用中文分 2～3 条加粗要点简述核心样式与动画细节。',
+        '完成后请用一条简短的终端命令检查生成的行数与字节数，并在回复末尾用中文给出 2～3 条加粗要点说明实现亮点。'
+      ]);
+      return `${step1}${step2}`;
+    });
+  }
   function autoqaOne(qIndex = 0) {
-    // 随机生成3个长短英文单词分句（不需要语法）+ 4个数字单词组合
+    // 第 1 问直接发送两步微缩探针（单轮点亮 20 维代码/工具/思考/行文指纹）；第 2、3 问保留为极短追问（仅在开启 /cost 且首轮同价并列时用于差分锁定）
+    if (qIndex === 0) return habit();
     return unique('gacha:autoqa-prompts:v1', () => {
-      const c1 = autoqaClause(2, 4);
-      const c2 = autoqaClause(4, 7);
-      const c3 = autoqaClause(2, 5);
-      const nums = sampleWords(AUTOQA_NUMBERS, 4);
-      if (qIndex === 0) return `${c1} ${nums[0]}, ${c2} ${nums[1]} ${nums[2]}, ${c3} ${nums[3]}?`;
-      if (qIndex === 1) return `${nums[0]} ${c1}, ${c2} ${nums[1]}, ${nums[2]} ${c3} ${nums[3]}?`;
-      return `${c1} ${nums[0]} ${nums[1]}, ${nums[2]} ${c2}, ${c3} ${nums[3]}?`;
+      const w = sampleWords(AUTOQA_WORDS, 3);
+      const n = pick(AUTOQA_NUMBERS);
+      if (qIndex === 1) {
+        return `请无需调用任何工具，直接用中文分 2 条简短加粗要点说明如果为「${w[0]} / ${w[1]} (${n})」卡片增加深色模式，你会如何调整配色与对比度（80 字以内）？`;
+      }
+      return `请无需调用任何工具，直接用一句话（50 字以内）给出「${w[0]} · ${w[2]} (${n})」状态指示器的无障碍属性建议。`;
     });
   }
   function autoqa() {
     return [autoqaOne(0), autoqaOne(1), autoqaOne(2)];
   }
-  return { PROTOCOL, DEFAULT_PREFERRED, normalize, keywords, match, randomInt, challenges, svg, custom, autoqa, autoqaOne };
+  return { PROTOCOL, DEFAULT_PREFERRED, normalize, keywords, match, randomInt, challenges, svg, custom, habit, autoqa, autoqaOne };
 })();

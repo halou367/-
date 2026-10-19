@@ -129,4 +129,29 @@ test('turn 2+ completion updates endAt/tcAt, clears outbox via completed assista
   assert.equal(c.posted[0].payload.message.parts[0].text,'queued item 1\nqueued item 2');
   assert.equal(c.queue.length,0);
 });
+test('recall restores queued text and attachments into multi-tab textarea and tab draft',()=>{
+  const h=setup(),c=h.chat();
+  const att={name:'pic.png',mediaType:'image/png',url:'data:image/png;base64,AA=='};
+  h.Q.add(c,'撤回回输入框的文字',[att]);
+  assert.equal(c.queue.length,1);
+  const tab={key:'t-1',sid:c.sid,draft:'已有草稿'};
+  const ta={value:'已有草稿',scrollHeight:60,style:{},focused:false,focus(){this.focused=true;},dispatchEvent(){}};
+  let savedTabDraft=null;
+  h.c.Tabs={list:[tab],cur:tab,save(){}};
+  h.c.UI={els:{chat:c},atts:new Map(),paintAtt(){},paintQ(){}};
+  h.D.setTab=(t,atts)=>{savedTabDraft={draft:t.draft,atts};};
+  h.c.document={
+    querySelectorAll:sel=>sel==='textarea[data-tab="t-1"]'?[ta]:[],
+    querySelector:()=>ta
+  };
+  const ok=h.Q.recall(c,c.queue[0]);
+  assert.equal(ok,true);
+  assert.equal(c.queue.length,0);
+  assert.equal(ta.value,'已有草稿\n撤回回输入框的文字');
+  assert.equal(tab.draft,'已有草稿\n撤回回输入框的文字');
+  assert.equal(ta.focused,true);
+  assert.ok(savedTabDraft);
+  assert.equal(savedTabDraft.draft,'已有草稿\n撤回回输入框的文字');
+  assert.equal(h.c.UI.atts.get('t-1')?.length,1);
+});
 

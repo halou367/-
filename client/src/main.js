@@ -17,8 +17,8 @@ function killKids() {
   for (const p of [...KIDS]) { try { p.kill(); } catch {} if (process.platform === 'win32' && p.pid) { try { spawnSync('taskkill', ['/F', '/T', '/PID', String(p.pid)], { windowsHide: true, timeout: 3000 }); } catch {} } }
   KIDS.clear();
 }
-// 改名 Brana AI 后仍用原来的数据目录 “Arena Client”（账号 / 登录数据不丢，目录名不能改）
-try { const d = app.getPath('userData'); if (['Brana AI', 'Arena Ai'].includes(path.basename(d))) app.setPath('userData', path.join(path.dirname(d), 'Arena Client')); } catch {}
+// 改名 Brana AI 后仍用原来的数据目录 “Arena Client”（账号 / 登录数据不丢，目录名不能改）；独立测试版使用独立数据目录
+try { if (!EXTENSION_TEST.testBuild) { const d = app.getPath('userData'); if (['Brana AI', 'Arena Ai'].includes(path.basename(d))) app.setPath('userData', path.join(path.dirname(d), 'Arena Client')); } } catch {}
 const ICON = (() => { try { const p = path.join(__dirname, '..', 'assets', process.platform === 'win32' ? 'icon.ico' : 'icon.png'); return fs.existsSync(p) ? nativeImage.createFromPath(p) : undefined; } catch { return undefined; } })();
 const { build } = require('./bundle');
 const RouteNative = require('./route-native');
@@ -76,8 +76,59 @@ let DB = { accounts: [], open: [] };
 function loadDB() {
   try { DB = { accounts: [], open: [], ...JSON.parse(fs.readFileSync(dataFile(), 'utf8')) }; } catch {}
   if (!DB.accounts.length) DB.accounts.push({ id: newId(), name: '账号 1', proxy: '' });
-  // 每个账号随机绑定一个指纹（旧账号第一次启动时补上）
-  let ch = false; for (const a of DB.accounts) if (!a.fp || !a.fp.seed) { a.fp = genFp(); ch = true; }
+  // 每个账号随机绑定一个指纹（旧账号第一次启动时补上），并自动修复被服务端去除了标点符号（. , - _ +）的邮箱
+  let ch = false;
+  for (const a of DB.accounts) {
+    if (!a.fp || !a.fp.seed) { a.fp = genFp(); ch = true; }
+    const mtEmail = DB.shared?.['mailtok@' + a.id]?.email || DB.shared?.['regpw@' + a.id]?.email || '';
+    const rich = AuthFlow.pickRichEmail(mtEmail || (AuthFlow.EMAIL.test(String(a.name || '').trim()) ? a.name : ''), a.email || '');
+    if (rich && AuthFlow.EMAIL.test(rich) && rich !== a.email && (!a.email || AuthFlow.sameMailbox(rich, a.email))) {
+      a.email = rich;
+      ch = true;
+    }
+    if (a.email && a.status?.me && AuthFlow.sameMailbox(a.email, a.status.me)) {
+      const richMe = AuthFlow.pickRichEmail(a.email, a.status.me);
+      if (richMe !== a.status.me) {
+        a.status.me = richMe;
+        ch = true;
+      }
+    }
+  }
+  // 迁移旧版过期的 autoCostDpl 并解除误拉黑的在线 deployment (dpl_3UbNvzoXfT6iNZqgBa7GjsGeKLaT -> dpl_BcGa9YULV843didEQWsFTd5taD4h)，若用户手动锁定了 pinDpl 则优先保留
+  try {
+    if (DB.shared && typeof DB.shared === 'object') {
+      const prefs = DB.shared.prefs;
+      const lockedDpl = (prefs && typeof prefs.pinDpl === 'string' && /^dpl_[A-Za-z0-9]{16,48}$/.test(prefs.pinDpl.trim()))
+        ? prefs.pinDpl.trim()
+        : '';
+      const targetDpl = lockedDpl || 'dpl_3UbNvzoXfT6iNZqgBa7GjsGeKLaT';
+      if (DB.shared.autoCostDpl && DB.shared.autoCostDpl !== targetDpl) {
+        DB.shared.autoCostDpl = targetDpl;
+        ch = true;
+      }
+      if (prefs && typeof prefs === 'object') {
+        if (!prefs.autoCostDpl || prefs.autoCostDpl !== targetDpl) {
+          prefs.autoCostDpl = targetDpl;
+          ch = true;
+        }
+        if (Array.isArray(prefs.autoCostPool)) {
+          const nextPool = [targetDpl, 'dpl_3UbNvzoXfT6iNZqgBa7GjsGeKLaT', ...prefs.autoCostPool.filter(x => x && x !== targetDpl && x !== 'dpl_3UbNvzoXfT6iNZqgBa7GjsGeKLaT' && x !== 'dpl_HAxwrhqRf48UW1Hf4MDQquRXSs7x')].slice(0, 12);
+          if (JSON.stringify(nextPool) !== JSON.stringify(prefs.autoCostPool)) {
+            prefs.autoCostPool = nextPool;
+            ch = true;
+          }
+        }
+        if (Array.isArray(prefs.expiredCostDpls)) {
+          const unban = new Set([targetDpl, 'dpl_3UbNvzoXfT6iNZqgBa7GjsGeKLaT', 'dpl_BcGa9YULV843didEQWsFTd5taD4h']);
+          const nextExp = prefs.expiredCostDpls.filter(x => !unban.has(x));
+          if (nextExp.length !== prefs.expiredCostDpls.length) {
+            prefs.expiredCostDpls = nextExp;
+            ch = true;
+          }
+        }
+      }
+    }
+  } catch {}
   if (ch) saveDB();
 }
 function saveDB(strict = false) {
@@ -131,7 +182,7 @@ const siteLogins = SiteLogins.createSiteLogins({ log: runtimeLog, read: id => ac
 // 密码只存本机：优先用系统钥匙串加密（safeStorage），不可用时退回 base64
 function encPw(p) { if (!p) return ''; try { if (safeStorage.isEncryptionAvailable()) return 'ss:' + safeStorage.encryptString(p).toString('base64'); } catch {} return 'b64:' + Buffer.from(p, 'utf8').toString('base64'); }
 function decPw(v) { if (!v) return ''; try { if (v.startsWith('ss:')) return safeStorage.decryptString(Buffer.from(v.slice(3), 'base64')); if (v.startsWith('b64:')) return Buffer.from(v.slice(4), 'base64').toString('utf8'); } catch {} return ''; }
-const byEmail = em => { const k = String(em || '').trim().toLowerCase(); return k ? DB.accounts.find(a => String(a.email || '').toLowerCase() === k) : null; };
+const byEmail = em => { const k = String(em || '').trim().toLowerCase(); return k ? DB.accounts.find(a => String(a.email || '').toLowerCase() === k || AuthFlow.sameMailbox(a.email, k)) : null; };
 
 // 代理解析：支持 http://host:port、socks5://host:port、host:port、http://user:pass@host:port
 function parseProxy(s) {
@@ -246,7 +297,7 @@ async function applyProxy(a, {force=false,deferReload=false}={}) {
       releaseExtensionTabs?.();
       // Reload surviving same-process subframes too; their document-start language getters belong to the old page.
       if(wc){wc.__privacyNeedsReload=wc.__privacyNeedsReload||changed;
-        if(!deferReload&&wc.__privacyNeedsReload&&/^https?:/.test(wc.getURL()))setTimeout(()=>{if(!wc.isDestroyed()&&epoch===ses.__routeEpoch&&!ses.__routeBlocked){wc.__privacyNeedsReload=false;wc.reload();}},50);
+        if(!deferReload&&wc.__privacyNeedsReload&&!wc.__clientShell&&/^https?:/.test(wc.getURL())&&!/^https:\/\/arena\.ai\/robots\.txt\b/.test(wc.getURL()))setTimeout(()=>{if(!wc.isDestroyed()&&epoch===ses.__routeEpoch&&!ses.__routeBlocked){wc.__privacyNeedsReload=false;wc.reload();}},50);
       }
       return ses;
     } catch(error) { if(epoch===ses.__routeEpoch)a.tunErr='代理/环境应用失败，网络已阻断：'+String(error.message||error);throw error; }
@@ -862,7 +913,14 @@ ipcMain.handle('host:saveAccount', async (e, a) => {
   if (!cur) { cur = { id: newId(), name: String(a.name || email || '账号').slice(0, 40), proxy: String(a.proxy || '').trim(), proxyIp: String(a.proxyIp || '').trim(), email: email || '', fp: a.fp ? cleanFp(a.fp) : genFp() }; if (a.password) cur.pw = encPw(String(a.password)); if (a.nodeId) cur.nodeId = String(a.nodeId).slice(0, 40); DB.accounts.push(cur); }
   else {
     cur.name = String(a.name || cur.name).slice(0, 40);
-    if (email !== undefined) { if (email !== cur.email) cur.status = null; cur.email = email; }
+    if (email !== undefined) {
+      const canonM = v => { const r = String(v || '').trim().toLowerCase(); if (!r || /@example\.invalid$/i.test(r)) return r; const [l, d] = r.split('@'); return d ? l.replace(/\+.*$/, '').replace(/[.,\-_]/g, '') + '@' + d : r; };
+      const sameBox = Boolean(cur.email && email && canonM(cur.email) === canonM(email));
+      const pickRich = (s, m) => { const sv = String(s || '').trim(), mv = String(m || '').trim(); if (!sv || !sv.includes('@')) return mv || sv; if (!mv || !mv.includes('@')) return sv; if (canonM(sv) === canonM(mv)) { const sp = (sv.split('@')[0].match(/[.,\-_+]/g) || []).length, mp = (mv.split('@')[0].match(/[.,\-_+]/g) || []).length; return sp >= mp ? sv : mv; } return mv; };
+      if (!sameBox && email !== cur.email) cur.status = null;
+      cur.email = (!a.manualEmailEdit && sameBox) ? pickRich(cur.email || cur.name, email) : email;
+      if (cur.status?.me && canonM(cur.email) === canonM(cur.status.me)) cur.status.me = cur.email;
+    }
     if (a.password !== undefined && a.password !== null && String(a.password) !== '') { cur.pw = encPw(String(a.password)); cur.noAuto = false; }   // 空密码不覆盖已保存的（以前连接失败时读不到密码、一保存就把密码清掉了）
     const np = String(a.proxy ?? cur.proxy ?? '').trim(), npi = String(a.proxyIp ?? cur.proxyIp ?? '').trim(); const changed = np !== (cur.proxy || '') || npi !== (cur.proxyIp || ''); cur.proxy = np; cur.proxyIp = npi; if (a.nodeId !== undefined) cur.nodeId = String(a.nodeId || '').slice(0, 40);
     if (a.fp) cur.fp = cleanFp(a.fp);
@@ -1012,17 +1070,22 @@ ipcMain.handle('host:authLink', async (e, u) => {
   } catch (err) { return { error: err?.name === 'AbortError' ? '超时' : String(err.message || err), hops }; }
 });
 // 主进程原生协议请求通道（复用当前账号独立分区 Cookie 罐与代理隧道，零 DOM Cookie 污染，失败由渲染层自动兜底）
+// Active 20261017.19 skew: 'dpl_3UbNvzoXfT6iNZqgBa7GjsGeKLaT' -> apiDpl 'dpl_BcGa9YULV843didEQWsFTd5taD4h'
 const COST_SKEW_DPLS = [
+  'dpl_3UbNvzoXfT6iNZqgBa7GjsGeKLaT',
   'dpl_HAxwrhqRf48UW1Hf4MDQquRXSs7x',
+];
+const CORE_COST_DPLS = new Set(['dpl_3UbNvzoXfT6iNZqgBa7GjsGeKLaT', 'dpl_BcGa9YULV843didEQWsFTd5taD4h']);
+const EXPIRED_COST_DPLS = new Set([
+  'dpl_HAxwrhqRf48UW1Hf4MDQquRXSs7x',
+  'dpl_ESfaucDQhCnPyQUz9QQZg82hdgNT',
+  'dpl_A8xveHwwqjrHna3G4BNGYY7jqqSu',
+  'dpl_9gD8cB3xQ7eTwzU2jLmVpR5kHs1Y',
   'dpl_4NhYCxHezktNSfr9x2GMwqJnbJPa',
   'dpl_Gxhd5ZSm5y3NhjeyXwjCYo8o3ADC',
-];
-const CORE_COST_DPLS = new Set(COST_SKEW_DPLS);
-const EXPIRED_COST_DPLS = new Set([
   'dpl_DaEk6YQDh7utsYDiEtpTgeRc5jct',
   'dpl_6gJxa2MLrLxAx6KcYkVgvMmbV2EA',
   'dpl_D2yWTJ2pjpQeiwvqpbtqDTpsZnY4',
-  'dpl_8c25ZvCYXszwFU4s19PErXPLVCzn',
   'dpl_2W47bX6FpYa8XrFCCjzBA2JNNZ4V',
   'dpl_BieRM8wzCXHw6R6ToLUsTdhu4ZBZ',
 ]);
@@ -1058,7 +1121,9 @@ function rememberCostDpl(dpl, verified = false) {
 
 function demoteCostDpl(dpl) {
   const d = String(dpl || '').trim();
-  if (!/^dpl_[A-Za-z0-9]{16,48}$/.test(d)) return;
+  if (!/^dpl_[A-Za-z0-9]{16,48}$/.test(d) || d === 'dpl_3UbNvzoXfT6iNZqgBa7GjsGeKLaT') return;
+  const manualPin = String(DB?.shared?.prefs?.pinDpl || '').trim();
+  if (manualPin && d === manualPin) return;
   if (!CORE_COST_DPLS.has(d)) {
     EXPIRED_COST_DPLS.add(d);
     const idx = COST_SKEW_DPLS.indexOf(d);
@@ -1079,6 +1144,25 @@ function demoteCostDpl(dpl) {
 async function discoverFreshCostDpl(ses, force = false) {
   if (!force && Date.now() - lastSkewDiscoverAt < 45000) return null;
   lastSkewDiscoverAt = Date.now();
+  // 先强制把 arena_build_bucket=stable 锁定，避免 canary 分桶导致页面和 /cost 不出账单
+  try {
+    const existing = await ses.cookies.get({ name: 'arena_build_bucket' }).catch(() => []);
+    for (const c of existing || []) {
+      if (c && (c.value !== 'stable' || c.httpOnly)) {
+        const host = String(c.domain || 'arena.ai').replace(/^\.+/, '');
+        await ses.cookies.remove('https://' + host + (c.path || '/'), 'arena_build_bucket').catch(() => {});
+      }
+    }
+    await ses.cookies.set({
+      url: 'https://arena.ai',
+      name: 'arena_build_bucket',
+      value: 'stable',
+      path: '/',
+      secure: true,
+      sameSite: 'lax',
+      expirationDate: Math.floor(Date.now() / 1000) + 31536000,
+    }).catch(() => {});
+  } catch {}
   const discovered = [];
   const collectText = text => {
     const s = String(text || '');
@@ -1103,9 +1187,9 @@ async function discoverFreshCostDpl(ses, force = false) {
     'https://arena.ai/?mode=agent',
     'https://arena.ai/',
   ];
-  for (const pUrl of probeUrls) {
+  const fetchOneUrl = async (pUrl) => {
     try {
-      const ctl = new AbortController(), t = setTimeout(() => ctl.abort(), 4500);
+      const ctl = new AbortController(), t = setTimeout(() => ctl.abort(), 3200);
       const r = await ses.fetch(pUrl, {
         method: 'GET',
         cache: 'no-store',
@@ -1119,9 +1203,10 @@ async function discoverFreshCostDpl(ses, force = false) {
       }
       const html = await r.text().catch(() => '');
       collectText(html);
-      if (discovered.length >= 2) break;
     } catch {}
-  }
+  };
+  await Promise.allSettled(probeUrls.slice(0, 2).map(fetchOneUrl));
+  if (!discovered.length && probeUrls[2]) await fetchOneUrl(probeUrls[2]);
   return discovered[0] || null;
 }
 
@@ -1131,10 +1216,16 @@ ipcMain.handle('host:protoFetch', async (e, u, opt = {}) => {
   if (!raw.startsWith('/') || raw.startsWith('//')) return { error: '仅支持同源协议路径', fallback: true };
   const ses = prepSession(a);
   if (ses.__routeBlocked) return { error: '当前账号线路未就绪', fallback: true };
+  const manualPinDpl = String(DB?.shared?.prefs?.pinDpl || '').trim();
   try {
-    const savedAutoDpl = DB?.shared?.prefs?.autoCostDpl;
-    if (savedAutoDpl && /^dpl_[A-Za-z0-9]{16,48}$/.test(savedAutoDpl) && !EXPIRED_COST_DPLS.has(savedAutoDpl)) {
-      rememberCostDpl(savedAutoDpl, false);
+    if (/^dpl_[A-Za-z0-9]{16,48}$/.test(manualPinDpl)) {
+      EXPIRED_COST_DPLS.delete(manualPinDpl);
+      rememberCostDpl(manualPinDpl, true);
+    } else {
+      const savedAutoDpl = DB?.shared?.prefs?.autoCostDpl;
+      if (savedAutoDpl && /^dpl_[A-Za-z0-9]{16,48}$/.test(savedAutoDpl) && !EXPIRED_COST_DPLS.has(savedAutoDpl)) {
+        rememberCostDpl(savedAutoDpl, false);
+      }
     }
   } catch {}
   const targetUrl = 'https://arena.ai' + raw;
@@ -1142,10 +1233,10 @@ ipcMain.handle('host:protoFetch', async (e, u, opt = {}) => {
   const referer = opt?.referer || (mSid ? 'https://arena.ai/c/' + mSid[1] : 'https://arena.ai/');
   const ctl = new AbortController(), tm = setTimeout(() => ctl.abort(), Math.max(3000, Math.min(60000, +opt?.timeout || 15000)));
   try {
-    const costValue = encodeURIComponent(JSON.stringify({ 'credit-system-m1': 'cost-shown' }));
+    const costValue = encodeURIComponent(JSON.stringify({ 'credit-system-m1': 'cost-shown', 'credit-system-m2': 'limits-enabled' }));
     const method = String(opt?.method || 'GET').toUpperCase();
     const nowMs = Date.now();
-    if (!ses.__cookieCache || nowMs - (ses.__cookieCacheAt || 0) > 4000) {
+    if (!ses.__cookieCache || nowMs - (ses.__cookieCacheAt || 0) > 8000) {
       ses.__cookieCache = await ses.cookies.get({ url: 'https://arena.ai' }).catch(() => []);
       ses.__cookieCacheAt = nowMs;
     }
@@ -1154,11 +1245,11 @@ ipcMain.handle('host:protoFetch', async (e, u, opt = {}) => {
     if (reqSkew && !EXPIRED_COST_DPLS.has(reqSkew)) rememberCostDpl(reqSkew, false);
     const dplCandidates = opt?.costShown === true
       ? [...new Set([
-          !EXPIRED_COST_DPLS.has(activeCostSkewDpl) ? activeCostSkewDpl : null,
+          (/^dpl_[A-Za-z0-9]{16,48}$/.test(manualPinDpl)) ? manualPinDpl : null,
           (/^dpl_[A-Za-z0-9]{16,48}$/.test(reqSkew) && !EXPIRED_COST_DPLS.has(reqSkew)) ? reqSkew : null,
+          !EXPIRED_COST_DPLS.has(activeCostSkewDpl) ? activeCostSkewDpl : null,
           ...COST_SKEW_DPLS.filter(x => !EXPIRED_COST_DPLS.has(x)),
-          '',
-        ].filter(x => x !== null))]
+        ].filter(x => x !== null && x !== ''))].slice(0, 2)
       : [null];
 
     const isCostPath = opt?.costShown === true && mSid && /\/cost(?:\?|$)/i.test(raw);
@@ -1180,22 +1271,38 @@ ipcMain.handle('host:protoFetch', async (e, u, opt = {}) => {
     let discoveredOnce = false;
     for (let i = 0; i < dplCandidates.length; i++) {
       const skewDpl = dplCandidates[i];
-      if (opt?.costShown === true) {
+      if (opt?.costShown === true && (ses.__appliedSkewDpl !== skewDpl || nowMs - (ses.__costCookieSetAt || 0) > 600000)) {
         ses.__appliedSkewDpl = skewDpl;
         ses.__costCookieSetAt = nowMs;
-        await ses.cookies.set({
-          url: 'https://arena.ai',
-          name: 'ph-toolbar-overrides',
-          value: costValue,
-          path: '/',
-          secure: true,
-          sameSite: 'lax',
-          expirationDate: Math.floor(nowMs / 1000) + 1800,
-        }).catch(() => {});
-        await ses.cookies.remove('https://arena.ai', '__vdpl').catch(() => {});
-        await ses.cookies.remove('https://arena.ai/', '__vdpl').catch(() => {});
-        if (skewDpl) {
-          await ses.cookies.set({
+        // 移除可能存在的 canary httpOnly arena_build_bucket，强制锁定 stable + 2-key ph-toolbar-overrides + __vdpl
+        try {
+          for (const c of allCookies || []) {
+            if (c && c.name === 'arena_build_bucket' && (c.value !== 'stable' || c.httpOnly)) {
+              const host = String(c.domain || 'arena.ai').replace(/^\.+/, '');
+              await ses.cookies.remove('https://' + host + (c.path || '/'), 'arena_build_bucket').catch(() => {});
+            }
+          }
+        } catch {}
+        await Promise.all([
+          ses.cookies.set({
+            url: 'https://arena.ai',
+            name: 'arena_build_bucket',
+            value: 'stable',
+            path: '/',
+            secure: true,
+            sameSite: 'lax',
+            expirationDate: Math.floor(nowMs / 1000) + 31536000,
+          }).catch(() => {}),
+          ses.cookies.set({
+            url: 'https://arena.ai',
+            name: 'ph-toolbar-overrides',
+            value: costValue,
+            path: '/',
+            secure: true,
+            sameSite: 'lax',
+            expirationDate: Math.floor(nowMs / 1000) + 2592000,
+          }).catch(() => {}),
+          skewDpl ? ses.cookies.set({
             url: 'https://arena.ai',
             name: '__vdpl',
             value: skewDpl,
@@ -1203,14 +1310,18 @@ ipcMain.handle('host:protoFetch', async (e, u, opt = {}) => {
             secure: true,
             sameSite: 'lax',
             expirationDate: Math.floor(nowMs / 1000) + 31536000,
-          }).catch(() => {});
-        }
+          }).catch(() => {}) : Promise.all([
+            ses.cookies.remove('https://arena.ai', '__vdpl').catch(() => {}),
+            ses.cookies.remove('https://arena.ai/', '__vdpl').catch(() => {}),
+          ]),
+        ]);
       }
       const filteredCookies = Array.isArray(allCookies)
-        ? allCookies.filter(c => c && c.name && (opt?.costShown !== true || (c.name !== '__vdpl' && c.name !== 'ph-toolbar-overrides')))
+        ? allCookies.filter(c => c && c.name && (opt?.costShown !== true || (c.name !== '__vdpl' && c.name !== 'ph-toolbar-overrides' && c.name !== 'arena_build_bucket')))
         : [];
       const cookieParts = filteredCookies.map(c => c.name + '=' + c.value);
       if (opt?.costShown === true) {
+        cookieParts.push('arena_build_bucket=stable');
         cookieParts.push('ph-toolbar-overrides=' + costValue);
         if (skewDpl) cookieParts.push('__vdpl=' + skewDpl);
       }
@@ -1219,16 +1330,17 @@ ipcMain.handle('host:protoFetch', async (e, u, opt = {}) => {
         Accept: opt?.accept || 'application/json',
         Referer: referer,
         ...(cookieHeader ? { Cookie: cookieHeader } : {}),
-        ...(opt?.costShown === true && skewDpl ? { 'x-deployment-id': skewDpl } : {}),
         ...(opt?.headers && typeof opt.headers === 'object' ? opt.headers : {}),
+        ...(opt?.costShown === true && skewDpl ? { 'x-deployment-id': skewDpl } : {}),
       };
       if (opt?.body !== undefined && !headers['Content-Type'] && !headers['content-type']) {
         headers['Content-Type'] = 'application/json';
       }
       const curPath = pathCandidates[0];
-      const curUrl = (opt?.costShown === true && skewDpl && i > 0)
-        ? ('https://arena.ai' + curPath + (curPath.includes('?') ? '&' : '?') + 'dpl=' + encodeURIComponent(skewDpl))
-        : ('https://arena.ai' + curPath);
+      const baseCostPath = (opt?.costShown === true)
+        ? curPath.replace(/([?&])dpl=dpl_[A-Za-z0-9]{16,48}(?:&|$)/gi, (m, p1) => (m.endsWith('&') ? p1 : '')).replace(/[?&]$/, '')
+        : curPath;
+      const curUrl = 'https://arena.ai' + baseCostPath;
       const r = await ses.fetch(curUrl, {
         method,
         headers,
@@ -1239,7 +1351,21 @@ ipcMain.handle('host:protoFetch', async (e, u, opt = {}) => {
         signal: ctl.signal,
       });
       const apiDpl = r.headers.get('x-arena-api-deployment');
-      if (apiDpl && !CORE_COST_DPLS.has(apiDpl)) EXPIRED_COST_DPLS.add(apiDpl);
+      if (apiDpl && r.status === 403 && !CORE_COST_DPLS.has(apiDpl)) EXPIRED_COST_DPLS.add(apiDpl);
+      if (r.status === 429 && opt?.costShown === true) {
+        try {
+          await ses.cookies.set({
+            url: 'https://arena.ai',
+            name: 'arena_visit_id',
+            value: crypto.randomUUID(),
+            path: '/',
+            secure: true,
+            sameSite: 'lax',
+            expirationDate: Math.floor(Date.now() / 1000) + 86400 * 30,
+          }).catch(() => {});
+          ses.__cookieCacheAt = 0;
+        } catch {}
+      }
       if (r.headers.get('set-cookie')) {
         ses.__cookieCacheAt = 0;
         try { await storeSetCookies(ses, r); } catch {}
@@ -1260,26 +1386,18 @@ ipcMain.handle('host:protoFetch', async (e, u, opt = {}) => {
         rememberCostDpl(skewDpl, true);
         if (sidVal && curPath) activeCostPathTpl = curPath.replace(sidVal, '{sid}');
       }
-      if (r.status !== 403 && r.status !== 404) break;
-      if (skewDpl && r.status === 403) demoteCostDpl(skewDpl);
+      if (r.status !== 403 && !(opt?.costShown === true && r.status === 409)) break;
+      if (skewDpl && (r.status === 403 || (opt?.costShown === true && r.status === 409))) demoteCostDpl(skewDpl);
       if (i === dplCandidates.length - 1 && opt?.costShown === true && !discoveredOnce) {
         discoveredOnce = true;
-        const beforeLen = COST_SKEW_DPLS.length;
-        const fresh = await discoverFreshCostDpl(ses, true);
-        if (fresh && !dplCandidates.includes(fresh)) dplCandidates.push(fresh);
-        for (const cand of COST_SKEW_DPLS) {
-          if (cand && !EXPIRED_COST_DPLS.has(cand) && !dplCandidates.includes(cand)) {
-            dplCandidates.push(cand);
-          }
-        }
-        if (COST_SKEW_DPLS.length > beforeLen) lastResp.triedAllSkew = false;
+        void discoverFreshCostDpl(ses, false).catch(() => {});
       }
     }
-    if (lastResp && (lastResp.status === 403 || lastResp.status === 404) && isCostPath && pathCandidates.length > 1) {
+    if (false && lastResp && lastResp.status === 404 && isCostPath && pathCandidates.length > 1) {
       const bestDpl = activeCostSkewDpl || COST_SKEW_DPLS[0] || '';
       for (let pIdx = 1; pIdx < pathCandidates.length; pIdx++) {
         const altPath = pathCandidates[pIdx];
-        const altUrl = 'https://arena.ai' + altPath + (bestDpl ? ((altPath.includes('?') ? '&' : '?') + 'dpl=' + encodeURIComponent(bestDpl)) : '');
+        const altUrl = 'https://arena.ai' + altPath;
         const filteredCookies = Array.isArray(allCookies)
           ? allCookies.filter(c => c && c.name && c.name !== '__vdpl' && c.name !== 'ph-toolbar-overrides')
           : [];
@@ -2105,25 +2223,27 @@ ipcMain.handle('host:getCred', e => { const a = winAcct(e.sender); if (!a || a.n
 function promoteRegPw(a, email) {
   const k = 'regpw@' + a.id, p = DB.shared?.[k];
   const mt = DB.shared?.['mailtok@' + a.id];
-  const em = String(email || '').trim().toLowerCase();
+  const em = String(email || '').trim();
+  const richEm = AuthFlow.pickRichEmail(a.email || a.name || mt?.email || p?.email, em);
   if (p) {
     if (Date.now() - (p.at || 0) > 24 * 3600e3) { delete DB.shared[k]; saveSoon(); return; }
-    if (p.email && em && p.email !== em) return;
+    if (p.email && em && !AuthFlow.sameMailbox(p.email, em)) return;
     if (p.pw && (p.src === 'web' || !a.pw)) {
-      a.pw = p.pw; a.noAuto = false; if (!a.email && em) a.email = em;
+      a.pw = p.pw; a.noAuto = false; if (!a.email && richEm) a.email = richEm;
       delete DB.shared[k]; saveSoon(); return;
     }
   }
-  if (!a.pw && mt?.pw && (!mt.email || !em || String(mt.email).trim().toLowerCase() === em)) {
-    a.pw = mt.pw; a.noAuto = false; if (!a.email && em) a.email = em; saveSoon();
+  if (!a.pw && mt?.pw && (!mt.email || !em || AuthFlow.sameMailbox(mt.email, em))) {
+    a.pw = mt.pw; a.noAuto = false; if (!a.email && richEm) a.email = richEm; saveSoon();
   }
 }
 ipcMain.handle('host:noteAccount', (e, o) => {
   const a = winAcct(e.sender); if (!a || !o || typeof o !== 'object') return false;
   const st = { ...(a.status || {}) };
   for (const k of ['loggedIn', 'ip', 'loc']) if (o[k] !== undefined) st[k] = o[k];
-  if (o.email) st.me = String(o.email);
-  if (o.loggedIn === true && o.email) promoteRegPw(a, String(o.email));
+  const richNoteEmail = o.email ? AuthFlow.pickRichEmail(a.email || a.name, String(o.email)) : '';
+  if (richNoteEmail) st.me = richNoteEmail;
+  if (o.loggedIn === true && richNoteEmail) promoteRegPw(a, richNoteEmail);
   if (o.gacha && typeof o.gacha === 'object') {
     const g = o.gacha; st.gacha = { busy: !!g.busy, cap: !!g.cap, done: +g.done || 0, total: g.total === '∞' ? '∞' : +g.total || 0, hits: +g.hits || 0, phase: String(g.phase || '').slice(0, 80), err: String(g.err || '').slice(0, 160), last: String(g.last || '').slice(0, 80), status: String(g.status || '').slice(0, 20), at: Date.now(),
       log: (Array.isArray(g.log) ? g.log : []).slice(-12).map(x => ({ no: +x.no || 0, draw: +x.draw || 0, at: +x.at || 0, model: String(x.model || '').slice(0, 80), tier: String(x.tier || '').slice(0, 20), verdict: String(x.verdict || '').slice(0, 20), archived: !!x.archived, note: String(x.note || '').slice(0, 120) })) };
@@ -2143,7 +2263,7 @@ ipcMain.handle('host:noteAccount', (e, o) => {
   if (o.quota && typeof o.quota === 'object') st.quota = { ...(st.quota || {}), ...Object.fromEntries(Object.entries(o.quota).filter(([, v]) => v != null)) };
   st.at = Date.now(); a.status = st;
   if (o.loggedIn && a.noAuto) a.noAuto = false;
-  if (!a.email && o.email && !byEmail(o.email)) a.email = String(o.email);
+  if (!a.email && richNoteEmail && !byEmail(richNoteEmail)) a.email = richNoteEmail;
   saveSoon(); return true;
 });
 // 推理分样本：所有账号共用一份（各账号窗口各自记录，统一在这里合并），{ 型号: [样本] } + 清除记录（清除时间之前的样本不再合并回来）
@@ -2417,8 +2537,67 @@ ipcMain.handle('host:shared', (e, k, v) => {
     return true;
   }
   // gacha@<账号id>：每个账号自己的抽卡设置
-  if (!['prefs', 'gacha', 'nodes', 'nodesubs', 'proxyips', 'pippool', 'archbl', 'gold', 'pelshots', 'pelican'].includes(k) && !/^(gacha|draft|gtok|signup|mailtok|webreg)@[\w-]{1,64}$/.test(String(k))) return null;
+  if (!['prefs', 'gacha', 'nodes', 'nodesubs', 'proxyips', 'pippool', 'archbl', 'gold', 'pelshots', 'pelican', 'habitLearnBank', 'habitCalibration'].includes(k) && !/^(gacha|draft|gtok|signup|mailtok|webreg)@[\w-]{1,64}$/.test(String(k))) return null;
   DB.shared = DB.shared || {};
+  if (k === 'habitLearnBank') {
+    const bankFile = path.join(ROOT, 'shared', 'habitLearnBank.json');
+    const mergeBankSamples = (a, b) => {
+      const bySid = new Map();
+      for (const s of [...(Array.isArray(a) ? a : []), ...(Array.isArray(b) ? b : [])]) {
+        if (!s || !s.model || !Array.isArray(s.vec)) continue;
+        const key = s.sid || (s.model + ':' + (s.at || 0));
+        const prev = bySid.get(key);
+        const sConf = Boolean(s.userConfirmed || s.importedFromDiag);
+        const pConf = Boolean(prev?.userConfirmed || prev?.importedFromDiag);
+        if (!prev || (sConf && !pConf) || (sConf === pConf && (((s.weight || 1) > (prev.weight || 1)) || ((s.at || 0) >= (prev.at || 0))))) {
+          bySid.set(key, prev ? { ...prev, ...s, meta: s.meta || prev.meta } : s);
+        }
+      }
+      return [...bySid.values()].sort((x, y) => (Number(Boolean(y.userConfirmed || y.importedFromDiag)) - Number(Boolean(x.userConfirmed || x.importedFromDiag))) || ((y.at || 0) - (x.at || 0))).slice(0, 1200);
+    };
+    const mergeCalibObj = (a, b) => {
+      const base = (a && typeof a === 'object') ? a : {};
+      const inc = (b && typeof b === 'object') ? b : {};
+      const protoCentroids = { ...(base.protoCentroids || {}) };
+      for (const [mk, rc] of Object.entries(inc.protoCentroids || {})) {
+        const lc = protoCentroids[mk];
+        if (!lc || (rc?.updatedAt || 0) >= (lc?.updatedAt || 0)) protoCentroids[mk] = rc;
+      }
+      const scoreOffsets = { ...(base.scoreOffsets || {}) };
+      for (const [mk, rs] of Object.entries(inc.scoreOffsets || {})) {
+        const ls = scoreOffsets[mk];
+        if (!ls || (rs?.updatedAt || 0) >= (ls?.updatedAt || 0)) scoreOffsets[mk] = rs;
+      }
+      return { v: 1, protoCentroids, scoreOffsets, updatedAt: Math.max(base.updatedAt || 0, inc.updatedAt || 0, Date.now()) };
+    };
+    let diskSamples = [], diskCalib = {};
+    try {
+      if (fs.existsSync(bankFile)) {
+        const d = JSON.parse(fs.readFileSync(bankFile, 'utf8'));
+        if (Array.isArray(d?.samples)) diskSamples = d.samples;
+        if (d?.calibration && typeof d.calibration === 'object') diskCalib = d.calibration;
+      }
+    } catch {}
+    if (v === undefined) {
+      const merged = mergeBankSamples(diskSamples, DB.shared.habitLearnBank?.samples);
+      const mergedCal = mergeCalibObj(diskCalib, DB.shared.habitLearnBank?.calibration);
+      return { v: 2, updatedAt: DB.shared.habitLearnBank?.updatedAt || Date.now(), samples: merged, calibration: mergedCal };
+    }
+    if (v && typeof v === 'object') {
+      const merged = v.replace === true
+        ? mergeBankSamples([], v.samples)
+        : mergeBankSamples(mergeBankSamples(diskSamples, DB.shared.habitLearnBank?.samples), v.samples);
+      const mergedCal = v.replace === true && (!v.samples || !v.samples.length)
+        ? (v.calibration || {})
+        : mergeCalibObj(mergeCalibObj(diskCalib, DB.shared.habitLearnBank?.calibration), v.calibration);
+      const nextBank = { v: 2, updatedAt: Date.now(), samples: merged, calibration: mergedCal };
+      DB.shared.habitLearnBank = nextBank;
+      try { fs.mkdirSync(path.dirname(bankFile), { recursive: true }); fs.writeFileSync(bankFile, JSON.stringify(nextBank, null, 2)); } catch {}
+      saveSoon();
+      return true;
+    }
+    return false;
+  }
   if (String(k).startsWith('signup@')) {
     const a = acct(k.slice(7)), flow = require('../ui/auth-flow');
     if (!a) return { error: '注册账号不存在' };
@@ -2480,6 +2659,17 @@ ipcMain.handle('host:shared', (e, k, v) => {
       cmd.goldAt = v?.goldAt || Date.now();
     }
     if (prevPrefs?.acctCheckHours !== v?.acctCheckHours && v?.acctCheckHours != null) cmd.acctCheckHours = v.acctCheckHours;
+    const pinned = String(v?.pinDpl || '').trim();
+    if (/^dpl_[A-Za-z0-9]{16,48}$/.test(pinned)) {
+      EXPIRED_COST_DPLS.delete(pinned);
+      rememberCostDpl(pinned, true);
+    } else if (prevPrefs?.pinDpl && !pinned) {
+      rememberCostDpl('dpl_3UbNvzoXfT6iNZqgBa7GjsGeKLaT', true);
+    }
+    if (prevPrefs?.pinDpl !== v?.pinDpl || prevPrefs?.autoCostDpl !== v?.autoCostDpl) {
+      cmd.pinDpl = v?.pinDpl || '';
+      cmd.autoCostDpl = v?.autoCostDpl || '';
+    }
     if (Object.keys(cmd).length) for (const w of BrowserWindow.getAllWindows()) if (!w.isDestroyed() && w.webContents !== e.sender) { try { w.webContents.send('anc-cmd', cmd); } catch {} }
   }
   return true;
@@ -2710,7 +2900,7 @@ ipcMain.handle('host:routeApply', async (e, o) => {
   routeActor(e,true);const wc=e.sender,source=wc.getURL(),result=await applyRoute(e,o);
   if(result.ok){
     routeProofs.consume(o.ticket);
-    if(o.manual&&!browserRouteOwners.has(wc)&&!source.startsWith('file:'))setTimeout(()=>{
+    if(o.manual&&!browserRouteOwners.has(wc)&&!wc.__clientShell&&!source.startsWith('file:')&&!source.startsWith(UI_URL))setTimeout(()=>{
       if(!wc.isDestroyed()&&winAcct(wc)?.id===o.id&&(wc.getURL()===source||wc.getURL()==='about:blank'))void navigateBrowser(wc,source);
     },100);
   }

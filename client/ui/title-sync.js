@@ -25,9 +25,10 @@ const TitleSync = (() => {
   function restored(sid) {
     const x = cache.get(sid);
     if (x?.generation === TitleCipher.generation) return x.meta;
-    if (typeof TitleCipher !== 'undefined' && typeof TitleCipher.decodeGoldPrefix === 'function' && typeof History !== 'undefined') {
-      const e = History.byId?.(sid);
-      const gp = e?.title ? TitleCipher.decodeGoldPrefix(e.title) : null;
+    if (typeof TitleCipher !== 'undefined' && typeof TitleCipher.decodeGoldPrefix === 'function') {
+      const e = typeof History !== 'undefined' ? History.byId?.(sid) : null;
+      const rawTitle = e?.title || (typeof Notes !== 'undefined' ? Notes.all?.[sid]?.c : '') || '';
+      const gp = rawTitle ? TitleCipher.decodeGoldPrefix(rawTitle) : null;
       if (gp) {
         if (gp.fav && typeof Fav !== 'undefined' && !Fav.has(sid) && !(Fav.unfavAt && Fav.unfavAt[sid])) Fav.setQuiet(sid, true);
         if (gp.gold && typeof Gold !== 'undefined' && Gold.noteRestoredChat) Gold.noteRestoredChat(sid, gp);
@@ -82,9 +83,13 @@ const TitleSync = (() => {
   }
   function build0(sid) {
     const mi = Models.get(sid), prior = restored(sid);
+    if (mi && mi.name && !/^(未识别|未知型号|待定)$/.test(String(mi.name).trim()) && (mi.habitInferred || mi.reverseInferred || mi.billingProbe || mi.userCorrected) && (mi.pendingConfirm || mi.guess)) {
+      mi.pendingConfirm = false;
+      mi.guess = false;
+    }
     const n = Notes.all[sid] || (mi && !mi.pendingConfirm && !mi.guess && mi.name ? Notes.rec(sid) : null);
     if (!n) return null;
-    if(n.modelData && n.modelStamp===modelStamp(mi))return {...n.modelData,time:Number(n.t)||n.modelData.time,note:String(n.n||''),revision:Number(n.modifiedAt)||n.modelData.revision};
+    if(n.modelData && n.modelData.model && !/^(未识别|未知型号|待定)$/.test(String(n.modelData.model).trim()) && n.modelStamp===modelStamp(mi))return {...n.modelData,time:Number(n.t)||n.modelData.time,note:String(n.n||''),revision:Number(n.modifiedAt)||n.modelData.revision};
     const entry=History.byId(sid), raw=entry?.localTitle || (!TitleCipher.isEncoded(entry?.title) ? entry?.title : '') || '';
     const fp = mi?.fingerprint, parsed = ConversationLabels.parse(noteBase(raw));
     const measured=fp?ConversationLabels.fingerprintData(mi):null;
@@ -138,6 +143,24 @@ const TitleSync = (() => {
         const had = Gold.restoredChats?.has?.(e.id);
         Gold.noteRestoredChat(e.id, gp);
         if (!had) changed = true;
+      }
+      if (gp.model && !/^(未识别|未知型号|待定)$/.test(String(gp.model).trim()) && typeof Models !== 'undefined') {
+        const cur = Models.get(e.id);
+        if (!cur || cur.pendingConfirm || !cur.name || /^(未识别|未知型号|待定)$/.test(String(cur.name).trim())) {
+          const canon = (typeof Strength !== 'undefined' && Strength.canon) ? Strength.canon(gp.model) : gp.model;
+          Models.set(e.id, {
+            ...(cur || {}),
+            name: canon,
+            candidateName: canon,
+            reverseScore: cur?.reverseScore ?? gp.score ?? undefined,
+            est: cur?.est || (gp.score != null ? { score: gp.score, source: 'prefix' } : undefined),
+            fromTitle: !cur?.habitInferred && !cur?.reverseInferred && !cur?.billingProbe && !cur?.userCorrected,
+            sure: true,
+            guess: false,
+            pendingConfirm: false,
+          });
+          changed = true;
+        }
       }
     }
     return changed;

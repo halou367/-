@@ -540,6 +540,17 @@ test('v0.13.158: halou367 update worker repo, send-message timeout fix, >2 netwo
   assert.ok(envRefSrc.includes('this.justRefreshed = true;') && envRefSrc.includes("location.replace('/robots.txt')"));
   assert.ok(envChkSrc.includes('UI.recoverFromBrowseMode()'));
   assert.ok(ripSrc.includes('const liveOk=Boolean(ip&&!IP.err&&!rttTimeout);'));
+
+  // 7) Reverse-inference speed optimizations: branch-and-bound pruning + effortMemo/evalMemo + unnarrowedCandidates + zero-SQLite /cost cookie guard + summaryCache
+  const prSrc = fs.readFileSync(path.join(ROOT, 'ui', 'arena-trace', 'pricing.js'), 'utf8');
+  const bpSrc = fs.readFileSync(path.join(ROOT, 'ui', 'billing-probe.js'), 'utf8');
+  const mainSrc = fs.readFileSync(path.join(ROOT, 'src', 'main.js'), 'utf8');
+  assert.ok(prSrc.includes('const evalMemo = new Map();') && prSrc.includes('const effortMemo = new Map();'));
+  assert.ok(prSrc.includes('unnarrowedCandidates,'));
+  assert.ok(bpSrc.includes('let unnarrowedList = result.baseMatch?.unnarrowedCandidates;'));
+  assert.ok(bpUiSrc.includes('const summaryCache = new Map();'));
+  assert.ok(bpUiSrc.includes('const ensurePelLoaded = () => {'));
+  assert.ok(mainSrc.includes("if (opt?.costShown === true && (ses.__appliedSkewDpl !== skewDpl || nowMs - (ses.__costCookieSetAt || 0) > 600000))"));
 });
 
 

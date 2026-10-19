@@ -17,7 +17,19 @@ const noteParseTime = s => { const m = /^(\d{1,2})-(\d{1,2})-(\d{1,2}):(\d{2})$/
 const Notes = {
   // { sid: { n: 备注, t: 最近一次自己发送的时间, c: 已写到云端的名字, e: 写失败放弃的名字, f: 失败次数, nx: 下次重试 } }
   all: (() => {
-    const o = Store.get('notes2', null); if (o && typeof o === 'object') return o;
+    const o = Store.get('notes2', null);
+    if (o && typeof o === 'object') {
+      let dirty = false;
+      for (const n of Object.values(o)) {
+        if (n && n.modelData && (!n.modelData.model || /^(未识别|未知型号|待定)$/.test(String(n.modelData.model).trim()))) {
+          delete n.modelData;
+          delete n.modelStamp;
+          dirty = true;
+        }
+      }
+      if (dirty) try { Store.set('notes2', o); } catch {}
+      return o;
+    }
     const old = Store.get('notes', {}), out = {};   // v0.3 / v0.4 的旧备注（纯文本）迁移过来
     for (const [k, v] of Object.entries(old || {})) if (typeof v === 'string' && v) out[k] = { n: v.slice(0, 60), t: 0 };
     return out;
@@ -96,19 +108,21 @@ const Titles = {
   // 模型段：识别结果（去掉 -vertex 等后缀）；还没识别出来时用会话名里原来的模型段 / 原名
   model(sid) {
     const mi = Models.get(sid);
-    if (mi?.pendingConfirm) return '';
-    if(typeof TitleSync!=='undefined'){const meta=TitleSync.build(sid);if(meta)return TitleSync.modelLabel(meta);}
-    let m = (!mi?.guess && mi?.name) || '';
+    const hasValidMiName = !!(mi?.name && !/^(未识别|未知型号|待定)$/.test(String(mi.name).trim()));
+    if (mi?.pendingConfirm && !hasValidMiName) return '';
+    if(typeof TitleSync!=='undefined'){const meta=TitleSync.build(sid);if(meta && meta.model && meta.model !== '未识别')return TitleSync.modelLabel(meta);}
+    let m = ((!mi?.guess || mi?.habitInferred || mi?.reverseInferred || mi?.billingProbe || mi?.userCorrected) && hasValidMiName ? mi.name : '') || '';
     if (!m) { const e = History.byId(sid); m = noteBase(e?.title || Chats.get(sid)?.title || ''); }
     m = String(Strength.canon(m) || '').replace(/\s+/g, ' ').trim();
     const fp = mi?.fingerprint;
     if (fp) return Fingerprint.describe({ name: m, fingerprint: fp }).slice(0, 90);
     return ConversationLabels.label(null,m).slice(0,90);
   },
-  known(sid) { const m = Models.get(sid); return !!(m && !m.pendingConfirm && ((!m.guess && m.name) || m.fingerprint)); },
+  known(sid) { const m = Models.get(sid); const hasValidName = !!(m?.name && !/^(未识别|未知型号|待定)$/.test(String(m.name).trim())); return !!(m && (!m.pendingConfirm || hasValidName) && (((!m.guess || m.habitInferred || m.reverseInferred || m.billingProbe || m.userCorrected) && hasValidName) || m.fingerprint)); },
   want(sid) {
     const n = Notes.all[sid]; if (!n) return '';
-    if (Models.get(sid)?.pendingConfirm) return '';
+    const mi = Models.get(sid);
+    if (mi?.pendingConfirm && !(mi?.name && !/^(未识别|未知型号|待定)$/.test(String(mi.name).trim()))) return '';
     const head = (this.model(sid) || '未识别') + '/' + noteFmt(n.t || now());
     return n.n ? head + '/' + n.n : head;
   },
@@ -124,7 +138,8 @@ const Titles = {
   // 识别 / 校准指纹后：这个对话优先同步，不等全局空闲，也不排在批量迁移后面
   touch(sid) {
     if (!sid) return;
-    if (Models.get(sid)?.pendingConfirm) { UI.renderListSoon?.(); UI.renderTabs?.(); return; }
+    const mi = Models.get(sid);
+    if (mi?.pendingConfirm && !(mi?.name && !/^(未识别|未知型号|待定)$/.test(String(mi.name).trim()))) { UI.renderListSoon?.(); UI.renderTabs?.(); return; }
     this.prio.add(sid); if (!Notes.owns(sid)) Notes.rec(sid); if(typeof TitleSync!=='undefined')TitleSync.dirty(sid); Notes.save(); this.local(sid); this.kick();
   },
   capture(sid,at) {
@@ -136,6 +151,8 @@ const Titles = {
   },
   // 本地先显示新名字（左侧卡片、标签页立即变）
   local(sid) {
+    if (!sid) return;
+    if (!Notes.owns(sid) && this.known(sid)) { Notes.rec(sid); Notes.save(); }
     const want = this.want(sid); if (!want) return;
     const e = History.byId(sid); if (e && e.title !== want) { e.localTitle = want; }
     UI.renderListSoon?.(); UI.renderTabs?.();
@@ -199,7 +216,7 @@ const Titles = {
   },
   // 显示用：{ vid, model, note, time, title }
   view(sid, fallback) {
-    const cloudTitle = (sid && History.byId(sid)?.title) || Chats.get(sid)?.title || fallback || '';
+    const cloudTitle = (sid && History.byId(sid)?.title) || Chats.get(sid)?.title || (sid && Notes.all?.[sid]?.c) || fallback || '';
     const gp = typeof TitleCipher !== 'undefined' && TitleCipher.decodeGoldPrefix ? TitleCipher.decodeGoldPrefix(cloudTitle) : null;
     if (sid && gp) {
       if (gp.fav && typeof Fav !== 'undefined' && !Fav.has(sid) && !(Fav.unfavAt && Fav.unfavAt[sid])) Fav.setQuiet(sid, true);
@@ -209,11 +226,13 @@ const Titles = {
     const raw = (typeof TitleCipher !== 'undefined' && TitleCipher.isGoldPrefixed?.(raw0)) ? (TitleCipher.stripGoldPrefix(raw0) || '新对话') : raw0;
     const sp = splitNote(raw), mi = sid ? Models.get(sid) : null;
     const note = sid ? Notes.get(sid) || sp.note : sp.note;
-    if (mi?.pendingConfirm) {
+    const hasValidMiName = !!(mi?.name && !/^(未识别|未知型号|待定)$/.test(String(mi.name).trim()));
+    if (mi?.pendingConfirm && !hasValidMiName && !gp?.model) {
       return { vid: '', model: '', pendingConfirm: true, note, time: sp.time, title: raw, plain: '请继续沟通', gold: !!(gp?.gold || (sid && typeof Gold !== 'undefined' && Gold.hasChat?.(sid))) };
     }
     const meta=sid&&typeof TitleSync!=='undefined'?(TitleSync.build(sid)||TitleSync.restored(sid)):null;
-    const model = meta ? TitleSync.modelLabel(meta) : (gp?.model ? ConversationLabels.format({ name: gp.model, confidence: null, score: gp.score ?? null }) : (!mi?.name&&typeof TitleCipher!=='undefined'&&TitleCipher.isEncoded(raw)?'加密名称（待解码）':ConversationLabels.label(mi,sp.composite?sp.base:raw)));
+    const validMeta = (meta && meta.model && !/^(未识别|未知型号|待定)$/.test(String(meta.model).trim())) ? meta : null;
+    const model = validMeta ? TitleSync.modelLabel(validMeta) : (gp?.model ? ConversationLabels.format({ name: gp.model, confidence: null, score: gp.score ?? null }) : (!hasValidMiName&&typeof TitleCipher!=='undefined'&&TitleCipher.isEncoded(raw)?'加密名称（待解码）':ConversationLabels.label(mi,sp.composite?sp.base:raw)));
     const vid = Brand.of(model) || Brand.of(sp.base) || '';
     return { vid, model: model || '', note, time: sp.time, title: raw, plain: !model ? ConversationLabels.label(null, sp.composite ? sp.base : raw) : '', gold: !!(gp?.gold || (sid && typeof Gold !== 'undefined' && Gold.hasChat?.(sid))) };
   },

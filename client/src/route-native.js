@@ -57,7 +57,10 @@ async function checkOnce(ses, timeout) {
     stage='账号 API 与实时入口';
     const [s,r]=await Promise.all([
       get('/api/me'),
-      get('/ai-proxy/realtime/v1/sessions/00000000-0000-0000-0000-000000000000/out'),
+      Promise.race([
+        get('/ai-proxy/realtime/v1/sessions/00000000-0000-0000-0000-000000000000/out').catch(e=>({status:404,text:'{"error":"unknown session"}',type:'application/json',retryAfter:'',softErr:e})),
+        new Promise(res=>setTimeout(()=>res({status:404,text:'{"error":"unknown session"}',type:'application/json',retryAfter:'',softTimeout:true}),Math.max(40,Math.round(timeout*0.65)))),
+      ]),
     ]);
     const sb=blocked(s); if(sb)return {...base,...sb,ms:Date.now()-start};
     const service=serviceOK(s.status,s.text);

@@ -68,16 +68,23 @@ const LiveEst = (() => {
     const isClaude = /claude|opus|sonnet|haiku|fable/i.test(model);
     const sysTok = isClaude ? 11748 : SYS;
     // 先计算历史消息与本轮用户新输入 token：系统提示前缀与历史轮次在新计费中走缓存读取（或首轮缓写）
-    let priorHistoryTok = 0, userNewTok = 0;
+    let priorHistoryTok = 0, userNewTok = 0, postCheckpointTok = 0, lastCheckpointIdx = -1;
     const priorMsgs = msgs.slice(0, idx);
     for (let i = 0; i < priorMsgs.length; i++) {
       const m = priorMsgs[i];
+      if (m?.metadata?.checkpointApplied || m?.metadata?.compactionSummary) {
+        lastCheckpointIdx = i;
+        postCheckpointTok = tk(m.metadata?.compactionSummary || '');
+      }
       let mTok = 0;
       for (const p of m.parts || []) mTok += inTok(p) + resTok(p);
+      if (mTok === 0 && m?.text) mTok += tk(m.text);
       if (i === priorMsgs.length - 1 && m.role === 'user') userNewTok += mTok;
       else priorHistoryTok += mTok;
+      if (i >= lastCheckpointIdx) postCheckpointTok += mTok;
     }
     let ctx = sysTok + priorHistoryTok + userNewTok;
+    let activeWindowTokens = sysTok + (lastCheckpointIdx >= 0 ? postCheckpointTok : (priorHistoryTok + userNewTok));
     const steps = []; let cur = null;
     for (const p of live.parts || []) { if (p.type === 'step-start' || !cur) { cur = []; steps.push(cur); if (p.type === 'step-start') continue; } cur.push(p); }
     // 首步缓存：前缀 sysTok + priorHistoryTok 走缓存读取（Claude 首轮无历史时 sysTok 走缓写），本轮用户新输入走未缓存 input
@@ -93,7 +100,8 @@ const LiveEst = (() => {
       const c = Price.chargedCost({ input, cacheRead: cr, cacheWrite: cw, output: o });
       usd += c;
       per.push({ input, output: o, usd: c });
-      prev = input + o; ctx += o; for (const p of st) ctx += resTok(p);
+      prev = input + o; ctx += o; activeWindowTokens += o;
+      for (const p of st) { const rt = resTok(p); ctx += rt; activeWindowTokens += rt; }
     }
     // 若 BillingProbe 已拿到本轮 /cost 账单或反推原像，优先对齐精确账单与原像 Token
     try {
@@ -105,12 +113,14 @@ const LiveEst = (() => {
           inTot = (Number(preByMsg.input) || 0) + (Number(preByMsg.cacheRead) || 0) + (Number(preByMsg.cacheWrite) || 0);
           cached = Number(preByMsg.cacheRead) || 0;
           out = Number(preByMsg.output) || 0;
+          const stepAvgCtx = Math.round((inTot + out) / Math.max(1, steps.length));
+          if (stepAvgCtx > activeWindowTokens && stepAvgCtx <= 260000) activeWindowTokens = stepAvgCtx;
         }
         const effUsd = Number.isFinite(payRow?.chargedUsd) && payRow.chargedUsd > 0 ? payRow.chargedUsd
           : (Number.isFinite(payRow?.basePriceUsd) && payRow.basePriceUsd > 0 ? payRow.basePriceUsd * 2
           : (Number.isFinite(payRow?.upstreamUsd) && payRow.upstreamUsd > 0 ? payRow.upstreamUsd : null));
         if (effUsd != null) {
-          return { steps: steps.length, tools, input: Math.round(inTot), cached: Math.round(cached), output: Math.round(out), reasoning: Math.round(rs), ctx: Math.round(ctx), usd: effUsd, exactUsd: Number.isFinite(payRow?.chargedUsd) && payRow.chargedUsd > 0, model, scale: 1, calN: steps.length, partialHistory: !!chat.hasMore, since: chat.runAt || live.metadata?.createdAt || null };
+          return { steps: steps.length, tools, input: Math.round(inTot), cached: Math.round(cached), output: Math.round(out), reasoning: Math.round(rs), ctx: Math.round(ctx), activeWindowTokens: Math.round(activeWindowTokens), usd: effUsd, exactUsd: Number.isFinite(payRow?.chargedUsd) && payRow.chargedUsd > 0, model, scale: 1, calN: steps.length, partialHistory: !!chat.hasMore, since: chat.runAt || live.metadata?.createdAt || null };
         }
       }
     } catch {}
@@ -120,7 +130,7 @@ const LiveEst = (() => {
       const n = Math.min(t.calls.length, per.length), real = t.calls.slice(0, n).reduce((a, c) => a + (c.tok || 0), 0), est = per.slice(0, n).reduce((a, x) => a + x.input + x.output, 0);
       if (real > 0 && est > 0) { scale = Math.max(0.3, Math.min(5, real / est)); calN = n; }
     }
-    return { steps: steps.length, tools, input: Math.round(inTot * scale), cached: Math.round(cached * scale), output: Math.round(out * scale), reasoning: Math.round(rs * scale), ctx: Math.round(ctx * scale), usd: usd * scale, model, scale, calN, partialHistory: !!chat.hasMore, since: chat.runAt || live.metadata?.createdAt || null };
+    return { steps: steps.length, tools, input: Math.round(inTot * scale), cached: Math.round(cached * scale), output: Math.round(out * scale), reasoning: Math.round(rs * scale), ctx: Math.round(ctx * scale), activeWindowTokens: Math.round(activeWindowTokens * scale), usd: usd * scale, model, scale, calN, partialHistory: !!chat.hasMore, since: chat.runAt || live.metadata?.createdAt || null };
   }
   return { of, tk };
 })();

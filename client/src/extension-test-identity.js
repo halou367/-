@@ -14,13 +14,14 @@ function chooseDataRoot({appData,override,isPackaged,executable,sourceDir=__dirn
  return candidate;
 }
 function configure(app){
- const pkgTest=(()=>{try{return Boolean(require('../package.json').extensionCompatibilityTest);}catch{return false;}})();
+ const exe=(()=>{try{return String(app.getPath('exe')||'');}catch{return '';}})();
+ const pkgTest=(()=>{try{const p=require('../package.json');return Boolean(p.extensionCompatibilityTest||p.name==='brana-ai-extension-test'||/-beta\b/i.test(String(p.version||''))||/BranaAI-ExtensionTest/i.test(exe));}catch{return false;}})();
  if(!pkgTest&&!process.env.BRANA_EXTENSION_TEST_DATA&&process.env.BRANA_EXTENSION_PACKAGED_SELF_TEST!=='1'){
   return {title:'Brana AI',dataRoot:null,testBuild:false};
  }
- const root=chooseDataRoot({appData:app.getPath('appData'),override:process.env.BRANA_EXTENSION_TEST_DATA,isPackaged:app.isPackaged,executable:app.getPath('exe')});
+ const root=chooseDataRoot({appData:app.getPath('appData'),override:process.env.BRANA_EXTENSION_TEST_DATA,isPackaged:app.isPackaged,executable:exe});
  fs.mkdirSync(path.join(root,'s'),{recursive:true});
- app.setName('Brana AI Extension Test');app.setPath('userData',root);app.setPath('sessionData',path.join(root,'s'));
+ app.setName('Brana AI Extension Test');try{app.setAppUserModelId?.('ai.arena.client.extensiontest');}catch{}app.setPath('userData',root);app.setPath('sessionData',path.join(root,'s'));
  if(process.env.BRANA_EXTENSION_PACKAGED_SELF_TEST==='1')require('./extension-packaged-self-test').install(app,root);
  return {title:TITLE,dataRoot:root,testBuild:true};
 }

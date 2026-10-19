@@ -66,12 +66,13 @@ test('5-layer lexicographic engine + BigInt quantum preimage solves exact model 
   assert.equal(analyzed5.preimage.totals.output, 3400);
 });
 
-test('UI top-bar revbtn is to the left of fpbtn and pelbtn; dock detailCard puts BillingProbe at top and traceCard at bottom', () => {
+test('UI top-bar removes fpbtn and keeps revbtn to the left of pelbtn; dock detailCard puts BillingProbe at top and traceCard at bottom', () => {
   const viewSrc = fs.readFileSync(path.join(__dirname, '../ui/view.js'), 'utf8');
   const revIdx = viewSrc.indexOf("class: 'ib revbtn'");
   const fpIdx = viewSrc.indexOf("class: 'ib fpbtn'");
   const pelIdx = viewSrc.indexOf("class: 'ib pelbtn'");
-  assert.ok(revIdx > 0 && fpIdx > revIdx && pelIdx > fpIdx);
+  assert.equal(fpIdx, -1, 'topbar fpbtn (测指纹) should be removed');
+  assert.ok(revIdx > 0 && pelIdx > revIdx);
 
   const dockSrc = fs.readFileSync(path.join(__dirname, '../ui/dock.js'), 'utf8');
   const bpCardIdx = dockSrc.indexOf('BillingProbe.card(sid');

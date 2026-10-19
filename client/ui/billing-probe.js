@@ -6,11 +6,43 @@
   const F = root.ArenaFamily || require('./arena-trace/family.js');
   const C = root.ArenaConfidence || require('./arena-trace/confidence.js');
   const S = root.ArenaCatalogSync || require('./arena-trace/catalog-sync.js');
-  const normalize = doc => { try { return Array.isArray(doc?.data) ? P.normalizeAgentCatalog(doc) : []; } catch { return []; } };
-  const MAX_MESSAGES = 50, MAX_SESSIONS = 40;
-  const eligible = m => m?.role === 'assistant' && m.id && !m.metadata?.pending && !m.metadata?.aborted
+  const normalize = doc => {
+    try {
+      if (!Array.isArray(doc?.data)) return [];
+      if (doc._normalizedCatalog && doc._normalizedCatalogLen === doc.data.length) return doc._normalizedCatalog;
+      const out = P.normalizeAgentCatalog(doc);
+      try {
+        Object.defineProperty(doc, '_normalizedCatalog', { value: out, configurable: true });
+        Object.defineProperty(doc, '_normalizedCatalogLen', { value: doc.data.length, configurable: true });
+      } catch {}
+      return out;
+    } catch { return []; }
+  };
+  const MAX_MESSAGES = 3, MAX_SESSIONS = 40;
+  function hasVisibleReasoningText(text) {
+    const s = String(text || '').trim();
+    if (!s || /^\(?(?:模型没有公开思考内容|未公开思考内容|model did not expose reasoning|thinking\.{0,3})\)?$/i.test(s)) return false;
+    let nonWs = 0;
+    for (const ch of s) { if (!/\s/.test(ch) && ++nonWs >= 2) return true; }
+    return false;
+  }
+  const isStopped = m => Boolean(m?.metadata?.aborted || m?.metadata?.openThinkStopped || m?.metadata?.feedback?.interruption === 'stop');
+  const eligible = m => m?.role === 'assistant' && m.id && !m.metadata?.pending && !isStopped(m)
     && !(m.parts || []).some(p => p.type === 'error');
-  const completed = chat => (chat?.messages || []).filter(eligible).slice(-MAX_MESSAGES);
+  const msgHasVisReason = m => (m?.parts || []).some(p => (p?.type === 'reasoning' || p?.type === 'thinking') && hasVisibleReasoningText(p?.text || p?.content || ''));
+  const msgIsClosed = m => !msgHasVisReason(m) && (m?.parts || []).some(p => p?.type === 'reasoning' || p?.type === 'thinking' || /^(?:toolu_|srvtoolu_|call_)/i.test(String(p?.toolCallId || '')));
+  const completed = chat => {
+    const all = (chat?.messages || []).filter(eligible);
+    if (all.length >= 2 && msgIsClosed(all[0])) {
+      const preRoute = [];
+      for (const m of all) {
+        if (msgHasVisReason(m)) break;
+        preRoute.push(m);
+      }
+      if (preRoute.length) return preRoute.slice(-MAX_MESSAGES);
+    }
+    return all.slice(-MAX_MESSAGES);
+  };
   // Reconstruct only the evidence consumed by the upstream pure parser. No prompt/tool result/credential is included.
   function captures(chat, cost, hints = new Map()) {
     const records = [], push = data => records.push({ body: JSON.stringify({ data }) });
@@ -178,13 +210,6 @@
     }
     return {...out,status:match ? 'supported' : 'conflict',text:match ? close.length > 1 ? source + '与计费候选相容，但价格仍不能唯一识别' : source + '与计费首选一致（双来源佐证）' : source + '与计费候选不一致；检查改派、价格变化或指纹误差'};
   }
-  function hasVisibleReasoningText(text) {
-    const s = String(text || '').trim();
-    if (!s || /^\(?(?:模型没有公开思考内容|未公开思考内容|model did not expose reasoning|thinking\.{0,3})\)?$/i.test(s)) return false;
-    let nonWs = 0;
-    for (const ch of s) { if (!/\s/.test(ch) && ++nonWs >= 2) return true; }
-    return false;
-  }
   function extractChatEvidence(chat, family, hints = new Map()) {
     const msgs = completed(chat);
     if (!msgs.length) return {};
@@ -192,11 +217,10 @@
     let visChars = 0, visTokens = 0, exactReasonTokens = 0, reasoningTextLength = 0, toolInputChars = 0, totalStepCount = 0, silentBashLoop = false;
     let sawPelicanWord = Boolean(typeof root.PelicanTest !== 'undefined' && chat?.sid && root.PelicanTest?.result?.(chat.sid));
     let sawSvgTag = false;
-    for (const um of (chat?.messages || [])) {
-      if (um?.role === 'user') {
-        const uTxt = String(um.content || (um.parts || []).map(p => p?.text || '').join(' ') || '');
-        if (/pelican|鹈鹕/i.test(uTxt)) sawPelicanWord = true;
-      }
+    let hasAskUserTool = false, hasWebSearchTool = false;
+    for (const um of (chat?.messages || []).filter(m => m?.role === 'user').slice(-3)) {
+      const uTxt = String(um.content || (um.parts || []).map(p => p?.text || '').join(' ') || '');
+      if (/pelican|鹈鹕/i.test(uTxt)) sawPelicanWord = true;
     }
     const toolIds = [];
     const msgVisTokensById = {}, msgReasonTokensById = {}, msgStepCountById = {}, msgDurationMsById = {};
@@ -230,6 +254,8 @@
           if (tid && !toolIds.includes(tid)) toolIds.push(tid);
           const tn = String(p.toolName || p.name || pt || '');
           if (/bash|shell|exec|run_command/i.test(tn)) bashCount += 1;
+          if (/ask_user|askuser/i.test(tn)) hasAskUserTool = true;
+          if (/web_search|websearch/i.test(tn)) hasWebSearchTool = true;
           const pIn = p.input ?? p.args;
           if (pIn) {
             try {
@@ -398,6 +424,8 @@
       msgDurationMsById,
       silentBashLoop,
       hasPelicanSvg,
+      hasAskUserTool,
+      hasWebSearchTool,
       toolIds,
       toolFamily,
     };
@@ -421,17 +449,21 @@
     let result = P.inferFromCaptures(rows, catalog, { sessionId: chat.sid, vendorHint: narrow, evidence });
     if (narrow.length && !result.baseMatch?.freeTokenMode) {
       const topN = result.baseMatch?.candidates?.[0];
+      let unnarrowedList = result.baseMatch?.unnarrowedCandidates;
       const fullRes = P.inferFromCaptures(rows, catalog, { sessionId: chat.sid, vendorHint: [], evidence });
-      const topF = fullRes.baseMatch?.candidates?.[0];
+      unnarrowedList = fullRes?.baseMatch?.candidates || unnarrowedList;
+      const topF = Array.isArray(unnarrowedList) ? unnarrowedList[0] : null;
+      let usedUnnarrowed = false;
       if (!topN || !topN.diophantinePassed || (topN.scoreResidual ?? topN.residual) > 0.02) {
         if (topF && (!topN || (topF.diophantinePassed && !topN.diophantinePassed) || (topF.scoreResidual ?? topF.residual) + 0.015 < (topN.scoreResidual ?? topN.residual))) {
           result = fullRes;
+          usedUnnarrowed = true;
         }
       }
-      if (result !== fullRes && Array.isArray(result.baseMatch?.candidates) && Array.isArray(fullRes.baseMatch?.candidates)) {
+      if (!usedUnnarrowed && Array.isArray(result.baseMatch?.candidates) && Array.isArray(unnarrowedList)) {
         const haveIds = new Set(result.baseMatch.candidates.map(c => c.id));
         const topEff = Number(topN?.effectiveResidual ?? topN?.scoreResidual ?? topN?.residual ?? 0);
-        for (const fc of fullRes.baseMatch.candidates) {
+        for (const fc of unnarrowedList) {
           if (!fc || haveIds.has(fc.id)) continue;
           if (!fc.impossible && (fc.freeTokens == null || Math.abs(fc.freeTokens) <= 1) && fc.diophantinePassed && (fc.priceResidual ?? fc.residual ?? 1) < 2e-3) {
             const fcEff = Math.max(topEff + 0.004, Number(fc.effectiveResidual ?? fc.scoreResidual ?? fc.residual ?? 0));

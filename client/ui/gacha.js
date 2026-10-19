@@ -253,7 +253,7 @@ const Gacha = (() => {
   const vendorBy = id => VENDORS.find(v => v.id === id) || null;
   const DEFAULTS = {
     vendor: '', customKeyword: '', archiveKeywords: ['super', 'GLM', 'deepseek', 'qwen', 'doubao', 'gpt-5.5', 'spark', 'grok-4.5'],
-    mode: 'autoqa', preferredKeywords: ['6-astra','opus-5.5','fable'], fingerprint: false, skipCompatThinking: true, archiveOn: true, prompt: 'Reply with only the number 9. Do not use any tools.', maxAttempts: 5, intervalMs: 800, stopOnThinking: true, sortSidebar: true, turbo: true, parallel: 3, endless: false, stopOnHit: false, notifyHit: false,
+    mode: 'habit', /* legacy default mode: 'autoqa' */ preferredKeywords: ['6-astra','opus-5.5','fable'], fingerprint: false, skipCompatThinking: true, archiveOn: true, prompt: 'Reply with only the number 9. Do not use any tools.', maxAttempts: 5, intervalMs: 800, stopOnThinking: true, sortSidebar: true, turbo: true, parallel: 3, endless: false, stopOnHit: false, notifyHit: false,
   };
   const TURBO_GAP = 10000; // 急速模式两次新建对话至少间隔 10 秒（更密会被 reCAPTCHA 拦）
   const REASONS = {
@@ -301,9 +301,24 @@ const Gacha = (() => {
     if (!bl && pulled) { const cur = settings(); bl = { sync: true, keywords: cur.archiveKeywords, on: cur.archiveOn, at: now() }; pushBl(); }
     const me = ME(); if (!me || !Host.shared) return;
     try {
-      const v = await Host.shared('gacha@' + me);
-      if (okObj(v)) Store.set('gacha', v);
-      else { const g = await Host.shared('gacha').catch(() => null), seed = okObj(g) ? g : Store.get('gacha', null); if (okObj(seed)) { Store.set('gacha', seed); Host.shared('gacha@' + me, seed)?.catch?.(() => {}); } }
+      let v = await Host.shared('gacha@' + me);
+      if (okObj(v)) {
+        if (!Store.get('gacha:habit_def_' + me, false)) {
+          Store.set('gacha:habit_def_' + me, true);
+          if (!v.mode || v.mode === 'autoqa' || v.mode === 'fingerprint') {
+            v = { ...v, mode: 'habit', fingerprint: false };
+            Host.shared('gacha@' + me, v)?.catch?.(() => {});
+          }
+        }
+        Store.set('gacha', v);
+      } else {
+        const g = await Host.shared('gacha').catch(() => null), seed = okObj(g) ? g : Store.get('gacha', null);
+        if (okObj(seed)) {
+          const nextSeed = (!seed.mode || seed.mode === 'autoqa' || seed.mode === 'fingerprint') ? { ...seed, mode: 'habit', fingerprint: false } : seed;
+          Store.set('gacha', nextSeed);
+          Host.shared('gacha@' + me, nextSeed)?.catch?.(() => {});
+        }
+      }
     } catch {}
     Bus.emit('gacha');
   }
@@ -311,18 +326,18 @@ const Gacha = (() => {
     if (mine(id)) return pullOwn();
     try { let v = await Host.shared('gacha@' + id); if (!okObj(v)) { v = await Host.shared('gacha').catch(() => null); if (!okObj(v)) v = {}; } remote.set(id, v); } catch {}
   }
-  if (!Store.get('gacha:mode_mig_20261016', false)) {
-    Store.set('gacha:mode_mig_20261016', true);
+  if (!Store.get('gacha:mode_mig_20261020_habit', false)) {
+    Store.set('gacha:mode_mig_20261020_habit', true);
     try {
       const curG = Store.get('gacha', null);
-      if (curG && typeof curG === 'object' && (!curG.mode || curG.mode === 'fingerprint')) {
-        Store.set('gacha', { ...curG, mode: 'autoqa', fingerprint: false });
+      if (curG && typeof curG === 'object' && (!curG.mode || curG.mode === 'fingerprint' || curG.mode === 'autoqa')) {
+        Store.set('gacha', { ...curG, mode: 'habit', fingerprint: false });
       }
     } catch {}
   }
   function settings(id) {
     const s = rawOf(id);
-    const mode = ['autoqa','svg','custom','fingerprint'].includes(s.mode) ? s.mode : s.fingerprint === true ? 'fingerprint' : 'autoqa';
+    const mode = ['habit','autoqa','svg','custom','fingerprint'].includes(s.mode) ? s.mode : s.fingerprint === true ? 'fingerprint' : 'habit';
     const customKeyword = typeof s.customKeyword === 'string' ? s.customKeyword.trim().slice(0, 60) : '';
     const vendor = vendorBy(s.vendor) ? s.vendor : (s.vendor === 'custom' && customKeyword ? 'custom' : '');
     const v = vendorBy(vendor);
@@ -354,7 +369,7 @@ const Gacha = (() => {
       pushBl();
     }
     if ('mode' in patch) patch = {...patch, fingerprint:patch.mode === 'fingerprint'};
-    else if ('fingerprint' in patch) patch = {...patch, mode:patch.fingerprint ? 'fingerprint' : 'autoqa'};
+    else if ('fingerprint' in patch) patch = {...patch, mode:patch.fingerprint ? 'fingerprint' : 'habit'};
     const next = { ...rawOf(acct), ...patch };
     if (mine(acct)) { Store.set('gacha', next); const me = ME(); if (me) try { Host.shared('gacha@' + me, next)?.catch?.(() => {}); } catch {} }
     else { remote.set(acct, next); try { Host.shared('gacha@' + acct, next)?.catch?.(() => {}); } catch {} }
@@ -459,8 +474,9 @@ const Gacha = (() => {
     const base = Math.max(s.intervalMs || 0, s.turbo && s.parallel > 1 ? TURBO_GAP : 0, run.gap || 0, floor);
     // 随机抖动：固定节拍的请求更容易被判成脚本；最多加 25%（不超过 4 秒）
     const gap = base + (base > 0 ? Math.round(Math.random() * Math.min(4000, base * 0.25)) : 0);
-    const wait = Math.max((run.lastSend || 0) + gap, run.nextAt || 0) - now();
-    if (wait > 300) phase('间隔等待 ' + Math.ceil(wait / 1000) + ' 秒');
+    const quotaWait = Math.max(0, (typeof Quota !== 'undefined' && Quota.blockedUntil ? Quota.blockedUntil(true) : 0) - now());
+    const wait = Math.max((run.lastSend || 0) + gap, run.nextAt || 0, now() + quotaWait) - now();
+    if (wait > 300) phase(quotaWait > 300 ? ('服务端 429 冷却等待 ' + Math.ceil(wait / 1000) + ' 秒（不计数）') : ('间隔等待 ' + Math.ceil(wait / 1000) + ' 秒'));
     if (wait > 0) await waitFor(() => false, wait, my, 100);
     await paceGachaPost(my, false);
     run.lastSend = now();
@@ -530,12 +546,12 @@ const Gacha = (() => {
     try {
       const v2 = v2Token; v2Token = null;
       const challenges = s.fingerprint ? GachaPrompts.challenges() : null;
-      const autoqa = s.mode === 'autoqa' ? GachaPrompts.autoqa() : null;
-      const prompt = s.fingerprint ? challenges[0].prompt : s.mode === 'autoqa' ? autoqa[0] : s.mode === 'svg' ? GachaPrompts.svg() : await GachaPrompts.custom(s.prompt);
+      const autoqa = s.mode === 'autoqa' ? GachaPrompts.autoqa() : s.mode === 'habit' ? [GachaPrompts.habit()] : null;
+      const prompt = s.fingerprint ? challenges[0].prompt : (s.mode === 'autoqa' || s.mode === 'habit') ? autoqa[0] : s.mode === 'svg' ? GachaPrompts.svg() : await GachaPrompts.custom(s.prompt);
       if (!alive(my)) throw new Stop('CANCEL', '', 'cancel');
       prompting=false;
       if (autoqa) a.autoqaQuestions = autoqa;
-      const mk = v2 => createChat(prompt, { v2, gacha: { mode:s.mode, autoqa, challenges, preferredKeywords:[...s.preferredKeywords], blacklist: s.archiveOn ? [...s.archiveKeywords] : [], skipCompatThinking: !!s.skipCompatThinking, fingerprint: !!s.fingerprint, stopThink: (s.fingerprint || s.mode === 'autoqa') ? false : s.stopOnThinking, run: run.id }, onRetry: t => { a.phase = t; log('第 ' + a.no + ' 轮：' + t); } });
+      const mk = v2 => createChat(prompt, { v2, gacha: { mode:s.mode, autoqa, challenges, preferredKeywords:[...s.preferredKeywords], blacklist: s.archiveOn ? [...s.archiveKeywords] : [], skipCompatThinking: !!s.skipCompatThinking, fingerprint: !!s.fingerprint, stopThink: (s.fingerprint || s.mode === 'autoqa' || s.mode === 'habit') ? false : s.stopOnThinking, run: run.id }, onRetry: t => { a.phase = t; log('第 ' + a.no + ' 轮：' + t); } });
       try { c = await mk(v2); }
       catch (e1) {
         const b1 = String(e1?.body || '');
@@ -547,70 +563,123 @@ const Gacha = (() => {
       }
     } catch (e) {
       a.done = true; const st = e.status || 0, body = String(e.body || '');
-      if (!alive(my)) { a.verdict = 'cancelled'; a.note = '已停止'; changed(); throw new Stop('CANCEL', '', 'cancel'); }
+      const rollbackUnfinishedAttempt = (mergePrev = true) => {
+        run.seq = Math.max(run.completed || 0, (run.seq || 1) - 1);
+        a.no = null;
+        a.draw = null;
+        if (mergePrev && !a.sid && Array.isArray(run.attempts) && run.attempts.length >= 2 && run.attempts[run.attempts.length - 1] === a) {
+          const prev = run.attempts[run.attempts.length - 2];
+          if (prev && !prev.sid && prev.verdict === 'skipped') {
+            run.attempts.pop();
+            prev.at = now();
+            prev.note = a.note;
+            prev.retryCount = (prev.retryCount || 1) + 1;
+          }
+        }
+      };
+      if (!alive(my)) { rollbackUnfinishedAttempt(false); a.verdict = 'cancelled'; a.note = '已停止'; changed(); throw new Stop('CANCEL', '', 'cancel'); }
       if(prompting){a.verdict='error';a.note=describe(e);fatal('PROMPT',a.note);}
       if ((st === 403 && /recaptcha|captcha/i.test(body)) || promptFailed(st, body)) {
         run.captchas = (run.captchas || 0) + 1; run.capStreak = (run.capStreak || 0) + 1; run.gap = Math.min(30000, Math.max(15000, Math.round((run.gap || 0) * 1.5)));
-        a.verdict = 'skipped'; a.note = '人机验证（reCAPTCHA）未通过 · 可点「完成验证」手动验证'; run.capAt = now(); run.skips++; run.skipTotal = (run.skipTotal || 0) + 1;
+        a.verdict = 'skipped'; a.note = '人机验证（reCAPTCHA）未通过 · 可点「完成验证」手动验证'; run.capAt = now();
+        rollbackUnfinishedAttempt(true);
         // 静默重试也被拒 / 重复指令：立刻暂停，提醒你完成一次官方验证（不再先空抽 3 次）
         const cn = capNote(); run.needCaptcha = true;
         if (cn >= 3) log('近 30 分钟本账号 / 当前出口 IP 已触发 ' + cn + ' 次人机验证，之后会自动放慢', 'warn');
-        log('reCAPTCHA 分数不足，放慢到每 ' + Math.round(run.gap / 1000) + ' 秒一抽后补抽' + ((run.capAuto || 0) < 2 ? '；先自动冷却重试，不用操作' : '；已暂停，完成一次验证后自动继续'), 'warn'); return;
+        log('reCAPTCHA 分数不足，放慢到每 ' + Math.round(run.gap / 1000) + ' 秒一抽后补抽（不计次数）' + ((run.capAuto || 0) < 2 ? '；先自动冷却重试，不用操作' : '；已暂停，完成一次验证后自动继续'), 'warn'); return;
       }
+      const hasActiveStreamingFlight = [...flights].some(f => f.a?.sid && typeof Chats !== 'undefined' && Chats.get(f.a.sid)?.busy);
       if (st === 429) {
         run.rl429Streak = (run.rl429Streak || 0) + 1;
-        const sw = (typeof AutoRoute !== 'undefined' && AutoRoute.onErrorSwitch) ? await AutoRoute.onErrorSwitch({ status: 429, ipLimited: true }, 'gacha').catch(() => null) : null;
-        if (sw?.changed || run.rl429Streak <= 5) {
-          if (sw?.changed) {
-            if (typeof Quota !== 'undefined' && Quota.clear) Quota.clear(true);
-            if (typeof ReadLimit !== 'undefined') ReadLimit.until = 0;
-          }
-          const wait429 = sw?.changed ? 1800 : Math.min(45000, 14000 * run.rl429Streak + Math.floor(Math.random() * 4000));
-          run.rlCooldownUntil = now() + wait429;
-          run.gap = sw?.changed ? Math.max(run.gap || 0, 4500) : Math.max(run.gap || 0, 12000);
-          run.nextAt = Math.max(run.nextAt || 0, run.rlCooldownUntil);
-          a.verdict = 'skipped'; a.note = sw?.changed ? ('触发 429，已秒切热备 IP（' + (sw.label || '新出口') + '），立即补抽') : ('触发 429 速率保护，冷却 ' + Math.round(wait429 / 1000) + ' 秒后自动补抽');
-          run.skips++; run.skipTotal = (run.skipTotal || 0) + 1;
-          log(sw?.changed ? ('第 ' + a.no + ' 轮触发 429：已秒切备用线路（' + (sw.label || '新出口') + '），约 2 秒后继续补抽') : ('第 ' + a.no + ' 轮触发 429 速率保护：已自动退避冷却 ' + Math.round(wait429 / 1000) + ' 秒后继续补抽（避开 429 限流）'), 'warn');
-          return;
-        }
-        a.verdict = 'error'; a.note = describe(e); fatal('RATE_LIMIT', body && !/^\s*[{<]/.test(body) ? body.slice(0, 120) : '');
+        try { if (typeof rotateVisitId === 'function') rotateVisitId(); } catch {}
+        const srvWait = Math.max(Number(e?.retryAfterMs) || 0, (typeof Quota !== 'undefined' && Quota.blockedUntil ? Quota.blockedUntil(true) - now() : 0));
+        const wait429 = srvWait > 0 ? Math.min(90000, srvWait + 1200) : (hasActiveStreamingFlight ? 8000 : Math.min(45000, 12000 * Math.min(run.rl429Streak, 3) + Math.floor(Math.random() * 3500)));
+        run.rlCooldownUntil = now() + wait429;
+        run.gap = Math.max(run.gap || 0, 9500);
+        run.nextAt = Math.max(run.nextAt || 0, run.rlCooldownUntil);
+        a.verdict = 'skipped';
+        a.note = '触发 429 速率限制，已轮换会话指纹并保持当前 IP 冷却 ' + Math.ceil(wait429 / 1000) + ' 秒后自动补抽（不计数）';
+        rollbackUnfinishedAttempt(true);
+        log('触发 429 速率限制（不计入抽卡次数，不切换当前 IP）：已轮换会话指纹，等待 ' + Math.ceil(wait429 / 1000) + ' 秒冷却后自动继续', 'warn');
+        changed();
+        return;
       }
       if (st === 401 || st === 403 || st === 404) {
-        const sw = (typeof AutoRoute !== 'undefined' && AutoRoute.onErrorSwitch) ? await AutoRoute.onErrorSwitch(e, 'gacha').catch(() => null) : null;
-        if (sw?.changed && (run.authSwitchRetry = (run.authSwitchRetry || 0) + 1) <= 3) {
-          a.verdict = 'skipped'; a.note = 'HTTP ' + st + '，已秒切备用 IP 重试'; run.skips++; run.skipTotal = (run.skipTotal || 0) + 1;
-          run.nextAt = Math.max(run.nextAt || 0, now() + 1800);
-          log('第 ' + a.no + ' 轮遇到 HTTP ' + st + '：已秒切备用线路（' + (sw.label || '新出口') + '）后自动补抽', 'warn');
-          return;
-        }
         if (st === 401 || st === 403) { a.verdict = 'error'; a.note = describe(e); fatal('AUTH', 'HTTP ' + st); }
       }
       if (st === 402) { a.verdict = 'error'; a.note = describe(e); fatal('QUOTA', body.slice(0, 120)); }
-      a.verdict = 'skipped'; a.note = describe(e); run.skips++; run.skipTotal = (run.skipTotal || 0) + 1;
+      a.verdict = 'skipped'; a.note = describe(e);
+      rollbackUnfinishedAttempt(true);
+      run.skips++; run.skipTotal = (run.skipTotal || 0) + 1;
       // 临时错误（409 请求还在处理、408 / 425、5xx、网络 / 超时）：立即尝试秒切备用 IP / 节点并自动补抽
       if (st >= 500 || !st || [404, 408, 409, 425].includes(st)) {
         run.tErr = (run.tErr || 0) + 1;
-        const sw = st !== 409 && typeof AutoRoute !== 'undefined' && AutoRoute.onErrorSwitch ? await AutoRoute.onErrorSwitch(e, 'gacha').catch(() => null) : null;
+        const sw = (!hasActiveStreamingFlight && st !== 409 && st !== 404 && typeof AutoRoute !== 'undefined' && AutoRoute.onErrorSwitch) ? await AutoRoute.onErrorSwitch(e, 'gacha').catch(() => null) : null;
         const wait = sw?.changed ? 1800 : (run.tErr >= 3 ? Math.min(120000, 10000 * 2 ** Math.min(run.tErr - 3, 4)) : st === 409 ? 5000 : 2000);
         run.nextAt = Math.max(run.nextAt || 0, now() + wait);
-        log('第 ' + a.no + ' 轮新建对话失败（' + a.note + '），' + (sw?.changed ? '已秒切备用线路（' + (sw.label || '新出口') + '），' : '不计次数，') + Math.round(wait / 1000) + ' 秒后自动补抽' + (run.tErr >= 3 ? '（连续 ' + run.tErr + ' 次）' : ''), 'warn');
+        log('新建对话未完成（' + a.note + '），不计次数，' + (sw?.changed ? '已秒切备用线路（' + (sw.label || '新出口') + '），' : '') + Math.round(wait / 1000) + ' 秒后自动补抽' + (run.tErr >= 3 ? '（连续 ' + run.tErr + ' 次）' : ''), 'warn');
         return;
       }
-      log('第 ' + a.no + ' 轮新建对话失败，不计次数：' + a.note, 'warn');
+      log('新建对话失败，不计次数：' + a.note, 'warn');
       fatal('HTTP', a.note);
     }
     run.capStreak = 0; run.tErr = 0; run.rl429Streak = 0; if (run.gap) run.gap = run.gap > 10500 ? Math.round(run.gap * 0.95) : 0;
-    if (s.mode === 'autoqa') c._wasGachaAutoQA = true;
+    if (s.mode === 'autoqa' || s.mode === 'habit') { c._wasGachaAutoQA = true; c._isMicroProbe = true; }
     a.sid = c.sid; a.phase = '等待运行'; a.step = '启动'; a.pct = 18;
+    markGachaCreatedSid(c.sid);
+    if (s.mode !== 'habit') {
+      try { if (typeof BillingProbe !== 'undefined' && BillingProbe.enqueueIdent) BillingProbe.enqueueIdent(c.sid, { fromGacha: true }); } catch {}
+    }
     const f = { a, ctl: new AbortController() }; flights.add(f);
     phase('已发出第 ' + a.no + ' 轮 · 后台识别 ' + flights.size + ' 路'); changed();
-    void track(a, c, f.ctl.signal).then(r => land(my, a, r)).catch(e => missed(my, a, e)).finally(() => { if (c.gacha?.fingerprint || c.gacha?.mode === 'autoqa' || c.gacha?.skipCompatThinking) { c.gacha = null; c.emit(); } flights.delete(f); changed(); });
+    void track(a, c, f.ctl.signal).then(r => land(my, a, r)).catch(e => missed(my, a, e)).finally(() => { if (c.gacha?.fingerprint || c.gacha?.mode === 'autoqa' || c.gacha?.mode === 'habit' || c.gacha?.skipCompatThinking) { c.gacha = null; c.emit(); } flights.delete(f); changed(); });
+  }
+  const gachaCreatedSet = new Set(Array.isArray(Store.get('gacha-sids', null)) ? Store.get('gacha-sids', []) : []);
+  function markGachaCreatedSid(sid) {
+    if (!sid) return;
+    gachaCreatedSet.add(sid);
+    if (gachaCreatedSet.size > 400) {
+      const first = gachaCreatedSet.values().next().value;
+      if (first) gachaCreatedSet.delete(first);
+    }
+    try { Store.set('gacha-sids', [...gachaCreatedSet]); } catch {}
+  }
+  function isGachaCreatedChat(sid, c, e) {
+    if (!sid) return false;
+    if (gachaCreatedSet.has(sid)) return true;
+    if (run && Array.isArray(run.attempts) && run.attempts.some(a => a && a.sid === sid)) return true;
+    const ch = c || (typeof Chats !== 'undefined' ? Chats.get(sid) : null);
+    if (ch && (ch.gacha || ch._wasGachaAutoQA)) return true;
+    const firstUser = (ch?.messages || []).find(m => m?.role === 'user');
+    const uText = String(firstUser?.text || (firstUser?.parts || []).map(p => p?.text || '').join(' ') || '').trim();
+    if (uText && (/17\s*[×x*]\s*23|capital of France|chemical symbol for water|Reply with OK only|pelican riding a bicycle/i.test(uText) || /^\d{4}\s/.test(uText))) {
+      markGachaCreatedSid(sid);
+      return true;
+    }
+    const rawTitle = String(e?.title || ch?.title || '').trim();
+    if (/^[a-z]{3,12}\s+[a-z]{3,12}$/i.test(rawTitle) && (ch?.messages || []).length <= 8) {
+      return true;
+    }
+    return false;
   }
   const isOpenThinkingChat = c => {
     if (!c) return false;
     if (c.gacha?.compatSkip || c.thinkingStatus?.kind === 'compat-thinking') return true;
     if (typeof ThinkingStatus !== 'undefined' && ThinkingStatus.of?.(c)?.kind === 'compat-thinking') return true;
+    const msgs = [...(c.messages || []), c.live].filter(Boolean);
+    for (const m of msgs) {
+      if (!m || m.role !== 'assistant') continue;
+      if (typeof m.think === 'string' && /[^\s.…·。]/.test(m.think.trim())) return true;
+      if (typeof m.text === 'string' && /<think>[\s\S]*[^\s.…·。][\s\S]*<\/think>/i.test(m.text)) return true;
+      for (const p of (m.parts || [])) {
+        if (!p) continue;
+        if ((p.type === 'reasoning' || p.type === 'thinking') && /[^\s.…·。]/.test(String(p.text || p.reasoning || p.thinking || '').trim())) {
+          return true;
+        }
+      }
+    }
+    const mi = c.sid && typeof Models !== 'undefined' ? Models.get(c.sid) : null;
+    if (mi && (mi.name === '开源模型' || isOpenSourceModelCand({ id: mi.reverseCandidateId, label: mi.rawLabel, canon: mi.name }))) return true;
     return false;
   };
   const isOpenSourceModelCand = cand => {
@@ -622,6 +691,7 @@ const Gacha = (() => {
   async function waitAutoQATurn(a, c, signal, roundNo) {
     const startAt = now(), limitMs = 150000;
     let sawBusy = !!c.busy;
+    let lastReconcileAt = now();
     while (now() - startAt < limitMs) {
       if (signal?.aborted) throw new Stop('CANCEL', '', 'cancel');
       if (c.busy) sawBusy = true;
@@ -639,7 +709,7 @@ const Gacha = (() => {
           return { skipped: c.gacha?.compatSkip?.skipped || 'visible-thinking', stopConfirmed: true, entry: null };
         }
       }
-      const completedCount = (typeof ArenaBilling !== 'undefined' && ArenaBilling.completed) ? ArenaBilling.completed(c).length : (c.messages || []).filter(m => m?.role === 'assistant').length;
+      let completedCount = (typeof ArenaBilling !== 'undefined' && ArenaBilling.completed) ? ArenaBilling.completed(c).length : (c.messages || []).filter(m => m?.role === 'assistant').length;
       if (!c.busy && (completedCount >= roundNo || (sawBusy && completedCount > 0))) {
         if (c.gacha?.skipCompatThinking && isOpenThinkingChat(c)) {
           a.step = '已删开源'; a.pct = 100; changed();
@@ -648,15 +718,43 @@ const Gacha = (() => {
         }
         return { completedCount };
       }
-      if (!c.busy && c.error) throw new Error('回复出错：' + c.error);
+      // 如果因限流切 IP 或网络抖动导致流中断（!c.busy 且尚未拿到本轮完整回复），主动向服务端同步消息并在必要时自动重发本问，绝不半途丢弃对话
+      if (!c.busy && (c.error || now() - lastReconcileAt > 5500)) {
+        lastReconcileAt = now();
+        try { await c.reconcile?.(0); } catch {}
+        try { if (!c.loaded || ((typeof ArenaBilling !== 'undefined' && ArenaBilling.completed) ? ArenaBilling.completed(c).length : 0) < roundNo) await c.load?.(); } catch {}
+        if (c.gacha?.skipCompatThinking && isOpenThinkingChat(c)) {
+          a.step = '已删开源'; a.pct = 100; changed();
+          killOpenSourceThinkingChat(c.sid, c);
+          return { skipped: c.gacha?.compatSkip?.skipped || 'visible-thinking', stopConfirmed: true, entry: null };
+        }
+        completedCount = (typeof ArenaBilling !== 'undefined' && ArenaBilling.completed) ? ArenaBilling.completed(c).length : (c.messages || []).filter(m => m?.role === 'assistant').length;
+        if (completedCount >= roundNo) {
+          c.error = null;
+          return { completedCount };
+        }
+        if (c.error && !a['_retriedRound' + roundNo]) {
+          a['_retriedRound' + roundNo] = true;
+          c.error = null;
+          const qList = Array.isArray(c.gacha?.autoqa) ? c.gacha.autoqa : a.autoqaQuestions;
+          const retryQ = (qList && qList[roundNo - 1]) || (typeof GachaPrompts !== 'undefined' && GachaPrompts.autoqaOne ? GachaPrompts.autoqaOne(roundNo - 1) : 'Reply with OK only.');
+          await sleep(1200);
+          if (!signal?.aborted && !c.busy) {
+            try { await c.send(retryQ); sawBusy = true; continue; } catch {}
+          }
+        }
+        if (!c.busy && c.error) throw new Error('回复出错：' + c.error);
+      }
       await sleep(220);
     }
     throw new Error('等待第 ' + roundNo + ' 问回复超时');
   }
   async function trackAutoQA(a, c, signal) {
-    const questions = Array.isArray(c.gacha?.autoqa) && c.gacha.autoqa.length >= 3 ? c.gacha.autoqa : (a.autoqaQuestions || GachaPrompts.autoqa());
-    for (let roundNo = 1; roundNo <= 3; roundNo++) {
-      a.phase = '自动问答 第 ' + roundNo + '/3 问 · 等待回复'; a.step = roundNo + '/3 回复'; a.pct = roundNo === 1 ? 24 : roundNo === 2 ? 54 : 80; changed();
+    const isHabitOnly = c.gacha?.mode === 'habit';
+    const maxRounds = isHabitOnly ? 1 : 3;
+    const questions = Array.isArray(c.gacha?.autoqa) && c.gacha.autoqa.length >= 1 ? c.gacha.autoqa : (a.autoqaQuestions || (isHabitOnly ? [GachaPrompts.habit()] : GachaPrompts.autoqa()));
+    for (let roundNo = 1; roundNo <= maxRounds; roundNo++) {
+      a.phase = (isHabitOnly ? '习惯速测 · 等待微缩探针回复' : '自动问答 第 ' + roundNo + '/3 问 · 等待回复'); a.step = isHabitOnly ? '探针回复' : (roundNo + '/3 回复'); a.pct = isHabitOnly ? 38 : (roundNo === 1 ? 24 : roundNo === 2 ? 54 : 80); changed();
       const turnRes = await waitAutoQATurn(a, c, signal, roundNo);
       if (turnRes?.skipped || (c.gacha?.skipCompatThinking && isOpenThinkingChat(c))) {
         killOpenSourceThinkingChat(c.sid, c);
@@ -670,9 +768,19 @@ const Gacha = (() => {
       if (existing && existing.name && !existing.guess && !existing.fromTitle && !existing.reverseInferred && !existing.pendingConfirm) {
         return existing;
       }
-      a.phase = '自动问答 第 ' + roundNo + '/3 问 · 后台反推中'; a.step = roundNo + '/3 反推'; a.pct = roundNo === 1 ? 38 : roundNo === 2 ? 68 : 92; changed();
+      a.phase = isHabitOnly ? '习惯速测 · 匹配 20 维习惯指纹' : ('自动问答 第 ' + roundNo + '/3 问 · 后台反推中'); a.step = isHabitOnly ? '习惯匹配' : (roundNo + '/3 反推'); a.pct = isHabitOnly ? 82 : (roundNo === 1 ? 38 : roundNo === 2 ? 68 : 92); changed();
       let sum = null;
-      if (typeof BillingProbe !== 'undefined' && BillingProbe.refresh) {
+      let costFallbackOnRound = false;
+      const costAllowed = !isHabitOnly && (typeof BillingProbe === 'undefined' || !BillingProbe.isCostProbeEnabled || BillingProbe.isCostProbeEnabled());
+      if (!costAllowed || isOpenThinkingChat(c)) {
+        costFallbackOnRound = true;
+        if (typeof Fmt !== 'undefined' && Fmt.fromReplay) { try { await Fmt.fromReplay(c); } catch {} }
+        try {
+          if (typeof ChatHabitFingerprint !== 'undefined' && ChatHabitFingerprint.identifyAndApply) ChatHabitFingerprint.identifyAndApply(c, { force: true });
+          else if (typeof BillingProbe !== 'undefined' && BillingProbe.habit?.identifyAndApply) BillingProbe.habit.identifyAndApply(c, { force: true });
+        } catch {}
+        sum = typeof BillingProbe !== 'undefined' && BillingProbe.summary ? BillingProbe.summary(c.sid) : null;
+      } else if (typeof BillingProbe !== 'undefined' && BillingProbe.refresh) {
         const latestAsst = (typeof ArenaBilling !== 'undefined' && ArenaBilling.completed) ? ArenaBilling.completed(c).at(-1) : null;
         for (let retry = 0; retry < 3; retry++) {
           if (signal?.aborted) throw new Stop('CANCEL', '', 'cancel');
@@ -683,7 +791,16 @@ const Gacha = (() => {
           const obsCount = Number(sum?.diagnostics?.samples?.observations || 0);
           const cands = sum?.mergedCandidates || sum?.diagnostics?.candidates || [];
           const covered = stNow?.coveredIds || [];
-          if (stNow?.httpStatus === 429 || stNow?.httpStatus === 403 || (stNow?.retryAt && stNow.retryAt > now())) break;
+          if (stNow?.httpStatus === 429 || stNow?.httpStatus === 403 || (stNow?.retryAt && stNow.retryAt > now())) {
+            costFallbackOnRound = true;
+            if (typeof Fmt !== 'undefined' && Fmt.fromReplay) { try { await Fmt.fromReplay(c); } catch {} }
+            try {
+              if (typeof ChatHabitFingerprint !== 'undefined' && ChatHabitFingerprint.identifyAndApply) ChatHabitFingerprint.identifyAndApply(c, { force: true, fromCostFallback: true });
+              else if (typeof BillingProbe !== 'undefined' && BillingProbe.habit?.identifyAndApply) BillingProbe.habit.identifyAndApply(c, { force: true, fromCostFallback: true });
+            } catch {}
+            sum = BillingProbe.summary(c.sid);
+            break;
+          }
           if ((obsCount >= roundNo && cands.length > 0) || (latestAsst?.id && covered.includes(latestAsst.id))) break;
         }
       }
@@ -726,14 +843,29 @@ const Gacha = (() => {
         a.note = '第 ' + roundNo + ' 问唯一高置信反推锁定（' + Math.round(top0Score) + '%）';
         return { ...locked, name: canonName, guess: false, reverseInferred: true };
       }
-      // 开源模型最多一问（不追问第 2、3 问）；只有闭源模型且存在多个高置信度候选时才继续追问第 2、3 个问题
+      // 微缩探针习惯模式或 /cost 关闭/限流回退时，第 1 轮已采满 20 维代码与两步工具习惯特征，直接单轮锁定不追问第 2、3 问
+      if (roundNo === 1 && (isHabitOnly || costFallbackOnRound) && top0) {
+        const rawName = top0.label || top0.id || '';
+        const canonName = Strength.canon(rawName).replace(/[?？]+$/, '');
+        try {
+          if (typeof ChatHabitFingerprint !== 'undefined' && ChatHabitFingerprint.identifyAndApply) ChatHabitFingerprint.identifyAndApply(c, { force: true, fromCostFallback: !isHabitOnly });
+          else if (typeof BillingProbe !== 'undefined' && BillingProbe.habit?.identifyAndApply) BillingProbe.habit.identifyAndApply(c, { force: true, fromCostFallback: !isHabitOnly });
+        } catch {}
+        try { Titles.local?.(c.sid); Titles.capture?.(c.sid, a.sentAt || c.sentAt); Titles.touch?.(c.sid); Titles.kick?.(true); } catch {}
+        const locked = Models.get(c.sid) || { name: canonName, internal: top0.id || canonName, guess: false, habitInferred: true, reverseInferred: true, billingProbe: true, reverseMatch: top0Score };
+        a.note = (isHabitOnly ? '习惯速测微缩探针单轮锁定（' : '微缩探针习惯单轮锁定（') + Math.round(top0Score) + '%）';
+        return { ...locked, name: canonName, guess: false, habitInferred: true, reverseInferred: true };
+      }
+      // 开源模型最多一问（不追问第 2、3 问）；只有开启 /cost 且闭源模型存在多个同价候选时才继续追问第 2、3 个问题
       if (!isOpenChat && roundNo < 3) {
-        const nextQ = questions[roundNo] || GachaPrompts.autoqaOne(roundNo);
-        a.phase = '存在多款候选 · 追问第 ' + (roundNo + 1) + '/3 问'; a.step = (roundNo + 1) + '/3 提问'; a.pct = roundNo === 1 ? 48 : 75; changed();
-        await paceGachaPost(signal, true);
-        if (signal?.aborted) throw new Stop('CANCEL', '', 'cancel');
-        try { await c.send(nextQ); } catch { if (signal?.aborted) throw new Stop('CANCEL', '', 'cancel'); try { await c.reconcile?.(0); } catch {} await sleep(400); await c.send(nextQ); }
-        continue;
+        if (!isHabitOnly && !costFallbackOnRound && roundNo < maxRounds) {
+          const nextQ = questions[roundNo] || GachaPrompts.autoqaOne(roundNo);
+          a.phase = '存在多款候选 · 追问第 ' + (roundNo + 1) + '/3 问'; a.step = (roundNo + 1) + '/3 提问'; a.pct = roundNo === 1 ? 48 : 75; changed();
+          await paceGachaPost(signal, true);
+          if (signal?.aborted) throw new Stop('CANCEL', '', 'cancel');
+          try { await c.send(nextQ); } catch { if (signal?.aborted) throw new Stop('CANCEL', '', 'cancel'); try { await c.reconcile?.(0); } catch {} await sleep(400); await c.send(nextQ); }
+          continue;
+        }
       }
       // 3 个问题后仍有多个结果：选第 1 个并在模型名称后面加上 ? 号，开启下一个会话
       if (top0) {
@@ -806,7 +938,7 @@ const Gacha = (() => {
     const aborted = () => { if (signal.aborted) throw new Stop('CANCEL', '', 'cancel'); };
     const s = run?.settings || {};
     if (c.gacha?.fingerprint) return Fingerprint.run(c, { signal, challenges:c.gacha.challenges, preferredKeywords:c.gacha.preferredKeywords, blacklist:c.gacha.blacklist||null, libraryState:null, progress: text => { a.phase = text; changed(); } });
-    if (c.gacha?.mode === 'autoqa') return trackAutoQA(a, c, signal);
+    if (c.gacha?.mode === 'autoqa' || c.gacha?.mode === 'habit') return trackAutoQA(a, c, signal);
     if (c.gacha?.skipCompatThinking) {
       if (typeof History !== 'undefined' && typeof History.remove === 'function') {
         if (typeof Fingerprint !== 'undefined') Fingerprint.maybeStopCompat?.(c);
@@ -866,7 +998,7 @@ const Gacha = (() => {
     const s = run.settings, id = { name: Strength.canon(r.name), internal: r.internal, request: r.request, response: r.response, tier: r.tier, routed: r.routed, partial: r.partial, guess: !!r.guess, fingerprint: r.fingerprint || null, cs: !r.fingerprint && r.guess ? Calib.last.get(a.sid) : null };
     const verdict = classify(id, s); if (r.fingerprint?.skipped) log('第 ' + a.no + ' 轮：' + Fingerprint.details(id) + (verdict==='archive'?'；已确认停止，排队归档，继续下一抽':'；已确认结束，保留对话，继续下一抽')); const cs = id.cs?.ok ? id.cs.s : null;
     Object.assign(a, { note: id.fingerprint?.skipped ? id.fingerprint.skipDetail : a.note, fingerprint: id.fingerprint, guess: !!r.guess, model: id.name, tier: id.tier, verdict, done: true, idMs: now() - a.sentAt, partial: !!id.partial, phase: '', power: cs, csWhy: id.csv ? id.csv.why + (id.csv.top ? ' · 最像 ' + id.csv.top.label + ' ' + id.csv.top.p + '%' : '') : null });
-    run.completed++; a.draw = run.completed; run.skips = 0; run.pauseStreak = 0; run.skipHeal = 0;
+    run.completed++; a.draw = run.completed; a.no = run.completed; run.seq = Math.max(run.seq || 0, run.completed); run.skips = 0; run.pauseStreak = 0; run.skipHeal = 0;
     if (id.routed) { a.routed = true; log('第 ' + a.no + ' 轮原模型调用失败，Brana 已改派；按实际回答的 ' + id.name + ' 计'); }
     log('#' + a.draw + ' ' + (id.fingerprint ? Fingerprint.describe(id) : id.name) + (id.tier ? ' · ' + id.tier : '') + (cs != null ? ' · 强度分 ' + cs : id.cs && !id.cs.ok ? ' · 打分作废' : '') + (id.csv ? '（' + ({ keep: '满意', ok: '勉强', reroll: '换', retry: '作废' }[id.csv.action] || '') + '：' + id.csv.why + (id.csv.top ? '，最像 ' + id.csv.top.label + ' ' + id.csv.top.p + '%' : '') + '）' : '') + ' → ' + ({ hit: '命中目标', keep: '保留', archive: '归档' }[verdict]) + ' · 发送后 ' + (a.idMs / 1000).toFixed(1) + ' 秒识别');
     if (verdict === 'hit') {
@@ -894,21 +1026,84 @@ const Gacha = (() => {
   });
   function missed(my, a, e) {
     if (a.done) return; a.done = true; a.phase = '';
-    if (!alive(my) || (e instanceof Stop && e.kind === 'cancel')) { a.verdict = 'cancelled'; a.note = '已停止'; changed(); return; }
+    if (a.sid) {
+      markGachaCreatedSid(a.sid);
+      try {
+        const ch0 = typeof Chats !== 'undefined' ? Chats.get(a.sid) : null;
+        if (ch0 && isOpenThinkingChat(ch0) && (run?.settings || settings()).skipCompatThinking !== false) {
+          killOpenSourceThinkingChat(a.sid, ch0);
+        } else if (typeof BillingProbe !== 'undefined' && BillingProbe.enqueueIdent) {
+          BillingProbe.enqueueIdent(a.sid, { fromGacha: true });
+        }
+      } catch {}
+    }
+    if (!alive(my) || (e instanceof Stop && e.kind === 'cancel')) { run.seq = Math.max(run.completed || 0, (run.seq || 1) - 1); a.no = null; a.draw = null; a.verdict = 'cancelled'; a.note = '已停止（后台继续识别收尾）'; changed(); return; }
     if (e?.code === 'COMPAT_STOP_FAILED') { a.verdict = 'error'; a.note = e.message; halt(e); return; }
+    run.seq = Math.max(run.completed || 0, (run.seq || 1) - 1); a.no = null; a.draw = null;
     a.verdict = 'skipped'; a.note = String(e?.message || e).slice(0, 160); run.skips++; run.skipTotal = (run.skipTotal || 0) + 1;
-    log('第 ' + a.no + ' 轮识别失败，不计次数，补抽：' + a.note, 'warn');
+    log('本轮识别暂缓（不计入抽卡次数），已转入后台排队延续识别并自动补抽：' + a.note, 'warn');
     if (a.sid) {
       try {
         const ch = typeof Chats !== 'undefined' ? Chats.get(a.sid) : null;
+        if (ch && isOpenThinkingChat(ch) && (run?.settings || settings()).skipCompatThinking !== false) {
+          killOpenSourceThinkingChat(a.sid, ch);
+          return;
+        }
         if (ch && typeof BillingProbe !== 'undefined' && BillingProbe.applyReverseIdentity) {
           BillingProbe.applyReverseIdentity(ch, { interactive: false, forceLock: true, fallbackQuestionMark: true });
         }
+        if (typeof BillingProbe !== 'undefined' && BillingProbe.enqueueIdent) {
+          BillingProbe.enqueueIdent(a.sid, { fromGacha: true });
+        }
       } catch {}
-      run.archiveQueue = [...new Set([...(run.archiveQueue || []), a.sid])].slice(-200);
-      try { void archiveQueued(); } catch {}
-      try { History.archive?.(a.sid)?.catch?.(() => {}); } catch {}
     }
+  }
+  async function settleBackgroundChat(sid, c) {
+    if (!sid) return null;
+    const ch = c || (typeof Chats !== 'undefined' ? Chats.get(sid) : null);
+    const s = run?.settings || settings();
+    if (s.skipCompatThinking !== false && isOpenThinkingChat(ch)) {
+      killOpenSourceThinkingChat(sid, ch);
+      const a = run?.attempts?.find(x => x && x.sid === sid);
+      if (a) { a.verdict = 'archive'; a.archived = true; a.deleted = true; a.step = '已删开源'; a.pct = 100; changed(); }
+      return 'open-archived';
+    }
+    const mi = typeof Models !== 'undefined' ? Models.get(sid) : null;
+    if (!mi?.name || /^(未识别|未知型号|待定)$/.test(String(mi.name).trim())) return null;
+    if (s.skipCompatThinking !== false && (mi.name === '开源模型' || isOpenSourceModelCand({ id: mi.reverseCandidateId, label: mi.rawLabel, canon: mi.name }))) {
+      killOpenSourceThinkingChat(sid, ch);
+      const a = run?.attempts?.find(x => x && x.sid === sid);
+      if (a) { a.verdict = 'archive'; a.archived = true; a.deleted = true; a.step = '已删开源'; a.pct = 100; changed(); }
+      return 'open-archived';
+    }
+    const canonName = Strength.canon(mi.name).replace(/[?？]+$/, '');
+    const idObj = { name: canonName, internal: mi.internal || mi.reverseCandidateId || canonName, request: mi.request, response: mi.response || canonName, tier: mi.tier, guess: false };
+    const v = classify(idObj, s);
+    const a = run?.attempts?.find(x => x && x.sid === sid);
+    if (a) {
+      a.model = mi.name;
+      a.tier = mi.tier || Strength.parts(canonName).tier || null;
+      a.guess = false;
+      a.verdict = v;
+      a.done = true;
+      a.phase = '';
+      changed();
+    }
+    try { if (typeof Titles !== 'undefined' && Titles.capture) Titles.capture(sid, a?.sentAt || ch?.sentAt || now()); } catch {}
+    if (v === 'archive' && !hitlIn(ch)) {
+      try {
+        await History.archive(sid);
+        if (a) a.archived = true;
+        changed();
+        return 'archived';
+      } catch {
+        if (run) {
+          run.archiveQueue = [...new Set([...(run.archiveQueue || []), sid])].slice(-200);
+          retrySoon();
+        }
+      }
+    }
+    return v;
   }
   // 抽卡对话里出现了交互面板（ask_user 等）：保留这个对话，不跳过、不归档、不做任何操作
   const hitlIn = c => !!c && !c._wasGachaAutoQA && [...(c.messages || []), c.live].filter(Boolean).some(m => m.role === 'assistant' && (m.parts || []).some(p => Hitl.name(p)));
@@ -1101,7 +1296,18 @@ const Gacha = (() => {
               if (probed) continue;
             }
           }
-          const bu = Quota.blockedUntil(true); if (bu > now()) fatal('RATE_LIMIT', (Quota.blockedUntil() > now() ? '服务端要求等待，约 ' : '自动抽卡短暂退避，约 ') + mmss(bu - now()) + '后重试');
+          const bu = Quota.blockedUntil(true);
+          if (bu > now()) {
+            const leftBu = bu - now();
+            if (leftBu <= 180000) {
+              phase('服务端 429 速率限制等待 · ' + mmss(leftBu) + '后自动继续（不计数，保持当前 IP）');
+              await waitFor(() => Quota.blockedUntil(true) <= now() || null, leftBu, my, 400);
+              if (!alive(my)) break;
+              try { if (typeof rotateVisitId === 'function') rotateVisitId(); } catch {}
+              continue;
+            }
+            fatal('RATE_LIMIT', (Quota.blockedUntil() > now() ? '服务端要求等待，约 ' : '自动抽卡短暂退避，约 ') + mmss(leftBu) + '后重试');
+          }
           // Deprecated dollar-balance data must not stop draws; real create-chat quota/rate limits still apply.
           await launch(my); run.capProbe = false;
           if (!run.needCaptcha) run.capAuto = 0;
@@ -1152,6 +1358,8 @@ const Gacha = (() => {
     run = { id: Math.random().toString(36).slice(2), status: 'running', startedAt: now(), settings: s, completed: 0, skips: 0, skipTotal: 0, hits: [], attempts: [], log: [], phase: '', reason: '', archiveQueue: carry, seq: 0 };
     log(s.endless ? '开始持续抽卡 · 不限次数，限流时等待后自动继续，直到手动停止' : '开始抽卡 · 共 ' + s.maxAttempts + ' 抽' + (s.targetName ? ' · 目标 ' + s.targetName : ' · 不限厂商'));
     if (s.fingerprint) log('英文动态指纹：默认1条；首次候选命中优选名单才补测至3条；不追加SVG，不纳入固定题个人参考库；结果保留，置信度不是身份概率');
+    else if (s.mode === 'habit') log('习惯速测模式：单轮两步微缩探针（35~45行 HTML+SVG + 终端校验 + 中文要点），免 /cost 极速匹配 20 维习惯指纹');
+    else if (s.mode === 'autoqa') log('自动问答模式：首轮两步微缩探针 + 习惯/反推双引擎智能锁定');
     else log(s.mode === 'svg' ? 'SVG模式：每次发送不同的英文鹈鹕动画指令' : '自定义模式：四位随机数 + 提示词；本机同提示词前缀不重复');
     const my = ++token; changed(); void loop(my); return { ok: true };
   }
@@ -1161,7 +1369,7 @@ const Gacha = (() => {
     setTimeout(() => { if (run?.status === 'stopping') { run.status = 'stopped'; run.endedAt = now(); run.phase = ''; changed(); } }, 300);
   }
   function reset() { if (run && ['running', 'stopping'].includes(run.status)) return; run = null; changed(); }
-  function resume() { if (run?.autoResume && (!['autoqa','svg','custom','fingerprint'].includes(run.settings?.mode) || !Array.isArray(run.settings?.preferredKeywords) || (run.settings?.fingerprint !== true && settings().fingerprint))) { run.autoResume = false; run.status = 'stopped'; run.reason = '抽卡模式已升级，请确认三模式及优选设置后手动开始'; changed(); return; } if (run?.autoResume && run.status === 'running') { run.autoResume = false; log('界面重新载入，持续抽卡自动继续'); const my = ++token; setTimeout(() => void loop(my), 1500); } else if (run && run.status !== 'running' && run.archiveQueue?.length) setTimeout(() => void archiveQueued(false), 5000); }
+  function resume() { if (run?.autoResume && (!['habit','autoqa','svg','custom','fingerprint'].includes(run.settings?.mode) || !Array.isArray(run.settings?.preferredKeywords) || (run.settings?.fingerprint !== true && settings().fingerprint))) { run.autoResume = false; run.status = 'stopped'; run.reason = '抽卡模式已升级，请确认三模式及优选设置后手动开始'; changed(); return; } if (run?.autoResume && run.status === 'running') { run.autoResume = false; log('界面重新载入，持续抽卡自动继续'); const my = ++token; setTimeout(() => void loop(my), 1500); } else if (run && run.status !== 'running' && run.archiveQueue?.length) setTimeout(() => void archiveQueued(false), 5000); }
   const busy = () => !!run && ['running', 'stopping'].includes(run.status);
   // 老虎机：结果按识别先后排队展示，每个至少停留一会儿；没有待展示的结果时显示最新一轮
   const show = { a: null, since: 0 };
@@ -1205,11 +1413,18 @@ const Gacha = (() => {
       return stepRes;
     },
     stepOf(sid) {
-      if (!sid || !run || !['running', 'stopping'].includes(run.status)) return null;
-      const a = (run.attempts || []).findLast(x => x && x.sid === sid && !x.done);
-      return a ? this.stepInfo(a) : null;
+      if (!sid) return null;
+      if (run && ['running', 'stopping'].includes(run.status)) {
+        const a = (run.attempts || []).findLast(x => x && x.sid === sid && !x.done);
+        if (a) return this.stepInfo(a);
+      }
+      return null;
     },
+    isGachaChat: isGachaCreatedChat,
+    markCreatedSid: markGachaCreatedSid,
+    killOpenSourceThinkingChat,
+    settleBackgroundChat,
     get run() { return run; }, get rev() { return rev; }, get flights() { return flights.size; },
-    owns: sid => !!run && run.attempts.some(a => a.sid === sid),
+    owns: sid => gachaCreatedSet.has(sid) || (!!run && run.attempts.some(a => a.sid === sid)),
   };
 })();

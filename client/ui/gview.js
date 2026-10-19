@@ -144,7 +144,7 @@ const GView = {
     // 选项
     const f = (k, type, attrs = {}) => h('input', { type, ...attrs, 'data-k': k });
     const prompt = h('textarea', { rows: 2, maxlength: 4000, 'data-k': 'prompt' }, s.prompt);
-    const mode=h('select',{'data-k':'mode',onchange:()=>{Gacha.save({mode:mode.value});this.paintCfg();}},...['autoqa','svg','custom','fingerprint'].map((key,i)=>h('option',{value:key,selected:s.mode===key||null},['自动问答 · 智能反推','SVG · 英文鹈鹕','自定义 · 四位数前缀','测指纹 · 优选名单'][i])));
+    const mode=h('select',{'data-k':'mode',onchange:()=>{Gacha.save({mode:mode.value});this.paintCfg();}},...['habit','autoqa','svg','custom','fingerprint'].map((key,i)=>h('option',{value:key,selected:s.mode===key||null},['习惯速测 · 微缩探针','自动问答 · 智能反推','SVG · 英文鹈鹕','自定义 · 四位数前缀','测指纹 · 优选名单'][i])));
     const preferred=h('textarea',{rows:2,'data-k':'preferredKeywords'},s.preferredKeywords.join('\n'));
 
     const interval = f('intervalSec', 'number', { min: 0, max: 60, step: 0.1, value: (s.intervalMs / 1000).toString() });
@@ -239,7 +239,7 @@ const GView = {
       const vd = a.done ? VERDICT[a.verdict] || [a.verdict || '—', ''] : [gs?.text || a.phase || '进行中', 'run'];
       const name = a.model || a.early || '', vid = Brand.of(name);
       return h('div', { class: 'gri ' + (a.verdict === 'hit' ? 'hit' : '') + (gs ? ' gstep-card' : ''), title: gs?.phase || '' },
-        h('span', { class: 'gno' }, a.draw ? '#' + a.draw : '·' + a.no),
+        h('span', { class: 'gno' }, a.verdict === 'skipped' ? '不计' : (a.draw ? '#' + a.draw : '·' + (a.no || ''))),
         vid ? VIcon.el(vid, 15) : h('span', { class: 'vicon' }),
         h('span', { class: 'gname', title: [a.model, a.note, gs?.phase].filter(Boolean).join('\n') }, name ? Brand.short(name).replace(/-(none|minimal|low|medium|high|xhigh|max)$/i, '') : (a.note || (a.done ? '—' : (gs?.phase || '等待…')))),
         h('span', { class: 'gtier', title: a.power != null ? '强度分（按回复节奏估算，满分 10000）' : null }, a.power != null ? String(a.power) : a.tier ? TIER_CN[a.tier] || a.tier : a.done && a.model ? (a.partial ? '?' : '标准') : ''),

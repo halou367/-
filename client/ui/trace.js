@@ -180,7 +180,7 @@ const Trace = (() => {
     for (const e of events) {
       if (!e || typeof e !== 'object' || (e.runId && e.runId !== runId)) continue;
       const m = /^chat turn (\d+)$/.exec(e.message || '');
-      if (m) { const turn = +m[1]; attempts[turn] = (attempts[turn] || 0) + 1; seg = { turn, attempt: attempts[turn], at: toMs(e.startTime), prompt: (e.style?.accessory?.items || [])[0]?.text || '', dur: durMs(e.duration), events: [] }; segs.push(seg); continue; }
+      if (m) { const turn = +m[1]; attempts[turn] = (attempts[turn] || 0) + 1; seg = { turn, attempt: attempts[turn], spanId: e.spanId || null, at: toMs(e.startTime), prompt: (e.style?.accessory?.items || [])[0]?.text || '', dur: durMs(e.duration), events: [] }; segs.push(seg); continue; }
       if (!seg) continue;
       seg.events.push(e);
     }
@@ -290,6 +290,30 @@ const Trace = (() => {
         ...s.records.filter(x => x.kind === 'context').slice(-1).filter(x => !x.detailed),
       ];
       const raw = s.raw || { spans: {} }; let rawSize = JSON.stringify(raw).length;
+      if (seg.spanId && SPAN.test(seg.spanId) && s.botScore == null) {
+        try {
+          const turnSpan = await Trigger.get('/api/v1/runs/' + runId + '/spans/' + seg.spanId, tok);
+          fetched++;
+          const props = obj(turnSpan?.properties) || {};
+          const cf = props?.payload?.metadata?.cloudflareMetadata || props?.cloudflareMetadata || null;
+          if (cf && typeof cf === 'object') {
+            const bs = parseInt(String(cf.botScore ?? ''), 10);
+            if (Number.isFinite(bs)) {
+              s.botScore = bs;
+              s.cloudflareMetadata = {
+                botScore: bs,
+                ja4: cf.ja4 || null,
+                ja4BrowserRatio: cf.ja4_browser_ratio_1h != null ? Number(cf.ja4_browser_ratio_1h) : null,
+                ja4H2H3Ratio: cf.ja4_h2h3_ratio_1h != null ? Number(cf.ja4_h2h3_ratio_1h) : null,
+                clientAsn: cf.clientAsn || null,
+                isVerifiedBot: Boolean(cf.isVerifiedBot === 'true' || cf.isVerifiedBot === true),
+                at: now(),
+              };
+              try { if (typeof BotService !== 'undefined' && BotService.noteCloudflare) BotService.noteCloudflare(s.cloudflareMetadata, sid); } catch {}
+            }
+          }
+        } catch {}
+      }
       for (const item of want) {
         let d; try { d = await Trigger.get('/api/v1/runs/' + runId + '/spans/' + item.id, tok); } catch (e) { if (e.status === 401 || e.status === 403) break; continue; }
         fetched++;
@@ -310,7 +334,7 @@ const Trace = (() => {
     const lk = { again: null }; locks.set(sid, lk);
     lk.p = (async () => {
       const r = rec(sid); let res = { events: 0, fetched: 0, turns: 0 }, err = null;
-      const runs = validRuns(sid).slice(0, opt.deep ? 8 : 2);
+      const runs = validRuns(sid).slice(0, opt.deep ? 3 : 2);
       if (!runs.length) err = Object.keys(r.runs).length ? '运行令牌已过期（超过 1 小时）' : '还没有运行记录';
       for (const [runId, v] of runs) {
         try { const x = await syncRun(sid, runId, v.tok, opt); res.events += x.events; res.fetched += x.fetched; res.turns += x.turns; }
@@ -433,3 +457,299 @@ const Workspace = {
   },
 };
 Bus.on('turn', c => { setTimeout(() => { if (Workspace.cache.has(c.sid) || UI.els?.chat === c) Workspace.latest(c.sid, true).catch(() => {}); }, 3000); });
+
+// ---------- 官方 BotService 与模拟官方四维号池分（Cloudflare/ASN + reCAPTCHA v3 + 近期出货后验 + Pulse 额度 → 1–99） ----------
+const BotService = (() => {
+  const STORE_KEY = 'botservice:v1';
+  let cur = (typeof Store !== 'undefined' && Store.get ? Store.get(STORE_KEY, null) : null) || {
+    botScore: null,
+    rawBotScore: null,
+    rawAt: 0,
+    ja4: null,
+    ja4BrowserRatio: null,
+    ja4H2H3Ratio: null,
+    clientAsn: null,
+    isVerifiedBot: false,
+    pulse: null,
+    pulseRefreshedAt: null,
+    sid: null,
+    updatedAt: 0,
+  };
+  let inflightPulse = null;
+  let lastPulseAt = 0;
+  let _calcMemo = null;
+  let _calcAt = 0;
+
+  function invalidate() { _calcAt = 0; }
+
+  function save() {
+    invalidate();
+    try { if (typeof Store !== 'undefined' && Store.set) Store.set(STORE_KEY, cur); } catch {}
+    try { if (typeof Bus !== 'undefined') Bus.emit('botservice', state()); } catch {}
+    try { if (typeof Bar !== 'undefined' && Bar.render) Bar.render(); } catch {}
+  }
+
+  function noteCloudflare(cf, sid = null) {
+    if (!cf || typeof cf !== 'object') return state();
+    const bs = parseInt(String(cf.botScore ?? ''), 10);
+    if (!Number.isFinite(bs)) return state();
+    const clamped = Math.max(1, Math.min(99, bs));
+    cur = {
+      ...cur,
+      botScore: clamped,
+      rawBotScore: clamped,
+      rawAt: now(),
+      ja4: cf.ja4 || cur.ja4 || null,
+      ja4BrowserRatio: cf.ja4BrowserRatio ?? cf.ja4_browser_ratio_1h ?? cur.ja4BrowserRatio ?? null,
+      ja4H2H3Ratio: cf.ja4H2H3Ratio ?? cf.ja4_h2h3_ratio_1h ?? cur.ja4H2H3Ratio ?? null,
+      clientAsn: cf.clientAsn || cur.clientAsn || null,
+      isVerifiedBot: Boolean(cf.isVerifiedBot),
+      sid: sid || cur.sid || null,
+      updatedAt: now(),
+    };
+    save();
+    return state();
+  }
+
+  // 模拟官方模型池分流标准（1–99）：
+  // 1) Cloudflare 网络与出口 ASN 纯净度（0–45）
+  // 2) reCAPTCHA Enterprise v3 静默过盾率与 429 频控状态（0–25）
+  // 3) 近期会话真实分配模型后验（旗舰提权 / 连抽 MiMo·DeepSeek 开源惩罚 / 中途改派惩罚，-22～+20）
+  // 4) 账户 Pulse 剩余额度水位（-8～+10）
+  function calcPoolScore() {
+    const t = now();
+    if (_calcMemo && t - _calcAt < 600) return _calcMemo;
+    _calcAt = t;
+
+    const acct = (typeof UI !== 'undefined' && UI.host?.account) ? UI.host.account : null;
+    const curIp = (typeof IP !== 'undefined' && IP.ip) || acct?.status?.ip || '';
+    const ipRep = (typeof IPRep !== 'undefined' && IPRep.cur) ? IPRep.cur(acct, curIp) : null;
+    const eg = (typeof IPRep !== 'undefined' && IPRep.egOf ? IPRep.egOf(acct?.proxyIp || curIp) : '') || curIp;
+    const rep = (typeof Pool !== 'undefined' && Pool.d?.rep && eg) ? Pool.d.rep[eg] : null;
+    const pu = rep?.pu || null;
+
+    // 1. 网络与 ASN 信誉分（0–45）
+    let ipScore = 28;
+    let ipTag = '待评估';
+    if (ipRep?.sc?.known || ipRep?.pct != null || rep) {
+      const pct = ipRep?.pct ?? (Number.isFinite(ipRep?.sc?.s) ? Math.round(ipRep.sc.s) : 68);
+      ipScore = Math.round((pct / 100) * 35);
+      if (pu?.res && !pu?.bc) { ipScore += 10; ipTag = '原生家宽'; }
+      else if (pu?.res || ipRep?.kind?.c === 'res') { ipScore += 8; ipTag = '住宅宽带'; }
+      else if (ipRep?.kind?.c === 'mob' || rep?.m) { ipScore += 7; ipTag = '移动网络'; }
+      else if (ipRep?.kind?.c === 'dc' || pu?.dc || rep?.h) { ipScore -= 12; ipTag = '机房ASN'; }
+      else { ipTag = ipRep?.label || '常规线路'; }
+      if (rep?.px) { ipScore -= 8; ipTag += '·代理标记'; }
+      ipScore = Math.max(4, Math.min(45, ipScore));
+    } else {
+      const rtt = typeof IP !== 'undefined' ? (+IP.rtt || 0) : 0;
+      ipScore = curIp ? (rtt > 0 && rtt < 380 ? 34 : rtt > 0 && rtt < 850 ? 30 : 28) : 26;
+      ipTag = curIp ? '在线待评' : '待检测';
+    }
+
+    // 2. reCAPTCHA v3 与频控过盾分（0–25）
+    const rq = (typeof Pool !== 'undefined' && Pool.d?.rq && eg) ? Pool.d.rq[eg] : null;
+    const ok = +(rq?.ok || 0), rc = +(rq?.rc || 0), rl = +(rq?.l || 0), rlt = +(rq?.lt || 0);
+    let v3Score = 21;
+    let v3Tag = '正常';
+    if (ok > 0 && rc === 0) {
+      v3Score = Math.min(25, 21 + Math.min(4, ok));
+      v3Tag = 'v3全过';
+    } else if (rc > 0) {
+      const rate = rc / Math.max(1, ok + rc);
+      v3Score -= Math.min(21, rc * 8 + Math.round(rate * 10));
+      v3Tag = '验证×' + rc;
+    }
+    if (rl > 0 && t - rlt < 6 * 3600e3) {
+      v3Score -= (t - rlt < 1800e3 ? Math.min(12, rl * 5 + 3) : Math.min(8, rl * 3));
+      v3Tag = (v3Tag === '正常' ? '' : v3Tag + '·') + '429×' + rl;
+    }
+    try {
+      if (typeof Gacha !== 'undefined' && (Gacha.capOffer?.() || Gacha.capCooling?.())) {
+        v3Score -= 12;
+        v3Tag = '验证冷却';
+      }
+      if (typeof ReadLimit !== 'undefined' && ReadLimit.active?.()) {
+        v3Score -= 6;
+        if (!v3Tag.includes('429')) v3Tag += '·读限流';
+      }
+    } catch {}
+    v3Score = Math.max(0, Math.min(25, Math.round(v3Score)));
+
+    // 3. 近期会话出货与中途改派后验分（-22～+20，初始无记录基准 +10）
+    let drawScore = 10;
+    let drawTag = '基准';
+    try {
+      const sids = [];
+      if (typeof History !== 'undefined' && Array.isArray(History.items) && History.items.length) {
+        for (const it of History.items) {
+          if (it?.id && !it.isArchived) sids.push(it.id);
+          if (sids.length >= 10) break;
+        }
+      }
+      if (!sids.length && typeof Models !== 'undefined' && Models.all) {
+        const recent = Object.entries(Models.all)
+          .filter(([, m]) => m && (!m.at || t - m.at < 48 * 3600e3))
+          .sort((a, b) => (b[1].at || 0) - (a[1].at || 0))
+          .slice(0, 8);
+        for (const [k] of recent) sids.push(k);
+      }
+      let openStreak = 0, streakBroken = false, crownCount = 0, closedCount = 0, openCount = 0, rerouteCount = 0, sampled = 0;
+      for (const sid of sids) {
+        const m = (typeof Models !== 'undefined' && Models.get) ? Models.get(sid) : null;
+        const bp = (!m?.name && !m?.candidateName && typeof BillingProbe !== 'undefined' && BillingProbe.state) ? BillingProbe.state(sid)?.summary : null;
+        if (!m && !bp?.top?.length) continue;
+        const txt = [
+          m?.name, m?.candidateName, m?.reverseLabel, m?.rawLabel, m?.internal,
+          m?.candidates?.[0]?.id, bp?.top?.[0]?.canon, bp?.top?.[0]?.label
+        ].filter(Boolean).join(' ');
+        const whyTxt = [txt, m?.why, m?.provider].filter(Boolean).join(' ');
+        if (!txt && !m?.openThink) continue;
+        sampled++;
+        const isOpen = Boolean(
+          m?.openThink ||
+          m?.name === 'compat' ||
+          /deepseek|mimo|qwen|glm|minimax|kimi|moonshot|doubao|seed|llama|mistral|yi-|baichuan|open-?source|明文思考|开源/i.test(whyTxt)
+        );
+        const isCrown = !isOpen && /opus|fable|gpt-6|6\.1|sol\b|astra\b|luna\b|argon|barium/i.test(txt);
+        const isClosed = !isOpen && (isCrown || /sonnet|haiku|claude|gpt-5|gpt-4|o1|o3|o4|gemini|grok|terra/i.test(txt));
+        if (isOpen) {
+          openCount++;
+          if (!streakBroken) openStreak++;
+        } else if (isClosed) {
+          streakBroken = true;
+          closedCount++;
+          if (isCrown) crownCount++;
+        }
+        if (sampled <= 4 && (m?.routed || m?.routeSwitched || m?.effortDowngraded || bp?.routeSwitched || bp?.effortDowngraded)) {
+          rerouteCount++;
+        }
+        if (sampled >= 6) break;
+      }
+      if (sampled > 0) {
+        if (crownCount >= 2 && openStreak < 2) { drawScore = 20; drawTag = '连出旗舰'; }
+        else if (crownCount >= 1 && openStreak < 3) { drawScore = 18; drawTag = '已出旗舰'; }
+        else if (closedCount >= 1 && openStreak < 3) { drawScore = 14; drawTag = '闭源正常'; }
+        else { drawScore = 10; drawTag = '常规'; }
+
+        if (openStreak >= 5) { drawScore = -20; drawTag = `连抽${openStreak}开源`; }
+        else if (openStreak === 4) { drawScore = -12; drawTag = '连抽4开源'; }
+        else if (openStreak === 3) { drawScore = -4; drawTag = '连抽3开源'; }
+        else if (openStreak === 2) { drawScore -= 6; drawTag = '连抽2开源'; }
+        else if (openStreak === 1 && crownCount === 0 && closedCount === 0) { drawScore = 6; drawTag = '首抽开源'; }
+
+        if (rerouteCount > 0) {
+          drawScore -= Math.min(10, rerouteCount * 5);
+          drawTag += '·改派';
+        }
+        drawScore = Math.max(-22, Math.min(20, Math.round(drawScore)));
+      }
+    } catch {}
+
+    // 4. Pulse 额度水位分（-8～+10）
+    const pct = (typeof Pulse !== 'undefined' && Number.isFinite(+Pulse.v?.pulse)) ? +Pulse.v.pulse : cur.pulse;
+    let quotaScore = 8;
+    let quotaTag = '未读';
+    if (pct != null && Number.isFinite(+pct)) {
+      if (pct >= 50) { quotaScore = 10; quotaTag = `${Math.round(pct)}%充足`; }
+      else if (pct >= 25) { quotaScore = 8; quotaTag = `${Math.round(pct)}%正常`; }
+      else if (pct >= 10) { quotaScore = 4; quotaTag = `${Math.round(pct)}%偏低`; }
+      else { quotaScore = -8; quotaTag = `${Math.round(pct)}%告急`; }
+    }
+
+    const simScore = Math.max(1, Math.min(99, Math.round(ipScore + v3Score + drawScore + quotaScore)));
+    const hasRecentOfficial = cur.rawBotScore != null && (t - (cur.rawAt || 0) < 2 * 3600e3);
+    const finalScore = hasRecentOfficial
+      ? Math.max(1, Math.min(99, Math.round(cur.rawBotScore * 0.5 + simScore * 0.5)))
+      : simScore;
+    const sign = n => (n >= 0 ? '+' + n : String(n));
+    const detail = `IP ${ipScore}(${ipTag}) · 过盾 ${v3Score}(${v3Tag}) · 出货 ${sign(drawScore)}(${drawTag}) · 额度 ${sign(quotaScore)}`;
+    const tier = finalScore >= 80 ? 'T1' : finalScore >= 50 ? 'T2' : 'T3';
+    const label = finalScore >= 80 ? 'T1 旗舰池' : finalScore >= 50 ? 'T2 混合池' : 'T3 惩罚池';
+
+    _calcMemo = {
+      score: finalScore,
+      simScore,
+      hasRecentOfficial,
+      tier,
+      label,
+      detail,
+      breakdown: { ipScore, ipTag, v3Score, v3Tag, drawScore, drawTag, quotaScore, quotaTag },
+    };
+    return _calcMemo;
+  }
+
+  async function refreshPulse(force = false) {
+    if (typeof UI === 'undefined' || !UI.me) return state();
+    if (!force && now() - lastPulseAt < 25000 && cur.pulse != null) return state();
+    if (inflightPulse) return inflightPulse;
+    inflightPulse = (async () => {
+      try {
+        const res = await api('/api/me/pulse');
+        if (res && Number.isFinite(+res.pulse)) {
+          lastPulseAt = now();
+          cur = {
+            ...cur,
+            pulse: Math.max(0, Math.min(100, Math.round(+res.pulse))),
+            pulseRefreshedAt: res.refreshedAt || new Date().toISOString(),
+            updatedAt: now(),
+          };
+          save();
+        }
+      } catch {} finally {
+        inflightPulse = null;
+      }
+      return state();
+    })();
+    return inflightPulse;
+  }
+
+  function levelOf(score) {
+    const ev = calcPoolScore();
+    const s = Number.isFinite(Number(score)) && Number(score) > 0 ? Math.round(Number(score)) : ev.score;
+    const srcTag = ev.hasRecentOfficial ? `官方CF ${cur.rawBotScore} + 四维号池` : '模拟官方四维号池分';
+    if (s >= 80) {
+      return {
+        tone: 'ok',
+        label: 'T1 旗舰池',
+        desc: `${srcTag} ${s}/99（🟢 T1 旗舰高优池：高信誉真人环境，正常分配 Opus / 6.1 Sol / Argon 等顶级模型）\n构成：${ev.detail}`,
+      };
+    }
+    if (s >= 50) {
+      return {
+        tone: 'warn',
+        label: 'T2 混合池',
+        desc: `${srcTag} ${s}/99（🟡 T2 常规混合池：中等信誉，旗舰权重受限或偶发分流开源模型，建议保持纯净原生家宽 IP）\n构成：${ev.detail}`,
+      };
+    }
+    return {
+      tone: 'bad',
+      label: 'T3 惩罚池',
+      desc: `${srcTag} ${s}/99（🔴 T3 降级惩罚池：疑似触发低分号屏蔽 Opus 机制，高频分配 MiMo/DeepSeek 或弹验证，建议立即切换纯净住宅 IP）\n构成：${ev.detail}`,
+    };
+  }
+
+  function state() {
+    const ev = calcPoolScore();
+    return {
+      ...cur,
+      botScore: ev.score,
+      simScore: ev.simScore,
+      isSimulated: !ev.hasRecentOfficial,
+      poolTier: ev.tier,
+      poolLabel: ev.label,
+      poolDetail: ev.detail,
+      breakdown: ev.breakdown,
+    };
+  }
+
+  for (const evt of ['ip', 'rtt', 'models', 'model', 'billing', 'pulse', 'history', 'captcha']) {
+    try { Bus.on(evt, () => { invalidate(); }); } catch {}
+  }
+  Bus.on('turn', () => { invalidate(); setTimeout(() => { void refreshPulse(true); }, 1800); });
+  setTimeout(() => { if (typeof UI !== 'undefined' && UI.me) void refreshPulse(false); }, 2500);
+
+  return { state, noteCloudflare, refreshPulse, levelOf, calcPoolScore };
+})();
+try { globalThis.BotService = BotService; } catch {}
+

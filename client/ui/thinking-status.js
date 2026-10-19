@@ -54,27 +54,56 @@ const ThinkingStatus = (() => {
     else if(t==='start')chat._contentKey='';
   }
   const isClosed=chat=>{const a=access(chat);return a.certain&&a.type==='closed';};
+  const isStoppedMsg=m=>Boolean(m?.metadata?.openThinkStopped||m?.metadata?.aborted||m?.metadata?.feedback?.interruption==='stop');
+  const hasClosedTools=m=>(m?.parts||[]).some(p=>/^(?:toolu_|srvtoolu_|call_)/i.test(String(p?.toolCallId||'')));
   function of(chat) {
     if (!chat) return null;
     const closedByApi = isClosed(chat);
     const f = chat.fmt;
-    if ((Number(f?.rChars) || 0) > 0 && !closedByApi) {
+    let sawClosed = false;
+    const rawMsgs = Array.isArray(chat.messages) ? [...chat.messages] : [];
+    if (chat.live && !rawMsgs.includes(chat.live)) rawMsgs.push(chat.live);
+    const asstMsgs = rawMsgs.filter(m => m && m.role === 'assistant');
+    const nonStopped = asstMsgs.filter(m => !isStoppedMsg(m));
+    const msgs = nonStopped.length ? nonStopped : asstMsgs;
+    for (const m of msgs) {
+      let mHasVisible = false, mHasHidden = false;
+      for (const p of m.parts || []) {
+        if (p?.type === 'reasoning') {
+          if (visible(p)) mHasVisible = true;
+          else mHasHidden = true;
+        }
+      }
+      if (!mHasVisible && (mHasHidden || hasClosedTools(m))) {
+        sawClosed = true;
+      }
+      if (mHasVisible && !closedByApi && !sawClosed) {
+        try {
+          if (chat.sid && !chat._closedLockedModel && typeof BillingProbe !== 'undefined' && typeof BillingProbe.markAsOpenSourceModel === 'function') {
+            const curM = typeof Models !== 'undefined' ? Models.get(chat.sid) : null;
+            if (!curM || (!curM.userCorrected && !curM.manualOpenInferred && curM.name !== '开源模型')) {
+              BillingProbe.markAsOpenSourceModel(chat);
+            }
+          }
+        } catch {}
+        return { kind: 'compat-thinking', label: '开源思考' };
+      }
+    }
+    if ((Number(f?.rChars) || 0) > 0 && !closedByApi && !sawClosed && !chat.thinkStopped && !asstMsgs.some(isStoppedMsg)) {
       const ids = Array.isArray(f?.ids) ? f.ids.map(x => String(x?.[1] ?? '')).filter(Boolean) : [];
       const isClosedFmt = (f?.toolIds || []).some(i => /^toolu_/i.test(String(i || ''))) ||
         ids.some(i => /^(?:msg|rs)_[0-9a-f]{16,}/i.test(i)) ||
         (ids.length > 0 && ids.every(i => /^\d+$/.test(i)) && /^\s*\*\*[^\n*]{2,80}\*\*/.test(String(f?.rHead || '')));
-      if (!isClosedFmt) return { kind: 'compat-thinking', label: '开源思考' };
-    }
-    let sawClosed = false;
-    const msgs = Array.isArray(chat.messages) ? [...chat.messages] : [];
-    if (chat.live && !msgs.includes(chat.live)) msgs.push(chat.live);
-    for (const m of msgs) {
-      if (!m || m.role !== 'assistant') continue;
-      for (const p of m.parts || []) {
-        if (p?.type === 'reasoning') {
-          if (visible(p) && !closedByApi) return { kind: 'compat-thinking', label: '开源思考' };
-          sawClosed = true;
-        }
+      if (!isClosedFmt) {
+        try {
+          if (chat.sid && !chat._closedLockedModel && typeof BillingProbe !== 'undefined' && typeof BillingProbe.markAsOpenSourceModel === 'function') {
+            const curM = typeof Models !== 'undefined' ? Models.get(chat.sid) : null;
+            if (!curM || (!curM.userCorrected && !curM.manualOpenInferred && curM.name !== '开源模型')) {
+              BillingProbe.markAsOpenSourceModel(chat);
+            }
+          }
+        } catch {}
+        return { kind: 'compat-thinking', label: '开源思考' };
       }
     }
     if ((Number(f?.rBlocks || f?.rN) || 0) > 0) sawClosed = true;

@@ -177,6 +177,10 @@ const NodeRoutes = (() => {
       if(!P)return '';
       const rows=pipRows().filter(([k,e])=>e.ok&&!blocked(k));
       const good=rows.filter(([k,e])=>!cooling(e)&&!(R?.risky?.(k,e)));
+      if(current.proxyIp){
+        const curHit=good.find(([k])=>String(k).toLowerCase()===String(current.proxyIp).toLowerCase());
+        if(curHit)return curHit[0];
+      }
       return (good[0]||rows.find(([,e])=>!cooling(e))||[''])[0]||'';
     }
     const pipOf=()=>!P?'':(isAuto()||selPip===AUTO)?bestPip():selPip;
@@ -188,12 +192,16 @@ const NodeRoutes = (() => {
       const pipLoc=chosenPip&&P?.d?.ips?.[chosenPip]?.loc||'';
       return {proxy:n?io.link(n):'',nodeId:n?.id||'',region:pipLoc||cc||'',proxyIp:chosenPip};
     }
-    // 出口自动：按「可用 → 非冷却 → 低风险 → 低延迟」排好的前几个 IP；某个 IP 被 429 / 不通就试下一个，不只押最优那一个
+    // 出口自动：当前可用出口优先保持不动；需要轮换时按纯净度和最久未使用排序，不再按最低延迟反复切
     function pipChoices(max){
       if(!P)return [pipOf()];
       if(!(isAuto()||selPip===AUTO))return [selPip];
       const rows=pipRows().filter(([k,e])=>e.ok&&!blocked(k)&&!cooling(e)),risky=([k,e])=>!!R?.risky?.(k,e);
       const ordered=rows.filter(x=>!risky(x)&&pureK(x[0])).map(([k])=>k);
+      if(current.proxyIp){
+        const idx=ordered.findIndex(k=>String(k).toLowerCase()===String(current.proxyIp).toLowerCase());
+        if(idx>0){const [curK]=ordered.splice(idx,1);ordered.unshift(curK);}
+      }
       return ordered.length?ordered.slice(0,max):[''];
     }
     const normProxy=v=>{v=String(v||'').trim();return /^\d{1,3}(\.\d{1,3}){3}:\d+$/.test(v)?'http://'+v:v;};
@@ -279,7 +287,7 @@ const NodeRoutes = (() => {
         const part=q.shift(),seen=new Set(),sources=new Map(part.map(k=>[k,P.d?.ips?.[k]?.src||'']));
         const receive=async(k,r)=>{
           if(!workLive(j)||seen.has(k)||!part.includes(k))return;seen.add(k);
-          await P.mutate(d=>{const e=d.ips[k];if(workLive(j)&&e&&!e.gone&&(e.src||'')===sources.get(k)&&!(d.drop?.[k]>j.started)&&!P.banned?.(k))P.apply(d,k,r);});
+          await P.mutate(d=>{const e=d.ips[k];if(workLive(j)&&e&&!e.gone&&(e.src||'')===sources.get(k)&&!(d.drop?.[k]>j.started)&&!P.banned?.(k)){P.apply(d,k,r);if(typeof IPRep!=='undefined'&&!IPRep.trusted?.(k)&&(IPRep.impure?IPRep.impure(k,e):IPRep.risky?.(k,e)))P.banForever?.(d,k,'非纯净（一般/高风险） · 已永久拉黑');}});
           if(!workLive(j))return;pipBusy.delete(k);j.done++;if(!(r.ip&&r.brana))j.failed++;onPart?.([k],[r]);paintPoolSoon();
         };
         const args={link,timeout:9000,signal:j.ctl.signal,cancelled:()=>!workLive(j),onItem:receive,onStage:stage=>{if(workLive(j)&&j.phase!=='probing'){j.phase=stage;paintWork();}}};
@@ -311,10 +319,10 @@ const NodeRoutes = (() => {
     const grp=e=>e.ok===true?(cooling(e)?1:0):e.ok==null?2:3;
     function pipRows(){
       if(!P)return [];
-      // 只列「检测可用 + 已评估为纯净」的 IP；默认全网自动优选全部地区纯净 IP，手动指定地区时按该地区过滤
+      // 只列「检测可用 + 已评估为纯净」的 IP；当前在用优先保留，按纯净度与最久未使用轮换，不按最低延迟锁死
       const byRegion=!regAuto&&!!cc;
       return P.entries().filter(([k,e])=>!e.gone&&(byRegion?(e.ok===true&&e.loc===cc):e.ok===true)&&!P.banned?.(k)&&pureK(k))
-        .sort(([ka,x],[kb,y])=>((cc&&x.loc===cc?0:1)-(cc&&y.loc===cc?0:1))||grp(x)-grp(y)||(R?R.rank(kb,y)-R.rank(ka,x):0)||(x.ms||9e9)-(y.ms||9e9)||ka.localeCompare(kb)).slice(0,60);
+        .sort(([ka,x],[kb,y])=>((isCurPip(kb)?1:0)-(isCurPip(ka)?1:0))||((cc&&x.loc===cc?0:1)-(cc&&y.loc===cc?0:1))||grp(x)-grp(y)||(R?R.rank(kb,y)-R.rank(ka,x):0)||((x.used||0)-(y.used||0))||ka.localeCompare(kb)).slice(0,60);
     }
     const mins=t=>Math.max(1,Math.ceil((t-Date.now())/60e3));
     const when=t=>t?'测于 '+new Date(t).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})+'（'+Math.max(0,Math.round((Date.now()-t)/60000))+' 分钟前）':'';
@@ -351,7 +359,7 @@ const NodeRoutes = (() => {
           h('span',{class:'dly '+b.cls},b.text),
           h('button',{type:'button',class:'pip-t',title:'用当前节点单独 ping 这个 IP',disabled:pipBusy.has(k)||null,onclick:ev=>{ev.stopPropagation();void testPips([k]);}},'ping'));
       });
-      if(P&&R?.prime&&cc)void R.prime(cc);
+      if(P&&R?.prime&&cc&&!P.prog&&!rows.length)void R.prime(cc);
       const empty=!rows.length?[h('div',{class:'pip-empty'},P?(poolWork?.running?'正在检测候选；结果可用且纯净后立即加入，不必等全部完成。':'暂无已验证且纯净的出口；可点刷新或闪电检测候选。'):'此页面不支持 ProxyIP 列表')]:[];
       pipList.replaceChildren(autoRow,...items,...empty);testAllPips.hidden=!candidateRows().length||!hasP;
       {const candidates=candidateRows(),pending=candidates.filter(([,e])=>e.ok==null).length;pipCnt.textContent=rows.length+' 个纯净 · '+readyCount()+' 可用'+(pending?' · '+pending+' 待检':'');}
@@ -374,7 +382,8 @@ const NodeRoutes = (() => {
       cc=v;changed=true;choice=null;tests=null;lastBrana=null;
       if(selPip!==AUTO&&selPip&&P?.d?.ips?.[selPip]?.loc!==v)selPip=AUTO;if(v&&!selPip)selPip=AUTO;
       fillPips();options.onRegion?.(v);preflight();
-      if(v&&P)void refreshRegion(false);
+      // 切换地区直接从已验证的纯净池里秒切，6 小时内已测过的绝不重新全扫
+      if(v&&P&&!P.prog&&candidateRows(v).some(([,e])=>e.ok==null||(e.at&&Date.now()-e.at>6*3600e3)))void refreshRegion(false);
     }
     async function refreshRegion(force=true){
       if(!P||!cc){say('请先选择地区；地区列表中日本优先显示。');return;}
@@ -386,7 +395,7 @@ const NodeRoutes = (() => {
         const resolveOne=async()=>{while(queue.length&&workLive(j)){const l=queue.shift();let r;try{r=await P.refreshSrc(l,force,{cancelled:()=>!workLive(j)});}catch(e){r={err:String(e?.message||e)};}
           if(!workLive(j))return;j.resolved++;if(r?.err)j.dnsErrors++;fillPips();paintWork();}};
         await Promise.all(Array.from({length:Math.min(3,queue.length)},resolveOne));if(!workLive(j))return;
-        const keys=candidateRows(j.region).filter(([,e])=>force||e.ok==null||(e.at&&Date.now()-e.at>30*60e3)).map(([k])=>k);
+        const keys=candidateRows(j.region).filter(([,e])=>force||e.ok==null||(e.at&&Date.now()-e.at>6*3600e3)).map(([k])=>k);
         if(!keys.length){finishPoolWork(j,j.dnsErrors?'failed':'done',j.dnsErrors?'来源解析失败，已保留原列表；可稍后强制重试。':'候选列表已更新；近期已检的可用出口可直接选择。');return;}
         await testPips(keys,j.seq,j);
       }catch(e){if(workLive(j))finishPoolWork(j,'failed',friendly(e));}
@@ -410,8 +419,8 @@ const NodeRoutes = (() => {
     // 同一条线路的检测共用：预检（选完就在后台测）和「应用更改」拿同一个结果；检测凭据 5 分钟内有效，期间应用不再重测
     const warm=new Map(),inflight=new Map();
     async function brana(c){
-      const k=routeKey(c),w=warm.get(k);
-      if(w&&Policy.good(w)&&(!w.proofExpires||w.proofExpires>Date.now()+15000))return w;
+      const k=routeKey(c),w=warm.get(k)||(live&&cache.get(k)?.result);
+      if(w&&Policy.good(w)&&(!w.proofExpires||w.proofExpires>Date.now()+15000)){warm.set(k,w);return w;}
       if(inflight.has(k))return inflight.get(k);
       const job=(async()=>{
         const r=await io.probe({...c,kind:'manual'}).catch(e=>({ok:false,kind:e.kind||'network',error:String(e.message||e)}));
@@ -470,14 +479,22 @@ const NodeRoutes = (() => {
     // 自动模式的候选：不限节点与地区，优先最低延迟可用节点 + 全地区未限流纯净 IP → 节点默认出口 → 本机代理端口 → 直连兜底
     async function autoCandidates(){
       const up=S?[...S.sort(nodes).filter(n=>S.get(n)?.ok),...nodes.filter(n=>!S.get(n)?.ok)]:nodes.slice(),seen=new Set(),list=[];
-      const allPurePips=!P?[]:P.entries().filter(([k,e])=>!e.gone&&e.ok===true&&!blocked(k)&&!cooling(e)).sort(([ka,x],[kb,y])=>((x.loc===cc?0:1)-(y.loc===cc?0:1))||grp(x)-grp(y)||(R?R.rank(kb,y)-R.rank(ka,x):0)||(x.ms||9e9)-(y.ms||9e9)||ka.localeCompare(kb)).slice(0,8).map(([k])=>k);
-      for(const n of up.slice(0,6)){
-        for(const p of pipChoices(2)){const c=getCandidate(n,p),k=routeKey(c);if(!seen.has(k)){seen.add(k);list.push(c);}}
-        for(const p of allPurePips.slice(0,4)){const c={proxy:io.link(n),nodeId:n.id||'',region:'',proxyIp:p},k=routeKey(c);if(!seen.has(k)){seen.add(k);list.push(c);}}
-        {const c={proxy:io.link(n),nodeId:n.id||'',region:'',proxyIp:''},k=routeKey(c);if(!seen.has(k)){seen.add(k);list.push(c);}}
+      const pushC=c=>{if(!c?.proxy)return;const k=routeKey(c);if(!seen.has(k)){seen.add(k);list.push(c);}};
+      if(live&&typeof AutoRoute!=='undefined'&&AutoRoute.standby){
+        for(const s of [...(AutoRoute.standby.ips||[]),...(AutoRoute.standby.nodes||[])]){
+          if(s?.owner===owner&&s.candidate&&s.result?.ticket&&(s.expiresAt||0)>Date.now()+15000){
+            const ck=routeKey(s.candidate);warm.set(ck,s.result);cache.set(ck,{at:Date.now(),result:s.result});pushC(s.candidate);
+          }
+        }
       }
-      if(!list.length&&nodes.length)list.push(getCandidate(nodes[0]));
-      return {list,local:async()=>{const l=await io.local(Policy.ports).catch(()=>[]);return l.filter(x=>x.proxy).map(x=>({proxy:normProxy(x.proxy),proxyIp:'',nodeId:'',region:''}));}};
+      const allPurePips=!P?[]:P.entries().filter(([k,e])=>!e.gone&&e.ok===true&&!blocked(k)&&!cooling(e)).sort(([ka,x],[kb,y])=>((isCurPip(kb)?1:0)-(isCurPip(ka)?1:0))||((x.loc===cc?0:1)-(y.loc===cc?0:1))||grp(x)-grp(y)||(R?R.rank(kb,y)-R.rank(ka,x):0)||((x.used||0)-(y.used||0))||ka.localeCompare(kb)).slice(0,6).map(([k])=>k);
+      for(const n of up.slice(0,3)){
+        for(const p of pipChoices(2))pushC(getCandidate(n,p));
+        for(const p of allPurePips.slice(0,2))pushC({proxy:io.link(n),nodeId:n.id||'',region:'',proxyIp:p});
+        pushC({proxy:io.link(n),nodeId:n.id||'',region:'',proxyIp:''});
+      }
+      if(!list.length&&nodes.length)pushC(getCandidate(nodes[0]));
+      return {list:list.slice(0,12),local:async()=>{const l=await io.local(Policy.ports).catch(()=>[]);return l.filter(x=>x.proxy).map(x=>({proxy:normProxy(x.proxy),proxyIp:'',nodeId:'',region:''}));}};
     }
     function paint(){
       const policyLocked=live?State.locked(UI.host?.account)&&a.id===UI.host.account.id:State.locked(a);
@@ -534,7 +551,7 @@ const NodeRoutes = (() => {
         }
         // 打开面板不重测：只测从没测过的节点；地区延迟 30 分钟内测过不重测；所选地区里没测过的 IP
         if(S&&nodes.length){const todo=nodes.filter(n=>!S.get(n));if(todo.length)void S.test(todo);}
-        if(!keep&&P&&cc&&candidateRows().some(([,e])=>e.ok==null||(e.at&&Date.now()-e.at>30*60e3)))void refreshRegion(false);
+        if(!keep&&P&&!P.prog&&cc&&candidateRows().some(([,e])=>e.ok==null||(e.at&&Date.now()-e.at>6*3600e3)))void refreshRegion(false);
       }catch(e){error=friendly(e);say(error,true);}finally{loading=false;paint();}
     }
     // 刚选了地区、出口 IP 还在后台检测：先等它出结果（最多 30 秒），否则会拿「空出口」去检测，得到「实际出口与所选地区不一致」
@@ -566,14 +583,15 @@ const NodeRoutes = (() => {
         // 手动应用期间：后台线路恢复 / 自动换节点 / 池维护全部让路，不和它抢检测名额、也不在中途改线路
         if(live){manualBusy++;held=true;if(typeof Pool!=='undefined'&&Pool.switching&&!Pool.switching.has(owner)){Pool.switching.add(owner);lockedPool=true;}}
         let candidate=getCandidate(),r=null,firstBad='';
-        const pick=async list=>{   // 候选并行检测（每批 3 条），按原顺序取第一条通过的
+        const pick=async list=>{   // 候选并行检测（每批 3 条），同批通过时优先最低延迟出口
           for(let i=0;i<list.length&&!r;i+=3){
-            const part=list.slice(i,i+3),xs=await Promise.all(part.map(c=>brana(c)));if(stale())return 0;
-            for(let j=0;j<part.length;j++){const c=part[j],x=xs[j];let bad=verdict(c,x);if(!bad){step(60,'评估出口纯净度…');bad=await riskBad(c,x);}if(stale())return 0;if(!bad){candidate=c;r=x;break;}firstBad||=bad;}
+            const part=list.slice(i,i+3),xs=await Promise.all(part.map((c,idx)=>brana(c).then(x=>({c,x,idx}))));if(stale())return 0;
+            xs.sort((u,v)=>((u.x?.ok?0:1)-(v.x?.ok?0:1))||((u.x?.ms??9e9)-(v.x?.ms??9e9))||(u.idx-v.idx));
+            for(let j=0;j<xs.length;j++){const {c,x}=xs[j];let bad=verdict(c,x);if(!bad){step(60,'评估出口纯净度…');bad=await riskBad(c,x);}if(stale())return 0;if(!bad){candidate=c;r=x;break;}firstBad||=bad;}
           }
           return true;
         };
-        const warmed=list=>list.some(c=>{const w=warm.get(routeKey(c));return w&&w.proofExpires>Date.now()+15000;});
+        const warmed=list=>list.some(c=>{const k=routeKey(c),w=warm.get(k)||(live&&cache.get(k)?.result);return w&&Policy.good(w)&&w.proofExpires>Date.now()+15000;});
         if(wanted==='auto'){
           const {list,local}=await autoCandidates();
           step(warmed(list)?55:25,'自动：检测 '+list.length+' 条候选线路…');
@@ -600,8 +618,8 @@ const NodeRoutes = (() => {
           if(candidate?.proxyIp&&P?.mutate){try{await P.mutate(d=>{d.ips||={};const it=d.ips[candidate.proxyIp]||={ip:String(candidate.proxyIp).split(':')[0]};it.ok=true;it.gone=false;it.banned=false;it.cool=0;if(r?.loc)it.loc=r.loc;if(r?.ip)it.eg=r.ip;if(r?.ms)it.ms=r.ms;if(d.ban)delete d.ban[String(candidate.proxyIp).toLowerCase()];});}catch{}}
           const saved=await selector({...io,cancelled:stale}).apply(data.account,candidate,wanted,r);warm.delete(routeKey(candidate));lastBrana=null;pre=null;
           Object.assign(a,saved);current=Policy.fields(saved);changed=false;if(P&&State.isNode(saved)&&saved.nodeId){if(P.d)P.d.node=saved.nodeId;if(!UI.host?.routeDraft)void P.setNode(saved.nodeId).catch(()=>{});}UI.host=await Host.info();UI.renderAcct?.();
-          // 刚手动换好：1 分钟内不因为重连抖动触发自动恢复
-          if(typeof AutoRoute!=='undefined'&&AutoRoute.engine){AutoRoute.engine.next=Math.max(AutoRoute.engine.next||0,Date.now()+60000);AutoRoute.failed=false;}
+          // 刚手动换好：记录手动选路锁定窗口（自动模式仅短暂防抖 15 秒，手动指定节点/IP 则锁定 10 分钟防止后台误切走）
+          if(typeof AutoRoute!=='undefined'){AutoRoute.noteManualRoute?.(wanted==='auto'?15000:600000);if(AutoRoute.engine)AutoRoute.engine.next=Math.max(AutoRoute.engine.next||0,Date.now()+(wanted==='auto'?15000:60000));AutoRoute.failed=false;}
           try{if(saved?.id&&(saved.proxy||saved.proxyIp))Store.set('lastGoodRoute:'+saved.id,{id:saved.id,proxy:saved.proxy||'',proxyIp:saved.proxyIp||'',nodeId:saved.nodeId||'',region:saved.region||'',at:now()});}catch{}options.onApplied?.(saved);
           setTimeout(()=>Store.del('auth-route-draft'),2000);
           const effective=State.isNode(saved)?'节点 '+(nodes.find(n=>n.id===saved.nodeId)?.name||saved.nodeId||''):isDirectP(saved.proxy)?'直连':'本机代理 '+maskProxy(saved.proxy);

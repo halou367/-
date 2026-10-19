@@ -104,31 +104,73 @@ const SendQ = {
     q.splice(i, 1);
     if (!q.length) chat._qPaused = '';
     try { Drafts.setQ(chat, true); } catch {}
-    const curDraft = (typeof Drafts !== 'undefined' && Drafts.get?.(chat.sid)) || '';
-    const nextDraft = curDraft && item.text ? (curDraft + '\n' + item.text) : (item.text || curDraft);
+    const tab = typeof Tabs !== 'undefined'
+      ? ((Tabs.list || []).find(t => t && t.sid === chat.sid && !t.kind)
+        || ((Tabs.list || []).find(t => t && t.sid === chat.sid))
+        || (Tabs.cur && (!Tabs.cur.sid || Tabs.cur.sid === chat.sid) && !Tabs.cur.kind ? Tabs.cur : null))
+      : null;
+    const tas = [];
+    if (typeof document !== 'undefined') {
+      if (tab?.key && typeof document.querySelectorAll === 'function') {
+        for (const el of document.querySelectorAll('textarea[data-tab="' + tab.key + '"]')) {
+          if (el && !tas.includes(el)) tas.push(el);
+        }
+      }
+      if (!tas.length && typeof document.querySelector === 'function') {
+        const canFallback = typeof UI === 'undefined' || !UI.els?.chat || UI.els.chat === chat || (typeof Tabs !== 'undefined' && Tabs.cur === tab);
+        if (canFallback) {
+          const fallbackTa = document.querySelector('#inp') || document.querySelector('.cbox textarea') || (tab?.key ? document.querySelector('textarea[data-tab="' + tab.key + '"]') : null);
+          if (fallbackTa && !tas.includes(fallbackTa)) tas.push(fallbackTa);
+        }
+      }
+    }
+    const liveVal = tas[0] && typeof tas[0].value === 'string' ? tas[0].value : '';
+    const tabVal = tab && typeof tab.draft === 'string' ? tab.draft : '';
+    const storeVal = (typeof Drafts !== 'undefined' && Drafts.get?.(chat.sid)) || '';
+    const curDraft = liveVal || tabVal || storeVal || '';
+    const recText = String(item.text || '');
+    const nextDraft = curDraft && recText ? (curDraft + '\n' + recText) : (recText || curDraft);
+    if (tab) tab.draft = nextDraft;
     try { Drafts.set?.(chat.sid, nextDraft); } catch {}
     if (Array.isArray(item.atts) && item.atts.length) {
-      if (typeof UI !== 'undefined' && UI.atts && typeof Tabs !== 'undefined') {
-        const tab = (Tabs.list || []).find(t => t.sid === chat.sid) || Tabs.cur;
-        if (tab) {
-          const list = UI.atts.get(tab.key) || [];
-          UI.atts.set(tab.key, list);
-          for (const a of item.atts) if (!list.includes(a)) list.push(a);
-          try { UI.paintAtt?.(); } catch {}
-        }
+      if (typeof UI !== 'undefined' && UI.atts && tab) {
+        const list = UI.atts.get(tab.key) || [];
+        UI.atts.set(tab.key, list);
+        for (const a of item.atts) if (!list.includes(a)) list.push(a);
+        try { UI.paintAtt?.(); } catch {}
       } else if (typeof Att !== 'undefined') {
         const list = Att.of(chat);
         for (const a of item.atts) if (!list.includes(a)) list.push(a);
       }
     }
-    const ta = typeof document !== 'undefined' ? document.querySelector('#inp') : null;
-    if (ta && typeof UI !== 'undefined' && UI.els?.chat === chat) {
+    if (tab && typeof Drafts !== 'undefined' && typeof Drafts.setTab === 'function') {
+      try { Drafts.setTab(tab, typeof UI !== 'undefined' && UI.atts ? UI.atts.get(tab.key) : undefined); } catch {}
+      try { Tabs?.save?.(); } catch {}
+    } else if (chat.sid && typeof Drafts !== 'undefined' && typeof Drafts.load === 'function') {
+      try {
+        const d = Drafts.load(), k = 'sid:' + chat.sid, o = d.t?.[k];
+        if (d.t) {
+          d.t[k] = {
+            v: nextDraft,
+            at: typeof now === 'function' ? now() : Date.now(),
+            atts: [...(o?.atts || []), ...(item.atts || []).map(a => Drafts.attOut?.(a)).filter(Boolean)],
+            missing: [...(o?.missing || []), ...(Drafts.missing?.(item.atts) || [])]
+          };
+          Drafts.write?.(true);
+        }
+      } catch {}
+    }
+    for (const ta of tas) {
       ta.value = nextDraft;
-      ta.style.height = 'auto';
-      ta.style.height = Math.min(200, ta.scrollHeight) + 'px';
-      try { ta.focus(); } catch {}
+      if (ta.style) {
+        ta.style.height = 'auto';
+        ta.style.height = Math.min(200, ta.scrollHeight || 40) + 'px';
+      }
+      try { if (typeof Event === 'function') ta.dispatchEvent?.(new Event('input')); } catch {}
+      try { ta.focus?.(); } catch {}
     }
     chat.emit();
+    try { UI?.paintQ?.(); } catch {}
     try { toast('已撤回至输入框'); } catch {}
     return true;
   },

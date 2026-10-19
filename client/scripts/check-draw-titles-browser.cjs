@@ -107,7 +107,7 @@ async function finish(f, name) {
   await p.evaluate(()=>{__anc.GPop.openAny();});await p.clock.runFor(200);
   await p.locator('#gpop [data-ui=text]').click();
   const mode=p.locator('#gpop [data-k=mode]'),preferred=p.locator('#gpop [data-ui=preferred]');
-  assert.deepEqual(await mode.locator('option').evaluateAll(x=>x.map(o=>o.value)),['autoqa','svg','custom','fingerprint']);
+  assert.deepEqual(await mode.locator('option').evaluateAll(x=>x.map(o=>o.value)),['habit','autoqa','svg','custom','fingerprint']);
   await mode.selectOption('svg');assert.equal(await preferred.isVisible(),false);assert.equal(await p.locator('#gpop [data-k=prompt]').isDisabled(),true);
   await mode.selectOption('custom');assert.equal(await preferred.isVisible(),false);
   await p.locator('#gpop [data-k=prompt]').fill('Reply with the word ready.');await p.locator('#gpop [data-k=prompt]').blur();assert.equal(await p.locator('#gpop [data-ui=saveText]').count(),0);

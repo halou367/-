@@ -1,7 +1,7 @@
 // Route failover confirmation dialog with countdown and automatic fallback
 const RouteConfirm = {
   job:null,
-  ask({title='当前线路断开，是否切换到已验证节点？',text='',ok='立即切换',keep='否（保持当前）',seconds=5}={}){
+  ask({title='当前线路断开，是否切换到已验证节点？',text='',ok='立即切换',keep='否（保持当前）',seconds=5,defaultYes=true}={}){
     if(this.job)return this.job;
     this.job=new Promise(resolve=>{
       let left=Math.max(1,seconds|0),timer=0;
@@ -12,10 +12,10 @@ const RouteConfirm = {
       const go=h('button',{class:'btn',onclick:()=>finish(true)},ok),stay=h('button',{class:'btn ghost',onclick:()=>finish(false)},keep);
       back.append(h('div',{class:'dlg route-confirm',role:'alertdialog','aria-modal':'true'},
         h('div',{class:'dlg-t'},title),text?h('div',{class:'dlg-h'},text):null,
-        h('div',{class:'dlg-h rc-tick'},count,' 秒后默认自动切换（点「否」保持当前节点）'),
+        h('div',{class:'dlg-h rc-tick'},count,defaultYes?' 秒后默认自动切换（点「否」保持当前节点）':' 秒后默认保持当前地区（点「'+ok+'」才切换）'),
         h('div',{class:'dlg-row'},h('span',{class:'grow'}),stay,go)));
-      document.body.append(back);addEventListener('keydown',key,true);setTimeout(()=>go.focus(),30);
-      timer=setInterval(()=>{left--;count.textContent=String(Math.max(0,left));if(left<=0)finish(true);},1000);
+      document.body.append(back);addEventListener('keydown',key,true);setTimeout(()=>(defaultYes?go:stay).focus(),30);
+      timer=setInterval(()=>{left--;count.textContent=String(Math.max(0,left));if(left<=0)finish(Boolean(defaultYes));},1000);
     });
     return this.job;
   },
@@ -36,9 +36,21 @@ const RouteConfirm = {
     try { toast('路由提醒：' + label + (text ? ' · ' + text : '') + '（仅提醒，不暂停）', 'warn'); } catch {}
     return Promise.resolve(false);
   },
-  // 出现 429 限流、连接超时或高延迟（且存在更优非 429 候选节点）时直接切换可用节点与全网纯净 IP，不做跨区阻拦
+  // 同地区内故障恢复直接切换；一旦涉及跨地区（fromRegion !== toRegion），必须弹窗提示用户确认后才允许跨地区切换
   route(x){
     if(typeof document!=='undefined'&&document.querySelector('.lpick:not(.out)'))return Promise.resolve(true);
+    const fromReg=String(x?.from?.region||x?.from?.routeHome||x?.current?.loc||(typeof IP!=='undefined'&&IP.loc)||'').trim().toUpperCase();
+    const toReg=String(x?.result?.loc||x?.winner?.region||'').trim().toUpperCase();
+    if(fromReg&&toReg&&fromReg!==toReg){
+      return this.ask({
+        title:'检测到跨地区切换出口，是否允许？',
+        text:'当前地区 '+fromReg+' 暂无可用出口，即将切换到跨地区出口：'+(x?.label||toReg)+'（'+fromReg+' → '+toReg+'）。若需留在 '+fromReg+'，请点击「保持当前地区」。',
+        ok:'允许跨地区切换',
+        keep:'保持当前地区',
+        seconds:15,
+        defaultYes:false,
+      });
+    }
     if(x?.mode==='node'||x?.mode==='ip'||x?.reason==='latency'||x?.reason==='limited'||x?.reason==='error-switch')return Promise.resolve(true);
     return Promise.resolve(true);
   },
@@ -107,8 +119,11 @@ const StandbyPool = {
     if (!a?.id) return null;
     this.prune(a.id, a.proxyIp, a.proxy);
     const pool = first?.pool || {}, at = now();
+    const curReg = String(a.region || a.routeHome || '').trim().toUpperCase();
     const isUsable = item => {
       const pip = String(item?.candidate?.proxyIp || '').trim();
+      const itemReg = String(item?.loc || item?.candidate?.region || item?.result?.loc || '').trim().toUpperCase();
+      if (curReg && itemReg && itemReg !== curReg) return false; // 跨地区候选不能绕过确认弹窗静默切换
       if (!pip) return true;
       const e = pool.ips?.[pip];
       if (e && (e.gone || e.cool > at || pool.ban?.[pip.toLowerCase()])) return false;
@@ -132,6 +147,7 @@ const StandbyPool = {
   async replenish(why = 'auto') {
     if (typeof window !== 'undefined' && (window.__routeFixture || window.__fixture)) return;
     if (this.warming || typeof navigator !== 'undefined' && navigator.onLine === false) return;
+    if ((typeof NodeRoutes !== 'undefined' && NodeRoutes.manual > 0) || (typeof Pool !== 'undefined' && Pool.switching?.size > 0)) return;
     if (why !== 'gacha-start' && why !== 'consumed' && why !== 'post-switch' && now() - this.lastWarmAt < 20000) return;
     const a = typeof UI !== 'undefined' ? UI.host?.account : null;
     if (!a?.id || !AutoRoute.adapter || !AutoRoute.engine || (typeof RouteState !== 'undefined' && RouteState.locked(a))) return;
@@ -189,7 +205,6 @@ const StandbyPool = {
               } catch {}
             }
           }
-          this.ips.sort((x, y) => (x.ms || 9999) - (y.ms || 9999));
           if (this.ips.length > this.MAX_IPS) this.ips.length = this.MAX_IPS;
         }
       }
@@ -251,26 +266,39 @@ const AutoRoute = {
   saveLastGood(a=UI.host?.account){if(!a?.id||(!a.proxy&&!a.proxyIp))return;try{Store.set('lastGoodRoute:'+a.id,{id:a.id,proxy:a.proxy||'',proxyIp:a.proxyIp||'',nodeId:a.nodeId||'',region:a.region||'',at:now()});}catch{}},
   getLastGood(id=UI.host?.account?.id){try{return id?Store.get('lastGoodRoute:'+id,null):null;}catch{return null;}},
   async rollbackLastGood(a=UI.host?.account){const g=this.getLastGood(a?.id);if(!a?.id||!g?.proxy||!this.adapter)return {ok:false,error:'尚无已记录的上次连通配置'};const pr=await this.adapter.probe({proxy:g.proxy,proxyIp:g.proxyIp||'',nodeId:g.nodeId||'',region:g.region||'',kind:'manual'});if(!RoutePolicy.good(pr))return {ok:false,error:pr?.error||'上次配置当前未通过检测'};const res=await this.adapter.apply({id:a.id,expected:RoutePolicy.fields(a),expectedConfig:RouteState.signature(a),expectedMode:RouteState.mode(a),route:{proxy:g.proxy,proxyIp:g.proxyIp||'',nodeId:g.nodeId||'',region:g.region||pr.loc||'',routeHome:g.region||pr.loc||''},manual:true,mode:'node',ticket:pr.ticket});if(res?.account)Object.assign(a,res.account);Bus.emit('host');return {ok:!!res?.ok,route:g};},
-  engine:null, adapter:null, busy:false, status:'尚未检测', lastChanged:0, streamFails:[], netErrorCount:0, netErrorTimes:[], initialized:false, needsOptimalUpgrade:false,
-  noteNetProblem(){
+  engine:null, adapter:null, busy:false, status:'尚未检测', lastChanged:0, manualLockUntil:0, streamFails:[], netErrorCount:0, netErrorTimes:[], initialized:false, needsOptimalUpgrade:false,
+  noteManualRoute(ms=600000){
     const t=typeof now==='function'?now():Date.now();
-    this.netErrorTimes=(this.netErrorTimes||[]).filter(x=>t-x<15*60e3);
-    this.netErrorTimes.push(t);
-    this.netErrorCount=this.netErrorTimes.length;
-    return this.netErrorCount;
+    this.manualLockUntil=Math.max(this.manualLockUntil||0,t+Math.max(60000,Number(ms)||600000));
+    this.failed=false;
+    this.netErrorCount=0;
+    this.netErrorTimes=[];
+    if(this.engine)this.engine.next=Math.max(this.engine.next||0,t+60000);
+    try{StandbyPool.ips=[];StandbyPool.nodes=[];}catch{}
+    try{if(typeof ReadLimit!=='undefined')ReadLimit.until=0;}catch{}
+    try{if(typeof Quota!=='undefined'&&Quota.clear)Quota.clear(true);}catch{}
+  },
+  isManualLocked(){
+    const t=typeof now==='function'?now():Date.now();
+    return t<(this.manualLockUntil||0);
+  },
+  noteNetProblem(){
+    this.netErrorTimes=[];
+    this.netErrorCount=0;
+    return 0;
   },
   canFailover(a=UI.host?.account){return !!this.adapter&&!!a&&!RouteState.locked(a)&&!this.authPending&&(RouteState.canRecover(a)||isVless(a.proxy)||Boolean(a.proxyIp));},
   enabled(){return this.canFailover(UI.host?.account);},
   init(){
     if(this.initialized)return;this.initialized=true;
     this.adapter=RouteHost.create(window.BranaHost,window.BranaAndroid,Vless);if(!this.adapter)return;
-    // 手动「应用更改」进行中：恢复流程立即让路；无论有没有开自动模式，只要未处于认证锁定，节点超时/不可达或 IP 429/超时均自动先切能用的，空闲时再后台升级最优
+    // 手动「应用更改」进行中：恢复流程立即让路；正常可用线路保持黏性，绝不按最低延迟反复切换
     const manual=()=>typeof NodeRoutes!=='undefined'&&NodeRoutes.manual>0;
     const engineAdapter={
       ...this.adapter,
       retryMs:200,
       fastCheck:true,
-      networkFirst:true,
+      networkFirst:false,
       batchSize:4,
       forceGlobalLowestLatency:()=>(this.netErrorCount||0)>2,
       banBadIp:(c,r)=>{if(c?.proxyIp&&typeof Pool!=='undefined'&&(r?.ip||r?.kind==='rate-limit'||Pool.isNodeConfirmedAlive?.(c.proxy)))void Pool.mutate(d=>{const e=d.ips?.[c.proxyIp];if(!e)return;e.fc=(e.fc||0)+1;if(r?.kind==='rate-limit')e.cool=Math.max(e.cool||0,now()+30*60000);else if((e.fc||0)>=3)Pool.banForever?.(d,c.proxyIp,r?.error||'节点正常但 ProxyIP 连续检测未通过 · 已永久拉黑');}).catch(()=>{});},
@@ -294,27 +322,20 @@ const AutoRoute = {
     this.engine=new RoutePolicy.Engine({...engineAdapter,allowCrossRegionEscape:true,speed:n=>typeof NodeSpeed!=='undefined'?NodeSpeed.get(n.proxy):null,confirm:x=>this.noConfirm?true:RouteConfirm.route(x),cancelled:()=>!this.enabled()||manual()||(!this.forced&&this.reason==='network'&&NetHealth.proof>this.proof),progress:text=>{this.status=text;this.paint();Bus.emit('route-state');}});
     Bus.on('neterr',()=>this.request('network'));
     Bus.on('limited',why=>this.limited(why));
-    // 出口检测（WebView 里的 /cdn-cgi/trace）偶尔超时不代表线路坏了；通了则自动同步实际出口国家并预热第二 IP
-    const anyChatBusy=()=>typeof Chats!=='undefined'&&[...Chats.values()].some(c=>c&&(c.busy||c.streaming));
+    // 出口检测（WebView 里的 /cdn-cgi/trace）偶尔超时不代表线路坏了；通了则自动同步实际出口国家并预热第二 IP，绝不因为后台探测超时触发循环恢复
     Bus.on('ip',()=>{
-      if(!IP.err&&IP.loc){this.adoptWorkingRegion(IP.loc);void StandbyPool.replenish('ip-ok');return;}
-      if(IP.err&&IP.failures>=3&&!anyChatBusy()&&!NetHealth.recent(45000)){
-        void this.onErrorSwitch({routeTimeout:true,net:true,message:IP.err},'ip-timeout');
-      }
+      if(!IP.err&&IP.loc){this.adoptWorkingRegion(IP.loc);void StandbyPool.replenish('ip-ok');}
     });
-    Bus.on('rtt',()=>{
-      if(typeof IP!=='undefined'&&IP.rttFail>=3&&(IP.failures||0)>=2&&!IP.quietFail?.()&&!anyChatBusy()&&!NetHealth.recent(45000)){
-        const t=typeof now==='function'?now():Date.now();
-        if(t-(this._lastRttHealAt||0)>=30000){
-          this._lastRttHealAt=t;
-          void this.onErrorSwitch({routeTimeout:true,net:true,message:'实时延迟探测超时'},'rtt-timeout');
-        }
-      }
-    });
-    Bus.on('connection',()=>{if(NetHealth.recent()){this.failed=false;this.adoptWorkingRegion();}});
+    Bus.on('rtt',()=>{});
+    Bus.on('connection',()=>{if(NetHealth.recent()){this.failed=false;this._errHits=[];this.adoptWorkingRegion();}});
     addEventListener('online',()=>{if(!NetHealth.recent())void this.nodeAlive().then(ok=>{if(!ok)this.request('network');});});
-    this.timer=setInterval(()=>{if(this.enabled()&&this.failed&&!this.busy&&navigator.onLine!==false)this.request('network');},5000);
-    // 自动模式：没有报错/断连时绝不主动换节点或切回旧地区，仅在节点完全断连时恢复，并在后台补充热备库
+    this.timer=setInterval(()=>{
+      if(this.enabled()&&this.failed&&!this.busy&&navigator.onLine!==false){
+        const t=typeof now==='function'?now():Date.now();
+        if(t-(this._lastAutoRetryAt||0)>=120000){this._lastAutoRetryAt=t;this.failed=false;void this.request('network');}
+      }
+    },15000);
+    // 自动模式：没有报错/断连时绝不主动换节点或切回旧地区，不在后台因延迟触发恢复
     Bus.on('nodespeed',()=>{clearTimeout(this.optT);this.optT=setTimeout(()=>void this.optimize(),2500);});
     if(typeof setTimeout==='function')setTimeout(()=>void StandbyPool.replenish('boot'),2500);
   },
@@ -331,9 +352,6 @@ const AutoRoute = {
     const a=UI.host?.account;
     if(!a||!this.adapter||this.busy||this.optimizing||this.authPending||a.authLocked||typeof NodeSpeed==='undefined'||NodeSpeed.testing)return;
     if(!isVless(a.proxy)||navigator.onLine===false)return;
-    const cur=NodeSpeed.get(a.proxy);
-    // 仅当前节点确实不通且无近期成功请求时才触发故障恢复；当前线路正常时绝不因延迟或旧地区主动换 IP / 节点
-    if(cur&&cur.ok===false){if(!NetHealth.recent())void this.request('network');return;}
     this.needsOptimalUpgrade=false;
     this.adoptWorkingRegion();
     void StandbyPool.replenish('optimize');
@@ -372,14 +390,17 @@ const AutoRoute = {
           if(!r.changed&&r.account?.proxyIp){
             const keepPip=r.account.proxyIp;
             try{await Pool.mutate(d=>{const e=d.ips?.[keepPip];if(e){e.cool=0;e.gone=false;e.banned=false;e.ok=true;if(d.ban)delete d.ban[keepPip.toLowerCase()];}});}catch{}
-          }else if(r.changed&&(r.mode==='ip'||reason==='error-switch')&&r.from?.proxyIp){
+          }else if(r.changed&&r.from?.proxyIp&&r.from.proxyIp!==r.account?.proxyIp){
             const old=r.from.proxyIp;
+            const newPip=r.account?.proxyIp||'';
             const sameNode=Boolean(r.from?.proxy&&r.account?.proxy&&r.from.proxy===r.account.proxy&&old!==r.account?.proxyIp);
             try{
               await Pool.mutate(d=>{
                 // 只有确认是同一个 VLESS 节点下换了新 ProxyIP 就恢复连通（说明节点没问题，纯粹是旧 ProxyIP 坏了），且旧 IP 已连续多次失败，才永久拉黑；
-                // 若是因为切换了 VLESS 节点才恢复，说明是旧节点故障，绝不误拉黑旧 ProxyIP！
+                // 若是因为切换了 VLESS 节点才恢复，说明是旧节点故障，绝不误拉黑旧 ProxyIP！但无论如何给旧 IP 记冷却与使用时间戳，防止紧接着又切回同一个旧 IP 死循环。
                 const e=d.ips?.[old];
+                if(e){e.used=now();e.cool=Math.max(e.cool||0,now()+10*60e3);}
+                if(newPip&&d.ips?.[newPip])d.ips[newPip].used=now();
                 if(sameNode&&e&&(e.fc||0)>=3&&typeof Pool.banForever==='function')Pool.banForever(d,old,'同节点下该 ProxyIP 连续异常 · 已永久拉黑');
                 else if(sameNode&&e){e.cool=Math.max(e.cool||0,now()+Math.max(1,+d.cool||30)*60e3);e.hits=(e.hits||0)+1;e.fc=(e.fc||0)+1;}
               });
@@ -399,7 +420,8 @@ const AutoRoute = {
               if(r.probe?.loc)IP.loc=r.probe.loc;
               try{Bus.emit('ip');Bus.emit('rtt');}catch{}
             }
-            UI.renderAcct?.();void IP.poll();void IP.ping?.();
+            UI.renderAcct?.();
+            setTimeout(()=>{if(!this.busy){void IP.poll();void IP.ping?.();}},2500);
             const fromReg=String(r.from?.region||'').trim().toUpperCase();
             const isCrossRegion=Boolean(fromReg&&toReg&&fromReg!==toReg);
             if(r.mode==='ip'&&isCrossRegion){
@@ -415,31 +437,40 @@ const AutoRoute = {
             if(c.busy||c.streaming)c.restream();else if(c.loaded)c.reconcile().catch(()=>{});
           }
         }else if(r.declined){this.failed=false;this.status=r.error;}else if(!r.disabled&&!r.cancelled){
-          this.failed=!r.stale&&!r.blocked&&reason!=='limited'&&reason!=='error-switch';
+          this.failed=false;
           this.status=r.error||'暂未恢复，稍后重试';
-          if(this.failed&&typeof UI!=='undefined'&&typeof RegionIP!=='undefined'&&!window.__routeFixture&&!window.__fixture){
+          if(!r.stale&&!r.blocked&&reason!=='limited'&&reason!=='error-switch'&&typeof UI!=='undefined'&&typeof RegionIP!=='undefined'&&!window.__routeFixture&&!window.__fixture){
             try{if(!UI.authed&&typeof UI.enterBrowseMode==='function')UI.enterBrowseMode('网络无法连接，已开启离线查阅 · 可切换节点或点 × 直接查阅本地对话');}catch{}
             try{RegionIP.open({offlineAlert:true});}catch{}
           }
         }
         return r;
-      }catch(e){this.failed=true;this.status='线路恢复失败：'+describe(e);return {ok:false,error:this.status};}
+      }catch(e){this.failed=false;this.status='线路恢复失败：'+describe(e);return {ok:false,error:this.status};}
       finally{this.busy=false;this.paint();Pool.switching.delete(owner);Bus.emit('route-state');}
     })();return this.pending;
   },
-  // 遇到 429 / 超时 / 401 / 403 / 404 / 5xx / 任何连接报错：立即拉黑当前异常 IP 并启用热备秒切；超过 2 次网络问题自动选全库最低延迟可用 IP
+  // 仅真实传输断连/超时才触发自动切换：429 / 404 / 401 / 403 或用户刚手动选定 IP 期间绝不自动把用户的可用 IP 切走；加严格防抖与冷却，绝不反复循环切换
   onErrorSwitch(err,where='api'){
     if(!this.enabled()||!RoutePolicy.shouldRotateOnError?.(err))return Promise.resolve({ok:false,skipped:true});
+    if(where==='ip-timeout'||where==='rtt-timeout')return Promise.resolve({ok:false,skipped:true});
     if((typeof NodeRoutes!=='undefined'&&NodeRoutes.manual>0)||(typeof RegionIP!=='undefined'&&RegionIP.busy))return Promise.resolve({ok:false,skipped:true});
     const st=Number(err?.status||err?.httpStatus||0);
-    const cnt=this.noteNetProblem();
-    if(st===429||err?.ipLimited)this.coolCurrentIp({retryAfterMs:err?.retryAfterMs||30*60000,reason:where+':429'});
+    if(st===429||st===404||st===401||st===403||err?.ipLimited||err?.rateLimitedLocally)return Promise.resolve({ok:false,skipped:true,status:st});
+    if(this.isManualLocked()&&where!=='manual')return Promise.resolve({ok:false,skipped:true,manualLocked:true});
+    const t=typeof now==='function'?now():Date.now();
+    if(this.busy||t-(this.lastChanged||0)<45000||t-(this._lastErrSwitchAt||0)<30000)return Promise.resolve({ok:false,cooldown:true});
+    if(where!=='manual'&&where!=='pre-send'&&where!=='send-timeout'&&where!=='create-chat'&&where!=='gacha'){
+      this._errHits=(this._errHits||[]).filter(x=>t-x<60000);
+      this._errHits.push(t);
+      if(this._errHits.length<2)return Promise.resolve({ok:false,debounced:true});
+    }
+    this._lastErrSwitchAt=t;
+    this.noteNetProblem();
     if(typeof ReadLimit!=='undefined')ReadLimit.until=0;
-    if(typeof Quota!=='undefined'&&Quota.clear)Quota.clear(true);
-    const reason=st===429||err?.ipLimited?'limited':'error-switch';
-    this.status=cnt>2?'检测到多次网络问题（>2次），正在自动切换全库最低延迟的可用纯净 IP…':'检测到连接报错（'+(st||'超时/断连')+'），正在秒切备用 IP / 节点…';
+    const reason='error-switch';
+    this.status='检测到连接报错（'+(st||'超时/断连')+'），正在切换备用线路…';
     Bus.emit('route-state');
-    return this.request(reason,true);
+    return this.request(reason,false);
   },
   unlimit(why){
     this.coolCurrentIp(why);
@@ -471,16 +502,9 @@ const AutoRoute = {
     }catch{}
   },
   limited(why){
-    const wait=Math.max(30000,Number(why?.retryAfterMs)||0);
-    this.coolCurrentIp(why);
-    if(this.enabled()&&!this.busy){
-      this.status='当前 IP 触发 429 限流（已进入冷却），正在秒切热备 IP / 跨地区节点…';
-      Bus.emit('route-state');
-      void this.request('limited',true);
-      return;
-    }
-    if(this.engine)this.engine.next=Math.max(this.engine.next,now()+wait);
-    this.failed=false;this.status='Brana 限流（当前 IP 已标记冷却），等待 '+Math.ceil(wait/1000)+' 秒后重试';Bus.emit('route-state');
+    const wait=Math.max(15000,Number(why?.retryAfterMs)||30000);
+    if(this.engine)this.engine.next=Math.max(this.engine.next||0,now()+wait);
+    this.failed=false;this.status='触发 429 速率限制：保持当前出口 IP，等待 '+Math.ceil(wait/1000)+' 秒冷却后自动继续';Bus.emit('route-state');
   },
   async silent(c){
     // Also used on Android: quiet thinking/tools alone are not a connection failure.

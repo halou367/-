@@ -1759,7 +1759,20 @@ const R = {
           (miRoute?.fingerprint?.skipped === 'compat-thinking' || miRoute?.fingerprint?.skipped === 'visible-thinking') ||
           ((m.parts || []).some(p => (p?.type === 'reasoning' || p?.type === 'thinking') && /[^\s.…·。]/.test(String(p.text || ''))) && !(typeof ThinkingStatus !== 'undefined' && ThinkingStatus.isClosed(chat)))
         );
+        if (isOpenThinkStop) md.openThinkStopped = true;
         meta.append(h('span', { class: 'dim' }, isOpenThinkStop ? '开源思考已停止' : '已停止'));
+        if (isLast && !chat.busy && isOpenThinkStop) {
+          meta.append(h('button', {
+            class: 'btn ghost xs',
+            style: { marginLeft: '6px' },
+            title: '本对话已被官方服务端路由为开源模型：点击允许本对话继续执行（不再因开源思考自动暂停，以便让 AI 执行完搬运文件/清理工作区等指令）',
+            onclick: () => {
+              chat._allowOpenThink = true;
+              toast('已允许本对话使用当前模型继续执行（不再因开源思考自动暂停），正在重发…');
+              void UI.retry(chat, null, false);
+            }
+          }, '▶ 允许继续执行（不暂停）'));
+        }
       }
       if (txt || isLast) tools.append(h('button', { class: 'ib', type: 'button', title: '复制', 'aria-label': 'Copy', onclick: () => copyText(txt) }, icon('copy')));
       if (typeof FingerprintReview !== 'undefined' && FingerprintReview.isReviewable(chat, m)) {
@@ -2046,6 +2059,25 @@ const UI = {
           h('input', { type: 'number', min: 1, max: 20, value: Tabs.maxCount(), style: { width: '64px', textAlign: 'center' }, onchange: e => { const v = Math.max(1, Math.min(20, parseInt(e.target.value, 10) || 6)); Prefs.maxTabs = v; e.target.value = v; savePrefs(); Tabs.enforceLimit(Tabs.active); Tabs.save(); this.renderTabs(); } })),
         h('label', { class: 'set' }, h('span', {}, h('b', {}, '账号状态检测间隔（小时）'), h('small', {}, '每次打开客户端及每隔指定小时自动检测全部账号可用状态（默认 6 小时，0 表示仅启动时检测；异常卡片标红）')),
           h('input', { type: 'number', min: 0, max: 168, step: 0.5, value: Number.isFinite(Number(Prefs.acctCheckHours)) ? Number(Prefs.acctCheckHours) : 6, style: { width: '68px', textAlign: 'center' }, onchange: e => { const raw = parseFloat(e.target.value); const v = Number.isFinite(raw) ? Math.max(0, Math.min(168, raw)) : 6; Prefs.acctCheckHours = v; e.target.value = v; savePrefs(); Bus.emit('prefs'); if (typeof AccountPicker !== 'undefined' && AccountPicker.startCheckTimer) AccountPicker.startCheckTimer(false); } })),
+        (() => {
+          const dplNote = h('small', {}, '手动输入并锁定 /cost 账单接口的 Vercel 部署编号（dpl_…，支持直接粘贴含 dpl_ 的链接）。当前生效：' + Pin.dpl() + (Pin.lockedDpl() ? '（已手动锁定）' : '（默认在线部署）'));
+          const dplInput = h('input', { type: 'text', class: 'dk-pin-id', value: Pin.lockedDpl() || Pin.dpl(), spellcheck: 'false', placeholder: 'dpl_3UbNvzoXfT6iNZqgBa7GjsGeKLaT', style: { width: '240px', fontFamily: 'var(--mono)' } });
+          const applyLock = raw => {
+            const res = Pin.lockCostDpl(raw);
+            if (!res.ok) { toast(res.error || '部署编号格式不对（dpl_ 开头）', 'err'); dplInput.value = Pin.dpl(); return; }
+            dplInput.value = res.dpl;
+            dplNote.textContent = '手动输入并锁定 /cost 账单接口的 Vercel 部署编号（dpl_…，支持直接粘贴含 dpl_ 的链接）。当前生效：' + Pin.dpl() + (Pin.lockedDpl() ? '（已手动锁定）' : '（默认在线部署）');
+            toast(res.locked ? '已手动锁定计费部署：' + res.dpl : '已恢复默认计费部署：' + res.dpl, 'ok');
+            try { Dock.render?.(); } catch {}
+          };
+          dplInput.onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); applyLock(dplInput.value); } };
+          return h('div', { class: 'set' },
+            h('span', {}, h('b', {}, '计费接口部署锁定（/cost）'), dplNote),
+            h('div', { class: 'set-btns', style: { display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' } },
+              dplInput,
+              h('button', { type: 'button', class: 'btn ghost sm', onclick: () => applyLock(dplInput.value) }, '锁定'),
+              h('button', { type: 'button', class: 'btn ghost sm', onclick: () => applyLock('') }, '默认')));
+        })(),
         h('label', { class: 'set' }, h('input', { type: 'checkbox', checked: Prefs.notify !== false || null, onchange: e => { Prefs.notify = e.target.checked; savePrefs(); if (e.target.checked) Host.notifyPerm?.(true)?.catch?.(() => {}); } }), h('span', {}, h('b', {}, '任务完成通知'), h('small', {}, 'App 在后台时，对话回复完成 / 等待你回答 / 出错时弹系统通知，点通知直接打开那个对话；抽卡（包括抽到金色）不通知'))),
         h('div', { class: 'set' }, h('span', {}, h('b', {}, '金色'), h('small', {}, Gold.manual ? '手动点亮：已点亮 ' + (Prefs.goldSet || []).length + ' 个型号（金色 + 侧栏置顶）' : '自动：最高版本里最强的一档；可改为手动打勾点亮')), h('button', { class: 'btn ghost sm', onclick: () => { back.remove(); GoldBoard.open(); } }, '设置')),
         h('label', { class: 'set' }, h('span', {}, h('b', {}, '主题')), theme),
@@ -2129,11 +2161,15 @@ const UI = {
     const shown = cardName(v.model || v.plain) || '未命名', note = v.note;
     const at = entAt(e);
     const d = new Date(at), tm = Number.isFinite(at) ? pad(d.getMonth() + 1) + '-' + pad(d.getDate()) + ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes()) : '';
-    const gstep = typeof Gacha !== 'undefined' && Gacha.stepOf ? Gacha.stepOf(e.id) : null;
-    const on = e.id === cur, st = (c?.busy || gstep?.active) ? 'run' : c && chatState(c) === 'bad' ? 'bad' : '';
+    const gstep0 = typeof Gacha !== 'undefined' && Gacha.stepOf ? Gacha.stepOf(e.id) : null;
+    const hasKnownModel = !!(r.vid || v.vid || (v.model && !/^(未识别|未知型号|待定)$/.test(String(v.model).trim())) || (mi?.name && !/^(未识别|未知型号|待定)$/.test(String(mi.name).trim()) && !mi?.pendingConfirm));
+    const identSt = (!gstep0 && !hasKnownModel && typeof BillingProbe !== 'undefined' && BillingProbe.identStatus) ? BillingProbe.identStatus(e.id, mi) : null;
+    const gstep = gstep0 || identSt;
+    const isRunStep = !!(c?.busy || gstep0?.active || identSt?.status === 'running');
+    const on = e.id === cur, st = isRunStep ? 'run' : c && chatState(c) === 'bad' ? 'bad' : '';
     const topConfSig = typeof BillingProbe !== 'undefined' && BillingProbe.topConfidence ? BillingProbe.topConfidence(e.id, mi) : null;
     const goldChat = typeof Gold !== 'undefined' && typeof Gold.hasChat === 'function' ? Gold.hasChat(e.id) : false;
-    const sig = [CardSelect.mode,CardSelect.ids.has(e.id),SideTools.scope,on, !!c?.busy, st, gstep?.text || '', gstep?.pct || 0, r.vip, r.hit, r.tint, r.vid || v.vid, shown, note, tm, v.title, mi?.name, mi?.routed, mi?.reverseMatch, mi?.reverseScore, mi?.confidence, topConfSig, e.title, e.updatedAt, Fav.has(e.id), goldChat, mi?.fingerprint?.thinkSec, mi?.fingerprint?.reasoning?.score].join('\u0001');
+    const sig = [CardSelect.mode,CardSelect.ids.has(e.id),SideTools.scope,on, !!c?.busy, st, gstep?.text || '', gstep?.pct || 0, gstep?.status || '', r.vip, r.hit, r.tint, r.vid || v.vid, shown, note, tm, v.title, mi?.name, mi?.routed, mi?.reverseMatch, mi?.reverseScore, mi?.confidence, topConfSig, e.title, e.updatedAt, Fav.has(e.id), goldChat, mi?.fingerprint?.thinkSec, mi?.fingerprint?.reasoning?.score].join('\u0001');
     if (this._cards?.has(e.id)) return this.cardEl(r, cur, { e, c, v, mi, shown, note, tm, on, st, gstep });   // 同一会话出现两次（分页重叠）：第二个单独建
     const prev = this._cardOld?.get(e.id);
     if (prev && prev.sig === sig) { this._cards?.set(e.id, prev); return prev.el; }
@@ -2183,7 +2219,7 @@ const UI = {
       r.vid || v.vid ? stLogo(r.vid || v.vid, 16, st) : st === 'run' ? h('span', { class: 'vlogo busy' }, h('i', { class: 'spin' })) : h('span', { class: 'vlogo none' + (st ? ' st-' + st : '') }, (shown[0] || '?').toUpperCase()),
       h('span', { class: 'cn' }, ...[].concat(metricName(shown, undefined, true))),
       Fav.has(e.id) ? h('span', { class: 'cfav', title: '已收藏' }, '★') : null,
-      gstep?.active ? h('span', { class: 'gstep-tag', title: gstep.phase || gstep.text }, gstep.text) : (cm.tip ? h('span', { class: 'cstat' }, cm.tip) : null),
+      gstep?.active ? h('span', { class: 'gstep-tag' + (gstep.status === 'queued' ? ' ident-queue' : gstep.status === 'pending' ? ' ident-wait' : gstep.status === 'running' ? ' ident-run' : ''), title: gstep.phase || gstep.text }, gstep.text) : (cm.tip ? h('span', { class: 'cstat' }, cm.tip) : null),
       // 电脑上和原来一样排成一行（外层不占布局）；手机上备注在上、时间在下，靠右对齐
       h('span', { class: 'cside' }, note ? h('span', { class: 'cnote' }, note) : null, h('span', { class: 'ctime' }, tm)),
       h('a', { href: '/agent/' + e.id, 'data-sidebar': 'menu-button', class: 'ext-sb-link', tabindex: '-1', onclick: ev => { ev.preventDefault(); } }, h('span', { class: 'truncate' }, e.title || shown)),
@@ -2345,9 +2381,8 @@ const UI = {
       chat.identifying ? h('span', { class: 'badge dim' }, h('i', { class: 'spin' }), '识别模型…')
         : !mi && chat.idErr ? h('button', { class: 'badge dim link', title: chat.idErr + '（点一下重试）', onclick: () => chat.identifyOld() }, '未识别') : null,
       h('span', { class: 'grow' }),
-      h('button', { class: 'ib revbtn' + (typeof BillingProbe !== 'undefined' && BillingProbe.isRunning?.(chat) ? ' run' : ''), 'aria-label': typeof BillingProbe !== 'undefined' && BillingProbe.isRunning?.(chat) ? '停止反推' : '费用反推', disabled: (chat.busy && !(typeof BillingProbe !== 'undefined' && BillingProbe.isRunning?.(chat))) || Fingerprint.isRunning(chat) || PelicanTest.isRunning(chat), title: typeof BillingProbe !== 'undefined' && BillingProbe.isRunning?.(chat) ? '停止费用反推识别' + (chat.probeProgress ? '（' + chat.probeProgress + '）' : '') : '费用反推识别：点一下直接读取第一方 /cost 账单，通过 5 层字典序整数原像引擎零消耗反推当前对话的真实模型与精确 Token（若当前为空对话则自动发 1 条极短消息后反推）。', onclick: () => void BillingProbe.reverseIdentify(chat, { interactive: true }) }, icon('pulse')),
-      h('button', { class: 'ib fpbtn' + (Fingerprint.isRunning(chat) ? ' run' : ''), 'aria-label': Fingerprint.isRunning(chat) ? '停止指纹' : '测指纹', disabled: (chat.busy && !Fingerprint.isRunning(chat)) || PelicanTest.isRunning(chat), title: Fingerprint.isRunning(chat) ? '停止指纹测试' + (chat.probeProgress ? '（' + chat.probeProgress + '）' : '') : '测指纹：点一下直接开测：发送1–3条数字探针（消耗额度）；置信度到 100% 就停。每条对话独立运行，不影响新建对话和其他对话。再点一下停止。', onclick: () => void Fingerprint.startCurrent(chat) }, icon('fingerprint')),
-      h('button', { class: 'ib pelbtn' + (PelicanTest.isRunning(chat) ? ' run' : ''), 'aria-label': PelicanTest.isRunning(chat) ? '停止鹈鹕' : '鹈鹕测试', disabled: (chat.busy && !PelicanTest.isRunning(chat)) || Fingerprint.isRunning(chat), title: PelicanTest.isRunning(chat) ? '停止鹈鹕测试' + (chat.probeProgress ? '（' + chat.probeProgress + '）' : '') : '鹈鹕测试：点一下直接开测：发 1 条英文鹈鹕 SVG 标准题，量思考时长算推理分（没思考不计分），思考一结束就停。再点一下停止。', onclick: () => void PelicanTest.start(chat) }, icon('pelican')),
+      h('button', { class: 'ib revbtn' + (typeof BillingProbe !== 'undefined' && BillingProbe.isRunning?.(chat) ? ' run' : ''), 'aria-label': typeof BillingProbe !== 'undefined' && BillingProbe.isRunning?.(chat) ? '停止反推' : '费用反推', disabled: (chat.busy && !(typeof BillingProbe !== 'undefined' && BillingProbe.isRunning?.(chat))) || PelicanTest.isRunning(chat), title: typeof BillingProbe !== 'undefined' && BillingProbe.isRunning?.(chat) ? '停止反推识别' + (chat.probeProgress ? '（' + chat.probeProgress + '）' : '') : '反推识别：点一下读取账单与对话记录/工具调用，按最高置信度反推并锁定当前对话的真实模型与推理分。', onclick: () => void BillingProbe.reverseIdentify(chat, { interactive: true }) }, icon('pulse')),
+      h('button', { class: 'ib pelbtn' + (PelicanTest.isRunning(chat) ? ' run' : ''), 'aria-label': PelicanTest.isRunning(chat) ? '停止鹈鹕' : '鹈鹕测试', disabled: (chat.busy && !PelicanTest.isRunning(chat)), title: PelicanTest.isRunning(chat) ? '停止鹈鹕测试' + (chat.probeProgress ? '（' + chat.probeProgress + '）' : '') : '鹈鹕测试：点一下直接开测：发 1 条英文鹈鹕 SVG 标准题，量思考时长算推理分（没思考不计分），思考一结束就停。再点一下停止。', onclick: () => void PelicanTest.start(chat) }, icon('pelican')),
       h('button', { class: 'ib mdbtn', title: '导出这个对话的全部内容（正文、思考、bash 命令和输出、工具调用）为 Markdown，自己选保存位置', onclick: () => void ChatExport.run(chat) }, icon('doc')),
       h('button', { class: 'ib wsbtn', title: WS.shown ? '收起工作区' : '显示工作区（沙盒文件）', onclick: () => { WS.set(!WS.shown); scheduleChat(chat); } }, icon('folder')),
       chat.busy ? h('span', { class: 'phase' }, h('i', { class: 'spin' }), h('span', { class: 'ph-t' }, phase), chat.sentAt ? h('span', { class: 'dim anc-since', 'data-since': chat.sentAt }, '') : null) : null));
@@ -2428,8 +2463,11 @@ const UI = {
     E.errbar.replaceChildren();
     if (chat.error && !chat.busy) {
       const cap = /recaptcha|captcha|人机验证/i.test(chat.error), lastUser = chat.messages.at(-1)?.role === 'user' ? chat.messages.at(-1) : null;
+      const isRejected = /rejected this request|拒绝请求|死节点|超限/i.test(chat.error || '');
       E.errbar.append(...K(h('span', {}, '⚠ ' + chat.error), h('span', { class: 'grow' }),
         cap ? h('button', { class: 'btn sm', onclick: () => this.retry(chat, lastUser, true) }, '人机验证后重试') : null,
+        isRejected ? h('button', { class: 'btn sm ghost', title: '跳过导致超限或死锁的上一轮，回退到再上一轮正常节点重发', onclick: () => this.rewindAndRetry(chat, lastUser) }, '⏪ 回退上一节点') : null,
+        isRejected ? h('button', { class: 'btn sm ghost', title: '在当前对话内开启全新空工作区分支（清空沙盒与报错历史，保留当前模型）', onclick: () => this.resetWsBranch(chat, lastUser) }, '🧹 重置工作区救活') : null,
         h('button', { class: 'btn sm ghost', onclick: () => this.retry(chat, lastUser, false) }, '重试'),
         h('button', { class: 'ib', onclick: () => { chat.error = null; chat.emit(); } }, icon('x'))));
     }
@@ -2444,17 +2482,83 @@ const UI = {
     b.classList.toggle('show', far);
     if (!far) b.classList.remove('new'); else if (grew) b.classList.add('new');
   },
+  async rewindAndRetry(chat, lastUser) {
+    if (!chat || chat.busy || chat._qBusy) return;
+    try {
+      if (typeof ensureHealthyHistoryLoaded === 'function') await ensureHealthyHistoryLoaded(chat).catch(() => {});
+      const curHealthy = typeof findHealthyLastUser === 'function' ? findHealthyLastUser(chat.messages, null, chat._rejectedHealthyNodeIds) : null;
+      if (curHealthy) {
+        const key = String(curHealthy.metadata?.nodeId || curHealthy.id || '');
+        if (key) (chat._rejectedHealthyNodeIds ||= new Set()).add(key);
+        if (curHealthy.id) (chat._rejectedHealthyNodeIds ||= new Set()).add(String(curHealthy.id));
+        if (typeof ensureHealthyHistoryLoaded === 'function') await ensureHealthyHistoryLoaded(chat).catch(() => {});
+      } else {
+        chat._forceResetWorkspaceBranch = true;
+      }
+      toast('已回退至更早一轮正常节点，正在重发…');
+      await this.retry(chat, lastUser, false);
+    } catch (e) { toast(describe(e), 'err'); }
+  },
+  async resetWsBranch(chat, lastUser) {
+    if (!chat || chat.busy || chat._qBusy) return;
+    if (!await Dialog.confirm({
+      title: '重置工作区并救活当前对话',
+      text: '将清理末尾卡死/开源思考已停止的异常轮次，并回退到第 1 轮正常闭源节点开启全新干净工作区分支（清空 /home/user 满载工作区与死节点历史，完整保留当前对话 ID 与已锁定的闭源模型）。是否立即重置并重发？',
+      ok: '重置工作区并重发'
+    })) return;
+    try {
+      if (typeof ensureHealthyHistoryLoaded === 'function') await ensureHealthyHistoryLoaded(chat).catch(() => {});
+      const getText = u => (u?.parts || []).filter(p => p && p.type === 'text').map(p => p.text || '').join('\n').trim();
+      const isContinueFiller = u => /^(?:继续|continue|go on|keep going|接着|继续执行)[。.!！?？\s]*$/i.test(getText(u)) && !(u?.metadata?.uploads?.length > 0);
+      const users = (chat.messages || []).filter(m => m && m.role === 'user');
+      const picked = [...users].reverse().find(u => !isContinueFiller(u) && getText(u)) || lastUser || users.at(-1);
+      const text = getText(picked) || '你好';
+      const firstU = typeof findFirstHealthyUser === 'function' ? findFirstHealthyUser(chat.messages) : null;
+      if (firstU) {
+        const uIdx = chat.messages.indexOf(firstU);
+        let cutIdx = uIdx;
+        for (let j = uIdx + 1; j < chat.messages.length; j++) {
+          const m = chat.messages[j];
+          if (!m) continue;
+          if (m.role === 'user') break;
+          if (m.role === 'assistant' && !(typeof isDeadAssistantMsg === 'function' && isDeadAssistantMsg(m))) cutIdx = j;
+        }
+        const removed = chat.messages.slice(cutIdx + 1);
+        const prunedSet = (chat._prunedDeadMsgIds ||= new Set());
+        for (const m of removed) if (m?.id) prunedSet.add(m.id);
+        chat.messages.splice(cutIdx + 1);
+      } else {
+        const prunedSet = (chat._prunedDeadMsgIds ||= new Set());
+        for (const m of (chat.messages || [])) if (m?.id) prunedSet.add(m.id);
+        chat.messages.length = 0;
+      }
+      if (typeof healChatModelAndBranch === 'function') healChatModelAndBranch(chat, { pruneTail: false });
+      const targetU = typeof findHealthyLastUser === 'function' ? findHealthyLastUser(chat.messages) : firstU;
+      chat._forceResetWorkspaceBranch = true;
+      chat._resetBranchTargetUserId = targetU ? (targetU.metadata?.nodeId || targetU.id || null) : null;
+      chat._rejectedHealthyNodeIds?.clear?.();
+      chat.error = null;
+      chat.errText = '';
+      try { Workspace.cache.delete(chat.sid); if (typeof WS !== 'undefined' && WS.sid === chat.sid) { WS.data = null; WS.render(); } } catch {}
+      toast('已回退至初始闭源节点并重置工作区分支，正在发送…');
+      await chat.send(text, {});
+    } catch (e) { toast(describe(e), 'err'); }
+  },
   async retry(chat, lastUser, captcha) {
     if (chat.busy || chat._qBusy) { toast('上一条仍在处理，请稍候','err'); return; }
     try {
       const uncertain = lastUser || [...chat.messages].reverse().find(m => m.role === 'user');
       if (uncertain?.deliveryUnknown && !await Dialog.confirm({ title: '发送状态尚未确认', text: '服务器可能已经收到这条消息。建议先刷新对话核对；现在重发可能产生重复消息。', ok: '仍要重发' })) return;
       const v2 = captcha ? await Recaptcha.v2() : null;
+      if (typeof ensureHealthyHistoryLoaded === 'function') await ensureHealthyHistoryLoaded(chat).catch(() => {});
       // 人机验证失败时服务端会回一条只有 error 的助手消息：去掉它，把上一条用户消息带着验证重新发出去
       const tail = chat.messages.at(-1);
-      const removedErrTail = !!(tail?.role === 'assistant' && (tail.parts || []).length && tail.parts.every(p => p.type === 'error' || p.type === 'step-start'));
-      if (removedErrTail) chat.messages.pop();
-      if (!lastUser && chat.messages.at(-1)?.role === 'user') lastUser = chat.messages.at(-1);
+      const pruned = typeof pruneDeadTailTurns === 'function' ? pruneDeadTailTurns(chat) : null;
+      try { if (typeof healChatModelAndBranch === 'function') healChatModelAndBranch(chat, { pruneTail: false }); } catch {}
+      const removedErrTail = !!(pruned || (tail?.role === 'assistant' && ((typeof isDeadAssistantMsg === 'function' && isDeadAssistantMsg(tail)) || ((tail.parts || []).length && tail.parts.every(p => p.type === 'error' || p.type === 'step-start')))));
+      if (!pruned && removedErrTail && chat.messages.at(-1) === tail) chat.messages.pop();
+      if (pruned?.lastUser) lastUser = pruned.lastUser;
+      else if (!lastUser && chat.messages.at(-1)?.role === 'user') lastUser = chat.messages.at(-1);
       if (lastUser && removedErrTail) lastUser._streamRejected = true;
       const capFail = /recaptcha|captcha|人机验证|prompt failed/i.test(chat.error || '');
       if (lastUser && (lastUser.failed || capFail || removedErrTail)) { await chat.send(lastUser.parts.filter(p => p.type === 'text').map(p => p.text).join('\n'), { v2, files: lastUser.metadata?.uploads, retryOf: lastUser }); }
@@ -2464,7 +2568,7 @@ const UI = {
   async regen(chat) {
     try {
       const tail = chat?.messages?.at(-1);
-      const isErrTail = !!(tail?.role === 'assistant' && (tail.parts || []).length && tail.parts.every(p => p.type === 'error' || p.type === 'step-start'));
+      const isErrTail = !!(tail?.role === 'assistant' && ((typeof isDeadAssistantMsg === 'function' && isDeadAssistantMsg(tail)) || ((tail.parts || []).length && tail.parts.every(p => p.type === 'error' || p.type === 'step-start'))));
       if (isErrTail) { await this.retry(chat, null, false); return; }
       await chat.regenerate();
     } catch (e) { toast('重新生成失败：' + describe(e), 'err'); }
@@ -2583,10 +2687,18 @@ const UI = {
       this.withPane(P, () => this.syncComposer(tab.sid ? Chats.get(tab.sid) : null));
     };
     const addFiles = list => {
+      const curC = tab.sid ? Chats.get(tab.sid) : null;
+      const curEst = curC && typeof LiveEst !== 'undefined' && LiveEst.of ? LiveEst.of(curC) : null;
+      const activeTok = curEst ? (curEst.activeWindowTokens || curEst.ctx || 0) : 0;
+      let warnedImgCtx = false;
       for (const f of list) {
         if (!f) continue;
         if (f.size > 100 * 1024 * 1024) { toast(f.name + ' 超过 100MB', 'err'); continue; }
         const type = Uploads.type(f), a = { name: f.name || 'file', size: f.size, type, state: 'up', stage: '', pct: 0, url: /^image\//.test(type) ? URL.createObjectURL(f) : null, subs: new Set() };
+        if (!warnedImgCtx && /^image\//.test(type) && activeTok >= 145000 && (typeof Prefs === 'undefined' || Prefs.ctxWarn !== false)) {
+          warnedImgCtx = true;
+          toast(`⚠ 当前上下文已达 ~${Math.round(activeTok / 1000)}k / 200k 临界区！直接发图片极易触发官方 provider_bad_request 熔断换模型，建议先点「一键短消息压缩」后再发图`, 'err');
+        }
         // 进度刷新节流到 ~8 次/秒，带尾随刷新（不丢最后一次状态）
         let pt = 0, tt = 0; const fire = () => { tt = 0; pt = now(); for (const fn of a.subs) try { fn(); } catch {} };
         const tick = () => { if (a.state !== 'up') { clearTimeout(tt); return fire(); } if (tt) return; const d = 120 - (now() - pt); if (d <= 0) fire(); else tt = setTimeout(fire, d); };
@@ -2765,11 +2877,70 @@ const UI = {
     pmObserver.observe(pm, { childList: true, subtree: true, characterData: true });
     ta.addEventListener('input', syncPmFromTa);
     syncPmFromTa();
+    const ctxGuardRow = h('div', { class: 'ctx-guard-bar', style: 'display:none' });
+    const paintCtxGuard = (cArg) => {
+      const c = cArg || (tab.sid ? Chats.get(tab.sid) : null);
+      if (!c || (typeof Prefs !== 'undefined' && Prefs.ctxWarn === false)) {
+        ctxGuardRow.style.display = 'none';
+        return;
+      }
+      const m = c.sid && typeof Models !== 'undefined' ? Models.get(c.sid) : null;
+      const isOpen = (typeof ThinkingStatus !== 'undefined' && ThinkingStatus.of?.(c)?.kind === 'compat-thinking' && !c._closedLockedModel) || (m?.name === '开源模型' && !c._closedLockedModel);
+      if (isOpen) {
+        ctxGuardRow.style.display = 'none';
+        return;
+      }
+      const est = typeof LiveEst !== 'undefined' && LiveEst.of ? LiveEst.of(c) : null;
+      const activeTok = est ? (est.activeWindowTokens || est.ctx || 0) : 0;
+      const lastMsgId = (c.messages || []).at(-1)?.id || '';
+      if (activeTok < 145000 || c._ctxGuardDismissedFor === lastMsgId) {
+        ctxGuardRow.style.display = 'none';
+        return;
+      }
+      const isDanger = activeTok >= 175000;
+      const kTok = Math.round(activeTok / 1000);
+      const sig = `${isDanger ? 'danger' : 'warn'}:${kTok}:${lastMsgId}:${!!c.busy}`;
+      if (ctxGuardRow._sig === sig) return;
+      ctxGuardRow._sig = sig;
+      ctxGuardRow.className = 'ctx-guard-bar ' + (isDanger ? 'danger' : 'warn');
+      ctxGuardRow.style.display = '';
+      ctxGuardRow.replaceChildren(
+        icon('alert'),
+        h('span', { class: 'ctx-guard-txt' },
+          isDanger
+            ? `🚨 上下文已逼近 200k 熔断红线（约 ${kTok}k tok）· 切勿直接粘贴大图，否则极易触发 provider_bad_request 熔断换模！`
+            : `⚠ 上下文已达 ~${kTok}k / 200k 临界区 · 建议先发送短文字触发官方无损压缩，避免发图触发熔断路由`),
+        h('span', { class: 'grow' }),
+        !c.busy ? h('button', {
+          type: 'button',
+          class: 'btn xs ctx-guard-btn',
+          title: '立即发送一条不带图片的简短汇总指令，安全触发 Arena 官方 checkpointApplied 无损压缩（不换模型）',
+          onclick: e => {
+            e?.stopPropagation?.();
+            c._ctxGuardDismissedFor = lastMsgId;
+            ctxGuardRow.style.display = 'none';
+            void c.send('请用两三句话简短总结当前进度，保持上下文精简。');
+          }
+        }, '一键短消息压缩') : null,
+        h('button', {
+          type: 'button',
+          class: 'ib xs',
+          title: '本轮忽略此提醒',
+          onclick: e => {
+            e?.stopPropagation?.();
+            c._ctxGuardDismissedFor = lastMsgId;
+            ctxGuardRow.style.display = 'none';
+          }
+        }, icon('x'))
+      );
+    };
+    this.paintCtxGuard = paintCtxGuard;
+    setTimeout(() => paintCtxGuard(chat), 0);
     const box = h('div', { class: 'cbox', onclick: e => { if (e.target === e.currentTarget) ta.focus(); },
       ondragover: e => { if ([...(e.dataTransfer?.types || [])].includes('Files')) { e.preventDefault(); box.classList.add('drop'); } },
       ondragleave: () => box.classList.remove('drop'),
       ondrop: e => { box.classList.remove('drop'); const fs = [...(e.dataTransfer?.files || [])]; if (fs.length) { e.preventDefault(); addFiles(fs); } } },
-      qrow, chips, ta, pmWrap, h('div', { class: 'crow' }, plus, fin, chint, h('span', { class: 'grow' }), Cap.btn(), GPop.btn(), btn));
+      ctxGuardRow, qrow, chips, ta, pmWrap, h('div', { class: 'crow' }, plus, fin, chint, h('span', { class: 'grow' }), Cap.btn(), GPop.btn(), btn));
     const composer = h('div', { class: 'composer' }, box);
     slash = SlashCommands.bind(composer, ta, { fingerprint: () => {
       const c = tab.sid ? chatOf(tab.sid) : null;
@@ -2800,6 +2971,7 @@ const UI = {
       }
     }
     this.paintQ?.();
+    this.paintCtxGuard?.(chat);
   },
   async startNew(tab, text, ta, v2, files) {
     const hint = this.els?.composer?.querySelector('.chint') || $('#view .chint'); if (hint) hint.textContent = '正在创建对话…';

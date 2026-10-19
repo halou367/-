@@ -1743,8 +1743,8 @@ public class MainActivity extends Activity {
                 HttpURLConnection dc = null;
                 try {
                     dc = (HttpURLConnection) new URL(u).openConnection(jp != null ? jp : java.net.Proxy.NO_PROXY);
-                    dc.setConnectTimeout(4500);
-                    dc.setReadTimeout(4500);
+                    dc.setConnectTimeout(3200);
+                    dc.setReadTimeout(3200);
                     dc.setInstanceFollowRedirects(true);
                     dc.setRequestMethod("GET");
                     dc.setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android 14; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36");

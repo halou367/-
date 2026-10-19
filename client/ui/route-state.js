@@ -17,6 +17,16 @@ const RouteState = (() => {
   const locked = a => !!a?.authLocked || !!(a?.routeAuth?.ticket && a.routeAuth.snapshot);
   const canRecover = a => !locked(a) && (mode(a) === 'node' ? isNode(a) && a.nodeFailover === true : mode(a) === 'auto' && a?.routeAuto !== false);
   const error = (message, code = 'AUTH_ROUTE_LOCKED') => Object.assign(Error(message), { code });
+  const canonMail = value => {
+    const raw = String(value || '').trim().toLowerCase();
+    if (!raw || /@example\.invalid$/i.test(raw)) return raw;
+    const [local, domain] = raw.split('@');
+    return domain ? local.replace(/\+.*$/, '').replace(/[.,\-_]/g, '') + '@' + domain : raw;
+  };
+  const sameMail = (a, b) => {
+    const ka = String(a || '').trim().toLowerCase(), kb = String(b || '').trim().toLowerCase();
+    return Boolean(ka && kb && (ka === kb || canonMail(ka) === canonMail(kb)));
+  };
   function status(a, now = Date.now()) {
     if (!locked(a)) return { locked: false };
     const x = a.routeAuth || { expires: a.authExpires, kind: a.authKind };
@@ -25,7 +35,7 @@ const RouteState = (() => {
   function assertChange(a, patch) {
     if (!locked(a)) return;
     if (signature({ ...a, ...patch }) !== signature(a)) throw error('该账号正在认证，节点、出口、地区和指纹已锁定；请完成或明确取消认证后再修改');
-    if (patch.email !== undefined && a.routeAuth?.email && String(patch.email).trim().toLowerCase() !== a.routeAuth.email.toLowerCase()) throw error('认证目标邮箱已锁定，请先取消旧任务', 'AUTH_TASK_CONFLICT');
+    if (patch.email !== undefined && a.routeAuth?.email && !sameMail(patch.email, a.routeAuth.email)) throw error('认证目标邮箱已锁定，请先取消旧任务', 'AUTH_TASK_CONFLICT');
     const policy = { routeMode: mode(a), nodeFailover: a.nodeFailover === true, routeAuto: a.routeAuto !== false };
     if (['routeMode', 'nodeFailover', 'routeAuto'].some(k => patch[k] !== undefined && patch[k] !== policy[k])) throw error('认证期间不能变更线路策略，请先完成或取消认证');
   }
@@ -41,7 +51,7 @@ const RouteState = (() => {
       if (x.expires <= now) throw error('认证任务已超时，线路仍被锁定；请取消旧任务后重新开始', 'AUTH_TASK_EXPIRED');
       if ((!request.prepare && x.ip && x.ip !== request.ip) || (x.environment && x.environment !== request.environment)) throw error('实际出口或浏览器环境已改变，已停止认证；请取消旧任务后核对', 'AUTH_ENV_CHANGED');
       if (x.snapshot !== signature(a)) throw error('认证环境已经改变，已停止认证，请取消旧任务后检查线路', 'AUTH_ENV_CHANGED');
-      if (x.email && x.email.toLowerCase() !== email.toLowerCase()) throw error('已有其他邮箱的认证任务，请先取消旧任务', 'AUTH_TASK_CONFLICT');
+      if (x.email && !sameMail(x.email, email)) throw error('已有其他邮箱的认证任务，请先取消旧任务', 'AUTH_TASK_CONFLICT');
       if (!request.prepare && request.ip) a.routeAuth = { ...x, ip: x.ip || request.ip, preparing: false };
       return { ticket: x.ticket, ...status(a, now) };
     }
@@ -56,7 +66,7 @@ const RouteState = (() => {
     if ((x.ip && x.ip !== request.ip) || (x.environment && x.environment !== request.environment)) throw error('实际出口或浏览器环境已改变，未确认完成', 'AUTH_ENV_CHANGED');
     if (x.snapshot !== signature(a)) throw error('认证环境已改变，未确认完成', 'AUTH_ENV_CHANGED');
     if (x.expires <= now) throw error('认证任务已超时，请取消旧任务后重新核对', 'AUTH_TASK_EXPIRED');
-    if (!request.email || (x.kind !== 'login' && x.email && x.email.toLowerCase() !== String(request.email).trim().toLowerCase())) throw error('实际账号与认证目标不一致，未解锁线路', 'AUTH_IDENTITY_MISMATCH');
+    if (!request.email || (x.kind !== 'login' && x.email && !sameMail(x.email, request.email))) throw error('实际账号与认证目标不一致，未解锁线路', 'AUTH_IDENTITY_MISMATCH');
     delete a.routeAuth; return { locked: false };
   }
   function stage(a, request, now = Date.now()) {

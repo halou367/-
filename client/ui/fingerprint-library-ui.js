@@ -1,6 +1,9 @@
 const FingerprintLibrary = {
   view:null,
   open(){
+    if(typeof ChatHabitFingerprint!=='undefined'&&typeof ChatHabitFingerprint.openManager==='function'){
+      return ChatHabitFingerprint.openManager();
+    }
     if(this.view?.back.isConnected)return;
     const v=this.view={owner:PersonalFP.owner(),mode:'models',query:'',page:0,refs:[],tests:[],base:null,loading:false,task:false,message:''};
     const back=v.back=h('div',{class:'modal-back fp-library-back'}),body=h('div',{class:'modal-b'});

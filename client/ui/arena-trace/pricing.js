@@ -489,8 +489,16 @@
    * 对某个候选型号，用 agent_p50 费率预测它应当产生的 basePriceUsd。
    * 返回 null 表示该候选在某个计费通道上没有定价 —— 口径对不上，不是候选。
    */
+  function fmtInt(n) {
+    const s = String(Math.round(Number(n) || 0));
+    return s.length <= 3 ? s : s.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+  }
+
   function enrichModelRates(model) {
     if (!model) return null;
+    if (model._enrichedRates && model._enrichedRatesPrompt === model.prompt && model._enrichedRatesComp === model.completion) {
+      return model._enrichedRates;
+    }
     const m = Object.assign({}, model);
     const id = String(m.id || '').toLowerCase();
     if (!(m.prompt > 0) && Number(m.inputPerMillion) > 0) m.prompt = Number(m.inputPerMillion) / 1e6;
@@ -540,6 +548,11 @@
     if (m.cacheWrite > 0 && cwList.indexOf(m.cacheWrite) < 0) cwList.unshift(m.cacheWrite);
     m.cacheReadList = crList;
     m.cacheWriteList = cwList;
+    try {
+      Object.defineProperty(model, '_enrichedRates', { value: m, configurable: true });
+      Object.defineProperty(model, '_enrichedRatesPrompt', { value: model.prompt, configurable: true });
+      Object.defineProperty(model, '_enrichedRatesComp', { value: model.completion, configurable: true });
+    } catch {}
     return m;
   }
 
@@ -674,17 +687,23 @@
 
   function resolveModelProtoFamily(rawModel) {
     if (!rawModel) return '';
-    if (rawModel.protoFamily) return String(rawModel.protoFamily).toLowerCase();
-    const vNorm = normVendor(rawModel.vendor || rawModel.org);
-    const id = String(rawModel.id || '').toLowerCase();
-    if (vNorm === 'anthropic' || /claude|opus|sonnet|haiku|fable/i.test(id)) return 'claude';
-    if (vNorm === 'openai' || /gpt-/i.test(id)) return 'openai';
-    if (vNorm === 'google' || /gemini|barium|argon/i.test(id)) return 'google';
-    if (vNorm === 'xai' || /grok/i.test(id)) return 'grok';
-    if (vNorm === 'deepseek' || /deepseek/i.test(id)) return 'deepseek';
-    if (vNorm === 'moonshotai' || /kimi|kivine/i.test(id)) return 'kimi';
-    if (/qwen|alibaba|z-ai|zai|glm|xiaomi|mimo|minimax/i.test(vNorm + ' ' + id)) return 'compat';
-    return 'vllm';
+    if (rawModel._protoFamily !== undefined) return rawModel._protoFamily;
+    let res = '';
+    if (rawModel.protoFamily) res = String(rawModel.protoFamily).toLowerCase();
+    else {
+      const vNorm = normVendor(rawModel.vendor || rawModel.org);
+      const id = String(rawModel.id || '').toLowerCase();
+      if (vNorm === 'anthropic' || /claude|opus|sonnet|haiku|fable/i.test(id)) res = 'claude';
+      else if (vNorm === 'openai' || /gpt-/i.test(id)) res = 'openai';
+      else if (vNorm === 'google' || /gemini|barium|argon/i.test(id)) res = 'google';
+      else if (vNorm === 'xai' || /grok/i.test(id)) res = 'grok';
+      else if (vNorm === 'deepseek' || /deepseek/i.test(id)) res = 'deepseek';
+      else if (vNorm === 'moonshotai' || /kimi|kivine/i.test(id)) res = 'kimi';
+      else if (/qwen|alibaba|z-ai|zai|glm|xiaomi|mimo|minimax/i.test(vNorm + ' ' + id)) res = 'compat';
+      else res = 'vllm';
+    }
+    try { Object.defineProperty(rawModel, '_protoFamily', { value: res, configurable: true }); } catch {}
+    return res;
   }
 
   // Official /leaderboard median output tokens (medOut) for reasoning tier disambiguation
@@ -878,21 +897,28 @@
   ];
 
   function resolveModelEffortSpec(rawModel) {
+    if (rawModel && rawModel._effortSpec) return rawModel._effortSpec;
     const id = String((rawModel && (rawModel.id || rawModel.agentKey || rawModel.model)) || '');
     const label = String((rawModel && rawModel.label) || '');
     const combined = id + ' ' + label;
+    let res = null;
     for (const spec of MODEL_EFFORT_SPECS) {
-      if (spec.match.test(combined)) return spec;
+      if (spec.match.test(combined)) { res = spec; break; }
     }
-    const supportsReason = !(rawModel && rawModel.supportsReasoning === false);
-    return {
-      familyKey: 'generic-reasoning',
-      tiers: ['Low', 'Medium', 'High', 'Max'],
-      fixedTier: false,
-      anchors: { Low: 800, Medium: 1600, High: 2900, Max: 5400 },
-      thinkAnchors: { Low: 150, Medium: 520, High: 1350, Max: 2900 },
-      rewriteLabel: false,
-    };
+    if (!res) {
+      res = {
+        familyKey: 'generic-reasoning',
+        tiers: ['Low', 'Medium', 'High', 'Max'],
+        fixedTier: false,
+        anchors: { Low: 800, Medium: 1600, High: 2900, Max: 5400 },
+        thinkAnchors: { Low: 150, Medium: 520, High: 1350, Max: 2900 },
+        rewriteLabel: false,
+      };
+    }
+    if (rawModel) {
+      try { Object.defineProperty(rawModel, '_effortSpec', { value: res, configurable: true }); } catch {}
+    }
+    return res;
   }
 
   function formatDynamicEffortLabel(rawLabel, effortProfile) {
@@ -974,6 +1000,7 @@
     let normPeakThink = peakThinkTokens;
     let normP75Think = p75ThinkTok;
     let hasProbePlusHeavyCode = false;
+    let hasMultiTurnCodeSurge = false;
     let probeTurnNormThink = 0;
     let codeTurnNormThink = 0;
     const turnTrajectory = [];
@@ -986,12 +1013,20 @@
         const stepO = Math.max(0, Number(t.O) || 0);
         const stepReasonO = Math.max(0, Number(t.reasonO) || 0);
         const stepSteps = Math.max(1, Number(t.stepCount) || 1);
+        let prevMedO = 0;
+        if (i >= 1) {
+          const prevOs = turnTokens.slice(0, i).map((x) => Math.max(0, Number(x && x.O) || 0)).filter((v) => v > 0).sort((a, b) => a - b);
+          if (prevOs.length > 0) prevMedO = prevOs[Math.floor(prevOs.length / 2)];
+        }
+        const isMultiTurnSurgeStep = i >= 1 && stepO >= 4000 && stepO <= 26000 && prevMedO > 0 && prevMedO <= 1500 && stepO >= prevMedO * 4;
         const propVis = (turnTokens.length === 1 && rawVisTok > 0)
           ? Math.min(stepO, visTokens)
-          : (stepO <= 600
-            ? Math.min(95, Math.max(18, Math.round(stepO * 0.24)))
-            : Math.min(420, Math.max(45, Math.round(visTokens * (stepO / Math.max(1, totalO))))));
-        let stepVis = Number(t.visO) > 0
+          : isMultiTurnSurgeStep
+            ? Math.round(stepO * 0.88)
+            : (stepO <= 600
+              ? Math.min(95, Math.max(18, Math.round(stepO * 0.24)))
+              : Math.min(420, Math.max(45, Math.round(visTokens * (stepO / Math.max(1, totalO))))));
+        let stepVis = (Number(t.visO) > 0 && !(isMultiTurnSurgeStep && Number(t.visO) <= 1500))
           ? Math.min(stepO || Number(t.visO), Number(t.visO))
           : (stepReasonO > 0 && stepO > stepReasonO ? (stepO - stepReasonO) : Math.min(stepO, propVis));
         let stepThink = stepReasonO > 0 && stepO > 0
@@ -999,10 +1034,11 @@
           : Math.max(0, stepO - stepVis);
         const stepI = Number(t.I) || 0;
         const hasMeasuredVis = Number(t.visO) > 0;
-        const isCodeSurgeTurn = (turnTokens.length === 2 && i === 1 && stepVis >= 175 && (
+        const isCodeSurgeTurn = isMultiTurnSurgeStep || (turnTokens.length === 2 && i === 1 && stepVis >= 175 && (
           (firstRawO <= 600 && stepO >= firstRawO * 8 && stepSteps <= 2 && stepI <= 2200) ||
           (firstRawO <= 80 && stepO >= firstRawO * 25 && stepSteps <= 3 && stepI <= 4500)
         ));
+        if (isMultiTurnSurgeStep) hasMultiTurnCodeSurge = true;
         const kappa = (((hasMeasuredVis && stepVis > 220 && stepSteps <= 2 && stepI <= 2200) || isCodeSurgeTurn))
           ? Math.min(22.0, +(1.0 + 0.028 * Math.max(40, stepVis - 135)).toFixed(2))
           : 1.0;
@@ -1066,6 +1102,19 @@
           hasProbePlusHeavyCode = true;
           probeTurnNormThink = firstStep.normThinkO;
           codeTurnNormThink = maxKappaStep.normThinkO;
+        } else if (hasMultiTurnCodeSurge && maxKappaStep && maxKappaStep.kappa >= 3.0) {
+          const nonSurgeSteps = turnTrajectory.filter((s) => s.kappa < 3.0 && s.O > 0);
+          if (nonSurgeSteps.length > 0) {
+            const nonSurgeThinks = nonSurgeSteps.map((s) => s.normThinkO).sort((a, b) => a - b);
+            const nsP75 = nonSurgeThinks[Math.min(nonSurgeThinks.length - 1, Math.floor(nonSurgeThinks.length * 0.75))];
+            if (nsP75 <= 900) {
+              hasProbePlusHeavyCode = true;
+              probeTurnNormThink = nsP75;
+              codeTurnNormThink = maxKappaStep.normThinkO;
+              thinkTokens = turnTrajectory.reduce((acc, s) => acc + (s.kappa >= 3.0 ? s.normThinkO : s.thinkO), 0);
+              visTokens = Math.max(visTokens, totalO - thinkTokens);
+            }
+          }
         }
       } else if (perStepThinks.length === 1) {
         p75ThinkTok = perStepThinks[0];
@@ -1116,12 +1165,14 @@
       : Math.max(Math.round(baseThink * telemetryMult), sseImpliedThink);
 
     // 4. Composite Reasoning Effort Index (REI)
+    const reiDurSec = hasProbePlusHeavyCode ? Math.min(24, thinkDurSec || (effThinkTok / 55)) : (thinkDurSec || (effThinkTok / 55));
+    const reiVisTok = hasProbePlusHeavyCode ? Math.min(600, Math.round(visTokens / Math.max(1, nTurns))) : visTokens;
     const reiScore = Math.max(
       1,
       Math.round(
         100
-        * Math.pow(Math.max(15, effThinkTok + 0.35 * visTokens) / 1000, 0.5)
-        * Math.pow(Math.max(1.8, Math.min(180, thinkDurSec || (effThinkTok / 55))) / 12, 0.3)
+        * Math.pow(Math.max(15, effThinkTok + 0.35 * reiVisTok) / 1000, 0.5)
+        * Math.pow(Math.max(1.8, Math.min(180, reiDurSec)) / 12, 0.3)
         * Math.pow((1 + Math.min(25, expansionRatio)) / 3.0, 0.2)
       )
     );
@@ -1141,7 +1192,7 @@
       primaryEffort = validTiers[0];
       confidence = 99;
       tierProbs = [{ tier: primaryEffort, prob: 100 }];
-      basis = `官方单档位锁定(${primaryEffort}) · 实测思考${thinkTokens.toLocaleString()}tok`;
+      basis = `官方单档位锁定(${primaryEffort}) · 实测思考${fmtInt(thinkTokens)}tok`;
     } else if (explicitRowTier) {
       const m = /-(low|medium|high|xhigh|max)(?:-|$)/i.exec(explicitRowTier);
       const hitTier = validTiers.find((t) => t.toLowerCase() === m[1].toLowerCase()) || validTiers[validTiers.length - 1];
@@ -1149,15 +1200,15 @@
       confidence = 99;
       tierProbs = validTiers.map((t) => ({ tier: t, prob: t === primaryEffort ? 99 : +(1 / Math.max(1, validTiers.length - 1)).toFixed(1) })).sort((a, b) => b.prob - a.prob);
       basis = `上游计费模型ID直出(${primaryEffort})`;
-    } else if (peakTurnO >= 24000 || thinkTokens >= 20000) {
+    } else if (!hasProbePlusHeavyCode && (peakTurnO >= 24000 || thinkTokens >= 20000)) {
       primaryEffort = validTiers[validTiers.length - 1];
       confidence = 99;
       tierProbs = validTiers.map((t, i) => ({
         tier: t,
         prob: i === validTiers.length - 1 ? 99.2 : +(0.8 / Math.max(1, validTiers.length - 1)).toFixed(1),
       })).sort((a, b) => b.prob - a.prob);
-      basis = `单步峰值 ${peakTurnO.toLocaleString()} tok 突破物理上限锁定 ${primaryEffort}`;
-    } else if (nTurns >= 4 && (totalO >= 10000 || thinkDurSec >= 180 || reasoningBlocks >= 20)) {
+      basis = `单步峰值 ${fmtInt(peakTurnO)} tok 突破物理上限锁定 ${primaryEffort}`;
+    } else if (!hasProbePlusHeavyCode && nTurns >= 4 && (totalO >= 10000 || thinkDurSec >= 180 || reasoningBlocks >= 20)) {
       primaryEffort = validTiers[validTiers.length - 1];
       confidence = 96;
       tierProbs = validTiers.map((t, i) => ({
@@ -1199,7 +1250,7 @@
       const bestTier = tierProbs[0];
       primaryEffort = bestTier.tier;
       confidence = Math.max(58, Math.min(99, Math.round(bestTier.prob)));
-      basis = `思考≈${thinkTokens.toLocaleString()}tok(P75=${p75ThinkTok}/等效${effThinkTok}) · 膨胀${expansionRatio}x${thinkDurSec > 0 ? ' · ' + thinkDurSec + 's' : ''} → 贝叶斯锁定${primaryEffort}(${bestTier.prob}%)`;
+      basis = `思考≈${fmtInt(thinkTokens)}tok(P75=${p75ThinkTok}/等效${effThinkTok}) · 膨胀${expansionRatio}x${thinkDurSec > 0 ? ' · ' + thinkDurSec + 's' : ''} → 贝叶斯锁定${primaryEffort}(${bestTier.prob}%)`;
     }
 
     let effortDowngraded = false;
@@ -1233,7 +1284,7 @@
     const stealthModelId = stealthNextGen ? 'anthropic/claude-opus-5.6' : null;
     const stealthModelLabel = stealthNextGen ? `Claude Opus 5.6 (${primaryEffort || 'Max'})` : null;
     if (stealthNextGen && spec.familyKey === 'claude-opus-5.5') {
-      basis = `单步峰值 ${peakTurnO.toLocaleString()} tok (思考 ${thinkTokens.toLocaleString()} tok · REI ${reiScore}) 突破 Opus 5.5 64K 物理上限 → 锁定新模型 ${stealthModelLabel}`;
+      basis = `单步峰值 ${fmtInt(peakTurnO)} tok (思考 ${fmtInt(thinkTokens)} tok · REI ${reiScore}) 突破 Opus 5.5 64K 物理上限 → 锁定新模型 ${stealthModelLabel}`;
     }
 
     return {
@@ -1318,10 +1369,28 @@
       ? ev.billingSources.map((s) => String(s || '').toLowerCase()).filter(Boolean)
       : [];
     const sources = [...new Set(rowSources.concat(evSources))];
+    const hasRowCW = Array.isArray(rows) && rows.some(r => (Number(r && r.cacheWriteUsd) || 0) > 1e-9);
+    const isSol61UnpricedCoding = !hasRowCW
+      && ev.silentBashLoop !== true
+      && !(Number(ev.avgChunk) >= 18)
+      && Array.isArray(turnTokens)
+      && turnTokens.some((t) => (t.solverTier || 1) === 1 && (t.W || 0) === 0 && (t.R || 0) >= 80000 && ((t.O || 0) >= 6000 || (t.stepCount || 1) >= 5))
+      && (
+        Number(ev.turnDurationMs) >= 95000
+        || (Number(ev.cps) > 0 && Number(ev.cps) <= 50)
+        || Number(solvedTokens && solvedTokens.maxTurnO) >= 18000
+        || ev.hasAskUserTool === true
+        || ev.hasWebSearchTool === true
+      );
     if (sources.includes('unpriced')) {
-      if (/barium|argon|nemotron|may26-chatbot4/i.test(id + ' ' + label)) {
+      if (isSol61UnpricedCoding && /gpt-6\.1-sol/i.test(id)) {
+        matchedDims.push('计费源:unpriced+长思考多步编码(锁定6.1-Sol)');
+        softPen -= 0.0055;
+      } else if (/barium|argon|nemotron|may26-chatbot4/i.test(id + ' ' + label)) {
         matchedDims.push('计费源:unpriced(锁定无标价模型)');
-        if (/barium|argon/i.test(id) && ev.visibleReasoning !== true && ev.reasoningSignature !== 'visible-text') {
+        if (isSol61UnpricedCoding) {
+          softPen += 0.0140;
+        } else if (/barium|argon/i.test(id) && ev.visibleReasoning !== true && ev.reasoningSignature !== 'visible-text') {
           softPen -= 0.0030;
         }
       } else {
@@ -1330,7 +1399,8 @@
     } else if (sources.length > 0 && /barium|argon|nemotron|may26-chatbot4/i.test(id + ' ' + label)) {
       const zeroReasonGemini = /barium|argon/i.test(id + ' ' + label)
         && (ev.noReasoningParts === true || ev.reasoningSignature === 'none')
-        && !hasCW;
+        && !hasCW
+        && !isSol61UnpricedCoding;
       if (!zeroReasonGemini) hardPen += 0.55;
     }
     if (sources.includes('agent-verified')) {
@@ -1421,7 +1491,6 @@
       }
     }
 
-    const hasRowCW = Array.isArray(rows) && rows.some(r => (Number(r && r.cacheWriteUsd) || 0) > 1e-9);
     const hasRow6603OpenAiPrefix = !hasRowCW && Array.isArray(rows) && rows.length > 0 && rows.some((r, idx) => {
       const iUsd = Number(r && r.inputUsd) || 0;
       const rUsd = Number(r && r.cacheReadUsd) || 0;
@@ -1506,6 +1575,9 @@
     } else if (ev.noReasoningParts === true || ev.reasoningSignature === 'none') {
       if (isOpenModel) {
         hardPen += 0.85;
+      } else if (isSol61UnpricedCoding && /gpt-6\.1-sol/i.test(id)) {
+        matchedDims.push('长耗时/高Token多步编码(6.1-Sol特征)');
+        softPen -= 0.0040;
       } else if (hasExact6603Turn && proto === 'openai') {
         matchedDims.push('系统前缀:6603t(OpenAI特征)');
         softPen -= 0.0040;
@@ -1513,7 +1585,7 @@
         hardPen += 0.28;
       } else if (proto === 'google' || /barium|argon|gemini/i.test(id + ' ' + label)) {
         matchedDims.push('思考段:nr=0(Gemini/Argon特征)');
-        softPen -= 0.0045;
+        if (!isSol61UnpricedCoding) softPen -= 0.0045;
       } else if (rawModel.supportsReasoning === false) {
         matchedDims.push('思考段:nr=0(无思考标记)');
         softPen -= 0.0010;
@@ -1559,9 +1631,12 @@
     }
 
     if (ev.silentBashLoop === true) {
-      if (proto === 'google') {
+      if (isSol61UnpricedCoding && /gpt-6\.1-sol/i.test(id)) {
+        matchedDims.push('行为习惯:零前置文本连调工具(6.1-Sol特征)');
+        softPen -= 0.0020;
+      } else if (proto === 'google') {
         matchedDims.push('行为习惯:静默连调Bash(Gemini特征)');
-        softPen -= 0.0015;
+        if (!isSol61UnpricedCoding) softPen -= 0.0015;
       } else {
         softPen += 0.0065;
       }
@@ -1869,6 +1944,8 @@
       });
     }
 
+    const evalMemo = new Map();
+    const effortMemo = new Map();
     let best = null;
     for (let p50Idx = 0; p50Idx < p50Variants.length; p50Idx += 1) {
       const p50 = p50Variants[p50Idx];
@@ -2059,36 +2136,50 @@
               visO: acc.visO + (t.visO || 0),
             }), { I: 0, W: 0, R: 0, O: 0, visO: 0 });
             const nTurns = Math.max(1, validTurns);
-            const baseSolvedTokens = {
-              I: sumTokens.I,
-              W: sumTokens.W,
-              R: sumTokens.R,
-              O: sumTokens.O,
-              visO: sumTokens.visO,
-              maxTurnO,
-              avgOutPerTurn: Math.round(sumTokens.O / nTurns),
-              turns: validTurns,
-            };
-            const effortProfile = inferModelEffortGrade(rawModel, baseSolvedTokens, evidence, rows, turnTokens);
-            const inferredEffort = String(effortProfile.primaryEffort || 'high').toLowerCase();
-            const dynamicLabel = formatDynamicEffortLabel(rawModel && (rawModel.label || rawModel.id), effortProfile);
-            const solvedTokens = {
-              I: sumTokens.I,
-              W: sumTokens.W,
-              R: sumTokens.R,
-              O: sumTokens.O,
-              visO: effortProfile.visTokens,
-              maxTurnO,
-              thinking: effortProfile.thinkTokens,
-              peakThinking: effortProfile.peakThinkTokens,
-              expansionRatio: effortProfile.expansionRatio,
-              reiScore: effortProfile.reiScore,
-              avgOutPerTurn: Math.round(sumTokens.O / nTurns),
-              turns: validTurns,
-            };
+            const memoKey = `${sumTokens.I}:${sumTokens.W}:${sumTokens.R}:${sumTokens.O}:${maxTurnO}:${validTurns}:${maxSolverTier}:${turnTokens.map((t) => `${t.I},${t.R},${t.W},${t.O},${t.solverTier || 1}`).join(';')}`;
+            let cachedEval = evalMemo.get(memoKey);
+            if (!cachedEval) {
+              const effortKey = `${sumTokens.I}:${sumTokens.O}:${maxTurnO}:${validTurns}:${turnTokens.map((t) => `${t.I},${t.O}`).join(';')}`;
+              let cachedEffort = effortMemo.get(effortKey);
+              if (!cachedEffort) {
+                const baseSolvedTokens = {
+                  I: sumTokens.I,
+                  W: sumTokens.W,
+                  R: sumTokens.R,
+                  O: sumTokens.O,
+                  visO: sumTokens.visO,
+                  maxTurnO,
+                  avgOutPerTurn: Math.round(sumTokens.O / nTurns),
+                  turns: validTurns,
+                };
+                const effortProfile = inferModelEffortGrade(rawModel, baseSolvedTokens, evidence, rows, turnTokens);
+                const inferredEffort = String(effortProfile.primaryEffort || 'high').toLowerCase();
+                const dynamicLabel = formatDynamicEffortLabel(rawModel && (rawModel.label || rawModel.id), effortProfile);
+                cachedEffort = { effortProfile, inferredEffort, dynamicLabel };
+                effortMemo.set(effortKey, cachedEffort);
+              }
+              const { effortProfile, inferredEffort, dynamicLabel } = cachedEffort;
+              const solvedTokens = {
+                I: sumTokens.I,
+                W: sumTokens.W,
+                R: sumTokens.R,
+                O: sumTokens.O,
+                visO: effortProfile.visTokens,
+                maxTurnO,
+                thinking: effortProfile.thinkTokens,
+                peakThinking: effortProfile.peakThinkTokens,
+                expansionRatio: effortProfile.expansionRatio,
+                reiScore: effortProfile.reiScore,
+                avgOutPerTurn: Math.round(sumTokens.O / nTurns),
+                turns: validTurns,
+              };
 
-            const multiDim = computeMultiDimPenalty(rawModel, evidence, solvedTokens, hasCW, hasCR, rows, turnTokens);
-            const matchedDimsWithEffort = (multiDim.matchedDims || []).concat([`思考档位:${effortProfile.effort}(REI=${effortProfile.reiScore})`]);
+              const multiDim = computeMultiDimPenalty(rawModel, evidence, solvedTokens, hasCW, hasCR, rows, turnTokens);
+              const matchedDimsWithEffort = (multiDim.matchedDims || []).concat([`思考档位:${effortProfile.effort}(REI=${effortProfile.reiScore})`]);
+              cachedEval = { effortProfile, inferredEffort, dynamicLabel, solvedTokens, multiDim, matchedDimsWithEffort };
+              evalMemo.set(memoKey, cachedEval);
+            }
+            const { effortProfile, inferredEffort, dynamicLabel, solvedTokens, multiDim, matchedDimsWithEffort } = cachedEval;
             const effCrPerM = derivedCrPerM != null ? derivedCrPerM : (Number(crBase) ? Number((crBase * 1e6).toFixed(4)) : null); const fableCrPen = (isLegacyFable5 && hasCR && (crIdx > 0 || maxSolverTier === 3 || (effCrPerM != null && Math.abs(effCrPerM - 0.25) < 0.05))) ? 0.16 : 0; const fableEffortPen = fableCrPen + ((isLegacyFable5 && ((effortProfile && effortProfile.reiScore >= 240) || (effortProfile && effortProfile.effThinkTok >= 2400))) ? 0.05 : 0);
             const effHardPen = (isAstraModel && cachePatternPenalty > 0 && (multiDim.hardPenalty || 0) > 0 && (multiDim.hardPenalty || 0) < 0.5)
               ? Math.max(0, (multiDim.hardPenalty || 0) - cachePatternPenalty)
@@ -2310,9 +2401,21 @@
       ? opts.perMessage
       : [Object.assign({}, costs, { basePriceUsd: base })];
 
+    const evEarly = options && options.evidence;
+    const earlyOpenThink = Boolean(evEarly && (evEarly.visibleReasoning === true || (Number(evEarly.visibleReasoningChars) > 0) || evEarly.reasoningSignature === 'visible-text' || evEarly.reasoningSignature === 'visible' || (evEarly.streamEvidence && evEarly.streamEvidence.reasoningSummary === 'visible')));
+    const earlyClosedThink = Boolean(evEarly && !earlyOpenThink && (evEarly.hiddenReasoning === true || evEarly.reasoningEmpty === true || evEarly.visibleReasoningChars === 0 || evEarly.reasoningSignature === 'markers-only' || evEarly.reasoningSignature === 'empty-deltas' || evEarly.noReasoningParts === true || evEarly.reasoningSignature === 'none' || evEarly.streamIdPrefix === 'openai-rs' || evEarly.streamIdPrefix === 'openai-tc-empty' || evEarly.hasClosedSourceThinking === true || (evEarly.streamEvidence && (evEarly.streamEvidence.reasoningSummary === 'empty' || evEarly.streamEvidence.reasoningSummary === 'none'))));
+    let activeCatalog = catalog || [];
+    if (earlyOpenThink) {
+      const openOnly = activeCatalog.filter((c) => !isClosedSourceModel(c));
+      if (openOnly.length > 0) activeCatalog = openOnly;
+    } else if (earlyClosedThink) {
+      const closedOnly = activeCatalog.filter((c) => !isOpenSourceModel(c));
+      if (closedOnly.length > 0) activeCatalog = closedOnly;
+    }
+
     function buildCandidateList(activeRates) {
       const listOut = [];
-      for (const model of (catalog || [])) {
+      for (const model of activeCatalog) {
         if (!servesInteractively(model)) continue;
         if (scope.length && scope.indexOf(normVendor(model.vendor)) < 0) continue;
         const hit = predictBasePrice(model, costs, activeRates, opts.tiers, perMessage, opts.evidence);
@@ -2368,9 +2471,6 @@
       chosenRates = AGENT_P50_RATES;
     }
 
-    const evEarly = options && options.evidence;
-    const earlyOpenThink = Boolean(evEarly && (evEarly.visibleReasoning === true || (Number(evEarly.visibleReasoningChars) > 0) || evEarly.reasoningSignature === 'visible-text' || evEarly.reasoningSignature === 'visible' || (evEarly.streamEvidence && evEarly.streamEvidence.reasoningSummary === 'visible')));
-    const earlyClosedThink = Boolean(evEarly && !earlyOpenThink && (evEarly.hiddenReasoning === true || evEarly.reasoningEmpty === true || evEarly.visibleReasoningChars === 0 || evEarly.reasoningSignature === 'markers-only' || evEarly.reasoningSignature === 'empty-deltas' || evEarly.noReasoningParts === true || evEarly.reasoningSignature === 'none' || evEarly.streamIdPrefix === 'openai-rs' || evEarly.streamIdPrefix === 'openai-tc-empty' || evEarly.hasClosedSourceThinking === true || (evEarly.streamEvidence && (evEarly.streamEvidence.reasoningSummary === 'empty' || evEarly.streamEvidence.reasoningSummary === 'none'))));
     if (earlyOpenThink) {
       candidates = candidates.filter((c) => !isClosedSourceModel(c));
     } else if (earlyClosedThink) {
@@ -2378,6 +2478,58 @@
       if (closedOnly.length > 0) candidates = closedOnly;
     }
 
+    function finalizeCandidateOrder(list) {
+      let arr = list.map((c) => Object.assign({}, c));
+      const exactT1 = arr.filter((c) => c && c.diophantinePassed === true && (c.solverTier || 1) === 1 && Math.abs((c.priceTier || 1) - 1) < 1e-6 && (Number(c.priceResidual ?? c.residual) || 0) < 1e-6);
+      if (exactT1.length > 0) {
+        const bestExact = exactT1.reduce((a, b) => ((a.scoreResidual ?? a.residual) <= (b.scoreResidual ?? b.residual) ? a : b));
+        const exactEpoch = bestExact && bestExact.matchedVariant;
+        if (exactEpoch) {
+          for (const c of arr) {
+            if (!c || !c.matchedVariant || c.matchedVariant === exactEpoch) continue;
+            if ((Number(c.priceResidual ?? c.residual) || 0) > 1e-6) {
+              const adj = Math.min(0.99, Math.max(Number(c.effectiveResidual) || 0, Number(c.scoreResidual) || 0) + 0.18);
+              c.effectiveResidual = adj;
+              c.scoreResidual = adj;
+            }
+          }
+        }
+      }
+      arr.sort((a, b) => {
+        const sDiff = (a.scoreResidual ?? a.residual) - (b.scoreResidual ?? b.residual);
+        if (Math.abs(sDiff) > 1e-9) return sDiff;
+        const rDiff = a.residual - b.residual;
+        if (Math.abs(rDiff) > 1e-9) return rDiff;
+        if ((b.diophantineRate || 0) !== (a.diophantineRate || 0)) {
+          return (b.diophantineRate || 0) - (a.diophantineRate || 0);
+        }
+        const genDiff = modelGenerationScore(b) - modelGenerationScore(a);
+        if (Math.abs(genDiff) > 1e-6) return genDiff;
+        return String(a.id || '').localeCompare(String(b.id || ''));
+      });
+      const seenIds = new Set();
+      arr = arr.filter((c) => {
+        const cid = String((c && c.id) || '');
+        if (!cid || seenIds.has(cid)) return false;
+        seenIds.add(cid);
+        return true;
+      });
+      for (let i = 1; i < arr.length; i++) {
+        const prev = arr[i - 1], cur = arr[i];
+        const isRealCatalog = Boolean((cur && (cur.agentTaskSamples > 0 || (cur.leaderboardRank > 0 && cur.leaderboardRank < 900))) || (prev && (prev.agentTaskSamples > 0 || (prev.leaderboardRank > 0 && prev.leaderboardRank < 900))));
+        if (!isRealCatalog) continue;
+        const prevEff = Number.isFinite(prev.effectiveResidual) ? prev.effectiveResidual : (prev.scoreResidual ?? prev.residual ?? 0);
+        let curEff = Math.max(Number.isFinite(cur.effectiveResidual) ? cur.effectiveResidual : 0, cur.scoreResidual ?? cur.residual ?? 0);
+        if (curEff < prevEff + 0.0015) {
+          curEff = Math.min(0.99, prevEff + 0.0015);
+        }
+        cur.effectiveResidual = curEff;
+        cur.scoreResidual = Math.max(cur.scoreResidual ?? 0, curEff);
+      }
+      return arr;
+    }
+
+    const rawAllCandidates = candidates;
     let vendorFiltered = false;
     const beforeHint = candidates.length;
     const activeHints = earlyOpenThink
@@ -2409,58 +2561,8 @@
       }
     }
 
-    {
-      const exactT1 = candidates.filter((c) => c && c.diophantinePassed === true && (c.solverTier || 1) === 1 && Math.abs((c.priceTier || 1) - 1) < 1e-6 && (Number(c.priceResidual ?? c.residual) || 0) < 1e-6);
-      if (exactT1.length > 0) {
-        const bestExact = exactT1.reduce((a, b) => ((a.scoreResidual ?? a.residual) <= (b.scoreResidual ?? b.residual) ? a : b));
-        const exactEpoch = bestExact && bestExact.matchedVariant;
-        if (exactEpoch) {
-          for (const c of candidates) {
-            if (!c || !c.matchedVariant || c.matchedVariant === exactEpoch) continue;
-            if ((Number(c.priceResidual ?? c.residual) || 0) > 1e-6) {
-              const adj = Math.min(0.99, Math.max(Number(c.effectiveResidual) || 0, Number(c.scoreResidual) || 0) + 0.18);
-              c.effectiveResidual = adj;
-              c.scoreResidual = adj;
-            }
-          }
-        }
-      }
-    }
-
-    candidates.sort((a, b) => {
-      const sDiff = (a.scoreResidual ?? a.residual) - (b.scoreResidual ?? b.residual);
-      if (Math.abs(sDiff) > 1e-9) return sDiff;
-      const rDiff = a.residual - b.residual;
-      if (Math.abs(rDiff) > 1e-9) return rDiff;
-      if ((b.diophantineRate || 0) !== (a.diophantineRate || 0)) {
-        return (b.diophantineRate || 0) - (a.diophantineRate || 0);
-      }
-      const genDiff = modelGenerationScore(b) - modelGenerationScore(a);
-      if (Math.abs(genDiff) > 1e-6) return genDiff;
-      return String(a.id || '').localeCompare(String(b.id || ''));
-    });
-    {
-      const seenIds = new Set();
-      candidates = candidates.filter((c) => {
-        const cid = String((c && c.id) || '');
-        if (!cid || seenIds.has(cid)) return false;
-        seenIds.add(cid);
-        return true;
-      });
-    }
-
-    for (let i = 1; i < candidates.length; i++) {
-      const prev = candidates[i - 1], cur = candidates[i];
-      const isRealCatalog = Boolean((cur && (cur.agentTaskSamples > 0 || (cur.leaderboardRank > 0 && cur.leaderboardRank < 900))) || (prev && (prev.agentTaskSamples > 0 || (prev.leaderboardRank > 0 && prev.leaderboardRank < 900))));
-      if (!isRealCatalog) continue;
-      const prevEff = Number.isFinite(prev.effectiveResidual) ? prev.effectiveResidual : (prev.scoreResidual ?? prev.residual ?? 0);
-      let curEff = Math.max(Number.isFinite(cur.effectiveResidual) ? cur.effectiveResidual : 0, cur.scoreResidual ?? cur.residual ?? 0);
-      if (curEff < prevEff + 0.0015) {
-        curEff = Math.min(0.99, prevEff + 0.0015);
-      }
-      cur.effectiveResidual = curEff;
-      cur.scoreResidual = Math.max(cur.scoreResidual ?? 0, curEff);
-    }
+    candidates = finalizeCandidateOrder(candidates);
+    const unnarrowedCandidates = vendorFiltered ? finalizeCandidateOrder(rawAllCandidates) : candidates;
 
     // 开源思考与闭源思考严格互斥过滤：开源思考绝不匹配闭源模型，闭源思考绝不匹配开源模型
     const evFilter = options && options.evidence;
@@ -2498,6 +2600,7 @@
       vendorFiltered,
       vendorConflict: !!(hints.length && !vendorFiltered && beforeHint > 0),
       candidates,
+      unnarrowedCandidates,
       ratesLookStale: best !== null && best > 0.25,
     };
   }
