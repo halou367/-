@@ -692,8 +692,11 @@ async function init() {
   // Cached UI/read-only refreshes do not wait behind a slow account metadata endpoint.
   // Authentication, saved credentials and automatic task resume still require /api/me.
   if (early) { void History.refresh({ noRelogin: true }); void Pulse.poll(); KeepAlive.start(); }
-  if (/[?&]browse=1\b/.test(location.search) || window.__BRANA_BROWSE_MODE) {
+  if ((/[?&]browse=1\b/.test(location.search) || window.__BRANA_BROWSE_MODE) && !(typeof EnvRefresh !== 'undefined' && EnvRefresh.justRefreshed)) {
     const isOfflineBoot = /[?&]offline=1\b/.test(location.search);
+    if (isOfflineBoot) {
+      try { if (location.pathname === '/robots.txt') history.replaceState(null, '', '/robots.txt'); } catch {}
+    }
     UI.enterBrowseMode(isOfflineBoot ? '网络无法连接，已开启离线查阅 · 可切换节点或点 × 直接查阅本地对话' : '已进入查阅模式（免登录浏览本地缓存对话）');
     if (isOfflineBoot && !window.__routeFixture && !window.__fixture) {
       try { if (typeof RegionIP !== 'undefined') RegionIP.open({ offlineAlert: true }); } catch {}

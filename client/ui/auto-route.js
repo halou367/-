@@ -178,7 +178,15 @@ const StandbyPool = {
                 NodeRoutes.cache.set(RoutePolicy.key(c), { at: now(), result: r });
               }
             } else if (c.proxyIp && typeof Pool !== 'undefined' && (r?.ip || r?.kind === 'rate-limit' || workingNodes.has(c.proxy) || Pool.isNodeConfirmedAlive?.(c.proxy))) {
-              try { void Pool.blacklistIp?.(c.proxyIp, r?.kind === 'rate-limit' ? '429 限流 · 已永久拉黑' : '节点正常但热备 ProxyIP 不可用 · 已永久拉黑'); } catch {}
+              try {
+                void Pool.mutate(d => {
+                  const e = d.ips?.[c.proxyIp];
+                  if (!e) return;
+                  e.fc = (e.fc || 0) + 1;
+                  if (r?.kind === 'rate-limit') e.cool = Math.max(e.cool || 0, now() + 30 * 60000);
+                  else if ((e.fc || 0) >= 3) Pool.banForever?.(d, c.proxyIp, '节点正常但热备 ProxyIP 连续不可用 · 已永久拉黑');
+                });
+              } catch {}
             }
           }
           this.ips.sort((x, y) => (x.ms || 9999) - (y.ms || 9999));
@@ -265,7 +273,7 @@ const AutoRoute = {
       networkFirst:true,
       batchSize:4,
       forceGlobalLowestLatency:()=>(this.netErrorCount||0)>2,
-      banBadIp:(c,r)=>{if(c?.proxyIp&&typeof Pool!=='undefined'&&(r?.ip||r?.kind==='rate-limit'||Pool.isNodeConfirmedAlive?.(c.proxy)))void Pool.blacklistIp?.(c.proxyIp,r?.error||'节点正常但 ProxyIP 检测未通过 · 已永久拉黑');},
+      banBadIp:(c,r)=>{if(c?.proxyIp&&typeof Pool!=='undefined'&&(r?.ip||r?.kind==='rate-limit'||Pool.isNodeConfirmedAlive?.(c.proxy)))void Pool.mutate(d=>{const e=d.ips?.[c.proxyIp];if(!e)return;e.fc=(e.fc||0)+1;if(r?.kind==='rate-limit')e.cool=Math.max(e.cool||0,now()+30*60000);else if((e.fc||0)>=3)Pool.banForever?.(d,c.proxyIp,r?.error||'节点正常但 ProxyIP 连续检测未通过 · 已永久拉黑');}).catch(()=>{});},
       standby:(first,mode,reason,groups)=>StandbyPool.take(first,mode,reason,groups),
       read:async(target)=>{
         const res=await this.adapter.read(target);
@@ -361,15 +369,19 @@ const AutoRoute = {
         if(!this.enabled()||UI.host?.account?.id!==owner)return r;
         if(r.ok){
           this.status=r.changed?(r.standby?'已秒切热备线路：':'已切换：')+r.label+'，正在续接原对话':'当前线路服务检测通过';
-          if(r.changed&&(r.mode==='ip'||reason==='error-switch')&&r.from?.proxyIp){
+          if(!r.changed&&r.account?.proxyIp){
+            const keepPip=r.account.proxyIp;
+            try{await Pool.mutate(d=>{const e=d.ips?.[keepPip];if(e){e.cool=0;e.gone=false;e.banned=false;e.ok=true;if(d.ban)delete d.ban[keepPip.toLowerCase()];}});}catch{}
+          }else if(r.changed&&(r.mode==='ip'||reason==='error-switch')&&r.from?.proxyIp){
             const old=r.from.proxyIp;
             const sameNode=Boolean(r.from?.proxy&&r.account?.proxy&&r.from.proxy===r.account.proxy&&old!==r.account?.proxyIp);
             try{
               await Pool.mutate(d=>{
-                // 只有确认是同一个 VLESS 节点下换了新 ProxyIP 就恢复连通（说明节点没问题，纯粹是旧 ProxyIP 坏了），才永久拉黑旧 ProxyIP；
+                // 只有确认是同一个 VLESS 节点下换了新 ProxyIP 就恢复连通（说明节点没问题，纯粹是旧 ProxyIP 坏了），且旧 IP 已连续多次失败，才永久拉黑；
                 // 若是因为切换了 VLESS 节点才恢复，说明是旧节点故障，绝不误拉黑旧 ProxyIP！
-                if(sameNode&&typeof Pool.banForever==='function')Pool.banForever(d,old,'同节点下该 ProxyIP 异常 · 已永久拉黑');
-                else{const e=d.ips?.[old];if(e){e.cool=Math.max(e.cool||0,now()+Math.max(1,+d.cool||30)*60e3);e.hits=(e.hits||0)+1;}}
+                const e=d.ips?.[old];
+                if(sameNode&&e&&(e.fc||0)>=3&&typeof Pool.banForever==='function')Pool.banForever(d,old,'同节点下该 ProxyIP 连续异常 · 已永久拉黑');
+                else if(sameNode&&e){e.cool=Math.max(e.cool||0,now()+Math.max(1,+d.cool||30)*60e3);e.hits=(e.hits||0)+1;e.fc=(e.fc||0)+1;}
               });
             }catch{}
           }
@@ -418,9 +430,10 @@ const AutoRoute = {
   // 遇到 429 / 超时 / 401 / 403 / 404 / 5xx / 任何连接报错：立即拉黑当前异常 IP 并启用热备秒切；超过 2 次网络问题自动选全库最低延迟可用 IP
   onErrorSwitch(err,where='api'){
     if(!this.enabled()||!RoutePolicy.shouldRotateOnError?.(err))return Promise.resolve({ok:false,skipped:true});
+    if((typeof NodeRoutes!=='undefined'&&NodeRoutes.manual>0)||(typeof RegionIP!=='undefined'&&RegionIP.busy))return Promise.resolve({ok:false,skipped:true});
     const st=Number(err?.status||err?.httpStatus||0);
     const cnt=this.noteNetProblem();
-    this.coolCurrentIp({retryAfterMs:err?.retryAfterMs||(st===429?30*60000:10*60000),reason:where+':'+st});
+    if(st===429||err?.ipLimited)this.coolCurrentIp({retryAfterMs:err?.retryAfterMs||30*60000,reason:where+':429'});
     if(typeof ReadLimit!=='undefined')ReadLimit.until=0;
     if(typeof Quota!=='undefined'&&Quota.clear)Quota.clear(true);
     const reason=st===429||err?.ipLimited?'limited':'error-switch';
@@ -441,20 +454,17 @@ const AutoRoute = {
     const is429=rawWhy.includes('429');
     const errLabel=is429?'429 冷却中':'连接超时 · 冷却中';
     const coolUntil=now()+Math.max(10*60000,Number(why?.retryAfterMs)||(is429?30*60000:15*60000));
-    // 只有在明确确认当前 VLESS 节点存活（非节点挂掉导致的超时）时，才将当前超时的 ProxyIP 永久拉黑；否则仅标记临时冷却，交由恢复引擎确认是节点问题还是 IP 问题
-    const nodeConfirmedOk=!is429&&Boolean(typeof Pool.isNodeConfirmedAlive==='function'&&Pool.isNodeConfirmedAlive(a.proxy));
     try{
       void Pool.mutate(d=>{
-        const mark=(k,e)=>{if(!e)return;e.cool=Math.max(e.cool||0,coolUntil);e.hits=(e.hits||0)+1;e.err=errLabel;if(!is429){e.fc=(e.fc||0)+1;e.at=now();if(nodeConfirmedOk){e.ok=false;if(k){d.ban||={};d.ban[String(k).toLowerCase()]=now();d.drop||={};d.drop[String(k)]=now();e.gone=true;e.banned=true;}}}};
+        const mark=(k,e)=>{if(!e)return;e.cool=Math.max(e.cool||0,coolUntil);e.hits=(e.hits||0)+1;e.err=errLabel;if(!is429){e.fc=(e.fc||0)+1;e.at=now();}};
         if(curPip&&d.ips?.[curPip])mark(curPip,d.ips[curPip]);
-        else if(curPip&&nodeConfirmedOk){d.ban||={};d.ban[curPip.toLowerCase()]=now();d.drop||={};d.drop[curPip]=now();}
         for(const [k,e] of Object.entries(d.ips||{})){if(e&&(k===curPip||k===curIp||e.eg===curIp))mark(k,e);}
       }).then(()=>{try{Bus.emit('pool');}catch{}}).catch(()=>{});
     }catch{}
     try{
       if(typeof RegionIP!=='undefined'&&RegionIP.state){
         for(const st of RegionIP.state.values()){
-          for(const row of st.rows||[]){if(row.ip===curPip||row.ip===curIp){row.state=nodeConfirmedOk?'ban':'cool';row.cool=coolUntil;row.reason=errLabel;}}
+          for(const row of st.rows||[]){if(row.ip===curPip||row.ip===curIp){row.state='cool';row.cool=coolUntil;row.reason=errLabel;}}
         }
         RegionIP.refreshOpen?.();
       }
@@ -535,7 +545,7 @@ const RouteWarm = {
       if(keys.length&&this.idle(a)){
         const r=await Host.probe({link:a.proxy,pips:keys,timeout:6500}).catch(()=>null);
         const nodeAlive=Array.isArray(r)&&(typeof Pool.isNodeConfirmedAlive==='function'?Pool.isNodeConfirmedAlive(a.proxy,r):r.some(x=>x&&(x.ip||x.brana)));
-        if(Array.isArray(r)&&UI.host?.account?.id===a.id)await Pool.mutate(d=>keys.forEach((k,j)=>{const res=r.find(x=>x?.pip===k)||r[j]||{};Pool.apply(d,k,res);if(!(res.ip&&res.brana)&&(nodeAlive||res.ip))Pool.banForever?.(d,k,'节点正常但该 ProxyIP 不可用 · 已拉黑');})).catch(()=>{});
+        if(Array.isArray(r)&&UI.host?.account?.id===a.id)await Pool.mutate(d=>keys.forEach((k,j)=>{const res=r.find(x=>x?.pip===k)||r[j]||{};Pool.apply(d,k,res);if(!(res.ip&&res.brana)&&(nodeAlive||res.ip)&&d.ips?.[k]&&(d.ips[k].fc||0)>=3)Pool.banForever?.(d,k,'节点正常但该 ProxyIP 连续不可用 · 已拉黑');})).catch(()=>{});
       }
       if(typeof Pool!=='undefined'&&Pool.purgeImpureAndUnstable)await Pool.purgeImpureAndUnstable().catch(()=>{});
       if(typeof IPRep!=='undefined'&&IPRep.prime&&this.idle(a)){if(IPRep._pr)IPRep._pr[a.region]=0;await IPRep.prime(a.region).catch(()=>{});}

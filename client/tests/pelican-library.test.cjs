@@ -526,9 +526,20 @@ test('v0.13.158: halou367 update worker repo, send-message timeout fix, >2 netwo
   assert.ok(bpUiSrc.includes('wasClosedModel && latestHasOpenThink'));
   assert.ok(sqSrc.includes('if (chat._routePaused && !chat.thinkStopped) chat._routePaused = false;'));
 
-  // 6) ProxyIP permanent blacklist never triggers when VLESS node itself is unreachable (isNodeConfirmedAlive / sameNode guard)
+  // 6) ProxyIP permanent blacklist never triggers when VLESS node itself is unreachable (isNodeConfirmedAlive / sameNode guard) + v0.13.160 Android networking recovery fixes
   assert.ok(poolSrc.includes('isNodeConfirmedAlive(link, batchResults = null)'));
+  assert.ok(poolSrc.includes('hasV158Poison'));
   assert.ok(arSrc.includes('const sameNode=Boolean(r.from?.proxy&&r.account?.proxy&&r.from.proxy===r.account.proxy&&old!==r.account?.proxyIp);'));
+  const rsJavaSrc = fs.readFileSync(path.join(ROOT, 'android', 'app', 'src', 'main', 'java', 'ai', 'arena', 'client', 'RouteSupport.java'), 'utf8');
+  const maJavaSrc = fs.readFileSync(path.join(ROOT, 'android', 'app', 'src', 'main', 'java', 'ai', 'arena', 'client', 'MainActivity.java'), 'utf8');
+  const envRefSrc = fs.readFileSync(path.join(ROOT, 'ui', 'env-refresh.js'), 'utf8');
+  const envChkSrc = fs.readFileSync(path.join(ROOT, 'ui', 'env-check.js'), 'utf8');
+  const ripSrc = fs.readFileSync(path.join(ROOT, 'ui', 'region-ip.js'), 'utf8');
+  assert.ok(rsJavaSrc.includes('if(!pip.isEmpty()&&!request.optBoolean("manual"))'));
+  assert.ok(maJavaSrc.includes('(request.isForMainFrame() && protectedWebs.contains(view))'));
+  assert.ok(envRefSrc.includes('this.justRefreshed = true;') && envRefSrc.includes("location.replace('/robots.txt')"));
+  assert.ok(envChkSrc.includes('UI.recoverFromBrowseMode()'));
+  assert.ok(ripSrc.includes('const liveOk=Boolean(ip&&!IP.err&&!rttTimeout);'));
 });
 
 

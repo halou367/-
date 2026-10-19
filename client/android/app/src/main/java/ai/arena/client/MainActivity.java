@@ -989,7 +989,7 @@ public class MainActivity extends Activity {
             @Override public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
                 String scheme = request.getUrl().getScheme();
                 if (!"http".equals(scheme) && !"https".equals(scheme)) return null;
-                if ("https".equals(scheme) && "arena.ai".equals(request.getUrl().getHost()) && "/robots.txt".equals(request.getUrl().getPath()) && "1".equals(request.getUrl().getQueryParameter("browse"))) {
+                if ("https".equals(scheme) && "arena.ai".equals(request.getUrl().getHost()) && "/robots.txt".equals(request.getUrl().getPath()) && ("1".equals(request.getUrl().getQueryParameter("browse")) || (request.isForMainFrame() && protectedWebs.contains(view)))) {
                     return new WebResourceResponse("text/plain", "UTF-8", 200, "OK", java.util.Collections.emptyMap(), new java.io.ByteArrayInputStream("User-agent: *\nAllow: /\n".getBytes(StandardCharsets.UTF_8)));
                 }
                 if (proxyBlocked || !protectedWebs.contains(view)) return new WebResourceResponse("text/plain", "UTF-8", 503, "Privacy protection", java.util.Collections.emptyMap(), new java.io.ByteArrayInputStream("Network blocked by privacy policy".getBytes(StandardCharsets.UTF_8)));

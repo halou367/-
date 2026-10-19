@@ -597,6 +597,7 @@ const NodeRoutes = (() => {
           const authForm=wrap.closest('.auth-form');
           if(authForm){const d=UI.authDraft(a);Store.set('auth-route-draft',{accountId:a.id,email:d.email,name:d.name||'',mode:authForm.dataset.authMode||'login',at:Date.now()});}
           applying=true;paint();step(78,'检测通过，正在应用…');
+          if(candidate?.proxyIp&&P?.mutate){try{await P.mutate(d=>{d.ips||={};const it=d.ips[candidate.proxyIp]||={ip:String(candidate.proxyIp).split(':')[0]};it.ok=true;it.gone=false;it.banned=false;it.cool=0;if(r?.loc)it.loc=r.loc;if(r?.ip)it.eg=r.ip;if(r?.ms)it.ms=r.ms;if(d.ban)delete d.ban[String(candidate.proxyIp).toLowerCase()];});}catch{}}
           const saved=await selector({...io,cancelled:stale}).apply(data.account,candidate,wanted,r);warm.delete(routeKey(candidate));lastBrana=null;pre=null;
           Object.assign(a,saved);current=Policy.fields(saved);changed=false;if(P&&State.isNode(saved)&&saved.nodeId){if(P.d)P.d.node=saved.nodeId;if(!UI.host?.routeDraft)void P.setNode(saved.nodeId).catch(()=>{});}UI.host=await Host.info();UI.renderAcct?.();
           // 刚手动换好：1 分钟内不因为重连抖动触发自动恢复

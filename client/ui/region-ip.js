@@ -193,9 +193,6 @@ const RegionIP = {
     v.back.append(h('div',{class:'modal region-ip',role:'dialog','aria-modal':'true','aria-labelledby':'region-ip-title'},h('div',{class:'rip-head'},h('div',{class:'rip-hl'},v.ipline,v.chips),v.refresh,v.done),h('div',{class:'modal-b'},v.mode,v.editor,v.info,v.list,v.status)));
     document.body.append(v.back);
     v.off=Bus.on('pool',()=>{if(!v.closed)this.paint();});v.tick=setInterval(()=>{if(!v.back.isConnected){if(!this.busy)this.close();return;}this.paint();},1000);
-    if(!window.__routeFixture&&!window.__fixture&&(v.offlineAlert||IP.err||(IP.rttFail>0&&!IP.quietFail?.()))&&typeof AutoRoute!=='undefined'&&AutoRoute.enabled?.()&&!AutoRoute.busy){
-      void AutoRoute.onErrorSwitch({routeTimeout:true,net:true,message:IP.err||'超时'},'panel-open');
-    }
     void this.reload();v.done.focus();
   },
   paint() {
@@ -205,8 +202,13 @@ const RegionIP = {
     { // 头部：当前 IP（国旗 + 大号 IP）+ 地区 / 实时延迟 / 纯净度 / 线路
       const ip=IP.ip||'',f=flagOf(IP.loc||cc)||'🌐',ms=IP.rtt||IP.liveFor?.(a.proxyIp)||0;
       const rttTimeout=Boolean(IP.rttFail>0&&!IP.quietFail?.());
-      if(v.offlineAlert&&ms>0&&!IP.err&&!rttTimeout&&!(typeof AutoRoute!=='undefined'&&AutoRoute.failed)&&!window.__BRANA_BROWSE_MODE)v.offlineAlert=false;
-      const isOff=!!(v.offlineAlert||IP.err||rttTimeout||(typeof AutoRoute!=='undefined'&&AutoRoute.failed)||window.__BRANA_BROWSE_MODE);
+      const liveOk=Boolean(ip&&!IP.err&&!rttTimeout);
+      if(liveOk){
+        if(v.offlineAlert)v.offlineAlert=false;
+        if(typeof AutoRoute!=='undefined'&&AutoRoute.failed)AutoRoute.failed=false;
+        if(window.__BRANA_BROWSE_MODE&&typeof UI!=='undefined'&&typeof UI.recoverFromBrowseMode==='function')void UI.recoverFromBrowseMode();
+      }
+      const isOff=!liveOk&&!!(v.offlineAlert||IP.err||rttTimeout||(typeof AutoRoute!=='undefined'&&AutoRoute.failed));
       const arBusy=Boolean(typeof AutoRoute!=='undefined'&&AutoRoute.busy);
       const sig=[ip,IP.loc,cc,ms,a.proxyIp,a.proxy,IP.err,isOff,arBusy].join('|');
       if(v.hsig!==sig){v.hsig=sig;

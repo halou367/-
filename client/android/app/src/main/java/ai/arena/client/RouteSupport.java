@@ -170,7 +170,7 @@ final class RouteSupport {
         if(request.optBoolean("manual")&&"direct".equals(request.optString("mode"))&&!main.isDirect(route.optString("proxy")))throw new Exception("直连模式只能使用直连");
         if(request.optBoolean("manual")&&"proxy".equals(request.optString("mode"))&&(main.isDirect(route.optString("proxy"))||MainActivity.isVless(route.optString("proxy"))))throw new Exception("代理模式不能保存节点或直连");
         String pip=route.optString("proxyIp");if(!pip.isEmpty())synchronized(main.acctLock){for(int i=0;i<main.accounts.length();i++){JSONObject a=main.accounts.optJSONObject(i);if(!owner.equals(a.optString("id"))&&pip.equalsIgnoreCase(a.optString("proxyIp")))throw new Exception("候选出口已被其他账号占用");}}
-        if(!pip.isEmpty()){JSONObject pool=new JSONObject(main.sp.getString("shared_pippool","{}")),ips=pool.optJSONObject("ips"),item=ips==null?null:ips.optJSONObject(pip),ban=pool.optJSONObject("ban");if(item==null||item.optBoolean("gone")||item.optLong("cool")>System.currentTimeMillis()||ban!=null&&(ban.optBoolean(pip.toLowerCase())||ban.optLong(pip.toLowerCase())>0))throw new Exception("候选出口已改变或冷却");}
+        if(!pip.isEmpty()&&!request.optBoolean("manual")){JSONObject pool=new JSONObject(main.sp.getString("shared_pippool","{}")),ips=pool.optJSONObject("ips"),item=ips==null?null:ips.optJSONObject(pip),ban=pool.optJSONObject("ban");if(item==null||item.optBoolean("gone")||item.optLong("cool")>System.currentTimeMillis()||ban!=null&&(ban.optBoolean(pip.toLowerCase())||ban.optLong(pip.toLowerCase())>0))throw new Exception("候选出口已改变或冷却");}
     }
 
     JSONObject draft(String actor,JSONObject request) throws Exception {

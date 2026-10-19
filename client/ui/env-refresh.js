@@ -18,7 +18,19 @@ const EnvRefresh = {
     if (this.inited) return; this.inited = true;
     this.base = this.key(UI.host?.account);
     const m = Store.get(this.KEY, null);
-    if (m) { Store.del(this.KEY); if (now() - (m.at || 0) < 120000) setTimeout(() => void this.welcome(m), 1200); }
+    if (m) {
+      Store.del(this.KEY);
+      if (now() - (m.at || 0) < 120000) {
+        this.justRefreshed = true;
+        try {
+          window.__BRANA_BROWSE_MODE = false;
+          if (typeof location !== 'undefined' && location.pathname === '/robots.txt' && /[?&](?:browse|offline)=1\b/.test(location.search)) {
+            history.replaceState(null, '', '/robots.txt');
+          }
+        } catch {}
+        setTimeout(() => void this.welcome(m), 1200);
+      }
+    }
     this.wrap();
     // 其他途径改了当前账号线路（例如账号管理窗口）：UI.host 刷新后也能发现；自动秒切（AutoRoute）走无感热切，不整页重载
     setInterval(() => { try { const k = this.key(UI.host?.account); if (k && this.base && k !== this.base) { this.base = k; if (typeof AutoRoute !== 'undefined' && (AutoRoute.busy || now() - (AutoRoute.lastChanged || 0) < 15000)) return; this.schedule(this.label(UI.host.account)); } } catch {} }, 4000);
@@ -70,6 +82,12 @@ const EnvRefresh = {
   },
   schedule(what) {
     if (this.blocked()) return;
+    try {
+      window.__BRANA_BROWSE_MODE = false;
+      if (typeof location !== 'undefined' && location.pathname === '/robots.txt' && /[?&](?:browse|offline)=1\b/.test(location.search)) {
+        history.replaceState(null, '', '/robots.txt');
+      }
+    } catch {}
     this.pending = { what, at: now() }; Store.set(this.KEY, { at: now(), what });
     clearTimeout(this.timer); this.timer = setTimeout(() => this.fire(), this.DELAY);
   },
@@ -85,6 +103,16 @@ const EnvRefresh = {
     }
     this.pending = null; this.waitToast = false; this.reload();
   },
-  reload() { location.reload(); },
+  reload() {
+    try {
+      window.__BRANA_BROWSE_MODE = false;
+      if (typeof location !== 'undefined' && location.pathname === '/robots.txt' && /[?&](?:browse|offline)=1\b/.test(location.search)) {
+        history.replaceState(null, '', '/robots.txt');
+        location.replace('/robots.txt');
+        return;
+      }
+    } catch {}
+    location.reload();
+  },
 };
 if (typeof module !== 'undefined' && module.exports) module.exports = EnvRefresh;

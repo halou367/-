@@ -132,6 +132,7 @@ const EnvCheck = {
         return { ok: false };
       }
       // 延迟：节点测速结果优先；其次实时延迟；这次真的请求过才用本次耗时
+      if (typeof UI !== 'undefined' && typeof UI.recoverFromBrowseMode === 'function') void UI.recoverFromBrowseMode();
       const ms = nodeMs || (IP.rtt > 0 && now() - IP.rttAt < 60000 ? IP.rtt : polled ? now() - t0 : 0);
       c.step('net', 'ok', (vl ? '节点 ' + nodeName() : '连接正常') + (ms ? ' · ' + ms + ' ms' : ''), 65);
       // 出口 IP 还在取：最多等 600ms（取不到也不挡，纯净度后台继续）

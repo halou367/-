@@ -2670,7 +2670,7 @@ function validateRouteCandidate(a, route, options, proofOwner = a.id) {
     if (['proxy','proxyIp','nodeId','region','routeHome'].some(k => route[k] !== undefined && typeof route[k] !== 'string')) throw Error('候选字段类型无效');
     if (route.proxyIp && !/^(?:[\w.:\[\]-]{3,120}|(?:socks5|https?|turn|sstp):\/\/(?:[\w.~%+=!$&'()*,;:-]{1,128}@)?[\w.\[\]:-]{3,160})$/i.test(route.proxyIp)) throw Error('候选出口无效');
     if (/^vless:/i.test(route.proxy) && route.proxy !== a.proxy) { const node = DB.shared?.nodes?.find?.(x => x.id === route.nodeId); if (!node || Vless.toLink(node) !== route.proxy) throw Error('候选节点已改变'); }
-    if (route.proxyIp) { const pool = DB.shared?.pippool || {}, item = pool.ips?.[route.proxyIp]; if (!item || item.gone || pool.ban?.[route.proxyIp.toLowerCase()] || item.cool > Date.now()) throw Error('候选出口已改变或冷却'); }
+    if (route.proxyIp && !options.manual) { const pool = DB.shared?.pippool || {}, item = pool.ips?.[route.proxyIp]; if (!item || item.gone || pool.ban?.[route.proxyIp.toLowerCase()] || item.cool > Date.now()) throw Error('候选出口已改变或冷却'); }
     if (route.proxyIp && DB.accounts.some(x => x.id !== a.id && pipKey(x.proxyIp) === pipKey(route.proxyIp))) throw Error('候选出口已被占用');
 }
 const applyRoute = RouteNative.createApply({

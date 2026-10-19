@@ -71,8 +71,35 @@ const Pool = {
   async load(force) {
     if (this.d && !force) return this.d;
     let x = null; try { x = await Host.shared('pippool'); } catch {}
-    if (x && x.v) this.d = { ...this.blank(), ...x, ips: x.ips || {}, src: Array.isArray(x.src) ? x.src : [] };
-    else {
+    if (x && x.v) {
+      this.d = { ...this.blank(), ...x, ips: x.ips || {}, src: Array.isArray(x.src) ? x.src : [] };
+      const hasV158Poison = !this.d.unpoisonV160 && (
+        Object.values(this.d.ips || {}).some(e => e && e.banned === true) ||
+        Object.values(this.d.ban || {}).some(v => typeof v === 'number' && v > 1.7e12)
+      );
+      if (hasV158Poison) {
+        this.d.unpoisonV160 = 1;
+        this.d.ban = {};
+        this.d.drop = {};
+        for (const [, e] of Object.entries(this.d.ips || {})) {
+          if (!e) continue;
+          if (e.banned) {
+            delete e.gone;
+            delete e.banned;
+            delete e.banReason;
+            e.cool = 0;
+            if (e.ok === false && !e.eg) { delete e.ok; e.fc = 0; e.err = ''; }
+          }
+        }
+        for (const l of this.d.src || []) {
+          const p = this.parse(l);
+          if ((p?.ip || p?.chain) && !this.d.ips[p.line]) {
+            this.d.ips[p.line] = { ip: p.host, port: p.port, src: '', ...(p.chain ? { chain: p.chain } : {}) };
+          }
+        }
+        Host.shared('pippool', this.d).catch(() => {});
+      }
+    } else {
       // 第一次：从旧版「节点库 / ProxyIP 库」迁移
       await Nodes.load(); const d = this.blank();
       for (const v of Nodes.pips) { const p = this.parse(v); if (p && !d.src.includes(p.line)) d.src.push(p.line); }
@@ -355,11 +382,11 @@ const Pool = {
       let n = 0;
       for (const [k, e] of Object.entries(d.ips || {})) {
         if (!e) continue;
-        const impure = typeof IPRep !== 'undefined' && !IPRep.trusted?.(k) && IPRep.score?.(k, e)?.known && (IPRep.pure ? !IPRep.pure(k, e) : IPRep.risky?.(k, e));
-        // 只有明确不纯净，或者已拿到出口 IP（说明节点是通的）但连续失败的 ProxyIP 才永久拉黑；节点不通（无出口 IP）绝不误拉黑 ProxyIP
-        const confirmedIpBad = (e.ok === false && Boolean(e.eg) && (e.fc || 0) >= 2) || Boolean(e.banned);
+        const impure = typeof IPRep !== 'undefined' && !IPRep.trusted?.(k) && Boolean(IPRep.risky?.(k, e));
+        // 只有明确高风险不纯净，或者已拿到出口 IP（说明节点是通的）但连续多次失败的 ProxyIP 才永久拉黑；节点不通（无出口 IP）绝不误拉黑 ProxyIP
+        const confirmedIpBad = (e.ok === false && Boolean(e.eg) && (e.fc || 0) >= 3) || Boolean(e.banned);
         if (impure || confirmedIpBad) {
-          this.banForever(d, k, impure ? '不纯净 · 已拉黑' : (e.err || 'ProxyIP 不可用或不稳定 · 已拉黑'));
+          this.banForever(d, k, impure ? '高风险不纯净 · 已拉黑' : (e.err || 'ProxyIP 不可用或不稳定 · 已拉黑'));
           n++;
         }
       }
@@ -424,6 +451,7 @@ const Pool = {
     const e = d.ips[k]; if (!e) return;
     e.at = now(); if (r.loc) e.loc = r.loc; e.eg = r.ip || e.eg || ''; e.ms = r.ms || 0;
     e.ok = !!(r.ip && r.brana); e.err = e.ok ? '' : (r.error || (r.ip ? 'Brana 不可用' : '连接失败')); e.fc = e.ok ? 0 : (e.fc || 0) + 1;
+    if (e.ok && e.banned) { e.gone = false; e.banned = false; if (d.ban) delete d.ban[String(k || '').trim().toLowerCase()]; }
     // 纯净度：检测时经隧道带回的 IPPure 风险值入库；可用的 IP 立即评估，高风险马上删除（导入 / 测全部 / 切换都走这里）
     if (typeof IPRep !== 'undefined') { if (r.pure && e.eg) IPRep.putPu?.(d, e.eg, r.pure); if (r.ipa && e.eg) IPRep.putIpa?.(d, e.eg, r.ipa); if (e.ok) IPRep.soon?.([k]); }
   },
@@ -444,9 +472,9 @@ const Pool = {
           await this.mutate(d=>{
             if(live()&&d.ips[k]&&!d.ips[k].gone&&!this.banned(k)){
               this.apply(d,k,result);
-              const impure=typeof IPRep!=='undefined'&&!IPRep.trusted?.(k)&&IPRep.score?.(k,d.ips[k])?.known&&!IPRep.pure?.(k,d.ips[k]);
-              if(impure||(result?.ip&&!result?.brana)){
-                this.banForever(d,k,impure?'不纯净 · 已永久拉黑':'ProxyIP 不可用 · 已永久拉黑');
+              const risky=typeof IPRep!=='undefined'&&!IPRep.trusted?.(k)&&IPRep.risky?.(k,d.ips[k]);
+              if(risky||(result?.ip&&!result?.brana&&(d.ips[k].fc||0)>=3)){
+                this.banForever(d,k,risky?'高风险不纯净 · 已永久拉黑':'ProxyIP 不可用 · 已永久拉黑');
               }
             }
           });
@@ -454,12 +482,12 @@ const Pool = {
           Object.assign(state,{done,failed});Bus.emit('pool');onProg?.(done,keys.length);
         };
         const r=await this.streamProbe(part,{link,timeout:9000,signal:options.signal,cancelled:()=>!live(),onItem:accept});
-        // 只有确认当前节点是通的（同批有其它 IP 连通，或节点测速通过），才把同批不通的 ProxyIP 永久拉黑；若整批全挂则说明是节点问题，不拉黑 ProxyIP
+        // 只有确认当前节点是通的（同批有其它 IP 连通，或节点测速通过），且该 IP 已连续多次失败，才永久拉黑；若整批全挂则说明是节点问题，不拉黑 ProxyIP
         if(live()&&Array.isArray(r)&&this.isNodeConfirmedAlive(link,r)){
           await this.mutate(d=>{
             for(const {k,result} of partRes){
-              if(!(result?.ip&&result?.brana)&&d.ips[k]&&!this.banned(k)){
-                this.banForever(d,k,'节点正常但该 ProxyIP 不通 · 已永久拉黑');
+              if(!(result?.ip&&result?.brana)&&d.ips[k]&&(d.ips[k].fc||0)>=3&&!this.banned(k)){
+                this.banForever(d,k,'节点正常但该 ProxyIP 连续不通 · 已永久拉黑');
               }
             }
           });
