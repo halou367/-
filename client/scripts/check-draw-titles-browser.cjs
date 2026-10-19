@@ -129,7 +129,7 @@ async function finish(f, name) {
    return{title:packet.title,encoded:a.TitleCipher.isEncoded(packet.title),length:packet.title.length,decoded,blocked,stored:Object.values(localStorage).some(v=>v.includes('phone desktop test passphrase'))};
   },sid);
   assert.equal(state.encoded,true);assert.equal(state.length,100);assert.equal(state.decoded[1],'gpt-6-astra');assert.equal(state.decoded[4],33.3);assert.equal(state.decoded[6],'手机电脑同步测试');assert.match(state.title,/^Qx /);assert.equal(state.blocked,true);assert.equal(state.stored,false);
-  await p.getByRole('button',{name:'锁定',exact:true}).click();assert.equal(await p.evaluate(()=>__anc.TitleCipher.unlocked),false);
+  await p.locator('.dlg').getByRole('button',{name:'锁定',exact:true}).click();assert.equal(await p.evaluate(()=>__anc.TitleCipher.unlocked),false);
   const polls=await p.evaluate(async()=>{const n=()=>__fixture.requests.filter(r=>r.path==='/api/me/pulse').length,before=n();await Promise.all([__anc.Pulse.poll(),__anc.Pulse.poll(),__anc.Pin.check()]);return{before,after:n()};});assert.equal(polls.before,polls.after);
   await finish(f,platform+': three modes, saved keywords, title unlock/lock, encrypted PATCH, no plaintext or repeated Pulse');
  }
