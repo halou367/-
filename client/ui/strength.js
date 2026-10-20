@@ -30,7 +30,7 @@ const Strength = (() => {
       n = n.trim().replace(/\s+/g, '-').toLowerCase();
     }
     n = n.replace(/(\d)(none|minimal|low|medium|high|xhigh|max)\b/gi, '$1-$2');
-    n = foldVer(n); n = n.replace(/\s*[·•・#]\s*\d{1,4}\s*$/, '').replace(/[-_]0\d{2}$/, '').trim(); if (!n) return '';   // 旧版序号后缀：opus-5.5 · 001 / -002 → 同一个型号
+    n = foldVer(n); n = n.replace(/gpt-5\.6-luna/ig, 'gpt-6-luna').replace(/\bbarium-bb-v2-4xts(?:-(?:agent|public|vertex))?(?:-(low|medium|high|max))?\b/ig, (_, t) => 'gemini-4-argon-' + String(t || 'high').toLowerCase()); n = n.replace(/\s*[·•・#]\s*\d{1,4}\s*$/, '').replace(/[-_]0\d{2}$/, '').trim(); if (!n) return '';   // 旧版序号后缀：opus-5.5 · 001 / -002 → 同一个型号
     n = n.replace(/-(none|minimal|low|medium|high|xhigh|max)(?:-\1)+$/i, '-$1');   // opus-5-high-high → opus-5-high（档位重复）
     n = n.replace(/-([a-z][a-z0-9]{0,14})(?:-\1)+$/i, '-$1');   // fable-5-v2-v2 → fable-5-v2（后缀重复；只处理字母开头的，5-5 这种版本号不动）
     const m = /^[\w.\/:@+-]{3,90}$/.test(n) && /^([a-z][a-z0-9]{2,15})[-_]+(.+)$/i.exec(n);   // 只处理像型号 ID 的名字（不含空格）
@@ -104,11 +104,19 @@ const Strength = (() => {
       if (!n || !Brand.of(n) || /\s/.test(n)) continue;
       if (!S[n]) { S[n] = []; add.add(n); }
       const bp = typeof BillingProbe !== 'undefined' ? BillingProbe.summary?.(sid) : null;
+      const saneSc = v => okScore(v) ? v : null;
       const sc = (m.routed && okScore(m.reverseScore))
         ? m.reverseScore
-        : (bookScore(sid) ?? (m.fingerprint && !m.fingerprint.skipped ? m.fingerprint.reasoning?.score : null) ?? m.est?.score ?? m.reverseScore ?? reverseDepthScore(sid, m, bp, null));
+        : (saneSc(bookScore(sid)) ?? (m.fingerprint && !m.fingerprint.skipped ? saneSc(m.fingerprint.reasoning?.score) : null) ?? saneSc(m.est?.score) ?? saneSc(m.reverseScore) ?? saneSc(m.habitScore) ?? reverseDepthScore(sid, m, bp, null));
+      const k = 'mdl:' + sid;
+      for (const otherName of Object.keys(S)) {
+        if (otherName === n || !Array.isArray(S[otherName])) continue;
+        const prevLen = S[otherName].length;
+        S[otherName] = S[otherName].filter(x => x && x.k !== k && !String(x.k || '').startsWith(sid + ':'));
+        if (S[otherName].length !== prevLen) add.add(otherName);
+      }
       if (okScore(sc)) {
-        const k = 'mdl:' + sid, arr = S[n] ||= [];
+        const arr = S[n] ||= [];
         const charged = bp?.payment?.chargedUsd ?? m.chargedUsd;
         const outTok = bp?.preimage?.latest?.output ?? m.reverseTokens?.output;
         const row = { k, at: m.at || now(), tok: outTok || null, out: outTok || null, rs: 0, usd: charged > 0 ? charged : null, sec: m.fingerprint?.thinkSec || null, std: false, modelScore: sc };
@@ -485,16 +493,31 @@ const Strength = (() => {
     const row = board().find(r => r.name === p.name);
     return p.tier + scTxt + (row?.pos ? ' · ' + row.pos : '') + ' · ' + st.n + ' 次';
   }
-  const fmtScore = v => v == null ? '—' : v >= 100 ? String(Math.round(v)) : v.toFixed(1);
+  const fmtScore = v => (v == null || !Number.isFinite(+v) || +v < 0 || +v > 100) ? '—' : +v >= 100 ? '100' : (+v).toFixed(1);
   function refresh() { cache.clear(); rev++; Bus.emit('strength'); }
   function clear(name) { if (name) delete S[name]; else S = {}; cache.clear(); rev++; save(); Bus.emit('strength'); hostMerge({ __clear: name || '*' }).then(adopt).catch(() => {}); }
 
-  // 旧数据：「spirit-gpt-6-astra」这类名字翻成厂商在前；只存了代号的用 Trace 里的响应型号补全
+  // 旧数据：「spirit-gpt-6-astra」这类名字翻成厂商在前；只存了代号的用 Trace 里的响应型号补全；并清理 >100 的异常推理分（如 REI 污染值）
   function migrate() {
     let n = 0;
     for (const [sid, m] of Object.entries(Models.all || {})) {
       if (!m?.name) continue;
       const c = canon(m.name); if (c && c !== clean(m.name)) { m.name = c; m.tier = parts(c).tier || m.tier || null; n++; }
+      if (m.reverseScore != null && (!Number.isFinite(+m.reverseScore) || +m.reverseScore <= 0 || +m.reverseScore > 100)) {
+        const fallback = okScore(m.habitScore) ? +m.habitScore : reverseDepthScore(sid, m, null, null);
+        m.reverseScore = okScore(fallback) ? fallback : null;
+        n++;
+      }
+      if (m.habitScore != null && (!Number.isFinite(+m.habitScore) || +m.habitScore <= 0 || +m.habitScore > 100)) {
+        const fallback = okScore(m.reverseScore) ? +m.reverseScore : reverseDepthScore(sid, m, null, null);
+        m.habitScore = okScore(fallback) ? fallback : null;
+        n++;
+      }
+      if (m.est && m.est.score != null && (!Number.isFinite(+m.est.score) || +m.est.score <= 0 || +m.est.score > 100)) {
+        const fallback = okScore(m.reverseScore) ? +m.reverseScore : (okScore(m.habitScore) ? +m.habitScore : reverseDepthScore(sid, m, null, null));
+        m.est = { ...m.est, score: okScore(fallback) ? fallback : null };
+        n++;
+      }
       if (!Brand.of(m.name)) try { Trace.adopt(sid); } catch {}
     }
     if (n) { Store.set('models', Models.all); Bus.emit('models'); }

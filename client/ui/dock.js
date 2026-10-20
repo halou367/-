@@ -148,14 +148,13 @@ const Dock = {
     const sum = (!t && typeof BillingProbe !== 'undefined' && BillingProbe.summary) ? BillingProbe.summary(sid) : null;
     const top0 = sum?.mergedCandidates?.[0];
     if (top0 && (top0.diophantinePassed || top0.revPct != null) && !top0.habitSource && !m?.userCorrected) {
-      if (top0.effortProfile?.reiScore != null && Number.isFinite(+top0.effortProfile.reiScore) && (+top0.effortProfile.reiScore) > 0) return +top0.effortProfile.reiScore;
       const chat = typeof Chats !== 'undefined' ? Chats.get(sid) : null;
       const topCanon = Strength.canon(String(top0.canon || top0.label || m.name || '').replace(/\?+$/, ''));
       const topEff = String(top0.inferredEffort || top0.effortProfile?.effort || (/\b(none|minimal|low|medium|high|xhigh|max)\b/i.exec(topCanon)?.[1]) || m.reverseEffort || '').toLowerCase();
       const revS = (typeof Strength !== 'undefined' && Strength.reverseDepthScore)
         ? Strength.reverseDepthScore(sid, { ...m, name: topCanon, reverseEffort: topEff }, sum, chat)
         : null;
-      if (revS != null && Number.isFinite(+revS) && (+revS) > 0) return +revS;
+      if (revS != null && Number.isFinite(+revS) && (+revS) >= 10 && (+revS) <= 100) return +revS;
     }
     return ConversationLabels.score(m,History.byId?.(sid)?.title || '');
   },

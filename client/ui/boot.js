@@ -825,10 +825,22 @@ async function init() {
     if (m?.pelshotsSync) {
       try { if (typeof PelicanShots !== 'undefined' && PelicanShots.pull) void PelicanShots.pull(false, true); } catch {}
     }
+    if (m?.habitBankSync) {
+      try {
+        if (typeof ChatHabitFingerprint !== 'undefined') {
+          if (m.habitBankSync.samples && ChatHabitFingerprint.applyRemoteSync) {
+            ChatHabitFingerprint.applyRemoteSync(m.habitBankSync, { persistToHost: false });
+          } else if (ChatHabitFingerprint.syncShared) {
+            void ChatHabitFingerprint.syncShared({ force: true });
+          }
+        }
+      } catch {}
+    }
     // 账号管理窗口：打开某个对话 / 重新统计
     if (m?.open && UI.me) Tabs.open(m.open);
     if (m?.stats) AcctStats.cmd(m).catch(() => {});
   });
+  try { if (typeof ChatHabitFingerprint !== 'undefined' && ChatHabitFingerprint.syncShared) void ChatHabitFingerprint.syncShared({ force: true }); } catch {}
   if (UI.me) Store.set('me:u', UI.me); else Store.del('me:u');
   if (!UI.me) { if (cmd === 'gacha-start') Host.noteAccount?.({ gacha: { busy: false, err: '未登录：请先打开这个账号登录' } })?.catch?.(() => {}); if (cmd?.stats) Host.noteAccount?.({ statsDone: true, statsErr: '未登录：请先打开这个账号登录' })?.catch?.(() => {}); const ga = UI.host?.account || {}, gk = 'gauto:' + ga.id;
     // 「使用 Google 添加账号」新建的账号：第一次打开时自动开始官方 Google 登录（只自动一次；取消后在登录页手动点）

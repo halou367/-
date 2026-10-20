@@ -4559,14 +4559,41 @@ const ExtCompat = {
 
       let prevMemo = (window.__atiSseMemo instanceof Map ? window.__atiSseMemo.get(sid) : window.__atiSseMemo?.[sid]) || null;
       if (!prevMemo) { try { prevMemo = JSON.parse(localStorage.getItem('ati.v4.sseMemo.' + sid) || 'null'); } catch {} }
-      const fmt = chat.fmt || null;
-      const fmtIds = Array.isArray(fmt?.ids) ? fmt.ids.map(x => String((x && x[1]) || '')).filter(Boolean) : [];
+      const msgFmts = assistants.map(m => m?._fmt).filter(Boolean);
+      const fmt = chat.fmt || msgFmts.at(-1) || null;
+      let fmtTN = 0, fmtTChars = 0, fmtRN = 0, fmtRE = 0, fmtRChars = 0;
+      const fmtIds = [];
+      for (const fObj of (chat.fmt && !msgFmts.includes(chat.fmt) ? [...msgFmts, chat.fmt] : msgFmts)) {
+        fmtTN += Number(fObj?.tN) || 0;
+        fmtTChars += Number(fObj?.tChars) || 0;
+        fmtRN += Number(fObj?.rN) || 0;
+        fmtRE += Number(fObj?.rE || fObj?.rBlocks) || 0;
+        fmtRChars += Number(fObj?.rChars) || 0;
+        if (Array.isArray(fObj?.ids)) {
+          for (const pair of fObj.ids) {
+            const idStr = String((pair && pair[1]) || '');
+            if (idStr && !fmtIds.includes(idStr)) fmtIds.push(idStr);
+          }
+        }
+      }
+      const isPollutedPrevMemo = Boolean(
+        prevMemo &&
+        Number(prevMemo.textDeltaCount) > 0 &&
+        Number(prevMemo.textDeltaCount) <= Math.max(2, assistants.length * 2) &&
+        Number(prevMemo.avgChunk) > 220 &&
+        (fmtTN === 0 || fmtTN > Number(prevMemo.textDeltaCount))
+      );
+      const prevValidDeltaCount = isPollutedPrevMemo ? 0 : (Number(prevMemo?.textDeltaCount) || 0);
+      const prevValidDeltaChars = isPollutedPrevMemo ? 0 : (Number(prevMemo?.textDeltaChars) || 0);
+      const prevValidAvgChunk = isPollutedPrevMemo ? null : (Number(prevMemo?.avgChunk) || null);
+      const effDeltaCount = Math.max(fmtTN, prevValidDeltaCount);
+      const effDeltaChars = fmtTN > 0 ? Math.max(fmtTChars, prevValidDeltaChars) : Math.max(prevValidDeltaChars, textDeltaChars);
       const streamIds = (Array.isArray(prevMemo?.streamIds) && prevMemo.streamIds.length) ? prevMemo.streamIds : fmtIds;
       const tStart = Number(fmt?.t0 || fmt?.tStart) || 0;
       const durSec = fmt && fmt.tEnd > tStart ? (fmt.tEnd - tStart) / 1000 : (fmt?.gen > 0 ? fmt.gen / 1000 : 0);
-      const liveCps = durSec >= 0.5 && (fmt?.tChars || textDeltaChars) >= 60 ? Math.round((fmt?.tChars || textDeltaChars) / durSec) : (prevMemo?.cps || null);
-      const effSawReason = Boolean(sawReasoning || prevMemo?.sawReasoning || (fmt && (fmt.rBlocks || fmt.rN || fmt.rE)));
-      const effReasonChars = Math.max(reasoningTextLength, Number(prevMemo?.reasoningTextLength) || 0, Number(fmt?.rChars) || 0);
+      const liveCps = durSec >= 0.5 && (fmtTChars || fmt?.tChars || textDeltaChars) >= 60 ? Math.round((fmtTChars || fmt?.tChars || textDeltaChars) / durSec) : (prevMemo?.cps || null);
+      const effSawReason = Boolean(sawReasoning || prevMemo?.sawReasoning || fmtRN > 0 || fmtRE > 0 || (fmt && (fmt.rBlocks || fmt.rN || fmt.rE)));
+      const effReasonChars = Math.max(reasoningTextLength, Number(prevMemo?.reasoningTextLength) || 0, fmtRChars, Number(fmt?.rChars) || 0);
       let streamIdPrefix = prevMemo?.streamIdPrefix || null;
       if (!streamIdPrefix && streamIds.length) {
         if (streamIds.some(i => /^(?:msg|rs)_[0-9a-f]{16,}/i.test(i))) streamIdPrefix = 'openai-rs';
@@ -4576,19 +4603,21 @@ const ExtCompat = {
         sid,
         toolIds: toolIds.length ? toolIds : (prevMemo?.toolIds || []),
         streamIds,
-        textDeltaCount: Math.max(textDeltaCount, Number(prevMemo?.textDeltaCount) || 0, Number(fmt?.tN) || 0),
-        textDeltaChars: Math.max(textDeltaChars, Number(prevMemo?.textDeltaChars) || 0, Number(fmt?.tChars) || 0),
+        textDeltaCount: effDeltaCount,
+        textDeltaChars: effDeltaChars,
         firstDeltaAt: prevMemo?.firstDeltaAt || (tStart || Date.now() - 1000),
         lastDeltaAt: fmt?.tEnd || Date.now(),
         sawReasoning: effSawReason,
-        reasoningDeltaCount: Math.max(reasoningDeltaCount, Number(prevMemo?.reasoningDeltaCount) || 0),
+        reasoningDeltaCount: Math.max(reasoningDeltaCount, Number(prevMemo?.reasoningDeltaCount) || 0, fmtRN),
         reasoningTextLength: effReasonChars,
         bashToolCount: Math.max(bashToolCount, Number(prevMemo?.bashToolCount) || 0),
         preToolTextChars,
         interToolTextChars,
         seenToolInTurn: (toolIds.length || prevMemo?.toolIds?.length) > 0,
         pendingInterText: 0,
-        avgChunk: prevMemo?.avgChunk || (textDeltaCount >= 1 ? +(textDeltaChars / Math.max(1, fmt?.tN || textDeltaCount)).toFixed(2) : null),
+        avgChunk: (fmtTN >= 3 && fmtTChars > 0)
+          ? +(fmtTChars / fmtTN).toFixed(2)
+          : (prevValidAvgChunk || (effDeltaCount >= 6 && effDeltaChars > 0 ? +(effDeltaChars / effDeltaCount).toFixed(2) : null)),
         cps: liveCps,
         silentBashLoop: bashToolCount >= 2 && preToolTextChars === 0 && interToolTextChars === 0,
         reasoningSignature: prevMemo?.reasoningSignature && prevMemo.reasoningSignature !== 'none'

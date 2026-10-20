@@ -2196,9 +2196,12 @@ const UI = {
       ? Math.max(...mergedPcts)
       : (mi?.fingerprint ? null : (p?.confidence != null ? +p.confidence : null));
     const conf = Number.isFinite(pct) ? Math.max(0, Math.min(100, pct)) : null;
-    const score = (mi?.routed && Number.isFinite(mi?.reverseScore))
-      ? mi.reverseScore
-      : (mi?.fingerprint ? (Number.isFinite(fd?.score) ? fd.score : null) : (Number.isFinite(mi?.reverseScore) ? mi.reverseScore : (Number.isFinite(p?.score) ? p.score : null)));
+    const saneSc = v => (typeof ConversationLabels !== 'undefined' && ConversationLabels.sane)
+      ? ConversationLabels.sane(v)
+      : (Number.isFinite(+v) && +v >= 0 && +v <= 100 ? +v : null);
+    const score = (mi?.routed && saneSc(mi?.reverseScore) != null)
+      ? saneSc(mi.reverseScore)
+      : (mi?.fingerprint ? saneSc(fd?.score) : (saneSc(mi?.reverseScore) ?? saneSc(mi?.habitScore) ?? saneSc(mi?.est?.score) ?? saneSc(p?.score)));
     const think = !mi?.fingerprint?.skipped && Number.isFinite(mi?.fingerprint?.thinkSec) ? mi.fingerprint.thinkSec : null;
     const bits = [];
     if (conf != null) bits.push('置信度 ' + +conf.toFixed(1) + '%');

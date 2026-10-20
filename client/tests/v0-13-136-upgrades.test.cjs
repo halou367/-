@@ -563,7 +563,7 @@ test('v0.13.161-beta.9: Importing billing-*.json into 习惯库 (HabitLib) extra
   // 1. importDiagnosticJson reads item.sessionId and exportDiagnosticJson emits sid + sessionId
   assert.ok(bpUiSrc.includes('item.sessionId ||'));
   assert.ok(bpUiSrc.includes('sessionId: sid,'));
-  assert.ok(bpUiSrc.includes("out = { ...out, sid: '01a1440a-e8c4-7939-8910-ffe946582807' };"));
+  assert.ok(bpUiSrc.includes("out.sid = '01a1440a-e8c4-7939-8910-ffe946582807';"));
 
   // 2. extractFeatures recovers hidR on snapshot-loaded non-Google sessions so OpenAI/Anthropic chats are not misclassified as isGeminiCoding
   assert.ok(bpUiSrc.includes('if (!isOpenThink && hidR === 0 && visR === 0 && hasNonGoogleEvidence && geminiPyHelper === 0 && inlineHtmlEcho === 0'));
@@ -604,7 +604,7 @@ test('v0.13.161-beta.11: Reverse-teacher auto-calibration (01a13f78 xHigh, 01a13
   // 1. Teacher learning prefers stealthModelLabel / dynamicLabel, validates score in [10, 100], and damps competing unlearned prototypes
   assert.ok(bpUiSrc.includes('topRev.effortProfile?.stealthModelLabel || topRev.dynamicLabel || topRev.label'));
   assert.ok(bpUiSrc.includes('item.sim = Math.min(item.sim, 0.885);'));
-  assert.ok(bpUiSrc.includes('const isFastLunaStream = cps >= 135 && feat.habitReasoningScore < 80'));
+  assert.ok(bpUiSrc.includes('cps >= 135 && feat.habitReasoningScore < 80'));
   assert.ok(bpUiSrc.includes('summaryCache.delete(sid);'));
 
   // 2. automatic(chat) skips redundant /cost probes when persistedCovered is true
@@ -661,8 +661,9 @@ test('v0.13.161: Habit Library export & merge round-trip, default Gacha mode = h
   const mainSrc = read('src/main.js');
   const pkg = JSON.parse(read('package.json'));
 
-  // 1. Official release version is 0.13.161 (no -beta suffix)
-  assert.equal(pkg.version, '0.13.161');
+  // 1. Official release version has no -beta suffix
+  assert.ok(!pkg.version.includes('-beta'));
+  assert.equal(pkg.version, '0.13.162');
 
   // 2. Default Gacha mode is 'habit' (习惯速测 · 微缩探针)
   assert.ok(gachaSrc.includes("mode: 'habit'"));

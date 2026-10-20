@@ -2540,18 +2540,123 @@ ipcMain.handle('host:shared', (e, k, v) => {
   if (!['prefs', 'gacha', 'nodes', 'nodesubs', 'proxyips', 'pippool', 'archbl', 'gold', 'pelshots', 'pelican', 'habitLearnBank', 'habitCalibration'].includes(k) && !/^(gacha|draft|gtok|signup|mailtok|webreg)@[\w-]{1,64}$/.test(String(k))) return null;
   DB.shared = DB.shared || {};
   if (k === 'habitLearnBank') {
-    const bankFile = path.join(ROOT, 'shared', 'habitLearnBank.json');
+    const bankFile = path.join(app.getPath('userData'), 'shared', 'habitLearnBank.json');
+    const userDataDir = app.getPath('userData');
+    const roamingRoot = path.dirname(userDataDir);
+    const bankFiles = [
+      bankFile,
+      path.join(roamingRoot, 'Brana AI Extension Test', 'shared', 'habitLearnBank.json'),
+      path.join(roamingRoot, 'Arena Client', 'shared', 'habitLearnBank.json'),
+    ].filter((f, idx, arr) => arr.indexOf(f) === idx);
+    const dbFiles = [
+      path.join(roamingRoot, 'Brana AI Extension Test', 'db.json'),
+      path.join(roamingRoot, 'Arena Client', 'db.json'),
+    ].filter((f, idx, arr) => arr.indexOf(f) === idx);
+    const KNOWN_DIAG_SIDS = new Set([
+      '01a13ee4-294d-7e67-8554-fad3b69284f6',
+      '01a13ef8-3b56-7b99-a43b-d991064c46d8',
+      '01a13f78-2a78-73af-b245-221a0949c7ca',
+      '01a13f8c-44aa-78eb-9d88-3f464586a2f1',
+      '01a14141-6b87-7580-a7d5-bf37d09986d6',
+      '01a14142-227a-7150-87f5-a06b13bc5613',
+      '01a141e3-3f0c-75ef-b700-bf9ab9312277',
+      '01a141e4-60ae-73ae-ba17-cd4ff105b084',
+      '01a1440a-e8c4-7939-8910-ffe946582807',
+      '01a148b9-8f93-741c-9115-05ff889e3fd6',
+      '01a14a34-2246-79fd-90e3-c73b07db1e52',
+      '01a14ce5-b4b6-7962-9f20-c3cbc66c1a54',
+      '01a151de-5840-75e5-b5e0-9bf662f543dd',
+      '01a151e0-c58e-7766-9c65-f7287592c61b',
+    ]);
+    const isCorrupt4000MetaObj = m => Boolean(m && Number(m.meanChars) === 4000 && (Number(m.writtenChars) || 0) === 0 && (Number(m.memoAvgChunk) || 0) === 0 && (Number(m.cps) === 1 || Number(m.cps) === 2 || (Number(m.totalTools) === 0 && (Number(m.write) > 0 || Number(m.askUser) > 0))));
+    const isUnloaded4500StubMeta = m => Boolean(m && Number(m.meanChars) === 4500 && (Number(m.writtenChars) || 0) === 0 && (Number(m.avgTurnDurMs) || 0) === 0 && (Number(m.cps) || 0) === 0 && (Number(m.memoAvgChunk) || 0) === 0 && (Number(m.bash) || 0) === 0 && (Number(m.askUser) || 0) === 0 && (Number(m.lowerDoctype) || 0) === 0 && (Number(m.colorSchemeCss) || 0) === 0 && (Number(m.prefersReducedMotion) || 0) === 0 && (Number(m.sandboxLink) || 0) === 0 && (Number(m.svgSmilNoScript) || 0) === 0);
+    const isSyntheticStubVecObj = v => Array.isArray(v) && v.length === 20 && v[12] === 0.8 && v[15] === 0.52 && v[2] === 0.05 && v[3] === 0;
+    const canonHabitModel = raw => {
+      if (!raw) return '';
+      let s = String(raw).replace(/[?？]+$/, '').replace(/\s+/g, ' ').trim();
+      if (!s || s === '开源模型') return s;
+      if (/gpt-5\.6-luna/i.test(s)) s = s.replace(/gpt-5\.6-luna/ig, 'gpt-6-luna');
+      if (/barium-bb-v2-4xts(?:-agent)?/i.test(s)) s = s.replace(/barium-bb-v2-4xts(?:-agent)?/ig, 'gemini-4-argon');
+      const bare = s.replace(/^[a-z0-9_.-]+\//i, '').replace(/\[[^\]]*\]\s*/g, '').trim();
+      const em = bare.match(/\((none|minimal|low|medium|high|xhigh|max)\)\s*$/i);
+      const eff = em ? em[1].toLowerCase() : '';
+      const base = (em ? bare.slice(0, em.index) : bare).trim();
+      const slug = base.toLowerCase().replace(/[^a-z0-9.]+/g, '-').replace(/^-+|-+$/g, '');
+      if (!slug) return s;
+      if (eff && !slug.endsWith('-' + eff)) return `${slug}-${eff}`;
+      return slug;
+    };
+    const cleanBankSample = raw => {
+      if (!raw || !raw.model || !Array.isArray(raw.vec)) return null;
+      const rawM = String(raw.model || '').trim();
+      let m = canonHabitModel(rawM) || rawM;
+      const sc = Number(raw.score);
+      const validSc = Number.isFinite(sc) && sc >= 10 && sc <= 100 ? sc : (Number.isFinite(+raw.rawHabitScore) && +raw.rawHabitScore >= 10 && +raw.rawHabitScore <= 100 ? +raw.rawHabitScore : 75);
+      const out = { ...raw, model: m, score: validSc };
+      delete out.id;
+      if (!out.rawLabel && rawM !== m) out.rawLabel = rawM;
+      const sidStr = String(out.sid || '');
+      if (KNOWN_DIAG_SIDS.has(sidStr)) out.importedFromDiag = true;
+      if (sidStr === '01a155ea-7be8-75fe-8b49-773f6159cb3a' && /6-sol/i.test(m)) {
+        m = canonHabitModel('Claude Opus 5.5 (Medium)');
+        out.model = m;
+        out.rawLabel = 'Claude Opus 5.5 (Medium)';
+      }
+      if (sidStr === '01a155eb-ebaa-730a-922c-085044a25044' && /argon/i.test(m)) {
+        m = canonHabitModel('Gemini 3.8 Flash (High)');
+        out.model = m;
+        out.rawLabel = 'Gemini 3.8 Flash (High)';
+      }
+      if (isCorrupt4000MetaObj(out.meta)) {
+        out.meta = null;
+      }
+      if (!out.userConfirmed && !out.importedFromDiag && isSyntheticStubVecObj(out.vec)) {
+        return null;
+      }
+      if (/gemini|google|argon/i.test(m)) {
+        if (out.meta && out.meta.hidR === 4 && ((out.meta.memoAvgChunk || 0) >= 25 || (out.meta.writtenChars || 0) >= 25000)) {
+          out.meta = { ...out.meta, hidR: 0, maxRInTurn: 0, isGeminiCoding: true };
+        }
+        if (out.vec.length === 20 && out.vec[0] === 1 && out.vec[1] === 0 && (!out.meta || out.meta.isGeminiCoding !== false)) {
+          const fv = [...out.vec];
+          fv[0] = 0; fv[1] = 1;
+          out.vec = fv;
+        }
+        if (Array.isArray(out.tags)) out.tags = out.tags.filter(t => !/^闭源隐藏思考/.test(String(t || '')));
+      }
+      return out;
+    };
     const mergeBankSamples = (a, b) => {
       const bySid = new Map();
-      for (const s of [...(Array.isArray(a) ? a : []), ...(Array.isArray(b) ? b : [])]) {
+      for (const rawS of [...(Array.isArray(a) ? a : []), ...(Array.isArray(b) ? b : [])]) {
+        const s = cleanBankSample(rawS);
         if (!s || !s.model || !Array.isArray(s.vec)) continue;
         const key = s.sid || (s.model + ':' + (s.at || 0));
         const prev = bySid.get(key);
-        const sConf = Boolean(s.userConfirmed || s.importedFromDiag);
-        const pConf = Boolean(prev?.userConfirmed || prev?.importedFromDiag);
-        if (!prev || (sConf && !pConf) || (sConf === pConf && (((s.weight || 1) > (prev.weight || 1)) || ((s.at || 0) >= (prev.at || 0))))) {
-          bySid.set(key, prev ? { ...prev, ...s, meta: s.meta || prev.meta } : s);
+        if (!prev) {
+          bySid.set(key, s);
+          continue;
         }
+        const sRank = (s.userConfirmed && !s.autoTeacher) || s.importedFromDiag ? 2 : (s.userConfirmed ? 1 : 0);
+        const pRank = (prev?.userConfirmed && !prev?.autoTeacher) || prev?.importedFromDiag ? 2 : (prev?.userConfirmed ? 1 : 0);
+        const win = (sRank > pRank) || (sRank === pRank && ((s.at || 0) >= (prev.at || 0))) ? s : prev;
+        const lose = win === s ? prev : s;
+        const winVecStub = isSyntheticStubVecObj(win.vec);
+        const loseVecRich = Array.isArray(lose?.vec) && lose.vec.length === 20 && !isSyntheticStubVecObj(lose.vec);
+        const bestVec = (winVecStub && loseVecRich) ? lose.vec : win.vec;
+        const pMeta = (prev.meta && !isCorrupt4000MetaObj(prev.meta) && !isUnloaded4500StubMeta(prev.meta)) ? prev.meta : null;
+        const sMeta = (s.meta && !isCorrupt4000MetaObj(s.meta) && !isUnloaded4500StubMeta(s.meta)) ? s.meta : null;
+        const fallbackMeta = (win.meta && !isCorrupt4000MetaObj(win.meta)) ? win.meta : ((lose?.meta && !isCorrupt4000MetaObj(lose.meta)) ? lose.meta : null);
+        const mergedMeta = (pMeta || sMeta) ? { ...(pMeta || {}), ...(sMeta || {}) } : fallbackMeta;
+        bySid.set(key, {
+          ...prev,
+          ...win,
+          vec: bestVec,
+          meta: mergedMeta,
+          userConfirmed: Boolean(prev.userConfirmed || s.userConfirmed),
+          autoTeacher: sRank > pRank ? Boolean(s.autoTeacher) : (pRank > sRank ? Boolean(prev.autoTeacher) : Boolean(win.autoTeacher)),
+          importedFromDiag: Boolean(prev.importedFromDiag || s.importedFromDiag),
+        });
       }
       return [...bySid.values()].sort((x, y) => (Number(Boolean(y.userConfirmed || y.importedFromDiag)) - Number(Boolean(x.userConfirmed || x.importedFromDiag))) || ((y.at || 0) - (x.at || 0))).slice(0, 1200);
     };
@@ -2560,41 +2665,208 @@ ipcMain.handle('host:shared', (e, k, v) => {
       const inc = (b && typeof b === 'object') ? b : {};
       const protoCentroids = { ...(base.protoCentroids || {}) };
       for (const [mk, rc] of Object.entries(inc.protoCentroids || {})) {
+        if (!rc || typeof rc !== 'object') continue;
+        const fixedRc = (Number(rc.count) || 0) > 50 ? { ...rc, count: 12 } : rc;
         const lc = protoCentroids[mk];
-        if (!lc || (rc?.updatedAt || 0) >= (lc?.updatedAt || 0)) protoCentroids[mk] = rc;
+        if (!lc || (fixedRc?.updatedAt || 0) >= (lc?.updatedAt || 0)) protoCentroids[mk] = fixedRc;
       }
       const scoreOffsets = { ...(base.scoreOffsets || {}) };
       for (const [mk, rs] of Object.entries(inc.scoreOffsets || {})) {
+        if (!rs || typeof rs !== 'object') continue;
+        const fixedRs = (Number(rs.count) || 0) > 50 ? { ...rs, count: 12 } : rs;
         const ls = scoreOffsets[mk];
-        if (!ls || (rs?.updatedAt || 0) >= (ls?.updatedAt || 0)) scoreOffsets[mk] = rs;
+        if (!ls || (fixedRs?.updatedAt || 0) >= (ls?.updatedAt || 0)) scoreOffsets[mk] = fixedRs;
       }
       return { v: 1, protoCentroids, scoreOffsets, updatedAt: Math.max(base.updatedAt || 0, inc.updatedAt || 0, Date.now()) };
     };
     let diskSamples = [], diskCalib = {};
-    try {
-      if (fs.existsSync(bankFile)) {
-        const d = JSON.parse(fs.readFileSync(bankFile, 'utf8'));
-        if (Array.isArray(d?.samples)) diskSamples = d.samples;
-        if (d?.calibration && typeof d.calibration === 'object') diskCalib = d.calibration;
+    for (const bf of bankFiles) {
+      try {
+        if (fs.existsSync(bf)) {
+          const d = JSON.parse(fs.readFileSync(bf, 'utf8'));
+          if (Array.isArray(d?.samples)) diskSamples = mergeBankSamples(diskSamples, d.samples);
+          if (d?.calibration && typeof d.calibration === 'object') diskCalib = mergeCalibObj(diskCalib, d.calibration);
+        }
+      } catch {}
+    }
+    for (const df of dbFiles) {
+      try {
+        if (fs.existsSync(df)) {
+          const d = JSON.parse(fs.readFileSync(df, 'utf8'));
+          const hb = d?.shared?.habitLearnBank;
+          if (Array.isArray(hb?.samples)) diskSamples = mergeBankSamples(diskSamples, hb.samples);
+          if (hb?.calibration && typeof hb.calibration === 'object') diskCalib = mergeCalibObj(diskCalib, hb.calibration);
+        }
+      } catch {}
+    }
+    if (!global._harvestedLegacyPartitionBanks) {
+      global._harvestedLegacyPartitionBanks = true;
+      let partSamples = [], partCalib = {};
+      const partRoots = [
+        path.join(roamingRoot, 'Arena Client', 'Partitions'),
+        path.join(roamingRoot, 'Brana AI Extension Test', 's', 'Partitions'),
+        path.join(roamingRoot, 'Brana AI Extension Test', 'Partitions'),
+      ].filter((p, idx, arr) => arr.indexOf(p) === idx);
+      const extractJsonObjectsWithSamples = str => {
+        const out = [];
+        let pos = 0;
+        while ((pos = str.indexOf('"samples":[', pos)) !== -1) {
+          let start = str.lastIndexOf('{"v":', pos);
+          if (start === -1 || pos - start > 120) start = str.lastIndexOf('{', pos);
+          if (start !== -1 && pos - start < 200) {
+            let depth = 0, inStr = false, esc = false, end = -1;
+            for (let i = start; i < str.length; i++) {
+              const ch = str[i];
+              if (inStr) {
+                if (esc) esc = false;
+                else if (ch === '\\') esc = true;
+                else if (ch === '"') inStr = false;
+              } else if (ch === '"') inStr = true;
+              else if (ch === '{') depth++;
+              else if (ch === '}') {
+                depth--;
+                if (depth === 0) { end = i + 1; break; }
+              }
+            }
+            if (end !== -1) {
+              try { out.push(JSON.parse(str.slice(start, end))); } catch {}
+            }
+          }
+          pos += 11;
+        }
+        return out;
+      };
+      for (const pr of partRoots) {
+        try {
+          if (!fs.existsSync(pr)) continue;
+          for (const dirName of fs.readdirSync(pr)) {
+            if (!dirName.startsWith('acct-')) continue;
+            const ldbDir = path.join(pr, dirName, 'Local Storage', 'leveldb');
+            if (!fs.existsSync(ldbDir)) continue;
+            for (const fn of fs.readdirSync(ldbDir)) {
+              if (!fn.endsWith('.ldb') && !fn.endsWith('.log')) continue;
+              let buf;
+              try { buf = fs.readFileSync(path.join(ldbDir, fn)); } catch { continue; }
+              for (const enc of ['utf8', 'utf16le']) {
+                const str = buf.toString(enc);
+                if (str.includes('"samples":[')) {
+                  for (const obj of extractJsonObjectsWithSamples(str)) {
+                    if (Array.isArray(obj?.samples)) partSamples = mergeBankSamples(partSamples, obj.samples);
+                    if (obj?.calibration && typeof obj.calibration === 'object') partCalib = mergeCalibObj(partCalib, obj.calibration);
+                  }
+                }
+                if (str.includes('"habitFeatures":')) {
+                  const re = /"(01a1[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})"\s*:\s*\{/g;
+                  let mMatch;
+                  while ((mMatch = re.exec(str)) !== null) {
+                    const sid = mMatch[1];
+                    const start = mMatch.index + mMatch[0].length - 1;
+                    let depth = 0, inStr = false, esc = false, end = -1;
+                    const maxEnd = Math.min(str.length, start + 60000);
+                    for (let i = start; i < maxEnd; i++) {
+                      const ch = str[i];
+                      if (inStr) {
+                        if (esc) esc = false;
+                        else if (ch === '\\') esc = true;
+                        else if (ch === '"') inStr = false;
+                      } else if (ch === '"') inStr = true;
+                      else if (ch === '{') depth++;
+                      else if (ch === '}') {
+                        depth--;
+                        if (depth === 0) { end = i + 1; break; }
+                      }
+                    }
+                    if (end !== -1) {
+                      try {
+                        const mObj = JSON.parse(str.slice(start, end));
+                        const hf = mObj?.habitFeatures;
+                        const isUConf = Boolean(mObj?.userCorrected || mObj?.userConfirmed);
+                        const isRConf = Boolean(!isUConf && mObj?.reverseName && Number(mObj?.reverseConfidence) >= 0.88 && !mObj?.habitInferred);
+                        if ((isUConf || isRConf) && Array.isArray(hf?.vec) && hf.vec.length === 20 && !isSyntheticStubVecObj(hf.vec)) {
+                          const rawLbl = String(isUConf ? (mObj.name || mObj.reverseName || '') : (mObj.reverseName || mObj.name || '')).replace(/[?？]+$/, '').trim();
+                          const cMod = canonHabitModel(rawLbl);
+                          if (cMod && cMod !== '开源模型') {
+                            partSamples = mergeBankSamples(partSamples, [{
+                              sid,
+                              model: cMod,
+                              rawLabel: rawLbl,
+                              vec: hf.vec,
+                              score: Number(hf.score || hf.habitReasoningScore || 75) || 75,
+                              tags: Array.isArray(hf.tags || mObj.habitTags) ? (hf.tags || mObj.habitTags).slice(0, 6) : [],
+                              meta: hf.meta || mObj.habitMeta || null,
+                              userConfirmed: true,
+                              autoTeacher: !isUConf,
+                              weight: isUConf ? 3.5 : 2.8,
+                              at: Number(mObj.updatedAt || mObj.at || 0) || 1792400000000,
+                            }]);
+                          }
+                        }
+                      } catch {}
+                    }
+                  }
+                }
+              }
+            }
+          }
+        } catch {}
       }
-    } catch {}
+      if (partSamples.length) diskSamples = mergeBankSamples(diskSamples, partSamples);
+      if (Object.keys(partCalib).length) diskCalib = mergeCalibObj(diskCalib, partCalib);
+      global._cachedPartitionSamples = partSamples;
+      global._cachedPartitionCalib = partCalib;
+    } else {
+      if (Array.isArray(global._cachedPartitionSamples) && global._cachedPartitionSamples.length) {
+        diskSamples = mergeBankSamples(diskSamples, global._cachedPartitionSamples);
+      }
+      if (global._cachedPartitionCalib && typeof global._cachedPartitionCalib === 'object') {
+        diskCalib = mergeCalibObj(diskCalib, global._cachedPartitionCalib);
+      }
+    }
     if (v === undefined) {
-      const merged = mergeBankSamples(diskSamples, DB.shared.habitLearnBank?.samples);
+      const merged = mergeBankSamples(diskSamples, DB.shared.habitLearnBank?.samples || []);
       const mergedCal = mergeCalibObj(diskCalib, DB.shared.habitLearnBank?.calibration);
-      return { v: 2, updatedAt: DB.shared.habitLearnBank?.updatedAt || Date.now(), samples: merged, calibration: mergedCal };
+      const nextBank = { v: 2, updatedAt: DB.shared.habitLearnBank?.updatedAt || Date.now(), samples: merged, calibration: mergedCal };
+      if (!DB.shared.habitLearnBank || (DB.shared.habitLearnBank.samples?.length || 0) !== merged.length) {
+        DB.shared.habitLearnBank = nextBank;
+        for (const bf of bankFiles) {
+          try {
+            if (bf === bankFiles[0] || fs.existsSync(path.dirname(bf))) {
+              fs.mkdirSync(path.dirname(bf), { recursive: true });
+              fs.writeFileSync(bf, JSON.stringify(nextBank, null, 2));
+            }
+          } catch {}
+        }
+        saveSoon();
+      }
+      return nextBank;
     }
     if (v && typeof v === 'object') {
+      const baseSamples = mergeBankSamples(diskSamples, DB.shared.habitLearnBank?.samples || []);
       const merged = v.replace === true
         ? mergeBankSamples([], v.samples)
-        : mergeBankSamples(mergeBankSamples(diskSamples, DB.shared.habitLearnBank?.samples), v.samples);
+        : mergeBankSamples(baseSamples, v.samples);
       const mergedCal = v.replace === true && (!v.samples || !v.samples.length)
         ? (v.calibration || {})
         : mergeCalibObj(mergeCalibObj(diskCalib, DB.shared.habitLearnBank?.calibration), v.calibration);
       const nextBank = { v: 2, updatedAt: Date.now(), samples: merged, calibration: mergedCal };
       DB.shared.habitLearnBank = nextBank;
-      try { fs.mkdirSync(path.dirname(bankFile), { recursive: true }); fs.writeFileSync(bankFile, JSON.stringify(nextBank, null, 2)); } catch {}
+      for (const bf of bankFiles) {
+        try {
+          if (bf === bankFiles[0] || fs.existsSync(path.dirname(bf))) {
+            fs.mkdirSync(path.dirname(bf), { recursive: true });
+            fs.writeFileSync(bf, JSON.stringify(nextBank, null, 2));
+          }
+        } catch {}
+      }
       saveSoon();
-      return true;
+      try {
+        for (const bw of BrowserWindow.getAllWindows()) {
+          if (bw && !bw.isDestroyed() && bw.webContents && bw.webContents !== e?.sender) {
+            bw.webContents.send('anc-cmd', { habitBankSync: nextBank });
+          }
+        }
+      } catch {}
+      return nextBank;
     }
     return false;
   }
