@@ -4597,9 +4597,7 @@ Object.assign(Chat.prototype, {
     if (this.busy || this.streaming) { this.convGap = 0; return; }
     const lastMsg = this.messages.at(-1);
     const waitReply = !!lastMsg && (lastMsg.role === 'user' || lastMsg.metadata?.pending) && !Hitl.idleWait(this);
-    const curHistAt = (typeof History !== 'undefined' && History.byId?.(this.sid)?.updatedAt) || null;
-    const idleUnchanged = !waitReply && curHistAt && this._lastSyncedHistAt && curHistAt === this._lastSyncedHistAt;
-    const baseGap = waitReply ? 2500 : (idleUnchanged ? 120000 : 20000);
+    const baseGap = waitReply ? 2500 : 20000;
     const gap = waitReply ? 2500 : Math.max(baseGap, this.convGap || baseGap), cap = this.watching && !this.wFails ? 900000 : 300000;
     if (t - this.convAt > gap) void this.converge().then(ch => { this.convGap = (ch || waitReply) ? (waitReply ? 2500 : baseGap) : Math.min(cap, gap * 2); }, () => { this.convGap = Math.min(cap, gap * 2); });
   },
@@ -43024,7 +43022,7 @@ const NodeRoutes = (() => {
     const warm=new Map(),inflight=new Map();
     async function brana(c){
       const k=routeKey(c),w=warm.get(k)||(live&&cache.get(k)?.result);
-      if(w&&Policy.good(w)&&(!w.proofExpires||w.proofExpires>Date.now()+15000)){warm.set(k,w);return w;}
+      if(w&&Policy.good(w)&&w.proofExpires>Date.now()+15000){warm.set(k,w);return w;}
       if(inflight.has(k))return inflight.get(k);
       const job=(async()=>{
         const r=await io.probe({...c,kind:'manual'}).catch(e=>({ok:false,kind:e.kind||'network',error:String(e.message||e)}));
@@ -43220,7 +43218,7 @@ const NodeRoutes = (() => {
           if(authForm){const d=UI.authDraft(a);Store.set('auth-route-draft',{accountId:a.id,email:d.email,name:d.name||'',mode:authForm.dataset.authMode||'login',at:Date.now()});}
           applying=true;paint();step(78,'检测通过，正在应用…');
           if(candidate?.proxyIp&&P?.mutate){try{await P.mutate(d=>{d.ips||={};const it=d.ips[candidate.proxyIp]||={ip:String(candidate.proxyIp).split(':')[0]};it.ok=true;it.gone=false;it.banned=false;it.cool=0;if(r?.loc)it.loc=r.loc;if(r?.ip)it.eg=r.ip;if(r?.ms)it.ms=r.ms;if(d.ban)delete d.ban[String(candidate.proxyIp).toLowerCase()];});}catch{}}
-          const saved=await selector({...io,cancelled:stale}).apply(data.account,candidate,wanted,r);warm.delete(routeKey(candidate));lastBrana=null;pre=null;
+          const saved=await selector({...io,cancelled:stale}).apply(data.account,candidate,wanted,r);warm.delete(routeKey(candidate));cache.delete(routeKey(candidate));lastBrana=null;pre=null;
           Object.assign(a,saved);current=Policy.fields(saved);changed=false;if(P&&State.isNode(saved)&&saved.nodeId){if(P.d)P.d.node=saved.nodeId;if(!UI.host?.routeDraft)void P.setNode(saved.nodeId).catch(()=>{});}UI.host=await Host.info();UI.renderAcct?.();
           // 刚手动换好：记录手动选路锁定窗口（自动模式仅短暂防抖 15 秒，手动指定节点/IP 则锁定 10 分钟防止后台误切走）
           if(typeof AutoRoute!=='undefined'){AutoRoute.noteManualRoute?.(wanted==='auto'?15000:600000);if(AutoRoute.engine)AutoRoute.engine.next=Math.max(AutoRoute.engine.next||0,Date.now()+(wanted==='auto'?15000:60000));AutoRoute.failed=false;}

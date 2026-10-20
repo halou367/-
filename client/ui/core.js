@@ -3486,9 +3486,7 @@ Object.assign(Chat.prototype, {
     if (this.busy || this.streaming) { this.convGap = 0; return; }
     const lastMsg = this.messages.at(-1);
     const waitReply = !!lastMsg && (lastMsg.role === 'user' || lastMsg.metadata?.pending) && !Hitl.idleWait(this);
-    const curHistAt = (typeof History !== 'undefined' && History.byId?.(this.sid)?.updatedAt) || null;
-    const idleUnchanged = !waitReply && curHistAt && this._lastSyncedHistAt && curHistAt === this._lastSyncedHistAt;
-    const baseGap = waitReply ? 2500 : (idleUnchanged ? 120000 : 20000);
+    const baseGap = waitReply ? 2500 : 20000;
     const gap = waitReply ? 2500 : Math.max(baseGap, this.convGap || baseGap), cap = this.watching && !this.wFails ? 900000 : 300000;
     if (t - this.convAt > gap) void this.converge().then(ch => { this.convGap = (ch || waitReply) ? (waitReply ? 2500 : baseGap) : Math.min(cap, gap * 2); }, () => { this.convGap = Math.min(cap, gap * 2); });
   },
