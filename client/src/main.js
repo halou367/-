@@ -2826,7 +2826,7 @@ ipcMain.handle('host:shared', (e, k, v) => {
       const merged = mergeBankSamples(diskSamples, DB.shared.habitLearnBank?.samples || []);
       const mergedCal = mergeCalibObj(diskCalib, DB.shared.habitLearnBank?.calibration);
       const nextBank = { v: 2, updatedAt: DB.shared.habitLearnBank?.updatedAt || Date.now(), samples: merged, calibration: mergedCal };
-      if (!DB.shared.habitLearnBank || (DB.shared.habitLearnBank.samples?.length || 0) !== merged.length) {
+      if (merged.length > (DB.shared.habitLearnBank?.samples?.length || 0)) {
         DB.shared.habitLearnBank = nextBank;
         for (const bf of bankFiles) {
           try {
