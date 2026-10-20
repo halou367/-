@@ -293,7 +293,7 @@ const TitleSync = (() => {
     Notes.save();
   }
   async function start() {upgradePending();const result=await unlock(TitleCipher.DEFAULT_PASSPHRASE,{automatic:true});recoverLocal();return result;}
-  const pending = () => Object.values(Notes.all).filter(n=>n.dirty).length;
+  const pending = () => Object.entries(Notes.all).filter(([id, n]) => n?.dirty && (!History.full || !History.items?.length || History.byId(id))).length;
   async function syncNow() {
     if(typeof SessionGate!=='undefined'&&(!UI.authed||!UI.me))throw Error('请先完成登录核对，再同步名称');
     if(!TitleCipher.unlocked)throw Error('请先解锁名称同步口令');

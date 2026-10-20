@@ -144,8 +144,13 @@ const Titles = {
   },
   capture(sid,at) {
     if(!sid)return;
+    const isGoldOrFav = (typeof Fav !== 'undefined' && Fav.has(sid)) || (typeof Gold !== 'undefined' && Gold.isChatGold?.(sid)) || (typeof TitleSync !== 'undefined' && TitleSync.shouldGoldPrefix?.(sid));
+    if (Prefs.autoTitle === false && !isGoldOrFav && !Notes.all[sid]?.n) {
+      this.local(sid);
+      return;
+    }
     const n=Notes.rec(sid,at);if(at)n.t=at;
-    if ((typeof Fav !== 'undefined' && Fav.has(sid)) || (typeof Gold !== 'undefined' && Gold.isChatGold?.(sid))) this.prio.add(sid);
+    if (isGoldOrFav) this.prio.add(sid);
     TitleSync.dirty(sid);Notes.save();this.local(sid);
     this.kick(this.prio.has(sid) ? 1200 : 6500);
   },

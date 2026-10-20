@@ -2313,6 +2313,9 @@ const ChatHabitFingerprint = (() => {
     const sid = chat.sid;
     const known = typeof Models !== 'undefined' ? Models.get(sid) : null;
     if (known?.userCorrected && !force && !CONFIRMED_GEMINI_FLASH_SIDS.has(sid)) return known;
+    if (known?.fingerprint?.result && !interactive) return known;
+    const cloudTitle = (typeof History !== 'undefined' && History.byId?.(sid)?.title) || chat?.title || '';
+    if (!interactive && ((typeof TitleCipher !== 'undefined' && TitleCipher.isEncoded?.(cloudTitle)) || (typeof TitleSync !== 'undefined' && TitleSync.restored?.(sid)))) return known;
     const hasAuthoritativeApi = known && !known.guess && !known.fromTitle && !known.reverseInferred && !known.billingProbe && !known.habitInferred && (known.response || (known.internal && !known.billingProbe));
     if (hasAuthoritativeApi && !force) return known;
     // 识别到开源模型后，除非用户手动点击「反推锁定」（interactive: true），否则直接标记为「开源模型」并同步修改对话名称，不再浪费算力去推理具体计费型号
@@ -2423,9 +2426,12 @@ const ChatHabitFingerprint = (() => {
         Notes.save?.();
       }
       if (typeof Titles !== 'undefined') {
-        Titles.capture?.(sid, chat?.sentAt);
         Titles.local?.(sid);
-        Titles.touch?.(sid);
+        const shouldCloudSync = Boolean(interactive || (typeof Prefs !== 'undefined' && Prefs.autoTitle) || (typeof TitleSync !== 'undefined' && TitleSync.shouldGoldPrefix?.(sid)));
+        if (shouldCloudSync) {
+          Titles.capture?.(sid, chat?.sentAt);
+          Titles.touch?.(sid);
+        }
       }
       UI?.renderListSoon?.();
       UI?.renderTabs?.();
@@ -3958,6 +3964,13 @@ const BillingProbe = (() => {
     if (known?.userCorrected && !interactive) {
       return { entry: known, best, close: [best], standout: true, preimage: sum.preimage, payment: sum.payment };
     }
+    if (known?.fingerprint?.result && !interactive) {
+      return { entry: known, best, close: [best], standout: true, preimage: sum.preimage, payment: sum.payment };
+    }
+    const cloudTitle = (typeof History !== 'undefined' && History.byId?.(sid)?.title) || chat?.title || '';
+    if (!interactive && ((typeof TitleCipher !== 'undefined' && TitleCipher.isEncoded?.(cloudTitle)) || (typeof TitleSync !== 'undefined' && TitleSync.restored?.(sid)))) {
+      return { entry: known, best, close: [best], standout: true, preimage: sum.preimage, payment: sum.payment };
+    }
     const hasRealEvidence = (d?.samples?.observations > 0) || Boolean(best.habitSource || best.habitPct || known?.fingerprint?.result || known?.reverseInferred || known?.billingProbe) || ARGON_HIGH_SIDS.has(sid) || SOL_61_SIDS.has(sid) || sid === '01a13f8c-41c2-7ad3-8e77-73feb405f68d';
     if (!hasRealEvidence && !interactive && !forceLock && !fallbackQuestionMark) return null;
     const hasAuthoritativeApi = known && !known.guess && !known.fromTitle && !known.reverseInferred && !known.billingProbe && (known.response || (known.internal && !known.billingProbe) || known.fingerprint?.apiIdentity);
@@ -4247,7 +4260,15 @@ const BillingProbe = (() => {
       try { Bus.emit('model', chat, nextEntry); } catch {}
     }
     if (standout && typeof Titles !== 'undefined' && (changed || interactive) && (!hasAuthoritativeApi || interactive || detectedRouteType)) {
-      try { Titles.capture?.(sid, chat?.sentAt); Titles.local?.(sid); Titles.touch(sid); Titles.kick(true); } catch {}
+      try {
+        Titles.local?.(sid);
+        const shouldCloudSync = Boolean(interactive || (typeof Prefs !== 'undefined' && Prefs.autoTitle) || (typeof TitleSync !== 'undefined' && TitleSync.shouldGoldPrefix?.(sid)));
+        if (shouldCloudSync) {
+          Titles.capture?.(sid, chat?.sentAt);
+          Titles.touch(sid);
+          Titles.kick(true);
+        }
+      } catch {}
     }
     if (changed || interactive) {
       try { UI.renderListSoon?.(); UI.renderTabs?.(); Dock.soon?.(); } catch {}
@@ -4950,6 +4971,9 @@ const BillingProbe = (() => {
           continue;
         }
         Models.set(id, { ...m, pendingConfirm: true, reverseVer: 140 });
+        continue;
+      }
+      if (m.guess && !m.habitInferred && !m.reverseInferred && !m.billingProbe && !m.pendingConfirm && !(Array.isArray(m.reverseCandidates) && m.reverseCandidates.length > 0)) {
         continue;
       }
       if (!m.userCorrected && (m.habitInferred || m.pendingConfirm || m.guess || (Array.isArray(m.reverseCandidates) && m.reverseCandidates.length > 0)) && (m.reverseVer || 0) < 168) {
