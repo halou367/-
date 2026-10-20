@@ -768,4 +768,124 @@ test('v0.13.161: Habit Library export & merge round-trip, default Gacha mode = h
   assert.equal(chf.getUsageStats().models['claude haiku 5.5 (medium)'], 6);
 });
 
+test('v0.13.161: Mobile diagnostic JSON export fix (extractCompactMeta + Android fallback) and strict High-Risk IP blocking (IPv6 exit, unverified datacenter, VPN proxy, bare node)', async () => {
+  const vm = require('node:vm');
+  const Vless = require('../ui/vless.js');
+  const RoutePolicy = require('../ui/route-policy.js');
+  const bpUiSrc = read('ui/billing-probe-ui.js');
+  const dockSrc = read('ui/dock.js');
+  const fileExportSrc = read('ui/file-export.js');
+  const iprepSrc = read('ui/iprep.js');
+
+  // 1. ChatHabitFingerprint exports extractCompactMeta and BillingProbe.exportDiagnosticJson invokes FileExport.text without ReferenceError
+  let exportedFile = null;
+  const ctx = vm.createContext({
+    console,
+    Math,
+    Date,
+    Set,
+    Map,
+    JSON,
+    Object,
+    Array,
+    String,
+    Number,
+    Boolean,
+    RegExp,
+    Promise,
+    Error,
+    setTimeout: () => 0,
+    clearTimeout: () => {},
+    now: () => 1700000000000,
+    describe: e => String(e?.message || e),
+    toast: () => {},
+    saveBlob: () => {},
+    Store: { get: (_k, d) => d, set: () => {} },
+    Host: { shared: async () => null },
+    Bus: { emit: () => {}, on: () => () => {} },
+    Prefs: { autoProbe: true, costProbe: true },
+    Chats: new Map([['sid-mob-1', { sid: 'sid-mob-1', loaded: true, messages: [{ role: 'user', content: 'hi' }, { role: 'assistant', content: 'hello' }] }]]),
+    Models: { get: () => ({ name: 'GPT 6.1 Sol (Max)', conf: 0.992 }) },
+    FileExport: {
+      text: async (txt, name, mime) => {
+        exportedFile = { txt, name, mime };
+        return { ok: true, path: 'Download/BranaAi/' + name };
+      },
+    },
+  });
+  const chfStart = bpUiSrc.indexOf('const ChatHabitFingerprint = (() => {');
+  const chfEnd = bpUiSrc.indexOf('const BillingProbe = (() => {');
+  vm.runInContext(bpUiSrc.slice(chfStart, chfEnd) + ';this.ChatHabitFingerprint = ChatHabitFingerprint;', ctx);
+  assert.equal(typeof ctx.ChatHabitFingerprint.extractCompactMeta, 'function');
+
+  // 2. Dock.exportBtns enables diagnostic download button whenever sid is truthy, and FileExport.write has Android chunked fallback
+  assert.ok(dockSrc.includes("disabled: !sid || null, title: diagTip, 'aria-label': '导出诊断 JSON'"));
+  assert.ok(fileExportSrc.includes('Host.downloadStart(name,mime,bytes.byteLength)'));
+
+  // 3. Vless.withProxyIp strips /video/ when attaching a regular ProxyIP so it never produces /video/ABC/proxyip=1.2.3.4
+  assert.equal(Vless.withProxyIp('/video/ABC', '1.2.3.4:443'), '/proxyip=1.2.3.4:443');
+
+  // 4. IPRep & RoutePolicy: IPv6 exits are accepted; unverified datacenter IPs (h=true without pu) are NOT rated pure (<75); proxycheck pp=true VPNs are penalized as high-risk (<50)
+  const poolData = {
+    v: 1,
+    ips: {
+      '40.233.77.216': { ok: true, loc: 'SG', eg: '2603:c021:5:8c88::825' },
+      '43.170.17.114': { ok: true, loc: 'SG', eg: '43.174.105.139' },
+      '43.160.238.73': { ok: true, loc: 'SG', eg: '43.160.238.73' },
+      '43.175.17.54': { ok: true, loc: 'SG', eg: '43.175.17.54' },
+    },
+    rep: {
+      '2603:c021:5:8c88::825': { pu: { fs: 72, res: false, bc: true, dc: true, org: 'Oracle' } },
+      '43.174.105.139': { a: 1792400000000, h: true, px: false, m: false, isp: 'ACE', as: 'AS139341' },
+      '43.160.238.73': { a: 1792400000000, h: true, px: false, m: false, isp: 'Tencent', c: 1792400000000, r: 66, pt: 'VPN', pp: true },
+      '43.175.17.54': { a: 1792400000000, h: true, px: false, m: false, isp: 'ACE', pu: { fs: 3, res: false, bc: false, dc: false, org: '6 COLLYER QUAY' } },
+    },
+  };
+  const poolCtx = vm.createContext({
+    console,
+    setTimeout: () => 0,
+    clearTimeout: () => {},
+    now: () => 1792450000000,
+    sleep: async () => {},
+    cleanErr: e => String(e?.message || e),
+    regionLabel: x => x,
+    ccF: x => x,
+    REGION_NAME: x => x,
+    h: () => ({ append() {}, replaceChildren() {}, classList: { add() {} }, remove() {} }),
+    document: { body: { append() {} }, querySelector: () => null },
+    toast: () => {},
+    isVless: p => /^vless:/i.test(p || ''),
+    UI: { host: { account: null } },
+    Bus: { emit() {}, on: () => () => {} },
+    Chats: new Map(),
+    Store: { get: (_k, d) => d, set() {} },
+    Nodes: { accts: [], refreshAccts: async () => {}, list: [] },
+    RouteState: require('../ui/route-state'),
+    Host: { shared: async () => poolData },
+  });
+  const poolSrc = read('ui/pool.js');
+  vm.runInContext(poolSrc.slice(poolSrc.indexOf('const Pool ='), poolSrc.indexOf('// 节点在编辑器里改了')) + ';this.Pool=Pool;', poolCtx);
+  vm.runInContext(iprepSrc.slice(0, iprepSrc.indexOf('// 后台：启动 1 分钟后')) + ';this.IPRep=IPRep;', poolCtx);
+  poolCtx.Pool.d = JSON.parse(JSON.stringify(poolData));
+
+  // IPv6 exit with IPPure fs=72 is recognized and scored as high-risk (27 < 50)
+  assert.equal(poolCtx.IPRep.egOf('40.233.77.216', poolCtx.Pool.d.ips['40.233.77.216']), '2603:c021:5:8c88::825');
+  assert.equal(poolCtx.IPRep.risky('40.233.77.216', poolCtx.Pool.d.ips['40.233.77.216']), true);
+  assert.equal(RoutePolicy.reputationOK(poolData, '40.233.77.216', poolData.ips['40.233.77.216'], 1792450000000), false);
+
+  // Unverified datacenter IP (h=true without pu) is NOT pure
+  assert.equal(poolCtx.IPRep.pure('43.170.17.114', poolCtx.Pool.d.ips['43.170.17.114']), false);
+  assert.equal(RoutePolicy.reputationOK(poolData, '43.170.17.114', poolData.ips['43.170.17.114'], 1792450000000), false);
+
+  // proxycheck VPN (pp=true, r=66, h=true) is high-risk (<50)
+  assert.equal(poolCtx.IPRep.risky('43.160.238.73', poolCtx.Pool.d.ips['43.160.238.73']), true);
+  assert.equal(RoutePolicy.reputationOK(poolData, '43.160.238.73', poolData.ips['43.160.238.73'], 1792450000000), false);
+
+  // IPPure-verified clean IP (pu.fs=3) is pure (>=75)
+  assert.equal(poolCtx.IPRep.pure('43.175.17.54', poolCtx.Pool.d.ips['43.175.17.54']), true);
+  assert.equal(RoutePolicy.reputationOK(poolData, '43.175.17.54', poolData.ips['43.175.17.54'], 1792450000000), true);
+  assert.deepEqual([...poolCtx.Pool.avail('SG', 'self')], ['43.175.17.54']);
+});
+
+
 

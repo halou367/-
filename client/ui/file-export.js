@@ -26,11 +26,28 @@ const FileExport = {
   async write(text,name,mime='application/json'){
     const native=Host.platform==='android'||!!Host.saveFile;
     if(native){
-      if(typeof Host.saveFile!=='function')throw Error('当前宿主不支持保存文件，请使用复制内容或更新客户端');
-      const r=await Host.saveFile(name,mime,text);
-      if(r?.canceled)return {canceled:true};
-      if(!r?.ok||!r.path)throw Error(r?.error||'宿主未确认文件已保存');
-      return r;
+      if(typeof Host.saveFile==='function'){
+        const r=await Host.saveFile(name,mime,text);
+        if(r?.canceled)return {canceled:true};
+        if(r?.ok&&r.path)return r;
+        if(Host.platform!=='android'||!Host.downloadStart||!Host.downloadChunk||!Host.downloadFinish){
+          throw Error(r?.error||'宿主未确认文件已保存');
+        }
+      }else if(Host.platform!=='android'||!Host.downloadStart||!Host.downloadChunk||!Host.downloadFinish){
+        throw Error('当前宿主不支持保存文件，请使用复制内容或更新客户端');
+      }
+      // Android 兜底：若 saveFile 失败或不可用，走 WorkspaceDownload 分块通道落盘到 Download/BranaAi
+      const bytes=new TextEncoder().encode(String(text??''));
+      const start=await Host.downloadStart(name,mime,bytes.byteLength);
+      if(!start?.ok||!start.id)throw Error(start?.error||'无法创建下载文件');
+      try{
+        let bin='';for(let i=0;i<bytes.length;i++)bin+=String.fromCharCode(bytes[i]);
+        const cr=await Host.downloadChunk(start.id,btoa(bin));
+        if(!cr?.ok)throw Error(cr?.error||'文件分块未保存');
+        const fin=await Host.downloadFinish(start.id);
+        if(!fin?.ok||!fin.path)throw Error(fin?.error||'文件未完整保存');
+        return fin;
+      }catch(e){try{await Host.downloadCancel?.(start.id);}catch{}throw e;}
     }
     saveBlob(new Blob([text],{type:mime}),name);
     return {requested:true,path:'浏览器下载目录 / '+name};

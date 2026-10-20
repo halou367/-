@@ -124,10 +124,11 @@ const StandbyPool = {
       const pip = String(item?.candidate?.proxyIp || '').trim();
       const itemReg = String(item?.loc || item?.candidate?.region || item?.result?.loc || '').trim().toUpperCase();
       if (curReg && itemReg && itemReg !== curReg) return false; // 跨地区候选不能绕过确认弹窗静默切换
-      if (!pip) return true;
+      if (!pip) return false;
       const e = pool.ips?.[pip];
       if (e && (e.gone || e.cool > at || pool.ban?.[pip.toLowerCase()])) return false;
       if ((first?.accounts || []).some(x => x.id !== a.id && String(x.proxyIp || '').toLowerCase() === pip.toLowerCase())) return false;
+      if (typeof IPRep !== 'undefined' && (IPRep.risky?.(pip, e) || (IPRep.pure && !IPRep.pure(pip, e)))) return false;
       return true;
     };
     const primary = mode === 'ip' ? this.ips : this.nodes;
@@ -181,7 +182,8 @@ const StandbyPool = {
           }));
           const workingNodes = new Set(results.filter(x => x.r?.ip || RoutePolicy.good(x.r)).map(x => x.c?.proxy).filter(Boolean));
           for (const { c, r } of results) {
-            if (RoutePolicy.good(r) && r.ticket) {
+            const pureOk = Boolean(c.proxyIp && (!(r?.pure && Number.isFinite(+r.pure.fs)) || +r.pure.fs < 25) && (typeof IPRep === 'undefined' || !IPRep.risky?.(c.proxyIp, { eg: r?.ip || '' })));
+            if (RoutePolicy.good(r) && r.ticket && pureOk) {
               this.ips.push({
                 owner: a.id,
                 candidate: { ...c, region: r.loc || c.region || '' },
@@ -193,11 +195,15 @@ const StandbyPool = {
               if (typeof NodeRoutes !== 'undefined' && NodeRoutes.cache) {
                 NodeRoutes.cache.set(RoutePolicy.key(c), { at: now(), result: r });
               }
-            } else if (c.proxyIp && typeof Pool !== 'undefined' && (r?.ip || r?.kind === 'rate-limit' || workingNodes.has(c.proxy) || Pool.isNodeConfirmedAlive?.(c.proxy))) {
+            } else if (c.proxyIp && typeof Pool !== 'undefined' && (!pureOk || r?.ip || r?.kind === 'rate-limit' || workingNodes.has(c.proxy) || Pool.isNodeConfirmedAlive?.(c.proxy))) {
               try {
                 void Pool.mutate(d => {
                   const e = d.ips?.[c.proxyIp];
                   if (!e) return;
+                  if (!pureOk && r?.pure && +r.pure.fs >= 25) {
+                    Pool.banForever?.(d, c.proxyIp, '热备检测 IPPure 风险值 ' + (+r.pure.fs) + ' · 已永久拉黑');
+                    return;
+                  }
                   e.fc = (e.fc || 0) + 1;
                   if (r?.kind === 'rate-limit') e.cool = Math.max(e.cool || 0, now() + 30 * 60000);
                   else if ((e.fc || 0) >= 3) Pool.banForever?.(d, c.proxyIp, '节点正常但热备 ProxyIP 连续不可用 · 已永久拉黑');
@@ -214,7 +220,7 @@ const StandbyPool = {
         const haveProxies = new Set([first.account.proxy, ...this.nodes.map(x => x.candidate?.proxy)]);
         for (const [, list] of planNode.stages || []) {
           for (const c of list || []) {
-            if (c.proxy && !haveProxies.has(c.proxy)) {
+            if (c.proxy && c.proxyIp && !haveProxies.has(c.proxy)) {
               haveProxies.add(c.proxy);
               nodeCands.push(c);
             }
@@ -224,7 +230,8 @@ const StandbyPool = {
         if (nb.length) {
           const nRes = await Promise.all(nb.map(async c => ({ c, r: await AutoRoute.adapter.probe({ ...c, kind: 'standby' }).catch(() => null) })));
           for (const { c, r } of nRes) {
-            if (RoutePolicy.good(r) && r.ticket) {
+            const pureOk = Boolean(c.proxyIp && (!(r?.pure && Number.isFinite(+r.pure.fs)) || +r.pure.fs < 25) && (typeof IPRep === 'undefined' || !IPRep.risky?.(c.proxyIp, { eg: r?.ip || '' })));
+            if (RoutePolicy.good(r) && r.ticket && pureOk) {
               this.nodes.push({
                 owner: a.id,
                 candidate: { ...c, region: r.loc || c.region || '' },

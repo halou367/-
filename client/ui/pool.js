@@ -507,9 +507,11 @@ const Pool = {
     const e = d.ips[k]; if (!e) return;
     e.at = now(); if (r.loc) e.loc = r.loc; e.eg = r.ip || e.eg || ''; e.ms = r.ms || 0;
     e.ok = !!(r.ip && r.brana); e.err = e.ok ? '' : (r.error || (r.ip ? 'Brana 不可用' : '连接失败')); e.fc = e.ok ? 0 : (e.fc || 0) + 1;
-    if (e.ok && e.banned) { e.gone = false; e.banned = false; if (d.ban) delete d.ban[String(k || '').trim().toLowerCase()]; }
     // 纯净度：检测时经隧道带回的 IPPure 风险值入库；可用的 IP 立即评估，高风险马上删除（导入 / 测全部 / 切换都走这里）
     if (typeof IPRep !== 'undefined') { if (r.pure && e.eg) IPRep.putPu?.(d, e.eg, r.pure); if (r.ipa && e.eg) IPRep.putIpa?.(d, e.eg, r.ipa); if (e.ok) IPRep.soon?.([k]); }
+    const egLow = String(e.eg || '').toLowerCase();
+    const isRiskBanned = Boolean((egLow && d.banEg?.[egLow]) || (r.pure && Number.isFinite(+r.pure.fs) && +r.pure.fs >= 25));
+    if (e.ok && e.banned && !isRiskBanned) { e.gone = false; e.banned = false; if (d.ban) delete d.ban[String(k || '').trim().toLowerCase()]; }
   },
   async probe(keys, onProg, options = {}) {
     keys=[...new Set(keys)].filter(k=>this.d.ips[k]&&!this.d.ips[k].gone&&!this.banned(k)&&this.d.ips[k].ok!==false);if(!keys.length)return {done:0};
@@ -724,7 +726,16 @@ const Pool = {
           }
         }
       });
-      const good = res.filter(([, x]) => x.ip && x.brana && (!x.loc || x.loc === cc)).sort((p, q) => (p[1].ms || 9e9) - (q[1].ms || 9e9));
+      const good = res.filter(([k, x]) => {
+        if (!(x.ip && x.brana && (!x.loc || x.loc === cc))) return false;
+        if (this.banned(k)) return false;
+        if (typeof IPRep !== 'undefined') {
+          const e = this.d?.ips?.[k];
+          if (IPRep.risky?.(k, e) || IPRep.impure?.(k, e)) return false;
+          if (IPRep.pure && !IPRep.pure(k, e)) return false;
+        }
+        return true;
+      }).sort((p, q) => (p[1].ms || 9e9) - (q[1].ms || 9e9));
       for (const [k, x] of res) if (!good.find(g => g[0] === k)) { fails++; log?.('ProxyIP ' + k + (x.ip && x.brana && x.loc && x.loc !== cc ? ' 出口地区是 ' + x.loc + '（不是 ' + cc + '）' : ' 不可用（' + (x.error || '超时') + '，已拉黑）') + '，换下一个'); }
       for (const [k, x] of good) {
         const nd = (ownRoute ? node : this.node()) || node || { id: a.nodeId || '' }, lk = link2 || link;

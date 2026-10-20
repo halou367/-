@@ -409,11 +409,13 @@ const NodeRoutes = (() => {
       catch(e){return {ok:false,error:friendly(e)};}
     }
     const testsLine=(g,r)=>(g==null?'':g.ok?'Google 连接正常 · ':'Google 不通（'+g.error+'；Google 登录可能受影响） · ')+'Brana 检测通过（建连 + 3 次请求共 '+(r.ms>=1000?(r.ms/1000).toFixed(1)+' s':r.ms+' ms')+'）'+(r.ip?' · 出口 '+r.ip:'')+(r.loc?' · '+regionLabel(r.loc):'');
-    // 纯净度把关（零容忍）：经节点 + ProxyIP 的出口先评估，高风险直接拉黑删除，不保存
+    // 纯净度把关（零容忍）：经节点的出口（含未显式指定 proxyIp 时节点自带的默认出口）一律先评估，高风险或非纯净直接拒绝，不保存
     async function riskBad(c,x,say){
-      if(!c?.proxyIp||!/^vless:/i.test(c.proxy||'')||typeof IPRep==='undefined'||!IPRep.vet)return '';
+      if(!/^vless:/i.test(c?.proxy||'')||typeof IPRep==='undefined'||!IPRep.vet)return '';
+      const targetPip=String(c?.proxyIp||'').trim()||(typeof Vless!=='undefined'&&Vless.proxyIpOf?String(Vless.proxyIpOf((()=>{try{return Vless.parse(c.proxy)?.path||'';}catch{return '';}})())||'').trim():'')||String(x?.ip||'').trim();
+      if(!targetPip)return '';
       say?.('评估出口 IP 纯净度…');
-      try{const v=await IPRep.vet(c.proxyIp,x?.ip);if(!v.ok)return v.error;}catch{}
+      try{const v=await IPRep.vet(targetPip,x?.ip);if(!v.ok)return v.error;}catch{}
       return '';
     }
     // 同一条线路的检测共用：预检（选完就在后台测）和「应用更改」拿同一个结果；检测凭据 5 分钟内有效，期间应用不再重测
@@ -489,9 +491,9 @@ const NodeRoutes = (() => {
       }
       const allPurePips=!P?[]:P.entries().filter(([k,e])=>!e.gone&&e.ok===true&&!blocked(k)&&!cooling(e)).sort(([ka,x],[kb,y])=>((isCurPip(kb)?1:0)-(isCurPip(ka)?1:0))||((x.loc===cc?0:1)-(y.loc===cc?0:1))||grp(x)-grp(y)||(R?R.rank(kb,y)-R.rank(ka,x):0)||((x.used||0)-(y.used||0))||ka.localeCompare(kb)).slice(0,6).map(([k])=>k);
       for(const n of up.slice(0,3)){
-        for(const p of pipChoices(2))pushC(getCandidate(n,p));
-        for(const p of allPurePips.slice(0,2))pushC({proxy:io.link(n),nodeId:n.id||'',region:'',proxyIp:p});
-        pushC({proxy:io.link(n),nodeId:n.id||'',region:'',proxyIp:''});
+        for(const p of pipChoices(2))if(p)pushC(getCandidate(n,p));
+        for(const p of allPurePips.slice(0,2))if(p)pushC({proxy:io.link(n),nodeId:n.id||'',region:P?.d?.ips?.[p]?.loc||'',proxyIp:p});
+        if(!allPurePips.length&&/\/video\//i.test(n.path||''))pushC({proxy:io.link(n),nodeId:n.id||'',region:'',proxyIp:''});
       }
       if(!list.length&&nodes.length)pushC(getCandidate(nodes[0]));
       return {list:list.slice(0,12),local:async()=>{const l=await io.local(Policy.ports).catch(()=>[]);return l.filter(x=>x.proxy).map(x=>({proxy:normProxy(x.proxy),proxyIp:'',nodeId:'',region:''}));}};

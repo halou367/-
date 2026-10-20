@@ -169,7 +169,12 @@ Object.assign(Nodes, {
       const old = parse(a.proxy), n = cur || pick(old, old?.name || '');
       let pip = String(a.proxyIp || '').trim();
       if (pip && typeof Pool !== 'undefined') { const e = Pool.d?.ips?.[pip]; if (!e || e.gone || Pool.banned(pip) || (typeof IPRep !== 'undefined' && (IPRep.risky(pip, e) || (IPRep.pure && !IPRep.pure(pip, e)))) || Pool.owner(pip, a.id)) pip = ''; }
-      try { await Host.saveAccount({ id: a.id, proxy: Vless.toLink(n), nodeId: n.id, region: a.region || '', proxyIp: pip }); moved++; } catch { failed++; }
+      if (!pip && typeof Pool !== 'undefined' && !/\/video\//i.test(n?.path || '')) {
+        const altPip = (a.region && Pool.avail?.(a.region, a.id)?.[0]) || Pool.availAllPureLowestLatency?.(a.id)?.[0] || '';
+        if (altPip) pip = altPip;
+      }
+      const nextReg = a.region || (pip && typeof Pool !== 'undefined' && Pool.d?.ips?.[pip]?.loc !== '?' ? Pool.d?.ips?.[pip]?.loc : '') || '';
+      try { await Host.saveAccount({ id: a.id, proxy: Vless.toLink(n), nodeId: n.id, region: nextReg, proxyIp: pip }); moved++; } catch { failed++; }
     }
     try { await this.refreshAccts(); } catch {}
     try { if (typeof NodeRoutes !== 'undefined') NodeRoutes.cache?.clear?.(); } catch {}

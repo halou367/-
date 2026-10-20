@@ -2739,6 +2739,7 @@ const ChatHabitFingerprint = (() => {
 
   return {
     extractFeatures,
+    extractCompactMeta,
     analyze,
     structuralReverse,
     learnFromChat,
@@ -5147,45 +5148,62 @@ const BillingProbe = (() => {
 
   function exportDiagnosticJson(sid) {
     if (!sid) return null;
-    const comb = summary(sid);
-    const base = typeof engine.exportSummary === 'function' ? engine.exportSummary(sid) : {};
-    const m = typeof Models !== 'undefined' ? Models.get(sid) : null;
-    const chat = (typeof Chats !== 'undefined' && Chats.get(sid)) || (typeof chatOf === 'function' ? chatOf(sid) : null);
-    const habitFeat = (typeof ChatHabitFingerprint !== 'undefined' && ChatHabitFingerprint.extractFeatures)
-      ? ChatHabitFingerprint.extractFeatures(chat || { sid, messages: [] }, m)
-      : null;
-    const payload = {
-      ...base,
-      sid,
-      sessionId: sid,
-      combined: comb,
-      model: m || null,
-      habitFeatures: habitFeat ? {
-        vec: habitFeat.vec,
-        meta: extractCompactMeta(habitFeat),
-        isOpenThink: Boolean(habitFeat.isOpenThink),
-        habitTags: habitFeat.habitTags,
-        habitReasoningScore: habitFeat.habitReasoningScore,
-        turns: habitFeat.turns,
-        codingTurns: habitFeat.codingTurns,
-        codingTurnsNoR: habitFeat.codingTurnsNoR,
-        isGeminiCoding: habitFeat.isGeminiCoding,
-        totalTools: habitFeat.totalTools,
-        pyHeredoc: habitFeat.pyHeredoc,
-        catHeredoc: habitFeat.catHeredoc,
-        edit: habitFeat.edit,
-        read: habitFeat.read,
-      } : null,
-      streamEvidence: chat?._streamEvidence || m?.streamEvidence || null,
+    const buildPayload = () => {
+      const comb = summary(sid);
+      const base = typeof engine.exportSummary === 'function' ? engine.exportSummary(sid) : {};
+      const m = typeof Models !== 'undefined' ? Models.get(sid) : null;
+      const chat = (typeof Chats !== 'undefined' && Chats.get(sid)) || (typeof chatOf === 'function' ? chatOf(sid) : null);
+      const habitFeat = (typeof ChatHabitFingerprint !== 'undefined' && ChatHabitFingerprint.extractFeatures)
+        ? ChatHabitFingerprint.extractFeatures(chat || { sid, messages: [] }, m)
+        : null;
+      const compactMeta = habitFeat
+        ? (typeof ChatHabitFingerprint !== 'undefined' && typeof ChatHabitFingerprint.extractCompactMeta === 'function'
+          ? ChatHabitFingerprint.extractCompactMeta(habitFeat)
+          : (habitFeat.meta || null))
+        : null;
+      return {
+        ...base,
+        sid,
+        sessionId: sid,
+        combined: comb,
+        model: m || null,
+        habitFeatures: habitFeat ? {
+          vec: habitFeat.vec,
+          meta: compactMeta,
+          isOpenThink: Boolean(habitFeat.isOpenThink),
+          habitTags: habitFeat.habitTags,
+          habitReasoningScore: habitFeat.habitReasoningScore,
+          turns: habitFeat.turns,
+          codingTurns: habitFeat.codingTurns,
+          codingTurnsNoR: habitFeat.codingTurnsNoR,
+          isGeminiCoding: habitFeat.isGeminiCoding,
+          totalTools: habitFeat.totalTools,
+          pyHeredoc: habitFeat.pyHeredoc,
+          catHeredoc: habitFeat.catHeredoc,
+          edit: habitFeat.edit,
+          read: habitFeat.read,
+        } : null,
+        streamEvidence: chat?._streamEvidence || m?.streamEvidence || null,
+      };
     };
-    const jsonText = JSON.stringify(payload, null, 2);
-    const fname = 'billing-' + String(sid).replace(/[^a-zA-Z0-9_-]/g, '_') + '.json';
-    if (typeof FileExport !== 'undefined' && typeof FileExport.text === 'function') {
-      void FileExport.text(jsonText, fname, 'application/json');
-    } else {
-      saveBlob(new Blob([jsonText], { type: 'application/json' }), fname);
+    const savePayload = payload => {
+      const jsonText = JSON.stringify(payload, null, 2);
+      const fname = 'billing-' + String(sid).replace(/[^a-zA-Z0-9_-]/g, '_') + '.json';
+      if (typeof FileExport !== 'undefined' && typeof FileExport.text === 'function') {
+        void FileExport.text(jsonText, fname, 'application/json');
+      } else {
+        saveBlob(new Blob([jsonText], { type: 'application/json' }), fname);
+      }
+      return payload;
+    };
+    const chat = (typeof Chats !== 'undefined' && Chats.get(sid)) || (typeof chatOf === 'function' ? chatOf(sid) : null);
+    if (chat && !chat.loaded && (!Array.isArray(chat.messages) || !chat.messages.length) && typeof chat.load === 'function') {
+      void Promise.resolve(chat.load()).catch(() => {}).then(() => {
+        try { savePayload(buildPayload()); } catch (e) { if (typeof toast === 'function') toast('导出失败：' + describe(e), 'err'); }
+      });
+      return buildPayload();
     }
-    return payload;
+    return savePayload(buildPayload());
   }
 
   function card(sid, { chargedInHero = false } = {}) {

@@ -2204,21 +2204,47 @@ public class MainActivity extends Activity {
                 File[] old = ld.listFiles(); if (old != null) for (File o : old) if (System.currentTimeMillis() - o.lastModified() > 3L * 86400000L) o.delete();
                 File cf = new File(ld, nm);
                 try (java.io.FileOutputStream os = new java.io.FileOutputStream(cf)) { os.write(data); }
-                String share = "content://" + getPackageName() + ".apk/logs/" + nm, shown;
+                String share = "content://" + getPackageName() + ".apk/logs/" + nm, shown = null;
                 if (android.os.Build.VERSION.SDK_INT >= 29) {
-                    android.content.ContentValues cv = new android.content.ContentValues();
-                    cv.put(android.provider.MediaStore.MediaColumns.DISPLAY_NAME, nm);
-                    cv.put(android.provider.MediaStore.MediaColumns.MIME_TYPE, mt);
-                    cv.put(android.provider.MediaStore.MediaColumns.RELATIVE_PATH, android.os.Environment.DIRECTORY_DOWNLOADS + "/BranaAi");
-                    Uri u = getContentResolver().insert(android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI, cv);
-                    if (u == null) throw new Exception("无法写入下载目录");
-                    try (java.io.OutputStream os = getContentResolver().openOutputStream(u)) { if (os == null) throw new Exception("无法写入下载目录"); os.write(data); }
-                    shown = "Download/BranaAi/" + nm;
-                } else {
-                    File dir = new File(getExternalFilesDir(android.os.Environment.DIRECTORY_DOWNLOADS), "BranaAi"); dir.mkdirs();
-                    File f = new File(dir, nm);
-                    try (java.io.FileOutputStream os = new java.io.FileOutputStream(f)) { os.write(data); }
-                    shown = f.getAbsolutePath();
+                    try {
+                        try {
+                            getContentResolver().delete(
+                                android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI,
+                                android.provider.MediaStore.MediaColumns.DISPLAY_NAME + "=?",
+                                new String[]{ nm }
+                            );
+                        } catch (Exception ignored) {}
+                        android.content.ContentValues cv = new android.content.ContentValues();
+                        cv.put(android.provider.MediaStore.MediaColumns.DISPLAY_NAME, nm);
+                        cv.put(android.provider.MediaStore.MediaColumns.MIME_TYPE, mt);
+                        cv.put(android.provider.MediaStore.MediaColumns.RELATIVE_PATH, android.os.Environment.DIRECTORY_DOWNLOADS + "/BranaAi");
+                        cv.put(android.provider.MediaStore.MediaColumns.IS_PENDING, 1);
+                        Uri u = getContentResolver().insert(android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI, cv);
+                        if (u != null) {
+                            try (java.io.OutputStream os = getContentResolver().openOutputStream(u)) {
+                                if (os != null) {
+                                    os.write(data);
+                                    os.flush();
+                                    android.content.ContentValues done = new android.content.ContentValues();
+                                    done.put(android.provider.MediaStore.MediaColumns.IS_PENDING, 0);
+                                    getContentResolver().update(u, done, null, null);
+                                    shown = "Download/BranaAi/" + nm;
+                                }
+                            }
+                        }
+                    } catch (Exception ignored) {}
+                }
+                if (shown == null) {
+                    try {
+                        File ext = getExternalFilesDir(android.os.Environment.DIRECTORY_DOWNLOADS);
+                        File dir = new File(ext != null ? ext : ld, "BranaAi");
+                        dir.mkdirs();
+                        File f = new File(dir, nm);
+                        try (java.io.FileOutputStream os = new java.io.FileOutputStream(f)) { os.write(data); }
+                        shown = f.getAbsolutePath();
+                    } catch (Exception ignored) {
+                        shown = cf.getAbsolutePath();
+                    }
                 }
                 return new JSONObject().put("ok", true).put("path", shown).put("share", share).toString();
             } catch (Exception e) {

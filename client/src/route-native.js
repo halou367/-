@@ -34,8 +34,8 @@ async function ipapi(ses, ms=1800, signal) {
   catch { return null; } finally { clearTimeout(t);signal?.removeEventListener('abort',abort); }
 }
 // 测延迟时顺带测纯净度：IPPure + ip-api 并行（同一条隧道）
-async function purity(ses, ms=1800, signal) { const [pure,ipa]=await Promise.all([ippure(ses,ms,signal),ipapi(ses,ms,signal)]); return {...(pure?{pure}:{}),...(ipa?{ipa}:{})}; }
-async function checkService(ses, timeout=6500) { const r=await checkService0(ses,timeout); if(r&&r.ok&&r.ip)Object.assign(r,await purity(ses,Math.min(1800,Math.max(50,timeout)))); return r; }
+async function purity(ses, ms=2500, signal) { const [pure,ipa]=await Promise.all([ippure(ses,ms,signal),ipapi(ses,ms,signal)]); return {...(pure?{pure}:{}),...(ipa?{ipa}:{})}; }
+async function checkService(ses, timeout=6500) { const r=await checkService0(ses,timeout); if(r&&r.ok&&r.ip)Object.assign(r,await purity(ses,Math.min(2500,Math.max(50,timeout)))); return r; }
 async function checkService0(ses, timeout=6500) {
   try { return await checkOnce(ses, timeout); }
   catch (e) { if (e.kind !== 'network') throw e; try { return await checkOnce(ses, Math.round(timeout * 1.1)); } catch (e2) { if (e2.kind === 'network' && e2.stage) e2.message += '（已重试 1 次）'; throw e2; } }

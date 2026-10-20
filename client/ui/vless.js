@@ -60,7 +60,8 @@ const Vless = (() => {
       qs = qs.split('&').filter(x => x && !/^(proxyip|socks5|https?|turn|sstp|globalproxy)(=|$)/i.test(x)).join('&');
       return base + '/' + pip + (qs ? '?' + qs : '');
     }
-    if (/(^|&)proxyip=/i.test(qs) && !/\/proxyip=/i.test(base)) { qs = qs.replace(/(^|&)proxyip=[^&]*/i, '$1proxyip=' + pip); return base + '?' + qs; }
+    base = base.replace(/\/video\/[^/]*/i, '').replace(/\/(?:socks5?|https?|turn|sstp):\/?\/?[^/]*/ig, '').replace(/\/(?:g?s5|socks5|g?https?|g?turn|g?sstp)=[^/]*/ig, '');
+    if (/(^|&)proxyip=/i.test(qs) && !/\/proxyip=/i.test(base)) { qs = qs.replace(/(^|&)proxyip=[^&]*/i, '$1proxyip=' + pip); return (base || '/') + '?' + qs; }
     if (/\/proxyip=/i.test(base)) base = base.replace(/\/proxyip=[^/]*/i, '/proxyip=' + pip);
     else if (base === '/' || base === '') base = '/proxyip=' + pip;
     else base = base.replace(/\/+$/, '') + '/proxyip=' + pip;
