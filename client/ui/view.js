@@ -2687,18 +2687,10 @@ const UI = {
       this.withPane(P, () => this.syncComposer(tab.sid ? Chats.get(tab.sid) : null));
     };
     const addFiles = list => {
-      const curC = tab.sid ? Chats.get(tab.sid) : null;
-      const curEst = curC && typeof LiveEst !== 'undefined' && LiveEst.of ? LiveEst.of(curC) : null;
-      const activeTok = curEst ? (curEst.activeWindowTokens || curEst.ctx || 0) : 0;
-      let warnedImgCtx = false;
       for (const f of list) {
         if (!f) continue;
         if (f.size > 100 * 1024 * 1024) { toast(f.name + ' 超过 100MB', 'err'); continue; }
         const type = Uploads.type(f), a = { name: f.name || 'file', size: f.size, type, state: 'up', stage: '', pct: 0, url: /^image\//.test(type) ? URL.createObjectURL(f) : null, subs: new Set() };
-        if (!warnedImgCtx && /^image\//.test(type) && activeTok >= 145000 && (typeof Prefs === 'undefined' || Prefs.ctxWarn !== false)) {
-          warnedImgCtx = true;
-          toast(`⚠ 当前上下文已达 ~${Math.round(activeTok / 1000)}k / 200k 临界区！直接发图片极易触发官方 provider_bad_request 熔断换模型，建议先点「一键短消息压缩」后再发图`, 'err');
-        }
         // 进度刷新节流到 ~8 次/秒，带尾随刷新（不丢最后一次状态）
         let pt = 0, tt = 0; const fire = () => { tt = 0; pt = now(); for (const fn of a.subs) try { fn(); } catch {} };
         const tick = () => { if (a.state !== 'up') { clearTimeout(tt); return fire(); } if (tt) return; const d = 120 - (now() - pt); if (d <= 0) fire(); else tt = setTimeout(fire, d); };
@@ -2877,70 +2869,11 @@ const UI = {
     pmObserver.observe(pm, { childList: true, subtree: true, characterData: true });
     ta.addEventListener('input', syncPmFromTa);
     syncPmFromTa();
-    const ctxGuardRow = h('div', { class: 'ctx-guard-bar', style: 'display:none' });
-    const paintCtxGuard = (cArg) => {
-      const c = cArg || (tab.sid ? Chats.get(tab.sid) : null);
-      if (!c || (typeof Prefs !== 'undefined' && Prefs.ctxWarn === false)) {
-        ctxGuardRow.style.display = 'none';
-        return;
-      }
-      const m = c.sid && typeof Models !== 'undefined' ? Models.get(c.sid) : null;
-      const isOpen = (typeof ThinkingStatus !== 'undefined' && ThinkingStatus.of?.(c)?.kind === 'compat-thinking' && !c._closedLockedModel) || (m?.name === '开源模型' && !c._closedLockedModel);
-      if (isOpen) {
-        ctxGuardRow.style.display = 'none';
-        return;
-      }
-      const est = typeof LiveEst !== 'undefined' && LiveEst.of ? LiveEst.of(c) : null;
-      const activeTok = est ? (est.activeWindowTokens || est.ctx || 0) : 0;
-      const lastMsgId = (c.messages || []).at(-1)?.id || '';
-      if (activeTok < 145000 || c._ctxGuardDismissedFor === lastMsgId) {
-        ctxGuardRow.style.display = 'none';
-        return;
-      }
-      const isDanger = activeTok >= 175000;
-      const kTok = Math.round(activeTok / 1000);
-      const sig = `${isDanger ? 'danger' : 'warn'}:${kTok}:${lastMsgId}:${!!c.busy}`;
-      if (ctxGuardRow._sig === sig) return;
-      ctxGuardRow._sig = sig;
-      ctxGuardRow.className = 'ctx-guard-bar ' + (isDanger ? 'danger' : 'warn');
-      ctxGuardRow.style.display = '';
-      ctxGuardRow.replaceChildren(
-        icon('alert'),
-        h('span', { class: 'ctx-guard-txt' },
-          isDanger
-            ? `🚨 上下文已逼近 200k 熔断红线（约 ${kTok}k tok）· 切勿直接粘贴大图，否则极易触发 provider_bad_request 熔断换模！`
-            : `⚠ 上下文已达 ~${kTok}k / 200k 临界区 · 建议先发送短文字触发官方无损压缩，避免发图触发熔断路由`),
-        h('span', { class: 'grow' }),
-        !c.busy ? h('button', {
-          type: 'button',
-          class: 'btn xs ctx-guard-btn',
-          title: '立即发送一条不带图片的简短汇总指令，安全触发 Arena 官方 checkpointApplied 无损压缩（不换模型）',
-          onclick: e => {
-            e?.stopPropagation?.();
-            c._ctxGuardDismissedFor = lastMsgId;
-            ctxGuardRow.style.display = 'none';
-            void c.send('请用两三句话简短总结当前进度，保持上下文精简。');
-          }
-        }, '一键短消息压缩') : null,
-        h('button', {
-          type: 'button',
-          class: 'ib xs',
-          title: '本轮忽略此提醒',
-          onclick: e => {
-            e?.stopPropagation?.();
-            c._ctxGuardDismissedFor = lastMsgId;
-            ctxGuardRow.style.display = 'none';
-          }
-        }, icon('x'))
-      );
-    };
-    this.paintCtxGuard = paintCtxGuard;
-    setTimeout(() => paintCtxGuard(chat), 0);
     const box = h('div', { class: 'cbox', onclick: e => { if (e.target === e.currentTarget) ta.focus(); },
       ondragover: e => { if ([...(e.dataTransfer?.types || [])].includes('Files')) { e.preventDefault(); box.classList.add('drop'); } },
       ondragleave: () => box.classList.remove('drop'),
       ondrop: e => { box.classList.remove('drop'); const fs = [...(e.dataTransfer?.files || [])]; if (fs.length) { e.preventDefault(); addFiles(fs); } } },
-      ctxGuardRow, qrow, chips, ta, pmWrap, h('div', { class: 'crow' }, plus, fin, chint, h('span', { class: 'grow' }), Cap.btn(), GPop.btn(), btn));
+      qrow, chips, ta, pmWrap, h('div', { class: 'crow' }, plus, fin, chint, h('span', { class: 'grow' }), Cap.btn(), GPop.btn(), btn));
     const composer = h('div', { class: 'composer' }, box);
     slash = SlashCommands.bind(composer, ta, { fingerprint: () => {
       const c = tab.sid ? chatOf(tab.sid) : null;
@@ -2971,7 +2904,6 @@ const UI = {
       }
     }
     this.paintQ?.();
-    this.paintCtxGuard?.(chat);
   },
   async startNew(tab, text, ta, v2, files) {
     const hint = this.els?.composer?.querySelector('.chint') || $('#view .chint'); if (hint) hint.textContent = '正在创建对话…';

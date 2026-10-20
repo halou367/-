@@ -355,11 +355,11 @@ test('v0.13.161-beta.2: ChatHabitFingerprint behavioral engine, /cost switch & o
   assert.ok(dockSrc.includes('renderCorrectPanel(sid, m, curName)'));
   assert.ok(dockSrc.includes('mc-correct-wizard'));
 
-  // 4. 200k context circuit-breaker guard
+  // 4. One-click context compaction removed
   assert.ok(priceSrc.includes('activeWindowTokens'));
-  assert.ok(viewSrc.includes('ctx-guard-bar'));
-  assert.ok(viewSrc.includes('一键短消息压缩'));
-  assert.ok(dockSrc.includes("row('200k 上下文防熔断预警'"));
+  assert.ok(!viewSrc.includes('一键短消息压缩'));
+  assert.ok(!viewSrc.includes('ctx-guard-bar'));
+  assert.ok(!dockSrc.includes("row('200k 上下文防熔断预警'"));
 });
 
 test('v0.13.161-beta.3: Gacha pending/queued sidebar badges, open-source auto-archiving in background, and uninterrupted identification continuation queue', () => {
