@@ -42,7 +42,7 @@ const Dock = {
   mount(el) {
     this.el = el; el.dataset.ks = ''; this.titleUntil = now() + 3500;
     try {
-      el.addEventListener('pointerdown', () => { this._pointerDownUntil = now() + 450; }, true);
+      el.addEventListener('pointerdown', () => { this._pointerDownUntil = Date.now() + 450; }, true);
       const clr = () => { this._pointerDownUntil = 0; };
       window.addEventListener('pointerup', clr, true);
       window.addEventListener('pointercancel', clr, true);
@@ -61,7 +61,7 @@ const Dock = {
     clearTimeout(this.t); this.t = null;
     const el = this.el; if (!el || !el.isConnected) return;
     if (!isMob() ? !this.open : !this.mOpen) { el.replaceChildren(); return; }
-    if (now() < (this._pointerDownUntil || 0) && !this.force) { clearTimeout(this.t); this.t = setTimeout(() => { this.t = null; this.render(); }, 180); return; }
+    if (this._pointerDownUntil && Date.now() < this._pointerDownUntil && !this.force) { clearTimeout(this.t); this.t = setTimeout(() => { this.t = null; this.render(); }, 180); return; }
     const ae = document.activeElement; if (ae && el.contains(ae) && /^(SELECT|INPUT|TEXTAREA)$/.test(ae.tagName) && !this.force) { clearTimeout(this.t); this.t = setTimeout(() => this.render(), 1500); return; }
     this.force = false;
     const sid = this.sid(), { t, c, ts = [] } = this.cur(sid);
