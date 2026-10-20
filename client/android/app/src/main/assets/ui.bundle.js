@@ -24190,13 +24190,13 @@ const DeviceInfo = (() => {
       // Selected numeric observations only: never export response bodies, prompts or tool arguments.
       return { format: 'brana-billing-probe/v1', sessionId: sid, at: s.at || null, status: s.status,
         pool: i?.pool || null, scope: i?.scope || null, family: i?.family?.label || null,
-        warnings: warnings(s), ranked: s.ranked || [], costs: i?.result.costs || null,
+        warnings: warnings(s), ranked: s.ranked || [], costs: i?.result?.costs || null,
         payments: s.payments || [], rates: P.AGENT_P50_RATES, observations: s.ledger.observations, catalogError };
     }
     return { state, observe, refresh, clearCooldowns: () => { cooldowns.clear(); for (const s of states.values()) { s.nextAt = 0; s.retryAt = 0; if (s.httpStatus === 429 || s.httpStatus === 403 || s.httpStatus === 401) { s.status = 'idle'; s.error = ''; s.httpStatus = null; } } }, syncCatalog, exportSummary, reference: priceReference, consensus: (sid,model,latestId) => consensus(state(sid),model,latestId,catalog), diagnostics:(sid,ctx={}) => diagnostics(state(sid),{...ctx,agreement:consensus(state(sid),ctx.model,ctx.latestId,catalog)}), get catalogError() { return catalogError; }, get catalogMeta() { return { size:normalize(catalog).length, at:catalog?.capturedAt, live:catalog?.origin === 'live-sync' }; }, get catalogRaw() { return Array.isArray(catalog?.data) ? catalog.data : []; }, get catalogData() { return normalize(catalog); } };
   }
   function warnings(s) {
-    const i = s.info; if (!i) return [];
+    const i = s.info; if (!i || !i.result || !i.result.baseMatch) return [];
     return [i.scope === 'unnarrowed' && '未取得工具/消息ID的家族线索，按整份Agent名单比价；数字指纹单独核对',
       i.scope === 'out-of-pool' && '家族与可用价格候选不一致，未按家族收窄',
       i.familyConflict && '同会话出现多个家族，可能改派；价格不能确定身份',
@@ -31884,44 +31884,53 @@ const BillingProbe = (() => {
   }
 
   function exportDiagnosticJson(sid) {
-    if (!sid) return null;
+    sid = sid || (typeof Dock !== 'undefined' && typeof Dock.sid === 'function' ? Dock.sid() : '') || (typeof Tabs !== 'undefined' ? Tabs.cur?.sid : '') || '';
+    if (!sid) {
+      if (typeof toast === 'function') toast('请先打开一个对话再导出诊断 JSON');
+      return null;
+    }
     const buildPayload = () => {
-      const comb = summary(sid);
-      const base = typeof engine.exportSummary === 'function' ? engine.exportSummary(sid) : {};
-      const m = typeof Models !== 'undefined' ? Models.get(sid) : null;
-      const chat = (typeof Chats !== 'undefined' && Chats.get(sid)) || (typeof chatOf === 'function' ? chatOf(sid) : null);
-      const habitFeat = (typeof ChatHabitFingerprint !== 'undefined' && ChatHabitFingerprint.extractFeatures)
-        ? ChatHabitFingerprint.extractFeatures(chat || { sid, messages: [] }, m)
-        : null;
-      const compactMeta = habitFeat
-        ? (typeof ChatHabitFingerprint !== 'undefined' && typeof ChatHabitFingerprint.extractCompactMeta === 'function'
-          ? ChatHabitFingerprint.extractCompactMeta(habitFeat)
-          : (habitFeat.meta || null))
-        : null;
-      return {
-        ...base,
-        sid,
-        sessionId: sid,
-        combined: comb,
-        model: m || null,
-        habitFeatures: habitFeat ? {
-          vec: habitFeat.vec,
-          meta: compactMeta,
-          isOpenThink: Boolean(habitFeat.isOpenThink),
-          habitTags: habitFeat.habitTags,
-          habitReasoningScore: habitFeat.habitReasoningScore,
-          turns: habitFeat.turns,
-          codingTurns: habitFeat.codingTurns,
-          codingTurnsNoR: habitFeat.codingTurnsNoR,
-          isGeminiCoding: habitFeat.isGeminiCoding,
-          totalTools: habitFeat.totalTools,
-          pyHeredoc: habitFeat.pyHeredoc,
-          catHeredoc: habitFeat.catHeredoc,
-          edit: habitFeat.edit,
-          read: habitFeat.read,
-        } : null,
-        streamEvidence: chat?._streamEvidence || m?.streamEvidence || null,
-      };
+      try {
+        const comb = summary(sid);
+        const base = typeof engine.exportSummary === 'function' ? engine.exportSummary(sid) : {};
+        const m = typeof Models !== 'undefined' ? Models.get(sid) : null;
+        const chat = (typeof Chats !== 'undefined' && Chats.get(sid)) || (typeof chatOf === 'function' ? chatOf(sid) : null);
+        const habitFeat = (typeof ChatHabitFingerprint !== 'undefined' && ChatHabitFingerprint.extractFeatures)
+          ? ChatHabitFingerprint.extractFeatures(chat || { sid, messages: [] }, m)
+          : null;
+        const compactMeta = habitFeat
+          ? (typeof ChatHabitFingerprint !== 'undefined' && typeof ChatHabitFingerprint.extractCompactMeta === 'function'
+            ? ChatHabitFingerprint.extractCompactMeta(habitFeat)
+            : (habitFeat.meta || null))
+          : null;
+        return {
+          ...base,
+          sid,
+          sessionId: sid,
+          combined: comb,
+          model: m || null,
+          habitFeatures: habitFeat ? {
+            vec: habitFeat.vec,
+            meta: compactMeta,
+            isOpenThink: Boolean(habitFeat.isOpenThink),
+            habitTags: habitFeat.habitTags,
+            habitReasoningScore: habitFeat.habitReasoningScore,
+            turns: habitFeat.turns,
+            codingTurns: habitFeat.codingTurns,
+            codingTurnsNoR: habitFeat.codingTurnsNoR,
+            isGeminiCoding: habitFeat.isGeminiCoding,
+            totalTools: habitFeat.totalTools,
+            pyHeredoc: habitFeat.pyHeredoc,
+            catHeredoc: habitFeat.catHeredoc,
+            edit: habitFeat.edit,
+            read: habitFeat.read,
+          } : null,
+          streamEvidence: chat?._streamEvidence || m?.streamEvidence || null,
+        };
+      } catch (e) {
+        const m = typeof Models !== 'undefined' ? Models.get(sid) : null;
+        return { format: 'brana-billing-probe/v1', sid, sessionId: sid, model: m || null, exportFallbackError: String(e?.message || e) };
+      }
     };
     const savePayload = payload => {
       const jsonText = JSON.stringify(payload, null, 2);
@@ -31934,8 +31943,27 @@ const BillingProbe = (() => {
       return payload;
     };
     const chat = (typeof Chats !== 'undefined' && Chats.get(sid)) || (typeof chatOf === 'function' ? chatOf(sid) : null);
-    if (chat && !chat.loaded && (!Array.isArray(chat.messages) || !chat.messages.length) && typeof chat.load === 'function') {
-      void Promise.resolve(chat.load()).catch(() => {}).then(() => {
+    if (chat && !chat.loaded && (!Array.isArray(chat.messages) || !chat.messages.length)) {
+      const ensureQuickMessages = async () => {
+        try {
+          if (typeof MsgCache !== 'undefined' && typeof MsgCache.get === 'function') {
+            const cached = await Promise.race([
+              Promise.resolve(MsgCache.get(sid)).catch(() => null),
+              new Promise(r => setTimeout(() => r(null), 250)),
+            ]);
+            if (cached?.messages?.length && (!Array.isArray(chat.messages) || !chat.messages.length)) {
+              chat.messages = cached.messages.map(x => ({ ...x, v: 0 }));
+            }
+          }
+          if ((!Array.isArray(chat.messages) || !chat.messages.length) && typeof chat.load === 'function') {
+            await Promise.race([
+              Promise.resolve(chat.load()).catch(() => {}),
+              new Promise(r => setTimeout(r, 1200)),
+            ]);
+          }
+        } catch {}
+      };
+      void ensureQuickMessages().then(() => {
         try { savePayload(buildPayload()); } catch (e) { if (typeof toast === 'function') toast('导出失败：' + describe(e), 'err'); }
       });
       return buildPayload();
@@ -32607,7 +32635,16 @@ const Dock = {
   mOpen: false,
   toggle(v) { this.titleUntil = now() + 3500; if (isMob()) { this.mOpen = v ?? !this.mOpen; if (this.mOpen) document.body.classList.remove('drawer'); } else { Prefs.dockOpen = v ?? !this.open; savePrefs(); } UI.layout(); this.render(); },
   sid() { const t = Tabs.cur; return t && !t.kind ? t.sid : null; },
-  mount(el) { this.el = el; el.dataset.ks = ''; this.titleUntil = now() + 3500; this.render(); },
+  mount(el) {
+    this.el = el; el.dataset.ks = ''; this.titleUntil = now() + 3500;
+    try {
+      el.addEventListener('pointerdown', () => { this._pointerDownUntil = now() + 450; }, true);
+      const clr = () => { this._pointerDownUntil = 0; };
+      window.addEventListener('pointerup', clr, true);
+      window.addEventListener('pointercancel', clr, true);
+    } catch {}
+    this.render();
+  },
   soon() { if (this.t) return; this.t = setTimeout(() => { this.t = null; this.render(); }, 120); },
   turnsOf(sid) { return sid ? Trace.turns(sid) : []; },
   cur(sid) {
@@ -32620,6 +32657,7 @@ const Dock = {
     clearTimeout(this.t); this.t = null;
     const el = this.el; if (!el || !el.isConnected) return;
     if (!isMob() ? !this.open : !this.mOpen) { el.replaceChildren(); return; }
+    if (now() < (this._pointerDownUntil || 0) && !this.force) { clearTimeout(this.t); this.t = setTimeout(() => { this.t = null; this.render(); }, 180); return; }
     const ae = document.activeElement; if (ae && el.contains(ae) && /^(SELECT|INPUT|TEXTAREA)$/.test(ae.tagName) && !this.force) { clearTimeout(this.t); this.t = setTimeout(() => this.render(), 1500); return; }
     this.force = false;
     const sid = this.sid(), { t, c, ts = [] } = this.cur(sid);
@@ -32727,13 +32765,14 @@ const Dock = {
     return h('button', { type: 'button', class: 'mc-unit mc-unit-inline', title: unitTip, 'aria-label': unitTip, onclick: e => { e?.stopPropagation?.(); Prefs.spendUnit = unit === 'usd' ? 'token' : 'usd'; if (typeof savePrefs === 'function') savePrefs(); this.render(); } }, unit === 'usd' ? '$' : 'T');
   },
   exportBtns(sid) {
+    sid = sid || (typeof this.sid === 'function' ? this.sid() : '') || (typeof Tabs !== 'undefined' ? Tabs.cur?.sid : '') || '';
     const chat = sid && typeof Chats !== 'undefined' ? (Chats.get(sid) || (typeof chatOf === 'function' ? chatOf(sid) : null)) : null;
     const mi = sid && typeof Models !== 'undefined' ? Models.get(sid) : null;
     const diagOk = Boolean(sid && (mi || chat || (typeof BillingProbe !== 'undefined' && BillingProbe.summary?.(sid)?.mergedCandidates?.length)));
     const diagTip = diagOk ? '导出诊断 JSON：导出本对话计费反推与习惯特征诊断文件（可导入习惯库）' : '导出诊断 JSON：当前对话暂无识别诊断数据';
     const toolTip = '导出调用工具：导出本对话模型调用过的全部工具及参数结构（JSON）';
     return h('span', { class: 'mc-foot-acts' },
-      h('button', { type: 'button', class: 'mc-unit mc-act-ico', disabled: !sid || null, title: diagTip, 'aria-label': '导出诊断 JSON', onclick: e => { e?.stopPropagation?.(); if (typeof BillingProbe !== 'undefined' && typeof BillingProbe.exportDiagnosticJson === 'function') BillingProbe.exportDiagnosticJson(sid); } }, icon('download')),
+      h('button', { type: 'button', class: 'mc-unit mc-act-ico', disabled: !sid || null, title: diagTip, 'aria-label': '导出诊断 JSON', onclick: e => { e?.stopPropagation?.(); if (typeof BillingProbe !== 'undefined' && typeof BillingProbe.exportDiagnosticJson === 'function') BillingProbe.exportDiagnosticJson(sid); else if (typeof this.exportJson === 'function') this.exportJson(sid); } }, icon('download')),
       h('button', { type: 'button', class: 'mc-unit mc-act-ico', disabled: !chat || null, title: toolTip, 'aria-label': '导出调用工具', onclick: e => { e?.stopPropagation?.(); void this.exportTools?.(sid, e?.currentTarget); } }, icon('tool')));
   },
   correctBtn(sid, m) {
@@ -34280,7 +34319,7 @@ const FileExport = {
     finally{this.busy=false;}
     if(result.canceled){toast('已取消保存');return result;}
     if(result.requested){toast('已请求浏览器下载：'+name);return result;}
-    if(result.error)toast('导出未保存：'+result.error,'err');else toast('已保存：'+result.path);
+    if(result.error)toast('导出未保存：'+result.error,'err');else{toast('已保存：'+result.path);try{if(typeof window!=='undefined'&&typeof window.__ancShowDownloadToast==='function'&&result.path)window.__ancShowDownloadToast({name,path:result.path,mime});}catch{}}
     void Dialog.open((box,done)=>{
       box.append(h('div',{class:'dlg-t'},result.error?'导出未保存':'文件已保存'),h('p',{},result.error||result.path));
       const actions=h('div',{class:'dlg-row'});

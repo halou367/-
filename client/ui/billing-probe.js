@@ -754,13 +754,13 @@
       // Selected numeric observations only: never export response bodies, prompts or tool arguments.
       return { format: 'brana-billing-probe/v1', sessionId: sid, at: s.at || null, status: s.status,
         pool: i?.pool || null, scope: i?.scope || null, family: i?.family?.label || null,
-        warnings: warnings(s), ranked: s.ranked || [], costs: i?.result.costs || null,
+        warnings: warnings(s), ranked: s.ranked || [], costs: i?.result?.costs || null,
         payments: s.payments || [], rates: P.AGENT_P50_RATES, observations: s.ledger.observations, catalogError };
     }
     return { state, observe, refresh, clearCooldowns: () => { cooldowns.clear(); for (const s of states.values()) { s.nextAt = 0; s.retryAt = 0; if (s.httpStatus === 429 || s.httpStatus === 403 || s.httpStatus === 401) { s.status = 'idle'; s.error = ''; s.httpStatus = null; } } }, syncCatalog, exportSummary, reference: priceReference, consensus: (sid,model,latestId) => consensus(state(sid),model,latestId,catalog), diagnostics:(sid,ctx={}) => diagnostics(state(sid),{...ctx,agreement:consensus(state(sid),ctx.model,ctx.latestId,catalog)}), get catalogError() { return catalogError; }, get catalogMeta() { return { size:normalize(catalog).length, at:catalog?.capturedAt, live:catalog?.origin === 'live-sync' }; }, get catalogRaw() { return Array.isArray(catalog?.data) ? catalog.data : []; }, get catalogData() { return normalize(catalog); } };
   }
   function warnings(s) {
-    const i = s.info; if (!i) return [];
+    const i = s.info; if (!i || !i.result || !i.result.baseMatch) return [];
     return [i.scope === 'unnarrowed' && '未取得工具/消息ID的家族线索，按整份Agent名单比价；数字指纹单独核对',
       i.scope === 'out-of-pool' && '家族与可用价格候选不一致，未按家族收窄',
       i.familyConflict && '同会话出现多个家族，可能改派；价格不能确定身份',

@@ -60,7 +60,7 @@ const FileExport = {
     finally{this.busy=false;}
     if(result.canceled){toast('已取消保存');return result;}
     if(result.requested){toast('已请求浏览器下载：'+name);return result;}
-    if(result.error)toast('导出未保存：'+result.error,'err');else toast('已保存：'+result.path);
+    if(result.error)toast('导出未保存：'+result.error,'err');else{toast('已保存：'+result.path);try{if(typeof window!=='undefined'&&typeof window.__ancShowDownloadToast==='function'&&result.path)window.__ancShowDownloadToast({name,path:result.path,mime});}catch{}}
     void Dialog.open((box,done)=>{
       box.append(h('div',{class:'dlg-t'},result.error?'导出未保存':'文件已保存'),h('p',{},result.error||result.path));
       const actions=h('div',{class:'dlg-row'});

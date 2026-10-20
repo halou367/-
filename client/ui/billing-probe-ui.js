@@ -5171,44 +5171,53 @@ const BillingProbe = (() => {
   }
 
   function exportDiagnosticJson(sid) {
-    if (!sid) return null;
+    sid = sid || (typeof Dock !== 'undefined' && typeof Dock.sid === 'function' ? Dock.sid() : '') || (typeof Tabs !== 'undefined' ? Tabs.cur?.sid : '') || '';
+    if (!sid) {
+      if (typeof toast === 'function') toast('请先打开一个对话再导出诊断 JSON');
+      return null;
+    }
     const buildPayload = () => {
-      const comb = summary(sid);
-      const base = typeof engine.exportSummary === 'function' ? engine.exportSummary(sid) : {};
-      const m = typeof Models !== 'undefined' ? Models.get(sid) : null;
-      const chat = (typeof Chats !== 'undefined' && Chats.get(sid)) || (typeof chatOf === 'function' ? chatOf(sid) : null);
-      const habitFeat = (typeof ChatHabitFingerprint !== 'undefined' && ChatHabitFingerprint.extractFeatures)
-        ? ChatHabitFingerprint.extractFeatures(chat || { sid, messages: [] }, m)
-        : null;
-      const compactMeta = habitFeat
-        ? (typeof ChatHabitFingerprint !== 'undefined' && typeof ChatHabitFingerprint.extractCompactMeta === 'function'
-          ? ChatHabitFingerprint.extractCompactMeta(habitFeat)
-          : (habitFeat.meta || null))
-        : null;
-      return {
-        ...base,
-        sid,
-        sessionId: sid,
-        combined: comb,
-        model: m || null,
-        habitFeatures: habitFeat ? {
-          vec: habitFeat.vec,
-          meta: compactMeta,
-          isOpenThink: Boolean(habitFeat.isOpenThink),
-          habitTags: habitFeat.habitTags,
-          habitReasoningScore: habitFeat.habitReasoningScore,
-          turns: habitFeat.turns,
-          codingTurns: habitFeat.codingTurns,
-          codingTurnsNoR: habitFeat.codingTurnsNoR,
-          isGeminiCoding: habitFeat.isGeminiCoding,
-          totalTools: habitFeat.totalTools,
-          pyHeredoc: habitFeat.pyHeredoc,
-          catHeredoc: habitFeat.catHeredoc,
-          edit: habitFeat.edit,
-          read: habitFeat.read,
-        } : null,
-        streamEvidence: chat?._streamEvidence || m?.streamEvidence || null,
-      };
+      try {
+        const comb = summary(sid);
+        const base = typeof engine.exportSummary === 'function' ? engine.exportSummary(sid) : {};
+        const m = typeof Models !== 'undefined' ? Models.get(sid) : null;
+        const chat = (typeof Chats !== 'undefined' && Chats.get(sid)) || (typeof chatOf === 'function' ? chatOf(sid) : null);
+        const habitFeat = (typeof ChatHabitFingerprint !== 'undefined' && ChatHabitFingerprint.extractFeatures)
+          ? ChatHabitFingerprint.extractFeatures(chat || { sid, messages: [] }, m)
+          : null;
+        const compactMeta = habitFeat
+          ? (typeof ChatHabitFingerprint !== 'undefined' && typeof ChatHabitFingerprint.extractCompactMeta === 'function'
+            ? ChatHabitFingerprint.extractCompactMeta(habitFeat)
+            : (habitFeat.meta || null))
+          : null;
+        return {
+          ...base,
+          sid,
+          sessionId: sid,
+          combined: comb,
+          model: m || null,
+          habitFeatures: habitFeat ? {
+            vec: habitFeat.vec,
+            meta: compactMeta,
+            isOpenThink: Boolean(habitFeat.isOpenThink),
+            habitTags: habitFeat.habitTags,
+            habitReasoningScore: habitFeat.habitReasoningScore,
+            turns: habitFeat.turns,
+            codingTurns: habitFeat.codingTurns,
+            codingTurnsNoR: habitFeat.codingTurnsNoR,
+            isGeminiCoding: habitFeat.isGeminiCoding,
+            totalTools: habitFeat.totalTools,
+            pyHeredoc: habitFeat.pyHeredoc,
+            catHeredoc: habitFeat.catHeredoc,
+            edit: habitFeat.edit,
+            read: habitFeat.read,
+          } : null,
+          streamEvidence: chat?._streamEvidence || m?.streamEvidence || null,
+        };
+      } catch (e) {
+        const m = typeof Models !== 'undefined' ? Models.get(sid) : null;
+        return { format: 'brana-billing-probe/v1', sid, sessionId: sid, model: m || null, exportFallbackError: String(e?.message || e) };
+      }
     };
     const savePayload = payload => {
       const jsonText = JSON.stringify(payload, null, 2);
@@ -5221,8 +5230,27 @@ const BillingProbe = (() => {
       return payload;
     };
     const chat = (typeof Chats !== 'undefined' && Chats.get(sid)) || (typeof chatOf === 'function' ? chatOf(sid) : null);
-    if (chat && !chat.loaded && (!Array.isArray(chat.messages) || !chat.messages.length) && typeof chat.load === 'function') {
-      void Promise.resolve(chat.load()).catch(() => {}).then(() => {
+    if (chat && !chat.loaded && (!Array.isArray(chat.messages) || !chat.messages.length)) {
+      const ensureQuickMessages = async () => {
+        try {
+          if (typeof MsgCache !== 'undefined' && typeof MsgCache.get === 'function') {
+            const cached = await Promise.race([
+              Promise.resolve(MsgCache.get(sid)).catch(() => null),
+              new Promise(r => setTimeout(() => r(null), 250)),
+            ]);
+            if (cached?.messages?.length && (!Array.isArray(chat.messages) || !chat.messages.length)) {
+              chat.messages = cached.messages.map(x => ({ ...x, v: 0 }));
+            }
+          }
+          if ((!Array.isArray(chat.messages) || !chat.messages.length) && typeof chat.load === 'function') {
+            await Promise.race([
+              Promise.resolve(chat.load()).catch(() => {}),
+              new Promise(r => setTimeout(r, 1200)),
+            ]);
+          }
+        } catch {}
+      };
+      void ensureQuickMessages().then(() => {
         try { savePayload(buildPayload()); } catch (e) { if (typeof toast === 'function') toast('导出失败：' + describe(e), 'err'); }
       });
       return buildPayload();

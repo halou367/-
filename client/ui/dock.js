@@ -39,7 +39,16 @@ const Dock = {
   mOpen: false,
   toggle(v) { this.titleUntil = now() + 3500; if (isMob()) { this.mOpen = v ?? !this.mOpen; if (this.mOpen) document.body.classList.remove('drawer'); } else { Prefs.dockOpen = v ?? !this.open; savePrefs(); } UI.layout(); this.render(); },
   sid() { const t = Tabs.cur; return t && !t.kind ? t.sid : null; },
-  mount(el) { this.el = el; el.dataset.ks = ''; this.titleUntil = now() + 3500; this.render(); },
+  mount(el) {
+    this.el = el; el.dataset.ks = ''; this.titleUntil = now() + 3500;
+    try {
+      el.addEventListener('pointerdown', () => { this._pointerDownUntil = now() + 450; }, true);
+      const clr = () => { this._pointerDownUntil = 0; };
+      window.addEventListener('pointerup', clr, true);
+      window.addEventListener('pointercancel', clr, true);
+    } catch {}
+    this.render();
+  },
   soon() { if (this.t) return; this.t = setTimeout(() => { this.t = null; this.render(); }, 120); },
   turnsOf(sid) { return sid ? Trace.turns(sid) : []; },
   cur(sid) {
@@ -52,6 +61,7 @@ const Dock = {
     clearTimeout(this.t); this.t = null;
     const el = this.el; if (!el || !el.isConnected) return;
     if (!isMob() ? !this.open : !this.mOpen) { el.replaceChildren(); return; }
+    if (now() < (this._pointerDownUntil || 0) && !this.force) { clearTimeout(this.t); this.t = setTimeout(() => { this.t = null; this.render(); }, 180); return; }
     const ae = document.activeElement; if (ae && el.contains(ae) && /^(SELECT|INPUT|TEXTAREA)$/.test(ae.tagName) && !this.force) { clearTimeout(this.t); this.t = setTimeout(() => this.render(), 1500); return; }
     this.force = false;
     const sid = this.sid(), { t, c, ts = [] } = this.cur(sid);
@@ -159,13 +169,14 @@ const Dock = {
     return h('button', { type: 'button', class: 'mc-unit mc-unit-inline', title: unitTip, 'aria-label': unitTip, onclick: e => { e?.stopPropagation?.(); Prefs.spendUnit = unit === 'usd' ? 'token' : 'usd'; if (typeof savePrefs === 'function') savePrefs(); this.render(); } }, unit === 'usd' ? '$' : 'T');
   },
   exportBtns(sid) {
+    sid = sid || (typeof this.sid === 'function' ? this.sid() : '') || (typeof Tabs !== 'undefined' ? Tabs.cur?.sid : '') || '';
     const chat = sid && typeof Chats !== 'undefined' ? (Chats.get(sid) || (typeof chatOf === 'function' ? chatOf(sid) : null)) : null;
     const mi = sid && typeof Models !== 'undefined' ? Models.get(sid) : null;
     const diagOk = Boolean(sid && (mi || chat || (typeof BillingProbe !== 'undefined' && BillingProbe.summary?.(sid)?.mergedCandidates?.length)));
     const diagTip = diagOk ? '导出诊断 JSON：导出本对话计费反推与习惯特征诊断文件（可导入习惯库）' : '导出诊断 JSON：当前对话暂无识别诊断数据';
     const toolTip = '导出调用工具：导出本对话模型调用过的全部工具及参数结构（JSON）';
     return h('span', { class: 'mc-foot-acts' },
-      h('button', { type: 'button', class: 'mc-unit mc-act-ico', disabled: !sid || null, title: diagTip, 'aria-label': '导出诊断 JSON', onclick: e => { e?.stopPropagation?.(); if (typeof BillingProbe !== 'undefined' && typeof BillingProbe.exportDiagnosticJson === 'function') BillingProbe.exportDiagnosticJson(sid); } }, icon('download')),
+      h('button', { type: 'button', class: 'mc-unit mc-act-ico', disabled: !sid || null, title: diagTip, 'aria-label': '导出诊断 JSON', onclick: e => { e?.stopPropagation?.(); if (typeof BillingProbe !== 'undefined' && typeof BillingProbe.exportDiagnosticJson === 'function') BillingProbe.exportDiagnosticJson(sid); else if (typeof this.exportJson === 'function') this.exportJson(sid); } }, icon('download')),
       h('button', { type: 'button', class: 'mc-unit mc-act-ico', disabled: !chat || null, title: toolTip, 'aria-label': '导出调用工具', onclick: e => { e?.stopPropagation?.(); void this.exportTools?.(sid, e?.currentTarget); } }, icon('tool')));
   },
   correctBtn(sid, m) {

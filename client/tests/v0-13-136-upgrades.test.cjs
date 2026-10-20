@@ -818,9 +818,18 @@ test('v0.13.161: Mobile diagnostic JSON export fix (extractCompactMeta + Android
   vm.runInContext(bpUiSrc.slice(chfStart, chfEnd) + ';this.ChatHabitFingerprint = ChatHabitFingerprint;', ctx);
   assert.equal(typeof ctx.ChatHabitFingerprint.extractCompactMeta, 'function');
 
-  // 2. Dock.exportBtns enables diagnostic download button whenever sid is truthy, and FileExport.write has Android chunked fallback
+  // 2. Dock.exportBtns enables diagnostic download button whenever sid is truthy, FileExport.write has Android chunked fallback, and ArenaBilling.warnings/exportSummary handle no-cost-records without throwing
   assert.ok(dockSrc.includes("disabled: !sid || null, title: diagTip, 'aria-label': '导出诊断 JSON'"));
   assert.ok(fileExportSrc.includes('Host.downloadStart(name,mime,bytes.byteLength)'));
+  const ArenaBilling = require('../ui/billing-probe.js');
+  assert.deepEqual(ArenaBilling.warnings({ info: { reason: 'no-cost-records' } }), []);
+  const bpEngine = ArenaBilling.create({ catalog: { data: [] } });
+  const stNoCost = bpEngine.state('sid-no-cost');
+  stNoCost.info = { reason: 'no-cost-records' };
+  const expNoCost = bpEngine.exportSummary('sid-no-cost');
+  assert.equal(expNoCost.sessionId, 'sid-no-cost');
+  assert.equal(expNoCost.costs, null);
+  assert.deepEqual(expNoCost.warnings, []);
 
   // 3. Vless.withProxyIp strips /video/ when attaching a regular ProxyIP so it never produces /video/ABC/proxyip=1.2.3.4
   assert.equal(Vless.withProxyIp('/video/ABC', '1.2.3.4:443'), '/proxyip=1.2.3.4:443');
