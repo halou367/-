@@ -2307,6 +2307,7 @@ const UI = {
     SideTools.filter(q,vf);
     const archived=SideTools.scope==='archived';
     let items = SideTools.rows().filter(e => SideTools.matches(e,q));
+    if (typeof ModeState !== 'undefined' && typeof ModeState.matchesHistoryEntry === 'function') items = items.filter(e => ModeState.matchesHistoryEntry(e));
     if (vf) items = items.filter(e => (vidOf(e) || 'other') === vf);
     // 增量更新：内容没变的卡片直接复用原来的 DOM 节点，只插入 / 移动 / 删除有变化的，流式回复时侧栏不再整块重建
     const frag = { list: [], append(...n) { this.list.push(...n); }, prepend(n) { this.list.unshift(n); } };
@@ -2345,18 +2346,21 @@ const UI = {
   card(r, cur) {
     if (r.e?._pending) return h('div', { class: 'card pending busy gstep-card', role: 'status', title: '抽卡：正在创建对话（reCAPTCHA + 服务器创建），拿到 ID 后自动替换' }, h('i', { class: 'spin' }), h('span', { class: 'grow' }, r.e.title), h('span', { class: 'gstep-tag' }, '建连'), h('i', { class: 'gstep-bar', 'aria-hidden': 'true' }, h('b', { style: { width: '12%' } })), h('i', { class: 'pulse-wave', 'aria-hidden': 'true' }));
     const e = r.e, c = Chats.get(e.id), v = Titles.view(e.id, e.title), mi = Models.get(e.id);
-    const shown = cardName(v.model || v.plain) || '未命名', note = v.note;
+    const isEvalEntry = Boolean(e.type === 'evaluation' || e.mode === 'battle' || e.mode === 'direct' || c?.isEvaluation);
+    const evalSub = (isEvalEntry && typeof EvalView !== 'undefined' && typeof EvalView.formatHistorySubtitle === 'function') ? EvalView.formatHistorySubtitle(e) : '';
+    const shown = isEvalEntry ? (evalSub || cardName(v.model || v.plain) || e.title || '未命名') : (cardName(v.model || v.plain) || '未命名');
+    const note = isEvalEntry ? (v.note || (evalSub && e.title ? String(e.title).slice(0, 26) : '')) : v.note;
     const at = entAt(e);
     const d = new Date(at), tm = Number.isFinite(at) ? pad(d.getMonth() + 1) + '-' + pad(d.getDate()) + ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes()) : '';
     const gstep0 = typeof Gacha !== 'undefined' && Gacha.stepOf ? Gacha.stepOf(e.id) : null;
-    const hasKnownModel = !!(r.vid || v.vid || (v.model && !/^(未识别|未知型号|待定)$/.test(String(v.model).trim())) || (mi?.name && !/^(未识别|未知型号|待定)$/.test(String(mi.name).trim()) && !mi?.pendingConfirm));
-    const identSt = (!gstep0 && !hasKnownModel && typeof BillingProbe !== 'undefined' && BillingProbe.identStatus) ? BillingProbe.identStatus(e.id, mi) : null;
+    const hasKnownModel = !!(isEvalEntry || r.vid || v.vid || (v.model && !/^(未识别|未知型号|待定)$/.test(String(v.model).trim())) || (mi?.name && !/^(未识别|未知型号|待定)$/.test(String(mi.name).trim()) && !mi?.pendingConfirm));
+    const identSt = (!isEvalEntry && !gstep0 && !hasKnownModel && typeof BillingProbe !== 'undefined' && BillingProbe.identStatus) ? BillingProbe.identStatus(e.id, mi) : null;
     const gstep = gstep0 || identSt;
     const isRunStep = !!(c?.busy || gstep0?.active || identSt?.status === 'running');
     const on = e.id === cur, st = isRunStep ? 'run' : c && chatState(c) === 'bad' ? 'bad' : '';
-    const topConfSig = typeof BillingProbe !== 'undefined' && BillingProbe.topConfidence ? BillingProbe.topConfidence(e.id, mi) : null;
+    const topConfSig = !isEvalEntry && typeof BillingProbe !== 'undefined' && BillingProbe.topConfidence ? BillingProbe.topConfidence(e.id, mi) : null;
     const goldChat = typeof Gold !== 'undefined' && typeof Gold.hasChat === 'function' ? Gold.hasChat(e.id) : false;
-    const sig = [CardSelect.mode,CardSelect.ids.has(e.id),SideTools.scope,on, !!c?.busy, st, gstep?.text || '', gstep?.pct || 0, gstep?.status || '', r.vip, r.hit, r.tint, r.vid || v.vid, shown, note, tm, v.title, mi?.name, mi?.routed, mi?.reverseMatch, mi?.reverseScore, mi?.confidence, topConfSig, e.title, e.updatedAt, Fav.has(e.id), goldChat, mi?.fingerprint?.thinkSec, mi?.fingerprint?.reasoning?.score].join('\u0001');
+    const sig = [CardSelect.mode,CardSelect.ids.has(e.id),SideTools.scope,on, !!c?.busy, st, gstep?.text || '', gstep?.pct || 0, gstep?.status || '', r.vip, r.hit, r.tint, r.vid || v.vid, shown, note, tm, v.title, mi?.name, mi?.routed, mi?.reverseMatch, mi?.reverseScore, mi?.confidence, topConfSig, e.title, e.updatedAt, Fav.has(e.id), goldChat, mi?.fingerprint?.thinkSec, mi?.fingerprint?.reasoning?.score, isEvalEntry, e.mode, e.modality, e.modelAId, e.modelBId, c?.voteState?.voted, c?.voteState?.modelAName, c?.voteState?.modelBName].join('\u0001');
     if (this._cards?.has(e.id)) return this.cardEl(r, cur, { e, c, v, mi, shown, note, tm, on, st, gstep });   // 同一会话出现两次（分页重叠）：第二个单独建
     const prev = this._cardOld?.get(e.id);
     if (prev && prev.sig === sig) { this._cards?.set(e.id, prev); return prev.el; }
@@ -2538,8 +2542,14 @@ const UI = {
     view.replaceChildren(head, scroller, errbar, composer);
     this.els = { head, scroller, thread, errbar, composer, chat, toBot };
     if (!chat) {
-      thread.append(h('div', { class: 'hero' }, h('div', { class: 'hero-t' }, '有什么可以帮你？'), h('div', { class: 'hero-s' }, (this.host?.account ? emailUser(this.host.account) : '') + (IP.ip ? ' · 出口 ' + IP.ip + (IP.loc ? ' ' + ccF(IP.loc) : '') : '') + ' · 新对话随机分配模型')));
-      head.append(h('div', { class: 'chead-t' }, '新对话'));
+      const defSub = (this.host?.account ? emailUser(this.host.account) : '') + (IP.ip ? ' · 出口 ' + IP.ip + (IP.loc ? ' ' + ccF(IP.loc) : '') : '') + ' · 新对话随机分配模型';
+      if (typeof EvalView !== 'undefined' && typeof EvalView.renderHero === 'function') {
+        EvalView.renderHero(thread, defSub);
+      } else {
+        thread.append(h('div', { class: 'hero' }, h('div', { class: 'hero-t' }, '有什么可以帮你？'), h('div', { class: 'hero-s' }, defSub)));
+      }
+      const curMode = typeof ModeState !== 'undefined' && typeof ModeState.getMode === 'function' ? ModeState.getMode() : 'agent';
+      head.append(h('div', { class: 'chead-t' }, curMode === 'battle' ? '新对话 · Battle 盲测' : curMode === 'direct' ? '新对话 · Direct 直连' : '新对话'));
       if (!side) this.autoFocus(composer, kbWas);
       return;
     }
@@ -2560,51 +2570,89 @@ const UI = {
   renderChat(chat, full) {
     const E = this.els; if (!E || E.chat !== chat) return;
     // 头部
+    const isBattleChat = Boolean((chat?.isEvaluation && chat?.evalMode === 'battle') || (typeof EvalView !== 'undefined' && EvalView.isBattleChat(chat)));
+    const isDirectChat = Boolean((chat?.isEvaluation && chat?.evalMode === 'direct') || (typeof EvalView !== 'undefined' && EvalView.isDirectChat(chat)));
+    const isEvalChat = isBattleChat || isDirectChat || Boolean(chat?.isEvaluation);
+    if (isDirectChat) {
+      const directName = chat.directModelName
+        || (chat.modelAId && typeof ModelCatalog !== 'undefined' && typeof ModelCatalog.resolveModelName === 'function'
+          ? ModelCatalog.resolveModelName(chat.modelAId, chat.revealedModels)
+          : chat.modelAId)
+        || (typeof ModeState !== 'undefined' && typeof ModeState.getDirectModel === 'function'
+          ? (ModeState.getDirectModel()?.displayName || ModeState.getDirectModel()?.publicName)
+          : '')
+        || '';
+      if (directName && Models.get(chat.sid)?.name !== directName) {
+        Models.set(chat.sid, { name: directName, sure: true, directMode: true, provider: 'Direct 直连锁定' });
+      }
+    }
     const mi = Models.get(chat.sid), v = Titles.view(chat.sid, chat.title), st = chatState(chat);
     const modelVersion=this.modelStamp(mi);
     const tip = [v.title, mi && [mi.internal && '内部：' + mi.internal, mi.request && '请求：' + mi.request, mi.provider && '提供方：' + mi.provider, mi.routed && 'Brana 已改派'].filter(Boolean).join('\n')].filter(Boolean).join('\n');
     // 打开对话后自动识别（不用手动点）：1 小时内有运行记录的，自动读取模型信息
-    if (this.pane.el?.id === 'view' && chat.loaded && !chat.autoTried && chat.messages.some(m => m.role === 'assistant')) { chat.autoTried = true; setTimeout(() => AutoId.run(chat), 400); }
+    if (!isEvalChat && this.pane.el?.id === 'view' && chat.loaded && !chat.autoTried && chat.messages.some(m => m.role === 'assistant')) { chat.autoTried = true; setTimeout(() => AutoId.run(chat), 400); }
     const phase=ThinkingStatus.phase(chat);
-    const hsig = [phase, chat.sid, typeof BillingProbe !== 'undefined' && BillingProbe.isRunning?.(chat), PelicanTest.isRunning(chat), !!mi?.fingerprint, !!chat.probeNumbers?.length, FingerprintBatch.busy, !!chat.gacha, Fingerprint.isRunning(chat), chat.probeProgress, tip, v.vid, st, v.note, v.model, v.plain, v.time, mi?.routed, chat.identifying, !mi && chat.idErr, WS.shown, chat.busy, chat.phase, chat.sentAt].join('\u0001');
-    if (E.hsig !== hsig) E.hsig = hsig, E.head.replaceChildren(...K(h('div', { class: 'chead-t', title: tip, 'aria-label': 'Session cumulative cost' }, stLogo(v.vid, 18, st), h('span', { class: 'chead-n' }, ...[].concat(v.note || metricName(v.model, cardName) || v.plain || '对话')), v.note && v.model ? h('span', { class: 'chead-md' }, '-', ...[].concat(metricName(v.model, cardName))) : null),
-      window.__BRANA_BROWSE_MODE ? h('button', { type: 'button', class: 'badge warn browse-badge', title: '当前处于离线/免登查阅模式，点击返回登录或重连', onclick: () => { window.__BRANA_BROWSE_MODE = false; UI.loginGate('已退出查阅模式，请登录或刷新连接'); } }, '查阅模式 · 退出') : null,
-      mi?.routed ? (() => {
-        const rType = mi.routeType === 'effort' ? '强度削弱' : '路由换模';
-        const cleanFrom = String(mi.routeFrom || mi.lastRouteNotice?.fromLabel || '').replace(/[?？]+$/, '').trim();
-        const cleanTo = String(mi.routeTo || mi.lastRouteNotice?.toLabel || mi.name || '').replace(/[?？]+$/, '').trim();
-        const shortM = s => String(s || '').replace(/\s*\((?:None|Minimal|Low|Medium|High|XHigh|Max)\)\s*$/i, '').trim();
-        const fromS = shortM(cleanFrom) || '原模型';
-        const toS = shortM(cleanTo) || '新模型';
-        const turnH = mi.lastRouteNotice?.toTurn ? `（第 #${mi.lastRouteNotice.toTurn} 轮起）` : '';
-        const rDesc = (cleanFrom && cleanTo) ? `${cleanFrom} → ${cleanTo}${turnH}` : (cleanTo || mi.lastRouteNotice?.text || '检测到中途路由变化');
-        const rReason = mi.routeReason || mi.lastRouteNotice?.reason || '';
-        const fullMsg = `⚠️ ${rType}提醒：${rDesc}${rReason ? ' · ' + rReason : ''}`;
-        return h('button', {
-          type: 'button',
-          class: 'badge warn route-warn-btn',
-          title: `${fullMsg}（点击定位到对话中的路由切换轮次）`,
-          'aria-label': '改派详情',
-          onclick: e => {
-            e.stopPropagation();
-            const alertEl = (E?.thread || document).querySelector('.msg-route-alert[data-route-pivot="1"], .msg-route-alert, .trow.is-route-start');
-            if (alertEl) {
-              alertEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
-              alertEl.classList.add('route-flash');
-              setTimeout(() => alertEl.classList.remove('route-flash'), 1800);
-            }
-            toast(fullMsg, 'warn');
-          }
-        }, icon('alert'), h('span', { class: 'route-warn-txt' }, `${rType}: ${fromS} → ${toS}`));
-      })() : null,
-      chat.identifying ? h('span', { class: 'badge dim' }, h('i', { class: 'spin' }), '识别模型…')
-        : !mi && chat.idErr ? h('button', { class: 'badge dim link', title: chat.idErr + '（点一下重试）', onclick: () => chat.identifyOld() }, '未识别') : null,
-      h('span', { class: 'grow' }),
-      h('button', { class: 'ib revbtn' + (typeof BillingProbe !== 'undefined' && BillingProbe.isRunning?.(chat) ? ' run' : ''), 'aria-label': typeof BillingProbe !== 'undefined' && BillingProbe.isRunning?.(chat) ? '停止反推' : '费用反推', disabled: (chat.busy && !(typeof BillingProbe !== 'undefined' && BillingProbe.isRunning?.(chat))) || PelicanTest.isRunning(chat), title: typeof BillingProbe !== 'undefined' && BillingProbe.isRunning?.(chat) ? '停止反推识别' + (chat.probeProgress ? '（' + chat.probeProgress + '）' : '') : '反推识别：点一下读取账单与对话记录/工具调用，按最高置信度反推并锁定当前对话的真实模型与推理分。', onclick: () => void BillingProbe.reverseIdentify(chat, { interactive: true }) }, icon('pulse')),
-      h('button', { class: 'ib pelbtn' + (PelicanTest.isRunning(chat) ? ' run' : ''), 'aria-label': PelicanTest.isRunning(chat) ? '停止鹈鹕' : '鹈鹕测试', disabled: (chat.busy && !PelicanTest.isRunning(chat)), title: PelicanTest.isRunning(chat) ? '停止鹈鹕测试' + (chat.probeProgress ? '（' + chat.probeProgress + '）' : '') : '鹈鹕测试：点一下直接开测：发 1 条英文鹈鹕 SVG 标准题，量思考时长算推理分（没思考不计分），思考一结束就停。再点一下停止。', onclick: () => void PelicanTest.start(chat) }, icon('pelican')),
-      h('button', { class: 'ib mdbtn', title: '导出这个对话的全部内容（正文、思考、bash 命令和输出、工具调用）为 Markdown，自己选保存位置', onclick: () => void ChatExport.run(chat) }, icon('doc')),
-      h('button', { class: 'ib wsbtn', title: WS.shown ? '收起工作区' : '显示工作区（沙盒文件）', onclick: () => { WS.set(!WS.shown); scheduleChat(chat); } }, icon('folder')),
-      chat.busy ? h('span', { class: 'phase' }, h('i', { class: 'spin' }), h('span', { class: 'ph-t' }, phase), chat.sentAt ? h('span', { class: 'dim anc-since', 'data-since': chat.sentAt }, '') : null) : null));
+    const battleTitle = isBattleChat
+      ? (chat.voteState?.voted
+        ? `${chat.voteState.modelAName || 'Model A'} vs ${chat.voteState.modelBName || 'Model B'}`
+        : '⚔️ Battle 盲测 · Model A vs Model B')
+      : '';
+    const hsig = [phase, chat.sid, isBattleChat, isDirectChat, battleTitle, chat.voteState?.voted, chat.voteState?.value, typeof BillingProbe !== 'undefined' && BillingProbe.isRunning?.(chat), PelicanTest.isRunning(chat), !!mi?.fingerprint, !!chat.probeNumbers?.length, FingerprintBatch.busy, !!chat.gacha, Fingerprint.isRunning(chat), chat.probeProgress, tip, v.vid, st, v.note, v.model, v.plain, v.time, mi?.routed, chat.identifying, !mi && chat.idErr, WS.shown, chat.busy, chat.phase, chat.sentAt].join('\u0001');
+    if (E.hsig !== hsig) {
+      E.hsig = hsig;
+      if (isBattleChat) {
+        E.head.replaceChildren(...K(
+          h('div', { class: 'chead-t', title: chat.title || battleTitle },
+            h('span', { class: 'chead-n' }, battleTitle),
+            chat.modality ? h('span', { class: 'badge dim' }, String(chat.modality).toUpperCase()) : null,
+            chat.voteState?.voted ? h('span', { class: 'badge ok' }, '✓ 已揭晓并入库') : h('span', { class: 'badge dim' }, '盲测中')
+          ),
+          h('span', { class: 'grow' }),
+          h('button', { class: 'ib mdbtn', title: '导出这个对话的全部内容为 Markdown', onclick: () => void ChatExport.run(chat) }, icon('doc')),
+          chat.busy ? h('span', { class: 'phase' }, h('i', { class: 'spin' }), h('span', { class: 'ph-t' }, phase), chat.sentAt ? h('span', { class: 'dim anc-since', 'data-since': chat.sentAt }, '') : null) : null
+        ));
+      } else {
+        E.head.replaceChildren(...K(h('div', { class: 'chead-t', title: tip, 'aria-label': 'Session cumulative cost' }, stLogo(v.vid || Brand.of(mi?.name), 18, st), h('span', { class: 'chead-n' }, ...[].concat(v.note || metricName(mi?.name || v.model, cardName) || v.plain || '对话')), v.note && (mi?.name || v.model) ? h('span', { class: 'chead-md' }, '-', ...[].concat(metricName(mi?.name || v.model, cardName))) : null),
+          isDirectChat ? h('span', { class: 'badge ok' }, '🎯 Direct 直连') : null,
+          window.__BRANA_BROWSE_MODE ? h('button', { type: 'button', class: 'badge warn browse-badge', title: '当前处于离线/免登查阅模式，点击返回登录或重连', onclick: () => { window.__BRANA_BROWSE_MODE = false; UI.loginGate('已退出查阅模式，请登录或刷新连接'); } }, '查阅模式 · 退出') : null,
+          mi?.routed ? (() => {
+            const rType = mi.routeType === 'effort' ? '强度削弱' : '路由换模';
+            const cleanFrom = String(mi.routeFrom || mi.lastRouteNotice?.fromLabel || '').replace(/[?？]+$/, '').trim();
+            const cleanTo = String(mi.routeTo || mi.lastRouteNotice?.toLabel || mi.name || '').replace(/[?？]+$/, '').trim();
+            const shortM = s => String(s || '').replace(/\s*\((?:None|Minimal|Low|Medium|High|XHigh|Max)\)\s*$/i, '').trim();
+            const fromS = shortM(cleanFrom) || '原模型';
+            const toS = shortM(cleanTo) || '新模型';
+            const turnH = mi.lastRouteNotice?.toTurn ? `（第 #${mi.lastRouteNotice.toTurn} 轮起）` : '';
+            const rDesc = (cleanFrom && cleanTo) ? `${cleanFrom} → ${cleanTo}${turnH}` : (cleanTo || mi.lastRouteNotice?.text || '检测到中途路由变化');
+            const rReason = mi.routeReason || mi.lastRouteNotice?.reason || '';
+            const fullMsg = `⚠️ ${rType}提醒：${rDesc}${rReason ? ' · ' + rReason : ''}`;
+            return h('button', {
+              type: 'button',
+              class: 'badge warn route-warn-btn',
+              title: `${fullMsg}（点击定位到对话中的路由切换轮次）`,
+              'aria-label': '改派详情',
+              onclick: e => {
+                e.stopPropagation();
+                const alertEl = (E?.thread || document).querySelector('.msg-route-alert[data-route-pivot="1"], .msg-route-alert, .trow.is-route-start');
+                if (alertEl) {
+                  alertEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                  alertEl.classList.add('route-flash');
+                  setTimeout(() => alertEl.classList.remove('route-flash'), 1800);
+                }
+                toast(fullMsg, 'warn');
+              }
+            }, icon('alert'), h('span', { class: 'route-warn-txt' }, `${rType}: ${fromS} → ${toS}`));
+          })() : null,
+          !isEvalChat && chat.identifying ? h('span', { class: 'badge dim' }, h('i', { class: 'spin' }), '识别模型…')
+            : !isEvalChat && !mi && chat.idErr ? h('button', { class: 'badge dim link', title: chat.idErr + '（点一下重试）', onclick: () => chat.identifyOld() }, '未识别') : null,
+          h('span', { class: 'grow' }),
+          !isEvalChat ? h('button', { class: 'ib revbtn' + (typeof BillingProbe !== 'undefined' && BillingProbe.isRunning?.(chat) ? ' run' : ''), 'aria-label': typeof BillingProbe !== 'undefined' && BillingProbe.isRunning?.(chat) ? '停止反推' : '费用反推', disabled: (chat.busy && !(typeof BillingProbe !== 'undefined' && BillingProbe.isRunning?.(chat))) || PelicanTest.isRunning(chat), title: typeof BillingProbe !== 'undefined' && BillingProbe.isRunning?.(chat) ? '停止反推识别' + (chat.probeProgress ? '（' + chat.probeProgress + '）' : '') : '反推识别：点一下读取账单与对话记录/工具调用，按最高置信度反推并锁定当前对话的真实模型与推理分。', onclick: () => void BillingProbe.reverseIdentify(chat, { interactive: true }) }, icon('pulse')) : null,
+          !isEvalChat ? h('button', { class: 'ib pelbtn' + (PelicanTest.isRunning(chat) ? ' run' : ''), 'aria-label': PelicanTest.isRunning(chat) ? '停止鹈鹕' : '鹈鹕测试', disabled: (chat.busy && !PelicanTest.isRunning(chat)), title: PelicanTest.isRunning(chat) ? '停止鹈鹕测试' + (chat.probeProgress ? '（' + chat.probeProgress + '）' : '') : '鹈鹕测试：点一下直接开测：发 1 条英文鹈鹕 SVG 标准题，量思考时长算推理分（没思考不计分），思考一结束就停。再点一下停止。', onclick: () => void PelicanTest.start(chat) }, icon('pelican')) : null,
+          h('button', { class: 'ib mdbtn', title: '导出这个对话的全部内容（正文、思考、bash 命令和输出、工具调用）为 Markdown，自己选保存位置', onclick: () => void ChatExport.run(chat) }, icon('doc')),
+          !isEvalChat ? h('button', { class: 'ib wsbtn', title: WS.shown ? '收起工作区' : '显示工作区（沙盒文件）', onclick: () => { WS.set(!WS.shown); scheduleChat(chat); } }, icon('folder')) : null,
+          chat.busy ? h('span', { class: 'phase' }, h('i', { class: 'spin' }), h('span', { class: 'ph-t' }, phase), chat.sentAt ? h('span', { class: 'dim anc-since', 'data-since': chat.sentAt }, '') : null) : null));
+      }
+    }
     // 消息
     const T = E.thread, sc = E.scroller;
     const stick = this.stick !== false;
@@ -2615,9 +2663,9 @@ const UI = {
       const ld = T.querySelector('.loading');
       if (!ld) T.replaceChildren(h('div', { class: 'loading' }, loadTxt));
       else if (ld.textContent !== loadTxt) ld.textContent = loadTxt;
-    }
-    else {
-      // 提问卡片等输入框：重建前记下焦点和光标，重建后搬到同一个输入框（data-fk 相同）
+    } else if (isBattleChat && typeof EvalView !== 'undefined' && typeof EvalView.renderBattleThread === 'function') {
+      EvalView.renderBattleThread(chat, T, sc);
+    } else {
       const ae = document.activeElement, fk = ae && T.contains(ae) ? ae.dataset?.fk : null, fsel = fk ? [ae.selectionStart, ae.selectionEnd] : null;
       const els = [];
       if (chat.hasMore) { const b = this.cache.get('__older') || (() => { const b = h('button', { class: 'older', onclick: () => chat.loadOlder() }, '加载更早的消息'); this.cache.set('__older', b); return b; })(); const t = chat.olderLoading ? '正在加载更早的消息…' : chat.allLoading ? '正在后台补全更早的消息（点此立即加载）' : '加载更早的消息'; if (b.textContent !== t) b.textContent = t; b.classList.toggle('busy', !!chat.olderLoading); els.push(b); }
@@ -3204,7 +3252,7 @@ const UI = {
       ondragover: e => { if ([...(e.dataTransfer?.types || [])].includes('Files')) { e.preventDefault(); box.classList.add('drop'); } },
       ondragleave: () => box.classList.remove('drop'),
       ondrop: e => { box.classList.remove('drop'); const fs = [...(e.dataTransfer?.files || [])]; if (fs.length) { e.preventDefault(); addFiles(fs); } } },
-      qrow, chips, ta, pmWrap, h('div', { class: 'crow' }, plus, fin, chint, h('span', { class: 'grow' }), Cap.btn(), GPop.btn(), btn));
+      qrow, chips, ta, pmWrap, h('div', { class: 'crow' }, plus, fin, typeof ModeSwitcher !== 'undefined' ? ModeSwitcher.renderBar(tab, chat) : null, chint, h('span', { class: 'grow' }), Cap.btn(), GPop.btn(), btn));
     const composer = h('div', { class: 'composer' }, box);
     slash = SlashCommands.bind(composer, ta, { fingerprint: () => {
       const c = tab.sid ? chatOf(tab.sid) : null;
@@ -3248,7 +3296,7 @@ const UI = {
       const c = await createChat(text, { v2, files });
       ta.value = ''; tab.draft = ''; this.atts.delete(tab.key); tab.sid = c.sid; tab.title = text.slice(0, 40); tab.touchedAt = now(); Tabs.enforceLimit(tab.key); Tabs.save();
       // createChat 已经把新对话放进侧栏了：这里只在没有时补一条（以前重复 unshift，侧栏出现两条一样的）
-      if (!History.byId(c.sid)) History.items.unshift({ type: 'agentic', id: c.sid, title: text.slice(0, 60), updatedAt: new Date().toISOString(), createdAt: new Date().toISOString(), _local: true });
+      if (!History.byId(c.sid)) History.items.unshift({ type: c.isEvaluation ? 'evaluation' : 'agentic', mode: c.evalMode || undefined, modality: c.modality || undefined, modelAId: c.modelAId || undefined, id: c.sid, title: text.slice(0, 60), updatedAt: new Date().toISOString(), createdAt: new Date().toISOString(), _local: true });
       History.dedupe();
       this.renderList(); this.renderTabs(); this.showTab();
       History.auto('new');   // 新对话：20 秒内最多拉一次（第一轮回复完成时还会再排一次拿服务器标题）
@@ -3278,7 +3326,7 @@ UI.withPane = function (P, fn) { const o = this.pane; this.pane = P; try { retur
 const ChatPaint=RenderWork.create({
   visible:()=>!document.hidden,mobile:()=>isMob(),current:()=>UI.els?.chat,
   state:c=>c.status+'|'+(c.error||''),
-  stamp:c=>[chatState(c),c.title,!!c.loaded,Models.get(c.sid)],
+  stamp:c=>[chatState(c),c.title,!!c.loaded,Models.get(c.sid),c.voteState?.voted,c.voteState?.submitting,c.voteState?.value,c.evalMode,c.modality],
   park:c=>{if(UI.els?.chat===c)UI.pane.dirty=true;else Pager.dirty(c);},
   paint:c=>{if(UI.els?.chat===c){UI.renderChat(c);UI.pane.dirty=false;}else Pager.dirty(c);},
   metadata:()=>{UI.renderTabs();UI.renderListSoon();},error:e=>console.warn('Chat paint:',e),
@@ -3318,6 +3366,13 @@ document.addEventListener('visibilitychange',()=>{if(document.hidden)ChatPaint.h
 // 已用时
 // 计时：用实时的 class 集合（不用每秒全文档按属性查一遍），后台 / 没有计时的时候什么都不做
 try { Tabs.enforceLimit(Tabs.active); Tabs.save(); } catch {}
-if (typeof Bus !== 'undefined') Bus.on('history', () => { try { Tabs.enforceLimit(Tabs.active); Tabs.save(); UI.renderTabs?.(); } catch {} });
+if (typeof Bus !== 'undefined') {
+  Bus.on('history', () => { try { Tabs.enforceLimit(Tabs.active); Tabs.save(); UI.renderTabs?.(); } catch {} });
+  Bus.on('modechange', () => { try { UI.renderList(); UI.showTab(); } catch {} });
+  Bus.on('modalitychange', () => { try { UI.showTab(); } catch {} });
+  Bus.on('directmodelchange', () => { try { UI.showTab(); } catch {} });
+  Bus.on('eval:vote-revealed', () => { try { if (UI.els?.chat) UI.renderChat(UI.els.chat, true); UI.renderListSoon?.(); } catch {} });
+  Bus.on('eval:stream', payload => { try { if (payload?.chat && UI.els?.chat === payload.chat) scheduleChat(payload.chat); } catch {} });
+}
 const SINCE = document.getElementsByClassName('anc-since');
 setInterval(() => { if (document.hidden || !SINCE.length) return; for (const e of [...SINCE]) { const t = ' ' + Math.floor((now() - +e.dataset.since) / 1000) + 's'; if (e.textContent !== t) e.textContent = t; } }, 1000);

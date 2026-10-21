@@ -5,7 +5,7 @@ const ArchiveHistory = {
   stop() { this.epoch++; this.ctl?.abort(); this.loading=false; this.promise=null; },
   reset() { this.stop(); this.items=[]; this.index=new Map(); this.cursor=''; this.hasMore=true; this.loaded=false; this.error=''; this.removed=new Set(); },
   drop(ids) { for(const id of ids){this.removed.add(id);this.index.delete(id);}this.items=this.items.filter(e=>!this.removed.has(e.id)); },
-  add(entries) { for(const e of entries){if(!e?.id)continue;this.removed.delete(e.id);this.index.set(e.id,{...e,isArchived:true});}this.items=[...this.index.values()];History.bury?.(entries.map(e=>e?.id)); },
+  add(entries) { for(const e of entries){if(!e?.id)continue;this.removed.delete(e.id);this.index.set(e.id,{...e,isArchived:true,mode:e.mode,modality:e.modality,modelAId:e.modelAId,modelBId:e.modelBId});}this.items=[...this.index.values()];History.bury?.(entries.map(e=>e?.id)); },
   load(refresh=false) {
     if(refresh)this.reset();
     if(this.loading)return this.promise;
@@ -20,7 +20,7 @@ const ArchiveHistory = {
           let j;try {j=await api('/api/history/unified?limit=50&includeArchived=true&archivedOnly=true'+(cursor?'&cursor='+encodeURIComponent(cursor):''),{signal:ctl.signal});}finally{clearTimeout(timer);}
           if(epoch!==this.epoch)return;
           if(!Array.isArray(j?.entries))throw Error('归档列表响应格式无效');
-          for(const e of j.entries){if(e?.id&&(e.isArchived||e.archivedAt)&&(e.type==='agentic'||e.productMode)&&!this.removed.has(e.id))this.index.set(e.id,e);}
+          for(const e of j.entries){if(e?.id&&(e.isArchived||e.archivedAt)&&(e.type==='agentic'||e.type==='evaluation'||e.productMode||e.mode)&&!this.removed.has(e.id))this.index.set(e.id,{...e,mode:e.mode,modality:e.modality,modelAId:e.modelAId,modelBId:e.modelBId});}
           this.items=[...this.index.values()];this.loaded=true;
           const next=j.pagination?.cursor||'';this.hasMore=!!j.pagination?.hasMore;
           if(this.hasMore&&(!next||next===cursor))throw Error('归档分页缺少有效游标，请稍后刷新');
@@ -74,7 +74,7 @@ const CardSelect = {
       if(kind==='arch'&&scope==='archived')kind='unarch';
       if(kind==='unarch'&&scope!=='archived')return;
       const verb=kind==='del'?'删除':kind==='unarch'?'恢复到对话':'归档';
-      const names=ids.slice(0,3).map(id=>History.byId(id)?.title||'未命名').join('\n');
+      const names=ids.slice(0,3).map(id=>(History.byId(id)||ArchiveHistory.byId(id)||SideTools.rows().find(e=>e?.id===id))?.title||'未命名').join('\n');
       const ok=await Dialog.confirm({title:kind==='unarch'?'恢复到对话':'批量'+verb,text:'确认'+(kind==='unarch'?'将':'')+verb+'已选中的 '+ids.length+' 个对话？\n'+names+(ids.length>3?'\n…':'')+(kind==='del'?'\n将删除云端对话及本机模型、备注、收藏和运行记录，无法恢复。':kind==='unarch'?'\n恢复后对话将回到普通对话列表。':'\n归档后可从搜索范围「归档」中查找。'),ok:verb,danger:kind==='del'});
       if(!ok)return;
       if(owner!==SideTools.owner||scope!==SideTools.scope||revision!==this.revision){toast('选择或搜索范围已改变，请重新确认');return;}
@@ -102,15 +102,22 @@ const SideTools = {
     else if(this.scope==='archived'&&ArchiveHistory.hasMore&&!ArchiveHistory.error)void ArchiveHistory.load();
   },
   filter(q,vf) {
-    this.ensure();const key=this.scope+'\n'+q+'\n'+vf;
+    this.ensure();const curMode=(typeof ModeState!=='undefined'&&typeof ModeState.getMode==='function')?ModeState.getMode():'agent';const key=this.scope+'\n'+curMode+'\n'+q+'\n'+vf;
     if(key!==this.filterKey){this.filterKey=key;CardSelect.clear();}
   },
   matches(e,q) {
     if (!q) return true;
     const tv = typeof Titles !== 'undefined' && Titles.view ? Titles.view(e.id, e.title, e.localTitle) : null;
-    return [e.title, e.localTitle, tv?.model, tv?.note, Models.get(e.id)?.name, Notes.get(e.id), e.note, e.notes, e.remark, e.description].some(s => typeof s === 'string' && s.toLowerCase().includes(q));
+    const resolveM = id => (id && typeof ModelCatalog !== 'undefined' && typeof ModelCatalog.resolveModelName === 'function') ? ModelCatalog.resolveModelName(id) : id;
+    return [e.title, e.localTitle, tv?.model, tv?.note, Models.get(e.id)?.name, Notes.get(e.id), e.note, e.notes, e.remark, e.description, e.mode, e.modality, resolveM(e.modelAId), resolveM(e.modelBId)].some(s => typeof s === 'string' && s.toLowerCase().includes(q));
   },
-  rows() { this.ensure();return this.scope==='archived'?ArchiveHistory.items:History.items; },
+  rows() {
+    this.ensure();
+    const raw = this.scope === 'archived' ? ArchiveHistory.items : History.items;
+    if (typeof ModeState === 'undefined' || typeof ModeState.matchesHistoryEntry !== 'function') return raw;
+    const curMode = ModeState.getMode();
+    return (raw || []).filter(e => ModeState.matchesHistoryEntry(e, curMode));
+  },
   toggle() { CardSelect.mode=!CardSelect.mode;if(!CardSelect.mode)CardSelect.clear();UI.renderList(); },
   paintToolbar() {
     const bar=document.querySelector('#selection-bar');if(!bar)return;
@@ -155,3 +162,13 @@ const ActiveFrame = {
     if(this.path.getAttribute('d')!==d)this.path.setAttribute('d',d);
   }
 };
+
+if (typeof Bus !== 'undefined' && typeof Bus.on === 'function') {
+  Bus.on('modechange', () => {
+    try {
+      if (typeof CardSelect !== 'undefined' && CardSelect.mode) CardSelect.clear();
+      if (typeof UI !== 'undefined' && typeof UI.renderList === 'function') UI.renderList();
+    } catch {}
+  });
+}
+

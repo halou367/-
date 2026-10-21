@@ -110,7 +110,7 @@ const StandbyPool = {
   lastWarmAt: 0,
   MAX_IPS: 4,
   MAX_NODES: 2,
-  TTL: 720000,
+  TTL: 3600000,
   prune(owner, curPip = '', curProxy = '') {
     const t = now(), p = String(curPip || '').trim().toLowerCase();
     this.ips = this.ips.filter(x => x && x.owner === owner && t < x.expiresAt && x.result?.ticket && String(x.candidate?.proxyIp || '').toLowerCase() !== p && (!curProxy || x.candidate?.proxy === curProxy));
@@ -151,12 +151,13 @@ const StandbyPool = {
     if (typeof window !== 'undefined' && (window.__routeFixture || window.__fixture)) return;
     if (this.warming || typeof navigator !== 'undefined' && navigator.onLine === false) return;
     if ((typeof NodeRoutes !== 'undefined' && NodeRoutes.manual > 0) || (typeof Pool !== 'undefined' && Pool.switching?.size > 0)) return;
-    if (why !== 'gacha-start' && why !== 'consumed' && why !== 'post-switch' && now() - this.lastWarmAt < 20000) return;
+    if (why !== 'gacha-start' && why !== 'consumed' && why !== 'post-switch' && now() - this.lastWarmAt < 180000) return;
     const a = typeof UI !== 'undefined' ? UI.host?.account : null;
     if (!a?.id || !AutoRoute.adapter || !AutoRoute.engine || (typeof RouteState !== 'undefined' && RouteState.locked(a))) return;
     if (typeof isVless === 'function' && !isVless(a.proxy)) return;
     this.prune(a.id, a.proxyIp, a.proxy);
-    if (this.ips.length >= 2 && (this.nodes.length >= 1 || why === 'auto')) return;
+    const targetIps = why === 'gacha-start' ? 2 : 1;
+    if (this.ips.length >= targetIps && (this.nodes.length >= 1 || why !== 'gacha-start')) return;
     this.warming = true;
     this.lastWarmAt = now();
     try {
@@ -164,7 +165,7 @@ const StandbyPool = {
       if (!first?.account || first.account.id !== a.id || (typeof RouteState !== 'undefined' && RouteState.locked(first.account))) return;
       this.prune(a.id, first.account.proxyIp, first.account.proxy);
       const havePips = new Set(this.ips.map(x => String(x.candidate?.proxyIp || '').toLowerCase()));
-      if (this.ips.length < 3) {
+      if (this.ips.length < targetIps) {
         const planIp = AutoRoute.engine.plan(first, 'ip', now());
         const cands = [];
         for (const [, list] of planIp.stages || []) {
@@ -176,7 +177,7 @@ const StandbyPool = {
             }
           }
         }
-        const batch = cands.slice(0, Math.max(1, 3 - this.ips.length));
+        const batch = cands.slice(0, Math.max(1, targetIps - this.ips.length));
         if (batch.length) {
           const results = await Promise.all(batch.map(async c => {
             const r = await AutoRoute.adapter.probe({ ...c, kind: 'standby' }).catch(() => null);
@@ -216,7 +217,7 @@ const StandbyPool = {
           if (this.ips.length > this.MAX_IPS) this.ips.length = this.MAX_IPS;
         }
       }
-      if (this.nodes.length < 1 && (first.nodes || []).length > 1) {
+      if (this.nodes.length < 1 && (first.nodes || []).length > 1 && (why === 'gacha-start' || this.ips.length < 1)) {
         const planNode = AutoRoute.engine.plan(first, 'node', now());
         const nodeCands = [];
         const haveProxies = new Set([first.account.proxy, ...this.nodes.map(x => x.candidate?.proxy)]);
@@ -228,7 +229,7 @@ const StandbyPool = {
             }
           }
         }
-        const nb = nodeCands.slice(0, 2);
+        const nb = nodeCands.slice(0, 1);
         if (nb.length) {
           const nRes = await Promise.all(nb.map(async c => ({ c, r: await AutoRoute.adapter.probe({ ...c, kind: 'standby' }).catch(() => null) })));
           for (const { c, r } of nRes) {
@@ -559,34 +560,35 @@ const AutoRoute = {
     const observer=new MutationObserver(()=>{if(!row.isConnected){off();observer.disconnect();}});queueMicrotask(()=>{if(row.isConnected)observer.observe(document.body,{childList:true,subtree:true});else off();});return row;
   },
 };
-// 后台无感维护：持续维护热备兜底库（StandbyPool），并在空闲时刷新当前地区的出口 IP 与纯净度。
+// 后台无感维护：持续维护热备兜底库（StandbyPool），并在当前地区纯净 IP 余量不足时按需小批量补充（绝不周期性盲扫消耗 EdgeTunnel 请求量）。
 const RouteWarm = {
   t:0, busy:false, at:0,
-  start(){ if(this.t)return; this.t=setInterval(()=>void this.tick(),45000); setTimeout(()=>void this.tick(),6000); },
+  start(){ if(this.t)return; this.t=setInterval(()=>void this.tick(),5*60e3); setTimeout(()=>void this.tick(),12000); },
   idle(a){ return !AutoRoute.busy&&!(typeof NodeRoutes!=='undefined'&&NodeRoutes.manual>0)&&!Pool.switching.has(a.id)&&![...Chats.values()].some(c=>c.busy||c.streaming); },
   async tick(force=false){
     if(this.busy||typeof document!=='undefined'&&document.hidden||navigator.onLine===false)return;
     // 无论是否空闲，只要热备池不足，先静默把「第二 IP」备好
     try{void StandbyPool.replenish('warm');}catch{}
-    if(!force&&now()-this.at<5*60e3)return;
+    if(!force&&now()-this.at<30*60e3)return;
     const a=UI.host?.account;if(!a?.id||!isVless(a.proxy)||!a.region||!Host.probe||typeof Pool==='undefined'||RouteState.locked(a))return;
     if(!this.idle(a))return;
     this.busy=true;this.at=now();
     try{
-      if(typeof NodeSpeed!=='undefined')await NodeSpeed.testOne(a.proxy,{rounds:1,timeout:2500}).catch(()=>{});
+      if(typeof NodeSpeed!=='undefined'&&(force||IP.err))await NodeSpeed.testOne(a.proxy,{rounds:1,timeout:2500}).catch(()=>{});
       await Pool.load();
       const pc=typeof IPRep!=='undefined'?IPRep.cur(a,IP.ip):null,good=pc?.label==='纯净';
-      if(!force&&good&&now()-(this.pipAt||0)<30*60e3){Bus.emit('pool');return;}
+      const availCnt=typeof Pool.avail==='function'?Pool.avail(a.region,a.id).length:0;
+      if(!force&&good&&(availCnt>=2||now()-(this.pipAt||0)<2*3600e3)){Bus.emit('pool');return;}
       this.pipAt=now();
-      const keys=Pool.entries().filter(([k,e])=>e&&!e.gone&&e.loc===a.region&&!Pool.banned(k)&&e.ok!==false&&(e.ok==null||now()-(e.at||0)>5*60e3))
-        .sort(([,x],[,y])=>(y.ok===true)-(x.ok===true)||(x.ms||9e9)-(y.ms||9e9)).slice(0,16).map(([k])=>k);
+      const keys=Pool.entries().filter(([k,e])=>e&&!e.gone&&e.loc===a.region&&!Pool.banned(k)&&e.ok!==false&&(e.ok==null||now()-(e.at||0)>2*3600e3))
+        .sort(([,x],[,y])=>(y.ok===true)-(x.ok===true)||(x.ms||9e9)-(y.ms||9e9)).slice(0,4).map(([k])=>k);
       if(keys.length&&this.idle(a)){
         const r=await Host.probe({link:a.proxy,pips:keys,timeout:6500}).catch(()=>null);
         const nodeAlive=Array.isArray(r)&&(typeof Pool.isNodeConfirmedAlive==='function'?Pool.isNodeConfirmedAlive(a.proxy,r):r.some(x=>x&&(x.ip||x.brana)));
         if(Array.isArray(r)&&UI.host?.account?.id===a.id)await Pool.mutate(d=>keys.forEach((k,j)=>{const res=r.find(x=>x?.pip===k)||r[j]||{};Pool.apply(d,k,res);if(!(res.ip&&res.brana)&&(nodeAlive||res.ip)&&d.ips?.[k]&&(d.ips[k].fc||0)>=3)Pool.banForever?.(d,k,'节点正常但该 ProxyIP 连续不可用 · 已拉黑');})).catch(()=>{});
       }
       if(typeof Pool!=='undefined'&&Pool.purgeImpureAndUnstable)await Pool.purgeImpureAndUnstable().catch(()=>{});
-      if(typeof IPRep!=='undefined'&&IPRep.prime&&this.idle(a)){if(IPRep._pr)IPRep._pr[a.region]=0;await IPRep.prime(a.region).catch(()=>{});}
+      if(typeof IPRep!=='undefined'&&IPRep.prime&&this.idle(a)&&availCnt<2){if(IPRep._pr)IPRep._pr[a.region]=0;await IPRep.prime(a.region).catch(()=>{});}
       Bus.emit('pool');
     }catch{}finally{this.busy=false;}
   },

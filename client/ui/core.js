@@ -18,6 +18,10 @@ const Traffic = {
     if (/\/api\/v1\/runs\//.test(u)) return '运行记录 Trace';
     if (/\/workspace\//.test(u)) return '工作区文件';
     if (/\/api\/chat\/[^/?]+\/messages/.test(u)) return '更早的消息';
+    if (/\/nextjs-api\/stream\/(create-evaluation|post-to-evaluation|retry-evaluation)/.test(u)) return '对战/直连生成';
+    if (/\/api\/evaluation\//.test(u)) return '读取评测对话';
+    if (/\/nextjs-api\/model-catalog/.test(u)) return '模型目录';
+    if (/\/nextjs-api\/auto-modality/.test(u)) return '模态路由';
     if (/\/api\/(stream|chat)\b[^?]*\/(create|evaluat|messages\/)|\/nextjs-api\/stream/.test(u)) return '发送 / 生成';
     if (/\/api\/chat\//.test(u)) return '读取对话';
     if (/\/api\/history\//.test(u)) return '对话列表';
@@ -4772,7 +4776,7 @@ const History = {
   saveSoon() {
     if (!this.ck) return; clearTimeout(this.saveT);
     this.saveT = setTimeout(() => {
-      const pick = e => { const o = {}; for (const k of ['id', 'type', 'productMode', 'title', 'localTitle', 'createdAt', 'updatedAt', 'isArchived', 'isPinned', 'modality']) if (e[k] !== undefined) o[k] = e[k]; return o; };
+      const pick = e => { const o = {}; for (const k of ['id', 'type', 'productMode', 'title', 'localTitle', 'createdAt', 'updatedAt', 'isArchived', 'isPinned', 'modality', 'mode', 'modelAId', 'modelBId', 'modelAOrganization', 'modelBOrganization']) if (e[k] !== undefined) o[k] = e[k]; return o; };
       const cleanItems = this.items.filter(e => !e._pending && !e._localRecovered && !/^本地缓存对话(\s|$)/i.test(String(e?.title || '').trim())).slice(0, 5000).map(pick);
       if (!cleanItems.length) {
         const prev = Store.get(this.ck, null);
@@ -4806,7 +4810,7 @@ const History = {
       throw Object.assign(Error('历史列表响应格式异常，已保留本地列表；请刷新重试'), { historyStop: true });
     }
     const gone = this.goneMap();
-    return { entries: j.entries.filter(e => (e.type === 'agentic' || e.productMode) && !e.isArchived && !e.archivedAt && !gone.has(e.id) && !(typeof Arch !== 'undefined' && Arch.has?.(e.id))), cursor: p.hasMore ? p.cursor : null, hasMore: p.hasMore };
+    return { entries: j.entries.filter(e => (e.type === 'agentic' || e.type === 'evaluation' || e.productMode || e.mode) && !e.isArchived && !e.archivedAt && !gone.has(e.id) && !(typeof Arch !== 'undefined' && Arch.has?.(e.id))).map(e => ({ ...e, ...(e.mode !== undefined ? { mode: e.mode } : {}), ...(e.modelAId !== undefined ? { modelAId: e.modelAId } : {}), ...(e.modelBId !== undefined ? { modelBId: e.modelBId } : {}), ...(e.modelAOrganization !== undefined ? { modelAOrganization: e.modelAOrganization } : {}), ...(e.modelBOrganization !== undefined ? { modelBOrganization: e.modelBOrganization } : {}) })), cursor: p.hasMore ? p.cursor : null, hasMore: p.hasMore };
   },
   // 已归档 / 删除的对话：本机记住 30 天，防止本地残留统计或延迟列表把已删对话复活成「本地缓存对话」。
   goneMap() {
@@ -5270,21 +5274,35 @@ const KB = {
 const IP = {
   ip: null, loc: null, at: 0, checkedAt: 0, failures: 0, err: null, prev: null, fast: false, polling: null,
   poll() { return this.polling ||= this.poll1().finally(() => { this.polling = null; }); },
-  // 当前连接的实时延迟：经账号线路请求一次 /cdn-cgi/trace（几百字节），只计耗时，不改出口状态
+  // 当前连接的实时延迟：经账号线路请求一次 /cdn-cgi/trace（几百字节），与出口检测复用采样，避免重复请求消耗 EdgeTunnel 配额
   rtt: 0, rttAt: 0, rttFail: 0, pinging: null,
-  ping() {
+  recordRtt(v) {
+    const ms = Math.max(1, Math.round(v)), key = String(typeof UI !== 'undefined' && UI?.host?.account?.proxy || '') + '|' + String(typeof UI !== 'undefined' && UI?.host?.account?.proxyIp || '');
+    if (this.rkey !== key) { this.rkey = key; this.samples = []; }
+    this.samples = [...(this.samples || []).filter(x => now() - x.at < 180000), { v: ms, at: now() }].slice(-5);
+    const sorted = this.samples.map(x => x.v).sort((x, y) => x - y);
+    this.rtt = sorted[Math.floor((sorted.length - 1) / 2)]; this.rttLast = ms; this.rttFail = 0; this.rttAt = now();
+    this.reconcile(); if (typeof Bus !== 'undefined') Bus.emit('rtt');
+  },
+  ping(force = false) {
+    if (!force && this.rtt > 0 && !this.rttFail && now() - this.rttAt < 25000) { if (typeof Bus !== 'undefined') Bus.emit('rtt'); return Promise.resolve(); }
+    if (this.polling) return this.polling;
+    const clk = () => typeof performance !== 'undefined' && performance.now ? performance.now() : now();
     return this.pinging ||= (async () => {
-      const t0 = performance.now();
+      const t0 = clk();
       try {
-        await NetPolicy.deadline(async signal => { const r = await rawFetch('/cdn-cgi/trace', { cache: 'no-store', signal }); await r.text(); }, { timeout: 6000 });
-        // 单次采样抖动大：保留最近 5 次（3 分钟内、同一条线路），显示中位数
-        const v = Math.max(1, Math.round(performance.now() - t0)), key = String(UI.host?.account?.proxy || '') + '|' + String(UI.host?.account?.proxyIp || '');
-        if (this.rkey !== key) { this.rkey = key; this.samples = []; }
-        this.samples = [...(this.samples || []).filter(x => now() - x.at < 180000), { v, at: now() }].slice(-5);
-        const sorted = this.samples.map(x => x.v).sort((x, y) => x - y);
-        this.rtt = sorted[Math.floor((sorted.length - 1) / 2)]; this.rttLast = v; this.rttFail = 0; this.reconcile();
-      } catch { this.rtt = 0; this.rttFail++; }
-      this.rttAt = now(); Bus.emit('rtt');
+        const t = await NetPolicy.deadline(async signal => { const r = await rawFetch('/cdn-cgi/trace', { cache: 'no-store', signal }); return r.ok ? r.text() : ''; }, { timeout: 6000 });
+        this.recordRtt(clk() - t0);
+        if (t) {
+          const kv = Object.fromEntries(t.trim().split('\n').map(l => l.split('=')));
+          if (kv.ip && /^[0-9a-f:.]+$/i.test(kv.ip)) {
+            if (this.ip && kv.ip !== this.ip) { this.prev = this.ip; this.changedAt = now(); setTimeout(() => { if (typeof Bus !== 'undefined') Bus.emit('ipchange', kv.ip, this.prev); if (typeof Acct !== 'undefined') Acct.report(); }, 0); }
+            const first = !this.ip; this.ip = kv.ip; this.loc = kv.loc; this.colo = kv.colo; this.err = null; this.failures = 0; this.at = now(); this.checkedAt = now();
+            if (first && typeof Acct !== 'undefined') Acct.report();
+            if (typeof Bus !== 'undefined') Bus.emit('ip');
+          }
+        }
+      } catch { this.rtt = 0; this.rttFail++; this.rttAt = now(); if (typeof Bus !== 'undefined') Bus.emit('rtt'); }
     })().finally(() => { this.pinging = null; });
   },
   // 实时延迟只在「当前这条线路」上测：它通，就是当前 ProxyIP 真的能用。
@@ -5306,8 +5324,10 @@ const IP = {
   quietFail() { return !!this.rttFail && typeof NetHealth !== 'undefined' && NetHealth.recent(); },
   rttCls() { return this.rtt ? (this.rtt < 300 ? 'd-good' : this.rtt < 800 ? 'd-mid' : 'd-bad') : this.rttFail && !this.quietFail() ? 'd-fail' : ''; },
   rttText() { return this.rtt ? this.rtt + ' ms' : this.rttFail && !this.quietFail() ? '超时' : ''; },
-  rttTip() { const xs = (this.samples || []).map(x => x.v); return xs.length ? '最近 ' + xs.length + ' 次：' + xs.join(' / ') + ' ms（显示中位数，30 秒测一次）' : ''; },
+  rttTip() { const xs = (this.samples || []).map(x => x.v); return xs.length ? '最近 ' + xs.length + ' 次：' + xs.join(' / ') + ' ms（显示中位数）' : ''; },
   async poll1() {
+    const clk = () => typeof performance !== 'undefined' && performance.now ? performance.now() : now();
+    const t0 = clk();
     try {
       // A trace failure is not a failed chat connection. Bound the whole read.
       const t = await NetPolicy.deadline(async signal => {
@@ -5318,7 +5338,9 @@ const IP = {
       const kv = Object.fromEntries(t.trim().split('\n').map(l => l.split('=')));
       if (!kv.ip || !/^[0-9a-f:.]+$/i.test(kv.ip)) throw new Error('出口检测未返回有效 IP');
       if (this.ip && kv.ip !== this.ip) { this.prev = this.ip; this.changedAt = now(); setTimeout(() => { Bus.emit('ipchange', kv.ip, this.prev); Acct.report(); }, 0); }
-      const first = !this.ip; this.ip = kv.ip; this.loc = kv.loc; this.colo = kv.colo; this.err = null; this.failures = 0; this.at = now(); if (first) Acct.report();
+      const first = !this.ip; this.ip = kv.ip; this.loc = kv.loc; this.colo = kv.colo; this.err = null; this.failures = 0; this.at = now();
+      this.recordRtt(clk() - t0);
+      if (first) Acct.report();
     } catch (e) { this.err = describe(e); this.failures++; }
     finally { this.checkedAt = now(); }
     Bus.emit('ip');

@@ -87,10 +87,13 @@ const Dock = {
     if (this.tab === 'overview') {
       if (typeof BillingProbe !== 'undefined' && sid) {
         const curChat = Chats.get(sid);
-        const autoKey = sid + ':' + (curChat?.messages?.length || 0) + ':' + (BillingProbe.isCostProbeEnabled?.() ? 1 : 0);
-        if (this._lastAutoSidKey !== autoKey) {
-          this._lastAutoSidKey = autoKey;
-          queueMicrotask(() => { try { BillingProbe.automatic(Chats.get(sid)); } catch {} });
+        const curMode = curChat?.isEvaluation ? (curChat.evalMode || 'battle') : (typeof ModeState !== 'undefined' ? ModeState.getMode() : 'agent');
+        if (curMode === 'agent') {
+          const autoKey = sid + ':' + (curChat?.messages?.length || 0) + ':' + (BillingProbe.isCostProbeEnabled?.() ? 1 : 0);
+          if (this._lastAutoSidKey !== autoKey) {
+            this._lastAutoSidKey = autoKey;
+            queueMicrotask(() => { try { BillingProbe.automatic(Chats.get(sid)); } catch {} });
+          }
         }
       }
       this.overview(nb, sid, t, c);
@@ -106,6 +109,15 @@ const Dock = {
   },
   empty(box, sid) {
     const chat = sid ? Chats.get(sid) : null, inf = sid ? Trace.info(sid) : null;
+    const activeMode = chat?.isEvaluation
+      ? (chat.evalMode || 'battle')
+      : (typeof ModeState !== 'undefined' ? ModeState.getMode() : 'agent');
+    if (activeMode === 'battle' || chat?.evalMode === 'battle') {
+      return this.renderBattleOverview(box, sid, chat);
+    }
+    if (activeMode === 'direct' || chat?.evalMode === 'direct') {
+      return this.renderDirectOverview(box, sid, chat);
+    }
     if (sid) {
       const m=Models.get(sid);
       const isIdent = !!(chat?.identifying || chat?.probeProgress || AutoId.busy?.has(sid) || this.busy || (typeof Fingerprint !== 'undefined' && Fingerprint.isRunning?.(chat)) || (typeof BillingProbe !== 'undefined' && BillingProbe.isRunning?.(chat)) || (typeof PelicanTest !== 'undefined' && PelicanTest.isRunning?.(chat)));
@@ -243,9 +255,12 @@ const Dock = {
       }
     }, icon('check'));
   },
-  // 同款 3D 弹巢左轮滚轮选择器（供三行纠偏：厂商 Logo / 型号 / 强度使用）
+  // 同款 3D 弹巢左轮滚轮选择器（供三行纠偏：厂商 Logo / 型号 / 强度使用，支持手机端上下滑动波轮选择与桌面滚轮）
   openCorrectWheel(btn, list, curIdx, hint, onPick, opts = {}) {
     if (!btn || !Array.isArray(list) || !list.length) return null;
+    if (this._activeWheel && this._activeWheel.btn !== btn) {
+      try { this._activeWheel.finish(false); } catch {}
+    }
     document.querySelectorAll('.rv.mc-rv').forEach(el => el.remove());
     const REV_H = 42;
     const vars = () => document.documentElement.dataset.theme === 'dark'
@@ -253,45 +268,56 @@ const Dock = {
       : '--rv-card:#fffdf9;--rv-win:#e6ddd0;--rv-fg:#262522;--rv-line:#0000000f;--rv-acc:#6a5e54;--rv-mut:#7a746b';
     const cur = Math.max(0, Math.min(list.length - 1, Number(curIdx) || 0));
     const root = document.createElement('div');
-    root.className = 'rv mc-rv' + (opts.logoOnly ? ' is-logo-only' : '');
+    root.className = 'rv mc-rv is-interactive' + (opts.logoOnly ? ' is-logo-only' : '');
     root.style.cssText = vars();
     root.innerHTML = '<div class="rv-win"></div><div class="rv-drum"></div><div class="rv-hint"></div>';
-    root.querySelector('.rv-hint').textContent = hint || '滚轮选择 · 停下或移开确认';
+    const hintEl = root.querySelector('.rv-hint');
+    hintEl.textContent = hint || '上下滑动或滚轮选择 · 松开确认';
     const drum = root.querySelector('.rv-drum');
     const els = list.map((it, i) => {
       const d = document.createElement('div');
       d.className = 'rv-it' + (i === cur ? ' cur' : '') + (it.isFreq ? ' is-freq' : it.isRec ? ' is-rec' : '');
+      d.dataset.idx = String(i);
       const icHtml = it.iconHtml ? '<span class="rv-ic">' + it.iconHtml + '</span>' : '';
       const nmHtml = it.label ? '<span class="rv-nm"></span>' : '';
-      d.innerHTML = icHtml + nmHtml;
+      const ckHtml = '<span class="rv-ck">当前</span>';
+      d.innerHTML = icHtml + nmHtml + ckHtml;
       if (it.label) d.querySelector('.rv-nm').textContent = it.label;
       drum.append(d);
       return d;
     });
     document.body.append(root);
     const r = btn.getBoundingClientRect();
-    const W = opts.logoOnly ? 148 : 228;
+    const W = opts.logoOnly ? 148 : Math.max(228, Math.min(300, Math.round(r.width || 228)));
     const H = REV_H * 5;
     root.style.width = W + 'px';
     root.style.height = H + 'px';
     root.style.left = Math.max(8, Math.min(innerWidth - W - 8, r.left + r.width / 2 - W / 2)) + 'px';
-    const topAbove = r.top - H - 12;
-    root.style.top = (topAbove >= 8 ? topAbove : Math.max(8, Math.min(innerHeight - H - 8, r.top + r.height / 2 - H / 2))) + 'px';
+    root.style.top = Math.max(22, Math.min(innerHeight - H - 12, r.top + r.height / 2 - H / 2)) + 'px';
     btn.setAttribute('data-rv', '');
     btn._rv = true;
     const n = els.length;
-    const wrap = k => ((k % n) + n) % n;
+    const isCircular = n >= 6;
+    const wrap = k => isCircular ? (((k % n) + n) % n) : Math.max(0, Math.min(n - 1, k));
+    const clampDragPos = p => {
+      if (n <= 1) return 0;
+      if (isCircular) return p;
+      if (p < 0) return p * 0.28;
+      if (p > n - 1) return (n - 1) + (p - (n - 1)) * 0.28;
+      return p;
+    };
     let shown = -1;
     const paint = pos => {
       els.forEach((d, i) => {
-        const off = ((((i - pos) % n) + n + n / 2) % n) - n / 2;
+        const off = n <= 1 ? 0 : isCircular ? (((((i - pos) % n) + n + n / 2) % n) - n / 2) : (i - pos);
         const a = Math.abs(off);
-        d.style.transform = 'translateY(' + (off * REV_H * 0.92) + 'px) rotateX(' + (-off * 24) + 'deg) translateZ(' + (-a * a * 6) + 'px) scale(' + Math.max(0.74, 1 - a * 0.07) + ')';
+        d.style.transform = 'translateY(' + (off * REV_H * 0.92) + 'px) rotateX(' + (-off * 24) + 'deg) translateZ(' + (-a * a * 6) + 'px) scale(' + Math.max(0.72, 1 - a * 0.07) + ')';
         d.style.opacity = String(Math.max(0, 1 - a * 0.32));
         d.style.zIndex = String(100 - Math.round(a * 10));
       });
       const k = wrap(Math.round(pos));
       if (k !== shown) {
+        if (shown >= 0) { try { navigator.vibrate?.(6); } catch {} }
         shown = k;
         els.forEach((d, i) => d.classList.toggle('sel', i === k));
         if (typeof opts.onPreview === 'function') {
@@ -300,7 +326,7 @@ const Dock = {
       }
     };
     requestAnimationFrame(() => root.classList.add('on'));
-    let pos = cur, target = cur, done = false, raf = 0, idleT = 0, acc = 0;
+    let pos = cur, target = cur, done = false, raf = 0, idleT = 0, acc = 0, wheelUsed = false, activeDragCleanup = null;
     paint(pos);
     const loop = () => {
       raf = 0;
@@ -314,11 +340,16 @@ const Dock = {
       done = true;
       clearTimeout(idleT);
       cancelAnimationFrame(raf);
+      if (activeDragCleanup) { try { activeDragCleanup(); } catch {} activeDragCleanup = null; }
       btn.removeEventListener('mouseleave', leave);
-      btn.removeEventListener('click', clk, true);
+      root.removeEventListener('mouseleave', leave);
+      root.removeEventListener('wheel', onRootWheel);
+      root.removeEventListener('pointerdown', onRootPointerDown);
+      removeEventListener('pointerdown', onDocPointerDown, true);
       removeEventListener('keydown', esc, true);
       removeEventListener('blur', away);
-      const kr = Math.round(target);
+      if (this._activeWheel === api) this._activeWheel = null;
+      const kr = isCircular ? Math.round(target) : wrap(Math.round(target));
       const p0 = pos, t0 = performance.now();
       const snap = t => {
         const p = Math.min(1, (t - t0) / 140);
@@ -331,36 +362,115 @@ const Dock = {
       btn.removeAttribute('data-rv');
       btn._rv = false;
       btn._wh = null;
+      btn._rvSkip = Date.now();
       if (pick) {
         const picked = list[wrap(kr)];
         if (picked && typeof onPick === 'function') onPick(picked, wrap(kr));
       }
     };
-    const leave = () => finish(true);
-    const clk = ev => { ev.preventDefault(); ev.stopImmediatePropagation(); finish(true); };
+    const leave = ev => {
+      if (!wheelUsed) return;
+      const to = ev?.relatedTarget;
+      if (to && (btn.contains(to) || root.contains(to))) return;
+      finish(true);
+    };
     const esc = ev => {
       if (ev.key === 'Escape') { ev.preventDefault(); ev.stopPropagation(); finish(false); }
       else if (ev.key === 'Enter') { ev.preventDefault(); ev.stopPropagation(); finish(true); }
     };
     const away = () => finish(false);
+    const onDocPointerDown = ev => {
+      if (done || activeDragCleanup) return;
+      const t = ev.target;
+      if (t instanceof Node && (root.contains(t) || btn.contains(t))) return;
+      finish(true);
+    };
+    const push = d => {
+      if (done) return;
+      wheelUsed = true;
+      const step = Math.abs(d) >= 45 ? Math.sign(d) : (acc += d, Math.abs(acc) >= 50 ? (d = Math.sign(acc), acc = 0, d) : 0);
+      if (step) {
+        target = isCircular ? (target + step) : Math.max(0, Math.min(n - 1, target + step));
+      }
+      if (!raf) raf = requestAnimationFrame(loop);
+      clearTimeout(idleT);
+      idleT = setTimeout(() => finish(true), 850);
+    };
+    const onRootWheel = e => {
+      if (!e.deltaY) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const d = e.deltaMode === 1 ? e.deltaY * 33 : e.deltaMode === 2 ? e.deltaY * 400 : e.deltaY;
+      push(d);
+    };
+    const startDrag = (pid, ev0, pre = 0, captureEl = btn) => {
+      if (done) return;
+      clearTimeout(idleT);
+      cancelAnimationFrame(raf);
+      raf = 0;
+      if (activeDragCleanup) { try { activeDragCleanup(); } catch {} }
+      hintEl.textContent = '上下推动 · 松开选中';
+      const startY = ev0.clientY + pre;
+      const startPos = pos;
+      let moved = Math.abs(pre) > 2;
+      try { captureEl?.setPointerCapture?.(pid); } catch {}
+      const move = ev => {
+        if (ev.pointerId !== pid || done) return;
+        ev.preventDefault();
+        if (Math.abs(ev.clientY - ev0.clientY) > 4) moved = true;
+        pos = clampDragPos(startPos + (startY - ev.clientY) / (REV_H * 0.90));
+        target = isCircular ? Math.round(pos) : wrap(Math.round(pos));
+        paint(pos);
+      };
+      const endDrag = (ev, pick) => {
+        if (ev && ev.pointerId !== pid) return;
+        if (activeDragCleanup) { activeDragCleanup(); activeDragCleanup = null; }
+        if (done) return;
+        if (!moved && pick && ev?.target instanceof Element) {
+          const itemEl = ev.target.closest('.rv-it');
+          if (itemEl && itemEl.dataset.idx != null) {
+            const tapIdx = Number(itemEl.dataset.idx);
+            if (Number.isFinite(tapIdx)) {
+              if (isCircular) {
+                const curK = wrap(Math.round(pos));
+                let diff = ((tapIdx - curK + n + n / 2) % n) - n / 2;
+                target = Math.round(pos) + diff;
+              } else {
+                target = wrap(tapIdx);
+              }
+            }
+          }
+        }
+        finish(pick);
+      };
+      const up = ev => endDrag(ev, true);
+      const cc = ev => endDrag(ev, false);
+      activeDragCleanup = () => {
+        removeEventListener('pointermove', move, true);
+        removeEventListener('pointerup', up, true);
+        removeEventListener('pointercancel', cc, true);
+        try { captureEl?.releasePointerCapture?.(pid); } catch {}
+      };
+      addEventListener('pointermove', move, true);
+      addEventListener('pointerup', up, true);
+      addEventListener('pointercancel', cc, true);
+    };
+    const onRootPointerDown = e => {
+      if (e.button !== 0 && e.pointerType === 'mouse') return;
+      e.preventDefault();
+      e.stopPropagation();
+      startDrag(e.pointerId, e, 0, root);
+    };
     btn.addEventListener('mouseleave', leave);
-    btn.addEventListener('click', clk, true);
+    root.addEventListener('mouseleave', leave);
+    root.addEventListener('wheel', onRootWheel, { passive: false });
+    root.addEventListener('pointerdown', onRootPointerDown);
+    setTimeout(() => { if (!done) addEventListener('pointerdown', onDocPointerDown, true); }, 0);
     addEventListener('keydown', esc, true);
     addEventListener('blur', away);
-    return {
-      push(d) {
-        if (done) return;
-        if (Math.abs(d) >= 45) target += Math.sign(d);
-        else {
-          acc += d;
-          if (Math.abs(acc) >= 50) { target += Math.sign(acc); acc = 0; }
-        }
-        if (!raf) raf = requestAnimationFrame(loop);
-        clearTimeout(idleT);
-        idleT = setTimeout(() => finish(true), 850);
-      },
-      finish,
-    };
+    const api = { btn, root, push, startDrag, finish };
+    this._activeWheel = api;
+    return api;
   },
   renderCorrectPanel(sid, m, curName) {
     if (!sid || this.editModelSid !== sid || this.isOpenCorrectionModel(curName || m?.name || m?.rawLabel || '')) return null;
@@ -591,7 +701,17 @@ const Dock = {
     this.editPreviewLabel = fullCurrentLabel;
     this.editPreviewLogo = curModelLogo;
 
+    const waveChev = () => {
+      const s = document.createElement('span');
+      s.className = 'mc-wheel-chev';
+      s.setAttribute('aria-hidden', 'true');
+      s.innerHTML = '<svg class="ic" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m7 15 5 5 5-5"/><path d="m7 9 5-5 5 5"/></svg>';
+      return s;
+    };
+
     const bindWheelRow = (rowEl, getList, getCurIdx, hint, onSelect, opts = {}) => {
+      rowEl.style.touchAction = 'none';
+      rowEl.addEventListener('contextmenu', e => { if (rowEl._rv || rowEl._rvT) e.preventDefault(); });
       rowEl.addEventListener('wheel', e => {
         if (!e.deltaY) return;
         e.preventDefault();
@@ -600,10 +720,41 @@ const Dock = {
         const w = (rowEl._wh ||= this.openCorrectWheel(rowEl, getList(), getCurIdx(), hint, onSelect, opts));
         w?.push(d);
       }, { passive: false });
+      rowEl.addEventListener('pointerdown', e => {
+        if ((e.button !== 0 && e.pointerType === 'mouse') || rowEl._rv || e.target?.closest?.('.mc-wheel-act')) return;
+        const x0 = e.clientX, y0 = e.clientY, pid = e.pointerId, touch = e.pointerType !== 'mouse';
+        const cancel = () => {
+          clearTimeout(rowEl._rvT);
+          rowEl._rvT = 0;
+          removeEventListener('pointermove', early, true);
+          removeEventListener('pointerup', cancel, true);
+          removeEventListener('pointercancel', cancel, true);
+        };
+        const openDrag = (ev, preDy = 0) => {
+          cancel();
+          const w = (rowEl._wh ||= this.openCorrectWheel(rowEl, getList(), getCurIdx(), '上下推动 · 松开选中', onSelect, opts));
+          w?.startDrag?.(pid, ev, preDy, rowEl);
+        };
+        const early = ev => {
+          if (ev.pointerId !== pid) return;
+          const dy = y0 - ev.clientY;
+          const dx = Math.abs(ev.clientX - x0);
+          if (touch ? (Math.abs(dy) > 6 && Math.abs(dy) > dx) : (Math.abs(dy) > 10 && Math.abs(dy) > dx)) {
+            openDrag(ev, touch ? dy : 0);
+          } else if (dx > (touch ? 24 : 16)) {
+            cancel();
+          }
+        };
+        rowEl._rvT = setTimeout(() => openDrag(e, 0), 280);
+        addEventListener('pointermove', early, true);
+        addEventListener('pointerup', cancel, true);
+        addEventListener('pointercancel', cancel, true);
+      });
       rowEl.addEventListener('click', e => {
         if (e.target?.closest?.('.mc-wheel-act')) return;
         e.preventDefault();
         e.stopPropagation();
+        if (Date.now() - (rowEl._rvSkip || 0) < 260) return;
         if (rowEl._wh) {
           rowEl._wh.finish(true);
           return;
@@ -654,15 +805,16 @@ const Dock = {
       previewRow.title = `当前预览：${fullLbl}`;
     };
 
-    // 底部第 1 行：独立滚轮选择「图标 + 厂商」名称（无右侧冗余图标）
+    // 底部第 1 行：独立滚轮/波轮选择「图标 + 厂商」名称
     const vFreqCur = Number(stats.vendors?.[curVendorObj.id] || 0) > 0;
     const vendorRow = h('div', {
       class: 'mc-jump-card mc-wheel-row' + (vFreqCur ? ' is-freq' : ''),
-      title: '滚轮切换厂商'
+      title: '上下滑动或滚轮切换厂商'
     },
       h('span', { class: 'mc-wheel-tag' }, '厂商'),
       vlogo(curVendorObj.logo, 16),
-      h('b', { class: 'mc-wheel-val' }, curVendorObj.name)
+      h('b', { class: 'mc-wheel-val' }, curVendorObj.name),
+      waveChev()
     );
     bindWheelRow(
       vendorRow,
@@ -673,7 +825,7 @@ const Dock = {
         isFreq: Number(stats.vendors?.[v.id] || 0) > 0,
       })),
       () => Math.max(0, sortedVendors.findIndex(v => v.id === curVendorObj.id)),
-      '滚轮选厂商',
+      '上下滑动或滚轮选厂商',
       picked => {
         if (picked && picked.id !== curVendorObj.id) {
           this.editVendor = picked.id;
@@ -693,14 +845,15 @@ const Dock = {
       }
     );
 
-    // 底部第 2 行：独立滚轮选择纯型号（无图标）
+    // 底部第 2 行：独立滚轮/波轮选择纯型号（无图标）
     const mFreqCur = Number(stats.families?.[curModelObj.fam.toLowerCase()] || 0) > 0;
     const modelRow = h('div', {
       class: 'mc-jump-card mc-wheel-row' + (mFreqCur ? ' is-freq' : ''),
-      title: '滚轮切换型号'
+      title: '上下滑动或滚轮切换型号'
     },
       h('span', { class: 'mc-wheel-tag' }, '型号'),
-      h('b', { class: 'mc-wheel-val' }, curModelObj.short || curModelObj.fam)
+      h('b', { class: 'mc-wheel-val' }, curModelObj.short || curModelObj.fam),
+      waveChev()
     );
     bindWheelRow(
       modelRow,
@@ -712,7 +865,7 @@ const Dock = {
         isFreq: Number(stats.families?.[it.fam.toLowerCase()] || 0) > 0,
       })),
       () => Math.max(0, sortedModels.findIndex(it => it.fam === curModelObj.fam)),
-      '滚轮选型号',
+      '上下滑动或滚轮选型号',
       picked => {
         if (!picked) return;
         if (picked.id !== curModelObj.fam) {
@@ -731,15 +884,16 @@ const Dock = {
       }
     );
 
-    // 底部第 3 行：独立滚轮选择纯强度（无图标，选完仅更新预览，点顶部思考分后的对勾确认关闭）
+    // 底部第 3 行：独立滚轮/波轮选择纯强度（无图标，选完仅更新预览，点顶部思考分后的对勾确认关闭）
     const tFreqCur = Number(stats.models?.[fullCurrentLabel.toLowerCase()] || 0) > 0;
     const tRecCur = !tFreqCur && curTier === curModelObj.defTier;
     const tierRow = h('div', {
       class: 'mc-jump-card mc-wheel-row' + (tFreqCur ? ' is-freq' : tRecCur ? ' is-rec' : ''),
-      title: '滚轮选择强度'
+      title: '上下滑动或滚轮选择强度'
     },
       h('span', { class: 'mc-wheel-tag' }, '强度'),
-      h('b', { class: 'mc-wheel-val' }, curTier || '标准')
+      h('b', { class: 'mc-wheel-val' }, curTier || '标准'),
+      waveChev()
     );
     bindWheelRow(
       tierRow,
@@ -756,7 +910,7 @@ const Dock = {
         };
       }),
       () => Math.max(0, sortedTiers.findIndex(t => t === curTier)),
-      '滚轮选强度',
+      '上下滑动或滚轮选强度',
       picked => {
         if (!picked) return;
         const chosenTier = picked.id;
@@ -981,7 +1135,238 @@ const Dock = {
     return card;
   },
   unit() { return Prefs.spendUnit === 'usd' ? 'usd' : 'token'; },
+  modalityLabel(mod) {
+    const map = {
+      chat: 'Text',
+      webdev: 'Code / WebDev',
+      search: 'Web Search',
+      image: 'Image',
+      video: 'Video',
+      auto: 'Auto',
+    };
+    const k = String(mod || '').toLowerCase();
+    return map[k] || (mod ? String(mod) : 'Auto');
+  },
+  renderBattleOverview(box, sid, chat) {
+    const rawMod = chat?.modality || (typeof ModeState !== 'undefined' && ModeState.getModality ? ModeState.getModality() : 'auto') || 'auto';
+    const modLabel = this.modalityLabel(rawMod);
+    if (!chat) {
+      const emptyHero = h('section', { class: 'mc-card mc-hero' },
+        h('div', { class: 'mc-top' },
+          h('span', { class: 'vlogo', style: { width: '30px', height: '30px', fontSize: '16px' } }, '⚔️'),
+          h('div', { class: 'mc-name' },
+            h('div', { class: 'mc-fam' }, h('span', {}, '⚔️ Battle 匿名双模型盲测')),
+            h('div', { class: 'mc-meta' }, `Modality: ${modLabel}`)
+          )
+        ),
+        h('p', { class: 'note', style: { marginTop: '8px' } }, '发送消息后将由两个匿名模型同时生成回复。系统会实时采集 A / B 双方的回复习惯特征，并在您投票揭晓模型身份后自动打标存入习惯库。')
+      );
+      box.append(emptyHero);
+      return;
+    }
+
+    const voted = Boolean(chat.voteState?.voted);
+    const voteVal = chat.voteState?.value || null;
+    const heroCard = h('section', { class: 'mc-card mc-hero' },
+      h('div', { class: 'mc-top' },
+        h('span', { class: 'vlogo', style: { width: '30px', height: '30px', fontSize: '16px' } }, voted ? '✓' : '⚔️'),
+        h('div', { class: 'mc-name' },
+          h('div', { class: 'mc-fam' }, h('span', {}, voted ? '✓ Battle 模型身份已揭晓' : '⚔️ Battle 盲测进行中（待投票揭晓）')),
+          h('div', { class: 'mc-meta' }, `Modality: ${modLabel} · 会话 ${String(sid || '').slice(0, 8)}`)
+        )
+      ),
+      h('div', { class: 'mc-verdict', 'data-tone': voted ? 'ok' : 'busy', style: { marginTop: '8px' } },
+        icon(voted ? 'check' : 'pulse'),
+        h('span', {}, voted ? '✓ 双方回复习惯已打标入库' : '实时采集 A / B 习惯中')
+      )
+    );
+    box.append(heroCard);
+
+    const snap = (typeof ChatHabitFingerprint !== 'undefined' && typeof ChatHabitFingerprint.analyzeBattleChat === 'function')
+      ? ChatHabitFingerprint.analyzeBattleChat(chat)
+      : null;
+
+    const renderSideCard = (pos) => {
+      const isA = pos === 'a';
+      const sideSnap = isA ? snap?.a : snap?.b;
+      const feat = sideSnap?.features || null;
+      const revealedName = String(
+        sideSnap?.revealedName
+        || (isA ? chat.voteState?.modelAName : chat.voteState?.modelBName)
+        || ''
+      ).trim();
+      const hasReveal = Boolean(voted && revealedName && !/^(未知|待定|Model [AB])$/i.test(revealedName));
+      const vid = hasReveal && typeof Brand !== 'undefined' && Brand.of ? Brand.of(revealedName) : '';
+      const isWinner = (isA && voteVal === 'model_a') || (!isA && voteVal === 'model_b');
+      const isTie = voteVal === 'tie';
+      const isBothBad = voteVal === 'both_bad';
+      const voteBadgeText = isWinner ? '🏆 胜出' : isTie ? '🤝 平局' : isBothBad ? '⚠️ 双差' : '';
+
+      const card = h('section', { class: 'mc-card', 'data-battle-side': pos });
+      const headerRow = h('div', { class: 'mc-top' },
+        hasReveal && vid
+          ? vlogo(vid, 24)
+          : h('span', { class: 'vlogo', style: { width: '24px', height: '24px', fontSize: '14px' } }, isA ? '🅰️' : '🅱️'),
+        h('div', { class: 'mc-name' },
+          h('div', { class: 'mc-fam', style: { display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' } },
+            h('span', {}, hasReveal ? revealedName : (isA ? '🅰️ 匿名模型 A' : '🅱️ 匿名模型 B')),
+            voteBadgeText ? h('span', { class: 'mc-tier', 'data-lv': isWinner ? 5 : 3 }, voteBadgeText) : null,
+            hasReveal ? h('span', { class: 'mc-tier', 'data-lv': 4, title: '真实标签与回复特征已写入习惯库' }, '✓ 已写入习惯库') : null,
+            sideSnap?.reasoningScore != null ? h('span', { class: 'mc-tier mc-reason-score', title: '习惯推理分' }, icon('brain'), Math.round(+sideSnap.reasoningScore)) : null
+          ),
+          h('div', { class: 'mc-meta' },
+            hasReveal
+              ? `${isA ? 'Model A' : 'Model B'}${vid && Brand?.NAME?.[vid] ? ' · ' + Brand.NAME[vid] : ''}`
+              : `${isA ? 'Model A' : 'Model B'} · 盲测匿名侧`
+          )
+        )
+      );
+      card.append(headerRow);
+
+      if (!feat || !(feat.turns > 0)) {
+        card.append(h('p', { class: 'note', style: { marginTop: '6px' } }, chat.busy ? '正在接收回复并提取习惯特征…' : '暂无回复内容'));
+        return card;
+      }
+
+      const thinkMode = (feat.hidR || 0) > 0 ? '隐藏思考' : (feat.visR || 0) > 0 ? '明文思考' : '直出无思考';
+      const metricsBar = h('div', { class: 'bp-pills', style: { marginTop: '8px', display: 'flex', flexWrap: 'wrap', gap: '4px' } },
+        h('span', { class: 'bp-pill bp-neutral' }, h('b', { class: 'mono' }, `${feat.turns || 1} 轮`)),
+        h('span', { class: 'bp-pill bp-in' }, h('b', { class: 'mono' }, `${(feat.totalChars || 0).toLocaleString('en-US')} 字`)),
+        h('span', { class: 'bp-pill bp-fp' }, h('b', {}, thinkMode)),
+        h('span', { class: 'bp-pill bp-rev' }, h('b', { class: 'mono' }, `代码 ${feat.codeBlocks || 0}`))
+      );
+      card.append(metricsBar);
+
+      const tags = Array.isArray(sideSnap?.habitTags) ? sideSnap.habitTags.filter(Boolean).slice(0, 5) : [];
+      if (tags.length) {
+        card.append(h('div', { class: 'mc-sub', style: { marginTop: '6px', display: 'flex', flexWrap: 'wrap', gap: '4px' } },
+          ...tags.map(tg => h('span', { class: 'bp-pill', style: { fontSize: '11px' } }, tg))
+        ));
+      }
+
+      const cands = Array.isArray(sideSnap?.candidates) ? sideSnap.candidates.slice(0, 3) : [];
+      if (cands.length) {
+        const candBox = h('div', { style: { marginTop: '8px' } },
+          h('div', { class: 'eyebrow', style: { marginBottom: '4px' } }, '习惯库盲猜候选')
+        );
+        const normName = s => String(typeof Strength !== 'undefined' && Strength.canon ? Strength.canon(s) : (s || '')).toLowerCase().replace(/[^a-z0-9\u4e00-\u9fa5]+/g, '');
+        const revNorm = hasReveal ? normName(revealedName) : '';
+        cands.forEach((cand, idx) => {
+          const cLbl = String(cand.label || cand.id || '');
+          const pct = Math.max(0, Math.min(100, Number(cand.match || 0)));
+          const cNorm = normName(cLbl);
+          const isHit = Boolean(revNorm && cNorm && (revNorm.includes(cNorm) || cNorm.includes(revNorm)));
+          candBox.append(h('div', { class: 'mc-fp-row' + (idx === 0 || isHit ? ' top' : ''), title: cLbl },
+            h('i', { class: 'mc-fp-bar', style: { width: pct + '%' } }),
+            h('span', { class: 'mc-fp-n' }, idx + 1),
+            h('span', { class: 'mc-fp-m' }, cLbl, isHit ? h('b', { style: { marginLeft: '6px', color: 'var(--ok,#2fb36b)' } }, '🎯 习惯盲猜命中') : null),
+            h('b', { class: 'mc-fp-p' }, pct.toFixed(1) + '%')
+          ));
+        });
+        card.append(candBox);
+      }
+
+      return card;
+    };
+
+    box.append(renderSideCard('a'));
+    box.append(renderSideCard('b'));
+
+    if (voted) {
+      const syncCard = h('section', { class: 'mc-card' },
+        h('button', {
+          type: 'button',
+          class: 'btn wide ghost',
+          onclick: () => {
+            if (typeof ChatHabitFingerprint !== 'undefined' && typeof ChatHabitFingerprint.learnBattleReveal === 'function') {
+              ChatHabitFingerprint.learnBattleReveal(chat);
+              toast('已同步更新 A/B 模型的习惯样本', 'ok');
+              this.render();
+            }
+          }
+        }, icon('refresh'), ' 重新同步双方习惯至样本库')
+      );
+      box.append(syncCard);
+    }
+  },
+  renderDirectOverview(box, sid, chat) {
+    const directModel = chat?.directModelName
+      || (chat?.modelAId && typeof ModelCatalog !== 'undefined' && ModelCatalog.resolveModelName ? ModelCatalog.resolveModelName(chat.modelAId, chat.revealedModels) : null)
+      || (typeof ModeState !== 'undefined' && ModeState.getDirectModel ? (ModeState.getDirectModel()?.displayName || ModeState.getDirectModel()?.publicName || ModeState.getDirectModel()?.name) : null)
+      || '指定直连模型';
+    const rawMod = chat?.modality || (typeof ModeState !== 'undefined' && ModeState.getModality ? ModeState.getModality() : 'auto') || 'auto';
+    const modLabel = this.modalityLabel(rawMod);
+    const vid = typeof Brand !== 'undefined' && Brand.of ? Brand.of(directModel) : '';
+    const [fam, sfx] = typeof famTier === 'function' ? famTier(directModel) : [directModel, ''];
+
+    const heroCard = h('section', { class: 'mc-card mc-hero' },
+      h('div', { class: 'mc-top' },
+        vid ? vlogo(vid, 30) : h('span', { class: 'vlogo', style: { width: '30px', height: '30px', fontSize: '16px' } }, '🎯'),
+        h('div', { class: 'mc-name', title: directModel },
+          h('div', { class: 'mc-fam' },
+            h('span', {}, fam || directModel),
+            sfx ? h('span', { class: 'mc-tier', 'data-lv': TIER_LV[sfx] ?? 3 }, sfx) : null
+          ),
+          h('div', { class: 'mc-meta' }, [vid && Brand?.NAME?.[vid] ? Brand.NAME[vid] : null, `Modality: ${modLabel}`].filter(Boolean).join(' · '))
+        )
+      ),
+      h('div', { class: 'mc-verdict', 'data-tone': 'ok', style: { marginTop: '8px' } },
+        icon('check'),
+        h('span', {}, `🎯 Direct 直连锁定 · 100% 确定 · ${modLabel}`)
+      )
+    );
+
+    if (chat && Array.isArray(chat.messages) && chat.messages.length) {
+      const feat = (typeof ChatHabitFingerprint !== 'undefined' && typeof ChatHabitFingerprint.extractFeatures === 'function')
+        ? ChatHabitFingerprint.extractFeatures(chat, null)
+        : null;
+      if (feat && feat.turns > 0) {
+        const thinkMode = (feat.hidR || 0) > 0 ? '隐藏思考' : (feat.visR || 0) > 0 ? '明文思考' : '直出无思考';
+        heroCard.append(h('div', { class: 'bp-pills', style: { marginTop: '8px', display: 'flex', flexWrap: 'wrap', gap: '4px' } },
+          h('span', { class: 'bp-pill bp-neutral' }, h('b', { class: 'mono' }, `${feat.turns} 轮`)),
+          h('span', { class: 'bp-pill bp-in' }, h('b', { class: 'mono' }, `${(feat.totalChars || 0).toLocaleString('en-US')} 字`)),
+          h('span', { class: 'bp-pill bp-fp' }, h('b', {}, thinkMode)),
+          feat.habitReasoningScore != null ? h('span', { class: 'bp-pill bp-ok' }, h('b', { class: 'mono' }, `推理分 ${Math.round(+feat.habitReasoningScore)}`)) : null
+        ));
+        const tags = Array.isArray(feat.habitTags) ? feat.habitTags.filter(Boolean).slice(0, 6) : [];
+        if (tags.length) {
+          heroCard.append(h('div', { class: 'mc-sub', style: { marginTop: '6px', display: 'flex', flexWrap: 'wrap', gap: '4px' } },
+            ...tags.map(tg => h('span', { class: 'bp-pill', style: { fontSize: '11px' } }, tg))
+          ));
+        }
+        heroCard.append(h('div', { style: { marginTop: '10px' } },
+          h('button', {
+            type: 'button',
+            class: 'btn wide ghost',
+            onclick: () => {
+              if (typeof ChatHabitFingerprint !== 'undefined' && typeof ChatHabitFingerprint.learnFromChat === 'function') {
+                ChatHabitFingerprint.learnFromChat(chat, directModel, { userConfirmed: true, weight: 3.0 });
+                toast('已将本场 Direct 回复特征记入习惯库', 'ok');
+                this.render();
+              }
+            }
+          }, icon('check'), ' 将本场直连回复记入习惯库')
+        ));
+      } else {
+        heroCard.append(h('p', { class: 'note', style: { marginTop: '8px' } }, chat.busy ? '正在生成直连回复…' : '等待模型回复后提取本场习惯统计'));
+      }
+    } else {
+      heroCard.append(h('p', { class: 'note', style: { marginTop: '8px' } }, '发送消息后将直接调用指定模型，并实时统计本场对话的回复习惯特征。'));
+    }
+
+    box.append(heroCard);
+  },
   overview(box, sid, t, c) {
+    const chat = sid ? Chats.get(sid) : null;
+    const activeMode = chat?.isEvaluation
+      ? (chat.evalMode || 'battle')
+      : (typeof ModeState !== 'undefined' ? ModeState.getMode() : 'agent');
+    if (activeMode === 'battle' || chat?.evalMode === 'battle') {
+      return this.renderBattleOverview(box, sid, chat);
+    }
+    if (activeMode === 'direct' || chat?.evalMode === 'direct') {
+      return this.renderDirectOverview(box, sid, chat);
+    }
     if (!t) { this.empty(box, sid); try { const pc = PelicanShots.card(sid) || (PelicanShots.entryCard ? PelicanShots.entryCard(sid) : null); if (pc) box.append(pc); } catch {} return; }
     const ts = this.turnsOf(sid), idx = ts.indexOf(t), tot = Trace.totals(sid), unit = this.unit();
     const billing=t===ts.at(-1) && typeof BillingProbe!=='undefined'?BillingProbe.summary(sid):null;
@@ -1365,6 +1750,18 @@ Bus.on('models', sid => { if (!sid || sid === Dock.sid()) Dock.soon(); });
 Bus.on('model', c => { if (!c?.sid || c.sid === Dock.sid()) Dock.soon(); });
 Bus.on('pin', () => { try { if (Dock.tab === 'settings') Dock.soon(); } catch {} });
 Bus.on('fmtcal', () => Dock.soon());
+if (typeof Bus !== 'undefined' && typeof Bus.on === 'function') {
+  for (const ev of ['modechange', 'modalitychange', 'directmodelchange', 'eval:vote-revealed']) {
+    Bus.on(ev, () => { try { Dock.render(); } catch {} });
+  }
+  Bus.on('eval:stream', () => {
+    try {
+      if (!Dock._evalStreamT) {
+        Dock._evalStreamT = setTimeout(() => { Dock._evalStreamT = 0; Dock.render(); }, 350);
+      }
+    } catch {}
+  });
+}
 
 // ---------- 工作区面板 ----------
 const WS = {

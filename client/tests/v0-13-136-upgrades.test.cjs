@@ -522,12 +522,15 @@ test('v0.13.161-beta.7: Remove 清理并回退重发, optimize /cost per 当前�
   assert.ok(bpUiSrc.includes('isDeep61Sol') && bpUiSrc.includes('isLong6Sol') && bpUiSrc.includes('isMid56Sol') && bpUiSrc.includes('isFastLuna') && bpUiSrc.includes('isMidAstra'));
   assert.ok(bpUiSrc.includes('isHaikuProfile') && bpUiSrc.includes('preTextTurns'));
 
-  // 4. 3-row wheel 纠偏 selector (① 厂商 -> ② 型号 -> ③ 强度) with vendor Logos and color-highlighted frequent items
+  // 4. 3-row wheel 纠偏 selector (① 厂商 -> ② 型号 -> ③ 强度) with vendor Logos and color-highlighted frequent items + mobile touch wave slide
   assert.ok(dockSrc.includes('① 厂商 -> ② 型号 -> ③ 强度'));
   assert.ok(dockSrc.includes('openCorrectWheel'));
   assert.ok(dockSrc.includes('mc-wheel-row'));
+  assert.ok(dockSrc.includes('startDrag'));
+  assert.ok(dockSrc.includes('上下推动 · 松开选中'));
   assert.ok(dockSrc.includes('ChatHabitFingerprint.getUsageStats'));
   assert.ok(cssSrc.includes('.mc-jump-card.is-freq'));
+  assert.ok(cssSrc.includes('.rv.mc-rv.is-interactive'));
 });
 
 test('v0.13.161-beta.8: Restore exact v0.13.160 /cost reverse inference (Gemini 4 Argon 100%, GPT-5.6 Terra 30.8%, display labels) and strict reverse-inference priority (以反推为准) over habit', () => {
@@ -1248,5 +1251,96 @@ test('v0.13.162: Dual-source (反推 + 习惯) combined confidence & strict desc
   assert.ok(bpUiSrc.includes('if (Boolean(a.hasDual) !== Boolean(b.hasDual)) return Number(Boolean(b.hasDual)) - Number(Boolean(a.hasDual));'));
   assert.ok(bpUiSrc.includes('((b.displayMatch || 0) - (a.displayMatch || 0))'));
 });
+
+test('v0.13.165: EdgeTunnel request-saving optimizations (lazy pool probe, 7-day purity cache + direct ip-api, unified IP poll/ping, 1h standby TTL, telemetry block, direct check.proxyip.cmliussss.net + HTTP/2 IPPure)', async () => {
+  const mainSrc = read('src/main.js');
+  const preloadSrc = read('src/preload.js');
+  const routeNativeSrc = read('src/route-native.js');
+  const poolSrc = read('ui/pool.js');
+  const iprepSrc = read('ui/iprep.js');
+  const autoRouteSrc = read('ui/auto-route.js');
+  const coreSrc = read('ui/core.js');
+  const bootSrc = read('ui/boot.js');
+  const nodeSpeedSrc = read('ui/node-speed.js');
+  const RouteNative = require('../src/route-native');
+
+  assert.ok(mainSrc.includes('TELEMETRY_BLOCK_RE'));
+  assert.ok(mainSrc.includes('function purityCacheOpt(ds)'));
+  assert.ok(mainSrc.includes("ipcMain.handle('host:ippureDirect'"));
+  assert.ok(mainSrc.includes('RouteNative.checkProxyIpDirect(p, ms, job.signal, dsFetch, pOpt)'));
+  assert.ok(preloadSrc.includes("ippureDirect: ip => call('ippureDirect'"));
+  assert.ok(mainSrc.includes('const routeProofs = RouteNative.createProofs({ ttl: 3600000 });'));
+  assert.ok(routeNativeSrc.includes('async function purity(ses, ms=3200, signal, targetIp=\'\', opt=null)'));
+  assert.ok(routeNativeSrc.includes('async function ippureDirect(targetIp, ms = 3200, signal, opt = null)'));
+  assert.ok(routeNativeSrc.includes('async function checkProxyIpDirect(pip, ms=9000, signal=null, directFetch=null, opt=null)'));
+  assert.ok(routeNativeSrc.includes('https://api.check.proxyip.cmliussss.net'));
+  assert.ok(poolSrc.includes('lazyPendingKeys(max = 12)'));
+  assert.ok(poolSrc.includes('EVERY: 12 * 3600e3'));
+  assert.ok(poolSrc.includes("x.via === 'direct-check'"));
+  assert.ok(iprepSrc.includes('unk.slice(0, 6)'));
+  assert.ok(iprepSrc.includes('Host.ippureDirect'));
+  assert.ok(autoRouteSrc.includes('TTL: 3600000'));
+  assert.ok(coreSrc.includes('recordRtt(v)'));
+  assert.ok(bootSrc.includes('Math.max(base, 300000)'));
+  assert.ok(nodeSpeedSrc.includes('BG = 6 * 3600e3'));
+
+  // Verify checkProxyIpDirect parses cmliussss JSON + cached purity with 0 tunnel requests
+  const mockDirectFetch = async url => ({
+    ok: true,
+    text: async () => JSON.stringify({
+      candidate: '203.0.113.55:443',
+      success: true,
+      responseTime: 85,
+      probe_results: {
+        ipv4: {
+          ok: true,
+          connect_ms: 41,
+          http_ms: 78,
+          exit: {
+            ip: '203.0.113.54',
+            country: 'JP',
+            asn: 2516,
+            asOrganization: 'KDDI CORPORATION',
+            botManagement: { corporateProxy: false, score: 99 },
+          },
+        },
+      },
+    }),
+  });
+  const directRes = await RouteNative.checkProxyIpDirect('203.0.113.55:443', 5000, null, mockDirectFetch, {
+    allowTestNet: true,
+    getCachedRep: ip => ip === '203.0.113.54' ? {
+      pu: { fs: 9, res: true, bc: false, dc: false, org: 'KDDI CORPORATION', at: Date.now() },
+      a: Date.now(), h: false, px: false, m: false, isp: 'KDDI CORPORATION', as: 'AS2516',
+    } : null,
+  });
+  assert.equal(directRes.ip, '203.0.113.54');
+  assert.equal(directRes.loc, 'JP');
+  assert.equal(directRes.brana, true);
+  assert.equal(directRes.via, 'direct-check');
+  assert.equal(directRes.pure.fs, 9);
+  assert.equal(directRes.pure.res, true);
+  assert.equal(directRes.ipa.as, 'AS2516');
+});
+
+test('v0.13.166: 4-Agent ModeSwitcher (Max/Battle/Direct), Modality selector, EvalView dual-column vote bar, and Battle Habit Auto-Learning', () => {
+  const evalCore = read('ui/eval-core.js');
+  const modeSw = read('ui/mode-switcher.js');
+  const evalView = read('ui/eval-view.js');
+  const sideTools = read('ui/sidebar-tools.js');
+  const dock = read('ui/dock.js');
+  const bpUi = read('ui/billing-probe-ui.js');
+  const bundle = read('src/bundle.js');
+
+  assert.ok(bundle.includes("'eval-core.js'") && bundle.includes("'mode-switcher.js'") && bundle.includes("'eval-view.js'"));
+  assert.ok(evalCore.includes('const ModeState =') && evalCore.includes('const ModelCatalog =') && evalCore.includes('const EvalEngine ='));
+  assert.ok(modeSw.includes('const ModeSwitcher =') && modeSw.includes('renderBar(tab, chat)'));
+  assert.ok(evalView.includes('const EvalView =') && evalView.includes('renderBattleThread(chat, threadEl, scrollerEl)') && evalView.includes('renderVoteBar(chat)'));
+  assert.ok(sideTools.includes('ModeState.matchesHistoryEntry(e, curMode)'));
+  assert.ok(dock.includes('renderBattleOverview(box, sid, chat)') && dock.includes('renderDirectOverview(box, sid, chat)'));
+  assert.ok(bpUi.includes('buildSideVirtualChat') && bpUi.includes('analyzeBattleChat') && bpUi.includes('learnBattleReveal'));
+});
+
+
 
 

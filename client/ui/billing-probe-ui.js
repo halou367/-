@@ -747,6 +747,10 @@ const ChatHabitFingerprint = (() => {
     let out = { ...s };
     let mStr = String(out.model || '').trim();
     const sidStr = String(out.sid || '');
+    out.battleRevealed = Boolean(s.battleRevealed || /#[ab]$/i.test(sidStr));
+    if (s.battleSide || /#[ab]$/i.test(sidStr)) {
+      out.battleSide = s.battleSide || (/#b$/i.test(sidStr) ? 'b' : 'a');
+    }
     // 自动纠偏测试 3 步菜单时误选的不存在组合 gpt-5.6-luna -> gpt-6-luna
     if (/gpt-5\.6-luna/i.test(mStr)) {
       mStr = mStr.replace(/gpt-5\.6-luna/ig, 'gpt-6-luna');
@@ -862,7 +866,7 @@ const ChatHabitFingerprint = (() => {
       }
     }
     // 过滤因中途路由切换（如首轮 Gemini Argon -> 后续切换为 GPT-6.1 Sol / Claude 产生大量隐藏思考块与小写 doctype）而误记为 Gemini 的自动纠偏样本
-    if (/gemini|google|argon/i.test(mStr) && !out.importedFromDiag && (out.autoTeacher || !out.userConfirmed) && out.meta) {
+    if (/gemini|google|argon/i.test(mStr) && !out.importedFromDiag && !out.battleRevealed && (out.autoTeacher || !out.userConfirmed) && out.meta) {
       const mHidG = Number(out.meta.hidR) || 0;
       const mLowerDoc = Number(out.meta.lowerDoctype) || 0;
       const mChkG = Number(out.meta.memoAvgChunk) || 0;
@@ -886,7 +890,7 @@ const ChatHabitFingerprint = (() => {
         out.tags = out.tags.filter(t => !/^闭源隐藏思考/.test(String(t || '')));
       }
     } else if (!isOpenName(mStr)) {
-      if (!out.importedFromDiag && (out.autoTeacher || !out.userConfirmed) && out.meta) {
+      if (!out.importedFromDiag && !out.battleRevealed && (out.autoTeacher || !out.userConfirmed) && out.meta) {
         const mChk = Number(out.meta.memoAvgChunk) || 0;
         const mCnt = Number(out.meta.memoDeltaCount) || 0;
         const mHid = Number(out.meta.hidR) || 0;
@@ -3632,7 +3636,7 @@ const ChatHabitFingerprint = (() => {
     const optsObj = (typeof arg3 === 'number')
       ? { ...(arg4 && typeof arg4 === 'object' ? arg4 : {}), weight: arg3 }
       : (arg3 && typeof arg3 === 'object' ? arg3 : {});
-    const { userConfirmed = false, autoTeacher = false, teacherConf = 0, weight = 1.0, score = null, modelMeta = null, oldModel = null } = optsObj;
+    const { userConfirmed = false, autoTeacher = false, teacherConf = 0, weight = 1.0, score = null, modelMeta = null, oldModel = null, battleRevealed = false, battleSide = null } = optsObj;
     if (!chat?.sid || !modelName) return null;
     const rawName = String(modelName || '').replace(/[?？]+$/, '').trim();
     if (!rawName || /^(未知型号|待定|未识别)$/.test(rawName)) return null;
@@ -3688,7 +3692,7 @@ const ChatHabitFingerprint = (() => {
       sid: chat.sid,
       model: canon,
       rawLabel: rawName,
-      isOpen: Boolean(feat?.isOpenThink || isOpenName(canon)),
+      isOpen: (battleRevealed || chat?.isEvaluation || chat?.battleSide || /#[ab]$/i.test(String(chat.sid))) ? Boolean(isOpenName(canon)) : Boolean(feat?.isOpenThink || isOpenName(canon)),
       score: targetScore,
       rawHabitScore: feat?.habitReasoningScore ?? null,
       vec: vec.map(v => Math.round((Number(v) || 0) * 1000) / 1000),
@@ -3700,6 +3704,8 @@ const ChatHabitFingerprint = (() => {
       autoTeacher: Boolean(autoTeacher && !isManualUserConfirm),
       teacherConf: Number(teacherConf) || (isManualUserConfirm ? 100 : 0),
       weight: isManualUserConfirm ? 3.5 : (isHighTrustTeacher ? 3.0 : weight),
+      battleRevealed: Boolean(battleRevealed || chat?.battleSide || /#[ab]$/i.test(String(chat.sid))),
+      battleSide: battleSide || chat?.battleSide || (/#b$/i.test(String(chat.sid)) ? 'b' : /#a$/i.test(String(chat.sid)) ? 'a' : undefined),
       at: Date.now(),
     };
     if (idx >= 0) bank[idx] = entry;
@@ -4576,6 +4582,100 @@ const ChatHabitFingerprint = (() => {
     return { kind: 'bank', imported: arr.length, ...res };
   }
 
+  function buildSideVirtualChat(chat, pos = 'a') {
+    if (!chat || !chat.sid) return null;
+    const targetPos = pos === 'b' ? 'b' : 'a';
+    const baseSid = String(chat.sid).replace(/#[ab]$/i, '');
+    const filteredMsgs = (Array.isArray(chat.messages) ? chat.messages : []).filter(m => {
+      if (!m) return false;
+      if (m.role === 'user') return true;
+      if (m.role === 'assistant') {
+        if (m.participantPosition === 'a' || m.participantPosition === 'b') {
+          return m.participantPosition === targetPos;
+        }
+        return targetPos === 'a';
+      }
+      return false;
+    });
+    return {
+      ...chat,
+      sid: `${baseSid}#${targetPos}`,
+      parentSid: baseSid,
+      battleSide: targetPos,
+      messages: filteredMsgs,
+    };
+  }
+
+  function analyzeBattleChat(chat) {
+    if (!chat || !chat.sid) return null;
+    const vChatA = buildSideVirtualChat(chat, 'a');
+    const vChatB = buildSideVirtualChat(chat, 'b');
+    const featA = vChatA ? extractFeatures(vChatA, null) : null;
+    const featB = vChatB ? extractFeatures(vChatB, null) : null;
+    const anaA = vChatA && featA ? analyze(vChatA, null) : null;
+    const anaB = vChatB && featB ? analyze(vChatB, null) : null;
+    const snap = {
+      sid: chat.sid,
+      at: Date.now(),
+      a: {
+        pos: 'a',
+        hasReply: Boolean(featA && featA.turns > 0),
+        features: featA,
+        habitTags: anaA?.habitTags || featA?.habitTags || [],
+        candidates: Array.isArray(anaA?.candidates) ? anaA.candidates.slice(0, 3) : [],
+        reasoningScore: anaA?.reasoningScore ?? featA?.habitReasoningScore ?? null,
+        revealedName: chat.voteState?.modelAName || null,
+      },
+      b: {
+        pos: 'b',
+        hasReply: Boolean(featB && featB.turns > 0),
+        features: featB,
+        habitTags: anaB?.habitTags || featB?.habitTags || [],
+        candidates: Array.isArray(anaB?.candidates) ? anaB.candidates.slice(0, 3) : [],
+        reasoningScore: anaB?.reasoningScore ?? featB?.habitReasoningScore ?? null,
+        revealedName: chat.voteState?.modelBName || null,
+      },
+    };
+    chat._battleHabitSnap = snap;
+    return snap;
+  }
+
+  function learnBattleReveal(chat, payload = {}) {
+    if (!chat || !chat.sid) return null;
+    const nameA = String(payload?.modelA?.name || chat.voteState?.modelAName || '').trim();
+    const nameB = String(payload?.modelB?.name || chat.voteState?.modelBName || '').trim();
+    const vChatA = buildSideVirtualChat(chat, 'a');
+    const vChatB = buildSideVirtualChat(chat, 'b');
+    let learnedA = null, learnedB = null;
+    if (vChatA && nameA && !/^(未知|待定|Model A)/i.test(nameA)) {
+      learnedA = learnFromChat(vChatA, nameA, {
+        userConfirmed: true,
+        autoTeacher: false,
+        teacherConf: 100,
+        weight: 3.5,
+        battleRevealed: true,
+        battleSide: 'a',
+      });
+    }
+    if (vChatB && nameB && !/^(未知|待定|Model B)/i.test(nameB)) {
+      learnedB = learnFromChat(vChatB, nameB, {
+        userConfirmed: true,
+        autoTeacher: false,
+        teacherConf: 100,
+        weight: 3.5,
+        battleRevealed: true,
+        battleSide: 'b',
+      });
+    }
+    if (chat.voteState) {
+      chat.voteState.learnedAt = Date.now();
+      chat.voteState.learnedA = Boolean(learnedA);
+      chat.voteState.learnedB = Boolean(learnedB);
+    }
+    analyzeBattleChat(chat);
+    return { learnedA, learnedB };
+  }
+
   try { syncPricingReverseCalib(loadCalibration()); } catch {}
   const recordUserCorrection = confirmUserCorrection;
 
@@ -4587,6 +4687,9 @@ const ChatHabitFingerprint = (() => {
     structuralReverse,
     learnFromChat,
     learnFromReverseTeacher,
+    buildSideVirtualChat,
+    analyzeBattleChat,
+    learnBattleReveal,
     loadCalibration,
     importDiagnosticJson,
     exportHabitBank,
@@ -4612,6 +4715,14 @@ const ChatHabitFingerprint = (() => {
 })();
 try { globalThis.ChatHabitFingerprint = ChatHabitFingerprint; } catch {}
 try { if (typeof window !== 'undefined') window.ChatHabitFingerprint = ChatHabitFingerprint; } catch {}
+if (typeof Bus !== 'undefined' && typeof Bus.on === 'function') {
+  Bus.on('eval:vote-revealed', payload => {
+    try {
+      if (payload?.chat) ChatHabitFingerprint.learnBattleReveal(payload.chat, payload);
+      if (typeof Dock !== 'undefined' && typeof Dock.render === 'function') Dock.render();
+    } catch {}
+  });
+}
 
 const BillingProbe = (() => {
   const bundled = /*__ARENA_AGENT_CATALOG__*/null;

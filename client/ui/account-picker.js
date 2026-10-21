@@ -2,8 +2,8 @@
 // never round-trip public/lite account objects through saveAccount (Android clears omitted proxies).
 const AccountPicker = {
   renamed: new Map(), refreshJob: null, checkTimer: 0, lastCheckAt: 0,
-  refreshAll() {
-    if (!this.refreshJob) this.refreshJob = Promise.resolve().then(() => Host.refreshQuotas()).finally(() => { this.refreshJob = null; });
+  refreshAll(force = true) {
+    if (!this.refreshJob) this.refreshJob = Promise.resolve().then(() => Host.refreshQuotas(force)).finally(() => { this.refreshJob = null; });
     return this.refreshJob;
   },
   checkIntervalMs() {
@@ -17,7 +17,7 @@ const AccountPicker = {
     if (!force && iv > 0 && this.lastCheckAt && now() - this.lastCheckAt < Math.min(iv, 60000)) return null;
     this.lastCheckAt = now();
     try {
-      const res = await this.refreshAll();
+      const res = await this.refreshAll(force);
       if (typeof LaunchPick !== 'undefined') LaunchPick.cache = null;
       return res;
     } catch { return null; }

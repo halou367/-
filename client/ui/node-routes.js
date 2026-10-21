@@ -281,7 +281,7 @@ const NodeRoutes = (() => {
     }
     // Stream completed IPs immediately. Mutations re-check the current job INSIDE the write queue.
     async function probeMany(keys,link,onPart,j){
-      const modern=!!(Host.onProbeProgress&&P.streamProbe),size=modern?16:4,q=[];
+      const modern=!!(Host.onProbeProgress&&P.streamProbe),size=modern?32:4,q=[];
       for(let i=0;i<keys.length;i+=size)q.push(keys.slice(i,i+size));let fatal='';
       const worker=async()=>{while(q.length&&!fatal&&workLive(j)){
         const part=q.shift(),seen=new Set(),sources=new Map(part.map(k=>[k,P.d?.ips?.[k]?.src||'']));

@@ -117,6 +117,10 @@ test('v0.13.150: remembered update password (0 extra popup), 4-step progress UI 
   assert.match(mainSrc, /taskkill \/F \/T \/IM "xray\.exe"/);
   assert.doesNotMatch(mainSrc, /taskkill \/F \/T \/PID %ANC_PID%/);
   assert.doesNotMatch(mainSrc, /taskkill \/F \/T \/IM "Brana AI\.exe"/);
+  assert.doesNotMatch(mainSrc, /find\.exe" "%ANC_PID%"/);
+  assert.doesNotMatch(mainSrc, /find\.exe" \/I "Brana AI\.exe"/);
+  assert.match(mainSrc, /function cleanOrphanFindProcesses\(\)/);
+  assert.match(mainSrc, /winmgmts:/);
   assert.ok(!mainSrc.includes('setTimeout(() => { try { shell.showItemInFolder(p.file); } catch {} }, 2500)'));
   assert.match(closePs, /\$hasMain -and -not \$env:BRANA_UPDATING/);
   assert.match(closePs, /Repair-UninstallRegistry/);

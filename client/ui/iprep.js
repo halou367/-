@@ -168,21 +168,35 @@ const IPRep = {
     this._curAt ||= {}; if (now() - (this._curAt[ip] || 0) < 10 * 60e3) return; this._curAt[ip] = now();
     const tasks = [];
     if (!r?.a && Host.fetchText) {
-      tasks.push(Pool.load().then(() => Host.fetchText('http://ip-api.com/json/' + encodeURIComponent(ip) + '?fields=status,query,isp,org,as,mobile,proxy,hosting')).then(res => {
+      tasks.push(Pool.load().then(() => Host.fetchText('http://ip-api.com/json/' + encodeURIComponent(ip) + '?fields=status,query,isp,org,as,mobile,proxy,hosting', { direct: true })).then(res => {
         let x = null; try { x = res?.text ? JSON.parse(res.text) : null; } catch {}
         if (!x || x.status !== 'success') return;
         return Pool.mutate(d => this.putIpa(d, ip, { ip: x.query || ip, h: !!x.hosting, px: !!x.proxy, m: !!x.mobile, isp: x.isp || x.org || '', as: String(x.as || '').split(' ')[0] }));
       }).catch(() => {}));
     }
-    if (!r?.pu && typeof fetch === 'function') {
-      tasks.push(fetch('https://my.ippure.com/v1/info', { cache: 'no-store' }).then(res => res.ok ? res.json() : null).then(j => {
+    if (!r?.pu && (Host.ippureDirect || typeof fetch === 'function')) {
+      tasks.push((async () => {
+        if (Host.ippureDirect) {
+          const dp = await Host.ippureDirect(ip).catch(() => null);
+          if (dp && Number.isFinite(+dp.fs)) {
+            const puIp = this.normIp(dp.ip) || ip;
+            await Pool.mutate(d => {
+              this.putPu(d, puIp, dp);
+              if (puIp !== ip) this.putPu(d, ip, { ...dp, ip });
+            });
+            return;
+          }
+        }
+        if (typeof fetch !== 'function') return;
+        const res = await fetch('https://my.ippure.com/v1/info', { cache: 'no-store' });
+        const j = res.ok ? await res.json() : null;
         if (!j || !Number.isFinite(+j.fraudScore)) return;
         const puIp = this.normIp(j.ip) || ip;
-        return Pool.mutate(d => {
+        await Pool.mutate(d => {
           this.putPu(d, puIp, { ip: puIp, fs: +j.fraudScore, res: !!j.isResidential, bc: !!j.isBroadcast, dc: !!j.isDataCenter, org: String(j.asOrganization || '').slice(0, 40) });
           if (puIp !== ip) this.putPu(d, ip, { ip, fs: +j.fraudScore, res: !!j.isResidential, bc: !!j.isBroadcast, dc: !!j.isDataCenter, org: String(j.asOrganization || '').slice(0, 40) });
         });
-      }).catch(() => {}));
+      })().catch(() => {}));
     }
     if (!tasks.length) return;
     void Promise.all(tasks).then(() => {
@@ -398,7 +412,7 @@ const IPRep = {
       for (let i = 0; i < a.length; i += 100) {
         if (i) await sleep(4500);
         const part = a.slice(i, i + 100);
-        const r = await Host.fetchText('http://ip-api.com/batch?fields=status,query,isp,org,as,mobile,proxy,hosting', { method: 'POST', body: JSON.stringify(part), type: 'application/json' }).catch(e => ({ error: cleanErr(e) }));
+        const r = await Host.fetchText('http://ip-api.com/batch?fields=status,query,isp,org,as,mobile,proxy,hosting', { method: 'POST', body: JSON.stringify(part), type: 'application/json', direct: true }).catch(e => ({ error: cleanErr(e) }));
         let arr = null; try { arr = r?.text ? JSON.parse(r.text) : null; } catch {}
         if (!Array.isArray(arr)) { this.lastErr = 'ip-api：' + (r?.error || '返回格式不对'); break; }
         await Pool.mutate(d => {
@@ -418,7 +432,7 @@ const IPRep = {
         for (let i = 0; i < pick.length; i += 25) {
           if (i) await sleep(1500);
           const part = pick.slice(i, i + 25);
-          const r = await Host.fetchText('https://proxycheck.io/v2/?vpn=1&risk=1' + (key ? '&key=' + encodeURIComponent(key) : ''), { method: 'POST', body: 'ips=' + part.join(','), type: 'application/x-www-form-urlencoded' }).catch(e => ({ error: cleanErr(e) }));
+          const r = await Host.fetchText('https://proxycheck.io/v2/?vpn=1&risk=1' + (key ? '&key=' + encodeURIComponent(key) : ''), { method: 'POST', body: 'ips=' + part.join(','), type: 'application/x-www-form-urlencoded', direct: true }).catch(e => ({ error: cleanErr(e) }));
           let j = null; try { j = r?.text ? JSON.parse(r.text) : null; } catch {}
           if (!j || typeof j !== 'object') { this.lastErr = 'proxycheck：' + (r?.error || '返回格式不对'); break; }
           if (j.status === 'denied' || j.status === 'error') {
@@ -431,10 +445,25 @@ const IPRep = {
           });
         }
       }
-      // ③ IPPure 兜底：上面都没评出来的（ip-api 失败、proxycheck 额度用完），经隧道重测一次顺带取 IPPure 风险值
-      const unk = []; const seenEg = new Set();
-      for (const [k, e] of Pool.entries()) { if (e.gone || e.ok !== true || this.trusted(k)) continue; const eg = this.egOf(k, e); if (!eg || seenEg.has(eg)) continue; seenEg.add(eg); const p = rep()[eg]; if (!this.score(k, e).known && !(p?.pu && now() - (p.pu.at || 0) < 7 * 86400e3)) unk.push(k); }
-      if (unk.length && Pool.link?.() && Host.probe) await Pool.probe(unk.slice(0, 96)).catch(() => {});
+      // ③ IPPure 兜底：上面都没评出来的（ip-api 失败、proxycheck 额度用完），优先走直连 IPPure HTTP/2（0 节点请求），仅在未命中时按需补测
+      const curAcct = typeof UI !== 'undefined' ? UI?.host?.account : null;
+      const curCc = String(curAcct?.region || '').trim().toUpperCase();
+      const regionRich = !force && curCc && Pool.avail?.(curCc, curAcct?.id)?.length >= 4;
+      if (!regionRich) {
+        const unk = []; const seenEg = new Set();
+        for (const [k, e] of Pool.entries()) { if (e.gone || e.ok !== true || this.trusted(k)) continue; if (curCc && e.loc && e.loc !== curCc) continue; const eg = this.egOf(k, e); if (!eg || seenEg.has(eg)) continue; seenEg.add(eg); const p = rep()[eg]; if (!this.score(k, e).known && !(p?.pu && now() - (p.pu.at || 0) < 7 * 86400e3)) unk.push(k); }
+        if (unk.length && Host.ippureDirect) {
+          const batchK = unk.slice(0, 10);
+          await Promise.all(batchK.map(async k => {
+            const eg = this.egOf(k, Pool.d?.ips?.[k]);
+            if (!eg) return;
+            const dp = await Host.ippureDirect(eg).catch(() => null);
+            if (dp && Number.isFinite(+dp.fs)) await Pool.mutate(d => this.putPu(d, eg, dp));
+          }));
+        } else if (unk.length && Pool.link?.() && Host.probe) {
+          await Pool.probe(unk.slice(0, 6)).catch(() => {});
+        }
+      }
       // 清理：已经不在池子里、30 天没更新的出口记录
       await Pool.mutate(d => {
         const live = new Set(); for (const [k, e] of Object.entries(d.ips)) { const eg = this.egOf(k, e); if (eg) live.add(eg); }
@@ -445,14 +474,14 @@ const IPRep = {
     finally { this.running = false; this.at = now(); Bus.emit('pool'); }
     this.check();
   },
-  // ---- 按需评估指定 ProxyIP 的出口（筛选 / 切换前用）：ip-api + proxycheck（每日额度内）；评估完自动拉黑并删除高风险 ----
+  // ---- 按需评估指定 ProxyIP 的出口（筛选 / 切换前用）：ip-api + proxycheck（每日额度内）+ 直连 IPPure；评估完自动拉黑并删除高风险 ----
   async rate(keys, extra = []) {
     const egs = [...new Set([...(keys || []).map(k => this.egOf(k)), ...extra].filter(Boolean))];
     if (!egs.length || !Host.fetchText) return { ok: false };
     const rep = () => Pool.d.rep || {};
     const a = egs.filter(ip => now() - (rep()[ip]?.a || 0) > 7 * 86400e3).slice(0, 100);
     if (a.length) {
-      const r = await Host.fetchText('http://ip-api.com/batch?fields=status,query,isp,org,as,mobile,proxy,hosting', { method: 'POST', body: JSON.stringify(a), type: 'application/json' }).catch(e => ({ error: cleanErr(e) }));
+      const r = await Host.fetchText('http://ip-api.com/batch?fields=status,query,isp,org,as,mobile,proxy,hosting', { method: 'POST', body: JSON.stringify(a), type: 'application/json', direct: true }).catch(e => ({ error: cleanErr(e) }));
       let arr = null; try { arr = r?.text ? JSON.parse(r.text) : null; } catch {}
       if (Array.isArray(arr)) await Pool.mutate(d => { d.rep ||= {}; for (const x of arr) if (x && x.status === 'success' && x.query) Object.assign(d.rep[x.query] ||= {}, { a: now(), h: !!x.hosting, px: !!x.proxy, m: !!x.mobile, isp: String(x.isp || x.org || '').slice(0, 40) }); });
     }
@@ -461,13 +490,22 @@ const IPRep = {
     let quota = left > 0;
     const c = egs.filter(ip => now() - (rep()[ip]?.c || 0) > 14 * 86400e3).slice(0, Math.max(0, Math.min(25, left)));
     if (c.length) {
-      const r = await Host.fetchText('https://proxycheck.io/v2/?vpn=1&risk=1' + (key ? '&key=' + encodeURIComponent(key) : ''), { method: 'POST', body: 'ips=' + c.join(','), type: 'application/x-www-form-urlencoded' }).catch(e => ({ error: cleanErr(e) }));
+      const r = await Host.fetchText('https://proxycheck.io/v2/?vpn=1&risk=1' + (key ? '&key=' + encodeURIComponent(key) : ''), { method: 'POST', body: 'ips=' + c.join(','), type: 'application/x-www-form-urlencoded', direct: true }).catch(e => ({ error: cleanErr(e) }));
       let j = null; try { j = r?.text ? JSON.parse(r.text) : null; } catch {}
       if (j && (j.status === 'denied' || j.status === 'error')) { quota = false; await Pool.mutate(d => { d.pcq = { day, n: cap }; }); }
       else if (j && typeof j === 'object') await Pool.mutate(d => {
         d.rep ||= {}; d.pcq = d.pcq?.day === day ? d.pcq : { day, n: 0 }; d.pcq.n = (d.pcq.n || 0) + c.length;
         for (const ip of c) { const x = j[ip]; if (x && typeof x === 'object') Object.assign(d.rep[ip] ||= {}, { c: now(), r: +x.risk || 0, pt: String(x.type || '').slice(0, 20), pp: x.proxy === 'yes' }); }
       });
+    }
+    if (Host.ippureDirect) {
+      const needPu = egs.filter(ip => !(rep()[ip]?.pu && now() - (rep()[ip].pu.at || 0) < 7 * 86400e3)).slice(0, 10);
+      if (needPu.length) {
+        await Promise.all(needPu.map(async ip => {
+          const dp = await Host.ippureDirect(ip).catch(() => null);
+          if (dp && Number.isFinite(+dp.fs)) await Pool.mutate(d => this.putPu(d, ip, dp));
+        }));
+      }
     }
     if (!quota || egs.some(ip => rep()[ip]?.a && !rep()[ip]?.c && !rep()[ip]?.pu)) {
       await Pool.mutate(d => {

@@ -36,32 +36,52 @@ jobs:
           "$RUNNER_TEMP/brana-ui-check/node_modules/.bin/playwright" install --with-deps chromium
           sudo apt-get install -y xvfb libgtk-3-0t64
           export NODE_PATH="$RUNNER_TEMP/brana-ui-check/node_modules"
-          node client/scripts/check-connection-browser.cjs
-          node client/scripts/check-auth-browser.cjs
-          node client/scripts/check-node-browser.cjs
-          node client/scripts/check-route-editors-browser.cjs
-          node client/scripts/check-history-browser.cjs
-          node client/scripts/check-workspace-browser.cjs
-          xvfb-run -a "$RUNNER_TEMP/brana-ui-check/node_modules/.bin/electron" client/scripts/check-workspace-electron.cjs --no-sandbox
-          node client/scripts/check-draw-titles-browser.cjs
-          node client/scripts/check-html-preview-browser.cjs
-          node client/scripts/check-interactive-card-browser.cjs
-          node client/scripts/check-browser-mode-browser.cjs
-          node client/scripts/check-extensions-toolbar-browser.cjs
-          node client/scripts/check-bookmarks-browser.cjs
-          node client/scripts/check-offline-modes-browser.cjs
-          node client/scripts/check-gacha-captcha-browser.cjs
-          xvfb-run -a "$RUNNER_TEMP/brana-ui-check/node_modules/.bin/electron" --no-sandbox client/scripts/check-privacy-electron.cjs
-          xvfb-run -a "$RUNNER_TEMP/brana-ui-check/node_modules/.bin/electron" --no-sandbox client/scripts/check-runtime-electron.cjs
-          xvfb-run -a "$RUNNER_TEMP/brana-ui-check/node_modules/.bin/electron" --no-sandbox client/scripts/check-extensions-electron.cjs
-          xvfb-run -a "$RUNNER_TEMP/brana-ui-check/node_modules/.bin/electron" --no-sandbox client/scripts/check-extension-storage-electron.cjs
-          xvfb-run -a "$RUNNER_TEMP/brana-ui-check/node_modules/.bin/electron" --no-sandbox client/scripts/check-browser-chrome-electron.cjs
-          xvfb-run -a "$RUNNER_TEMP/brana-ui-check/node_modules/.bin/electron" --no-sandbox client/scripts/check-browser-navigation-electron.cjs
-          xvfb-run -a "$RUNNER_TEMP/brana-ui-check/node_modules/.bin/electron" --no-sandbox client/scripts/check-browser-viewport-electron.cjs
-          xvfb-run -a "$RUNNER_TEMP/brana-ui-check/node_modules/.bin/electron" --no-sandbox client/scripts/check-auth-route-electron.cjs
-          xvfb-run -a "$RUNNER_TEMP/brana-ui-check/node_modules/.bin/electron" --no-sandbox client/scripts/check-multiwindow-electron.cjs
           export BRANA_GBROWSER="$(node -p "require('playwright').chromium.executablePath()")"
-          xvfb-run -a node client/scripts/check-gbrowser-privacy.cjs
+          ELECTRON_BIN="$RUNNER_TEMP/brana-ui-check/node_modules/.bin/electron" node -e '
+            const { spawn } = require("node:child_process");
+            const el = process.env.ELECTRON_BIN;
+            const jobs = [
+              ["check-runtime-electron", "xvfb-run", ["-n", "101", "-s", "-screen 0 1280x900x24", el, "--no-sandbox", "client/scripts/check-runtime-electron.cjs"]],
+              ["check-route-editors-browser", "node", ["client/scripts/check-route-editors-browser.cjs"]],
+              ["check-gacha-captcha-browser", "node", ["client/scripts/check-gacha-captcha-browser.cjs"]],
+              ["check-auth-browser", "node", ["client/scripts/check-auth-browser.cjs"]],
+              ["check-node-browser", "node", ["client/scripts/check-node-browser.cjs"]],
+              ["check-connection-browser", "node", ["client/scripts/check-connection-browser.cjs"]],
+              ["check-interactive-card-browser", "node", ["client/scripts/check-interactive-card-browser.cjs"]],
+              ["check-history-browser", "node", ["client/scripts/check-history-browser.cjs"]],
+              ["check-workspace-browser", "node", ["client/scripts/check-workspace-browser.cjs"]],
+              ["check-browser-mode-browser", "node", ["client/scripts/check-browser-mode-browser.cjs"]],
+              ["check-html-preview-browser", "node", ["client/scripts/check-html-preview-browser.cjs"]],
+              ["check-draw-titles-browser", "node", ["client/scripts/check-draw-titles-browser.cjs"]],
+              ["check-extensions-toolbar-browser", "node", ["client/scripts/check-extensions-toolbar-browser.cjs"]],
+              ["check-bookmarks-browser", "node", ["client/scripts/check-bookmarks-browser.cjs"]],
+              ["check-offline-modes-browser", "node", ["client/scripts/check-offline-modes-browser.cjs"]],
+              ["check-auth-route-electron", "xvfb-run", ["-n", "102", "-s", "-screen 0 1280x900x24", el, "--no-sandbox", "client/scripts/check-auth-route-electron.cjs"]],
+              ["check-browser-navigation-electron", "xvfb-run", ["-n", "103", "-s", "-screen 0 1280x900x24", el, "--no-sandbox", "client/scripts/check-browser-navigation-electron.cjs"]],
+              ["check-extensions-electron", "xvfb-run", ["-n", "104", "-s", "-screen 0 1280x900x24", el, "--no-sandbox", "client/scripts/check-extensions-electron.cjs"]],
+              ["check-extension-storage-electron", "xvfb-run", ["-n", "105", "-s", "-screen 0 1280x900x24", el, "--no-sandbox", "client/scripts/check-extension-storage-electron.cjs"]],
+              ["check-browser-chrome-electron", "xvfb-run", ["-n", "106", "-s", "-screen 0 1280x900x24", el, "--no-sandbox", "client/scripts/check-browser-chrome-electron.cjs"]],
+              ["check-browser-viewport-electron", "xvfb-run", ["-n", "107", "-s", "-screen 0 1280x900x24", el, "--no-sandbox", "client/scripts/check-browser-viewport-electron.cjs"]],
+              ["check-privacy-electron", "xvfb-run", ["-n", "108", "-s", "-screen 0 1280x900x24", el, "--no-sandbox", "client/scripts/check-privacy-electron.cjs"]],
+              ["check-workspace-electron", "xvfb-run", ["-n", "109", "-s", "-screen 0 1280x900x24", el, "client/scripts/check-workspace-electron.cjs", "--no-sandbox"]],
+              ["check-multiwindow-electron", "xvfb-run", ["-n", "110", "-s", "-screen 0 1280x900x24", el, "--no-sandbox", "client/scripts/check-multiwindow-electron.cjs"]],
+              ["check-gbrowser-privacy", "xvfb-run", ["-n", "111", "-s", "-screen 0 1280x900x24", "node", "client/scripts/check-gbrowser-privacy.cjs"]]
+            ];
+            let idx = 0, failed = false;
+            const runOne = ([name, cmd, args]) => new Promise(res => {
+              const t0 = Date.now(), p = spawn(cmd, args, { stdio: ["ignore", "pipe", "pipe"], env: process.env });
+              let out = "";
+              p.stdout.on("data", d => out += d);
+              p.stderr.on("data", d => out += d);
+              p.on("close", code => {
+                const s = ((Date.now() - t0) / 1000).toFixed(1) + "s";
+                if (code === 0) { console.log("PASS [" + s + "] " + name); res(true); }
+                else { console.error("FAIL [" + s + "] " + name + " (exit " + code + ")\n" + out.slice(-4000)); failed = true; res(false); }
+              });
+            });
+            const worker = async () => { while (idx < jobs.length && !failed) { const j = jobs[idx++]; await runOne(j); } };
+            Promise.all(Array.from({ length: 3 }, worker)).then(() => { if (failed) process.exit(1); });
+          '
   prep:
     runs-on: ubuntu-latest
     steps:

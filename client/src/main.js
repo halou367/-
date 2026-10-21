@@ -657,12 +657,13 @@ ipcMain.handle('browser:showFile', async (_e, p) => {
   try { if (p && typeof p === 'string' && fs.existsSync(p)) { shell.showItemInFolder(p); return { ok: true }; } } catch {}
   return { ok: false };
 });
+const TELEMETRY_BLOCK_RE = /^https?:\/\/(?:[a-z0-9-]+\.)?(?:i\.posthog\.com\/(?:e|batch|s|track)\b|ingest\.sentry\.io\/|sentry\.io\/api\/|cloudflareinsights\.com\/|google-analytics\.com\/|googletagmanager\.com\/|doubleclick\.net\/|clarity\.ms\/|hotjar\.com\/|browser-intake-datadoghq\.com\/)/i;
 function prepSession(a) {
   const ses = session.fromPartition(partOf(a.id));
   if (ses.__prepared) return ses; ses.__prepared = true;
   cookiePersistence.watch(ses); siteLogins.watch(a.id, ses);
   applyFp(a);
-  ses.webRequest.onBeforeRequest({urls:['http://*/*','https://*/*','ws://*/*','wss://*/*']},(d,cb)=>cb({cancel:!!ses.__routeBlocked}));
+  ses.webRequest.onBeforeRequest({urls:['http://*/*','https://*/*','ws://*/*','wss://*/*']},(d,cb)=>cb({cancel:!!ses.__routeBlocked||TELEMETRY_BLOCK_RE.test(String(d?.url||''))}));
   ses.webRequest.onHeadersReceived((d,cb)=>{const headers={...d.responseHeaders};for(const key of Object.keys(headers))if(key.toLowerCase()==='x-dns-prefetch-control')delete headers[key];headers['X-DNS-Prefetch-Control']=['off'];cb({responseHeaders:headers});});
   // reCAPTCHA 的 iframe 会申请 storage-access：拒绝会让 grecaptcha.execute 一直不返回（发不出新对话）
   const ALLOW = ['notifications', 'clipboard-sanitized-write', 'clipboard-read', 'storage-access', 'top-level-storage-access', 'fullscreen'];
@@ -1755,13 +1756,49 @@ ipcMain.handle('host:ready', e => {
   return true;
 });
 ipcMain.handle('host:stage', (e, t) => { splashText(String(t || '').slice(0, 40)); return true; });
+function purityCacheOpt(ds) {
+  return {
+    getCachedRep: ip => (ip && DB?.shared?.pippool?.rep) ? DB.shared.pippool.rep[ip] : null,
+    directFetch: ds ? (u, o) => ds.fetch(u, o) : null,
+    directIppure: true,
+    onCacheRep: (ip, { pure, ipa }) => {
+      if (!ip || !DB?.shared?.pippool) return;
+      const rep = (DB.shared.pippool.rep ||= {});
+      const entry = (rep[ip] ||= {});
+      const at = Date.now();
+      if (pure && Number.isFinite(+pure.fs) && !entry.pu) {
+        entry.pu = { fs: +pure.fs, res: !!pure.res, bc: !!pure.bc, dc: !!pure.dc, org: String(pure.org || '').slice(0, 40), at };
+      }
+      if (ipa && !entry.a) {
+        Object.assign(entry, { a: at, h: !!ipa.h, px: !!ipa.px, m: !!ipa.m, isp: String(ipa.isp || '').slice(0, 40), as: String(ipa.as || '').slice(0, 12) });
+      }
+    },
+  };
+}
+ipcMain.handle('host:ippureDirect', async (_e, ip) => {
+  try {
+    const qIp = String(ip || '').trim();
+    if (!qIp) return null;
+    const ds = await directSession().catch(() => null);
+    const pOpt = purityCacheOpt(ds);
+    const cached = pOpt.getCachedRep(qIp);
+    if (cached?.pu && Number.isFinite(+cached.pu.fs) && (Date.now() - (+cached.pu.at || 0) < 7 * 86400e3)) {
+      return { ip: qIp, fs: +cached.pu.fs, res: !!cached.pu.res, bc: !!cached.pu.bc, dc: !!cached.pu.dc, org: String(cached.pu.org || '') };
+    }
+    const r = await RouteNative.ippureDirect(qIp, 3500);
+    if (r && pOpt.onCacheRep) pOpt.onCacheRep(qIp, { pure: r });
+    return r || null;
+  } catch {
+    return null;
+  }
+});
 // ProxyIP 批量检测：一个 xray 进程开 N 个入口（每个入口走同一个节点 + 不同 ProxyIP），
 // 每个入口 ① 读 arena.ai/cdn-cgi/trace 得出口 IP / 地区 / 延迟 ② 再请求 arena.ai/robots.txt 确认 Brana 能正常访问（不是验证页）
 async function probeVia(i, port, ms, signal) {
   const ses = session.fromPartition('probe-slot-' + i);
   await ses.setProxy({ proxyRules: 'socks5://127.0.0.1:' + port, proxyBypassRules: '<-loopback>' });
   await ses.closeAllConnections?.().catch?.(() => {});
-  await ses.clearAuthCache(); await ses.clearStorageData();
+  await ses.clearAuthCache();
   if (signal?.aborted) return { cancelled:true };
   const get = async (url, left) => {
     const ctl = new AbortController(), tm = setTimeout(() => ctl.abort(), Math.max(1500, left));
@@ -1780,7 +1817,10 @@ async function probeVia(i, port, ms, signal) {
     out.cold = out.ms; out.ms = Math.min(out.ms, Date.now() - t1);
     out.status = r.status; out.brana = r.status === 200 && /user-agent/i.test(r.text);
     if (!out.brana) out.error = r.status === 403 || r.status === 503 ? 'Brana 返回验证页（HTTP ' + r.status + '）' : r.status === 429 ? 'Brana 限流（429）' : 'Brana 访问异常（HTTP ' + r.status + '）';
-    else Object.assign(out, await RouteNative.purity(ses, 3200, signal, out.ip));   // 测延迟顺带测纯净度：IPPure + ip-api（经同一条隧道，并行）
+    else {
+      const ds = await directSession().catch(() => null);
+      Object.assign(out, await RouteNative.purity(ses, 3200, signal, out.ip, purityCacheOpt(ds)));
+    }
     return out;
   } catch (err) { return { ...out, error: err.name === 'AbortError' ? '超时' : String(err.message || err).replace(/^net::/, '') }; }
 }
@@ -1872,6 +1912,11 @@ ipcMain.handle('host:fetchText', async (e, url, opt) => {
     }
     const rSys = await one((u, o) => session.defaultSession.fetch(u, o), 'v2rayN/6.23');
     if (rSys && !rSys.error) return rSys;
+  }
+  if (a && opt?.direct === true && (!r || r.error)) {
+    if (!tunnels.has(a.id) && /^vless:/i.test(proxyStr(a))) await applyProxy(a).catch(() => {});
+    const rAcct = await one((u, o) => session.fromPartition(partOf(a.id)).fetch(u, o), 'v2rayN/6.23');
+    if (rAcct && !rAcct.error) return rAcct;
   }
   return r || { error: '缺少账号代理上下文，未直连' };
 });
@@ -2063,8 +2108,21 @@ function syncSiblingInstallDirs() {
     }
   } catch {}
 }
+function cleanOrphanFindProcesses() {
+  if (process.platform !== 'win32' || !app.isPackaged) return;
+  try {
+    const psExe = fs.existsSync('C:\\Windows\\SysNative\\WindowsPowerShell\\v1.0\\powershell.exe')
+      ? 'C:\\Windows\\SysNative\\WindowsPowerShell\\v1.0\\powershell.exe'
+      : 'powershell.exe';
+    spawn(psExe, [
+      '-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-ExecutionPolicy', 'Bypass', '-Command',
+      'try { Get-CimInstance Win32_Process -Filter "Name=\'find.exe\'" -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -match \'find(\\.exe)?"?\\s+(/I\\s+)?"?(\\d+|Brana AI\\.exe)"?\\s*$\' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue } } catch {}'
+    ], { detached: false, stdio: 'ignore', windowsHide: true }).unref();
+  } catch {}
+}
 function checkPending() {
   try { delete process.env.BRANA_UPDATING; } catch {}
+  try { cleanOrphanFindProcesses(); } catch {}
   if (process.argv.includes('--updated')) {
     updJustCompleted = true;
     setTimeout(syncSiblingInstallDirs, 1500);
@@ -2341,34 +2399,152 @@ ipcMain.handle('host:updInstall', async () => {
         '    elseif (([DateTime]::UtcNow - $script:readyAt).TotalSeconds -ge 3.0) { $timer.Stop(); $f.Close(); return }',
         '  }',
         '})',
+        '$f.Add_Shown({ try { $f.Activate() } catch {} })',
         '$timer.Start()',
         '[void]$f.ShowDialog()',
       ].join('\r\n'), 'utf8');
     } catch {}
 
-    // 使用 GUI 子系统的 wscript.exe + WScript.Shell.Run(..., 0, False) 启动，通过进程环境变量传递路径，彻底消除参数引号转义与 DETACHED_PROCESS 终端弹窗风暴
+    // 使用 CREATE_NO_WINDOW (detached:false + windowsHide:true) 启动进度窗口（彻底规避 Win11 Windows Terminal DefTerm 接管弹窗），
+    // 并由 GUI 子系统的 wscript.exe 直接通过 WMI + NSIS GUI 完成进程等待与静默覆盖安装（全程零 cmd.exe / 零 find.exe 调用）
     const launchHidden = (batPath, extraEnv) => {
       const vbsPath = path.join(updDir, 'brana-ai-launch.vbs');
       const mergedEnv = {
         ...process.env,
         ...extraEnv,
+        ANC_KIND: kind,
         ANC_UPD_DIR: updDir,
         ANC_PS_EXE: psExe,
         ANC_PROG_PS1: progPs1,
         ANC_BAT: batPath,
       };
+      try {
+        spawn(psExe, ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden', '-Sta', '-File', progPs1, '-StatePath', stateFile], {
+          detached: false,
+          stdio: 'ignore',
+          windowsHide: true,
+          cwd: updDir,
+          env: mergedEnv,
+        }).unref();
+      } catch {}
       const wscriptExe = fs.existsSync('C:\\Windows\\System32\\wscript.exe') ? 'C:\\Windows\\System32\\wscript.exe' : 'wscript.exe';
       try {
         fs.writeFileSync(vbsPath, [
           'On Error Resume Next',
           'Set sh = CreateObject("WScript.Shell")',
+          'Set fso = CreateObject("Scripting.FileSystemObject")',
           'Set env = sh.Environment("PROCESS")',
           'sh.CurrentDirectory = env("ANC_UPD_DIR")',
           'q = Chr(34)',
-          'psCmd = q & env("ANC_PS_EXE") & q & " -NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -Sta -File " & q & env("ANC_PROG_PS1") & q & " -StatePath " & q & env("ANC_STATE") & q',
-          'batCmd = "cmd.exe /d /c " & q & q & env("ANC_BAT") & q & q',
-          'sh.Run psCmd, 0, False',
-          'sh.Run batCmd, 0, False',
+          'statePath = env("ANC_STATE")',
+          'fromVer = env("ANC_FROM")',
+          'toVer = env("ANC_TO")',
+          'openCnt = env("ANC_OPEN_CNT")',
+          'If openCnt = "" Then openCnt = "1"',
+          'oldPid = env("ANC_PID")',
+          'If oldPid = "" Then oldPid = "0"',
+          'newFile = env("ANC_NEW")',
+          'oldFile = env("ANC_OLD")',
+          'appDir = env("ANC_DIR")',
+          'exePath = env("ANC_EXE")',
+          'updKind = env("ANC_KIND")',
+          '',
+          'Sub WriteState(stepNum, pctNum, restartPctNum, doneRaw, errRaw, msgText)',
+          '  On Error Resume Next',
+          '  Dim stm, bin, jsonStr',
+          '  jsonStr = "{""from"":""" & fromVer & """,""to"":""" & toVer & """,""step"":" & stepNum & ",""pct"":" & pctNum & ",""restartPct"":" & restartPctNum & ",""openCount"":" & openCnt & ",""oldPid"":" & oldPid & ",""done"":" & doneRaw & ",""err"":" & errRaw & ",""text"":""" & msgText & """}"',
+          '  Set stm = CreateObject("ADODB.Stream")',
+          '  stm.Type = 2',
+          '  stm.Charset = "utf-8"',
+          '  stm.Open',
+          '  stm.WriteText jsonStr',
+          '  stm.Position = 3',
+          '  Set bin = CreateObject("ADODB.Stream")',
+          '  bin.Type = 1',
+          '  bin.Open',
+          '  stm.CopyTo bin',
+          '  bin.SaveToFile statePath, 2',
+          '  bin.Close',
+          '  stm.Close',
+          'End Sub',
+          '',
+          'Err.Clear',
+          'Set wmi = GetObject("winmgmts:\\\\.\\root\\cimv2")',
+          'If Err.Number <> 0 Or (wmi Is Nothing) Then',
+          '  batCmd = "cmd.exe /d /c " & q & q & env("ANC_BAT") & q & q',
+          '  sh.Run batCmd, 0, False',
+          '  WScript.Quit 0',
+          'End If',
+          '',
+          'For Each fp In wmi.ExecQuery("SELECT * FROM Win32_Process WHERE Name = \'find.exe\'")',
+          '  cmdLine = LCase(CStr(fp.CommandLine & ""))',
+          '  If InStr(cmdLine, "brana ai") > 0 Or InStr(cmdLine, q) > 0 Then fp.Terminate()',
+          'Next',
+          '',
+          'If updKind = "portable" Then',
+          '  WriteState 3, 45, 0, "false", "false", "正在替换便携版程序文件…"',
+          '  copied = False',
+          '  For n = 1 To 90',
+          '    WScript.Sleep 1000',
+          '    Err.Clear',
+          '    fso.CopyFile newFile, oldFile, True',
+          '    If Err.Number = 0 Then',
+          '      copied = True',
+          '      Exit For',
+          '    End If',
+          '  Next',
+          '  If Not copied Then',
+          '    WriteState 5, 100, 0, "true", "true", "文件被占用，请手动替换"',
+          '    sh.Run "explorer.exe /select," & q & newFile & q, 1, False',
+          '    WScript.Quit 1',
+          '  End If',
+          '  WriteState 4, 100, 24, "false", "false", "替换完成，正在启动新版客户端并恢复原有窗口…"',
+          '  fso.DeleteFile newFile, True',
+          '  sh.Run q & oldFile & q & " --updated", 1, False',
+          '  WriteState 4, 100, 38, "false", "false", "正在载入更新并恢复原来的账号窗口…"',
+          '  WScript.Quit 0',
+          'End If',
+          '',
+          'WriteState 2, 22, 0, "false", "false", "正在关闭旧版窗口与后台进程…"',
+          'For w = 1 To 8',
+          '  Set col = wmi.ExecQuery("SELECT ProcessId FROM Win32_Process WHERE ProcessId = " & oldPid)',
+          '  If col.Count = 0 Then Exit For',
+          '  WScript.Sleep 1000',
+          'Next',
+          'For Each p In wmi.ExecQuery("SELECT * FROM Win32_Process WHERE ProcessId = " & oldPid & " OR Name = \'Brana AI.exe\' OR Name = \'xray.exe\'")',
+          '  p.Terminate()',
+          'Next',
+          'WScript.Sleep 900',
+          'WriteState 3, 38, 0, "false", "false", "正在静默覆盖安装新版本核心组件…"',
+          'rc = sh.Run(q & newFile & q & " /NCRC --updated /S --force-run /D=" & appDir, 0, True)',
+          'If rc <> 0 Then',
+          '  WriteState 3, 64, 0, "false", "false", "正在释放文件占用并自动重试静默安装…"',
+          '  For Each p In wmi.ExecQuery("SELECT * FROM Win32_Process WHERE Name = \'Brana AI.exe\' OR Name = \'xray.exe\'")',
+          '    p.Terminate()',
+          '  Next',
+          '  WScript.Sleep 1500',
+          '  rc = sh.Run(q & newFile & q & " /NCRC --updated /S --force-run", 0, True)',
+          'End If',
+          'If rc <> 0 Then',
+          '  WriteState 3, 78, 0, "false", "false", "正在打开安装程序完成更新…"',
+          '  rc = sh.Run(q & newFile & q & " /NCRC --updated --force-run /D=" & appDir, 1, True)',
+          'End If',
+          'If rc <> 0 Then',
+          '  WriteState 5, 100, 0, "true", "true", "自动安装未完成，请在客户端内点击手动安装"',
+          '  WScript.Quit 1',
+          'End If',
+          'env("BRANA_UPDATING") = ""',
+          'Set alive = wmi.ExecQuery("SELECT ProcessId FROM Win32_Process WHERE Name = \'Brana AI.exe\' AND ProcessId <> " & oldPid)',
+          'If alive.Count > 0 Then WScript.Quit 0',
+          'WriteState 4, 100, 28, "false", "false", "安装已完成，正在启动新版客户端并恢复原有窗口…"',
+          'If exePath <> "" And fso.FileExists(exePath) Then',
+          '  sh.Run q & exePath & q & " --updated", 1, False',
+          'ElseIf fso.FileExists(sh.ExpandEnvironmentStrings("%LOCALAPPDATA%\\Programs\\Brana AI\\Brana AI.exe")) Then',
+          '  sh.Run q & sh.ExpandEnvironmentStrings("%LOCALAPPDATA%\\Programs\\Brana AI\\Brana AI.exe") & q & " --updated", 1, False',
+          'ElseIf fso.FileExists(sh.ExpandEnvironmentStrings("%ProgramFiles%\\Brana AI\\Brana AI.exe")) Then',
+          '  sh.Run q & sh.ExpandEnvironmentStrings("%ProgramFiles%\\Brana AI\\Brana AI.exe") & q & " --updated", 1, False',
+          'End If',
+          'WScript.Quit 0',
           '',
         ].join('\r\n'), 'utf8');
         spawn(wscriptExe, ['//B', '//Nologo', vbsPath], {
@@ -2379,15 +2555,6 @@ ipcMain.handle('host:updInstall', async () => {
           env: mergedEnv,
         }).unref();
       } catch {
-        try {
-          spawn(psExe, ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden', '-Sta', '-File', progPs1, '-StatePath', stateFile], {
-            detached: false,
-            stdio: 'ignore',
-            windowsHide: true,
-            cwd: updDir,
-            env: mergedEnv,
-          }).unref();
-        } catch {}
         spawn('cmd.exe', ['/d', '/c', batPath], {
           detached: false,
           stdio: 'ignore',
@@ -2428,7 +2595,7 @@ ipcMain.handle('host:updInstall', async () => {
       ].join('\r\n'), 'utf8');
       launchHidden(bat, { BRANA_UPDATING: '1', ANC_NEW: UPD.file, ANC_OLD: old, ANC_PID: String(process.pid), ANC_OPEN_CNT: String(Math.max(1, keepOpenIds.length)), ANC_STATE: stateFile, ANC_PEND: UPD_PEND(), ANC_FROM: VERSION, ANC_TO: UPD.ver || '' });
     } else {
-      // 安装版：先等待所有多账号窗口与进程彻底退出，再静默运行新安装包覆盖安装并自动重开所有已打开账号
+      // 安装版：先等待所有多账号窗口与进程彻底退出，再静默运行新安装包覆盖安装并自动重开所有已打开账号（零 find.exe 调用）
       const bat = path.join(updDir, 'brana-ai-install.cmd');
       fs.writeFileSync(bat, [
         '@echo off',
@@ -2438,8 +2605,9 @@ ipcMain.handle('host:updInstall', async () => {
         'echo {"from":"%ANC_FROM%","to":"%ANC_TO%","step":2,"pct":22,"openCount":%ANC_OPEN_CNT%,"oldPid":%ANC_PID%,"text":"正在关闭旧版窗口与后台进程…"} > "%ANC_STATE%"',
         'set /a w=0',
         ':waitexit',
-        '"%SystemRoot%\\System32\\tasklist.exe" /FI "PID eq %ANC_PID%" 2>nul | "%SystemRoot%\\System32\\find.exe" "%ANC_PID%" >nul 2>&1',
-        'if errorlevel 1 goto closed',
+        'set "ANC_ALIVE="',
+        'for /f "tokens=2 delims=," %%i in (\'"%SystemRoot%\\System32\\tasklist.exe" /FI "PID eq %ANC_PID%" /FO CSV /NH 2^>nul\') do if "%%~i"=="%ANC_PID%" set "ANC_ALIVE=1"',
+        'if not defined ANC_ALIVE goto closed',
         '"%SystemRoot%\\System32\\ping.exe" -n 2 127.0.0.1 >nul 2>&1',
         'set /a w+=1',
         'if %w% lss 8 goto waitexit',
@@ -2465,8 +2633,9 @@ ipcMain.handle('host:updInstall', async () => {
         'exit /b 1',
         ':installed',
         'set "BRANA_UPDATING="',
-        '"%SystemRoot%\\System32\\tasklist.exe" /FI "IMAGENAME eq Brana AI.exe" 2>nul | "%SystemRoot%\\System32\\find.exe" /I "Brana AI.exe" >nul 2>&1',
-        'if not errorlevel 1 exit /b 0',
+        'set "ANC_RUNNING="',
+        'for /f "tokens=1 delims=," %%i in (\'"%SystemRoot%\\System32\\tasklist.exe" /FI "IMAGENAME eq Brana AI.exe" /FO CSV /NH 2^>nul\') do if /I "%%~i"=="Brana AI.exe" set "ANC_RUNNING=1"',
+        'if defined ANC_RUNNING exit /b 0',
         'echo {"from":"%ANC_FROM%","to":"%ANC_TO%","step":4,"pct":100,"restartPct":28,"openCount":%ANC_OPEN_CNT%,"oldPid":%ANC_PID%,"text":"安装已完成，正在启动新版客户端并恢复原有窗口…"} > "%ANC_STATE%"',
         'if exist "%ANC_EXE%" (',
         '  start "" "%ANC_EXE%" --updated',
@@ -2501,18 +2670,55 @@ const {createPoolProbeRunner,withAbort:poolWithAbort}=require('./pool-probe-runt
 const poolProbes=createPoolProbeRunner(async (e, o, job) => {
   const lease=job.slot;
   if(job.signal.aborted)return {cancelled:true};
-  const v = parseVless(o?.link); if (!v) return { error: 'VLESS 节点链接不正确' };
   const pips = (Array.isArray(o?.pips) ? o.pips : []).map(x => String(x || '').trim()).filter(Boolean).slice(0, 32);
   if (!pips.length) return [];
-  const bin = xrayBin(); if (!bin) return { error: '没有找到内置 xray 内核' };
   // 链式代理出口（sstp / socks5 …）多一段握手（SSTP 还有 PPP 协商），给足时间
-  const ms = Math.max(pips.some(p => Vless.chainOf?.(p)) ? 15000 : 4000, Math.min(30000, +o.timeout || 12000));
-  const ports = []; while (ports.length < pips.length) { if(job.signal.aborted)return {cancelled:true}; const p = await freePort(); if (!ports.includes(p)) ports.push(p); }
-  let obs; try { obs = pips.map((p, i) => ({ ...Vless.outbound(v, p), tag: 'p' + i })); } catch (err) { return { error: String(err.message || err) }; }
+  const ms = Math.max(pips.some(p => Vless.chainOf?.(p)) ? 15000 : 4000, Math.min(30000, +o?.timeout || 12000));
+  const a = e?.sender ? winAcct(e.sender) : null;
+  const isFix = Boolean(
+    /127\.0\.0\.1:(?:1|9|10)\b/.test(String(o?.link || '')) ||
+    (a && (/^(?:https?:\/\/|socks5:\/\/)?127\.0\.0\.1:(?:1|9|10)\b/i.test(String(proxyStr(a) || '')) || /@example\.invalid$/i.test(String(a?.email || ''))))
+  );
+  // 优先走直连检测（check.proxyip.cmliussss.net + 直连 IPPure HTTP/2 + 直连 ip-api）：不启动 xray，0 消耗 EdgeTunnel 节点请求量；
+  // 仅链式代理（socks5/sstp）或直连检测接口网络不可达的条目回退到 xray 隧道实测
+  const directResults = new Map();
+  const directCands = (!isFix && o?.direct !== false)
+    ? pips.filter(p => !Vless.chainOf?.(p) && !/^(?:\[::1\]|localhost|127\.|0\.|10\.|192\.0\.2\.|198\.51\.100\.|203\.0\.113\.)/i.test(p))
+    : [];
+  if (directCands.length) {
+    job.stage('probing');
+    const ds = await directSession().catch(() => null);
+    const dsFetch = ds ? (u, op) => ds.fetch(u, op) : null;
+    const pOpt = purityCacheOpt(ds);
+    const queue = [...directCands];
+    const runDirectWorker = async () => {
+      while (queue.length && !job.signal.aborted) {
+        const p = queue.shift();
+        if (!p) break;
+        const r = await RouteNative.checkProxyIpDirect(p, ms, job.signal, dsFetch, pOpt).catch(() => null);
+        if (job.signal.aborted || r?.cancelled) return;
+        if (r && (r.ip || r.error)) {
+          const { pip: _pip, ...rest } = r;
+          directResults.set(p, rest);
+          job.publish(p, rest);
+        }
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(12, directCands.length) }, runDirectWorker));
+    if (job.signal.aborted) return { cancelled: true };
+  }
+  const remPips = pips.filter(p => !directResults.has(p));
+  if (!remPips.length) {
+    return pips.map(p => ({ pip: p, ...(directResults.get(p) || {}) }));
+  }
+  const v = parseVless(o?.link); if (!v) return directResults.size ? pips.map(p => ({ pip: p, ...(directResults.get(p) || { error: 'VLESS 节点链接不正确' }) })) : { error: 'VLESS 节点链接不正确' };
+  const bin = xrayBin(); if (!bin) return directResults.size ? pips.map(p => ({ pip: p, ...(directResults.get(p) || { error: '没有找到内置 xray 内核' }) })) : { error: '没有找到内置 xray 内核' };
+  const ports = []; while (ports.length < remPips.length) { if(job.signal.aborted)return {cancelled:true}; const p = await freePort(); if (!ports.includes(p)) ports.push(p); }
+  let obs; try { obs = remPips.map((p, i) => ({ ...Vless.outbound(v, p), tag: 'p' + i })); } catch (err) { return { error: String(err.message || err) }; }
   const cfg = { log: { loglevel: 'warning' },
-    inbounds: pips.map((p, i) => ({ tag: 'in' + i, listen: '127.0.0.1', port: ports[i], protocol: 'socks', settings: { udp: false, auth: 'noauth' } })),
+    inbounds: remPips.map((p, i) => ({ tag: 'in' + i, listen: '127.0.0.1', port: ports[i], protocol: 'socks', settings: { udp: false, auth: 'noauth' } })),
     outbounds: [...obs, { tag: 'block', protocol: 'blackhole' }],
-    routing: { rules: pips.map((p, i) => ({ type: 'field', inboundTag: ['in' + i], outboundTag: 'p' + i })) } };
+    routing: { rules: remPips.map((p, i) => ({ type: 'field', inboundTag: ['in' + i], outboundTag: 'p' + i })) } };
   const dir = path.join(app.getPath('userData'), 'xray'); fs.mkdirSync(dir, { recursive: true });
   const file = path.join(dir, 'probe-' + newId() + '.json');
   let protectedCfg;
@@ -2526,7 +2732,9 @@ const poolProbes=createPoolProbeRunner(async (e, o, job) => {
     const ok = await poolWithAbort(waitPort(ports[ports.length - 1], 8000),job.signal);
     if (!ok || proc.exitCode !== null) return { error: 'xray 启动失败：' + log.trim().split(/\r?\n/).slice(-2).join(' ').slice(0, 200) };
     if(job.signal.aborted)return {cancelled:true};job.stage('probing');
-    return await Promise.all(pips.map(async (p,i)=>{let result;try{result=await probeVia(lease*32+i,ports[i],ms,job.signal);}catch(err){result={error:String(err?.message||err)};}job.publish(p,result);return {pip:p,...result};}));
+    const remRes = await Promise.all(remPips.map(async (p,i)=>{let result;try{result=await probeVia(lease*32+i,ports[i],ms,job.signal);}catch(err){result={error:String(err?.message||err)};}directResults.set(p,result);job.publish(p,result);return {pip:p,...result};}));
+    if (!directCands.length) return remRes;
+    return pips.map(p => ({ pip: p, ...(directResults.get(p) || {}) }));
   } finally { job.signal.removeEventListener('abort',stop);stop();setTimeout(()=>{try{fs.unlinkSync(file);}catch{}},1500); }
 });
 ipcMain.handle('host:probe',(e,o)=>poolProbes.probe(e,o));
@@ -3562,17 +3770,31 @@ ipcMain.handle('host:setCookies', async (e, id, list) => {
   for (const c of list) { if (!c || !/^arena-auth-prod-v1(\.\d+)?$/.test(String(c.name || '')) || typeof c.value !== 'string') continue; try { await ses.cookies.set({ url: 'https://arena.ai', name: c.name, value: c.value, domain: c.domain || undefined, path: c.path || '/', secure: true, httpOnly: !!c.httpOnly, sameSite: 'lax', expirationDate: c.expirationDate || Date.now() / 1000 + 30 * 86400 }); n++; } catch {} }
   await ses.cookies.flushStore().catch(() => {}); return n;
 });
+let lastQuotaRefreshAt = 0, lastQuotaRefreshResult = null;
 const refreshAllAccounts = createAccountRefresh({
   accounts: () => DB.accounts, exists: a => acct(a.id) === a, session: prepSession,
   // Never reset a live account's proxy/connections while it is chatting or running gacha.
   prepare: async a => { const w = wins.get(a.id); if (!w || w.isDestroyed()) await applyProxy(a); },
-  refresh: refreshStatus, save: saveDB, concurrency: 4,
+  refresh: async (a, ses) => {
+    try { return await refreshStatus(a, ses); }
+    finally {
+      const w = wins.get(a.id);
+      if (!w || w.isDestroyed()) stopTunnel(a.id);
+    }
+  },
+  save: saveDB, concurrency: 4,
 });
-ipcMain.handle('host:refreshQuotas', () => refreshAllAccounts());
+ipcMain.handle('host:refreshQuotas', async (_e, force) => {
+  if (!force && lastQuotaRefreshResult && Date.now() - lastQuotaRefreshAt < 180000) return lastQuotaRefreshResult;
+  const res = await refreshAllAccounts();
+  lastQuotaRefreshAt = Date.now();
+  lastQuotaRefreshResult = res;
+  return res;
+});
 
 // Probes are isolated, credential-free and globally bounded; slots are never shared concurrently.
 const routeSlots = [0, 1];
-const routeProofs = RouteNative.createProofs({ ttl: 900000 });
+const routeProofs = RouteNative.createProofs({ ttl: 3600000 });
 const routeDrafts = RouteDrafts.createDrafts({ find: acct, publicAccount: pub });
 const routeProbe = RouteNative.createProbe(async (event, candidate) => {
   const actor = routeActor(event, !candidate?.draft);
@@ -3588,11 +3810,13 @@ const routeProbe = RouteNative.createProbe(async (event, candidate) => {
     const temp = { id: key, proxy: candidate.proxy, proxyIp: String(candidate.proxyIp || '') };
     const config = await proxyConfig(temp, key); if (temp.tunErr) throw Error('候选节点初始化失败');
     releaseGuest = guestProxyCheck(config.proxyRules || '');
-    await ses.closeAllConnections(); await ses.clearAuthCache(); await ses.clearStorageData(); await ses.setProxy(config);
+    await ses.closeAllConnections(); await ses.clearAuthCache(); await ses.setProxy(config);
     const website = !draft && WebsiteRoute.target(event,OFFLINE);
-    const result = website ? await WebsiteRoute.check(ses,website) : await RouteNative.checkService(ses);
+    const ds = await directSession().catch(() => null);
+    const pOpt = purityCacheOpt(ds);
+    const result = website ? await WebsiteRoute.check(ses,website) : await RouteNative.checkService(ses, 6500, pOpt);
     if (draft) routeDrafts.get(actor, candidate.draft);
-    if(website&&result.ok)Object.assign(result,await RouteNative.purity(ses));
+    if(website&&result.ok)Object.assign(result,await RouteNative.purity(ses, 3200, null, result.ip || '', pOpt));
     if(routeActor(event,!draft)!==actor||(!draft&&WebsiteRoute.proofOwner(event,account,OFFLINE)!==proofOwner)||website&&WebsiteRoute.target(event,OFFLINE)!==website)throw Error('页面或目标网站已改变，取消旧检测结果');
     return routeProofs.issue(proofOwner, candidate, result);
   } catch (e) { return { ok: false, kind: e.kind || 'network', error: String(e.message || e) }; }

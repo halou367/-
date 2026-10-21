@@ -1,7 +1,7 @@
 // 节点延迟（Clash url-test 式）：所有节点并发经 xray 访问 generate_204，只看连通 + 延迟。
 // 结果按节点链接（去掉名字）存在 Host.shared('nodedelay')，各窗口共享；启动时过期才测，之后每 5 分钟后台复测，复测期间保留旧结果。
 const NodeSpeed = (() => {
-  const URL = 'https://www.gstatic.com/generate_204', TTL = 5 * 60e3, TMO = 5000, BG = 30 * 60e3;   // 后台整批复测：30 分钟一次（以前 5 分钟，每次经每个节点各握手一遍）
+  const URL = 'https://www.gstatic.com/generate_204', TTL = 30 * 60e3, TMO = 5000, BG = 6 * 3600e3;   // 后台整批复测：6 小时一次（减少 EdgeTunnel 闲置握手消耗）
   let res = {}, at = 0, loaded = null, job = null;
   const testing = new Set(), probing = new Set();   /* probing = 单节点连测中 */
   const linkOf = n => { try { return typeof n === 'string' ? n : Vless.toLink(n); } catch { return ''; } };

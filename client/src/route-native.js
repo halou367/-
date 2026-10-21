@@ -14,9 +14,149 @@ function blocked(response) {
 }
 // 冷启动（新 xray + 节点握手 + ProxyIP 建连）可能要好几秒：第一次超时 / 网络错误时，隧道已建好，再测一次；
 // 报错写明卡在哪一步，不再一律说「节点不通」
+// IPPure 官方直连 HTTP/2 接口（api.123169.xyz / api.ippure.com）：直接按目标出口 IP 查询纯净度与原生/广播/家宽属性（0 节点请求量）
+const _h2Sessions = new Map();
+const _inFlightPure = new Map();
+function _getH2Session(host) {
+  const http2 = require('node:http2');
+  let entry = _h2Sessions.get(host);
+  if (entry && entry.client && !entry.client.closed && !entry.client.destroyed) return entry;
+  const client = http2.connect('https://' + host);
+  client.on('error', () => {});
+  try { client.setTimeout(15000, () => { try { client.close(); } catch {} }); } catch {}
+  try { client.unref?.(); } catch {}
+  entry = { client, xk: entry?.xk || '', xt: entry?.xt || 0, lt: entry?.lt || 0, handshake: null };
+  _h2Sessions.set(host, entry);
+  return entry;
+}
+async function _ippureH2Host(host, qIp, ms = 3200, signal) {
+  const crypto = require('node:crypto');
+  const entry = _getH2Session(host);
+  const h2Get = (p, extra = {}) => new Promise((res, rej) => {
+    if (signal?.aborted) return rej(Error('aborted'));
+    if (!entry.client || entry.client.closed || entry.client.destroyed) {
+      try { Object.assign(entry, _getH2Session(host)); } catch (e) { return rej(e); }
+    }
+    const tm = setTimeout(() => { try { req?.close?.(); } catch {} rej(Error('ippure h2 timeout')); }, ms);
+    const onAbort = () => { clearTimeout(tm); try { req?.close?.(); } catch {} rej(Error('aborted')); };
+    signal?.addEventListener('abort', onAbort, { once: true });
+    let req;
+    try {
+      req = entry.client.request({
+        ':method': 'GET',
+        ':path': p,
+        ':authority': host,
+        ':scheme': 'https',
+        'accept': '*/*',
+        'origin': 'https://ippure.com',
+        'referer': 'https://ippure.com/',
+        'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+        ...extra,
+      });
+      try { req.unref?.(); } catch {}
+    } catch (e) {
+      clearTimeout(tm);
+      signal?.removeEventListener('abort', onAbort);
+      return rej(e);
+    }
+    let rh = {};
+    const ch = [];
+    req.on('response', h => { rh = h || {}; });
+    req.on('data', c => ch.push(c));
+    req.on('end', () => {
+      clearTimeout(tm);
+      signal?.removeEventListener('abort', onAbort);
+      res({ headers: rh, text: Buffer.concat(ch).toString('utf8') });
+    });
+    req.on('error', e => {
+      clearTimeout(tm);
+      signal?.removeEventListener('abort', onAbort);
+      rej(e);
+    });
+    req.end();
+  });
+  const updateToken = hdrs => {
+    const xk = hdrs?.['x-k'], xt = parseInt(hdrs?.['x-t'], 10);
+    if (xk) {
+      entry.xk = String(xk);
+      if (Number.isFinite(xt)) { entry.xt = xt; entry.lt = Date.now(); }
+      return true;
+    }
+    return false;
+  };
+  const callSigned = async p => {
+    if (!entry.xk) {
+      if (!entry.handshake) {
+        entry.handshake = h2Get(p).then(r0 => { updateToken(r0.headers); return r0; }).finally(() => { entry.handshake = null; });
+      }
+      await entry.handshake;
+    }
+    if (!entry.xk) return null;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const t = Date.now() - (entry.lt || Date.now()) + (entry.xt || Date.now());
+      const sig = crypto.createHmac('sha256', entry.xk).update(['GET', 'https://' + host + p, '', t].join('-')).digest('hex');
+      const r = await h2Get(p, { 'x-k': entry.xk, 'x-t': t + '-' + sig });
+      if (updateToken(r.headers)) continue;
+      return r;
+    }
+    return null;
+  };
+  const encIp = encodeURIComponent(qIp);
+  const isV4 = /^\d{1,3}(?:\.\d{1,3}){3}$/.test(qIp);
+  const [basicRes, riskRes] = await Promise.all([
+    callSigned('/api/info/ip-basic/' + encIp),
+    isV4 ? callSigned('/api/info/ip-risk/' + encIp).catch(() => null) : Promise.resolve(null),
+  ]);
+  if (!basicRes?.text) return null;
+  const bJson = JSON.parse(basicRes.text.slice(0, 20000));
+  const rJson = riskRes?.text ? (() => { try { return JSON.parse(riskRes.text.slice(0, 8000)); } catch { return null; } })() : null;
+  if (!bJson?.ok || !bJson?.data) return null;
+  const d = bJson.data;
+  const ip = String(d.ip || qIp).slice(0, 64);
+  const org = String(d.asn?.organization || '').slice(0, 40);
+  const asnType = String(d.asn?.type || '').toLowerCase();
+  const dc = asnType ? /hosting|datacenter|cloud/i.test(asnType) : (d.asn?.is_residential === false && /cloudflare|oracle|amazon|google|microsoft|linode|akamai|vultr|digitalocean|hetzner|ovh|choopa|datacamp|contabo|zenlayer|cogent|hurricane|hosting|datacenter|cloud|vps|server/i.test(org));
+  const res = d.asn?.is_residential !== undefined ? !!d.asn.is_residential : (!dc && /broadband|telecom|communications|cable|mobile|fpt|kt|ntt|softbank|kddi|comcast|verizon|charter/i.test(org));
+  const bc = !!d.traits?.is_broadcast;
+  let fs = Number(rJson?.data?.risk_score);
+  if (!Number.isFinite(fs)) {
+    fs = (dc || /cloudflare|oracle|amazon|google|microsoft|linode|akamai|vultr|digitalocean|hetzner|ovh|choopa|datacamp|contabo|zenlayer|cogent|hurricane/i.test(org)) ? 15 : 8;
+  }
+  return { fs: Math.max(0, Math.min(100, Math.round(fs))), ip, res, bc, dc, org };
+}
+function isReservedOrFixtureTarget(s, allowTestNet = false) {
+  const h = String(s || '').trim().replace(/^\[|\]$/g, '').replace(/:\d{1,5}$/, '');
+  if (!h) return true;
+  if (/^(?:127\.|10\.|0\.|169\.254\.|localhost$|::1$)/i.test(h)) return true;
+  if (!allowTestNet && /^(?:192\.0\.2\.|198\.51\.100\.|203\.0\.113\.)/.test(h)) return true;
+  if (/(?:^|\.)(?:invalid|example|localhost|test)$/i.test(h) || /\.example\./i.test(h)) return true;
+  return false;
+}
+async function ippureDirect(targetIp, ms = 3200, signal, opt = null) {
+  const qIp = String(targetIp || '').trim().replace(/^\[|\]$/g, '');
+  if (!qIp || (!/^\d{1,3}(?:\.\d{1,3}){3}$/.test(qIp) && !qIp.includes(':'))) return null;
+  if (isReservedOrFixtureTarget(qIp, opt?.allowTestNet === true)) return null;
+  const inflight = _inFlightPure.get(qIp);
+  if (inflight && !signal) return inflight;
+  const task = (async () => {
+    for (const host of ['api.123169.xyz', 'api.ippure.com']) {
+      try {
+        const r = await _ippureH2Host(host, qIp, ms, signal);
+        if (r && Number.isFinite(r.fs)) return r;
+      } catch {}
+    }
+    return null;
+  })();
+  if (!signal) {
+    _inFlightPure.set(qIp, task);
+    task.finally(() => { if (_inFlightPure.get(qIp) === task) _inFlightPure.delete(qIp); });
+  }
+  return task;
+}
 // IPPure 纯净度兜底：经同一条隧道请求 my.ippure.com/v1/info（报告的是「调用方」的出口 IP，即 Brana 看到的那个），
 // fraudScore 0–100 越高越危险；失败 / 超时只是没有这项数据，不影响线路检测结果
 async function ippure(ses, ms=3200, signal) {
+  if (!ses || typeof ses.fetch !== 'function') return null;
   const ctl=new AbortController(),t=setTimeout(()=>ctl.abort(),ms);
   const abort=()=>ctl.abort();if(signal?.aborted)abort();else signal?.addEventListener('abort',abort,{once:true});
   try { const r=await ses.fetch('https://my.ippure.com/v1/info',{method:'GET',signal:ctl.signal,credentials:'omit',cache:'no-store',redirect:'follow'}); if(!r.ok)return null;
@@ -30,7 +170,7 @@ async function ippure(ses, ms=3200, signal) {
   catch { return null; } finally { clearTimeout(t);signal?.removeEventListener('abort',abort); }
 }
 // ip-api（经隧道或按已实测出口 IP 查询）：是否代理 / 机房 / 移动网络，免费不限每日次数 —— 和 IPPure 一起测，保证测延迟时就评出纯净度
-async function ipapi(ses, ms=2500, signal, targetIp='') {
+async function ipapi(ses, ms=2500, signal, targetIp='', directFetch=null) {
   const qIp=String(targetIp||'').trim();
   const baseUrl='http://ip-api.com/json/?fields=status,query,isp,org,as,mobile,proxy,hosting';
   const tryFetch=async(url,fn)=>{
@@ -41,23 +181,115 @@ async function ipapi(ses, ms=2500, signal, targetIp='') {
       return {ip:String(j.query).slice(0,64),h:!!j.hosting,px:!!j.proxy,m:!!j.mobile,isp:String(j.isp||j.org||'').slice(0,40),as:String(j.as||'').split(' ')[0].slice(0,12)}; }
     catch { return null; } finally { clearTimeout(t);signal?.removeEventListener('abort',abort); }
   };
-  const viaSes=await tryFetch(baseUrl,(u,sig)=>ses.fetch(u,{method:'GET',signal:sig,credentials:'omit',cache:'no-store',redirect:'follow'}));
+  // 若已由 /cdn-cgi/trace 或直连检测获知明确出口 IP 且宿主提供了直连通道，优先走直连按 IP 参数查询（不消耗 EdgeTunnel 节点请求量）
+  if(qIp&&typeof directFetch==='function'&&!isReservedOrFixtureTarget(qIp)){
+    const directUrl='http://ip-api.com/json/'+encodeURIComponent(qIp)+'?fields=status,query,isp,org,as,mobile,proxy,hosting';
+    const viaDirect=await tryFetch(directUrl,(u,sig)=>directFetch(u,{method:'GET',signal:sig,cache:'no-store',redirect:'follow'}));
+    if(viaDirect&&(!qIp||viaDirect.ip.toLowerCase()===qIp.toLowerCase()))return viaDirect;
+  }
+  const viaSes=(ses&&typeof ses.fetch==='function')
+    ?await tryFetch(baseUrl,(u,sig)=>ses.fetch(u,{method:'GET',signal:sig,credentials:'omit',cache:'no-store',redirect:'follow'}))
+    :null;
   if(viaSes&&(!qIp||viaSes.ip.toLowerCase()===qIp.toLowerCase()))return viaSes;
-  if(qIp&&typeof fetch==='function'){
+  if(qIp&&typeof fetch==='function'&&typeof directFetch!=='function'&&!isReservedOrFixtureTarget(qIp)){
     const directUrl='http://ip-api.com/json/'+encodeURIComponent(qIp)+'?fields=status,query,isp,org,as,mobile,proxy,hosting';
     return await tryFetch(directUrl,(u,sig)=>fetch(u,{method:'GET',signal:sig,cache:'no-store',redirect:'follow'}));
   }
   return viaSes;
 }
-// 测延迟时顺带测纯净度：IPPure + ip-api 并行（同一条隧道）；若已通过 Brana 实测且 IPPure 超时，按 ip-api 兜底给出纯净度评估
-async function purity(ses, ms=3200, signal, targetIp='') {
-  let [pure,ipa]=await Promise.all([ippure(ses,ms,signal),ipapi(ses,ms,signal,targetIp)]);
+// 测延迟时顺带测纯净度：优先复用 7 天内已缓存的出口信誉（0 额外节点请求），未命中时优先直连查 IPPure (HTTP/2) + ip-api（0 节点请求量）
+async function purity(ses, ms=3200, signal, targetIp='', opt=null) {
+  const qIp=String(targetIp||'').trim();
+  const rep=(typeof opt?.getCachedRep==='function'&&qIp)?opt.getCachedRep(qIp):(opt?.cachedRep||null);
+  const nowMs=Date.now();
+  const cachedPu=(qIp&&rep?.pu&&Number.isFinite(+rep.pu.fs)&&(nowMs-(+rep.pu.at||0)<7*86400e3))
+    ?{ip:qIp,fs:+rep.pu.fs,res:!!rep.pu.res,bc:!!rep.pu.bc,dc:!!rep.pu.dc,org:String(rep.pu.org||'')}
+    :null;
+  const cachedIpa=(qIp&&rep?.a&&(nowMs-(+rep.a||0)<7*86400e3))
+    ?{ip:qIp,h:!!rep.h,px:!!rep.px,m:!!rep.m,isp:String(rep.isp||''),as:String(rep.as||'')}
+    :null;
+  const fetchPure=async()=>{
+    if(cachedPu)return cachedPu;
+    if(qIp&&(opt?.directIppure===true||!ses)){
+      const dp=await ippureDirect(qIp,ms,signal,opt);
+      if(dp)return dp;
+    }
+    return ses?await ippure(ses,ms,signal):null;
+  };
+  let [pure,ipa]=await Promise.all([
+    fetchPure(),
+    cachedIpa?Promise.resolve(cachedIpa):ipapi(ses,ms,signal,targetIp,opt?.directFetch||null),
+  ]);
+  const cmExit=opt?.cmliuExit||null;
+  if(!ipa&&qIp&&cmExit&&(cmExit.asOrganization||cmExit.org||cmExit.asn)){
+    const orgStr=String(cmExit.asOrganization||cmExit.org||'').replace(/^AS\d+\s+/i,'').trim().slice(0,40);
+    const isHosting=/\b(?:cloudflare|oracle|amazon|aws|google|microsoft|azure|linode|akamai|vultr|digitalocean|hetzner|ovh|choopa|datacamp|contabo|zenlayer|cogent|hurricane|hosting|datacenter|cloud|vps|server)\b/i.test(orgStr)||Boolean(cmExit.botManagement?.corporateProxy);
+    ipa={ip:qIp,h:isHosting,px:false,m:false,isp:orgStr,as:cmExit.asn?'AS'+cmExit.asn:''};
+  }
   if(!pure&&targetIp&&ipa&&(!ipa.ip||ipa.ip.toLowerCase()===String(targetIp).trim().toLowerCase())){
-    pure={ip:String(targetIp).trim(),fs:ipa.px?65:12,res:!ipa.h&&!ipa.px,bc:false,dc:!!ipa.h,org:String(ipa.isp||'')};
+    const bmScore=Number(cmExit?.botManagement?.score);
+    const bmCorp=Boolean(cmExit?.botManagement?.corporateProxy);
+    let fallbackFs=ipa.px?65:(ipa.h||bmCorp?16:12);
+    if(Number.isFinite(bmScore)&&bmScore>0&&bmScore<30&&!ipa.px)fallbackFs=Math.max(fallbackFs,Math.min(75,99-bmScore));
+    pure={ip:String(targetIp).trim(),fs:fallbackFs,res:!ipa.h&&!ipa.px&&!bmCorp,bc:false,dc:!!(ipa.h||bmCorp),org:String(ipa.isp||'')};
+  }
+  if(qIp&&(pure||ipa)&&typeof opt?.onCacheRep==='function'){
+    try{opt.onCacheRep(qIp,{pure,ipa});}catch{}
   }
   return {...(pure?{pure}:{}),...(ipa?{ipa}:{})};
 }
-async function checkService(ses, timeout=6500) { const r=await checkService0(ses,timeout); if(r&&r.ok&&r.ip)Object.assign(r,await purity(ses,Math.min(3200,Math.max(50,timeout)),null,r.ip)); return r; }
+// 直连检测单个 ProxyIP 连通性、真实落地出口 IP、国家地区与纯净度（通过 check.proxyip.cmliussss.net + 直连 IPPure/ip-api，全程 0 节点请求量）
+async function checkProxyIpDirect(pip, ms=9000, signal=null, directFetch=null, opt=null) {
+  const raw=String(pip||'').trim();
+  if(!raw||/^(?:socks5?|https?|turn|sstp):\/\//i.test(raw))return null;
+  if(isReservedOrFixtureTarget(raw, opt?.allowTestNet === true))return null;
+  const hasPort=/:\d{1,5}$/.test(raw);
+  const target=hasPort?raw:(raw.includes(':')&&!raw.startsWith('[')?`[${raw}]:443`:`${raw}:443`);
+  const doFetch=typeof directFetch==='function'?directFetch:(typeof fetch==='function'?fetch:null);
+  if(!doFetch)return null;
+  const bases=['https://api.check.proxyip.cmliussss.net','https://check.proxyip.cmliussss.net'];
+  for(const base of bases){
+    if(signal?.aborted)return {cancelled:true};
+    const ctl=new AbortController(),t0=Date.now(),tm=setTimeout(()=>ctl.abort(),Math.max(2500,Math.min(12000,ms)));
+    const abort=()=>ctl.abort();if(signal?.aborted)abort();else signal?.addEventListener('abort',abort,{once:true});
+    try{
+      const r=await doFetch(base+'/check?proxyip='+encodeURIComponent(target),{
+        method:'GET',
+        signal:ctl.signal,
+        cache:'no-store',
+        redirect:'follow',
+        headers:{'Accept':'application/json,*/*','User-Agent':'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'},
+      });
+      if(!r?.ok)continue;
+      const txt=(await r.text()).slice(0,32000);
+      const j=JSON.parse(txt);
+      if(!j||typeof j.success!=='boolean')continue;
+      if(!j.success){
+        const errMsg=String(j.probe_results?.ipv4?.error||j.probe_results?.ipv6?.error||j.message||j.error||'ProxyIP 不可用').slice(0,160);
+        return {pip:raw,error:errMsg,status:0,brana:false,via:'direct-check'};
+      }
+      const v4=j.probe_results?.ipv4,v6=j.probe_results?.ipv6;
+      const probe=(v4?.ok&&v4?.exit)?v4:(v6?.ok&&v6?.exit)?v6:null;
+      const exit=probe?.exit||(Array.isArray(j.info)?j.info[0]:j.info)||{};
+      const ip=String(exit.ip||j.ip||'').trim();
+      const loc=String(exit.country||j.country||'').trim().toUpperCase();
+      if(!ip)continue;
+      const elapsed=Date.now()-t0;
+      const netMs=Math.max(1,Math.round(Number(probe?.http_ms||probe?.connect_ms||j.responseTime||elapsed)));
+      const coldMs=Math.max(netMs,Math.round(Number(j.responseTime||elapsed)));
+      const leftMs=Math.max(1800,Math.min(4000,ms-(Date.now()-t0)));
+      const pur=await purity(null,leftMs,signal,ip,{...(opt||{}),directFetch:doFetch,directIppure:true,cmliuExit:exit});
+      return {pip:raw,ip,loc,ms:netMs,cold:coldMs,status:200,brana:true,via:'direct-check',...pur};
+    }catch{
+      if(signal?.aborted)return {cancelled:true};
+    }finally{
+      clearTimeout(tm);
+      signal?.removeEventListener('abort',abort);
+    }
+  }
+  return null;
+}
+async function checkService(ses, timeout=6500, opt=null) { const r=await checkService0(ses,timeout); if(r&&r.ok&&r.ip)Object.assign(r,await purity(ses,Math.min(3200,Math.max(50,timeout)),null,r.ip,opt)); return r; }
 async function checkService0(ses, timeout=6500) {
   try { return await checkOnce(ses, timeout); }
   catch (e) { if (e.kind !== 'network') throw e; try { return await checkOnce(ses, Math.round(timeout * 1.1)); } catch (e2) { if (e2.kind === 'network' && e2.stage) e2.message += '（已重试 1 次）'; throw e2; } }
@@ -143,4 +375,4 @@ function createApply({find,owner,validate,apply,persist,publicAccount,now=Date.n
     finally{busy.delete(a.id);}
   };fn.busy=busy;return fn;
 }
-module.exports={ippure,ipapi,purity,signature,probeKey,serviceOK,realtimeOK,blocked,checkService,createProbe,createProofs,createApply};
+module.exports={ippure,ippureDirect,ipapi,purity,checkProxyIpDirect,signature,probeKey,serviceOK,realtimeOK,blocked,checkService,createProbe,createProofs,createApply};

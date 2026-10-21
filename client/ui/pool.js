@@ -60,6 +60,21 @@ const Pool = {
   untestedKeys() {
     return this.entries().filter(([k, e]) => e && !e.gone && !this.banned(k) && e.ok == null).map(([k]) => k);
   },
+  // 按需懒检测（保护 EdgeTunnel 每日 10 万次请求配额）：
+  // 当前账号所在地区已有 ≥ 4 个纯净可用 IP（或未限定地区时全池已有 ≥ 8 个纯净可用 IP）时，绝不在后台盲目全量扫描上千个待测 IP；
+  // 仅当在用地区纯净余量不足（< 4）且跨窗口冷却已过时，才按需小批量（最多 12 个）补充检测。
+  lazyPendingKeys(max = 12) {
+    const a = typeof UI !== 'undefined' ? UI?.host?.account : null;
+    const cc = String(a?.region || '').trim().toUpperCase();
+    if (cc) {
+      if (this.avail(cc, a?.id).length >= 4) return [];
+      const regUntested = this.regionCandidates(cc).filter(([, e]) => e && e.ok == null).map(([k]) => k);
+      if (regUntested.length) return regUntested.slice(0, max);
+    }
+    const totalPure = this.entries().filter(([k, e]) => e && e.ok === true && !e.gone && !this.banned(k) && this.state(k, e, a?.id) === 'ok').length;
+    if (totalPure >= 8) return [];
+    return this.untestedKeys().slice(0, max);
+  },
   isFixtureEnv() {
     if (typeof window !== 'undefined' && (window.__routeFixture || window.__fixture)) return true;
     const p = String((typeof UI !== 'undefined' && UI?.host?.account?.proxy) || '').trim();
@@ -77,16 +92,19 @@ const Pool = {
         const r = await this.importText(add.join('\n'));
         if (this.link() && Host.probe) {
           if (r.doms.length) await this.probeDomains(r.doms).catch(() => {});
-          if (r.todo.length) await this.probe(r.todo).catch(() => {});
+          if (r.todo.length) await this.probe(r.todo.slice(0, 12)).catch(() => {});
         }
       } else if (!this.d.dom && this.domains().length && this.link() && Host.probe) {
         await this.probeDomains().catch(() => {});
       }
-      // 断点续扫：上次客户端关闭时未测完的待测 IP（ok == null），启动后自动从剩余部分继续后台全量扫描，已测过的绝不重复测
-      const pending = this.untestedKeys();
+      // 按需小批量补扫：仅当当前在用地区纯净可用 IP 不足时才按需检测最多 12 个候选，绝不启动时把几千个 API 池全扫一遍消耗 EdgeTunnel 请求量
+      const pending = this.lazyPendingKeys(12);
       if (pending.length && this.link() && Host.probe) {
-        await this.probe(pending).catch(() => {});
-        if (this.domains().length) await this.domSummarize(this.domains()).catch(() => {});
+        const canScan = await this.mutate(d => { if (now() - (d.bgScanAt || 0) < 10 * 60e3) return 0; d.bgScanAt = now(); return 1; }).catch(() => 0);
+        if (canScan) {
+          await this.probe(pending).catch(() => {});
+          if (this.domains().length) await this.domSummarize(this.domains()).catch(() => {});
+        }
       }
     } catch {} finally { this._seeding = false; }
   },
@@ -617,7 +635,7 @@ const Pool = {
       let link=this.link(),done=0,failed=0,fatal='',foDone=false;
       const live=()=>!options.signal?.aborted&&Boolean(this.link()||link);
       if(!live())return {done:0,cancelled:true};
-      const size=Host.onProbeProgress?16:4,queue=[],completed=new Set(),seenKeys=new Set(keys),callbacks=onProg?[onProg]:[];
+      const size=Host.onProbeProgress?32:4,queue=[],completed=new Set(),seenKeys=new Set(keys),callbacks=onProg?[onProg]:[];
       const state={done:0,total:keys.length,failed:0,started:now()};
       for(let i=0;i<keys.length;i+=size)queue.push(keys.slice(i,i+size));
       this._activeScan={size,queue,seenKeys,state,callbacks};
@@ -654,7 +672,7 @@ const Pool = {
         const part=queue.shift();let r=await one(part);if(!live())return;
         if(r?.cancelled){fatal=r.error||'检测已取消';return;}
         // Explicit UI refresh opts out of legacy automatic node failover.
-        if(options.allowFailover!==false&&!foDone&&((!Array.isArray(r)&&/节点|xray/.test(r?.error||'')&&Nodes.list.length>1)||(part.length>=6&&Array.isArray(r)&&r.every(x=>!x.ip)))&&this.entries().some(([k,e])=>e.ok&&!part.includes(k))){
+        if(options.allowFailover!==false&&!foDone&&((!Array.isArray(r)&&/节点|xray/.test(r?.error||'')&&Nodes.list.length>1)||(part.length>=6&&Array.isArray(r)&&r.every(x=>!x.ip&&x.via!=='direct-check')))&&this.entries().some(([k,e])=>e.ok&&!part.includes(k))){
           foDone=true;const f=await this.failover();if(f.ok){link=this.link();r=await one(part);}
         }
         if(!Array.isArray(r))fatal=r?.error||'检测失败';
@@ -795,7 +813,7 @@ const Pool = {
         for (const [k, x] of res) {
           this.apply(d, k, x);
           if (!(x.ip && x.brana)) {
-            if (nodeAliveForBatch || x.ip) {
+            if (nodeAliveForBatch || x.ip || x.via === 'direct-check') {
               this.banForever(d, k, '节点正常但该 ProxyIP 不可用 · 已永久拉黑');
             }
           } else if (x.loc && x.loc !== cc && d.ips[k]) {
@@ -1695,18 +1713,19 @@ if (!globalThis.__BRANA_OFFLINE__) setTimeout(() => { RegionAdvisor.check().catc
 
 // ---------- IP 库自动维护：每 6 小时后台静默增量更新一次（拉黑的绝不回来、一般与高风险永久淘汰，池内只留纯净 IP）；未完成的首轮扫描自动断点续扫 ----------
 const PoolMaint = {
-  EVERY: 6 * 3600e3, MAXGAP: 6 * 3600e3, input: now(), running: false,
+  EVERY: 12 * 3600e3, MAXGAP: 12 * 3600e3, input: now(), running: false,
   quiet() { return ![...Chats.values()].some(c => c.busy) && !(typeof Gacha !== 'undefined' && Gacha.busy?.()); },
   idle() { return (document.hidden || now() - this.input > 120e3) && this.quiet(); },
   async tick() {
-    if (this.running || navigator.onLine === false) return;
+    if (this.running || navigator.onLine === false || Pool.isFixtureEnv()) return;
     try { await Nodes.load(); await Pool.load(true); } catch { return; }
     await Pool.purgeImpureAndUnstable().catch(() => {});
     if (!Pool.link() || !Host.probe) return;
-    // 若有未测完的待检 IP（如上次关闭客户端前未扫完的剩余部分），后台自动继续扫描
-    const pending = Pool.untestedKeys();
-    if (pending.length && !Pool.prog) {
-      void Pool.probe(pending).then(() => Pool.purgeImpureAndUnstable()).catch(() => {});
+    // 仅当当前地区纯净可用 IP 不足（< 4）且跨窗口冷却已过时，才按需小批量补充检测最多 12 个待测 IP
+    const pending = Pool.lazyPendingKeys(12);
+    if (pending.length && !Pool.prog && now() - (Pool.d?.bgScanAt || 0) >= 10 * 60e3) {
+      const canScan = await Pool.mutate(d => { if (now() - (d.bgScanAt || 0) < 10 * 60e3) return 0; d.bgScanAt = now(); return 1; }).catch(() => 0);
+      if (canScan) void Pool.probe(pending).then(() => Pool.purgeImpureAndUnstable()).catch(() => {});
     }
     if (!Pool.entries().length && !Pool.d?.src?.length) return;
     const d = Pool.d, gap = now() - (d.mt || 0), due = gap >= this.EVERY;
@@ -1717,9 +1736,7 @@ const PoolMaint = {
     try {
       const srcs = Pool.d.src.filter(l => Pool.isSrc(l));
       for (const l of srcs) await Pool.refreshSrc(l, true).catch(() => {});
-      const keys = Pool.entries()
-        .filter(([k, e]) => e && !e.gone && !Pool.banned(k) && (e.ok == null || now() - (e.at || 0) >= this.EVERY))
-        .map(([k]) => k);
+      const keys = Pool.lazyPendingKeys(12);
       if (keys.length) await Pool.probe(keys).catch(() => {});
       await Pool.purgeImpureAndUnstable().catch(() => {});
       if (Pool.domains().length) await Pool.domSummarize(Pool.domains()).catch(() => {});
@@ -1729,9 +1746,9 @@ const PoolMaint = {
 for (const ev of ['pointerdown', 'keydown', 'wheel', 'touchstart']) addEventListener(ev, () => { PoolMaint.input = now(); }, { capture: true, passive: true });
 if (!globalThis.__BRANA_OFFLINE__) setTimeout(() => { PoolMaint.tick().catch(() => {}); setInterval(() => PoolMaint.tick().catch(() => {}), 5 * 60e3); }, 30e3);
 
-// API 来源自动更新：每 6 小时拉取一次（已拉黑/不纯净的永久跳过不加回，只把新出现的候选加入后台检测，始终只留纯净 IP）
+// API 来源自动更新：每 12 小时拉取一次（已拉黑/不纯净的永久跳过不加回，只入库候选并按需懒检测，绝不后台全量扫池消耗节点请求）
 const ApiMaint = {
-  EVERY: 6 * 3600e3, running: false,
+  EVERY: 12 * 3600e3, running: false,
   async tick(force) {
     if (this.running || navigator.onLine === false || (!force && Pool.isFixtureEnv())) return;
     try { await Pool.load(true); } catch { return; }
@@ -1739,8 +1756,9 @@ const ApiMaint = {
     this.running = true;
     try {
       const add = [];
-      for (const l of ls) { const st = Pool.d.api?.[l]; const waitMs = st?.err ? 2 * 60e3 : this.EVERY; if (!force && now() - (st?.tried || 0) < waitMs) continue; const r = await Pool.refreshApi(l, true).catch(() => null); if (r?.added?.length) add.push(...r.added); }
-      if (add.length && Pool.link() && Host.probe) await Pool.probe(add).catch(() => {});
+      for (const l of ls) { const st = Pool.d.api?.[l]; const waitMs = st?.err ? 5 * 60e3 : this.EVERY; if (!force && now() - (st?.tried || 0) < waitMs) continue; const r = await Pool.refreshApi(l, true).catch(() => null); if (r?.added?.length) add.push(...r.added); }
+      const lazyKeys = add.length ? Pool.lazyPendingKeys(12) : [];
+      if (lazyKeys.length && Pool.link() && Host.probe) await Pool.probe(lazyKeys).catch(() => {});
       await Pool.purgeImpureAndUnstable().catch(() => {});
     } finally { this.running = false; Bus.emit('pool'); }
   },

@@ -189,7 +189,7 @@ const WebBar = (() => {
       let sid0 = sidNow();
       setInterval(() => { if (!wrap?.isConnected) { wrap = null; try { mount(); } catch {} } const s = sidNow(); if (s !== sid0) { sid0 = s; Bar.render(); } }, 1500);
       const ping = () => { if (!document.hidden) void IP.ping?.()?.then?.(() => Bar.render(), () => {}); };
-      setTimeout(ping, 1500); setInterval(ping, 30000);
+      setTimeout(ping, 1500); setInterval(ping, 90000);
       setInterval(() => { if (!document.hidden) { void hostInfo(); Bar.render(); } }, 15000);
       return true;
     },
@@ -604,14 +604,14 @@ async function init() {
   UI.renderAcct(); UI.renderQuota(); UI.renderGachaBadge();
   try { History.warm(UI.host?.account?.id || 'web'); } catch {}
   void TitleSync.start().catch(e=>TitleSync.error(describe(e)));
-  // 出口 IP：平时按设置间隔；抽卡等待换 IP 时 4 秒一次；窗口隐藏时 30 秒起
+  // 出口 IP 与实时延迟合一采样：前台每 30 秒由 IP.ping 同步刷新延迟与出口 IP（IP.poll 自动复用不重发）；窗口隐藏且非抽卡时延长至 5 分钟一次，大幅节省 EdgeTunnel 请求配额
   IP.poll();
-  IP.ping(); setInterval(() => { if (!document.hidden && navigator.onLine !== false) IP.ping(); }, 30000);   // 延迟显示：30 秒一次足够，8 秒一次是多余流量
+  IP.ping(); setInterval(() => { if (!document.hidden && navigator.onLine !== false) IP.ping(); }, 30000);
   Bus.on('rtt', () => { const el = document.getElementById('ip-rtt'); if (el) { el.className = IP.rttCls(); el.textContent = IP.rttText(); } });
   setInterval(() => Traffic.tick(), 1000);
   setInterval(() => {
     if (IP.polling) return;
-    const base = IP.fast ? 4000 : Math.max(15, Prefs.ipPoll || 60) * 1000, gap = document.hidden && !IP.fast ? Math.max(base, 30000) : base;
+    const base = IP.fast ? 4000 : Math.max(15, Prefs.ipPoll || 60) * 1000, gap = document.hidden && !IP.fast ? Math.max(base, 300000) : base;
     const retryGap = IP.err ? Math.max(gap, Math.min(120000, 15000 * 2 ** Math.min(IP.failures - 1, 3))) : gap;
     if (navigator.onLine !== false && now() - Math.max(IP.at, IP.checkedAt || 0) >= retryGap) IP.poll();
   }, 1000);
@@ -929,7 +929,7 @@ async function init() {
 function boot() {
   const isMgrFile = window.top === window && location.protocol === 'file:' && /[?&]mgr=1\b/.test(location.search);
   if (!isMgrFile && (window.top !== window || location.origin !== ORIGIN)) return;
-  try { Object.defineProperty(window, '__anc', { value: { BillingProbe, EnvRefresh, EnvCheck, StreamMD, ChatExport, Connectors, HtmlPreview, PelicanShots, CapRoute, Recaptcha, NetHealth, NetPolicy, ThinkingStatus, WorkspacePath, WorkspacePreview, MD, SessionGate, AutoRoute, RoutePolicy, RouteState, NodeRoutes, AuthEnv, RegionIP, Bulk, Brand, Gacha, Host, Auth, Bus, chatOf, IPRep, Update, Cap, Calib, Fmt, CS, Pin, FmtAcc, History, Drafts, TabSw, Warm, PoolGuard, RegionAdvisor, PoolMaint, SubMaint, NodeImport, Sync, acctWheel, acctCard, Gold, GoldBoard, PView, LeaderPop, TabPress, userAtts, attZoom, Side, AcctStats, LaunchPick, MgrWin, SendQ, Notes, Mob, Pager, EnterFlow, Hitl, Vless, Nodes, NodeEditor, NodeMgr, Chats, chatOf, Tabs, UI, History, Models, Store, Trigger, Pulse, IP, Trace, Workspace, Dock, WS, Bar, Prefs, Recaptcha, createChat, R, Uploads, Revolver, GPop, Notes, Titles, TitleSync, TitleCompact, TitleCipher, ProbeArchive, Fingerprint, FingerprintBatch, GachaPrompts, Dialog, AutoId, Strength, PView, StrPick, Side, Price, LiveEst, KeepAlive, Palette, ExtPop, LeaderPop, Steps, FileLink, Tip, Pool, ProxySet, GSlot, Fav, LocalProxy, proxyField, get Gacha() { return Gacha; } } }); } catch {}
+  try { Object.defineProperty(window, '__anc', { value: { BillingProbe, EnvRefresh, EnvCheck, StreamMD, ChatExport, Connectors, HtmlPreview, PelicanShots, CapRoute, Recaptcha, NetHealth, NetPolicy, ThinkingStatus, WorkspacePath, WorkspacePreview, MD, SessionGate, AutoRoute, RoutePolicy, RouteState, NodeRoutes, AuthEnv, RegionIP, Bulk, Brand, Gacha, Host, Auth, Bus, chatOf, IPRep, Update, Cap, Calib, Fmt, CS, Pin, FmtAcc, History, Drafts, TabSw, Warm, PoolGuard, RegionAdvisor, PoolMaint, SubMaint, NodeImport, Sync, acctWheel, acctCard, Gold, GoldBoard, PView, LeaderPop, TabPress, userAtts, attZoom, Side, AcctStats, LaunchPick, MgrWin, SendQ, Notes, Mob, Pager, EnterFlow, Hitl, Vless, Nodes, NodeEditor, NodeMgr, Chats, chatOf, Tabs, UI, History, Models, Store, Trigger, Pulse, IP, Trace, Workspace, Dock, WS, Bar, Prefs, Recaptcha, createChat, R, Uploads, Revolver, GPop, Notes, Titles, TitleSync, TitleCompact, TitleCipher, ProbeArchive, Fingerprint, FingerprintBatch, GachaPrompts, Dialog, AutoId, Strength, PView, StrPick, Side, Price, LiveEst, KeepAlive, Palette, ExtPop, LeaderPop, Steps, FileLink, Tip, Pool, ProxySet, GSlot, Fav, LocalProxy, proxyField, ModeState, ModelCatalog, EvalEngine, ModeSwitcher, EvalView, get Gacha() { return Gacha; } } }); } catch {}
   // 桌面账号管理窗口（本地页面）：只显示账号管理，不联网
   if (isMgrFile) { MgrWin.boot(); return; }
   if (window.__ANC_BOOTED) return; window.__ANC_BOOTED = true;
