@@ -154,7 +154,6 @@ const HtmlPreview = (() => {
         stageMetaCache.set(metaKey, { W, H, wfit, fill, bg });
       } catch {}
       place();
-      if (o.probe && lastPw > 0) m.style.display = 'none';
     };
     m.addEventListener('load', analyse);
     try {

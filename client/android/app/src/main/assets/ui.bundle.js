@@ -5210,7 +5210,7 @@ Object.assign(Chat.prototype, {
     const fgSid = typeof Tabs !== 'undefined' ? Tabs.cur?.sid : null;
     if (fgSid && Chats.get(fgSid)?.loading) return;
     const t = now(); if (!this.convAt) { this.convAt = t; return; }
-    if (this.live) { this.convGap = 0; if ((this.recAt || 0) > this.convAt) this.liveGap = 0; const lg = this.liveGap || 20000; if (t - (this.recAt || 0) > lg && t - this.convAt > lg) { this.liveGap = Math.min(60000, lg * 2); this.converge(); } return; }
+    if (this.live) { this.convGap = 0; if ((this.recAt || 0) > this.convAt) this.liveGap = 0; const lg = this.liveGap || 10000; if (t - (this.recAt || 0) > lg && t - this.convAt > lg) { this.liveGap = Math.min(60000, lg * 2); this.converge(); } return; }
     if (this.busy || this.streaming) { this.convGap = 0; return; }
     const lastMsg = this.messages.at(-1);
     const waitReply = !!lastMsg && (lastMsg.role === 'user' || lastMsg.metadata?.pending) && !Hitl.idleWait(this);
@@ -16308,7 +16308,7 @@ const UI = {
             h('span', {}, h('b', {}, '计费接口部署锁定（/cost）'), dplNote),
             h('div', { class: 'set-btns', style: { display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' } },
               dplInput,
-              h('button', { type: 'button', class: 'btn ghost sm', onclick: () => applyLock(dplInput.value) }, '锁定'),
+              h('button', { type: 'button', class: 'btn ghost sm', onclick: () => applyLock(dplInput.value) }, '锁定部署'),
               h('button', { type: 'button', class: 'btn ghost sm', onclick: () => applyLock('') }, '默认')));
         })(),
         h('label', { class: 'set' }, h('input', { type: 'checkbox', checked: Prefs.notify !== false || null, onchange: e => { Prefs.notify = e.target.checked; savePrefs(); if (e.target.checked) Host.notifyPerm?.(true)?.catch?.(() => {}); } }), h('span', {}, h('b', {}, '任务完成通知'), h('small', {}, 'App 在后台时，对话回复完成 / 等待你回答 / 出错时弹系统通知，点通知直接打开那个对话；抽卡（包括抽到金色）不通知'))),
@@ -16872,8 +16872,10 @@ const UI = {
   },
   async confirmPureIpBeforeSend() {
     try {
+      if (window.__fixture || window.__routeFixture) return true;
       const a = this.host?.account || {};
       const curIp = typeof IP !== 'undefined' ? (IP.ip || '') : '';
+      if (!curIp && !a.proxyIp && !a.proxy && !(typeof IP !== 'undefined' && IP.err)) return true;
       const ipRep = (typeof IPRep !== 'undefined' && IPRep.cur) ? IPRep.cur(a, curIp) : null;
       const isTrusted = Boolean(typeof IPRep !== 'undefined' && IPRep.trusted && ((a.proxyIp && IPRep.trusted(a.proxyIp)) || (curIp && IPRep.trusted(curIp))));
       const isPure = Boolean(isTrusted || (ipRep && ipRep.label === '纯净' && (ipRep.pct == null || ipRep.pct >= 75) && !(typeof IP !== 'undefined' && IP.err)));
@@ -17523,7 +17525,6 @@ const HtmlPreview = (() => {
         stageMetaCache.set(metaKey, { W, H, wfit, fill, bg });
       } catch {}
       place();
-      if (o.probe && lastPw > 0) m.style.display = 'none';
     };
     m.addEventListener('load', analyse);
     try {
@@ -30399,8 +30400,9 @@ const ChatHabitFingerprint = (() => {
     if (known?.fingerprint?.result && !interactive) return known;
     const cloudTitle = (typeof History !== 'undefined' && History.byId?.(sid)?.title) || chat?.title || '';
     const restoredMeta = typeof TitleSync !== 'undefined' ? TitleSync.restored?.(sid) : null;
+    if (!interactive && ((typeof TitleCipher !== 'undefined' && TitleCipher.isEncoded?.(cloudTitle)) || (restoredMeta && !restoredMeta.fromPrefix))) return known;
     const hasLoadedMsgs = Array.isArray(chat?.messages) && chat.messages.some(x => x && x.role === 'assistant');
-    if (!interactive && !force && !hasLoadedMsgs && ((typeof TitleCipher !== 'undefined' && TitleCipher.isEncoded?.(cloudTitle)) || (restoredMeta && (!restoredMeta.fromPrefix || (!known?.habitFeatures && (known?.reverseVer || 0) >= 174))))) return known;
+    if (!interactive && !force && !hasLoadedMsgs && restoredMeta?.fromPrefix && (!known?.habitFeatures && (known?.reverseVer || 0) >= 174)) return known;
     const hasAuthoritativeApi = known && !known.guess && !known.fromTitle && !known.reverseInferred && !known.billingProbe && !known.habitInferred && (known.response || (known.internal && !known.billingProbe));
     if (hasAuthoritativeApi && !force) return known;
     // 识别到开源模型后，除非用户手动点击「反推锁定」（interactive: true），否则直接标记为「开源模型」并同步修改对话名称，不再浪费算力去推理具体计费型号
@@ -35408,7 +35410,10 @@ const BillingProbe = (() => {
       (typeof Tabs !== 'undefined' && Tabs.cur?.sid === sid) ||
       (typeof UI !== 'undefined' && UI.els?.chat?.sid === sid)
     );
-    if (isActiveOrLoadedChat && sid && mergedCandidates.length > 0 && (!model || (!model.userCorrected && !(model.fingerprint?.result && !model.reverseInferred && !model.habitInferred && !model.billingProbe)))) {
+    const cloudTitleForSync = (typeof History !== 'undefined' && History.byId?.(sid)?.title) || chat?.title || '';
+    const restoredForSync = typeof TitleSync !== 'undefined' ? TitleSync.restored?.(sid) : null;
+    const isFullEncodedTitle = Boolean((typeof TitleCipher !== 'undefined' && TitleCipher.isEncoded?.(cloudTitleForSync)) || (restoredForSync && !restoredForSync.fromPrefix));
+    if (!isFullEncodedTitle && isActiveOrLoadedChat && sid && mergedCandidates.length > 0 && (!model || (!model.userCorrected && !(model.fingerprint?.result && !model.reverseInferred && !model.habitInferred && !model.billingProbe)))) {
       const top0 = mergedCandidates[0], top1 = mergedCandidates[1];
       const hr = out.habitRoute;
       const isNowRouted = Boolean(top0?.routed || hr?.routed || diagnostics?.routeSwitched || diagnostics?.effortDowngraded || diagnostics?.routeType);
@@ -35584,8 +35589,11 @@ const BillingProbe = (() => {
     }
     const cloudTitle = (typeof History !== 'undefined' && History.byId?.(sid)?.title) || chat?.title || '';
     const restoredMeta = typeof TitleSync !== 'undefined' ? TitleSync.restored?.(sid) : null;
+    if (!interactive && !forceLock && ((typeof TitleCipher !== 'undefined' && TitleCipher.isEncoded?.(cloudTitle)) || (restoredMeta && !restoredMeta.fromPrefix))) {
+      return { entry: known, best, close: [best], standout: true, preimage: sum.preimage, payment: sum.payment };
+    }
     const hasLoadedMsgs = Array.isArray(chat?.messages) && chat.messages.some(x => x && x.role === 'assistant');
-    if (!interactive && !forceLock && !hasLoadedMsgs && ((typeof TitleCipher !== 'undefined' && TitleCipher.isEncoded?.(cloudTitle)) || (restoredMeta && (!restoredMeta.fromPrefix || (known?.reverseVer || 0) >= 174)))) {
+    if (!interactive && !forceLock && !hasLoadedMsgs && restoredMeta?.fromPrefix && (known?.reverseVer || 0) >= 174) {
       return { entry: known, best, close: [best], standout: true, preimage: sum.preimage, payment: sum.payment };
     }
     const hasRealEvidence = (d?.samples?.observations > 0) || Boolean(best.habitSource || best.habitPct || known?.fingerprint?.result || known?.reverseInferred || known?.billingProbe) || ARGON_HIGH_SIDS.has(sid) || SOL_61_SIDS.has(sid) || sid === '01a13f8c-41c2-7ad3-8e77-73feb405f68d';
@@ -38783,7 +38791,7 @@ const Dock = {
       grp('模型识别',
         row('自动识别模式', '每轮回复结束后自动识别当前对话型号（关闭后不自动触发识别，仅在手动刷新或切换时识别）。', h('input', { type: 'checkbox', class: 'sw', role: 'switch', checked: (typeof BillingProbe !== 'undefined' && typeof BillingProbe.isAutoEnabled === 'function' ? BillingProbe.isAutoEnabled() : Store.get('billing:auto', true) !== false) ? true : null, onchange: e => { const on = e.target.checked; if (typeof BillingProbe !== 'undefined' && typeof BillingProbe.setAutoEnabled === 'function') BillingProbe.setAutoEnabled(on); else Store.set('billing:auto', on); const curSid = this.sid(); const ch = curSid ? Chats.get(curSid) : null; if (on && ch && typeof BillingProbe !== 'undefined' && BillingProbe.automatic) BillingProbe.automatic(ch); if (curSid) Bus.emit('billing', curSid); this.render(); } })),
         row('计费接口反推（/cost）', '开启时对闭源模型请求 /api/chat/:id/cost 进行精确账单反推（开源模型自动跳过不请求，防 429 限流）；关闭后完全不请求计费接口，100% 使用本地「对话习惯 + 推理分 + 习惯库」识别，可随时开关对比准确性。', sw('costProbe', true, on => { if (typeof BillingProbe !== 'undefined' && BillingProbe.setCostProbeEnabled) BillingProbe.setCostProbeEnabled(on); const curSid = this.sid(); const ch = curSid ? Chats.get(curSid) : null; if (ch) { if (on && BillingProbe.automatic) BillingProbe.automatic(ch); else if (typeof ChatHabitFingerprint !== 'undefined') ChatHabitFingerprint.identifyAndApply(ch, { force: true }); } this.render(); })),
-        row('计费接口部署锁定（/cost）', '手动输入并锁定 /cost 账单接口的 Vercel 部署编号（dpl_…，支持直接粘贴完整链接）。锁定后优先级最高，不会被自动轮换覆盖。\n当前生效：' + Pin.dpl() + (Pin.lockedDpl() ? '（已手动锁定）' : '（默认在线部署）'), h('div', { style: { display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' } }, costLockInput, btn('锁定', () => { if (!applyPinInput(costLockInput.value)) costLockInput.value = Pin.dpl(); }), btn('默认', () => applyPinInput(''))), { div: true }),
+        row('计费接口部署锁定（/cost）', '手动输入并锁定 /cost 账单接口的 Vercel 部署编号（dpl_…，支持直接粘贴完整链接）。锁定后优先级最高，不会被自动轮换覆盖。\n当前生效：' + Pin.dpl() + (Pin.lockedDpl() ? '（已手动锁定）' : '（默认在线部署）'), h('div', { style: { display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' } }, costLockInput, btn('锁定部署', () => { if (!applyPinInput(costLockInput.value)) costLockInput.value = Pin.dpl(); }), btn('默认', () => applyPinInput(''))), { div: true }),
         row('习惯库（诊断 JSON 导入与自学习）', '通过对话记录与工具调用习惯零风控识别模型；支持将确定知道是什么模型的诊断 JSON（billing-*.json）导入到习惯库中帮助习惯识别，或在右上角点「纠偏」沉淀学习，越用越准。', btn('管理 / 导入 (' + (typeof ChatHabitFingerprint !== 'undefined' ? ChatHabitFingerprint.learnedCount() : 0) + ')', () => typeof ChatHabitFingerprint !== 'undefined' && ChatHabitFingerprint.openManager?.()), { div: true }),
         row('自动读取运行记录', '每轮结束后读取 Trace（型号 / token / 花费 / 改派 / BotService），保存在本机。', sw('traceAuto', true)),
         row('实时监控换模型', '这一轮进行中每 6 秒读一次当前对话的 Trace（只读当前打开的对话）。', sw('traceLive', true)),
@@ -46245,8 +46253,14 @@ const Pool = {
   untestedKeys() {
     return this.entries().filter(([k, e]) => e && !e.gone && !this.banned(k) && e.ok == null).map(([k]) => k);
   },
+  isFixtureEnv() {
+    if (typeof window !== 'undefined' && (window.__routeFixture || window.__fixture)) return true;
+    const p = String((typeof UI !== 'undefined' && UI?.host?.account?.proxy) || '').trim();
+    const em = String((typeof UI !== 'undefined' && (UI?.host?.account?.email || UI?.me?.email)) || '').trim();
+    return /^(?:https?:\/\/|socks5:\/\/)?127\.0\.0\.1:(?:1|9|10)\b/i.test(p) || /@example\.invalid$/i.test(em);
+  },
   async seed() {
-    if (typeof window !== 'undefined' && (window.__routeFixture || window.__fixture)) return;
+    if (this.isFixtureEnv()) return;
     if (this._seeding) return; this._seeding = true;
     try {
       await this.load();
@@ -47912,7 +47926,7 @@ if (!globalThis.__BRANA_OFFLINE__) setTimeout(() => { PoolMaint.tick().catch(() 
 const ApiMaint = {
   EVERY: 6 * 3600e3, running: false,
   async tick(force) {
-    if (this.running || navigator.onLine === false) return;
+    if (this.running || navigator.onLine === false || (!force && Pool.isFixtureEnv())) return;
     try { await Pool.load(true); } catch { return; }
     const ls = Pool.apis(); if (!ls.length) return;
     this.running = true;
@@ -47924,7 +47938,7 @@ const ApiMaint = {
     } finally { this.running = false; Bus.emit('pool'); }
   },
 };
-if (!globalThis.__BRANA_OFFLINE__) setTimeout(() => { ApiMaint.tick().catch(() => {}); setInterval(() => ApiMaint.tick().catch(() => {}), 2 * 60e3); }, 12e3);
+if (!globalThis.__BRANA_OFFLINE__) setTimeout(() => { ApiMaint.tick().catch(() => {}); setInterval(() => ApiMaint.tick().catch(() => {}), 5 * 60e3); }, 60e3);
 
 // 启动后稍等一会儿再补默认域名（不跟首屏抢网络）
 if (!globalThis.__BRANA_OFFLINE__) setTimeout(() => { Pool.seed().catch(() => {}); }, 9000);
@@ -47934,6 +47948,7 @@ const SubMaint = {
   start() {
     if (this.t) return;
     const tick = async () => {
+      if (Pool.isFixtureEnv()) return;
       try {
         await Nodes.loadSubs();
         if (Nodes.subs.some(s => now() - (s.at || 0) > 6 * 3600e3)) { const r = await Nodes.refreshSubs(); if (r.add || r.rm) Bus.emit('pool'); }
@@ -53916,10 +53931,15 @@ async function init() {
     UI.renderListSoon?.();
   };
   {
-    try { await Promise.race([History.restoreFromLocalCache?.() || Promise.resolve(), sleep(500)]); } catch {}
+    if (!window.__fixture && !window.__routeFixture) {
+      try { await Promise.race([History.restoreFromLocalCache?.() || Promise.resolve(), sleep(500)]); } catch {}
+    } else {
+      try { void History.restoreFromLocalCache?.(); } catch {}
+    }
     const cm = Store.get('me:u', null);
     const hasLocalState = !!(History.items?.length || Store.get('tabs', null)?.length || Store.get('tabs:v1', null)?.list?.length || Tabs.list?.length || (typeof MsgCache !== 'undefined' && MsgCache.keys?.()?.length));
-    const hasConfiguredAccount = Boolean(!window.__fixture && !window.__routeFixture && (UI.host?.account?.email || UI.host?.account?.hasPw || UI.host?.account?.hasPassword));
+    const isFixtureAcct = Boolean(window.__fixture || window.__routeFixture || /@example\.invalid$/i.test(String(UI.host?.account?.email || '')) || /^(?:https?:\/\/|socks5:\/\/)?127\.0\.0\.1:(?:1|9|10)\b/i.test(String(UI.host?.account?.proxy || '')));
+    const hasConfiguredAccount = Boolean(!isFixtureAcct && (UI.host?.account?.email || UI.host?.account?.hasPw || UI.host?.account?.hasPassword));
     if ((cm && cm.id && (!expectedEmail || sameAcctEmail(cm.email, expectedEmail))) || hasLocalState || hasConfiguredAccount) {
       const em = expectedEmail || cm?.email || UI.host?.account?.email || UI.host?.account?.name || '本地账号';
       UI.me = (cm && cm.id) ? cm : { id: UI.host?.account?.id || 'local', email: em, name: String(em).split('@')[0] };
@@ -53939,7 +53959,7 @@ async function init() {
     const done = value => { if (finished) return; finished = true; clearInterval(tm); now.disabled = true; res(value); };
     const txt = h('span', {}), now = h('button', { type: 'button', class: 'link', onclick: () => { left = 0; tick(); } }, '立即重试');
     const tick = () => { if (finished) return; if (left <= 0) { txt.textContent = '正在重新登录…'; done(); return; } txt.textContent = '账号登录暂未完成（' + why + '），' + left + ' 秒后重试'; left--; };
-    if (!early && !window.__BRANA_BROWSE_MODE) {
+    if (!early && !window.__BRANA_BROWSE_MODE && !window.__fixture && !window.__routeFixture) {
       try { UI.enterBrowseMode?.(); } catch {}
     }
     try { if (typeof RegionIP !== 'undefined' && !RegionIP.view && !window.__routeFixture && !window.__fixture) RegionIP.open({ offlineAlert: true }); } catch {}
@@ -53969,7 +53989,7 @@ async function init() {
     return;
   }
   if (check.manual) {
-    if (early) { UI.enterBrowseMode('账号和本地对话已保留 · 可直接查阅本地记录，或点右上角重新登录'); return; }
+    if (early && !window.__fixture && !window.__routeFixture) { UI.enterBrowseMode('账号和本地对话已保留 · 可直接查阅本地记录，或点右上角重新登录'); return; }
     UI.loginGate('账号和本地对话已保留。请检查登录验证或线路后重试，或点「查阅模式」免登录浏览本地记录。');
     return;
   }
@@ -53985,21 +54005,21 @@ async function init() {
   let needShell = !early;
   // 未登录：有保存的密码就直接用接口登录，否则显示登录表单
   if (!UI.me) {
-    needShell = !early;
+    needShell = (!early || !!window.__fixture || !!window.__routeFixture);
     const cred = await Host.getCred().catch(() => null);
     if (cred?.email && cred?.password) {
-      if (!early) $('#view').replaceChildren(h('div', { class: 'gate' }, h('div', { class: 'lform' }, h('div', { class: 'hero-t' }, '正在登录…'), h('div', { class: 'lsub' }, cred.email + ' · ' + (isDirectP(UI.host.account?.proxy) ? '直连' : '代理 ' + maskProxy(UI.host.account?.proxy))), h('i', { class: 'spin' }))));
+      if (!early || window.__fixture || window.__routeFixture) $('#view').replaceChildren(h('div', { class: 'gate' }, h('div', { class: 'lform' }, h('div', { class: 'hero-t' }, '正在登录…'), h('div', { class: 'lsub' }, cred.email + ' · ' + (isDirectP(UI.host.account?.proxy) ? '直连' : '代理 ' + maskProxy(UI.host.account?.proxy))), h('i', { class: 'spin' }))));
       for (;;) {
         try { UI.me = checkedUser(await Auth.signIn(cred.email, cred.password)); connOk(); break; }
         catch (e) {
           // Read retries may recover automatically; an unconfirmed authentication POST is never replayed.
           if (e.net && await connWait(describe(e), e.slow) !== 'gate') continue;
           connOk();
-          if (early) { UI.enterBrowseMode('自动登录暂未完成（' + describe(e) + '）· 已保留本地缓存对话'); return; }
+          if (early && !window.__fixture && !window.__routeFixture) { UI.enterBrowseMode('自动登录暂未完成（' + describe(e) + '）· 已保留本地缓存对话'); return; }
           UI.renderAcct(); return UI.loginGate('自动登录失败：' + describe(e));
         }
       }
-    } else if (early) {
+    } else if (early && !window.__fixture && !window.__routeFixture) {
       UI.enterBrowseMode('已保留本地缓存对话 · 登录会话过期，可直接查阅本地记录');
       return;
     }

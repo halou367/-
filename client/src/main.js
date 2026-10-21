@@ -443,9 +443,6 @@ async function applyProxy(a, {force=false,deferReload=false}={}) {
         if(!recoveryPage)await loadURLAlive(wc, 'about:blank');
         check(); await uaMeta(wc); check();
       }
-      if (wc && !process.env.BRANA_EXTENSION_TEST_DATA && typeof wc.debugger?.sendCommand === 'function') {
-        await wc.debugger.sendCommand('Fetch.enable', { patterns: [{ urlPattern: 'https://arena.ai/robots.txt*' }] }).catch(() => {});
-      }
       const changed=wc?.__privacyRefresh ? await wc.__privacyRefresh(snapshot) : false;check();
       if (wc && (wc.__privacyFailed || !wc.__uam || !wc.debugger.isAttached())) throw Error('隐私保护未就绪');
       const releaseExtensionTabs=typeof extensionTabs!=='undefined'&&extensionTabs?await extensionTabs.refresh(snapshot,{check}):null;check();
@@ -1854,6 +1851,7 @@ ipcMain.handle('host:fetchText', async (e, url, opt) => {
     }
   };
   const a = winAcct(e.sender) || (Array.isArray(DB?.accounts) ? (DB.accounts.find(x => x && !isDirect(proxyStr(x))) || DB.accounts[0]) : null);
+  const isFixtureAccount = a && (/^(?:https?:\/\/|socks5:\/\/)?127\.0\.0\.1:(?:1|9|10)\b/i.test(String(proxyStr(a) || '')) || /@example\.invalid$/i.test(String(a?.email || '')));
   let r = null;
   if (a && opt?.direct !== true) {
     if (!tunnels.has(a.id) && /^vless:/i.test(proxyStr(a))) await applyProxy(a).catch(() => {});
@@ -1865,7 +1863,7 @@ ipcMain.handle('host:fetchText', async (e, url, opt) => {
     }
   }
   // 订阅与更新等公开资源在代理不可用、连接关闭或代理网关返回 5xx/403/429 时支持直连安全回退
-  if (!publicData && (!r || (r.error && (!/^HTTP \d+/.test(r.error) || /^HTTP (?:5\d\d|403|429)$/.test(r.error))))) {
+  if (!isFixtureAccount && !publicData && (!r || (r.error && (!/^HTTP \d+/.test(r.error) || /^HTTP (?:5\d\d|403|429)$/.test(r.error))))) {
     // 真直连（不走系统代理 / 本机代理）；都不通才最后试一次系统代理
     const ds = await directSession();
     for (const ua of ['v2rayN/6.23', 'ClashforWindows/0.20.39', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36']) {

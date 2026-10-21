@@ -60,8 +60,14 @@ const Pool = {
   untestedKeys() {
     return this.entries().filter(([k, e]) => e && !e.gone && !this.banned(k) && e.ok == null).map(([k]) => k);
   },
+  isFixtureEnv() {
+    if (typeof window !== 'undefined' && (window.__routeFixture || window.__fixture)) return true;
+    const p = String((typeof UI !== 'undefined' && UI?.host?.account?.proxy) || '').trim();
+    const em = String((typeof UI !== 'undefined' && (UI?.host?.account?.email || UI?.me?.email)) || '').trim();
+    return /^(?:https?:\/\/|socks5:\/\/)?127\.0\.0\.1:(?:1|9|10)\b/i.test(p) || /@example\.invalid$/i.test(em);
+  },
   async seed() {
-    if (typeof window !== 'undefined' && (window.__routeFixture || window.__fixture)) return;
+    if (this.isFixtureEnv()) return;
     if (this._seeding) return; this._seeding = true;
     try {
       await this.load();
@@ -1727,7 +1733,7 @@ if (!globalThis.__BRANA_OFFLINE__) setTimeout(() => { PoolMaint.tick().catch(() 
 const ApiMaint = {
   EVERY: 6 * 3600e3, running: false,
   async tick(force) {
-    if (this.running || navigator.onLine === false) return;
+    if (this.running || navigator.onLine === false || (!force && Pool.isFixtureEnv())) return;
     try { await Pool.load(true); } catch { return; }
     const ls = Pool.apis(); if (!ls.length) return;
     this.running = true;
@@ -1739,7 +1745,7 @@ const ApiMaint = {
     } finally { this.running = false; Bus.emit('pool'); }
   },
 };
-if (!globalThis.__BRANA_OFFLINE__) setTimeout(() => { ApiMaint.tick().catch(() => {}); setInterval(() => ApiMaint.tick().catch(() => {}), 2 * 60e3); }, 12e3);
+if (!globalThis.__BRANA_OFFLINE__) setTimeout(() => { ApiMaint.tick().catch(() => {}); setInterval(() => ApiMaint.tick().catch(() => {}), 5 * 60e3); }, 60e3);
 
 // 启动后稍等一会儿再补默认域名（不跟首屏抢网络）
 if (!globalThis.__BRANA_OFFLINE__) setTimeout(() => { Pool.seed().catch(() => {}); }, 9000);
@@ -1749,6 +1755,7 @@ const SubMaint = {
   start() {
     if (this.t) return;
     const tick = async () => {
+      if (Pool.isFixtureEnv()) return;
       try {
         await Nodes.loadSubs();
         if (Nodes.subs.some(s => now() - (s.at || 0) > 6 * 3600e3)) { const r = await Nodes.refreshSubs(); if (r.add || r.rm) Bus.emit('pool'); }

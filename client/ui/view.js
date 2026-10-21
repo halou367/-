@@ -2262,7 +2262,7 @@ const UI = {
             h('span', {}, h('b', {}, '计费接口部署锁定（/cost）'), dplNote),
             h('div', { class: 'set-btns', style: { display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' } },
               dplInput,
-              h('button', { type: 'button', class: 'btn ghost sm', onclick: () => applyLock(dplInput.value) }, '锁定'),
+              h('button', { type: 'button', class: 'btn ghost sm', onclick: () => applyLock(dplInput.value) }, '锁定部署'),
               h('button', { type: 'button', class: 'btn ghost sm', onclick: () => applyLock('') }, '默认')));
         })(),
         h('label', { class: 'set' }, h('input', { type: 'checkbox', checked: Prefs.notify !== false || null, onchange: e => { Prefs.notify = e.target.checked; savePrefs(); if (e.target.checked) Host.notifyPerm?.(true)?.catch?.(() => {}); } }), h('span', {}, h('b', {}, '任务完成通知'), h('small', {}, 'App 在后台时，对话回复完成 / 等待你回答 / 出错时弹系统通知，点通知直接打开那个对话；抽卡（包括抽到金色）不通知'))),
@@ -2826,8 +2826,10 @@ const UI = {
   },
   async confirmPureIpBeforeSend() {
     try {
+      if (window.__fixture || window.__routeFixture) return true;
       const a = this.host?.account || {};
       const curIp = typeof IP !== 'undefined' ? (IP.ip || '') : '';
+      if (!curIp && !a.proxyIp && !a.proxy && !(typeof IP !== 'undefined' && IP.err)) return true;
       const ipRep = (typeof IPRep !== 'undefined' && IPRep.cur) ? IPRep.cur(a, curIp) : null;
       const isTrusted = Boolean(typeof IPRep !== 'undefined' && IPRep.trusted && ((a.proxyIp && IPRep.trusted(a.proxyIp)) || (curIp && IPRep.trusted(curIp))));
       const isPure = Boolean(isTrusted || (ipRep && ipRep.label === '纯净' && (ipRep.pct == null || ipRep.pct >= 75) && !(typeof IP !== 'undefined' && IP.err)));

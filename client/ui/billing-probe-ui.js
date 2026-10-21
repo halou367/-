@@ -3948,8 +3948,9 @@ const ChatHabitFingerprint = (() => {
     if (known?.fingerprint?.result && !interactive) return known;
     const cloudTitle = (typeof History !== 'undefined' && History.byId?.(sid)?.title) || chat?.title || '';
     const restoredMeta = typeof TitleSync !== 'undefined' ? TitleSync.restored?.(sid) : null;
+    if (!interactive && ((typeof TitleCipher !== 'undefined' && TitleCipher.isEncoded?.(cloudTitle)) || (restoredMeta && !restoredMeta.fromPrefix))) return known;
     const hasLoadedMsgs = Array.isArray(chat?.messages) && chat.messages.some(x => x && x.role === 'assistant');
-    if (!interactive && !force && !hasLoadedMsgs && ((typeof TitleCipher !== 'undefined' && TitleCipher.isEncoded?.(cloudTitle)) || (restoredMeta && (!restoredMeta.fromPrefix || (!known?.habitFeatures && (known?.reverseVer || 0) >= 174))))) return known;
+    if (!interactive && !force && !hasLoadedMsgs && restoredMeta?.fromPrefix && (!known?.habitFeatures && (known?.reverseVer || 0) >= 174)) return known;
     const hasAuthoritativeApi = known && !known.guess && !known.fromTitle && !known.reverseInferred && !known.billingProbe && !known.habitInferred && (known.response || (known.internal && !known.billingProbe));
     if (hasAuthoritativeApi && !force) return known;
     // 识别到开源模型后，除非用户手动点击「反推锁定」（interactive: true），否则直接标记为「开源模型」并同步修改对话名称，不再浪费算力去推理具体计费型号
@@ -6458,7 +6459,10 @@ const BillingProbe = (() => {
       (typeof Tabs !== 'undefined' && Tabs.cur?.sid === sid) ||
       (typeof UI !== 'undefined' && UI.els?.chat?.sid === sid)
     );
-    if (isActiveOrLoadedChat && sid && mergedCandidates.length > 0 && (!model || (!model.userCorrected && !(model.fingerprint?.result && !model.reverseInferred && !model.habitInferred && !model.billingProbe)))) {
+    const cloudTitleForSync = (typeof History !== 'undefined' && History.byId?.(sid)?.title) || chat?.title || '';
+    const restoredForSync = typeof TitleSync !== 'undefined' ? TitleSync.restored?.(sid) : null;
+    const isFullEncodedTitle = Boolean((typeof TitleCipher !== 'undefined' && TitleCipher.isEncoded?.(cloudTitleForSync)) || (restoredForSync && !restoredForSync.fromPrefix));
+    if (!isFullEncodedTitle && isActiveOrLoadedChat && sid && mergedCandidates.length > 0 && (!model || (!model.userCorrected && !(model.fingerprint?.result && !model.reverseInferred && !model.habitInferred && !model.billingProbe)))) {
       const top0 = mergedCandidates[0], top1 = mergedCandidates[1];
       const hr = out.habitRoute;
       const isNowRouted = Boolean(top0?.routed || hr?.routed || diagnostics?.routeSwitched || diagnostics?.effortDowngraded || diagnostics?.routeType);
@@ -6634,8 +6638,11 @@ const BillingProbe = (() => {
     }
     const cloudTitle = (typeof History !== 'undefined' && History.byId?.(sid)?.title) || chat?.title || '';
     const restoredMeta = typeof TitleSync !== 'undefined' ? TitleSync.restored?.(sid) : null;
+    if (!interactive && !forceLock && ((typeof TitleCipher !== 'undefined' && TitleCipher.isEncoded?.(cloudTitle)) || (restoredMeta && !restoredMeta.fromPrefix))) {
+      return { entry: known, best, close: [best], standout: true, preimage: sum.preimage, payment: sum.payment };
+    }
     const hasLoadedMsgs = Array.isArray(chat?.messages) && chat.messages.some(x => x && x.role === 'assistant');
-    if (!interactive && !forceLock && !hasLoadedMsgs && ((typeof TitleCipher !== 'undefined' && TitleCipher.isEncoded?.(cloudTitle)) || (restoredMeta && (!restoredMeta.fromPrefix || (known?.reverseVer || 0) >= 174)))) {
+    if (!interactive && !forceLock && !hasLoadedMsgs && restoredMeta?.fromPrefix && (known?.reverseVer || 0) >= 174) {
       return { entry: known, best, close: [best], standout: true, preimage: sum.preimage, payment: sum.payment };
     }
     const hasRealEvidence = (d?.samples?.observations > 0) || Boolean(best.habitSource || best.habitPct || known?.fingerprint?.result || known?.reverseInferred || known?.billingProbe) || ARGON_HIGH_SIDS.has(sid) || SOL_61_SIDS.has(sid) || sid === '01a13f8c-41c2-7ad3-8e77-73feb405f68d';

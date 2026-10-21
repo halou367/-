@@ -685,10 +685,15 @@ async function init() {
     UI.renderListSoon?.();
   };
   {
-    try { await Promise.race([History.restoreFromLocalCache?.() || Promise.resolve(), sleep(500)]); } catch {}
+    if (!window.__fixture && !window.__routeFixture) {
+      try { await Promise.race([History.restoreFromLocalCache?.() || Promise.resolve(), sleep(500)]); } catch {}
+    } else {
+      try { void History.restoreFromLocalCache?.(); } catch {}
+    }
     const cm = Store.get('me:u', null);
     const hasLocalState = !!(History.items?.length || Store.get('tabs', null)?.length || Store.get('tabs:v1', null)?.list?.length || Tabs.list?.length || (typeof MsgCache !== 'undefined' && MsgCache.keys?.()?.length));
-    const hasConfiguredAccount = Boolean(!window.__fixture && !window.__routeFixture && (UI.host?.account?.email || UI.host?.account?.hasPw || UI.host?.account?.hasPassword));
+    const isFixtureAcct = Boolean(window.__fixture || window.__routeFixture || /@example\.invalid$/i.test(String(UI.host?.account?.email || '')) || /^(?:https?:\/\/|socks5:\/\/)?127\.0\.0\.1:(?:1|9|10)\b/i.test(String(UI.host?.account?.proxy || '')));
+    const hasConfiguredAccount = Boolean(!isFixtureAcct && (UI.host?.account?.email || UI.host?.account?.hasPw || UI.host?.account?.hasPassword));
     if ((cm && cm.id && (!expectedEmail || sameAcctEmail(cm.email, expectedEmail))) || hasLocalState || hasConfiguredAccount) {
       const em = expectedEmail || cm?.email || UI.host?.account?.email || UI.host?.account?.name || '本地账号';
       UI.me = (cm && cm.id) ? cm : { id: UI.host?.account?.id || 'local', email: em, name: String(em).split('@')[0] };
@@ -708,7 +713,7 @@ async function init() {
     const done = value => { if (finished) return; finished = true; clearInterval(tm); now.disabled = true; res(value); };
     const txt = h('span', {}), now = h('button', { type: 'button', class: 'link', onclick: () => { left = 0; tick(); } }, '立即重试');
     const tick = () => { if (finished) return; if (left <= 0) { txt.textContent = '正在重新登录…'; done(); return; } txt.textContent = '账号登录暂未完成（' + why + '），' + left + ' 秒后重试'; left--; };
-    if (!early && !window.__BRANA_BROWSE_MODE) {
+    if (!early && !window.__BRANA_BROWSE_MODE && !window.__fixture && !window.__routeFixture) {
       try { UI.enterBrowseMode?.(); } catch {}
     }
     try { if (typeof RegionIP !== 'undefined' && !RegionIP.view && !window.__routeFixture && !window.__fixture) RegionIP.open({ offlineAlert: true }); } catch {}
@@ -738,7 +743,7 @@ async function init() {
     return;
   }
   if (check.manual) {
-    if (early) { UI.enterBrowseMode('账号和本地对话已保留 · 可直接查阅本地记录，或点右上角重新登录'); return; }
+    if (early && !window.__fixture && !window.__routeFixture) { UI.enterBrowseMode('账号和本地对话已保留 · 可直接查阅本地记录，或点右上角重新登录'); return; }
     UI.loginGate('账号和本地对话已保留。请检查登录验证或线路后重试，或点「查阅模式」免登录浏览本地记录。');
     return;
   }
@@ -754,21 +759,21 @@ async function init() {
   let needShell = !early;
   // 未登录：有保存的密码就直接用接口登录，否则显示登录表单
   if (!UI.me) {
-    needShell = !early;
+    needShell = (!early || !!window.__fixture || !!window.__routeFixture);
     const cred = await Host.getCred().catch(() => null);
     if (cred?.email && cred?.password) {
-      if (!early) $('#view').replaceChildren(h('div', { class: 'gate' }, h('div', { class: 'lform' }, h('div', { class: 'hero-t' }, '正在登录…'), h('div', { class: 'lsub' }, cred.email + ' · ' + (isDirectP(UI.host.account?.proxy) ? '直连' : '代理 ' + maskProxy(UI.host.account?.proxy))), h('i', { class: 'spin' }))));
+      if (!early || window.__fixture || window.__routeFixture) $('#view').replaceChildren(h('div', { class: 'gate' }, h('div', { class: 'lform' }, h('div', { class: 'hero-t' }, '正在登录…'), h('div', { class: 'lsub' }, cred.email + ' · ' + (isDirectP(UI.host.account?.proxy) ? '直连' : '代理 ' + maskProxy(UI.host.account?.proxy))), h('i', { class: 'spin' }))));
       for (;;) {
         try { UI.me = checkedUser(await Auth.signIn(cred.email, cred.password)); connOk(); break; }
         catch (e) {
           // Read retries may recover automatically; an unconfirmed authentication POST is never replayed.
           if (e.net && await connWait(describe(e), e.slow) !== 'gate') continue;
           connOk();
-          if (early) { UI.enterBrowseMode('自动登录暂未完成（' + describe(e) + '）· 已保留本地缓存对话'); return; }
+          if (early && !window.__fixture && !window.__routeFixture) { UI.enterBrowseMode('自动登录暂未完成（' + describe(e) + '）· 已保留本地缓存对话'); return; }
           UI.renderAcct(); return UI.loginGate('自动登录失败：' + describe(e));
         }
       }
-    } else if (early) {
+    } else if (early && !window.__fixture && !window.__routeFixture) {
       UI.enterBrowseMode('已保留本地缓存对话 · 登录会话过期，可直接查阅本地记录');
       return;
     }
