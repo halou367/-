@@ -170,7 +170,7 @@ const LaunchPick = {
       if (!S) body.append(h('div', { class: 'lp-none dim' }, '未同步：打开这个账号后自动统计'));
       else {
         const detail = h('div', { class: 'lp-vd', hidden: true }); let openV = null;
-        const gnOf = (vid, v) => (Gold.manual || StatUI.GOLD.includes(vid)) ? (v.gold?.n || 0) : 0;
+        const gnOf = (vid, v) => (Gold.manual || typeof Gold.isUnifiedGold === 'function' || StatUI.GOLD.includes(vid)) ? (v.gold?.n || 0) : 0;
         const chip = (nm, m, gold) => h('span', { class: 'mg-chip' + (gold ? ' gold' : '') }, StatUI.mname(nm), h('i', {}, String(m.n)));
         const fill = (vid, v) => {
           const all = StatUI.models(v), gold = all.filter(([, m]) => m.gold && gnOf(vid, v)), rest = all.filter(x => !gold.includes(x));
@@ -514,7 +514,7 @@ const MgrWin = {
       const vs = StatUI.vendors(S);
       body.append(h('div', { class: 'mg-vs' }, ...vs.map(([vid, v]) => {
         const k = id + '|' + vid;
-        return h('button', { class: 'mg-v' + (this.open.has(k) ? ' on' : '') + (v.gold?.n && StatUI.GOLD.includes(vid) ? ' g' : ''), title: StatUI.vname(vid) + '：' + v.n + ' 个对话' + (v.gold?.n ? ' · 金色 ' + v.gold.n : ''), onclick: () => this.toggle(k) },
+        return h('button', { class: 'mg-v' + (this.open.has(k) ? ' on' : '') + (v.gold?.n && (Gold.manual || typeof Gold.isUnifiedGold === 'function' || StatUI.GOLD.includes(vid)) ? ' g' : ''), title: StatUI.vname(vid) + '：' + v.n + ' 个对话' + (v.gold?.n ? ' · 金色 ' + v.gold.n : ''), onclick: () => this.toggle(k) },
           StatUI.vicon(vid, 15), h('b', {}, v.n), v.gold?.n ? h('span', { class: 'mg-vg' }, '★' + v.gold.n) : null);
       })));
       for (const [vid, v] of vs) if (this.open.has(id + '|' + vid)) body.append(this.vendorTable(a, vid, v));

@@ -19,9 +19,15 @@ const NetPolicy = (() => {
       listener = () => abort(signal.reason || abortError());
       signal.addEventListener('abort', listener, { once: true });
     }
-    if (Number.isFinite(+timeout) && +timeout > 0) tm = timer(() => abort(Object.assign(
-      new Error('请求超时（' + Math.ceil(timeout / 1000) + ' 秒）'), { routeTimeout: true }
-    )), +timeout);
+    const arm = (ms = timeout) => {
+      if (tm !== undefined) clear(tm);
+      tm = undefined;
+      if (Number.isFinite(+ms) && +ms > 0) tm = timer(() => abort(Object.assign(
+        new Error('请求超时（' + Math.ceil(ms / 1000) + ' 秒）'), { routeTimeout: true }
+      )), +ms);
+    };
+    arm(timeout);
+    try { ctl.signal.touch = (ms = timeout) => { if (!ctl.signal.aborted) arm(ms); }; } catch {}
     try {
       return await Promise.race([Promise.resolve().then(() => {
         if (ctl.signal.aborted) throw ctl.signal.reason || abortError();
@@ -81,8 +87,10 @@ const NetPolicy = (() => {
   // Only a real 401 (not a 403/challenge/HTML page) resolves to unauthenticated.
   class SessionCheck {
     constructor(io) {
-      this.io = io; this.clock = io.clock || Date.now; this.timer = io.timer || setTimeout;
-      this.clear = io.clear || clearTimeout; this.phase = 'idle'; this.attempt = 0;
+      this.io = io; this.clock = io.clock ? () => io.clock() : () => Date.now();
+      this.timer = io.timer ? (fn, ms) => io.timer(fn, ms) : (fn, ms) => setTimeout(fn, ms);
+      this.clear = io.clear ? id => io.clear(id) : id => clearTimeout(id);
+      this.phase = 'idle'; this.attempt = 0;
       this.error = null; this.retryAt = 0; this.lastTry = -Infinity; this.cancelled = false;
     }
     snapshot() { return { phase: this.phase, attempt: this.attempt, error: this.error, retryAt: this.retryAt }; }

@@ -133,6 +133,12 @@ const TitleCipher = (() => {
     'gpt-6-luna-high', 'gpt-6-luna-medium', 'gpt-6-luna-low', 'gpt-6-luna',
     'gemini-4-argon-high', 'gemini-4-argon-medium', 'gemini-4-argon',
     'deepseek-v4.1-flash', 'deepseek-v4.1',
+    'gpt-6.1-sol-low', 'gpt-6-astra-low', 'gpt-6-sol-low', 'gpt-6-luna-max', 'gpt-6-luna-xhigh',
+    'gpt-6.1-luna-max', 'gpt-6.1-luna-xhigh', 'gpt-6.1-luna-high', 'gpt-6.1-luna-medium', 'gpt-6.1-luna-low',
+    'gemini-4-argon-max', 'gemini-4-argon-low', 'gemini-3.8-flash-high', 'gemini-3.8-flash-medium', 'gemini-3.8-flash-max', 'gemini-3.8-flash-low',
+    'muse-wonder-max', 'muse-wonder-high', 'muse-spark-open-max', 'muse-spark-1.3-max', 'muse-spark-1.2-xhigh',
+    'deepseek-v4.1-flash-max', 'deepseek-v4.1-flash-1017-max', 'beam-1.0-501b-a23b',
+    'qwen-3.8-max-max', 'qwen-3.8-flash-next-high', 'glm-5.3-max', 'glm-5.2-max', 'kimi-k3-max', 'grok-4.7-max', 'mimo-v2.6-pro-high', 'mimo-v2.6-flash-high',
   ];
   function fnv32(str, h = 0x811c9dc5) {
     const s = String(str || '');

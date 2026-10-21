@@ -72,9 +72,8 @@ const Dock = {
     const tabs = [['overview', '概览'], noData ? null : ['data', '数据'], ['records', '记录'], ['settings', '设置'], ['about', '关于']].filter(Boolean);
     if (noData && this.tab === 'data') this.tab = 'overview';
     const head = h('div', { class: 'dk-head' },
-      h('b', { class: 'dk-title' + (now() > (this.titleUntil || 0) ? ' gone' : '') }, '模型信息'), sid ? h('span', { class: 'dk-n', title: '本对话已记录的轮数' }, '#' + ts.length) : null,
+      h('b', { class: 'dk-title' + (now() > (this.titleUntil || 0) ? ' gone' : '') }, '模型信息'),
       sid && ts.length ? h('button', { class: 'ib sm', title: '导出本对话的模型信息（JSON）', onclick: () => this.exportJson(sid) }, icon('dl')) : null,
-      h('span', { class: 'grow' }),
       h('div', { class: 'dk-tabs' }, ...tabs.map(([k, l]) => h('button', { class: this.tab === k ? 'on' : '', onclick: () => { this.tab = k; Store.set('dock:tab', k); this.render(); } }, l))));
     const sel = h('div', { class: 'dk-sel' });
     if (sid && ts.length && ['overview', 'data'].includes(this.tab)) {
@@ -136,15 +135,25 @@ const Dock = {
   isClosedModelName(s) {
     if (!s) return false;
     const id = String(s).toLowerCase();
+    if (/muse/i.test(id)) return true;
     const vid = (typeof Brand !== 'undefined' && typeof Brand.of === 'function') ? Brand.of(id) : '';
     if (['deepseek', 'qwen', 'zhipu', 'moonshot', 'minimax', 'mistral', 'meta', 'stepfun', 'tencent', 'xiaomi', 'compat'].includes(vid)) return false;
     if (/qwen|farris|paisley|deepseek|v4\.1|v3\.[12]|\br[12]-|glm|mimo|minimax|\bm[23]\.[0-9]|kimi|\bk2\.[0-9]|moonshot|mistral|hy3|hy4|hunyuan|step-5|stepfun|gpt-oss|llama|nemotron|开源|国产|compat/i.test(id)) return false;
     if (['claude', 'openai', 'gemini', 'grok'].includes(vid)) return true;
-    return /gpt-|6-astra|6\.1-sol|6-sol|6-luna|5\.6-|openai|claude|anthropic|opus|sonnet|haiku|fable|gemini|google|barium|argon|grok|x-ai|muse-spark|inkling|solar-pro/i.test(id);
+    return /gpt-|6-astra|6\.1-sol|6-sol|6-luna|5\.6-|openai|claude|anthropic|opus|sonnet|haiku|fable|gemini|google|barium|argon|grok|x-ai|muse|inkling|solar-pro/i.test(id);
   },
-  scoreOf(sid, m, t) {
+   isOpenCorrectionModel(s) {
+     const name = String(s || '').trim().toLowerCase();
+     if (!name) return false;
+     if (/^(?:开源模型|open[- ]?source|compat)(?:$|[\s(/-])/i.test(name)) return true;
+     const vid = (typeof Brand !== 'undefined' && typeof Brand.of === 'function') ? Brand.of(name) : '';
+     if (['deepseek', 'qwen', 'zhipu', 'moonshot', 'xiaomi', 'compat'].includes(vid)) return true;
+     return /gpt[- ]?oss|llama|nemotron|beam|muse[ .-]*spark[ .-]*open/i.test(name);
+   },
+   scoreOf(sid, m, t) {
     const key=n=>Strength.canon(String(n || '').replace(/\?+$/, '')).toLowerCase();
-    if(!m?.name || (t?.best && key(t.best)!==key(m.name)))return null;
+    const isReid=Boolean(m && (m.userCorrected || m.routed || m.habitInferred || m.reverseInferred || m.billingProbe));
+    if(!m?.name || (!isReid && t?.best && key(t.best)!==key(m.name)))return null;
     const sum = (!t && typeof BillingProbe !== 'undefined' && BillingProbe.summary) ? BillingProbe.summary(sid) : null;
     const top0 = sum?.mergedCandidates?.[0];
     if (top0 && (top0.diophantinePassed || top0.revPct != null) && !top0.habitSource && !m?.userCorrected) {
@@ -179,10 +188,14 @@ const Dock = {
       h('button', { type: 'button', class: 'mc-unit mc-act-ico', disabled: !chat || null, title: toolTip, 'aria-label': '导出调用工具', onclick: e => { e?.stopPropagation?.(); void this.exportTools?.(sid, e?.currentTarget); } }, icon('tool')));
   },
   correctBtn(sid, m) {
-    if (!sid) return null;
+    if (!sid || this.isOpenCorrectionModel(m?.name || m?.rawLabel || m?.candidateName || '')) return null;
     const isOpen = this.editModelSid === sid;
     const isCorrected = Boolean(m?.userCorrected);
-    const tip = isCorrected ? '已手动纠偏确认并记入习惯库（点击可再次修改型号）' : '识别不准？点击三次卡片跳转纠偏（厂商→型号→强度，常用置顶，越用越准）';
+    const tip = isOpen
+      ? '点击确认当前型号并收起面板'
+      : isCorrected
+        ? '已手动纠偏确认（点击展开或修改型号）'
+        : '点击展开三行滚轮纠偏，选好后再点此对勾确认关闭';
     return h('button', {
       type: 'button',
       class: 'mc-correct-btn mc-correct-ico' + (isOpen ? ' on' : '') + (isCorrected ? ' ok' : ''),
@@ -190,26 +203,168 @@ const Dock = {
       'aria-label': tip,
       onclick: e => {
         e?.stopPropagation?.();
+        document.querySelectorAll('.rv.mc-rv').forEach(el => el.remove());
         if (this.editModelSid === sid) {
+          const finalLbl = String(this.editPreviewLabel || '').trim();
+          const vHint = this.editVendor || '';
+          const fHint = this.editFamily || '';
+          const eHint = this.editTier || '';
+          const shouldCommit = Boolean(finalLbl && (this.editChanged || !isCorrected || finalLbl !== String(m?.name || '').trim()));
+          const shouldLearn = this.editLearn !== false;
           this.editModelSid = null;
           this.editStep = 1;
           this.editVendor = null;
           this.editFamily = null;
+          this.editTier = null;
           this.editModelDraft = null;
+          this.editPreviewLabel = null;
+          this.editPreviewLogo = null;
+          this.editChanged = false;
+          if (shouldCommit && typeof ChatHabitFingerprint !== 'undefined' && ChatHabitFingerprint.confirmUserCorrection) {
+            ChatHabitFingerprint.confirmUserCorrection(sid, finalLbl, {
+              learn: shouldLearn,
+              vendorHint: vHint,
+              familyHint: fHint,
+              effortHint: eHint,
+            });
+            return;
+          }
         } else {
           this.editModelSid = sid;
           this.editStep = 1;
           this.editVendor = null;
           this.editFamily = null;
+          this.editTier = null;
           this.editModelDraft = null;
           this.editLearn = true;
+          this.editChanged = false;
         }
         this.render();
       }
-    }, icon(isCorrected ? 'check' : 'note'));
+    }, icon('check'));
+  },
+  // 同款 3D 弹巢左轮滚轮选择器（供三行纠偏：厂商 Logo / 型号 / 强度使用）
+  openCorrectWheel(btn, list, curIdx, hint, onPick, opts = {}) {
+    if (!btn || !Array.isArray(list) || !list.length) return null;
+    document.querySelectorAll('.rv.mc-rv').forEach(el => el.remove());
+    const REV_H = 42;
+    const vars = () => document.documentElement.dataset.theme === 'dark'
+      ? '--rv-card:#34322e;--rv-win:#4b4740;--rv-fg:#ecebe7;--rv-line:#ffffff14;--rv-acc:#d8d3ca;--rv-mut:#a9a59d'
+      : '--rv-card:#fffdf9;--rv-win:#e6ddd0;--rv-fg:#262522;--rv-line:#0000000f;--rv-acc:#6a5e54;--rv-mut:#7a746b';
+    const cur = Math.max(0, Math.min(list.length - 1, Number(curIdx) || 0));
+    const root = document.createElement('div');
+    root.className = 'rv mc-rv' + (opts.logoOnly ? ' is-logo-only' : '');
+    root.style.cssText = vars();
+    root.innerHTML = '<div class="rv-win"></div><div class="rv-drum"></div><div class="rv-hint"></div>';
+    root.querySelector('.rv-hint').textContent = hint || '滚轮选择 · 停下或移开确认';
+    const drum = root.querySelector('.rv-drum');
+    const els = list.map((it, i) => {
+      const d = document.createElement('div');
+      d.className = 'rv-it' + (i === cur ? ' cur' : '') + (it.isFreq ? ' is-freq' : it.isRec ? ' is-rec' : '');
+      const icHtml = it.iconHtml ? '<span class="rv-ic">' + it.iconHtml + '</span>' : '';
+      const nmHtml = it.label ? '<span class="rv-nm"></span>' : '';
+      d.innerHTML = icHtml + nmHtml;
+      if (it.label) d.querySelector('.rv-nm').textContent = it.label;
+      drum.append(d);
+      return d;
+    });
+    document.body.append(root);
+    const r = btn.getBoundingClientRect();
+    const W = opts.logoOnly ? 148 : 228;
+    const H = REV_H * 5;
+    root.style.width = W + 'px';
+    root.style.height = H + 'px';
+    root.style.left = Math.max(8, Math.min(innerWidth - W - 8, r.left + r.width / 2 - W / 2)) + 'px';
+    const topAbove = r.top - H - 12;
+    root.style.top = (topAbove >= 8 ? topAbove : Math.max(8, Math.min(innerHeight - H - 8, r.top + r.height / 2 - H / 2))) + 'px';
+    btn.setAttribute('data-rv', '');
+    btn._rv = true;
+    const n = els.length;
+    const wrap = k => ((k % n) + n) % n;
+    let shown = -1;
+    const paint = pos => {
+      els.forEach((d, i) => {
+        const off = ((((i - pos) % n) + n + n / 2) % n) - n / 2;
+        const a = Math.abs(off);
+        d.style.transform = 'translateY(' + (off * REV_H * 0.92) + 'px) rotateX(' + (-off * 24) + 'deg) translateZ(' + (-a * a * 6) + 'px) scale(' + Math.max(0.74, 1 - a * 0.07) + ')';
+        d.style.opacity = String(Math.max(0, 1 - a * 0.32));
+        d.style.zIndex = String(100 - Math.round(a * 10));
+      });
+      const k = wrap(Math.round(pos));
+      if (k !== shown) {
+        shown = k;
+        els.forEach((d, i) => d.classList.toggle('sel', i === k));
+        if (typeof opts.onPreview === 'function') {
+          try { opts.onPreview(list[k], k); } catch {}
+        }
+      }
+    };
+    requestAnimationFrame(() => root.classList.add('on'));
+    let pos = cur, target = cur, done = false, raf = 0, idleT = 0, acc = 0;
+    paint(pos);
+    const loop = () => {
+      raf = 0;
+      pos += (target - pos) * 0.32;
+      if (Math.abs(target - pos) < 0.003) pos = target;
+      paint(pos);
+      if (pos !== target) raf = requestAnimationFrame(loop);
+    };
+    const finish = pick => {
+      if (done) return;
+      done = true;
+      clearTimeout(idleT);
+      cancelAnimationFrame(raf);
+      btn.removeEventListener('mouseleave', leave);
+      btn.removeEventListener('click', clk, true);
+      removeEventListener('keydown', esc, true);
+      removeEventListener('blur', away);
+      const kr = Math.round(target);
+      const p0 = pos, t0 = performance.now();
+      const snap = t => {
+        const p = Math.min(1, (t - t0) / 140);
+        paint(p0 + (kr - p0) * (1 - Math.pow(1 - p, 3)));
+        if (p < 1) requestAnimationFrame(snap);
+      };
+      requestAnimationFrame(snap);
+      root.classList.add('out');
+      setTimeout(() => root.remove(), 340);
+      btn.removeAttribute('data-rv');
+      btn._rv = false;
+      btn._wh = null;
+      if (pick) {
+        const picked = list[wrap(kr)];
+        if (picked && typeof onPick === 'function') onPick(picked, wrap(kr));
+      }
+    };
+    const leave = () => finish(true);
+    const clk = ev => { ev.preventDefault(); ev.stopImmediatePropagation(); finish(true); };
+    const esc = ev => {
+      if (ev.key === 'Escape') { ev.preventDefault(); ev.stopPropagation(); finish(false); }
+      else if (ev.key === 'Enter') { ev.preventDefault(); ev.stopPropagation(); finish(true); }
+    };
+    const away = () => finish(false);
+    btn.addEventListener('mouseleave', leave);
+    btn.addEventListener('click', clk, true);
+    addEventListener('keydown', esc, true);
+    addEventListener('blur', away);
+    return {
+      push(d) {
+        if (done) return;
+        if (Math.abs(d) >= 45) target += Math.sign(d);
+        else {
+          acc += d;
+          if (Math.abs(acc) >= 50) { target += Math.sign(acc); acc = 0; }
+        }
+        if (!raf) raf = requestAnimationFrame(loop);
+        clearTimeout(idleT);
+        idleT = setTimeout(() => finish(true), 850);
+      },
+      finish,
+    };
   },
   renderCorrectPanel(sid, m, curName) {
-    if (!sid || this.editModelSid !== sid) return null;
+    if (!sid || this.editModelSid !== sid || this.isOpenCorrectionModel(curName || m?.name || m?.rawLabel || '')) return null;
+    // ① 厂商 -> ② 型号 -> ③ 强度 三行滚轮选择器（常用项用颜色区分，所有厂商名均用 Logo 代替）
     const stats = (typeof ChatHabitFingerprint !== 'undefined' && typeof ChatHabitFingerprint.getUsageStats === 'function')
       ? ChatHabitFingerprint.getUsageStats()
       : { vendors: {}, families: {}, models: {}, efforts: {} };
@@ -217,90 +372,143 @@ const Dock = {
     const VENDOR_CATALOG = [
       {
         id: 'openai',
-        name: 'OpenAI',
+        name: 'GPT',
         logo: 'openai',
-        sub: '6.1 Sol · 6 Luna · 6 Astra · 6 Sol · 5.6 Sol',
         defaultRank: 1,
         models: [
-          { fam: 'GPT 6.1 Sol', desc: '多步深层推理 / 复杂编码主力', defTier: 'High', tiers: ['Max', 'xHigh', 'High', 'Medium', 'Low'] },
-          { fam: 'GPT 6 Luna', desc: '高速流式直答 / 紧凑脚本', defTier: 'Max', tiers: ['Max', 'High', 'Medium', 'Low'] },
-          { fam: 'GPT 6 Astra', desc: '中高速均衡 / 单页前端构建', defTier: 'Max', tiers: ['Max', 'High', 'Medium', 'Low'] },
-          { fam: 'GPT 6 Sol', desc: '长单轮深层推理 / 少并发步', defTier: 'Max', tiers: ['Max', 'High', 'Medium', 'Low'] },
-          { fam: 'GPT 5.6 Sol', desc: '5.6 稳健串行工具流', defTier: 'High', tiers: ['Max', 'High', 'Medium', 'Low'] },
-          { fam: 'GPT 5.6 Terra', desc: '5.6 轻量快速直答', defTier: 'High', tiers: ['High', 'Medium', 'Low'] },
-          { fam: 'GPT 5.6 Luna', desc: '5.6 高速响应版', defTier: 'High', tiers: ['Max', 'High', 'Medium'] },
+          { fam: 'GPT 6.1 Sol', short: '6.1 Sol', defTier: 'High', tiers: ['Max', 'xHigh', 'High', 'Medium', 'Low'] },
+          { fam: 'GPT 6.1 Luna', short: '6.1 Luna', defTier: 'High', tiers: ['Max', 'xHigh', 'High', 'Medium', 'Low'] },
+          { fam: 'GPT 6 Astra', short: '6 Astra', defTier: 'Max', tiers: ['Max', 'xHigh', 'High', 'Medium', 'Low'] },
+          { fam: 'GPT 6 Sol', short: '6 Sol', defTier: 'Max', tiers: ['Max', 'xHigh', 'High', 'Medium', 'Low'] },
+          { fam: 'GPT 6 Luna', short: '6 Luna', defTier: 'Max', tiers: ['Max', 'xHigh', 'High', 'Medium', 'Low'] },
+          { fam: 'GPT 5.6 Sol', short: '5.6 Sol', defTier: 'High', tiers: ['Max', 'xHigh', 'High', 'Medium', 'Low'] },
+          { fam: 'GPT 5.6 Terra', short: '5.6 Terra', defTier: 'High', tiers: ['Max', 'High', 'Medium', 'Low'] },
+          { fam: 'GPT 5.6 Luna', short: '5.6 Luna', defTier: 'High', tiers: ['Max', 'xHigh', 'High', 'Medium', 'Low'] },
         ],
       },
       {
         id: 'anthropic',
-        name: 'Anthropic',
-        logo: 'claude',
-        sub: 'Haiku 5.5 · Opus 5.6 · Sonnet 5.5 · Fable 5.1',
+        name: 'Claude',
+        logo: 'anthropic',
         defaultRank: 2,
         models: [
-          { fam: 'Claude Haiku 5.5', desc: '高速精炼闭源 / 工具前简述', defTier: 'High', tiers: ['High', 'Medium', 'Low', 'Max'] },
-          { fam: 'Claude Opus 5.6', desc: '超长深度思考旗舰 (64k+)', defTier: 'Max', tiers: ['Max', 'High', 'Medium'] },
-          { fam: 'Claude Sonnet 5.5', desc: '高密度 Write/Edit 工程主力', defTier: 'Max', tiers: ['Max', 'High', 'Medium'] },
-          { fam: 'Claude Fable 5.1', desc: '深度推理与长文创作 5.1', defTier: 'Max', tiers: ['Max', 'High', 'Medium'] },
-          { fam: 'Claude Fable 5', desc: '深度推理经典版 5.0', defTier: 'Max', tiers: ['Max', 'High', 'Medium'] },
-          { fam: 'Claude Opus 5.5', desc: 'Opus 5.5 经典版', defTier: 'Max', tiers: ['Max', 'High', 'Medium'] },
+          { fam: 'Claude Opus 5.6', short: 'Opus 5.6', defTier: 'Max', tiers: ['Max', 'High', 'Medium', 'Low'] },
+          { fam: 'Claude Opus 5.5', short: 'Opus 5.5', defTier: 'Max', tiers: ['Max', 'High', 'Medium', 'Low'] },
+          { fam: 'Claude Opus 5', short: 'Opus 5', defTier: 'Max', tiers: ['Max', 'High', 'Medium', 'Low'] },
+          { fam: 'Claude Sonnet 5.5', short: 'Sonnet 5.5', defTier: 'Max', tiers: ['Max', 'High', 'Medium', 'Low'] },
+          { fam: 'Claude Sonnet 5', short: 'Sonnet 5', defTier: 'High', tiers: ['Max', 'High', 'Medium', 'Low'] },
+          { fam: 'Claude Fable 5.1', short: 'Fable 5.1', defTier: 'Max', tiers: ['Max', 'High', 'Medium', 'Low'] },
+          { fam: 'Claude Fable 5', short: 'Fable 5', defTier: 'Max', tiers: ['Max', 'High', 'Medium', 'Low'] },
+          { fam: 'Claude Haiku 5.5', short: 'Haiku 5.5', defTier: 'High', tiers: ['High', 'Medium', 'Low', 'Max'] },
         ],
       },
       {
         id: 'google',
-        name: 'Google',
-        logo: 'gemini',
-        sub: 'Gemini 3.8 Flash · 3.7 Flash · 3.1 Pro · 4 Argon',
+        name: 'Gemini',
+        logo: 'google',
         defaultRank: 3,
         models: [
-          { fam: 'Gemini 3.8 Flash', desc: '编码零思考块 / Python+Cat流', defTier: 'High', tiers: ['High', 'Medium', 'Max', 'Low'] },
-          { fam: 'Gemini 3.7 Flash', desc: '高速脚本与单页 HTML 直出', defTier: 'High', tiers: ['High', 'Medium', 'Low'] },
-          { fam: 'Gemini 3.1 Pro Preview', desc: 'Read/Edit + Bash 工程版', defTier: 'High', tiers: ['High', 'Max', 'Medium', ''] },
-          { fam: 'Gemini 4 Argon', desc: '高频并发 Read/Edit 改写', defTier: 'High', tiers: ['High', 'Max', 'Medium'] },
+          { fam: 'Gemini 4 Argon', short: '4 Argon', defTier: 'High', tiers: ['Max', 'High', 'Medium', 'Low'] },
+          { fam: 'Gemini 3.8 Flash', short: '3.8 Flash', defTier: 'High', tiers: ['High', 'Medium', 'Max', 'Low'] },
+          { fam: 'Gemini 3.7 Flash', short: '3.7 Flash', defTier: 'High', tiers: ['High', 'Medium', 'Low', 'Max'] },
+          { fam: 'Gemini 3.1 Pro Preview', short: '3.1 Pro Preview', defTier: 'High', tiers: ['High', 'Max', 'Medium', 'Low', ''] },
         ],
       },
       {
         id: 'xai',
-        name: 'xAI',
-        logo: 'grok',
-        sub: 'Grok 4.7 · Grok 4.6 · Grok 4.20',
+        name: 'Grok',
+        logo: 'xai',
         defaultRank: 4,
         models: [
-          { fam: 'Grok 4.7', desc: 'xAI 旗舰闭源推理', defTier: 'Max', tiers: ['Max', 'High', 'Medium'] },
-          { fam: 'Grok 4.6', desc: 'xAI 均衡推理版', defTier: 'High', tiers: ['Max', 'High', 'Medium'] },
-          { fam: 'Grok 4.20', desc: 'xAI 经典版', defTier: 'High', tiers: ['High', 'Medium', ''] },
+          { fam: 'Grok 4.7', short: '4.7', defTier: 'Max', tiers: ['Max', 'High', 'Medium', 'Low'] },
+          { fam: 'Grok 4.6', short: '4.6', defTier: 'High', tiers: ['Max', 'High', 'Medium', 'Low'] },
+          { fam: 'Grok 4.20', short: '4.20', defTier: 'High', tiers: ['High', 'Medium', 'Low', ''] },
         ],
       },
       {
-        id: 'open',
-        name: '国产 / 开源',
+        id: 'deepseek',
+        name: 'DeepSeek',
         logo: 'deepseek',
-        sub: '开源通用 · DeepSeek V4.1 · GLM 5.2 · Qwen 3.8 · Kimi K3',
         defaultRank: 5,
         models: [
-          { fam: '开源模型', desc: '通用开源标记（一键直达·免计费反推）', defTier: '', direct: true, tiers: [''] },
-          { fam: 'DeepSeek V4.1 Flash', desc: '深度可见思考链', defTier: 'Max', tiers: ['Max', 'High', 'Medium'] },
-          { fam: 'GLM 5.2', desc: '智谱旗舰可见思考', defTier: 'Max', tiers: ['Max', 'High', 'Medium'] },
-          { fam: 'GLM 5.3', desc: '智谱新一代推理', defTier: 'Max', tiers: ['Max', 'High', 'Medium'] },
-          { fam: 'Qwen 3.8 Max', desc: '通义千问 3.8 旗舰', defTier: 'High', tiers: ['Max', 'High', 'Medium'] },
-          { fam: 'Qwen 3.7 Max', desc: '通义千问 3.7 旗舰', defTier: 'High', tiers: ['Max', 'High', 'Medium'] },
-          { fam: 'Kimi K3', desc: '月之暗面 K3 推理', defTier: 'Max', tiers: ['Max', 'High', 'Medium'] },
-          { fam: 'MiMo V2.6 Pro', desc: '小米 MiMo 推理', defTier: 'High', tiers: ['Max', 'High', 'Medium'] },
-          { fam: 'Beam 1.0 501B A23B', desc: 'Reflection AI 开源大模型', defTier: '', direct: true, tiers: ['', 'High'] },
+          { fam: 'DeepSeek V4.1 Flash', short: 'V4.1 Flash', defTier: 'Max', tiers: ['Max', 'High', 'Medium', 'Low'] },
+          { fam: 'DeepSeek V4.1 Flash 1017', short: 'V4.1 Flash 1017', defTier: 'Max', tiers: ['Max', 'High', 'Medium', 'Low'] },
+          { fam: 'DeepSeek V4.1 Flash 20260910', short: 'V4.1 Flash 0910', defTier: 'Max', tiers: ['Max', 'High', 'Medium', 'Low'] },
+          { fam: 'Beam 1.0 501B A23B', short: 'Beam 1.0 501B', defTier: '', direct: true, tiers: ['', 'High', 'Max'] },
+          { fam: '开源模型', short: '开源模型', defTier: '', direct: true, tiers: [''] },
+        ],
+      },
+      {
+        id: 'zhipu',
+        name: 'GLM',
+        logo: 'zhipu',
+        defaultRank: 6,
+        models: [
+          { fam: 'GLM 5.3', short: '5.3', defTier: 'Max', tiers: ['Max', 'High', 'Medium', 'Low'] },
+          { fam: 'GLM 5.2', short: '5.2', defTier: 'Max', tiers: ['Max', 'High', 'Medium', 'Low'] },
+        ],
+      },
+      {
+        id: 'qwen',
+        name: 'Qwen',
+        logo: 'qwen',
+        defaultRank: 7,
+        models: [
+          { fam: 'Qwen 3.8 Max', short: '3.8 Max', defTier: 'Max', tiers: ['Max', 'High', 'Medium', 'Low'] },
+          { fam: 'Qwen 3.8 Flash Next', short: '3.8 Flash Next', defTier: 'High', tiers: ['High', 'Medium', 'Low', 'Max'] },
+          { fam: 'Qwen 3.7 Max', short: '3.7 Max', defTier: 'High', tiers: ['Max', 'High', 'Medium', 'Low'] },
+        ],
+      },
+      {
+        id: 'moonshot',
+        name: 'Kimi',
+        logo: 'moonshot',
+        defaultRank: 8,
+        models: [
+          { fam: 'Kimi K3', short: 'K3', defTier: 'Max', tiers: ['Max', 'High', 'Medium', 'Low'] },
+        ],
+      },
+      {
+        id: 'xiaomi',
+        name: 'MiMo',
+        logo: 'xiaomi',
+        defaultRank: 9,
+        models: [
+          { fam: 'MiMo V2.6 Pro', short: 'V2.6 Pro', defTier: 'High', tiers: ['Max', 'High', 'Medium', 'Low'] },
+          { fam: 'MiMo V2.6 Flash', short: 'V2.6 Flash', defTier: 'High', tiers: ['High', 'Medium', 'Low', 'Max'] },
+        ],
+      },
+      {
+        id: 'meta',
+        name: 'Muse',
+        logo: 'meta',
+        defaultRank: 10,
+        models: [
+          { fam: 'Muse Spark 1.3', short: 'Spark 1.3', defTier: 'Max', tiers: ['Max', 'High', 'Medium', 'Low'] },
+          { fam: 'Muse Spark 1.2', short: 'Spark 1.2', defTier: 'xHigh', tiers: ['xHigh', 'High', 'Medium', 'Low', 'Max'] },
+          { fam: 'Muse Wonder', short: 'Wonder', defTier: 'Max', tiers: ['Max', 'High', 'Medium', 'Low'] },
+          { fam: 'Muse Spark Open', short: 'Spark Open', defTier: 'Max', tiers: ['Max', 'High', 'Medium', 'Low'] },
         ],
       },
     ];
 
-    const step = this.editStep || 1;
+    // Keep only correction targets that the existing model classifier identifies as closed-source.
+    const closedCatalog = VENDOR_CATALOG
+      .map(v => ({ ...v, models: (v.models || []).filter(model => !this.isOpenCorrectionModel(model.fam)) }))
+      .filter(v => v.models.length);
+
     const applyCorrection = (fullLabel, vHint = '', fHint = '', eHint = '') => {
       const val = String(fullLabel || '').trim();
-      if (!val) { toast('请先选择或输入模型名称', 'err'); return; }
+      if (!val) { toast('请先选择模型名称', 'err'); return; }
       const shouldLearn = this.editLearn !== false;
       this.editModelSid = null;
       this.editStep = 1;
       this.editVendor = null;
       this.editFamily = null;
+      this.editTier = null;
       this.editModelDraft = null;
+      this.editPreviewLabel = null;
+      this.editPreviewLogo = null;
       if (typeof ChatHabitFingerprint !== 'undefined' && ChatHabitFingerprint.confirmUserCorrection) {
         ChatHabitFingerprint.confirmUserCorrection(sid, val, {
           learn: shouldLearn,
@@ -311,260 +519,326 @@ const Dock = {
       }
     };
 
-    const curVendorObj = VENDOR_CATALOG.find(v => v.id === this.editVendor) || VENDOR_CATALOG[0];
-    const curModelObj = (curVendorObj?.models || []).find(x => x.fam === this.editFamily) || null;
-
-    // 顶部三步面包屑导航条（1. 选厂商 -> 2. 选型号 -> 3. 选强度）
-    const stepBar = h('div', { class: 'mc-step-bar' },
-      h('button', {
-        type: 'button',
-        class: 'mc-step-pill' + (step === 1 ? ' active' : ' done'),
-        onclick: e => { e?.stopPropagation?.(); this.editStep = 1; this.render(); }
-      }, '① 厂商' + (step > 1 && curVendorObj ? ` (${curVendorObj.name})` : '')),
-      h('span', { class: 'mc-step-arr' }, '▸'),
-      h('button', {
-        type: 'button',
-        class: 'mc-step-pill' + (step === 2 ? ' active' : step > 2 ? ' done' : ''),
-        disabled: step < 2 || null,
-        onclick: e => { e?.stopPropagation?.(); if (step >= 2) { this.editStep = 2; this.render(); } }
-      }, '② 型号' + (step > 2 && this.editFamily ? ` (${this.editFamily})` : '')),
-      h('span', { class: 'mc-step-arr' }, '▸'),
-      h('button', {
-        type: 'button',
-        class: 'mc-step-pill' + (step === 3 ? ' active' : ''),
-        disabled: step < 3 || null,
-        onclick: e => { e?.stopPropagation?.(); }
-      }, '③ 强度'),
-      h('span', { class: 'grow' }),
-      h('button', {
-        type: 'button',
-        class: 'btn xs ghost',
-        title: '打开习惯库管理与导入诊断 JSON',
-        onclick: e => { e?.stopPropagation?.(); if (typeof ChatHabitFingerprint !== 'undefined' && ChatHabitFingerprint.openManager) ChatHabitFingerprint.openManager(); }
-      }, '习惯库'),
-      h('button', {
-        type: 'button',
-        class: 'btn xs ghost',
-        title: '关闭纠偏面板',
-        onclick: e => { e?.stopPropagation?.(); this.editModelSid = null; this.editStep = 1; this.render(); }
-      }, '✕')
-    );
-
-    const bodyWrap = h('div', { class: 'mc-step-body' });
-
-    if (step === 1) {
-      // 提取最常用的 Top 4 完整型号，放在顶部「常用置顶一键直达」方便高频点击
-      const freqModels = Object.entries(stats.models || {})
-        .filter(([k, cnt]) => k && cnt > 0)
-        .sort((a, b) => b[1] - a[1])
-        .slice(0, 4);
-      if (freqModels.length > 0) {
-        const quickRow = h('div', { class: 'mc-freq-strip' },
-          h('span', { class: 'mc-freq-lbl' }, '🔥 常用置顶：'),
-          ...freqModels.map(([mName, cnt]) => h('button', {
-            type: 'button',
-            class: 'mc-freq-chip',
-            title: `常用纠偏型号（已用 ${Math.max(1, Math.round(cnt / 2))} 次）· 点击一键纠偏`,
-            onclick: e => { e?.stopPropagation?.(); applyCorrection(mName); }
-          }, mName))
-        );
-        bodyWrap.append(quickRow);
-      }
-
-      // 按用户使用频次对厂商卡片排序（常用的厂商自动置顶）
-      const sortedVendors = VENDOR_CATALOG.slice().sort((a, b) => {
-        const fa = Number(stats.vendors?.[a.id] || 0);
-        const fb = Number(stats.vendors?.[b.id] || 0);
-        if (fb !== fa) return fb - fa;
-        return a.defaultRank - b.defaultRank;
-      });
-
-      const vGrid = h('div', { class: 'mc-card-grid mc-vendor-grid' });
-      for (const v of sortedVendors) {
-        const vFreq = Number(stats.vendors?.[v.id] || 0);
-        vGrid.append(h('button', {
-          type: 'button',
-          class: 'mc-jump-card' + (vFreq > 0 ? ' is-freq' : ''),
-          onclick: e => {
-            e?.stopPropagation?.();
-            this.editVendor = v.id;
-            this.editStep = 2;
-            this.render();
-          }
-        },
-          h('div', { class: 'mc-jc-top' },
-            vlogo(v.logo, 20),
-            h('b', { class: 'mc-jc-title' }, v.name),
-            vFreq > 0 ? h('span', { class: 'mc-jc-hot' }, '常用') : null,
-            h('span', { class: 'mc-jc-arr' }, '→')
-          ),
-          h('div', { class: 'mc-jc-sub' }, v.sub)
-        ));
-      }
-      // 额外提供「开源模型」一键快捷卡
-      vGrid.append(h('button', {
-        type: 'button',
-        class: 'mc-jump-card is-open-quick',
-        onclick: e => { e?.stopPropagation?.(); applyCorrection('开源模型', 'open', '开源模型', ''); }
-      },
-        h('div', { class: 'mc-jc-top' },
-          icon('spark'),
-          h('b', { class: 'mc-jc-title' }, '直接标为「开源模型」'),
-          h('span', { class: 'mc-jc-arr' }, '✓')
-        ),
-        h('div', { class: 'mc-jc-sub' }, '一键完成标记 · 自动跳过 /cost 计费请求')
-      ));
-      bodyWrap.append(vGrid);
-    } else if (step === 2) {
-      // 第二步：型号选择（按用户在该厂商下各型号的使用频次排序，常用的型号自动置顶！）
-      const modelsList = (curVendorObj?.models || []).slice().sort((a, b) => {
-        const fa = Number(stats.families?.[a.fam.toLowerCase()] || 0);
-        const fb = Number(stats.families?.[b.fam.toLowerCase()] || 0);
-        return fb - fa;
-      });
-      const mGrid = h('div', { class: 'mc-card-grid mc-model-grid' });
-      for (const item of modelsList) {
-        const fFreq = Number(stats.families?.[item.fam.toLowerCase()] || 0);
-        mGrid.append(h('button', {
-          type: 'button',
-          class: 'mc-jump-card' + (fFreq > 0 ? ' is-freq' : ''),
-          onclick: e => {
-            e?.stopPropagation?.();
-            if (item.direct) {
-              applyCorrection(item.fam, curVendorObj.id, item.fam, '');
-              return;
-            }
-            this.editFamily = item.fam;
-            this.editStep = 3;
-            this.render();
-          }
-        },
-          h('div', { class: 'mc-jc-top' },
-            vlogo(curVendorObj.logo, 18),
-            h('b', { class: 'mc-jc-title' }, item.fam),
-            fFreq > 0 ? h('span', { class: 'mc-jc-hot' }, '常用置顶') : null,
-            h('span', { class: 'mc-jc-arr' }, item.direct ? '✓' : '→')
-          ),
-          h('div', { class: 'mc-jc-sub' }, item.desc)
-        ));
-      }
-      bodyWrap.append(
-        h('div', { class: 'mc-step-subhd' },
-          h('button', { type: 'button', class: 'mc-back-link', onclick: e => { e?.stopPropagation?.(); this.editStep = 1; this.render(); } }, '← 返回重选厂商'),
-          h('span', { class: 'dim' }, `当前厂商：${curVendorObj.name}（点击卡片跳到强度选择）`)
-        ),
-        mGrid
-      );
-    } else if (step === 3) {
-      // 第三步：强度选择（常用的强度档位或推荐档位置顶，点击即完成纠偏！）
-      const famName = this.editFamily || curModelObj?.fam || 'GPT 6.1 Sol';
-      const rawTiers = curModelObj?.tiers || ['Max', 'xHigh', 'High', 'Medium', 'Low'];
-      const TIER_META = {
-        'Max': { title: 'Max · 满血最高强度', desc: '深度多步推理 / 最高思考预算' },
-        'xHigh': { title: 'xHigh · 超高强度', desc: '高密思考块 / 强化工具校验' },
-        'High': { title: 'High · 标准高强度', desc: '主力高频档位 / 速度与深度均衡' },
-        'Medium': { title: 'Medium · 中等强度', desc: '中速响应 / 常规思考预算' },
-        'Low': { title: 'Low · 轻量低强度', desc: '极速短平快 / 极少思考步' },
-        '': { title: '不带强度后缀', desc: `直接锁定为「${famName}」` },
-      };
-      const allTiers = [...new Set([...rawTiers, 'Max', 'High', 'Medium', 'Low', ''])];
-      const sortedTiers = allTiers.sort((a, b) => {
-        const fullA = (a ? `${famName} (${a})` : famName).toLowerCase();
-        const fullB = (b ? `${famName} (${b})` : famName).toLowerCase();
-        const exactA = Number(stats.models?.[fullA] || 0);
-        const exactB = Number(stats.models?.[fullB] || 0);
-        if (exactB !== exactA) return exactB - exactA;
-        const isDefA = a === curModelObj?.defTier ? 1 : 0;
-        const isDefB = b === curModelObj?.defTier ? 1 : 0;
-        if (isDefB !== isDefA) return isDefB - isDefA;
-        const effA = Number(stats.efforts?.[a.toLowerCase()] || 0);
-        const effB = Number(stats.efforts?.[b.toLowerCase()] || 0);
-        return effB - effA;
-      });
-      const tGrid = h('div', { class: 'mc-card-grid mc-tier-grid' });
-      for (const t of sortedTiers) {
-        const fullLabel = t ? `${famName} (${t})` : famName;
-        const meta = TIER_META[t] || { title: t || '默认', desc: fullLabel };
-        const isHot = Number(stats.models?.[fullLabel.toLowerCase()] || 0) > 0;
-        const isRec = !isHot && t === curModelObj?.defTier;
-        tGrid.append(h('button', {
-          type: 'button',
-          class: 'mc-jump-card mc-tier-card' + (isHot ? ' is-freq' : isRec ? ' is-rec' : ''),
-          onclick: e => {
-            e?.stopPropagation?.();
-            applyCorrection(fullLabel, curVendorObj?.id || '', famName, t);
-          }
-        },
-          h('div', { class: 'mc-jc-top' },
-            h('b', { class: 'mc-jc-title' }, meta.title),
-            isHot ? h('span', { class: 'mc-jc-hot' }, '常用置顶') : isRec ? h('span', { class: 'mc-jc-rec' }, '推荐') : null,
-            h('span', { class: 'mc-jc-arr' }, '✓ 完成')
-          ),
-          h('div', { class: 'mc-jc-sub' }, `锁定为：${fullLabel} · ${meta.desc}`)
-        ));
-      }
-      bodyWrap.append(
-        h('div', { class: 'mc-step-subhd' },
-          h('button', { type: 'button', class: 'mc-back-link', onclick: e => { e?.stopPropagation?.(); this.editStep = 2; this.render(); } }, '← 返回重选型号'),
-          h('span', { class: 'dim' }, `已选型号：${famName}（点击强度卡片立即完成纠偏）`)
-        ),
-        tGrid
-      );
-    }
-
-    const learnChk = h('input', {
-      type: 'checkbox',
-      checked: this.editLearn !== false,
-      onchange: e => { this.editLearn = Boolean(e.target.checked); }
+    // 按常用频次排序厂商
+    const sortedVendors = closedCatalog.slice().sort((a, b) => {
+      const fa = Number(stats.vendors?.[a.id] || 0);
+      const fb = Number(stats.vendors?.[b.id] || 0);
+      if (fb !== fa) return fb - fa;
+      return a.defaultRank - b.defaultRank;
     });
-    const customInp = h('input', {
-      type: 'text',
-      class: 'mc-correct-inp',
-      value: this.editModelDraft || '',
-      placeholder: '或直接输入自定义型号名回车确认…',
-      spellcheck: 'false',
-      oninput: e => { this.editModelDraft = e.target.value; },
-      onkeydown: e => {
-        if (e.key === 'Enter') {
-          e.preventDefault();
-          applyCorrection(customInp.value);
-        } else if (e.key === 'Escape') {
-          e.preventDefault();
-          this.editModelSid = null;
-          this.editStep = 1;
-          this.render();
+
+    // 若尚未选择厂商/型号/强度，从草稿或当前识别型号智能初始化
+    const seedRaw = String(this.editModelDraft || curName || m?.rawLabel || m?.name || '').trim();
+    if (!this.editVendor && seedRaw) {
+      const seedLow = seedRaw.toLowerCase();
+      const seedCanon = (typeof Strength !== 'undefined' && Strength.canon ? Strength.canon(seedRaw) : seedRaw).toLowerCase();
+      for (const v of closedCatalog) {
+        const byLen = v.models.slice().sort((a, b) => b.fam.length - a.fam.length);
+        const hitM = byLen.find(it => {
+          const fLow = it.fam.toLowerCase();
+          const sLow = it.short.toLowerCase();
+          const fCanon = (typeof Strength !== 'undefined' && Strength.canon ? Strength.canon(it.fam) : fLow).toLowerCase();
+          return seedLow.includes(fLow) || seedCanon.includes(fCanon) || seedLow.includes(sLow);
+        });
+        if (hitM) {
+          this.editVendor = v.id;
+          this.editFamily = hitM.fam;
+          const tm = /\b(max|xhigh|high|medium|low)\b/i.exec(seedRaw);
+          if (tm) {
+            const tLow = tm[1].toLowerCase();
+            this.editTier = tLow === 'xhigh' ? 'xHigh' : (tLow[0].toUpperCase() + tLow.slice(1));
+          }
+          break;
         }
       }
-    });
+    }
 
-    return h('div', { class: 'mc-correct-box mc-correct-wizard', onclick: e => e.stopPropagation() },
-      stepBar,
-      bodyWrap,
-      h('div', { class: 'mc-correct-foot' },
-        h('label', { class: 'mc-correct-learn' },
-          learnChk,
-          h('span', {}, '同步记入习惯库自学习（越用越准）')),
-        h('div', { class: 'mc-correct-custom' },
-          customInp,
-          h('button', { type: 'button', class: 'btn xs mc-correct-ok', onclick: () => applyCorrection(customInp.value) }, '确认'))));
+    const curVendorObj = sortedVendors.find(v => v.id === this.editVendor) || sortedVendors[0];
+    this.editVendor = curVendorObj.id;
+
+    // 按常用频次排序该厂商下的型号
+    const sortedModels = (curVendorObj.models || []).slice().sort((a, b) => {
+      const fa = Number(stats.families?.[a.fam.toLowerCase()] || 0);
+      const fb = Number(stats.families?.[b.fam.toLowerCase()] || 0);
+      return fb - fa;
+    });
+    const curModelObj = sortedModels.find(x => x.fam === this.editFamily) || sortedModels[0];
+    this.editFamily = curModelObj.fam;
+
+    // 按常用频次与默认推荐排序强度档位
+    const famName = curModelObj.fam;
+    const rawTiers = curModelObj.tiers || ['Max', 'xHigh', 'High', 'Medium', 'Low'];
+    const allTiers = curModelObj.direct ? [''] : [...new Set([...rawTiers, 'Max', 'High', 'Medium', 'Low', ''])];
+    const sortedTiers = allTiers.slice().sort((a, b) => {
+      const fullA = (a ? `${famName} (${a})` : famName).toLowerCase();
+      const fullB = (b ? `${famName} (${b})` : famName).toLowerCase();
+      const exactA = Number(stats.models?.[fullA] || 0);
+      const exactB = Number(stats.models?.[fullB] || 0);
+      if (exactB !== exactA) return exactB - exactA;
+      const isDefA = a === curModelObj.defTier ? 1 : 0;
+      const isDefB = b === curModelObj.defTier ? 1 : 0;
+      if (isDefB !== isDefA) return isDefB - isDefA;
+      const effA = Number(stats.efforts?.[a.toLowerCase()] || 0);
+      const effB = Number(stats.efforts?.[b.toLowerCase()] || 0);
+      return effB - effA;
+    });
+    if (this.editTier == null || !sortedTiers.includes(this.editTier)) {
+      this.editTier = sortedTiers[0] ?? (curModelObj.defTier || '');
+    }
+    const curTier = this.editTier;
+    const fullCurrentLabel = curTier ? `${famName} (${curTier})` : famName;
+    const curModelLogo = curModelObj.mLogo || curVendorObj.logo;
+    this.editPreviewLabel = fullCurrentLabel;
+    this.editPreviewLogo = curModelLogo;
+
+    const bindWheelRow = (rowEl, getList, getCurIdx, hint, onSelect, opts = {}) => {
+      rowEl.addEventListener('wheel', e => {
+        if (!e.deltaY) return;
+        e.preventDefault();
+        e.stopPropagation();
+        const d = e.deltaMode === 1 ? e.deltaY * 33 : e.deltaMode === 2 ? e.deltaY * 400 : e.deltaY;
+        const w = (rowEl._wh ||= this.openCorrectWheel(rowEl, getList(), getCurIdx(), hint, onSelect, opts));
+        w?.push(d);
+      }, { passive: false });
+      rowEl.addEventListener('click', e => {
+        if (e.target?.closest?.('.mc-wheel-act')) return;
+        e.preventDefault();
+        e.stopPropagation();
+        if (rowEl._wh) {
+          rowEl._wh.finish(true);
+          return;
+        }
+        const list = getList();
+        const idx = getCurIdx();
+        rowEl._wh = this.openCorrectWheel(rowEl, list, idx, hint, onSelect, opts);
+      });
+    };
+
+    // 顶部最终「图标 + 型号 + 强度」实时预览栏（无冗余按钮，由顶部思考分后的对勾统一开启/确认关闭）
+    let liveVendorObj = curVendorObj;
+    let liveModelObj = curModelObj;
+    let liveTier = curTier;
+    const prevLogoWrap = h('span', { class: 'mc-wheel-prev-ico' }, vlogo(curModelLogo, 18));
+    const prevModelEl = h('b', { class: 'mc-wheel-prev-model' }, curModelObj.short || curModelObj.fam);
+    const prevTierEl = h('span', { class: 'mc-tier mc-wheel-prev-tier', 'data-lv': TIER_LV[curTier] ?? 3 }, curTier || '标准');
+    const previewRow = h('div', {
+      class: 'mc-wheel-preview',
+      style: { cursor: 'pointer' },
+      title: `当前预览：${fullCurrentLabel}（点击此栏或右上对勾即可确认纠偏）`,
+      onclick: e => {
+        e?.stopPropagation?.();
+        applyCorrection(this.editPreviewLabel || fullCurrentLabel, this.editVendor, this.editFamily, this.editTier);
+      }
+    },
+      prevLogoWrap,
+      prevModelEl,
+      prevTierEl
+    );
+    const syncLivePreview = (vObj, mObj, tVal) => {
+      liveVendorObj = vObj || curVendorObj;
+      liveModelObj = mObj || curModelObj;
+      liveTier = tVal != null ? tVal : '';
+      const fName = liveModelObj.fam;
+      const fullLbl = liveTier ? `${fName} (${liveTier})` : fName;
+      const mLogo = liveModelObj.mLogo || liveVendorObj.logo;
+      this.editVendor = liveVendorObj.id;
+      this.editFamily = fName;
+      this.editTier = liveTier;
+      this.editPreviewLabel = fullLbl;
+      this.editPreviewLogo = mLogo;
+      this.editChanged = true;
+      prevLogoWrap.replaceChildren(vlogo(mLogo, 18));
+      prevModelEl.textContent = liveModelObj.short || liveModelObj.fam;
+      prevTierEl.textContent = liveTier || '标准';
+      prevTierEl.setAttribute('data-lv', String(TIER_LV[liveTier] ?? 3));
+      previewRow.title = `当前预览：${fullLbl}`;
+    };
+
+    // 底部第 1 行：独立滚轮选择「图标 + 厂商」名称（无右侧冗余图标）
+    const vFreqCur = Number(stats.vendors?.[curVendorObj.id] || 0) > 0;
+    const vendorRow = h('div', {
+      class: 'mc-jump-card mc-wheel-row' + (vFreqCur ? ' is-freq' : ''),
+      title: '滚轮切换厂商'
+    },
+      h('span', { class: 'mc-wheel-tag' }, '厂商'),
+      vlogo(curVendorObj.logo, 16),
+      h('b', { class: 'mc-wheel-val' }, curVendorObj.name)
+    );
+    bindWheelRow(
+      vendorRow,
+      () => sortedVendors.map(v => ({
+        id: v.id,
+        label: v.name,
+        iconHtml: VIcon.html(v.logo, 16),
+        isFreq: Number(stats.vendors?.[v.id] || 0) > 0,
+      })),
+      () => Math.max(0, sortedVendors.findIndex(v => v.id === curVendorObj.id)),
+      '滚轮选厂商',
+      picked => {
+        if (picked && picked.id !== curVendorObj.id) {
+          this.editVendor = picked.id;
+          this.editFamily = null;
+          this.editTier = null;
+          this.editChanged = true;
+          this.render();
+        }
+      },
+      {
+        onPreview: picked => {
+          const vObj = sortedVendors.find(v => v.id === picked?.id) || curVendorObj;
+          const mObj = (vObj.models || [])[0] || curModelObj;
+          const tVal = mObj.direct ? '' : (mObj.defTier ?? liveTier);
+          syncLivePreview(vObj, mObj, tVal);
+        }
+      }
+    );
+
+    // 底部第 2 行：独立滚轮选择纯型号（无图标）
+    const mFreqCur = Number(stats.families?.[curModelObj.fam.toLowerCase()] || 0) > 0;
+    const modelRow = h('div', {
+      class: 'mc-jump-card mc-wheel-row' + (mFreqCur ? ' is-freq' : ''),
+      title: '滚轮切换型号'
+    },
+      h('span', { class: 'mc-wheel-tag' }, '型号'),
+      h('b', { class: 'mc-wheel-val' }, curModelObj.short || curModelObj.fam)
+    );
+    bindWheelRow(
+      modelRow,
+      () => sortedModels.map(it => ({
+        id: it.fam,
+        direct: !!it.direct,
+        label: it.short || it.fam,
+        iconHtml: '',
+        isFreq: Number(stats.families?.[it.fam.toLowerCase()] || 0) > 0,
+      })),
+      () => Math.max(0, sortedModels.findIndex(it => it.fam === curModelObj.fam)),
+      '滚轮选型号',
+      picked => {
+        if (!picked) return;
+        if (picked.id !== curModelObj.fam) {
+          this.editFamily = picked.id;
+          this.editTier = null;
+          this.editChanged = true;
+          this.render();
+        }
+      },
+      {
+        onPreview: picked => {
+          const mObj = sortedModels.find(it => it.fam === picked?.id) || curModelObj;
+          const tVal = mObj.direct ? '' : (mObj.defTier ?? liveTier);
+          syncLivePreview(liveVendorObj, mObj, tVal);
+        }
+      }
+    );
+
+    // 底部第 3 行：独立滚轮选择纯强度（无图标，选完仅更新预览，点顶部思考分后的对勾确认关闭）
+    const tFreqCur = Number(stats.models?.[fullCurrentLabel.toLowerCase()] || 0) > 0;
+    const tRecCur = !tFreqCur && curTier === curModelObj.defTier;
+    const tierRow = h('div', {
+      class: 'mc-jump-card mc-wheel-row' + (tFreqCur ? ' is-freq' : tRecCur ? ' is-rec' : ''),
+      title: '滚轮选择强度'
+    },
+      h('span', { class: 'mc-wheel-tag' }, '强度'),
+      h('b', { class: 'mc-wheel-val' }, curTier || '标准')
+    );
+    bindWheelRow(
+      tierRow,
+      () => sortedTiers.map(t => {
+        const fl = (t ? `${famName} (${t})` : famName).toLowerCase();
+        const isHot = Number(stats.models?.[fl] || 0) > 0;
+        const isRec = !isHot && t === curModelObj.defTier;
+        return {
+          id: t,
+          label: t || '标准',
+          iconHtml: '',
+          isFreq: isHot,
+          isRec,
+        };
+      }),
+      () => Math.max(0, sortedTiers.findIndex(t => t === curTier)),
+      '滚轮选强度',
+      picked => {
+        if (!picked) return;
+        const chosenTier = picked.id;
+        this.editTier = chosenTier;
+        this.editChanged = true;
+        this.render();
+      },
+      {
+        onPreview: picked => {
+          if (!picked) return;
+          syncLivePreview(liveVendorObj, liveModelObj, picked.id);
+        }
+      }
+    );
+    return h('div', { class: 'mc-correct-wizard mc-wheel-wrap', onclick: e => e.stopPropagation() },
+      previewRow,
+      h('div', { class: 'mc-correct-box mc-wheel-box' },
+        vendorRow,
+        modelRow,
+        tierRow
+      )
+    );
+  },  routeBanner(sid, m, billing, curName = '') {
+    const d = billing?.diagnostics || null;
+    const hr = billing?.habitRoute || null;
+    const rn = m?.lastRouteNotice || null;
+    const isRouted = Boolean(m?.routed || hr?.routed || d?.routeSwitched || d?.effortDowngraded || d?.routeType || rn);
+    if (!isRouted) return null;
+    const rType = m?.routeType || hr?.routeType || d?.routeType || (d?.effortDowngraded ? 'effort' : 'model');
+    const fromLbl = String(m?.routeFrom || rn?.fromLabel || hr?.fromLabel || d?.initialModelLabel || '前序模型').replace(/[?？]+$/, '').trim();
+    const toLbl = String(m?.routeTo || rn?.toLabel || hr?.toLabel || d?.routedModelLabel || curName || m?.name || '当前模型').replace(/[?？]+$/, '').trim();
+    const toTurn = rn?.toTurn || hr?.toTurn || null;
+    const fromTurn = rn?.fromTurn || hr?.fromTurn || null;
+    const reason = String(m?.routeReason || rn?.reason || hr?.reason || (rType === 'effort' ? '同型号思考强度削弱' : '中途路由切换模型')).trim();
+    const turnBadge = toTurn ? (fromTurn && fromTurn !== toTurn - 1 ? `第 #${fromTurn} → #${toTurn} 轮` : `第 #${toTurn} 轮起`) : '中途切换';
+    const titleStr = rType === 'effort' ? '⚠️ 检测到思考强度削弱' : '⚠️ 检测到中途路由切换模型';
+    return h('div', {
+      class: 'mc-route-banner',
+      title: `点击定位到对话中的路由切换轮次 · ${reason}`,
+      onclick: () => {
+        const alertEl = document.querySelector('#msgs .msg-route-alert[data-route-pivot="1"], #msgs .msg-route-alert, #msgs .trow.is-route-start');
+        if (alertEl) {
+          alertEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          alertEl.classList.add('route-flash');
+          setTimeout(() => alertEl.classList.remove('route-flash'), 1800);
+        }
+        toast(`${titleStr}：${fromLbl} → ${toLbl}（${turnBadge}${reason ? ' · ' + reason : ''}）`, 'warn');
+      }
+    },
+      h('div', { class: 'mc-route-head' },
+        icon('alert'),
+        h('span', { class: 'mc-route-title' }, titleStr),
+        h('span', { class: 'mc-route-turn' }, turnBadge)
+      ),
+      h('div', { class: 'mc-route-flow' },
+        h('span', { class: 'mc-route-from' }, fromLbl),
+        h('span', { class: 'mc-route-arrow' }, '→'),
+        h('span', { class: 'mc-route-to' }, toLbl)
+      ),
+      reason ? h('div', { class: 'mc-route-reason' }, reason) : null
+    );
   },
+
   heroFp(sid, m) {
     const billing=typeof BillingProbe!=='undefined'?BillingProbe.summary(sid):null, charged=billing?.payment?.chargedUsd ?? billing?.payment?.effectiveUsd ?? null;
+    if (sid && typeof Models !== 'undefined') m = Models.get(sid) || m || {};
     const merged=billing?.mergedCandidates||[], top0=merged[0], top1=merged[1];
-    const uniqueTop=top0 && (!top1 || (Number(top0.match||0) - Number(top1.match||0)) >= 0.05);
+    const uniqueTop=top0 && (!top1 || (Number(top0.match||0) - Number(top1.match||0)) >= 0.05 || (Number(top0.combinedWeight ?? top0.match ?? 0) - Number(top1.combinedWeight ?? top1.match ?? 0)) >= 0.5);
     const pend = !!(m?.pendingConfirm && !uniqueTop && !(m?.name));
     const chat = Chats.get(sid);
     const thinkSt = (chat && typeof ThinkingStatus !== 'undefined' && ThinkingStatus.of) ? ThinkingStatus.of(chat) : null;
     const isOpenThinkNow = thinkSt?.kind === 'compat-thinking' && !chat?._closedLockedModel;
     const cleanModelVal = s => (!s || /^(未知型号|待定|未识别)\??$/.test(String(s)) || (isOpenThinkNow && this.isClosedModelName?.(s))) ? '' : String(s || '');
     const savedModelName = cleanModelVal(m?.name);
-    const candidate=pend?null:this.candidateOf(m), fp = m?.fingerprint, revPreferred = (m?.userCorrected && savedModelName) ? savedModelName : (uniqueTop && top0 && (m?.routed || m?.reverseInferred || m?.billingProbe || !savedModelName || m?.guess || m?.fromTitle)) ? ((m?.routed && savedModelName) ? savedModelName : (top0.canon || top0.label)) : '', name = pend ? '' : String(revPreferred || savedModelName || candidate?.name || top0?.canon || top0?.label || cleanModelVal(m?.candidateName) || cleanModelVal(m?.reverseLabel) || (isOpenThinkNow ? '开源模型' : '') || m?.name || '').replace(/\?+$/, ''), [fam, sfx] = famTier(name), vid = pend ? null : Brand.of(name), unit = this.unit();
+    const candidate=pend?null:this.candidateOf(m), fp = m?.fingerprint, revPreferred = ((m?.userCorrected && savedModelName) || (m?.routed && savedModelName)) ? savedModelName : (uniqueTop && top0 && (m?.reverseInferred || m?.habitInferred || m?.billingProbe || !savedModelName || m?.guess || m?.fromTitle)) ? (top0.canon || top0.label || savedModelName) : savedModelName, name = pend ? '' : String(revPreferred || savedModelName || candidate?.name || top0?.canon || top0?.label || cleanModelVal(m?.candidateName) || cleanModelVal(m?.reverseLabel) || (isOpenThinkNow ? '开源模型' : '') || m?.name || '').replace(/\?+$/, ''), [fam, sfx] = famTier(name), vid = pend ? null : Brand.of(name), unit = this.unit();
     const conf = candidate?.probability ?? ConversationLabels.fingerprintData(m)?.confidence, bt = Budget.sid(sid), est = chat && !chat.busy ? LiveEst.of(chat) : null;
     const compTurns = chat && Array.isArray(chat.messages) ? chat.messages.filter(x => x && x.role === 'assistant' && x.status === 'completed').length : 0;
     const totalTurns = Math.max(bt?.turns || 0, billing?.sessionPayment?.turns || 0, compTurns);
     const top0IsCost = Boolean(uniqueTop && top0 && (top0.diophantinePassed || top0.revPct != null) && !top0.habitSource);
     const revMatch = (top0IsCost && !m?.userCorrected) ? (top0.revPct ?? top0.match ?? m?.reverseMatch ?? m?.confidence) : (m?.reverseMatch ?? m?.confidence);
     const srcLabel = m?.userCorrected ? '手动纠偏确认'
+      : (m?.routed || billing?.habitRoute?.routed || billing?.diagnostics?.routeSwitched) ? ('中途路由切换识别' + (Number.isFinite(revMatch) ? ' ' + +Number(revMatch).toFixed(1) + '%' : ''))
       : pend ? ('候选并列 · 请继续沟通' + (Number.isFinite(revMatch) ? '（最高 ' + +Number(revMatch).toFixed(1) + '%）' : ''))
       : candidate ? '候选 · ' + candidate.reason + ' ' + +(conf * 100).toFixed(1) + '%'
       : !m?.name && !top0IsCost ? '待识别'
@@ -581,6 +855,8 @@ const Dock = {
     card.append(h('div', { class: 'mc-top' }, vid ? vlogo(vid, 30) : h('span', { class: 'vlogo', style: { width: '30px', height: '30px' } }, '?'),
       h('div', { class: 'mc-name', title: pend ? '候选模型权重接近，请继续沟通以锁定唯一模型' : (candidate?'候选 '+name+' · '+candidate.reason+'，身份待核对':name) }, h('div', { class: 'mc-fam' }, h('span', {}, pend ? '请继续沟通' : ((fam || name || '未识别')+(candidate?'?':''))), !pend && sfx ? h('span', { class: 'mc-tier', 'data-lv': TIER_LV[sfx] ?? 3 }, sfx) : null, !pend && typeof BillingProbe === 'undefined' ? this.scoreBadge(sid, m, true) : null),
         h('div', { class: 'mc-meta' }, [vid ? Brand.NAME[vid] : null, srcLabel, totalTurns ? totalTurns + ' 轮' : null].filter(Boolean).join(' · ')))));
+    const rBanner = this.routeBanner(sid, m, billing, name);
+    if (rBanner) card.append(rBanner);
     if (typeof BillingProbe === 'undefined') { const cp = this.renderCorrectPanel(sid, m, name); if (cp) card.append(cp); }
     const preTok = billing?.preimage?.latest || billing?.preimage?.totals || m?.reverseTokens || null;
     const tok = preTok?.total || (est ? est.input + est.output : null), usd = est?.usd || 0, usdTxt = charged!=null ? fmtUsd(charged) : usd ? '≈ ' + fmtUsd(usd) : '—', tokTxt = tok ? (preTok?.total ? '' : '≈ ') + Math.round(tok).toLocaleString('en-US') : '—';
@@ -711,13 +987,16 @@ const Dock = {
     const billing=t===ts.at(-1) && typeof BillingProbe!=='undefined'?BillingProbe.summary(sid):null;
     // ① 身份 + 消耗
     const mCur = Models.get(sid);
-    const best = (mCur?.userCorrected && mCur?.name) ? mCur.name : (t.best || t.internal || c?.response || c?.request || c?.model || t.best || ''), [fam, sfx] = famTier(best), vid = Brand.of(best) || Brand.of(c?.model || '');
-    const tier = c?.effort && c.effort !== 'conflict' ? c.effort : sfx;
+    const hasReidCur = Boolean((mCur?.userCorrected || mCur?.routed || mCur?.habitInferred || mCur?.reverseInferred || mCur?.billingProbe) && mCur?.name && !mCur?.pendingConfirm && !mCur?.guess);
+    const best = hasReidCur ? mCur.name : (t.best || t.internal || c?.response || c?.request || c?.model || mCur?.name || ''), [fam, sfx] = famTier(best), vid = Brand.of(best) || Brand.of(c?.model || '');
+    const tier = (hasReidCur && sfx) ? sfx : (c?.effort && c.effort !== 'conflict' ? c.effort : sfx);
     const card = h('section', { class: 'mc-card mc-hero' });
     const top = h('div', { class: 'mc-top' }, vid ? vlogo(vid, 30) : h('span', { class: 'vlogo', style: { width: '30px', height: '30px' } }, '?'),
       h('div', { class: 'mc-name', title: best }, h('div', { class: 'mc-fam' }, h('span', {}, fam || best || '未识别'), tier ? h('span', { class: 'mc-tier', 'data-lv': TIER_LV[tier] ?? Math.round(Strength.level(best) ?? 3), title: Strength.label(best) }, tier) : null),
         h('div', { class: 'mc-meta' }, [vid ? Brand.NAME[vid] : null, mCur?.userCorrected ? '手动纠偏确认' : null, `第 ${idx + 1} 轮`, t.calls.length + ' 次调用'].filter(Boolean).join(' · '))));
     card.append(top);
+    const ovRouteBanner = this.routeBanner(sid, mCur, billing, best);
+    if (ovRouteBanner) card.append(ovRouteBanner);
     { const cp = this.renderCorrectPanel(sid, mCur, best); if (cp) card.append(cp); }
     const s = t.sum || {}, exact = n => Number.isFinite(+n) && n != null ? Math.round(+n).toLocaleString('en-US') : '—';
     // 用量没报告（Trace 还没写入 / 运行令牌过期）：按实时内容估算，标「≈ 估算」，绝不显示假的 0
@@ -861,15 +1140,16 @@ const Dock = {
     const historicalTurn=!!t && t!==Trace.latest(sid);
     const billing=typeof BillingProbe!=='undefined' && (!t || t===Trace.latest(sid))?BillingProbe.summary(sid):null;
     const merged=billing?.mergedCandidates||[], top0=merged[0], top1=merged[1];
-    const uniqueTop=top0 && (!top1 || (Number(top0.match||0) - Number(top1.match||0)) >= 0.05);
+    const uniqueTop=top0 && (!top1 || (Number(top0.match||0) - Number(top1.match||0)) >= 0.05 || (Number(top0.combinedWeight ?? top0.match ?? 0) - Number(top1.combinedWeight ?? top1.match ?? 0)) >= 0.5);
     const m = historicalTurn?null:Models.get(sid), chat = Chats.get(sid), pend = !t && !!(m?.pendingConfirm && !uniqueTop && !(m?.name));
     const thinkSt = (chat && typeof ThinkingStatus !== 'undefined' && ThinkingStatus.of) ? ThinkingStatus.of(chat) : null;
     const isOpenThinkNow = thinkSt?.kind === 'compat-thinking';
     const cleanModelVal = s => (!s || /^(未知型号|待定|未识别)\??$/.test(String(s)) || (isOpenThinkNow && this.isClosedModelName?.(s))) ? '' : String(s || '');
     const candidate=(!t && !pend)?this.candidateOf(m):null;
     const savedModelName = cleanModelVal(m?.name);
-    const revPreferred = (m?.userCorrected && savedModelName) ? savedModelName : (uniqueTop && top0 && (m?.routed || m?.reverseInferred || m?.billingProbe || !savedModelName || m?.guess || m?.fromTitle)) ? ((m?.routed && savedModelName) ? savedModelName : (top0.canon || top0.label)) : '';
-    const name = t?.best || (pend ? '' : String(revPreferred || candidate?.name || savedModelName || cleanModelVal(m?.candidateName) || cleanModelVal(m?.reverseLabel) || top0?.canon || top0?.label || (isOpenThinkNow ? '开源模型' : '') || m?.name || '').replace(/\?+$/, ''));
+    const revPreferred = ((m?.userCorrected || m?.routed) && savedModelName) ? savedModelName : (uniqueTop && top0 && (m?.reverseInferred || m?.habitInferred || m?.billingProbe || !savedModelName || m?.guess || m?.fromTitle)) ? (top0.canon || top0.label || savedModelName) : savedModelName;
+    const isReidNow = !historicalTurn && Boolean(m && (m.userCorrected || m.routed || m.habitInferred || m.reverseInferred || m.billingProbe) && (revPreferred || savedModelName));
+    const name = (isReidNow ? '' : t?.best) || (pend ? '' : String(revPreferred || savedModelName || candidate?.name || cleanModelVal(m?.candidateName) || cleanModelVal(m?.reverseLabel) || top0?.canon || top0?.label || (isOpenThinkNow ? '开源模型' : '') || m?.name || '').replace(/\?+$/, ''));
     const score=(historicalTurn || pend)?null:this.scoreOf(sid,m,t), shortName=Brand.short(Strength.canon(name)).replace(/\?+$/, '');
     const d = h('details', { class: 'mc-card mc-tech', open: this.techOpen || null, ontoggle: e => { this.techOpen = e.target.open; } },
       h('summary', {}, icon('layers'), h('b', { class: 'grow' }, '识别细节'), h('span', { class: 'eyebrow mc-ident-summary',title:pend?'候选权重接近，请继续沟通':(candidate?'候选 '+name+' · '+candidate.reason:name)+(score!=null?' · 推理分 '+Strength.fmtScore(score):'')+(m?.at?' · '+fmtClock2(m.at):'') }, chat?.identifying ? '识别中…' : pend ? '请继续沟通' : name ? shortName+(candidate?'?':'')+(score!=null?'-'+Strength.fmtScore(score):'') : '暂无'), icon('chevr', 'mc-chev')));
@@ -1393,8 +1673,9 @@ const Bar = {
       rem != null ? [h('span', { class: 'dim' }, u == null ? '≈美金' : '美金'), h('b', {}, (u == null ? '≈' : '') + '$' + (rem >= 100 ? Math.round(rem) : rem.toFixed(2))), all ? h('span', { class: 'dim' }, '/ $' + (all >= 100 ? Math.round(all) : all.toFixed(2))) : null, pct != null ? h('span', { class: 'dim' }, '· ' + pct + '%') : null, botScore != null ? h('span', { class: 'dim bot-score-tag', title: botLv?.desc || '' }, '· Bot ' + botScore) : null]
         : [h('span', { class: 'dim' }, '额度'), h('b', {}, pct != null ? pct + '%' : '—'), botScore != null ? h('span', { class: 'dim bot-score-tag', title: botLv?.desc || '' }, '· Bot ' + botScore) : null]));
     kids.push(this.refreshBtn(sid));   // 刷新紧跟在额度右边；更新时间在点开额度后的「余额明细」里
+    const bpSum = sid && typeof BillingProbe !== 'undefined' ? BillingProbe.summary(sid) : null;
     { // 本轮花费与对话总消耗：优先采用新计费 /cost 账单（含 P50×2 原像实扣），进行中或账单未到达时按新计费 P50×2 实时估算
-      const ch = sid ? Chats.get(sid) : null, bp = sid && typeof BillingProbe !== 'undefined' ? BillingProbe.summary(sid) : null, bSid = sid && typeof Budget !== 'undefined' ? Budget.sid(sid) : null;
+      const ch = sid ? Chats.get(sid) : null, bp = bpSum, bSid = sid && typeof Budget !== 'undefined' ? Budget.sid(sid) : null;
       const estNow = ch ? LiveEst.of(ch) : null, live = ch?.busy ? estNow : null, real = lt?.sum?.usd || 0, estU = lt?.sum?.usdEst || 0;
       const bpTurnExact = bp?.payment?.chargedUsd > 0 ? bp.payment.chargedUsd : null;
       const bpTurnEff = bp?.payment?.effectiveUsd > 0 ? bp.payment.effectiveUsd : null;
@@ -1409,12 +1690,16 @@ const Bar = {
       if (v || all) kids.push(it('bcost', (ch?.busy ? '本轮进行中：按新计费 P50×2 实时估算' : bpTurnEff ? '本轮：新计费账单 ' + (bpTurnExact ? '实扣 ' : 'P50×2 折算 ') + fmtUsd(v) : '本轮：最近一轮 ' + (lt?.calls.length || estNow?.steps || 1) + ' 次调用') + (real ? '\nTrace 实际 ' + fmtUsd(real) : '') + (all ? '\n总：本对话 ' + allTurns + ' 轮合计 ' + (allApprox ? '≈' : '') + fmtUsd(all) : ''),
         h('span', { class: 'dim' }, '对话消耗'), h('b', {}, v ? (approx ? '≈' : '') + fmtUsd(v) : '—'), h('span', { class: 'dim' }, '/'), h('b', {}, all ? (allApprox ? '≈' : '') + fmtUsd(all) : '—')));
     }
+    const miNow = (sid && typeof Models !== 'undefined' ? Models.get(sid) : null) || mi;
     const bestNm = mi?.name || mi?.candidates?.[0]?.id || lt?.best || '';
-    const bpTop = sid && typeof BillingProbe !== 'undefined' ? BillingProbe.summary(sid)?.top?.[0] : null;
-    const tvMod = sid && typeof Titles !== 'undefined' && typeof ConversationLabels !== 'undefined' ? ConversationLabels.parse(Titles.view(sid, History.byId?.(sid)?.title || '')?.model || '')?.name : '';
+    const bpTop = bpSum?.mergedCandidates?.[0] || bpSum?.top?.[0] || null;
+    const hRow = sid && typeof History !== 'undefined' ? History.byId?.(sid) : null;
+    const tvMod = sid && typeof Titles !== 'undefined' && typeof ConversationLabels !== 'undefined' ? ConversationLabels.parse(Titles.view(sid, hRow?.title || '', hRow?.localTitle)?.model || '')?.name : '';
     const rawLtBest = lt?.best && !/^(none|minimal|low|medium|high|xhigh|max)$/i.test(String(lt.best).trim()) ? lt.best : '';
-    const bestBase = (!mi?.guess && mi?.name) || mi?.candidateName || mi?.reverseLabel || bpTop?.canon || bpTop?.label || tvMod || (!/^(none|minimal|low|medium|high|xhigh|max)$/i.test(bestNm) ? bestNm : '') || rawLtBest || '';
-    const bestEffort = lt?.calls?.at(-1)?.effort && lt.calls.at(-1).effort !== 'conflict' ? lt.calls.at(-1).effort : (/^(none|minimal|low|medium|high|xhigh|max)$/i.test(String(lt?.best || '').trim()) ? String(lt.best).trim().toLowerCase() : '');
+    const hasReidMi = Boolean((!miNow?.guess || miNow?.userCorrected || miNow?.habitInferred || miNow?.reverseInferred || miNow?.billingProbe) && miNow?.name);
+    const bestBase = (hasReidMi && miNow?.name) || miNow?.candidateName || miNow?.reverseLabel || bpTop?.canon || bpTop?.label || tvMod || (!/^(none|minimal|low|medium|high|xhigh|max)$/i.test(bestNm) ? bestNm : '') || rawLtBest || '';
+    const baseHasTier = Boolean(bestBase && typeof Strength !== 'undefined' && Strength.parts && Strength.parts(bestBase).tier);
+    const bestEffort = (hasReidMi && baseHasTier) ? '' : (lt?.calls?.at(-1)?.effort && lt.calls.at(-1).effort !== 'conflict' ? lt.calls.at(-1).effort : (/^(none|minimal|low|medium|high|xhigh|max)$/i.test(String(lt?.best || '').trim()) ? String(lt.best).trim().toLowerCase() : ''));
     const syncNm = bestBase ? (bestEffort && typeof Strength !== 'undefined' && Strength.withEffort ? Strength.withEffort(bestBase, bestEffort) : Strength.canon(bestBase)) : '';
     if (syncNm && !/^(none|minimal|low|medium|high|xhigh|max)$/i.test(syncNm)) {
       const nm = syncNm, vid = Brand.of(nm), disp = (typeof cardName === 'function' ? cardName(nm) : '') || nm;

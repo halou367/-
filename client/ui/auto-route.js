@@ -20,20 +20,22 @@ const RouteConfirm = {
     return this.job;
   },
   // 检测到模型路由（路由到其他模型 / 同型号的强度削弱）时仅轻提示提醒，绝不因为路由误判而暂停对话（仅闭源模型突然出现开源思考才暂停）
-  askModelRoute(chat, { routeType = 'model', fromLabel = '', toLabel = '', reason = '', seconds = 10 } = {}) {
+  askModelRoute(chat, { routeType = 'model', fromLabel = '', toLabel = '', reason = '', toTurn = null, seconds = 10 } = {}) {
     if (typeof Prefs !== 'undefined' && Prefs.routePausePrompt === false) return Promise.resolve(false);
     const isEffort = routeType === 'effort';
     const _legacyTitle = isEffort ? '检测到同型号的强度削弱，是否暂停对话？' : '检测到路由到其他模型，是否暂停对话？';
     void _legacyTitle; void seconds;
-    const label = isEffort ? '检测到同型号的强度削弱' : '检测到路由到其他模型';
+    const label = isEffort ? '检测到同型号的思考强度削弱' : '检测到中途路由切换模型';
+    const turnStr = toTurn ? ('第 #' + toTurn + ' 轮起') : '';
     const changeStr = (fromLabel && toLabel) ? ('识别变化：' + fromLabel + ' → ' + toLabel) : (toLabel ? ('当前检测：' + toLabel) : '');
-    const text = [changeStr, reason].filter(Boolean).join(' · ') || '检测到当前对话模型或思考强度发生路由变化';
+    const reasonStr = (reason && reason !== changeStr && !changeStr.includes(reason)) ? reason : '';
+    const text = [turnStr, changeStr, reasonStr].filter(Boolean).join(' · ') || '检测到当前对话模型或思考强度发生路由变化';
     if (chat) {
       chat._routePaused = false;
-      try { Trace.note?.(chat.sid, '路由提醒（不暂停）：' + label + ' · ' + text, 'warn'); } catch {}
+      try { Trace.note?.(chat.sid, '⚠️ 路由切换提醒（不暂停）：' + label + ' · ' + text, 'warn'); } catch {}
       try { chat.emit?.(); } catch {}
     }
-    try { toast('路由提醒：' + label + (text ? ' · ' + text : '') + '（仅提醒，不暂停）', 'warn'); } catch {}
+    try { toast('⚠️ 路由切换提醒：' + label + (text ? ' · ' + text : ''), 'warn'); } catch {}
     return Promise.resolve(false);
   },
   // 同地区内故障恢复直接切换；一旦涉及跨地区（fromRegion !== toRegion），必须弹窗提示用户确认后才允许跨地区切换
@@ -182,7 +184,7 @@ const StandbyPool = {
           }));
           const workingNodes = new Set(results.filter(x => x.r?.ip || RoutePolicy.good(x.r)).map(x => x.c?.proxy).filter(Boolean));
           for (const { c, r } of results) {
-            const pureOk = Boolean(c.proxyIp && (!(r?.pure && Number.isFinite(+r.pure.fs)) || +r.pure.fs < 25) && (typeof IPRep === 'undefined' || !IPRep.risky?.(c.proxyIp, { eg: r?.ip || '' })));
+            const pureOk = Boolean(c.proxyIp && r?.ip && !String(r.ip).includes(':') && ((r?.pure && Number.isFinite(+r.pure.fs) && +r.pure.fs < 25) || RoutePolicy.reputationOK(RoutePolicy.withProbe(first.pool || {}, r), c.proxyIp, { ...(first.pool?.ips?.[c.proxyIp] || {}), eg: r.ip }, now())) && (typeof IPRep === 'undefined' || !IPRep.risky?.(c.proxyIp, { eg: r?.ip || '' })));
             if (RoutePolicy.good(r) && r.ticket && pureOk) {
               this.ips.push({
                 owner: a.id,
@@ -230,7 +232,7 @@ const StandbyPool = {
         if (nb.length) {
           const nRes = await Promise.all(nb.map(async c => ({ c, r: await AutoRoute.adapter.probe({ ...c, kind: 'standby' }).catch(() => null) })));
           for (const { c, r } of nRes) {
-            const pureOk = Boolean(c.proxyIp && (!(r?.pure && Number.isFinite(+r.pure.fs)) || +r.pure.fs < 25) && (typeof IPRep === 'undefined' || !IPRep.risky?.(c.proxyIp, { eg: r?.ip || '' })));
+            const pureOk = Boolean(c.proxyIp && r?.ip && !String(r.ip).includes(':') && ((r?.pure && Number.isFinite(+r.pure.fs) && +r.pure.fs < 25) || RoutePolicy.reputationOK(RoutePolicy.withProbe(first.pool || {}, r), c.proxyIp, { ...(first.pool?.ips?.[c.proxyIp] || {}), eg: r.ip }, now())) && (typeof IPRep === 'undefined' || !IPRep.risky?.(c.proxyIp, { eg: r?.ip || '' })));
             if (RoutePolicy.good(r) && r.ticket && pureOk) {
               this.nodes.push({
                 owner: a.id,
@@ -371,7 +373,7 @@ const AutoRoute = {
       void StandbyPool.replenish('post-switch');
     },1200);
   },
-  paint(){ if(!this.busy){this.notice?.remove();this.notice=null;return;}if(!this.notice){this.notice=h('div',{class:'route-recovery-note',role:'status'},h('i',{class:'spin'}),h('span'));document.body.append(this.notice);}this.notice.querySelector('span').textContent='线路恢复：'+this.status; },
+  paint(){ this.notice?.remove();this.notice=null; },
   async request(reason='network',force=false){
     if(!this.enabled()||navigator.onLine===false){
       if(reason==='network'&&typeof UI!=='undefined'&&typeof RegionIP!=='undefined'&&!window.__routeFixture&&!window.__fixture){
@@ -382,7 +384,7 @@ const AutoRoute = {
     }
     if(this.busy)return this.pending;
     if(typeof NodeRoutes!=='undefined'&&NodeRoutes.manual>0)return {ok:false,busy:true};
-    if(!force&&reason==='network'&&NetHealth.recent())return {ok:true,changed:false,live:true};
+    if(!force&&(reason==='network'||reason==='realtime-repeat')&&NetHealth.recent())return {ok:true,changed:false,live:true};
     const owner=UI.host?.account?.id;
     if(PoolGuard.busy||RegionAdvisor.busy||Pool.switching.has(owner))return {ok:false,busy:true};
     if(!force&&Date.now()<this.engine.next)return {ok:false,cooldown:true};
@@ -459,22 +461,25 @@ const AutoRoute = {
   // 仅真实传输断连/超时才触发自动切换：429 / 404 / 401 / 403 或用户刚手动选定 IP 期间绝不自动把用户的可用 IP 切走；加严格防抖与冷却，绝不反复循环切换
   onErrorSwitch(err,where='api'){
     if(!this.enabled()||!RoutePolicy.shouldRotateOnError?.(err))return Promise.resolve({ok:false,skipped:true});
-    if(where==='ip-timeout'||where==='rtt-timeout')return Promise.resolve({ok:false,skipped:true});
+    if(where==='ip-timeout'||where==='rtt-timeout'||where==='rtt')return Promise.resolve({ok:false,skipped:true});
     if((typeof NodeRoutes!=='undefined'&&NodeRoutes.manual>0)||(typeof RegionIP!=='undefined'&&RegionIP.busy))return Promise.resolve({ok:false,skipped:true});
     const st=Number(err?.status||err?.httpStatus||0);
-    if(st===429||st===404||st===401||st===403||err?.ipLimited||err?.rateLimitedLocally)return Promise.resolve({ok:false,skipped:true,status:st});
+    if(st===429||st===404||st===401||st===403||st===500||err?.ipLimited||err?.rateLimitedLocally)return Promise.resolve({ok:false,skipped:true,status:st});
     if(this.isManualLocked()&&where!=='manual')return Promise.resolve({ok:false,skipped:true,manualLocked:true});
     const t=typeof now==='function'?now():Date.now();
     if(this.busy||t-(this.lastChanged||0)<45000||t-(this._lastErrSwitchAt||0)<30000)return Promise.resolve({ok:false,cooldown:true});
+    const a=typeof UI!=='undefined'?UI.host?.account:null;
+    const isLiveHealthy=Boolean((typeof NetHealth!=='undefined'&&NetHealth.recent?.(30000))||(typeof IP!=='undefined'&&IP.ip&&!IP.err&&(!IP.rttFail||IP.quietFail?.())&&t-(IP.at||0)<45000));
     if(where!=='manual'&&where!=='pre-send'&&where!=='send-timeout'&&where!=='create-chat'&&where!=='gacha'){
       this._errHits=(this._errHits||[]).filter(x=>t-x<60000);
       this._errHits.push(t);
-      if(this._errHits.length<2)return Promise.resolve({ok:false,debounced:true});
+      const minHits=(a?.routeMode==='node'||isLiveHealthy)?3:2;
+      if(this._errHits.length<minHits)return Promise.resolve({ok:false,debounced:true});
     }
     this._lastErrSwitchAt=t;
     this.noteNetProblem();
     if(typeof ReadLimit!=='undefined')ReadLimit.until=0;
-    const reason='error-switch';
+    const reason=(a?.routeMode==='node'||isLiveHealthy)?'network':'error-switch';
     this.status='检测到连接报错（'+(st||'超时/断连')+'），正在切换备用线路…';
     Bus.emit('route-state');
     return this.request(reason,false);
@@ -524,6 +529,7 @@ const AutoRoute = {
         const repeat=!!c.routeMissAt&&now()-c.routeMissAt<90000;c.routeMissAt=now();
         // First repair only the stream, preserving cursor/content/delivery IDs.
         c.restream();
+        void c.reconcile?.(0)?.catch?.(()=>{});
         if(repeat&&this.enabled())return this.request('realtime-repeat');
       }
       // Unknown or quiet: let the stream's own bounded watchdog handle it.
@@ -532,6 +538,7 @@ const AutoRoute = {
   },
   fault(e,kind='network'){
     if(!this.enabled())return;
+    if(typeof Chats!=='undefined'&&[...Chats.values()].some(ch=>ch?.streaming&&ch?.byteAt&&now()-ch.byteAt<8000))return;
     if(kind!=='stream'&&RoutePolicy.shouldRotateOnError?.(e)){
       void this.onErrorSwitch(e,kind);
       return;

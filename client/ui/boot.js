@@ -9,6 +9,29 @@ function overlay() {
   try { if (/(^|\.)arena\.ai$/i.test(location.hostname)) WebSide.start(); } catch {}
   try { if (/(^|\.)arena\.ai$/i.test(location.hostname)) { if (!WebBar.start()) WebFoot.start(); } } catch { try { WebFoot.start(); } catch {} }
   try { if (/(^|\.)arena\.ai$/i.test(location.hostname)) WebPw.start(); } catch {}
+  // 浏览器模式打开某个对话时（/agent/:sid）：后台将对话正文缓存进本机 MsgCache（IndexedDB），切回客户端模式时 0ms 秒开
+  try {
+    if (/(^|\.)arena\.ai$/i.test(location.hostname) && typeof MsgCache !== 'undefined' && typeof chatOf === 'function') {
+      let seededSid = '';
+      const syncBrowserChatToCache = () => {
+        const m = /^\/(?:agent|c|chat)\/([0-9a-f-]{36})\b/i.exec(location.pathname || '');
+        const sid = m ? m[1] : '';
+        if (!sid || sid === seededSid) return;
+        seededSid = sid;
+        setTimeout(async () => {
+          try {
+            const existing = await MsgCache.get(sid).catch(() => null);
+            if (existing?.messages?.length && Date.now() - (existing.at || 0) < 60000) return;
+            const c = chatOf(sid);
+            if (!c.loaded && !c.loading) await c.load().catch(() => {});
+          } catch {}
+        }, 1200);
+      };
+      if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', syncBrowserChatToCache, { once: true });
+      else syncBrowserChatToCache();
+      setInterval(syncBrowserChatToCache, 2500);
+    }
+  } catch {}
   const add = () => {
     // 浏览器模式顶部已经有浏览条（含「客户端」按钮）：不再放右下角的「返回客户端」
     if (window.__ancWebbar) { document.getElementById('anc-back')?.remove(); return; }
@@ -526,7 +549,7 @@ async function init() {
     }
   } catch {}
   if (fastReturn) {
-    const cmFast = Store.get('me:u', null) || (Store.get('tabs:v1', null)?.list?.length ? { id: 'fast', email: '' } : null);
+    const cmFast = Store.get('me:u', null) || ((Store.get('tabs', null)?.length || Store.get('tabs:v1', null)?.list?.length) ? { id: 'fast', email: '' } : null);
     if (cmFast && cmFast.id) {
       UI.me = cmFast;
       try {
@@ -570,8 +593,8 @@ async function init() {
   ]);
   try { if (typeof AccountPicker !== 'undefined' && AccountPicker.startCheckTimer) AccountPicker.startCheckTimer(true); } catch {}
   // 外壳永远不该滚动：万一被 focus / scrollIntoView 滚动了（旧内核不支持 overflow:clip 时），立刻复位
-  { const fix = e => { const t = e.target; for (const el of t === document ? [document.scrollingElement, document.body] : [t]) if (el && (el === document.body || el === document.documentElement || el.id === 'app' || el.id === 'main') && (el.scrollTop || el.scrollLeft)) { el.scrollTop = 0; el.scrollLeft = 0; } };
-    document.addEventListener('scroll', fix, true); }
+  { const fix = e => { const t = e.target; if (t && t !== document && t !== document.body && t !== document.documentElement && t.id !== 'app' && t.id !== 'main') return; for (const el of t === document ? [document.scrollingElement, document.body] : [t]) if (el && (el === document.body || el === document.documentElement || el.id === 'app' || el.id === 'main') && (el.scrollTop || el.scrollLeft)) { el.scrollTop = 0; el.scrollLeft = 0; } };
+    document.addEventListener('scroll', fix, { capture: true, passive: true }); }
   // 别的窗口（账号菜单）可能改了共享设置（金色点亮 / 主题 / 检测间隔）或本账号的抽卡设置：回到这个窗口时重新读一次
   addEventListener('focus', () => {
     Shared.pull().catch(() => {});
@@ -662,10 +685,11 @@ async function init() {
     UI.renderListSoon?.();
   };
   {
-    try { void History.restoreFromLocalCache?.(); } catch {}
+    try { await Promise.race([History.restoreFromLocalCache?.() || Promise.resolve(), sleep(500)]); } catch {}
     const cm = Store.get('me:u', null);
-    const hasLocalState = !!(History.items?.length || Store.get('tabs:v1', null)?.list?.length || (typeof MsgCache !== 'undefined' && MsgCache.keys?.()?.length));
-    if ((cm && cm.id && (!expectedEmail || sameAcctEmail(cm.email, expectedEmail))) || hasLocalState) {
+    const hasLocalState = !!(History.items?.length || Store.get('tabs', null)?.length || Store.get('tabs:v1', null)?.list?.length || Tabs.list?.length || (typeof MsgCache !== 'undefined' && MsgCache.keys?.()?.length));
+    const hasConfiguredAccount = Boolean(!window.__fixture && !window.__routeFixture && (UI.host?.account?.email || UI.host?.account?.hasPw || UI.host?.account?.hasPassword));
+    if ((cm && cm.id && (!expectedEmail || sameAcctEmail(cm.email, expectedEmail))) || hasLocalState || hasConfiguredAccount) {
       const em = expectedEmail || cm?.email || UI.host?.account?.email || UI.host?.account?.name || '本地账号';
       UI.me = (cm && cm.id) ? cm : { id: UI.host?.account?.id || 'local', email: em, name: String(em).split('@')[0] };
       early = true;
@@ -713,7 +737,11 @@ async function init() {
     if (!UI.authed) UI.enterBrowseMode('已进入查阅模式（免登录浏览本地缓存对话）');
     return;
   }
-  if (check.manual) { UI.loginGate('账号和本地对话已保留。请检查登录验证或线路后重试，或点「查阅模式」免登录浏览本地记录。'); return; }
+  if (check.manual) {
+    if (early) { UI.enterBrowseMode('账号和本地对话已保留 · 可直接查阅本地记录，或点右上角重新登录'); return; }
+    UI.loginGate('账号和本地对话已保留。请检查登录验证或线路后重试，或点「查阅模式」免登录浏览本地记录。');
+    return;
+  }
   let me = check.value;
   connOk();
   try { UI.me = checkedUser(me?.user); if (UI.me) await AuthEnv.finish(UI.me); }
@@ -726,18 +754,23 @@ async function init() {
   let needShell = !early;
   // 未登录：有保存的密码就直接用接口登录，否则显示登录表单
   if (!UI.me) {
-    needShell = true;
+    needShell = !early;
     const cred = await Host.getCred().catch(() => null);
     if (cred?.email && cred?.password) {
-      $('#view').replaceChildren(h('div', { class: 'gate' }, h('div', { class: 'lform' }, h('div', { class: 'hero-t' }, '正在登录…'), h('div', { class: 'lsub' }, cred.email + ' · ' + (isDirectP(UI.host.account?.proxy) ? '直连' : '代理 ' + maskProxy(UI.host.account?.proxy))), h('i', { class: 'spin' }))));
+      if (!early) $('#view').replaceChildren(h('div', { class: 'gate' }, h('div', { class: 'lform' }, h('div', { class: 'hero-t' }, '正在登录…'), h('div', { class: 'lsub' }, cred.email + ' · ' + (isDirectP(UI.host.account?.proxy) ? '直连' : '代理 ' + maskProxy(UI.host.account?.proxy))), h('i', { class: 'spin' }))));
       for (;;) {
         try { UI.me = checkedUser(await Auth.signIn(cred.email, cred.password)); connOk(); break; }
         catch (e) {
           // Read retries may recover automatically; an unconfirmed authentication POST is never replayed.
           if (e.net && await connWait(describe(e), e.slow) !== 'gate') continue;
-          connOk(); UI.renderAcct(); return UI.loginGate('自动登录失败：' + describe(e));
+          connOk();
+          if (early) { UI.enterBrowseMode('自动登录暂未完成（' + describe(e) + '）· 已保留本地缓存对话'); return; }
+          UI.renderAcct(); return UI.loginGate('自动登录失败：' + describe(e));
         }
       }
+    } else if (early) {
+      UI.enterBrowseMode('已保留本地缓存对话 · 登录会话过期，可直接查阅本地记录');
+      return;
     }
   }
   if (verification && UI.me) {
@@ -889,10 +922,11 @@ async function init() {
 }
 
 function boot() {
+  const isMgrFile = window.top === window && location.protocol === 'file:' && /[?&]mgr=1\b/.test(location.search);
+  if (!isMgrFile && (window.top !== window || location.origin !== ORIGIN)) return;
   try { Object.defineProperty(window, '__anc', { value: { BillingProbe, EnvRefresh, EnvCheck, StreamMD, ChatExport, Connectors, HtmlPreview, PelicanShots, CapRoute, Recaptcha, NetHealth, NetPolicy, ThinkingStatus, WorkspacePath, WorkspacePreview, MD, SessionGate, AutoRoute, RoutePolicy, RouteState, NodeRoutes, AuthEnv, RegionIP, Bulk, Brand, Gacha, Host, Auth, Bus, chatOf, IPRep, Update, Cap, Calib, Fmt, CS, Pin, FmtAcc, History, Drafts, TabSw, Warm, PoolGuard, RegionAdvisor, PoolMaint, SubMaint, NodeImport, Sync, acctWheel, acctCard, Gold, GoldBoard, PView, LeaderPop, TabPress, userAtts, attZoom, Side, AcctStats, LaunchPick, MgrWin, SendQ, Notes, Mob, Pager, EnterFlow, Hitl, Vless, Nodes, NodeEditor, NodeMgr, Chats, chatOf, Tabs, UI, History, Models, Store, Trigger, Pulse, IP, Trace, Workspace, Dock, WS, Bar, Prefs, Recaptcha, createChat, R, Uploads, Revolver, GPop, Notes, Titles, TitleSync, TitleCompact, TitleCipher, ProbeArchive, Fingerprint, FingerprintBatch, GachaPrompts, Dialog, AutoId, Strength, PView, StrPick, Side, Price, LiveEst, KeepAlive, Palette, ExtPop, LeaderPop, Steps, FileLink, Tip, Pool, ProxySet, GSlot, Fav, LocalProxy, proxyField, get Gacha() { return Gacha; } } }); } catch {}
   // 桌面账号管理窗口（本地页面）：只显示账号管理，不联网
-  if (window.top === window && location.protocol === 'file:' && /[?&]mgr=1\b/.test(location.search)) { MgrWin.boot(); return; }
-  if (window.top !== window || location.origin !== ORIGIN) return;
+  if (isMgrFile) { MgrWin.boot(); return; }
   if (window.__ANC_BOOTED) return; window.__ANC_BOOTED = true;
   // 文件拖到输入框以外的地方时不要让窗口跳转去打开这个文件
   addEventListener('dragover', e => { if ([...(e.dataTransfer?.types || [])].includes('Files')) e.preventDefault(); });

@@ -9,7 +9,7 @@ const Brand = (() => {
     ['google', /gemini|gemma|\bbard\b|google/i],
     ['xai', /grok|\bxai\b/i],
     ['moonshot', /kimi|moonshot/i],
-    ['deepseek', /deepseek/i],
+    ['deepseek', /deepseek|\bbeam\b/i],
     ['qwen', /qwen|qwq|tongyi/i],
     ['zhipu', /\bglm|chatglm|zhipu/i],
     ['xiaomi', /\bmimo/i],
@@ -38,7 +38,7 @@ const Brand = (() => {
   const toks0 = t => String(t || '').toLowerCase().replace(/^#\d+\s*/, '').replace(/\/\d+-\d+-\d+:\d+$/, '').replace(/(\d)([a-z])/g, '$1-$2').replace(/([a-z])(\d)/g, '$1-$2').split(/[^a-z0-9]+/).filter(Boolean);
   // 版本号：第一个 1–2 位数字 + 紧随的次版本（opus-5.5 → 5.05、gpt-6 → 6）
   const version = t => { const k = toks(t); const i = k.findIndex(x => /^\d{1,2}$/.test(x)); if (i < 0) return null; const minor = /^\d{1,2}$/.test(k[i + 1] || '') ? +k[i + 1] : 0; return +k[i] + minor / 100; };
-  const VPRE = /^(?:[\w.-]+\/)?(?:gpt|chatgpt|claude|gemini|grok|kimi|qwen|deepseek|mimo|glm|llama|mistral|doubao|minimax)(?:[-_ ]+(?=[\w])|(?=\d))/i;
+  const VPRE = /^(?:[\w.-]+\/)?(?:gpt|chatgpt|claude|gemini|grok|kimi|qwen|deepseek|mimo|glm|llama|muse|mistral|doubao|minimax)(?:[-_ ]+(?=[\w])|(?=\d))/i;
   const short = n => { n = noVertex(String(n || '')).trim(); if (!of(n)) return n; let r = n.replace(VPRE, ''); if (/^k\d/.test(r)) r = 'K' + r.slice(1); return r || n; };
   const TIERS = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
   const tierOf = n => (/-(none|minimal|low|medium|high|xhigh|max)$/i.exec(noVertex(String(n || '')).replace(/\/\d+-\d+-\d+:\d+$/, '').replace(/-(agent|public)$/i, '')) || [])[1]?.toLowerCase() || null;
@@ -62,7 +62,7 @@ const VIcon = (() => {
 // ---------- 实时排名：同源读取 /leaderboard/agent（公开页面），缓存 6 小时；下面是兜底快照 ----------
 const Ranking = (() => {
   const TTL = 6 * 3600000;
-  const LEGACY_FALLBACK = ["Claude Fable 5.1 (Max)", "GPT 6 Astra (Max)", "Claude Opus 5 (High)", "Claude Opus 5 (Max)", "Claude Fable 5 (High)", "Claude Opus 4.8 (High)", "GPT 5.6 Sol (xHigh)", "Kimi K3 (Max)", "Claude Sonnet 5 (High)", "GPT 5.5 (xHigh)", "Hy4 preview", "Deepseek V4.1 Flash (Max)", "Gemini 3.8 Flash (High)", "GLM 5.2 (Max)", "Muse Spark 1.3 (Max)", "DeepSeek V4 Pro (High)", "Qwen3.8 Max", "GLM 5.3 (Max)", "Grok 4.5", "GPT 5.5", "Grok 4.6 (xHigh)", "Deepseek V4 Flash (High)", "GPT 5.6 Terra (xHigh)", "GPT 5.4 (High)", "GLM 5.3 Flash", "Qwen3.8 Flash Next", "GPT 5.6 Luna (xHigh)", "Gemini 3.7 Flash (High)", "Qwen 3.8 27B", "DeepSeek V4 Pro", "Claude Sonnet 4.6", "Muse Spark 1.2 (xHigh)", "Muse Spark 1.1", "Qwen3.7 Max", "Hy3", "Mimo V2.5 Pro", "Minimax M3", "Gemini 3.1 Pro Preview", "Gemini 3.6 Flash (High)", "Qwen3.7 Plus", "Inkling Small", "Inkling", "Mistral Medium 3.5", "Minimax M2.7", "Gemini 3.5 Flash Lite", "Solar Pro 4"];
+  const LEGACY_FALLBACK = ["Claude Opus 5.6 (Max)", "Claude Opus 5.5 (Max)", "Claude Opus 5 (Max)", "Claude Sonnet 5.5 (Max)", "Claude Sonnet 5 (High)", "Claude Fable 5.1 (Max)", "Claude Fable 5 (High)", "GPT 6 Astra (Max)", "GPT 6.1 Sol (Max)", "GPT 6.1 Luna (xHigh)", "GPT 6 Sol (xHigh)", "GPT 6 Luna (xHigh)", "Claude Opus 4.8 (High)", "GPT 5.6 Sol (xHigh)", "Kimi K3 (Max)", "GPT 5.5 (xHigh)", "Hy4 preview", "Deepseek V4.1 Flash (Max)", "Gemini 4 Argon (Max)", "Gemini 3.8 Flash (High)", "GLM 5.2 (Max)", "Muse Spark 1.3 (Max)", "DeepSeek V4 Pro (High)", "Qwen3.8 Max", "GLM 5.3 (Max)", "Grok 4.5", "GPT 5.5", "Grok 4.6 (xHigh)", "Deepseek V4 Flash (High)", "GPT 5.6 Terra (xHigh)", "GPT 5.4 (High)", "GLM 5.3 Flash", "Qwen3.8 Flash Next", "GPT 5.6 Luna (xHigh)", "Gemini 3.7 Flash (High)", "Qwen 3.8 27B", "DeepSeek V4 Pro", "Claude Sonnet 4.6", "Muse Spark 1.2 (xHigh)", "Muse Spark 1.1", "Qwen3.7 Max", "Hy3", "Mimo V2.5 Pro", "Minimax M3", "Gemini 3.1 Pro Preview", "Gemini 3.6 Flash (High)", "Qwen3.7 Plus", "Inkling Small", "Inkling", "Mistral Medium 3.5", "Minimax M2.7", "Gemini 3.5 Flash Lite", "Solar Pro 4"];
   const OFFICIAL_FALLBACK = [
     "Claude Opus 4.6 (thinking-max)", "GPT-5.4 (xhigh)", "Claude Opus 4.6 (thinking-auto)", "Claude Opus 4.7 (xhigh)",
     "Claude Opus 4.5 (thinking-32k)", "Claude Sonnet 4.6 (thinking-max)", "GPT-5.2 (xhigh)", "GLM-5.1",
@@ -213,7 +213,7 @@ const Ranking = (() => {
       if (force) { syncFromCatalog(); at = now(); rev++; Bus.emit('rank'); }
     } finally { loading = false; }
   }
-  const find = (hay, needle) => { for (let i = 0; i + needle.length <= hay.length; i++) if (needle.every((x, j) => hay[i + j] === x)) return true; return false; };
+  const find = (hay, needle) => { for (let i = 0; i + needle.length <= hay.length; i++) if (needle.every((x, j) => hay[i + j] === x) && !(/^\d+$/.test(needle[needle.length - 1]) && /^\d+$/.test(hay[i + needle.length] || ''))) return true; return false; };
   // 越小越强：同系列 = 名次（档位一致再减 0.5）；未上榜的同族 = 100 + 名次；其他 = 1000
   function score(title) {
     const t = Brand.toks(title); let best = null;
@@ -546,7 +546,7 @@ const Gacha = (() => {
     try {
       const v2 = v2Token; v2Token = null;
       const challenges = s.fingerprint ? GachaPrompts.challenges() : null;
-      const autoqa = s.mode === 'autoqa' ? GachaPrompts.autoqa() : s.mode === 'habit' ? [GachaPrompts.habit()] : null;
+      const autoqa = s.mode === 'autoqa' ? [GachaPrompts.habit(), GachaPrompts.svg(), GachaPrompts.autoqaOne(2)] : s.mode === 'habit' ? [GachaPrompts.habit(), GachaPrompts.svg()] : null;
       const prompt = s.fingerprint ? challenges[0].prompt : (s.mode === 'autoqa' || s.mode === 'habit') ? autoqa[0] : s.mode === 'svg' ? GachaPrompts.svg() : await GachaPrompts.custom(s.prompt);
       if (!alive(my)) throw new Stop('CANCEL', '', 'cancel');
       prompting=false;
@@ -634,7 +634,8 @@ const Gacha = (() => {
     phase('已发出第 ' + a.no + ' 轮 · 后台识别 ' + flights.size + ' 路'); changed();
     void track(a, c, f.ctl.signal).then(r => land(my, a, r)).catch(e => missed(my, a, e)).finally(() => { if (c.gacha?.fingerprint || c.gacha?.mode === 'autoqa' || c.gacha?.mode === 'habit' || c.gacha?.skipCompatThinking) { c.gacha = null; c.emit(); } flights.delete(f); changed(); });
   }
-  const gachaCreatedSet = new Set(Array.isArray(Store.get('gacha-sids', null)) ? Store.get('gacha-sids', []) : []);
+  const gachaCreatedSet = new Set();
+  try { Store.set('gacha-sids', []); } catch {}
   function markGachaCreatedSid(sid) {
     if (!sid) return;
     gachaCreatedSet.add(sid);
@@ -642,24 +643,51 @@ const Gacha = (() => {
       const first = gachaCreatedSet.values().next().value;
       if (first) gachaCreatedSet.delete(first);
     }
-    try { Store.set('gacha-sids', [...gachaCreatedSet]); } catch {}
+  }
+  function unmarkGachaCreatedSid(sid) {
+    if (!sid) return;
+    gachaCreatedSet.delete(sid);
+  }
+  function canAutoCleanupGachaChat(sid, c) {
+    if (!sid) return false;
+    if (typeof Fav !== 'undefined' && Fav.has?.(sid)) return false;
+    if (typeof Notes !== 'undefined' && Notes.get?.(sid)?.n) return false;
+    const ch = c || (typeof Chats !== 'undefined' ? Chats.get(sid) : null);
+    if (ch && ch._gachaKept) return false;
+    const isRunningGacha = Boolean(run && ['running', 'stopping'].includes(run.status));
+    const att = (run && Array.isArray(run.attempts)) ? run.attempts.find(a => a && a.sid === sid) : null;
+    if (att && (att.verdict === 'hit' || att.verdict === 'keep' || att.kept)) return false;
+    if (!isRunningGacha && !ch?.gacha) return false;
+    if (!att && !ch?.gacha && !gachaCreatedSet.has(sid)) return false;
+    if (ch && !ch.gacha && Array.isArray(ch.messages)) {
+      const userTurns = ch.messages.filter(m => m && m.role === 'user').length;
+      const maxAllowed = ch._wasGachaAutoQA ? 4 : 1;
+      if (userTurns > maxAllowed) {
+        unmarkGachaCreatedSid(sid);
+        return false;
+      }
+    }
+    return true;
   }
   function isGachaCreatedChat(sid, c, e) {
     if (!sid) return false;
-    if (gachaCreatedSet.has(sid)) return true;
-    if (run && Array.isArray(run.attempts) && run.attempts.some(a => a && a.sid === sid)) return true;
     const ch = c || (typeof Chats !== 'undefined' ? Chats.get(sid) : null);
-    if (ch && (ch.gacha || ch._wasGachaAutoQA)) return true;
-    const firstUser = (ch?.messages || []).find(m => m?.role === 'user');
-    const uText = String(firstUser?.text || (firstUser?.parts || []).map(p => p?.text || '').join(' ') || '').trim();
-    if (uText && (/17\s*[×x*]\s*23|capital of France|chemical symbol for water|Reply with OK only|pelican riding a bicycle/i.test(uText) || /^\d{4}\s/.test(uText))) {
-      markGachaCreatedSid(sid);
-      return true;
+    if (ch && ch._gachaKept) { unmarkGachaCreatedSid(sid); return false; }
+    const att = (run && Array.isArray(run.attempts)) ? run.attempts.find(a => a && a.sid === sid) : null;
+    if (att && (att.verdict === 'hit' || att.verdict === 'keep' || att.kept)) {
+      unmarkGachaCreatedSid(sid);
+      return false;
     }
-    const rawTitle = String(e?.title || ch?.title || '').trim();
-    if (/^[a-z]{3,12}\s+[a-z]{3,12}$/i.test(rawTitle) && (ch?.messages || []).length <= 8) {
-      return true;
+    if (ch && !ch.gacha && Array.isArray(ch.messages)) {
+      const userTurns = ch.messages.filter(m => m && m.role === 'user').length;
+      if (userTurns > (ch._wasGachaAutoQA ? 4 : 1)) {
+        unmarkGachaCreatedSid(sid);
+        return false;
+      }
     }
+    if (att) return true;
+    if (ch && ch.gacha) return true;
+    if (gachaCreatedSet.has(sid)) return true;
     return false;
   }
   const isOpenThinkingChat = c => {
@@ -688,18 +716,55 @@ const Gacha = (() => {
     return /qwen|farris|paisley|deepseek|v4\.1|v3\.[12]|\br[12]-|glm|mimo|minimax|\bm[23]\.[0-9]|kimi|\bk2\.[0-9]|moonshot|mistral|hy3|hy4|hunyuan|step-5|stepfun|gpt-oss|llama|nemotron|beam|caveman|reflection|inkling|thinky|thinking-?machines|may26-chatbot4|\b\d+b[-_\s]+a\d+b\b|开源|国产|compat/i.test(s);
   };
   // 后台跟踪一抽：等运行令牌 → 等对话自己的识别结果（与普通对话共用，不重复请求 Trigger）
+  function shouldRunStage2Pelican(c, top0, canonName, cands, curSet, isOpenChat) {
+    if (isOpenChat) return { ok: false, reason: 'open-source', famLabel: '开源模型', stage1Vendor: 'compat' };
+    const probeStr = [canonName, top0?.id, top0?.label, top0?.vendor, c?.fmtGuess?.fam, c?.fmtGuess?.name].filter(Boolean).join(' ').toLowerCase();
+    let stage1Vendor = '', famLabel = '闭源模型';
+    if (/claude|anthropic|opus|sonnet|haiku|fable/.test(probeStr)) { stage1Vendor = 'anthropic'; famLabel = 'Claude 家族'; }
+    else if (/gpt|openai|\bsol\b|\bluna\b|\bastra\b|\bterra\b/.test(probeStr)) { stage1Vendor = 'openai'; famLabel = 'GPT 家族'; }
+    else if (/gemini|google|argon|barium|\bflash\b/.test(probeStr)) { stage1Vendor = 'google'; famLabel = 'Gemini 家族'; }
+    else if (/grok|xai/.test(probeStr)) { stage1Vendor = 'xai'; famLabel = 'Grok 家族'; }
+    else if (/kimi|moonshot/.test(probeStr)) { stage1Vendor = 'moonshot'; famLabel = 'Kimi 家族'; }
+    if (!stage1Vendor || !['anthropic', 'openai', 'google'].includes(stage1Vendor)) {
+      return { ok: false, reason: 'non-pelican-vendor', famLabel, stage1Vendor };
+    }
+    if (curSet?.vendor && curSet.vendor !== 'custom' && stage1Vendor !== curSet.vendor) {
+      return { ok: false, reason: 'non-target-vendor', famLabel, stage1Vendor };
+    }
+    if (curSet?.vendor === 'custom' && Array.isArray(curSet.targetKeywords) && curSet.targetKeywords.length > 0) {
+      const kwJoin = curSet.targetKeywords.join(' ').toLowerCase();
+      const targetVendors = new Set();
+      if (/claude|anthropic|opus|sonnet|haiku|fable/.test(kwJoin)) targetVendors.add('anthropic');
+      if (/gpt|openai|\bsol\b|\bluna\b|\bastra\b|\bterra\b/.test(kwJoin)) targetVendors.add('openai');
+      if (/gemini|google|argon|barium|\bflash\b/.test(kwJoin)) targetVendors.add('google');
+      if (/grok|xai/.test(kwJoin)) targetVendors.add('xai');
+      if (/kimi|moonshot/.test(kwJoin)) targetVendors.add('moonshot');
+      if (targetVendors.size > 0 && !targetVendors.has(stage1Vendor)) {
+        return { ok: false, reason: 'non-target-custom-family', famLabel, stage1Vendor };
+      }
+    }
+    if (curSet?.archiveOn && Array.isArray(curSet.archiveKeywords) && curSet.archiveKeywords.length > 0) {
+      const vendorKw = stage1Vendor === 'anthropic' ? 'claude' : stage1Vendor === 'openai' ? 'gpt' : 'gemini';
+      if (has(vendorKw, curSet.archiveKeywords)) {
+        return { ok: false, reason: 'archived-vendor', famLabel, stage1Vendor };
+      }
+    }
+    return { ok: true, famLabel, stage1Vendor };
+  }
   async function waitAutoQATurn(a, c, signal, roundNo) {
-    const startAt = now(), limitMs = 150000;
+    const startAt = now(), limitMs = roundNo >= 2 ? 240000 : 150000;
     let sawBusy = !!c.busy;
     let lastReconcileAt = now();
+    const isHabitMode = c.gacha?.mode === 'habit';
     while (now() - startAt < limitMs) {
       if (signal?.aborted) throw new Stop('CANCEL', '', 'cancel');
       if (c.busy) sawBusy = true;
       if (c.busy) {
-        const basePct = roundNo === 1 ? 24 : roundNo === 2 ? 54 : 80;
+        const basePct = roundNo === 1 ? 24 : roundNo === 2 ? 56 : 80;
         const tChars = Number(c.fmt?.tChars) || 0;
-        const nextPct = Math.min(basePct + 10, basePct + (tChars > 120 ? 8 : tChars > 20 ? 5 : 2));
-        if (a.pct !== nextPct || a.step !== roundNo + '/3 回复') { a.step = roundNo + '/3 回复'; a.pct = nextPct; changed(); }
+        const nextPct = Math.min(basePct + 26, basePct + (tChars > 6000 ? 24 : tChars > 2000 ? 16 : tChars > 120 ? 8 : tChars > 20 ? 5 : 2));
+        const stepLbl = isHabitMode ? (roundNo === 1 ? '1/2 初筛回复' : '2/2 精测回复') : (roundNo + '/3 回复');
+        if (a.pct !== nextPct || a.step !== stepLbl) { a.step = stepLbl; a.pct = nextPct; changed(); }
       }
       if (c.gacha?.skipCompatThinking) {
         if (typeof Fingerprint !== 'undefined') Fingerprint.maybeStopCompat?.(c);
@@ -751,24 +816,32 @@ const Gacha = (() => {
   }
   async function trackAutoQA(a, c, signal) {
     const isHabitOnly = c.gacha?.mode === 'habit';
-    const maxRounds = isHabitOnly ? 1 : 3;
-    const questions = Array.isArray(c.gacha?.autoqa) && c.gacha.autoqa.length >= 1 ? c.gacha.autoqa : (a.autoqaQuestions || (isHabitOnly ? [GachaPrompts.habit()] : GachaPrompts.autoqa()));
+    const maxRounds = isHabitOnly ? 2 : 3;
+    const questions = Array.isArray(c.gacha?.autoqa) && c.gacha.autoqa.length >= 2 ? c.gacha.autoqa : (a.autoqaQuestions && a.autoqaQuestions.length >= 2 ? a.autoqaQuestions : (isHabitOnly ? [GachaPrompts.habit(), GachaPrompts.svg()] : [GachaPrompts.habit(), GachaPrompts.svg(), GachaPrompts.autoqaOne(2)]));
     for (let roundNo = 1; roundNo <= maxRounds; roundNo++) {
-      a.phase = (isHabitOnly ? '习惯速测 · 等待微缩探针回复' : '自动问答 第 ' + roundNo + '/3 问 · 等待回复'); a.step = isHabitOnly ? '探针回复' : (roundNo + '/3 回复'); a.pct = isHabitOnly ? 38 : (roundNo === 1 ? 24 : roundNo === 2 ? 54 : 80); changed();
+      a.phase = isHabitOnly
+        ? (roundNo === 1 ? '习惯速测 · 第 1/2 轮极速微缩探针初筛' : '习惯速测 · 第 2/2 轮鹈鹕 SVG 深度精测中')
+        : ('自动问答 第 ' + roundNo + '/3 问 · 等待回复');
+      a.step = isHabitOnly ? (roundNo === 1 ? '1/2 初筛回复' : '2/2 精测回复') : (roundNo + '/3 回复');
+      a.pct = isHabitOnly ? (roundNo === 1 ? 28 : 62) : (roundNo === 1 ? 24 : roundNo === 2 ? 54 : 80);
+      changed();
       const turnRes = await waitAutoQATurn(a, c, signal, roundNo);
       if (turnRes?.skipped || (c.gacha?.skipCompatThinking && isOpenThinkingChat(c))) {
         killOpenSourceThinkingChat(c.sid, c);
         const fp = { skipped: turnRes?.skipped || 'visible-thinking', stopConfirmed: true, skipDetail: '检测到开源思考，已直接归档删除' };
-        const entry = { name: '未知型号', guess: true, fingerprint: fp, at: now() };
-        Models.set(c.sid, entry);
-        return { name: '未知型号', guess: true, fingerprint: fp };
+        return { name: '开源模型', guess: false, fingerprint: fp };
       }
       // 如果已经拿到运行令牌真实型号，直接锁定并结束本轮会话
       const existing = Models.get(c.sid);
-      if (existing && existing.name && !existing.guess && !existing.fromTitle && !existing.reverseInferred && !existing.pendingConfirm) {
+      if (existing && existing.name && !existing.guess && !existing.fromTitle && !existing.reverseInferred && !existing.habitInferred && !existing.billingProbe && !existing.userCorrected && !existing.pendingConfirm && (existing.response || existing.internal)) {
         return existing;
       }
-      a.phase = isHabitOnly ? '习惯速测 · 匹配 20 维习惯指纹' : ('自动问答 第 ' + roundNo + '/3 问 · 后台反推中'); a.step = isHabitOnly ? '习惯匹配' : (roundNo + '/3 反推'); a.pct = isHabitOnly ? 82 : (roundNo === 1 ? 38 : roundNo === 2 ? 68 : 92); changed();
+      a.phase = isHabitOnly
+        ? (roundNo === 1 ? '习惯速测 · 初筛识别家族与候选' : '习惯速测 · 汇总两轮特征锁定最终型号')
+        : ('自动问答 第 ' + roundNo + '/3 问 · 后台反推中');
+      a.step = isHabitOnly ? (roundNo === 1 ? '1/2 初筛判定' : '2/2 精测锁定') : (roundNo + '/3 反推');
+      a.pct = isHabitOnly ? (roundNo === 1 ? 44 : 92) : (roundNo === 1 ? 38 : roundNo === 2 ? 68 : 92);
+      changed();
       let sum = null;
       let costFallbackOnRound = false;
       const costAllowed = !isHabitOnly && (typeof BillingProbe === 'undefined' || !BillingProbe.isCostProbeEnabled || BillingProbe.isCostProbeEnabled());
@@ -813,9 +886,7 @@ const Gacha = (() => {
       if (isOpenChat && c.gacha?.skipCompatThinking) {
         killOpenSourceThinkingChat(c.sid, c);
         const fp = { skipped: 'visible-thinking', stopConfirmed: true, skipDetail: '检测到开源思考，已直接归档删除' };
-        const entry = { name: '未知型号', guess: true, fingerprint: fp, at: now() };
-        Models.set(c.sid, entry);
-        return { name: '未知型号', guess: true, fingerprint: fp };
+        return { name: '开源模型', guess: false, fingerprint: fp };
       }
       // 判断是否仅有 1 个唯一第一名高置信度模型（差距 < 0.05% 才视为并列），或者所有接近的候选均属于归档非目标
       const highConfidenceList = cands.filter(x => {
@@ -828,6 +899,44 @@ const Gacha = (() => {
         const cName = Strength.canon(x.label || x.id || '').replace(/[?？]+$/, '');
         return classify({ name: cName, internal: x.id || cName, response: cName, guess: false }, curSet) === 'archive';
       });
+      const rawTopName = top0 ? (top0.label || top0.id || '') : '';
+      const canonTopName = rawTopName ? Strength.canon(rawTopName).replace(/[?？]+$/, '') : '';
+      const stage2Check = roundNo === 1 ? shouldRunStage2Pelican(c, top0, canonTopName, cands, curSet, isOpenChat) : { ok: false };
+      const hasRealDiophantineLock = Boolean(!isHabitOnly && !costFallbackOnRound && top0 && top0.diophantinePassed && !top0.structuralRev && !top0.habitSource);
+      // 第 1 轮极速初筛：若命中目标闭源家族（如 Claude / GPT / Gemini）且未拿到真实账单整数解，自动在后台补发第 2 轮鹈鹕 SVG 精测锁定具体型号与档位（全程 0 人工干预）
+      if (roundNo === 1 && top0 && !allCloseArchive && !hasRealDiophantineLock && stage2Check.ok) {
+        c._isMicroProbe = false;
+        const nextQ = questions[1] || GachaPrompts.svg();
+        log('第 ' + a.no + ' 轮：初筛命中 ' + stage2Check.famLabel + '（初判 ' + canonTopName + '），自动补发第 2 轮鹈鹕 SVG 精测锁定型号与档位…');
+        a.phase = '初筛命中 ' + stage2Check.famLabel + '（' + canonTopName + '）· 自动补发第 2 轮精测';
+        a.step = '2/2 精测提问';
+        a.pct = 50;
+        changed();
+        await paceGachaPost(signal, true);
+        if (signal?.aborted) throw new Stop('CANCEL', '', 'cancel');
+        try { await c.send(nextQ); } catch { if (signal?.aborted) throw new Stop('CANCEL', '', 'cancel'); try { await c.reconcile?.(0); } catch {} await sleep(400); await c.send(nextQ); }
+        continue;
+      }
+      // 第 1 轮非目标家族 / 归档黑名单家族，或已完成第 2 轮鹈鹕 SVG 精测：直接锁定并完成自动改名与归档/保留分流
+      if ((isHabitOnly || costFallbackOnRound) && top0) {
+        if (roundNo >= 2 && typeof Fmt !== 'undefined' && Fmt.fromReplay) {
+          try { await Fmt.fromReplay(c); } catch {}
+        }
+        let reEntry = null;
+        try {
+          if (typeof ChatHabitFingerprint !== 'undefined' && ChatHabitFingerprint.identifyAndApply) reEntry = ChatHabitFingerprint.identifyAndApply(c, { force: true, fromCostFallback: !isHabitOnly });
+          else if (typeof BillingProbe !== 'undefined' && BillingProbe.habit?.identifyAndApply) reEntry = BillingProbe.habit.identifyAndApply(c, { force: true, fromCostFallback: !isHabitOnly });
+        } catch {}
+        const locked = reEntry || Models.get(c.sid) || { name: canonTopName, internal: top0.id || canonTopName, guess: false, habitInferred: true, reverseInferred: true, billingProbe: true, reverseMatch: top0Score };
+        const finalCanon = Strength.canon(locked.name || canonTopName).replace(/[?？]+$/, '');
+        const finalScore = Number(locked.reverseMatch || top0Score || 96);
+        try { if (typeof PelicanShots !== 'undefined' && PelicanShots.syncSid) PelicanShots.syncSid(c.sid); } catch {}
+        try { Titles.local?.(c.sid); Titles.capture?.(c.sid, a.sentAt || c.sentAt); Titles.touch?.(c.sid); Titles.kick?.(true); } catch {}
+        a.note = roundNo >= 2
+          ? ('初筛+二轮鹈鹕精测全自动锁定（' + Math.round(finalScore) + '%）')
+          : ('第 1 轮极速初筛完成（' + Math.round(finalScore) + '% · 非目标家族跳过二轮）');
+        return { ...locked, name: finalCanon, guess: false, routed: false, habitInferred: true, reverseInferred: true };
+      }
       const isUniqueHigh = !!(top0 && top0Score >= 75 && !top0.streamFallback && (
         (highConfidenceList.length === 1 && (top0.diophantinePassed || !top1 || (top0Score - top1Score) >= 0.1)) ||
         allCloseArchive ||
@@ -842,19 +951,6 @@ const Gacha = (() => {
         const locked = Models.get(c.sid) || { name: canonName, internal: top0.id || canonName, guess: false, reverseInferred: true, billingProbe: true, reverseMatch: top0Score };
         a.note = '第 ' + roundNo + ' 问唯一高置信反推锁定（' + Math.round(top0Score) + '%）';
         return { ...locked, name: canonName, guess: false, reverseInferred: true };
-      }
-      // 微缩探针习惯模式或 /cost 关闭/限流回退时，第 1 轮已采满 20 维代码与两步工具习惯特征，直接单轮锁定不追问第 2、3 问
-      if (roundNo === 1 && (isHabitOnly || costFallbackOnRound) && top0) {
-        const rawName = top0.label || top0.id || '';
-        const canonName = Strength.canon(rawName).replace(/[?？]+$/, '');
-        try {
-          if (typeof ChatHabitFingerprint !== 'undefined' && ChatHabitFingerprint.identifyAndApply) ChatHabitFingerprint.identifyAndApply(c, { force: true, fromCostFallback: !isHabitOnly });
-          else if (typeof BillingProbe !== 'undefined' && BillingProbe.habit?.identifyAndApply) BillingProbe.habit.identifyAndApply(c, { force: true, fromCostFallback: !isHabitOnly });
-        } catch {}
-        try { Titles.local?.(c.sid); Titles.capture?.(c.sid, a.sentAt || c.sentAt); Titles.touch?.(c.sid); Titles.kick?.(true); } catch {}
-        const locked = Models.get(c.sid) || { name: canonName, internal: top0.id || canonName, guess: false, habitInferred: true, reverseInferred: true, billingProbe: true, reverseMatch: top0Score };
-        a.note = (isHabitOnly ? '习惯速测微缩探针单轮锁定（' : '微缩探针习惯单轮锁定（') + Math.round(top0Score) + '%）';
-        return { ...locked, name: canonName, guess: false, habitInferred: true, reverseInferred: true };
       }
       // 开源模型最多一问（不追问第 2、3 问）；只有开启 /cost 且闭源模型存在多个同价候选时才继续追问第 2、3 个问题
       if (!isOpenChat && roundNo < 3) {
@@ -904,7 +1000,7 @@ const Gacha = (() => {
         try { await Fmt.fromReplay(c); } catch {}
       }
       const lastMsg = (c.messages || []).findLast(m => m.role === 'assistant');
-      const fmtG = c.fmtGuess || (lastMsg && typeof Fmt !== 'undefined' && Fmt.guess ? Fmt.guess(lastMsg.text || '', lastMsg.think || '', lastMsg.tools || []) : null);
+      const fmtG = c.fmtGuess || ((lastMsg?._fmt || c?.fmt) && typeof Fmt !== 'undefined' && Fmt.guess ? Fmt.guess(lastMsg?._fmt || c?.fmt) : (lastMsg && typeof Fmt !== 'undefined' && Fmt.guess ? Fmt.guess(lastMsg.text || '', lastMsg.think || '', lastMsg.tools || []) : null));
       const fallbackBase = String(Models.get(c.sid)?.name || fmtG?.name || '').replace(/[?？]+$/, '').trim();
       if (fallbackBase && fallbackBase !== '未知型号') {
         const baseCanon = Strength.canon(fallbackBase).replace(/[?？]+$/, '');
@@ -945,9 +1041,7 @@ const Gacha = (() => {
         if (isOpenThinkingChat(c)) {
           killOpenSourceThinkingChat(c.sid, c);
           const fp = { skipped: c.gacha?.compatSkip?.skipped || 'visible-thinking', stopConfirmed: true, skipDetail: '检测到开源思考，已直接归档删除' };
-          const entry = { name: '未知型号', guess: true, fingerprint: fp, at: now() };
-          Models.set(c.sid, entry);
-          return entry;
+          return { name: '开源模型', guess: false, fingerprint: fp, at: now() };
         }
       } else {
         const skipped = await Fingerprint.waitCompatDecision(c, signal); if (skipped) return skipped;
@@ -960,9 +1054,7 @@ const Gacha = (() => {
         if (isOpenThinkingChat(c)) {
           killOpenSourceThinkingChat(c.sid, c);
           const fp = { skipped: c.gacha?.compatSkip?.skipped || 'visible-thinking', stopConfirmed: true, skipDetail: '检测到开源思考，已直接归档删除' };
-          const entry = { name: '未知型号', guess: true, fingerprint: fp, at: now() };
-          Models.set(c.sid, entry);
-          return entry;
+          return { name: '开源模型', guess: false, fingerprint: fp, at: now() };
         }
       }
       // 新建对话拿不到运行令牌：按回复格式推测厂商（能确定时立即用；不确定的等这一轮结束再用）
@@ -1001,6 +1093,11 @@ const Gacha = (() => {
     run.completed++; a.draw = run.completed; a.no = run.completed; run.seq = Math.max(run.seq || 0, run.completed); run.skips = 0; run.pauseStreak = 0; run.skipHeal = 0;
     if (id.routed) { a.routed = true; log('第 ' + a.no + ' 轮原模型调用失败，Brana 已改派；按实际回答的 ' + id.name + ' 计'); }
     log('#' + a.draw + ' ' + (id.fingerprint ? Fingerprint.describe(id) : id.name) + (id.tier ? ' · ' + id.tier : '') + (cs != null ? ' · 强度分 ' + cs : id.cs && !id.cs.ok ? ' · 打分作废' : '') + (id.csv ? '（' + ({ keep: '满意', ok: '勉强', reroll: '换', retry: '作废' }[id.csv.action] || '') + '：' + id.csv.why + (id.csv.top ? '，最像 ' + id.csv.top.label + ' ' + id.csv.top.p + '%' : '') + '）' : '') + ' → ' + ({ hit: '命中目标', keep: '保留', archive: '归档' }[verdict]) + ' · 发送后 ' + (a.idMs / 1000).toFixed(1) + ' 秒识别');
+    if (verdict === 'hit' || verdict === 'keep') {
+      if (a.sid) unmarkGachaCreatedSid(a.sid);
+      const keptCh = a.sid && typeof Chats !== 'undefined' ? Chats.get(a.sid) : null;
+      if (keptCh) { keptCh._gachaKept = true; keptCh._wasGachaAutoQA = false; keptCh.gacha = null; }
+    }
     if (verdict === 'hit') {
       run.hits = [...(run.hits || []), id.name].slice(-50);
       log('命中目标：' + id.name + '（已命中 ' + run.hits.length + ' 次' + (s.stopOnHit ? '，按设置停止' : s.endless ? '，持续抽卡继续' : '，继续抽满 ' + s.maxAttempts + ' 次') + '）');
@@ -1061,6 +1158,7 @@ const Gacha = (() => {
   async function settleBackgroundChat(sid, c) {
     if (!sid) return null;
     const ch = c || (typeof Chats !== 'undefined' ? Chats.get(sid) : null);
+    if (!canAutoCleanupGachaChat(sid, ch)) return null;
     const s = run?.settings || settings();
     if (s.skipCompatThinking !== false && isOpenThinkingChat(ch)) {
       killOpenSourceThinkingChat(sid, ch);
@@ -1107,9 +1205,22 @@ const Gacha = (() => {
   }
   // 抽卡对话里出现了交互面板（ask_user 等）：保留这个对话，不跳过、不归档、不做任何操作
   const hitlIn = c => !!c && !c._wasGachaAutoQA && [...(c.messages || []), c.live].filter(Boolean).some(m => m.role === 'assistant' && (m.parts || []).some(p => Hitl.name(p)));
+  const killedOpenSids = new Set();
+  const isKilledOpenChat = sid => Boolean(sid && killedOpenSids.has(sid));
   function killOpenSourceThinkingChat(sid, c) {
     if (!sid) return;
+    if (!canAutoCleanupGachaChat(sid, c)) {
+      unmarkGachaCreatedSid(sid);
+      return;
+    }
+    if (c) c._killedOpenThink = true;
     try { c?.stop?.({ strict: false })?.catch?.(() => {}); } catch {}
+    if (killedOpenSids.has(sid)) return;
+    killedOpenSids.add(sid);
+    if (killedOpenSids.size > 600) {
+      const first = killedOpenSids.values().next().value;
+      if (first) killedOpenSids.delete(first);
+    }
     try {
       if (typeof History !== 'undefined' && History && typeof History.remove === 'function') {
         if (Array.isArray(History.items)) History.items = History.items.filter(x => x.id !== sid);
@@ -1358,7 +1469,7 @@ const Gacha = (() => {
     run = { id: Math.random().toString(36).slice(2), status: 'running', startedAt: now(), settings: s, completed: 0, skips: 0, skipTotal: 0, hits: [], attempts: [], log: [], phase: '', reason: '', archiveQueue: carry, seq: 0 };
     log(s.endless ? '开始持续抽卡 · 不限次数，限流时等待后自动继续，直到手动停止' : '开始抽卡 · 共 ' + s.maxAttempts + ' 抽' + (s.targetName ? ' · 目标 ' + s.targetName : ' · 不限厂商'));
     if (s.fingerprint) log('英文动态指纹：默认1条；首次候选命中优选名单才补测至3条；不追加SVG，不纳入固定题个人参考库；结果保留，置信度不是身份概率');
-    else if (s.mode === 'habit') log('习惯速测模式：单轮两步微缩探针（35~45行 HTML+SVG + 终端校验 + 中文要点），免 /cost 极速匹配 20 维习惯指纹');
+    else if (s.mode === 'habit') log('习惯速测模式（两段全自动精测）：第 1 轮极速微缩探针初筛（秒杀开源与非目标家族）→ 命中目标闭源家族自动补发第 2 轮鹈鹕 SVG 精测锁定型号与档位（全程 0 人工干预）');
     else if (s.mode === 'autoqa') log('自动问答模式：首轮两步微缩探针 + 习惯/反推双引擎智能锁定');
     else log(s.mode === 'svg' ? 'SVG模式：每次发送不同的英文鹈鹕动画指令' : '自定义模式：四位随机数 + 提示词；本机同提示词前缀不重复');
     const my = ++token; changed(); void loop(my); return { ok: true };
@@ -1422,9 +1533,12 @@ const Gacha = (() => {
     },
     isGachaChat: isGachaCreatedChat,
     markCreatedSid: markGachaCreatedSid,
+    unmarkCreatedSid: unmarkGachaCreatedSid,
+    canAutoCleanupChat: canAutoCleanupGachaChat,
     killOpenSourceThinkingChat,
+    isKilledOpenChat,
     settleBackgroundChat,
     get run() { return run; }, get rev() { return rev; }, get flights() { return flights.size; },
-    owns: sid => gachaCreatedSet.has(sid) || (!!run && run.attempts.some(a => a.sid === sid)),
+    owns: sid => Boolean(run && ['running', 'stopping'].includes(run.status) && Array.isArray(run.attempts) && run.attempts.some(a => a && a.sid === sid && a.verdict !== 'hit' && a.verdict !== 'keep' && !a.kept)),
   };
 })();

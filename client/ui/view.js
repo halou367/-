@@ -4,7 +4,7 @@ const h = (tag, attrs = {}, ...kids) => {
   const e = document.createElement(tag); e.__anc = 1;   // 客户端自己建的元素：浏览器模式里挂到悬浮层（见 WebLayer）
   for (const [k, v] of Object.entries(attrs || {})) {
     if (v == null || v === false) continue;
-    if (k === 'class') e.className = v; else if (k === 'html') e.innerHTML = v; else if (k.startsWith('on')) e.addEventListener(k.slice(2), v); else if (k === 'style' && typeof v === 'object') { for (const [sk, sv] of Object.entries(v)) if (sv != null) { if (sk.startsWith('--')) e.style.setProperty(sk, String(sv)); else e.style[sk] = sv; } } else e.setAttribute(k, v === true ? '' : v);
+    if (k === 'class') e.className = v; else if (k === 'html') e.innerHTML = v; else if (k.startsWith('on')) e.addEventListener(k.slice(2), v, k === 'onscroll' ? { passive: true } : undefined); else if (k === 'style' && typeof v === 'object') { for (const [sk, sv] of Object.entries(v)) if (sv != null) { if (sk.startsWith('--')) e.style.setProperty(sk, String(sv)); else e.style[sk] = sv; } } else e.setAttribute(k, v === true ? '' : v);
   }
   if (e.classList?.contains('spin') && !e.style.animationDelay) e.style.animationDelay = '-' + (Math.floor(typeof performance !== 'undefined' ? performance.now() : Date.now()) % 800) + 'ms';
   for (const c of kids.flat()) if (c != null && c !== false) e.append(c.nodeType ? c : document.createTextNode(String(c)));
@@ -285,7 +285,7 @@ Object.assign(SendQ, {
         h('div', { class: 'sq-note dim' }, SendQ.status(chat)));
     };
     const foot = K(h('button', { class: 'btn ghost', onclick: () => { SendQ.clear(chat); back.remove(); } }, '清空'), h('span', { class: 'grow' }),
-      !chat.busy || chat.status === 'error' ? h('button', { class: 'btn ghost', onclick: () => { back.remove(); SendQ.flush(chat, { manual: true }); } }, '立即发送') : null,
+      !chat.busy || chat.status === 'error' ? h('button', { class: 'btn ghost', onclick: async () => { back.remove(); if (await UI.confirmPureIpBeforeSend()) void SendQ.flush(chat, { manual: true }); } }, '立即发送') : null,
       h('button', { class: 'btn', onclick: () => back.remove() }, '关闭'));
     back = modal('队列 ' + q.length + ' 条', body, foot, 'sq-modal'); back.classList.add('sq-back');
     paint();
@@ -425,7 +425,32 @@ const ImgView = {
 // ---------- 图片：复制 / 另存为（查看大图的按钮 + 图片右键菜单）----------
 const ImgAct = {
   canCopy: () => Host.platform !== 'android' && (!!Host.copyImage || (!!navigator.clipboard?.write && typeof ClipboardItem !== 'undefined')),
-  async blob(src) { const r = await rawFetch(src, { credentials: 'same-origin' }); if (!r.ok) throw new Error('HTTP ' + r.status); return r.blob(); },
+  async blob(src, imgEl) {
+    try {
+      const r = await rawFetch(src, { credentials: 'same-origin' });
+      if (r.ok) return await r.blob();
+    } catch {}
+    try {
+      const r2 = await rawFetch(src, { credentials: 'omit' });
+      if (r2.ok) return await r2.blob();
+    } catch {}
+    const el = (imgEl && imgEl.tagName === 'IMG' && imgEl.naturalWidth > 0)
+      ? imgEl
+      : [...document.querySelectorAll('img')].find(x => (x.currentSrc === src || x.getAttribute('src') === src) && x.naturalWidth > 0);
+    if (el) {
+      try {
+        const cv = document.createElement('canvas');
+        cv.width = el.naturalWidth;
+        cv.height = el.naturalHeight;
+        cv.getContext('2d').drawImage(el, 0, 0);
+        const b = await new Promise(res => cv.toBlob(res, 'image/png'));
+        if (b) return b;
+      } catch {}
+    }
+    const r3 = await rawFetch(src);
+    if (!r3.ok) throw new Error('HTTP ' + r3.status);
+    return r3.blob();
+  },
   b64: b => new Promise((res, rej) => { const fr = new FileReader(); fr.onload = () => res(String(fr.result).split(',')[1] || ''); fr.onerror = () => rej(fr.error || new Error('读取失败')); fr.readAsDataURL(b); }),
   async png(b) {
     if (b.type === 'image/png') return b;
@@ -437,27 +462,42 @@ const ImgAct = {
     let n = String(name || '').trim() || (String(src || '').split(/[?#]/)[0].split('/').pop() || '').slice(0, 40) || 'image';
     if (!/\.[a-z0-9]{2,5}$/i.test(n)) n += '.' + ext; return n;
   },
-  async copy(src) {
+  async copy(src, imgEl) {
     try {
-      const b = await this.blob(src);
-      if (Host.copyImage && Host.platform !== 'android') { const p = /^image\/(png|jpeg)$/.test(b.type) ? b : await this.png(b); const r = await Host.copyImage(await this.b64(p)); if (!r?.ok) throw new Error(r?.error || '复制失败'); }
-      else await navigator.clipboard.write([new ClipboardItem({ 'image/png': await this.png(b) })]);
+      const b = await this.blob(src, imgEl);
+      const pngBlob = await this.png(b);
+      let copied = false, lastErr = null;
+      if (Host.copyImage && Host.platform !== 'android') {
+        try {
+          const r = await Host.copyImage(await this.b64(pngBlob));
+          if (r?.ok) copied = true;
+          else lastErr = new Error(r?.error || '复制失败');
+        } catch (err) { lastErr = err; }
+      }
+      if (!copied && navigator.clipboard?.write && typeof ClipboardItem !== 'undefined') {
+        try {
+          await navigator.clipboard.write([new ClipboardItem({ 'image/png': pngBlob })]);
+          copied = true;
+        } catch (err) { if (!lastErr) lastErr = err; }
+      }
+      if (!copied) throw (lastErr || new Error('复制失败'));
       toast('图片已复制');
     } catch (e) { toast('复制图片失败：' + describe(e), 'err'); }
   },
-  async save(src, name) {
+  async save(src, name, imgEl) {
     try {
-      const b = await this.blob(src), nm = this.name(src, name, b.type);
+      const b = await this.blob(src, imgEl), nm = this.name(src, name, b.type);
       if (Host.saveImage) { const r = await Host.saveImage(nm, await this.b64(b), b.type || 'image/png'); if (r?.canceled) return; if (!r?.ok) throw new Error(r?.error || '保存失败'); toast(Host.platform === 'android' ? '已保存到相册（' + (r.path || 'Pictures/BranaAi') + '）' : '已保存：' + (r.path || nm)); return; }
       saveBlob(b, nm);
     } catch (e) { toast('保存图片失败：' + describe(e), 'err'); }
   },
-  menu(e, src, name, zoomed) {
+  menu(e, src, name, zoomed, imgEl) {
+    const targetImg = imgEl || (e?.target?.tagName === 'IMG' ? e.target : null);
     document.querySelectorAll('.menu:not(.anc-gh).imenu').forEach(m => m.remove());
     const m = h('div', { class: 'menu imenu', style: { left: Math.min(e.clientX, innerWidth - 180) + 'px', top: Math.min(e.clientY, innerHeight - 130) + 'px', zIndex: 400 } },
-      zoomed ? null : h('button', { onclick: () => { m.remove(); ImgView.open(src, name, e.target); } }, icon('expand'), '查看大图'),
-      this.canCopy() ? h('button', { onclick: () => { m.remove(); this.copy(src); } }, icon('copy'), '复制图片') : null,
-      h('button', { onclick: () => { m.remove(); this.save(src, name); } }, icon('dl'), Host.platform === 'android' ? '保存到相册' : '图片另存为…'));
+      zoomed ? null : h('button', { onclick: () => { m.remove(); ImgView.open(src, name, targetImg || e.target); } }, icon('expand'), '查看大图'),
+      this.canCopy() ? h('button', { onclick: () => { m.remove(); this.copy(src, targetImg); } }, icon('copy'), '复制图片') : null,
+      h('button', { onclick: () => { m.remove(); this.save(src, name, targetImg); } }, icon('dl'), Host.platform === 'android' ? '保存到相册' : '图片另存为…'));
     document.body.append(m);
     if (typeof placeInward === 'function') placeInward(m, { left: e.clientX, top: e.clientY, right: e.clientX, bottom: e.clientY, width: 0, height: 0 }, { pad: 8, gap: 4 });
     setTimeout(() => { const off = ev => { if (!m.isConnected) { document.removeEventListener('pointerdown', off, true); return; } if (!m.contains(ev.target)) { m.remove(); document.removeEventListener('pointerdown', off, true); } }; document.addEventListener('pointerdown', off, true); }, 0);
@@ -473,10 +513,13 @@ document.addEventListener('contextmenu', e => {
 }, true);
 // 对话 / 附件里的图片：右键（手机长按）弹出 查看 / 复制 / 保存
 document.addEventListener('contextmenu', e => {
-  const t = e.target; if (t?.tagName !== 'IMG' || t.closest('.att-zoom,.pane')) return;
+  const raw = e.target;
+  if (!raw || raw.closest?.('.att-zoom,.pane')) return;
+  const t = raw.tagName === 'IMG' ? raw : raw.closest?.('.att-img')?.querySelector?.('img');
+  if (!t || t.tagName !== 'IMG') return;
   if (!(t.closest('.att-img,.att-row,.md,.msg,.thread') || t.classList.contains('file-img'))) return;
   const src = t.currentSrc || t.getAttribute('src'); if (!src || /^data:image\/svg/.test(src)) return;
-  e.preventDefault(); ImgAct.menu(e, src, t.alt || '');
+  e.preventDefault(); ImgAct.menu(e, src, t.alt || '', false, t);
 });
 const copyText = async t => { try { await navigator.clipboard.writeText(t); toast('已复制'); } catch { const ta = h('textarea', {}, t); document.body.append(ta); ta.select(); document.execCommand('copy'); ta.remove(); toast('已复制'); } };
 // 对话状态：run 进行中（图标顺时针转）/ bad 出错（红）/ ok 正常完成（绿）/ '' 未知
@@ -767,7 +810,8 @@ const StreamMD = {
   // 回复结束后用更快的速度补完。后台 / 关掉「逐字显示」/ 重新打开的长回复：直接整段显示。只重画这一个正文块，不重画整个对话。
   tw: new Set(), twRaf: 0, twCost: 0,
   paint(box, text, streaming) {
-    const smooth = Prefs.smoothStream !== false && !document.hidden;
+    const tailLen = text.length - (box.__st?.end || 0);
+    const smooth = Prefs.smoothStream !== false && !document.hidden && tailLen <= 1200 && this.twCost <= 4;
     let tw = box.__tw;
     if (smooth && streaming && !tw) tw = box.__tw = { shown: box.__st ? (box.__st.shownLen ?? text.length) : (text.length > 600 ? text.length : 0), at: 0 };
     if (tw && smooth && (streaming || tw.shown < text.length)) {
@@ -784,20 +828,29 @@ const StreamMD = {
     if (this.twRaf) return;
     this.twRaf = requestAnimationFrame(t => {
       this.twRaf = 0; const t0 = performance.now();
+      const tasks = [];
       for (const box of this.tw) {
         const tw = box.__tw;
-        if (!tw || !box.isConnected || document.hidden || Prefs.smoothStream === false) { this.tw.delete(box); if (tw && box.isConnected) { tw.shown = tw.text.length; this.paint0(box, tw.text, tw.live); } continue; }
+        if (!tw || !box.isConnected || document.hidden || Prefs.smoothStream === false) {
+          this.tw.delete(box);
+          if (tw && box.isConnected) { tw.shown = tw.text.length; tasks.push({ box, text: tw.text, live: tw.live, sc: null, atBot: false, done: true }); }
+          continue;
+        }
         const dt = Math.min(100, tw.at ? t - tw.at : 16); tw.at = t;
-        // 节流：渲染一次很贵（长代码块）时降到 30fps 左右
-        if (this.twCost > 8 && dt < 30) { tw.at -= dt; continue; }
+        if (this.twCost > 6 && dt < 28) { tw.at -= dt; continue; }
         const left = tw.text.length - tw.shown;
-        const cps = tw.live ? Math.max(45, left / 0.3) : Math.max(600, left / 0.15);
-        tw.shown = Math.min(tw.text.length, tw.shown + Math.max(1, cps * dt / 1000));
-        const sc = box.closest('.scroller'), atBot = sc && sc.scrollTop + sc.clientHeight > sc.scrollHeight - 80;
-        this.paint0(box, this.cut(tw.text, tw.shown), tw.live || tw.shown < tw.text.length);
-        if (atBot) sc.scrollTop = sc.scrollHeight;
-        if (tw.shown >= tw.text.length) { this.tw.delete(box); if (!tw.live) { delete box.__tw; this.paint0(box, tw.text, false); } }
+        const cps = tw.live ? Math.max(180, left / 0.08) : Math.max(900, left / 0.05);
+        tw.shown = Math.min(tw.text.length, tw.shown + Math.max(2, cps * dt / 1000));
+        const sc = box.closest('.scroller'), atBot = Boolean(sc && sc.scrollTop + sc.clientHeight > sc.scrollHeight - 80);
+        tasks.push({ box, tw, text: this.cut(tw.text, tw.shown), live: tw.live || tw.shown < tw.text.length, sc, atBot, done: tw.shown >= tw.text.length });
       }
+      const scrollTargets = new Set();
+      for (const k of tasks) {
+        this.paint0(k.box, k.text, k.live);
+        if (k.atBot && k.sc) scrollTargets.add(k.sc);
+        if (k.done && k.tw) { this.tw.delete(k.box); if (!k.tw.live) { delete k.box.__tw; this.paint0(k.box, k.tw.text, false); } }
+      }
+      for (const sc of scrollTargets) sc.scrollTop = sc.scrollHeight;
       this.twCost = this.twCost * .8 + (performance.now() - t0) * .2;
       if (this.tw.size) this.twTick();
     });
@@ -805,7 +858,8 @@ const StreamMD = {
   // box 是持久的 .md 容器；text 只会在末尾追加（流式）；不是追加（被整条替换）时从头重建
   paint0(box, text, streaming) {
     let st = box.__st;
-    if (!st || text.length < st.end || (st.end && text.slice(0, st.end) !== st.head)) { st = box.__st = { end: 0, head: '', els: [], tail: null, tailSrc: null }; }
+    if (!st || text.length < st.end || (st.end && text.slice(0, st.end) !== st.head)) { st = box.__st = { end: 0, head: '', els: [], tail: null, tailSrc: null, shownLen: 0 }; }
+    st.shownLen = text.length;
     for (;;) { const c = this.safeCut(text, st.end); if (c < 0) break; st.els.push(this.chunk(text.slice(st.end, c))); st.end = c; st.head = text.slice(0, c); }
     const tail = text.slice(st.end);
     if (tail !== st.tailSrc) { st.tailSrc = tail; if (!st.tail) st.tail = h('div', { class: 'mdc' }); st.tail.innerHTML = tail.trim() ? MD.render(tail) : ''; }
@@ -903,11 +957,57 @@ const R = {
     }
     return Object.keys(out).length ? out : raw;
   },
-  tinput(p) { return p.input ?? (p.inputText ? R.parsePartialInput(p.inputText) : undefined); },
+  tinput(p) {
+    if (!p) return undefined;
+    if (p.input != null) return p.input;
+    const raw = p.inputText;
+    if (!raw) return undefined;
+    if (p._parsedInputRaw === raw) return p._parsedInputVal;
+    const val = R.parsePartialInput(raw);
+    p._parsedInputRaw = raw;
+    p._parsedInputVal = val;
+    return val;
+  },
   normPath(pth) { return String(pth || '').replace(/^\/home\/user\//, '').replace(/^~\//, '').replace(/^\.\//, ''); },
+  _fileTextCache: new Map(),
+  _chatWriteStamp(chat) {
+    if (!chat || !Array.isArray(chat.messages)) return '';
+    const msgs = chat.messages, L = msgs.length, last = L ? msgs[L - 1] : null;
+    const lp = last?.parts, lpl = Array.isArray(lp) ? lp.length : 0, tailP = lpl ? lp[lpl - 1] : null;
+    const tailLen = (tailP?.inputText?.length || 0) + (tailP?.text?.length || 0) + (tailP?.state || '');
+    return L + ':' + (last?.v || 0) + ':' + lpl + ':' + tailLen + ':' + (chat.busy ? 1 : 0);
+  },
   latestFileText(sid, targetPath, fallbackPart) {
     const norm = R.normPath(targetPath);
     const chat = (sid && typeof Chats !== 'undefined' && Chats.get?.(sid)) || (typeof Chats !== 'undefined' ? Chats.cur : null);
+    if (chat && norm) {
+      const cSid = chat.sid || sid || '_cur', stamp = R._chatWriteStamp(chat);
+      let entry = R._fileTextCache.get(cSid);
+      if (!entry || entry.stamp !== stamp) {
+        const files = new Map();
+        for (const m of chat.messages || []) {
+          for (const p of m.parts || []) {
+            if (!p || !(String(p.type || '').startsWith('tool-') || p.type === 'dynamic-tool')) continue;
+            const n = R.tname(p).toLowerCase(), inp = R.tinput(p);
+            if (!inp || typeof inp !== 'object') continue;
+            const pth = R.normPath(inp.path || inp.file_path || '');
+            if (!pth) continue;
+            if (/^(write_?file|create_?file|write)$/.test(n)) {
+              const c = typeof inp.content === 'string' ? inp.content : typeof inp.text === 'string' ? inp.text : '';
+              if (c || !files.has(pth)) files.set(pth, c);
+            } else if (files.has(pth) && /^(edit_file|str_replace|edit)$/.test(n)) {
+              const oldT = inp.old_text ?? inp.old_str, newT = inp.new_text ?? inp.new_str, cur = files.get(pth) || '';
+              if (typeof oldT === 'string' && typeof newT === 'string' && oldT && cur.includes(oldT)) files.set(pth, cur.replace(oldT, newT));
+            }
+          }
+        }
+        entry = { stamp, files };
+        if (R._fileTextCache.size >= 40) R._fileTextCache.delete(R._fileTextCache.keys().next().value);
+        R._fileTextCache.set(cSid, entry);
+      }
+      const hit = entry.files.get(norm);
+      if (hit) return hit;
+    }
     let text = '', found = false;
     for (const m of chat?.messages || []) {
       for (const p of m.parts || []) {
@@ -1050,7 +1150,10 @@ const R = {
     return body;
   },
   toolRow(p, key) {
-    const st = R.tstate(p), n = R.tname(p), inp = R.tinput(p);
+    const rawSt = R.tstate(p), n = R.tname(p), inp = R.tinput(p);
+    const chatCur = (typeof Tabs !== 'undefined' && Tabs.cur) ? Tabs.cur : null;
+    const isStaleToolRun = rawSt === 'run' && !Hitl.name(p) && chatCur && (!chatCur.busy || (chatCur.live && Array.isArray(chatCur.live.parts) && !chatCur.live.parts.includes(p)));
+    const st = isStaleToolRun ? 'bad' : rawSt;
     const tid = String(p?.toolCallId || p?.id || key || ''), isBash = /^(bash|shell|run_command)$/i.test(n);
     if (st === 'run') {
       if (!R.toolStarts.has(tid)) R.toolStarts.set(tid, Number(p?._startAt) > 0 ? Number(p._startAt) : Date.now());
@@ -1071,11 +1174,12 @@ const R = {
     const routeStartTag = p?._routeStart
       ? h('span', {
           class: 'tr-route-tag',
-          title: `路由提示：对话疑似 ${p._routeStart.toLabel}`,
-        }, `路由提示：对话疑似 ${p._routeStart.toLabel}`)
+          title: p._routeStart.title || (p._routeStart.fromLabel ? `路由切换：${p._routeStart.fromLabel} → ${p._routeStart.toLabel}` : `路由提示：对话疑似 ${p._routeStart.toLabel}`),
+        }, p._routeStart.fromLabel ? `⚠️ 路由切换：${p._routeStart.fromLabel} → ${p._routeStart.toLabel}` : `⚠️ 路由提示：对话疑似 ${p._routeStart.toLabel}`)
       : null;
+    const stIcon = st === 'run' ? h('i', { class: 'spin' }) : h('span', { class: 'tr-st' }, st === 'ok' ? '✓' : '✗');
     const sm = h('summary', {}, icon('term', 'ti'), h('span', { class: 'min-w-0 tr-main' }, h('span', { class: 'tr-used' }, 'used'), h('b', {}, R.tlabel(n)),
-      st === 'run' ? h('i', { class: 'spin' }) : h('span', { class: 'tr-st' }, st === 'ok' ? '✓' : '✗'),
+      stIcon,
       durSpan, h('code', { class: 'tr-sum' }, String(R.tsum(inp)).split('\n')[0].slice(0, 160))), routeStartTag, nudgeBtn, icon('chev', 'tr-chev'));
     sm.__reactFiber = { memoizedProps: { part: R.extPart(p, key) }, return: null };
     const isOpen = !!R.openOf(key, false);
@@ -1091,9 +1195,13 @@ const R = {
         if (!d.isConnected && Date.now() - mountAt > 3000) { if (d.__durTm) { clearInterval(d.__durTm); d.__durTm = null; } return; }
         if (R.tstate(curP) !== 'run' || (chat && !chat.busy && !chat.live)) {
           if (d.__durTm) { clearInterval(d.__durTm); d.__durTm = null; }
+          const endSt = R.tstate(curP) === 'ok' ? 'ok' : 'bad';
+          d.classList.remove('run', 'is-stuck');
+          d.classList.add(endSt);
+          const spinEl = sm.querySelector('i.spin');
+          if (spinEl) spinEl.replaceWith(h('span', { class: 'tr-st' }, endSt === 'ok' ? '✓' : '✗'));
           durSpan.className = 'tr-dur';
           durSpan.textContent = R.tdur(curP, tid);
-          d.classList.remove('is-stuck');
           nudgeBtn?.remove();
           return;
         }
@@ -1185,9 +1293,31 @@ const R = {
     }
     return null;
   },
+  _inlineHtmlMemoKey: '',
+  _inlineHtmlMemoVal: null,
+  _inlineHtmlMemoMap: new Map(),
+  countLinesFast(s) {
+    if (!s) return 0;
+    let n = 1;
+    for (let i = 0, L = s.length; i < L; i++) if (s.charCodeAt(i) === 10) n++;
+    return n;
+  },
   extractInlineHtmlSegments(text, streaming = false) {
     const raw = String(text || '');
-    if (raw.length < 100 || !/<(?:!doctype|html|svg|head|body|style|script|canvas|div|main|section|article|header|table|form)\b/i.test(raw)) return null;
+    if (raw.length < 100) return null;
+    const memoKey = (streaming ? '1:' : '0:') + raw.length + ':' + raw.slice(0, 48) + ':' + raw.slice(-48);
+    if (this._inlineHtmlMemoKey === memoKey) return this._inlineHtmlMemoVal;
+    if (this._inlineHtmlMemoMap.has(memoKey)) {
+      const hit = this._inlineHtmlMemoMap.get(memoKey);
+      this._inlineHtmlMemoKey = memoKey; this._inlineHtmlMemoVal = hit;
+      return hit;
+    }
+    if (!/<(?:!doctype\s+html|html[\s>]|svg[\s>]|head[\s>]|body[\s>])|(?:`{3,}|~{3,})[ \t]*(?:html?|svg|xml)\b/i.test(raw)) {
+      this._inlineHtmlMemoKey = memoKey; this._inlineHtmlMemoVal = null;
+      if (this._inlineHtmlMemoMap.size >= 256) this._inlineHtmlMemoMap.delete(this._inlineHtmlMemoMap.keys().next().value);
+      this._inlineHtmlMemoMap.set(memoKey, null);
+      return null;
+    }
     const out = [];
     let htmlIdx = 0;
     const pushUnfencedOrMd = (chunk, isTail) => {
@@ -1237,11 +1367,19 @@ const R = {
       if (info) {
         if (openFence.index > 0) pushUnfencedOrMd(tail.slice(0, openFence.index), false);
         out.push({ type: 'html', code: openFence[3].trim(), ext: info.ext, kind: info.kind, title: info.title, running: Boolean(streaming), idx: htmlIdx++ });
-        return htmlIdx > 0 ? out : null;
+        const res = htmlIdx > 0 ? out : null;
+        this._inlineHtmlMemoKey = memoKey; this._inlineHtmlMemoVal = res;
+        if (this._inlineHtmlMemoMap.size >= 256) this._inlineHtmlMemoMap.delete(this._inlineHtmlMemoMap.keys().next().value);
+        this._inlineHtmlMemoMap.set(memoKey, res);
+        return res;
       }
     }
     pushUnfencedOrMd(tail, true);
-    return htmlIdx > 0 ? out : null;
+    const res = htmlIdx > 0 ? out : null;
+    this._inlineHtmlMemoKey = memoKey; this._inlineHtmlMemoVal = res;
+    if (this._inlineHtmlMemoMap.size >= 256) this._inlineHtmlMemoMap.delete(this._inlineHtmlMemoMap.keys().next().value);
+    this._inlineHtmlMemoMap.set(memoKey, res);
+    return res;
   },
   inlineHtmlPath(m, seg) {
     const midShort = String(m?.id || 'msg').replace(/[^A-Za-z0-9]/g, '').slice(-6) || 'msg';
@@ -1250,7 +1388,7 @@ const R = {
   inlineHtmlCard(seg, key, m, chat) {
     const vpath = R.inlineHtmlPath(m, seg);
     const text = String(seg?.code || '');
-    const lines = text ? text.split('\n').length : 0;
+    const lines = R.countLinesFast(text);
     const running = !!seg?.running;
     const ext = String(seg?.ext || 'html').toUpperCase();
     const dispTitle = seg?.title ? `${seg.title} (${vpath})` : `内嵌 ${ext} 页面 (${vpath})`;
@@ -1284,16 +1422,25 @@ const R = {
       codeBtn,
       icon('chevr', 'tg-chev')
     );
-    d = R.keep(h('details', { class: 'wcard ' + (running ? 'run' : 'ok') + ' pvable inline-html-card', open: R.openOf(key, false) || null }, wsm), key);
+    const isOpen = Boolean(R.openOf(key, false));
+    d = R.keep(h('details', { class: 'wcard ' + (running ? 'run' : 'ok') + ' pvable inline-html-card', open: isOpen || null }, wsm), key);
     d.__inlineCode = text;
     if (typeof HtmlPreview !== 'undefined' && HtmlPreview.bindRow) {
       HtmlPreview.bindRow(wsm, { path: vpath, get: getTxt, getWsid: () => sidOf(d) });
     }
-    d.append(h('div', { class: 'wc-card' },
-      h('div', { class: 'wc-h' }, icon('file'), h('span', {}, dispTitle), h('span', { class: 'grow' }), h('span', { class: 'wc-lang' }, ext),
-        h('button', { class: 'ib xs', title: '复制代码', onclick: e => { e.preventDefault(); e.stopPropagation(); copyText(getTxt()); } }, icon('copy'))),
-      h('pre', { class: 'wc-code' }, text.length > 60000 ? text.slice(0, 60000) + '\n…' : text || '（空）')
-    ));
+    let bodyBuilt = false;
+    const ensureBody = () => {
+      if (bodyBuilt) return;
+      bodyBuilt = true;
+      const curTxt = getTxt();
+      d.append(h('div', { class: 'wc-card' },
+        h('div', { class: 'wc-h' }, icon('file'), h('span', {}, dispTitle), h('span', { class: 'grow' }), h('span', { class: 'wc-lang' }, ext),
+          h('button', { class: 'ib xs', title: '复制代码', onclick: e => { e.preventDefault(); e.stopPropagation(); copyText(getTxt()); } }, icon('copy'))),
+        h('pre', { class: 'wc-code' }, curTxt.length > 60000 ? curTxt.slice(0, 60000) + '\n…' : curTxt || '（空）')
+      ));
+    };
+    if (isOpen) ensureBody();
+    else d.addEventListener('toggle', () => { if (d.open) ensureBody(); }, { passive: true });
     if (Seg.off || typeof HtmlPreview === 'undefined' || !HtmlPreview.card) return d;
     const card = HtmlPreview.card(key, { path: vpath, running, get: getTxt, getWsid: () => sidOf(d) });
     let wrap = R.wraps.get(key);
@@ -1309,9 +1456,15 @@ const R = {
     return wrap;
   },
   // 这个对话里 Write 出来的所有可预览文件（含对话正文内嵌的完整 HTML/SVG）：预览面板的「文件」下拉与自动截图共用
+  _writesCache: new Map(),
   writes(sid) {
-    const chat = Chats.get(sid), seen = new Map();
-    for (const m of chat?.messages || []) for (const p of m.parts || []) {
+    const chat = Chats.get(sid);
+    if (!chat) return [];
+    const stamp = R._chatWriteStamp(chat);
+    const cached = R._writesCache.get(sid);
+    if (cached && cached.stamp === stamp) return cached.list;
+    const seen = new Map();
+    for (const m of chat.messages || []) for (const p of m.parts || []) {
       if (!p) continue;
       if ((String(p.type || '').startsWith('tool-') || p.type === 'dynamic-tool') && R.isWrite(p)) {
         const inp = R.tinput(p) || {}, path = R.normPath(inp.path || inp.file_path || '');
@@ -1328,23 +1481,35 @@ const R = {
         }
       }
     }
-    return [...seen.values()];
+    const list = [...seen.values()];
+    if (R._writesCache.size >= 40) R._writesCache.delete(R._writesCache.keys().next().value);
+    R._writesCache.set(sid, { stamp, list });
+    return list;
   },
   writeCard(p, key) {
     const inp = R.tinput(p) || {}, path = String(inp.path || inp.file_path || ''), short = R.normPath(path);
     const sidOf = el => el?.closest?.('[data-wsid]')?.getAttribute('data-wsid') || (typeof Tabs !== 'undefined' ? Tabs.cur?.sid : null) || null;
     const getTxt = () => R.latestFileText(sidOf(d), short, p);
     const text = (typeof inp.content === 'string' ? inp.content : typeof inp.text === 'string' ? inp.text : '') || R.latestFileText(null, short, p);
-    const lines = text ? text.split('\n').length : 0, st = R.tstate(p), name = path.split('/').pop() || path;
+    const lines = R.countLinesFast(text), st = R.tstate(p), name = path.split('/').pop() || path;
     const ext = (/\.([\w]+)$/.exec(name)?.[1] || 'plain').toUpperCase();
     const pv = HtmlPreview.previewable(path);   // html / svg：点这一行在右侧内嵌预览（箭头仍是展开代码）
     const wsm = h('summary', {}, h('span', { class: 'wc-w' }, 'Write'), pv ? h('code', { class: 'wc-p', title: '点击在右侧预览' }, short) : h('code', { class: 'wc-p fpath', 'data-fpath': short, title: '在工作区打开' }, short), h('span', { class: 'dim' }, lines ? lines + ' 行' : ''), st === 'run' ? h('i', { class: 'spin' }) : st === 'bad' ? h('span', { class: 'tr-st bad' }, '✗') : null, h('span', { class: 'grow' }), icon('chevr', 'tg-chev'));
     wsm.__reactFiber$extcompat = { memoizedProps: { part: R.extPart(p, key) }, return: null };
-    const d = R.keep(h('details', { class: 'wcard ' + st + (pv ? ' pvable' : ''), open: R.openOf(key, false) || null }, wsm), key);
+    const isOpen = Boolean(R.openOf(key, false) || p.errorText);
+    const d = R.keep(h('details', { class: 'wcard ' + st + (pv ? ' pvable' : ''), open: isOpen || null }, wsm), key);
     if (pv) HtmlPreview.bindRow(d.querySelector('summary'), { path: short, get: getTxt, getWsid: () => sidOf(d) });
-    d.append(h('div', { class: 'wc-card' }, h('div', { class: 'wc-h' }, icon('file'), h('span', {}, name), h('span', { class: 'grow' }), h('span', { class: 'wc-lang' }, ext.length > 6 ? 'PLAIN' : ext), h('button', { class: 'ib xs', title: '复制', onclick: e => { e.preventDefault(); copyText(getTxt() || text); } }, icon('copy'))),
-      h('pre', { class: 'wc-code' }, text.length > 60000 ? text.slice(0, 60000) + '\n…' : text || '（空）'),
-      p.errorText ? h('pre', { class: 'err' }, p.errorText) : null));
+    let bodyBuilt = false;
+    const ensureBody = () => {
+      if (bodyBuilt) return;
+      bodyBuilt = true;
+      const curTxt = getTxt() || text;
+      d.append(h('div', { class: 'wc-card' }, h('div', { class: 'wc-h' }, icon('file'), h('span', {}, name), h('span', { class: 'grow' }), h('span', { class: 'wc-lang' }, ext.length > 6 ? 'PLAIN' : ext), h('button', { class: 'ib xs', title: '复制', onclick: e => { e.preventDefault(); copyText(getTxt() || text); } }, icon('copy'))),
+        h('pre', { class: 'wc-code' }, curTxt.length > 60000 ? curTxt.slice(0, 60000) + '\n…' : curTxt || '（空）'),
+        p.errorText ? h('pre', { class: 'err' }, p.errorText) : null));
+    };
+    if (isOpen) ensureBody();
+    else d.addEventListener('toggle', () => { if (d.open) ensureBody(); }, { passive: true });
     // html / svg：和网页版一样，在这一行下面直接显示页面缩略图（点一下放大）；其它文件仍然只有这一行
     if (!pv || Seg.off || HtmlPreview.kindOf(path) !== 'html') return d;
     const card = HtmlPreview.card(key, { path: short, running: st === 'run', get: getTxt, getWsid: () => sidOf(d) });
@@ -1723,9 +1888,31 @@ const R = {
     if (rn) {
       const suspectedModel = String(rn.toLabel || rn.toShort || miRoute?.routeTo || miRoute?.reverseLabel || miRoute?.candidateName || miRoute?.name || '其他模型')
         .replace(/(\s*\((?:None|Minimal|Low|Medium|High|xHigh|Max)\))(?:\s*\1)+/gi, '$1')
+        .replace(/[?？]+$/, '')
         .trim();
-      const rText = `路由提示：对话疑似 ${suspectedModel}`;
-      segs.push(Seg.use(mid, 'route-alert', rText, () => h('div', { class: 'msg-route-alert', role: 'status' }, icon('alert'), h('span', {}, rText))));
+      const fromModel = String(rn.fromLabel || rn.fromShort || miRoute?.routeFrom || '')
+        .replace(/(\s*\((?:None|Minimal|Low|Medium|High|xHigh|Max)\))(?:\s*\1)+/gi, '$1')
+        .replace(/[?？]+$/, '')
+        .trim();
+      const sm = m._routeStepInfo || rn.stepMeta || null;
+      const stepSuffix = sm && sm.toolIdx ? `（自本轮第 #${sm.toolIdx} 步 ${sm.toolName || 'tool'} 起）` : '';
+      const isFollowup = Boolean(rn.isFollowup);
+      const rText = isFollowup
+        ? `⚠️ 路由切换提醒：当前回复由切换后的 ${suspectedModel} 生成${fromModel ? '（自第 #' + (rn.toTurn || '?') + ' 轮起由 ' + fromModel + ' 切换）' : ''}`
+        : fromModel
+          ? `⚠️ 路由切换提醒：本轮起模型已由 ${fromModel} 切换为 ${suspectedModel}${stepSuffix}`
+          : `⚠️ 路由提示：对话疑似 ${suspectedModel}${stepSuffix}`;
+      const rTitle = [
+        fromModel ? `检测到中途路由：${fromModel} → ${suspectedModel}` : `对话疑似切换为 ${suspectedModel}`,
+        rn.fromTurn && rn.toTurn ? `切换位置：第 #${rn.fromTurn} 轮 → 第 #${rn.toTurn} 轮` : '',
+        rn.reason || miRoute?.routeReason ? `判据：${rn.reason || miRoute?.routeReason}` : ''
+      ].filter(Boolean).join(' · ');
+      segs.push(Seg.use(mid, 'route-alert', rText, () => h('div', {
+        class: `msg-route-alert${isFollowup ? ' is-followup' : ''}`,
+        'data-route-pivot': isFollowup ? '0' : '1',
+        role: 'status',
+        title: rTitle
+      }, icon('alert'), h('span', {}, rText))));
     }
     if (live) segs.push(Seg.box(mid, 'typing', () => h('div', { class: 'typing', title: '正在生成与执行中…' }, h('i'), h('i'), h('i'))));
     patchKids(body, segs);
@@ -2116,7 +2303,7 @@ const UI = {
     this.listDirty = false; SideTools.ensure();
     const q = ($('#q').value || '').trim().toLowerCase();
     const cur = Tabs.cur?.sid, vf = Prefs.vf || '';
-    const vidOf = e => Brand.of(Models.get(e.id)?.name) || Brand.of(e.title) || '';
+    const vidOf = e => { const tv = typeof Titles !== 'undefined' && Titles.view ? Titles.view(e.id, e.title, e.localTitle) : null; return Brand.of(tv?.model) || tv?.vid || Brand.of(Models.get(e.id)?.name) || Brand.of(e.localTitle) || Brand.of(e.title) || ''; };
     SideTools.filter(q,vf);
     const archived=SideTools.scope==='archived';
     let items = SideTools.rows().filter(e => SideTools.matches(e,q));
@@ -2156,7 +2343,7 @@ const UI = {
   },
   // 侧栏卡片（油猴格式）：logo 圆 · 型号短名 + 备注（小字、不加粗）· 右侧 MM-DD HH:MM；进行中 logo 顺时针转，出错红、完成绿
   card(r, cur) {
-    if (r.e?._pending) return h('div', { class: 'card pending gstep-card', role: 'status', title: '抽卡：正在创建对话（reCAPTCHA + 服务器创建），拿到 ID 后自动替换' }, h('i', { class: 'spin' }), h('span', { class: 'grow' }, r.e.title), h('span', { class: 'gstep-tag' }, '建连'), h('i', { class: 'gstep-bar', 'aria-hidden': 'true' }, h('b', { style: { width: '12%' } })));
+    if (r.e?._pending) return h('div', { class: 'card pending busy gstep-card', role: 'status', title: '抽卡：正在创建对话（reCAPTCHA + 服务器创建），拿到 ID 后自动替换' }, h('i', { class: 'spin' }), h('span', { class: 'grow' }, r.e.title), h('span', { class: 'gstep-tag' }, '建连'), h('i', { class: 'gstep-bar', 'aria-hidden': 'true' }, h('b', { style: { width: '12%' } })), h('i', { class: 'pulse-wave', 'aria-hidden': 'true' }));
     const e = r.e, c = Chats.get(e.id), v = Titles.view(e.id, e.title), mi = Models.get(e.id);
     const shown = cardName(v.model || v.plain) || '未命名', note = v.note;
     const at = entAt(e);
@@ -2204,6 +2391,7 @@ const UI = {
       : (mi?.fingerprint ? saneSc(fd?.score) : (saneSc(mi?.reverseScore) ?? saneSc(mi?.habitScore) ?? saneSc(mi?.est?.score) ?? saneSc(p?.score)));
     const think = !mi?.fingerprint?.skipped && Number.isFinite(mi?.fingerprint?.thinkSec) ? mi.fingerprint.thinkSec : null;
     const bits = [];
+    if (mi?.routed) bits.push('⚠️换模');
     if (conf != null) bits.push('置信度 ' + +conf.toFixed(1) + '%');
     if (score != null) bits.push('推理分 ' + +score.toFixed(1)); else if (mi?.fingerprint && !mi.fingerprint.skipped && fpPct != null) bits.push('未测');
     if (think != null) bits.push('思考 ' + think + 's');
@@ -2211,7 +2399,7 @@ const UI = {
   },
   cardEl(r, cur, { e, c, v, mi, shown, note, tm, on, st, gstep }) {
     const cm = this.cardMetrics(shown, mi, e.id);
-    return h('div', { 'data-sid':e.id, role:'option', 'aria-selected':String(CardSelect.ids.has(e.id)), tabindex:'0', class: 'card' + (CardSelect.ids.has(e.id)?' selected':'') + (CardSelect.mode?' selecting':'') + (on ? ' on' : '') + ((c?.busy || gstep?.active) ? ' busy' : '') + (gstep?.active ? ' gstep-card' : '') + (r.vip ? ' vip' : r.hit ? ' hit' : '') + (Fav.has(e.id) ? ' fv' : '') + (cm.conf != null ? ' cf' : ''), style: r.tint || cm.conf != null ? { ...(r.tint ? { '--tint': r.tint } : {}), ...(cm.conf != null ? { '--cp': cm.conf + '%' } : {}) } : null, title: [v.title, mi?.fingerprint ? Fingerprint.details(mi) : '', mi?.name && mi.name !== v.model ? '型号：' + mi.name : '', note ? '备注：' + note : ''].filter(Boolean).join('\n'),
+    return h('div', { 'data-sid':e.id, role:'option', 'aria-selected':String(CardSelect.ids.has(e.id)), tabindex:'0', class: 'card' + (CardSelect.ids.has(e.id)?' selected':'') + (CardSelect.mode?' selecting':'') + (on ? ' on' : '') + ((c?.busy || gstep?.active || st === 'run') ? ' busy' : '') + (gstep?.active ? ' gstep-card' : '') + (r.vip ? ' vip' : r.hit ? ' hit' : '') + (Fav.has(e.id) ? ' fv' : '') + (cm.conf != null ? ' cf' : ''), style: r.tint || cm.conf != null ? { ...(r.tint ? { '--tint': r.tint } : {}), ...(cm.conf != null ? { '--cp': cm.conf + '%' } : {}) } : null, title: [v.title, mi?.routed ? ('⚠️ 检测到中途路由：' + (mi.routeFrom ? mi.routeFrom + ' → ' : '') + (mi.routeTo || mi.name || '')) : '', mi?.fingerprint ? Fingerprint.details(mi) : '', mi?.name && mi.name !== v.model ? '型号：' + mi.name : '', note ? '备注：' + note : ''].filter(Boolean).join('\n'),
       onmousedown: ev=>{if(ev.ctrlKey||ev.metaKey||ev.shiftKey)ev.preventDefault();},
       onkeydown:ev=>{if(ev.target!==ev.currentTarget)return;if(ev.key===' '){ev.preventDefault();CardSelect.toggle(e.id);this.renderList();}else if(ev.key==='Enter'){ev.preventDefault();ev.currentTarget.click();}},
       onclick: ev => { if (ev.target.closest('.more,.card-check')) return; if(CardSelect.click(e.id,ev)){ev.preventDefault();this.renderList();return;} this.saveScroll(); Tabs.open(e.id, { title: e.title }); this.closeDrawer(); },
@@ -2227,7 +2415,8 @@ const UI = {
       h('span', { class: 'cside' }, note ? h('span', { class: 'cnote' }, note) : null, h('span', { class: 'ctime' }, tm)),
       h('a', { href: '/agent/' + e.id, 'data-sidebar': 'menu-button', class: 'ext-sb-link', tabindex: '-1', onclick: ev => { ev.preventDefault(); } }, h('span', { class: 'truncate' }, e.title || shown)),
       h('button', { class: 'more', onclick: ev => { ev.stopPropagation(); this.itemMenu(ev, e); } }, icon('dots')),
-      gstep?.active ? h('i', { class: 'gstep-bar', 'aria-hidden': 'true' }, h('b', { style: { width: gstep.pct + '%' } })) : null);
+      gstep?.active ? h('i', { class: 'gstep-bar', 'aria-hidden': 'true' }, h('b', { style: { width: gstep.pct + '%' } })) : null,
+      h('i', { class: 'pulse-wave', 'aria-hidden': 'true' }));
   },
   async editNote(e) {
     const v = Titles.view(e.id, e.title);
@@ -2340,7 +2529,7 @@ const UI = {
     const thread = h('div', { class: 'thread', 'data-agent-transcript-thread': 'true' });
     // 回到底部按钮（电脑 / 手机都有）：离底部超过大半屏时出现在输入框上方，点一下平滑滚到最新；有新内容时带个小点
     const toBot = h('button', { class: 'tobot', type: 'button', title: '回到底部', 'aria-label': '回到底部', onclick: () => { P.stick = true; scroller.scrollTo({ top: scroller.scrollHeight, behavior: 'smooth' }); toBot.classList.remove('show', 'new'); } }, icon('chev'));
-    const scroller = h('div', { class: 'scroller', 'data-custom-scrollbar': 'true', role: 'log', 'aria-live': 'polite', onscroll: () => { const sc = scroller; P.stick = sc.scrollTop + sc.clientHeight > sc.scrollHeight - 60; this.paintToBot(false, P); if (chat && sc.scrollTop < 80 && chat.hasMore) chat.loadOlder(true); } }, thread);
+    const scroller = h('div', { class: 'scroller', 'data-custom-scrollbar': 'true', role: 'log', 'aria-live': 'polite', onscroll: () => { if (typeof window !== 'undefined') window.__ancLastScrollAt = Date.now(); if (P._scrollRaf) return; P._scrollRaf = requestAnimationFrame(() => { P._scrollRaf = 0; const sc = scroller; if (!sc.isConnected) return; P.stick = sc.scrollTop + sc.clientHeight > sc.scrollHeight - 60; this.paintToBot(false, P); if (chat && sc.scrollTop < 80 && chat.hasMore) chat.loadOlder(true); }); } }, thread);
     scroller.__reactFiber$extcompat = { memoizedProps: { get value() { const c = t?.sid ? Chats.get(t.sid) : null; return { id: c?.sid || '', status: !c ? 'ready' : c.busy ? 'streaming' : c.status === 'error' ? 'error' : 'ready', messages: c?.messages || [] }; } }, return: null };
     const head = h('div', { class: 'chead' });
     const errbar = h('div', { class: 'errbar' });
@@ -2380,7 +2569,34 @@ const UI = {
     const hsig = [phase, chat.sid, typeof BillingProbe !== 'undefined' && BillingProbe.isRunning?.(chat), PelicanTest.isRunning(chat), !!mi?.fingerprint, !!chat.probeNumbers?.length, FingerprintBatch.busy, !!chat.gacha, Fingerprint.isRunning(chat), chat.probeProgress, tip, v.vid, st, v.note, v.model, v.plain, v.time, mi?.routed, chat.identifying, !mi && chat.idErr, WS.shown, chat.busy, chat.phase, chat.sentAt].join('\u0001');
     if (E.hsig !== hsig) E.hsig = hsig, E.head.replaceChildren(...K(h('div', { class: 'chead-t', title: tip, 'aria-label': 'Session cumulative cost' }, stLogo(v.vid, 18, st), h('span', { class: 'chead-n' }, ...[].concat(v.note || metricName(v.model, cardName) || v.plain || '对话')), v.note && v.model ? h('span', { class: 'chead-md' }, '-', ...[].concat(metricName(v.model, cardName))) : null),
       window.__BRANA_BROWSE_MODE ? h('button', { type: 'button', class: 'badge warn browse-badge', title: '当前处于离线/免登查阅模式，点击返回登录或重连', onclick: () => { window.__BRANA_BROWSE_MODE = false; UI.loginGate('已退出查阅模式，请登录或刷新连接'); } }, '查阅模式 · 退出') : null,
-      mi?.routed ? h('button', { type: 'button', class: 'badge warn route-warn-btn', title: mi?.lastRouteNotice?.text || tip || '检测到模型改派或强度削弱（点击查看详情）', 'aria-label': '改派详情', onclick: e => { e.stopPropagation(); toast(mi?.lastRouteNotice?.text || tip || '检测到模型改派或思考强度削弱', 'err'); } }, icon('alert')) : null,
+      mi?.routed ? (() => {
+        const rType = mi.routeType === 'effort' ? '强度削弱' : '路由换模';
+        const cleanFrom = String(mi.routeFrom || mi.lastRouteNotice?.fromLabel || '').replace(/[?？]+$/, '').trim();
+        const cleanTo = String(mi.routeTo || mi.lastRouteNotice?.toLabel || mi.name || '').replace(/[?？]+$/, '').trim();
+        const shortM = s => String(s || '').replace(/\s*\((?:None|Minimal|Low|Medium|High|XHigh|Max)\)\s*$/i, '').trim();
+        const fromS = shortM(cleanFrom) || '原模型';
+        const toS = shortM(cleanTo) || '新模型';
+        const turnH = mi.lastRouteNotice?.toTurn ? `（第 #${mi.lastRouteNotice.toTurn} 轮起）` : '';
+        const rDesc = (cleanFrom && cleanTo) ? `${cleanFrom} → ${cleanTo}${turnH}` : (cleanTo || mi.lastRouteNotice?.text || '检测到中途路由变化');
+        const rReason = mi.routeReason || mi.lastRouteNotice?.reason || '';
+        const fullMsg = `⚠️ ${rType}提醒：${rDesc}${rReason ? ' · ' + rReason : ''}`;
+        return h('button', {
+          type: 'button',
+          class: 'badge warn route-warn-btn',
+          title: `${fullMsg}（点击定位到对话中的路由切换轮次）`,
+          'aria-label': '改派详情',
+          onclick: e => {
+            e.stopPropagation();
+            const alertEl = (E?.thread || document).querySelector('.msg-route-alert[data-route-pivot="1"], .msg-route-alert, .trow.is-route-start');
+            if (alertEl) {
+              alertEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+              alertEl.classList.add('route-flash');
+              setTimeout(() => alertEl.classList.remove('route-flash'), 1800);
+            }
+            toast(fullMsg, 'warn');
+          }
+        }, icon('alert'), h('span', { class: 'route-warn-txt' }, `${rType}: ${fromS} → ${toS}`));
+      })() : null,
       chat.identifying ? h('span', { class: 'badge dim' }, h('i', { class: 'spin' }), '识别模型…')
         : !mi && chat.idErr ? h('button', { class: 'badge dim link', title: chat.idErr + '（点一下重试）', onclick: () => chat.identifyOld() }, '未识别') : null,
       h('span', { class: 'grow' }),
@@ -2392,7 +2608,14 @@ const UI = {
     // 消息
     const T = E.thread, sc = E.scroller;
     const stick = this.stick !== false;
-    if (!chat.loaded && !chat.messages.length) { if (!T.querySelector('.loading')) T.replaceChildren(h('div', { class: 'loading' }, chat.error ? chat.error : '加载中…')); }
+    if (!chat.loaded && !chat.messages.length) {
+      const loadTxt = chat.loading
+        ? ('加载中…' + (chat.loadBytes >= 65536 ? '（已接收 ' + (chat.loadBytes / 1048576).toFixed(2) + ' MB）' : ''))
+        : (chat.error ? chat.error : '加载中…');
+      const ld = T.querySelector('.loading');
+      if (!ld) T.replaceChildren(h('div', { class: 'loading' }, loadTxt));
+      else if (ld.textContent !== loadTxt) ld.textContent = loadTxt;
+    }
     else {
       // 提问卡片等输入框：重建前记下焦点和光标，重建后搬到同一个输入框（data-fk 相同）
       const ae = document.activeElement, fk = ae && T.contains(ae) ? ae.dataset?.fk : null, fsel = fk ? [ae.selectionStart, ae.selectionEnd] : null;
@@ -2400,7 +2623,7 @@ const UI = {
       if (chat.hasMore) { const b = this.cache.get('__older') || (() => { const b = h('button', { class: 'older', onclick: () => chat.loadOlder() }, '加载更早的消息'); this.cache.set('__older', b); return b; })(); const t = chat.olderLoading ? '正在加载更早的消息…' : chat.allLoading ? '正在后台补全更早的消息（点此立即加载）' : '加载更早的消息'; if (b.textContent !== t) b.textContent = t; b.classList.toggle('busy', !!chat.olderLoading); els.push(b); }
       // _held：已按发送、但要等服务器上一轮结束才真正发出的消息，在输入框上方的队列条里显示，不进对话区
       let lastIdx = chat.messages.length - 1; while (lastIdx >= 0 && chat.messages[lastIdx]._held) lastIdx--;
-      const isVisibleUser = u => u && u.role === 'user' && !u._held && !u._autoContinue && !u.metadata?.autoContinue && (((u.parts || []).some(p => p.type === 'text' && String(p.text || '').trim())) || userAtts(u).length > 0);
+      const isVisibleUser = u => u && u.role === 'user' && !u._held && !u._autoContinue && !u.metadata?.autoContinue && (((u.parts || []).some(p => (p.type === 'text' && String(p.text || '').trim()) || p.type === 'data-tool-results')) || userAtts(u).length > 0);
       const segMeta = new Array(chat.messages.length);
       for (let i = 0; i <= lastIdx; i++) {
         const m = chat.messages[i];
@@ -2469,6 +2692,7 @@ const UI = {
       const isRejected = /rejected this request|拒绝请求|死节点|超限/i.test(chat.error || '');
       E.errbar.append(...K(h('span', {}, '⚠ ' + chat.error), h('span', { class: 'grow' }),
         cap ? h('button', { class: 'btn sm', onclick: () => this.retry(chat, lastUser, true) }, '人机验证后重试') : null,
+        !cap && !isRejected ? h('button', { class: 'btn sm', title: '保留当前轮次已有进度，直接发送新消息「继续」推进流程（不回退、不重发长文）', onclick: () => this.continueFlow(chat) }, '⚡ 继续推进') : null,
         isRejected ? h('button', { class: 'btn sm ghost', title: '跳过导致超限或死锁的上一轮，回退到再上一轮正常节点重发', onclick: () => this.rewindAndRetry(chat, lastUser) }, '⏪ 回退上一节点') : null,
         isRejected ? h('button', { class: 'btn sm ghost', title: '在当前对话内开启全新空工作区分支（清空沙盒与报错历史，保留当前模型）', onclick: () => this.resetWsBranch(chat, lastUser) }, '🧹 重置工作区救活') : null,
         h('button', { class: 'btn sm ghost', onclick: () => this.retry(chat, lastUser, false) }, '重试'),
@@ -2476,14 +2700,67 @@ const UI = {
     }
     // 输入框按钮状态
     this.syncComposer(chat);
-    try { HtmlPreview.syncLive?.(chat.sid); } catch {}
-    try { window.__arenaBashTranslate?.scan?.(); } catch {}
+    const tNow = now();
+    if (!chat.busy) {
+      if (this._pvSyncT) { clearTimeout(this._pvSyncT); this._pvSyncT = 0; }
+      if (this._trScanT) { clearTimeout(this._trScanT); this._trScanT = 0; }
+      this._lastPvSyncAt = tNow; this._lastTrScanAt = tNow;
+      try { HtmlPreview.syncLive?.(chat.sid); } catch {}
+      try { window.__arenaBashTranslate?.scan?.(); } catch {}
+    } else {
+      if (tNow - (this._lastPvSyncAt || 0) >= 180) {
+        this._lastPvSyncAt = tNow;
+        try { HtmlPreview.syncLive?.(chat.sid); } catch {}
+      } else if (!this._pvSyncT) {
+        this._pvSyncT = setTimeout(() => { this._pvSyncT = 0; this._lastPvSyncAt = now(); try { if (this.els?.chat?.sid) HtmlPreview.syncLive?.(this.els.chat.sid); } catch {} }, 180);
+      }
+      if (tNow - (this._lastTrScanAt || 0) >= 350) {
+        this._lastTrScanAt = tNow;
+        try { window.__arenaBashTranslate?.scan?.(); } catch {}
+      } else if (!this._trScanT) {
+        this._trScanT = setTimeout(() => { this._trScanT = 0; this._lastTrScanAt = now(); try { window.__arenaBashTranslate?.scan?.(); } catch {} }, 350);
+      }
+    }
   },
   paintToBot(grew, P = this.pane) {
     const E = P?.els, b = E?.toBot, sc = E?.scroller; if (!b || !sc) return;
     const far = sc.scrollHeight - sc.scrollTop - sc.clientHeight > Math.max(240, sc.clientHeight * 0.6);
-    b.classList.toggle('show', far);
+    if (E._toBotFar !== far) { E._toBotFar = far; b.classList.toggle('show', far); }
     if (!far) b.classList.remove('new'); else if (grew) b.classList.add('new');
+  },
+  async continueFlow(chat) {
+    if (!chat || chat.busy || chat._qBusy) return;
+    try {
+      const tail = chat.messages?.at(-1);
+      const prevU = tail?.role === 'assistant' ? chat.messages?.at(-2) : (tail?.role === 'user' ? tail : null);
+      const origText = prevU ? (prevU.parts || []).filter(p => p && p.type === 'text').map(p => p.text || '').join('\n') : '';
+      if (prevU && typeof chat.verifyTurnForContinue === 'function') {
+        const vr = await chat.verifyTurnForContinue(prevU, origText);
+        if (vr?.mode === 'already-done' || vr?.mode === 'server-busy') return;
+        if (vr?.mode === 'resend-orig' || vr?.mode === 'rewind-resend') {
+          await this.retry(chat, prevU, false);
+          return;
+        }
+      }
+      if (prevU?.role === 'user') {
+        prevU._officialContinueParent = true;
+        delete prevU._streamRejected;
+      }
+      if (tail?.role === 'assistant' && Array.isArray(tail.parts)) {
+        const nonErr = tail.parts.filter(p => p && p.type !== 'error');
+        if (!nonErr.filter(p => p.type !== 'step-start').length) {
+          if (tail.id) (chat._prunedDeadMsgIds ||= new Set()).add(tail.id);
+          chat.messages.pop();
+        } else {
+          tail.parts = nonErr;
+          tail.v = (tail.v || 0) + 1;
+        }
+      }
+      chat.error = null;
+      chat.errText = '';
+      chat._officialTurnErrAt = 0;
+      await chat.send('继续', { autoContinue: true, officialAutoResend: true });
+    } catch (e) { toast(describe(e), 'err'); }
   },
   async rewindAndRetry(chat, lastUser) {
     if (!chat || chat.busy || chat._qBusy) return;
@@ -2547,9 +2824,55 @@ const UI = {
       await chat.send(text, {});
     } catch (e) { toast(describe(e), 'err'); }
   },
+  async confirmPureIpBeforeSend() {
+    try {
+      const a = this.host?.account || {};
+      const curIp = typeof IP !== 'undefined' ? (IP.ip || '') : '';
+      const ipRep = (typeof IPRep !== 'undefined' && IPRep.cur) ? IPRep.cur(a, curIp) : null;
+      const isTrusted = Boolean(typeof IPRep !== 'undefined' && IPRep.trusted && ((a.proxyIp && IPRep.trusted(a.proxyIp)) || (curIp && IPRep.trusted(curIp))));
+      const isPure = Boolean(isTrusted || (ipRep && ipRep.label === '纯净' && (ipRep.pct == null || ipRep.pct >= 75) && !(typeof IP !== 'undefined' && IP.err)));
+      if (isPure) return true;
+
+      const statusParts = [
+        ipRep?.label || (typeof IP !== 'undefined' && IP.err ? '连接异常' : '未评估'),
+        ipRep?.pct != null ? ipRep.pct + '%' : '',
+        ipRep?.kind?.t ? ipRep.kind.t + ' IP' : '',
+      ].filter(Boolean).join(' · ');
+      const ipDesc = curIp ? `当前出口 ${curIp}（${statusParts}）` : `当前节点（${statusParts || '出口未就绪'}）`;
+
+      const choice = await Dialog.open((box, done) => {
+        const noBtn = h('button', { type: 'button', class: 'btn ghost', onclick: () => done('no') }, '否，直接发出');
+        const yesBtn = h('button', { type: 'button', class: 'btn', onclick: () => done('yes') }, '是，去切换节点');
+        box.append(
+          h('div', { class: 'dlg-t' }, '请切换纯净 IP，否则会出人机验证'),
+          h('div', { class: 'dlg-h', style: { whiteSpace: 'pre-line', lineHeight: '1.55' } },
+            `检测到${ipDesc}不是纯净 IP。\n请切换纯净 IP，否则发送消息极易触发人机验证！\n\n是否现在跳出节点切换窗口手动切换？`),
+          h('div', { class: 'dlg-row' },
+            h('span', { class: 'grow' }),
+            noBtn,
+            yesBtn)
+        );
+        setTimeout(() => yesBtn.focus(), 35);
+      });
+      if (choice === 'yes') {
+        try { if (typeof RegionIP !== 'undefined' && RegionIP.open) RegionIP.open(); } catch {}
+        return false;
+      }
+      if (choice === 'no') return true;
+      return false;
+    } catch {
+      return true;
+    }
+  },
   async retry(chat, lastUser, captcha) {
     if (chat.busy || chat._qBusy) { toast('上一条仍在处理，请稍候','err'); return; }
+    if (!captcha && !(await this.confirmPureIpBeforeSend())) return;
     try {
+      if (!chat.loaded && !chat.messages.length) {
+        chat.error = null;
+        await chat.reload('重试载入', true);
+        return;
+      }
       const uncertain = lastUser || [...chat.messages].reverse().find(m => m.role === 'user');
       if (uncertain?.deliveryUnknown && !await Dialog.confirm({ title: '发送状态尚未确认', text: '服务器可能已经收到这条消息。建议先刷新对话核对；现在重发可能产生重复消息。', ok: '仍要重发' })) return;
       const v2 = captcha ? await Recaptcha.v2() : null;
@@ -2676,7 +2999,7 @@ const UI = {
         h('div', { class: 'q-h' },
           h('button', { type: 'button', class: 'q-mode ' + (qMode === 'split' ? 'is-split' : 'is-merge'), title: qMode === 'split' ? '当前：分列发送（每条单独卡片展示，等上一轮真正完成后逐条发出）；点击切换为合并发送' : '当前：合并发送（合并在一个长条框内展示并发送）；点击切换为分列发送', onclick: e => { e.stopPropagation(); SendQ.toggleMode(c); } }, qMode === 'split' ? '分列' : '合并'),
           icon('queue'), h('b', {}, '队列 ' + q.length + ' 条'), h('span', { class: 'dim' }, SendQ.status(c)), h('span', { class: 'grow' }),
-          c.status === 'error' || !c.busy ? h('button', { class: 'q-now', onclick: () => SendQ.flush(c, { manual: true }) }, '立即发送') : null,
+          c.status === 'error' || !c.busy ? h('button', { class: 'q-now', onclick: async () => { if (await UI.confirmPureIpBeforeSend()) void SendQ.flush(c, { manual: true }); } }, '立即发送') : null,
           h('button', { class: 'q-clr', title: '清空队列', onclick: () => { SendQ.clear(c); } }, '清空')),
         ...(qMode === 'split' ? visibleItems : [h('div', { class: 'q-merge-card' }, ...visibleItems)]),
         q.length > 2 ? h('button', { class: 'q-more', onclick: () => SendQ.view(c) }, '还有 ' + (q.length - 2) + ' 条 · 查看全部') : null));
@@ -2717,6 +3040,7 @@ const UI = {
       if (c && !c._qBusy && !this.sending && (ta.value.trim() || atts.length) && Hitl.skippable(c)) {
         if (atts.some(a => a.state === 'bad')) { toast('有附件上传失败，移除后再发送', 'err'); return; }
         if (!UI.me) { UI.loginGate('请先登录'); return; }
+        if (!(await this.confirmPureIpBeforeSend())) return;
         let text = ta.value.trim(); const list = atts.slice();
         if (!text && list.length) text = '请查看附件：' + list.map(a => a.name).join('、');
         const filesP = list.length ? Promise.all(list.map(a => a.p)).then(rs => { if (rs.some(r => !r)) throw new Error('附件上传失败'); return rs; }) : null;
@@ -2747,12 +3071,14 @@ const UI = {
       // 空闲但还有排队的（比如上一轮出错暂停了）：和这次输入合并一起发
       if (c?.queue?.length) {
         if (atts.some(a => a.state === 'bad')) { toast('有附件上传失败，请先移除', 'err'); return; }
+        if (!(await this.confirmPureIpBeforeSend())) return;
         if (ta.value.trim() || atts.length) { if (ta.value.trim()) this.inputHistory.push(ta.value); if (!SendQ.add(c, ta.value.trim(), atts.slice())) return; histIdx = -1; histSavedDraft = ''; ta.value = ''; tab.draft = ''; atts.length = 0; autosize(); Tabs.save(); paintAtt(); }
         await SendQ.flush(c, { manual: true }); paintQ(); return;
       }
       const rawDraft = ta.value;
       let text = ta.value.trim(); if ((!text && !atts.length) || this.sending) return;
       if (atts.some(a => a.state === 'bad')) { toast('有附件上传失败，移除后再发送', 'err'); return; }
+      if (!(await this.confirmPureIpBeforeSend())) return;
       if (rawDraft.trim()) this.inputHistory.push(rawDraft);
       histIdx = -1; histSavedDraft = '';
       if (!text && atts.length) text = '请查看附件：' + atts.map(a => a.name).join('、');

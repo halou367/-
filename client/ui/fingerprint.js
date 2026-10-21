@@ -215,7 +215,7 @@ const Fingerprint = (() => {
     }
     if (chat.sid && typeof Models !== 'undefined' && typeof Pricing !== 'undefined' && Pricing.isClosedSourceModel) {
       const m = Models.get(chat.sid);
-      if (m && (m.reverseInferred || m.billing) && m.name && Pricing.isClosedSourceModel({ id: m.response || m.internal || m.name, name: m.name }) && !Pricing.isOpenSourceModel?.({ id: m.response || m.internal || m.name, name: m.name })) {
+      if (m && (m.reverseInferred || m.habitInferred || m.billingProbe || m.userCorrected || m.billing) && m.name && Pricing.isClosedSourceModel({ id: m.response || m.internal || m.name, name: m.name }) && !Pricing.isOpenSourceModel?.({ id: m.response || m.internal || m.name, name: m.name })) {
         const all = Array.isArray(f?.ids) ? f.ids.map(x => String(x?.[1] ?? '')).filter(Boolean) : [];
         const hasCompatId = all.some(i => /^(?:txt|reasoning)-\d+$/i.test(i) || /^[0-9a-z]{9}$/.test(i));
         if (!hasCompatId) return true;
@@ -296,7 +296,7 @@ const Fingerprint = (() => {
     const verifyIdentity = () => {
       if(libraryState)return; // Compare correlated per-turn identities, not partial/stale Models names.
       const m = Models.get(sid);
-      if (m?.name && !m.guess && !m.reverseInferred && !m.billingProbe) {
+      if (m?.name && !m.guess && !m.reverseInferred && !m.habitInferred && !m.billingProbe && !m.userCorrected) {
         const name = ProbeLib.baseModelId(m.name);
         if (knownIdentity && name !== knownIdentity) throw Error('探测期间服务端型号改变，不能合并指纹');
         knownIdentity = name;
@@ -364,9 +364,9 @@ const Fingerprint = (() => {
              第一条照旧发 model 事件（标题 / 归档那一套）；后面几条只刷新界面，最终结果仍在测完后统一写入。 */
           const existing = Models.get(sid), partialFp = { result, count: outputs.length, reasoning: { ...(measurements[0] || measured) }, partial: true, goal: forceThree ? 3 : (plan?.goal || 3) };
           let tempEntry = null;
-          const isApiExisting = existing?.name && !existing.guess && !existing.reverseInferred && !existing.billingProbe;
+          const isApiExisting = existing?.name && !existing.guess && !existing.reverseInferred && !existing.habitInferred && !existing.billingProbe || existing?.userCorrected;
           const fpPctNow = (result?.signals?.relative_probability ?? result?.nearest?.probability ?? 0) * 100;
-          const revPctNow = Number(existing?.reverseMatch || 0);
+          const revPctNow = Number(existing?.reverseMatch ?? existing?.revPct ?? existing?.confidence ?? 0);
           const blockedByOpen = isOpenThink && isClosedFpId(result.nearest.id);
           if (!isApiExisting && !blockedByOpen && (fpPctNow >= revPctNow || !existing?.name)) tempEntry = { ...(existing || {}), name: result.nearest.id + (result.status === 'clear' ? '' : '?'), guess: true, pendingConfirm: false, fingerprint: partialFp };
           else tempEntry = { ...existing, fingerprint: partialFp };
@@ -447,11 +447,11 @@ const Fingerprint = (() => {
     // Retain independently obtained API identity; attach fingerprint diagnostics for comparison.
     // 这次没能确定型号（门控未过 / 与格式冲突 / 没有结果），而这个对话之前已经测出过型号：保留之前的结果，不拿「未知型号」盖掉
     const keepPrev = !accepted && before?.fingerprint?.result?.nearest?.id && before.fingerprint.suffix && !before.fingerprint.skipped && !/^(未知型号|待定)/.test(before.name || '');
-    const isApiKnown = known?.name && !known.guess && !known.reverseInferred && !known.billingProbe;
+    const isApiKnown = Boolean((known?.name && !known.guess && !known.reverseInferred && !known.habitInferred && !known.billingProbe) || known?.userCorrected);
     const fpConfPct = accepted ? ((result?.signals?.relative_probability ?? result?.nearest?.probability ?? 0) * 100) : 0;
-    const revConfPct = Number(known?.reverseMatch || 0);
-    const revWins = !isApiKnown && (known?.reverseInferred || known?.billingProbe) && known?.name && !(isOpenThinkEnd && isClosedEnd(known.name)) && (revConfPct > fpConfPct || fpBlockedEnd);
-    const final = keepPrev ? before : isApiKnown ? { ...known, fingerprint } : revWins ? { ...known, fingerprint } : (known?.reverseInferred || known?.billingProbe ? { ...known, ...entry, pendingConfirm: false } : entry);
+    const revConfPct = Number(known?.reverseMatch ?? known?.revPct ?? known?.confidence ?? 0);
+    const revWins = !isApiKnown && (known?.reverseInferred || known?.habitInferred || known?.billingProbe) && known?.name && !(isOpenThinkEnd && isClosedEnd(known.name)) && (revConfPct > fpConfPct || fpBlockedEnd);
+    const final = keepPrev ? before : isApiKnown ? { ...known, fingerprint } : revWins ? { ...known, fingerprint } : ((known?.reverseInferred || known?.habitInferred || known?.billingProbe) ? { ...known, ...entry, pendingConfirm: false } : entry);
     chat.probeNumbers = outputs.map(o => ({ challenge_id: o.challenge_id, expected_count: o.expected_count, numbers: o.text.length <= 50000 ? ProbeLib.numbers(o.text) : [] }));
     if(libraryState)PersonalFP.applyAuthority(libraryState,final);
     Models.set(sid, final); Bus.emit('model', chat, final); chat.emit();

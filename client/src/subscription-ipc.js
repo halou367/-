@@ -1,6 +1,6 @@
 'use strict';
 const {createSubscriptionFetcher,configuredLoopbackPorts}=require('./subscription-fetch');
-function setupSubscriptionFetch({ipcMain,authorize,accountFor,fetcher=createSubscriptionFetcher(),maxActive=4}){
+function setupSubscriptionFetch({ipcMain,authorize,accountFor,tunnelPortsFor,fetcher=createSubscriptionFetcher(),maxActive=8}){
  const jobs=new Map();let active=0;
  ipcMain.handle('host:fetchSubscription',async(event,url)=>{
   const wc=event?.sender,frame=event?.senderFrame;
@@ -13,7 +13,10 @@ function setupSubscriptionFetch({ipcMain,authorize,accountFor,fetcher=createSubs
   wc.once('destroyed',cancel);wc.on('did-start-navigation',navigate);active++;
   const job=(async()=>{
    try{
-    const a=accountFor(wc),result=await fetcher(url,{preferredPorts:configuredLoopbackPorts(a?.proxy),signal:ctl.signal});
+    const a=accountFor(wc);
+    const extra=typeof tunnelPortsFor==='function'?await Promise.resolve(tunnelPortsFor(wc,a)).catch(()=>[]):[];
+    const preferredPorts=[...new Set([...configuredLoopbackPorts(a?.proxy),...(Array.isArray(extra)?extra:[])].map(Number).filter(p=>Number.isInteger(p)&&p>0&&p<65536))];
+    const result=await fetcher(url,{preferredPorts,signal:ctl.signal});
     if(ctl.signal.aborted||wc.isDestroyed())return {error:'订阅获取已取消',code:'CANCELLED'};
     try{if(authorize(event)!==owner)return {error:'订阅页面已切换，请重新获取',code:'CANCELLED'};}catch{return {error:'订阅页面已切换，请重新获取',code:'CANCELLED'};}
     return result;

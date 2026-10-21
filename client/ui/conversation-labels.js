@@ -32,9 +32,10 @@ const ConversationLabels = (() => {
     let confidence=finite(fp.result?.signals?.relative_probability);
     if(confidence===null){const m=/匹配置信度\s*(\d+(?:\.\d+)?)%/.exec(fp.suffix||'');if(m)confidence=+m[1]/100;}
     const canon=x=>String(typeof Strength!=='undefined'?Strength.canon(x):x).toLowerCase().replace(/\?$/,'');
-    // A candidate's probability is not the confidence of a DIFFERENT API model.
-    if(fp.apiIdentity && fp.result?.nearest?.id && canon(name)!==canon(fp.result.nearest.id))confidence=null;
-    const sc = (entry?.routed && sane(entry?.reverseScore) != null) ? sane(entry.reverseScore) : (sane(fp.reasoning?.score) ?? sane(entry?.reverseScore));
+    // A candidate's probability is not the confidence of a DIFFERENT API or re-identified model.
+    if((fp.apiIdentity || entry?.userCorrected || entry?.reverseInferred || entry?.habitInferred || entry?.routed) && fp.result?.nearest?.id && canon(name)!==canon(fp.result.nearest.id))confidence=null;
+    const reidSc = sane(entry?.reverseScore ?? entry?.habitScore);
+    const sc = ((entry?.routed || entry?.userCorrected || entry?.reverseInferred || entry?.habitInferred) && reidSc != null) ? reidSc : (sane(fp.reasoning?.score) ?? reidSc ?? sane(entry?.est?.score));
     return {model:name,confidence:confidence===null?null:Math.min(1,confidence),score:sc,average:finite(fp.avgProbeSec)};
   }
   const unified = m => m.model+(m.confidence!==null&&m.confidence!==undefined?'('+ +(m.confidence*100).toFixed(1)+'%)':'')+(sane(m.score)!==null?'-'+ +m.score.toFixed(1)+'分':''); // 对话时长不再写进名称（并入推理分，鼠标悬停才看）
@@ -42,20 +43,27 @@ const ConversationLabels = (() => {
   function label(entry, title) {
     if (entry?.fingerprint) return fingerprintLabel(entry);
     const p = parse(title), name = entry?.name || p.name;
-    if (entry?.name && Strength.canon(name).toLowerCase() !== Strength.canon(p.name).toLowerCase()) return name;
-    return format({...p,name,score:sane(entry?.reverseScore) ?? sane(entry?.est?.score) ?? p.score});   // 只做过鹈鹕测试（没有指纹）时，名字里也带鹈鹕测出来的推理分
+    const entrySc = sane(entry?.reverseScore ?? entry?.habitScore) ?? sane(entry?.est?.score);
+    if (entry?.name && Strength.canon(name).toLowerCase() !== Strength.canon(p.name).toLowerCase()) {
+      return format({ name, confidence: null, score: entrySc });
+    }
+    return format({...p,name,score:entrySc ?? p.score});   // 只做过鹈鹕测试（没有指纹）时，名字里也带鹈鹕测出来的推理分
   }
   function score(entry, title) {
     if (entry?.routed) {
       const r = sane(entry?.reverseScore);
       if (r != null) return r;
     }
+    if (entry?.userCorrected || entry?.reverseInferred || entry?.habitInferred) {
+      const r = sane(entry?.reverseScore ?? entry?.habitScore);
+      if (r != null) return r;
+    }
     if (entry?.fingerprint) {
       const n = entry.fingerprint.reasoning?.score;
       const fpS = !entry.fingerprint.skipped ? sane(n) : null;
-      if (fpS != null || !entry?.reverseScore) return fpS;
+      if (fpS != null || !(entry?.reverseScore ?? entry?.habitScore)) return fpS;
     }
-    const rs = sane(entry?.reverseScore); if (rs != null) return rs;
+    const rs = sane(entry?.reverseScore ?? entry?.habitScore); if (rs != null) return rs;
     const es = sane(entry?.est?.score); if (es != null) return es;
     const p = parse(title);
     if (entry?.name && Strength.canon(entry.name).toLowerCase() !== Strength.canon(p.name).toLowerCase()) return null;

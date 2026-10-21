@@ -376,3 +376,20 @@ test('waiting tools are not subjected to the text-stall reload deadline', () => 
   const text = keepFixture([{ type: 'text', state: 'streaming', text: '中断的文字' }]);
   text.tick(100000); assert.equal(text.state().plan.kind, 'stream');
 });
+test('extra-long /api/chat/:id streaming transcripts extend deadline on chunk activity without false 20s timeout', async () => {
+  const c = clock();
+  let progressed = 0;
+  const result = P.deadline(async signal => {
+    for (let i = 0; i < 4; i++) {
+      await new Promise(r => c.timer(r, 15000));
+      signal.touch(30000);
+      progressed++;
+    }
+    return 'ok-60s-stream';
+  }, { timeout: 20000, timer: c.timer, clear: c.clear });
+  await c.tick(60000);
+  assert.equal(await result, 'ok-60s-stream');
+  assert.equal(progressed, 4);
+  assert.equal(c.jobs.size, 0);
+});
+

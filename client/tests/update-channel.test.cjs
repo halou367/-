@@ -105,8 +105,29 @@ test('v0.13.150: remembered update password (0 extra popup), 4-step progress UI 
   assert.match(updSrc, /const stepLabels = \['1\. 下载更新包', '2\. 完整性校验', '3\. 保存会话'/);
   assert.match(updSrc, /fmtSpd\(spd\)/);
   assert.match(mainSrc, /brana-ai-progress\.ps1/);
+  assert.match(mainSrc, /1\. 更新安装进度/);
+  assert.match(mainSrc, /2\. 客户端重启与载入进度/);
+  assert.match(mainSrc, /writeUpdRestartState/);
+  assert.match(mainSrc, /updRestoredOpen/);
+  assert.match(mainSrc, /window\.__anc\.History\?\.refresh\?\.\(\)/);
+  assert.match(mainSrc, /\\uFEFF/);
+  assert.match(mainSrc, /chcp 65001 >nul 2>&1/);
+  assert.match(mainSrc, /brana-ai-launch\.vbs/);
   assert.match(mainSrc, /upd-state\.json/);
   assert.match(mainSrc, /taskkill \/F \/T \/IM "xray\.exe"/);
+  assert.doesNotMatch(mainSrc, /taskkill \/F \/T \/PID %ANC_PID%/);
+  assert.doesNotMatch(mainSrc, /taskkill \/F \/T \/IM "Brana AI\.exe"/);
   assert.ok(!mainSrc.includes('setTimeout(() => { try { shell.showItemInFolder(p.file); } catch {} }, 2500)'));
   assert.match(closePs, /\$hasMain -and -not \$env:BRANA_UPDATING/);
+  assert.match(closePs, /Repair-UninstallRegistry/);
+  assert.doesNotMatch(closePs, /taskkill\.exe.*\/T \/PID/);
+
+  const instNsh = fs.readFileSync(path.join(__dirname, '../scripts/installer.nsh'), 'utf8');
+  assert.match(instNsh, /!macro customInit/);
+  assert.match(instNsh, /ReadEnvStr \$0 "ANC_DIR"/);
+  assert.match(instNsh, /-WindowStyle Hidden/);
+
+  const pkgJson = JSON.parse(fs.readFileSync(path.join(__dirname, '../package.json'), 'utf8'));
+  assert.ok(pkgJson.build.files.includes('gen/**/*'));
+  assert.ok(pkgJson.build.files.includes('data/**/*'));
 });

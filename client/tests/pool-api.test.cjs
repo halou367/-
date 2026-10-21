@@ -53,4 +53,24 @@ test('EdgeTunnel space-separated country_proxies and 02_proxies.csv rows parse w
   assert.equal(Pool.sourceRegionHint('nrt.proxyip.cmliussss.net'), 'JP');
   assert.equal(Pool.sourceRegionHint('https://raw.githubusercontent.com/NiREvil/vless/main/sub/country_proxies/US.txt'), 'US');
 });
+test('Direct IP entry & CSV API import: unbans previously banned/failed IPs, parses generic result.csv rows, and allows re-probing failed IPs', async () => {
+  const ctx = load();
+  const { Pool } = ctx;
+  await Pool.load();
+  await Pool.mutate(d => {
+    d.ban = { '1.2.3.4:443': 100, '1.2.3.4': 100 };
+    d.drop = { '1.2.3.4:443': 100, '1.2.3.4': 100 };
+    d.banEg = { '1.2.3.4': 100 };
+    d.ips['5.6.7.8:8443'] = { ip: '5.6.7.8', port: '8443', src: '', ok: false, err: '超时', fc: 2 };
+  });
+  const imp = await Pool.importText('1.2.3.4:443#US 优选节点\n5.6.7.8 8443\n130.61.129.162,4,4,0.00,152.34,12.56,US\n');
+  assert.equal(imp.bad.length, 0);
+  assert.deepEqual([...imp.todo].sort(), ['1.2.3.4:443', '130.61.129.162', '5.6.7.8:8443']);
+  assert.equal(Pool.banned('1.2.3.4:443'), false);
+  assert.equal(Pool.d.ips['5.6.7.8:8443'].ok, undefined);
+
+  const csvItems = Pool.apiItems('IP地址,已发送,已接收,丢包率,平均延迟,下载速度,地区\n130.61.129.162,4,4,0.00,152.34,12.56,US\n45.131.71.168,2053,DE\n');
+  assert.deepEqual([...csvItems].map(p => [p.line, p.loc || '']), [['130.61.129.162', 'US'], ['45.131.71.168:2053', 'DE']]);
+});
+
 

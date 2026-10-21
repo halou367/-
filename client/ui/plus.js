@@ -13,10 +13,10 @@ const Tip = (() => {
     if (typeof placeInward === 'function') placeInward(box, el, { pad: 8, gap: 6, keepWidth: true, keepHeight: true });
   }
   function hide() { if (box) box.style.display = 'none'; owner = null; pinned = false; }
-  document.addEventListener('mouseover', e => { const el = e.target.closest?.('[data-tip]'); if (el && el !== owner && !pinned) show(el); else if (!el && owner && !pinned && !box?.contains(e.target)) { clearTimeout(hideT); hideT = setTimeout(hide, 180); } });
+  document.addEventListener('mouseover', e => { if (typeof window !== 'undefined' && window.__ancLastScrollAt && Date.now() - window.__ancLastScrollAt < 160) return; const el = e.target.closest?.('[data-tip]'); if (el && el !== owner && !pinned) show(el); else if (!el && owner && !pinned && !box?.contains(e.target)) { clearTimeout(hideT); hideT = setTimeout(hide, 180); } });
   document.addEventListener('click', e => { const el = e.target.closest?.('[data-tip]'); if (el && (el.classList?.contains('tipi') || el.classList?.contains('bp-pill') || el.classList?.contains('u'))) { e.preventDefault(); e.stopPropagation(); if (owner === el && pinned) hide(); else show(el, true); } else if (box && !box.contains(e.target)) hide(); }, true);
   document.addEventListener('focusin', e => { const el = e.target.closest?.('[data-tip]'); if (el) show(el); });
-  addEventListener('scroll', () => { if (!pinned) hide(); }, true);
+  addEventListener('scroll', () => { if (owner && !pinned) hide(); }, { capture: true, passive: true });
   return { show, hide };
 })();
 

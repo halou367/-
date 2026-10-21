@@ -90,8 +90,8 @@ test('wheel exempts pencil and gacha actions and remeasures padding on viewport 
 });
 test('strict desktop name persistence writes a temporary file before replacement and cleans failure', () => {
   const s = fs.readFileSync(path.join(root, 'src/main.js'), 'utf8'), start = s.indexOf('function saveDB('), end = s.indexOf('\n}', start) + 2;
-  const calls = [], fake = { mkdirSync: () => {}, writeFileSync: (p) => calls.push(['write', p]), renameSync: (a,b) => calls.push(['rename',a,b]), unlinkSync: p => calls.push(['unlink',p]) };
-  const env = { fs: fake, path, DB: {}, dataFile: () => '/fixture/accounts.json', console: { error() {} } }; vm.createContext(env);vm.runInContext(s.slice(start,end),env);env.saveDB(true);
+  const calls = [], fake = { existsSync: () => true, mkdirSync: () => {}, writeFileSync: (p) => calls.push(['write', p]), renameSync: (a,b) => calls.push(['rename',a,b]), unlinkSync: p => calls.push(['unlink',p]) };
+  const env = { fs: fake, path, DB: {}, isRichDB: () => false, dataFile: () => '/fixture/accounts.json', console: { error() {} } }; vm.createContext(env);vm.runInContext(s.slice(start,end),env);env.saveDB(true);
   assert.deepEqual(calls.map(x=>x[0]),['write','rename','unlink']);assert.equal(calls[0][1],'/fixture/accounts.json.rename.tmp');
   calls.length=0;fake.writeFileSync=()=>{throw Error('disk full');};assert.throws(()=>env.saveDB(true),/disk full/);assert.deepEqual(calls,[['unlink','/fixture/accounts.json.rename.tmp']]);
 });

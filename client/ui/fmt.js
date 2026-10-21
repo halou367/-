@@ -2,7 +2,7 @@
 const Fmt = {
   NAME: { claude: 'claude', gpt: 'gpt', gemini: 'gemini', mistral: 'mistral', compat: '开源模型' },
   LABEL: { claude: 'Claude', gpt: 'GPT', gemini: 'Gemini', mistral: 'Mistral', compat: '开源模型' },
-  fresh(t0) { return { ids: [], rN: 0, rE: 0, rChars: 0, rHead: '', rEnd: false, tN: 0, tChars: 0, tools: 0, toolIds: [], done: false,
+  fresh(t0) { return { ids: [], rN: 0, rE: 0, rChars: 0, rHead: '', rEnd: false, tN: 0, tChars: 0, tidCount: 0, tidChars: 0, tools: 0, toolIds: [], done: false,
     t0: t0 || 0, stepAt: t0 || 0, recs: t0 ? [{ timestamp: t0, data: { type: 'data-agent-dispatch' } }] : [], seen: false, think: 0, vis: 0, visR: 0, tEnd: 0, stepR: 0, gen: 0, lastOut: 0, open: false }; },
   // 字数 → token（中日韩文字约 1 字 1 token，其余约 4 字符 1 token）
   tok(s) { s = String(s || ''); const cjk = (s.match(/[\u3000-\u9fff\uac00-\ud7af\uff00-\uffef]/g) || []).length; return cjk + (s.length - cjk) / 4; },
@@ -61,51 +61,117 @@ const Fmt = {
         f.rE++;
       }
     } else if (t === 'text-delta') { f.tN++; f.tChars += String(ch.delta || '').length; if (!f.ids.some(x => x[0] === 't' && x[1] === String(ch.id ?? '')) && f.ids.filter(x => x[0] === 't').length < 16) f.ids.push(['t', String(ch.id ?? '')]); }
+    else if (t === 'tool-input-delta') { f.tidCount = (f.tidCount || 0) + 1; f.tidChars = (f.tidChars || 0) + String(ch.inputTextDelta ?? ch.delta ?? '').length; }
     else if (t === 'tool-input-start') f.tools++;
     else if (t === 'finish') f.done = true;
   },
   // 推测：{ fam, sure, why }；证据还不够时返回 null
-  guess(f) {
+  guess(f, thinkArg, toolsArg) {
     if (!f) return null;
-    if ((f.toolIds || []).some(i => /^toolu_/.test(i))) return { fam: 'claude', sure: true, why: '工具调用编号是 toolu_…' + (f.toolIds.some(i => /^toolu_vrtx_/.test(i)) ? '（toolu_vrtx_ = Vertex 上的 Claude）' : '') + '：Anthropic 接口' };
-    if (!f.ids.length) return null;
+    if (typeof f === 'string') {
+      const synth = this.fresh(0);
+      synth.tChars = f.length;
+      synth.tN = f.length > 0 ? 1 : 0;
+      synth.rChars = String(thinkArg || '').length;
+      synth.rHead = String(thinkArg || '').slice(0, 120);
+      synth.tools = Array.isArray(toolsArg) ? toolsArg.length : 0;
+      if (synth.rChars > 0) synth.ids.push(['r', '0']);
+      if (synth.tChars > 0) synth.ids.push(['t', '0']);
+      f = synth;
+    }
+    const ret = (fam, sure, why) => ({ fam, name: this.NAME[fam] || fam, sure, why });
+    if ((f.toolIds || []).some(i => /^toolu_/.test(i))) return ret('claude', true, '工具调用编号是 toolu_…' + (f.toolIds.some(i => /^toolu_vrtx_/.test(i)) ? '（toolu_vrtx_ = Vertex 上的 Claude）' : '') + '：Anthropic 接口');
+    if (!f.ids?.length) return null;
     const ids = f.ids, all = ids.map(x => x[1]);
-    if (all.some(i => /^(msg|rs)_[0-9a-f]{16,}/i.test(i))) return { fam: 'gpt', sure: true, why: '文字块编号是 msg_… / rs_…（OpenAI Responses 接口）' };
+    if (all.some(i => /^(msg|rs)_[0-9a-f]{16,}/i.test(i))) return ret('gpt', true, '文字块编号是 msg_… / rs_…（OpenAI Responses 接口）');
     const rs = ids.filter(x => x[0] === 'r').map(x => x[1]);
     const tx = ids.filter(x => x[0] === 't').map(x => x[1]);
     const num = i => /^\d+$/.test(i);
     // 铁律：开源模型含可见思考文字（rChars > 0）；闭源模型思考块为空（rChars === 0）或使用 msg_/rs_（OpenAI）或纯数字+**标题**（Gemini）
     if (f.rChars > 0) {
-      if (all.some(i => /^[0-9a-z]{9}$/.test(i))) return { fam: 'mistral', sure: true, why: '9 位短编号 + 开源可见思考内容' };
+      if (all.some(i => /^[0-9a-z]{9}$/.test(i))) return ret('mistral', true, '9 位短编号 + 开源可见思考内容');
       if (all.length > 0 && all.every(num) && /^\s*\*\*[^\n*]{2,80}\*\*/.test(f.rHead || '')) {
-        return { fam: 'gemini', sure: true, why: '纯数字流块编号 + **标题** 思考摘要（Google Gemini 闭源思考格式）' };
+        return ret('gemini', true, '纯数字流块编号 + **标题** 思考摘要（Google Gemini 闭源思考格式）');
       }
-      return { fam: 'compat', sure: true, why: '思考块含可见思考文字（开源思考：仅匹配开源模型，绝不匹配闭源模型）' };
+      return ret('compat', true, '思考块含可见思考文字（开源思考：仅匹配开源模型，绝不匹配闭源模型）');
     }
     if (all.some(i => /^(txt|reasoning)-\d+$/.test(i))) {
-      if (rs.length > 0 && f.rChars === 0) return { fam: 'gpt', sure: false, why: '思考块内容为空（闭源思考：仅匹配闭源模型）' };
-      return { fam: 'compat', sure: true, why: '流块编号是 txt-0 / reasoning-0 这种兼容格式（DeepSeek / GLM / Qwen / Kimi / MiniMax 等）' };
+      if (rs.length > 0 && f.rChars === 0) return ret('gpt', false, '思考块内容为空（闭源思考：仅匹配闭源模型）');
+      return ret('compat', true, '流块编号是 txt-0 / reasoning-0 这种兼容格式（DeepSeek / GLM / Qwen / Kimi / MiniMax 等）');
     }
-    if (all.some(i => /^[0-9a-z]{9}$/.test(i))) return { fam: 'mistral', sure: true, why: '流块编号是固定 9 位小写字母数字（Mistral 家族格式）' };
+    if (all.some(i => /^[0-9a-z]{9}$/.test(i))) return ret('mistral', true, '流块编号是固定 9 位小写字母数字（Mistral 家族格式）');
+    const tN = Number(f.tN || 0), tChars = Number(f.tChars || 0);
+    const avgChunk = tN >= 3 ? tChars / tN : 0;
+    const tidCnt = Number(f.tidCount || 0), tidChars = Number(f.tidChars || 0);
+    const tidAvg = tidCnt > 0 ? tidChars / tidCnt : 0;
+    const isOpenAiChunk = (tN >= 15 && avgChunk > 0 && avgChunk <= 3.8) || (tidCnt >= 18 && tidAvg > 0 && tidAvg <= 22);
+    const isGeminiChunk = !isOpenAiChunk && tN >= 3 && tN <= 28 && avgChunk >= 28.0;
+    const isClaudeChunk = !isOpenAiChunk && !isGeminiChunk && ((tN >= 15 && avgChunk >= 4.0 && avgChunk <= 25.0) || (tN >= 6 && avgChunk >= 4.0 && avgChunk <= 25.0 && rs.length > 0) || (tidCnt > 0 && tidCnt <= 8 && (f.tools || 0) > 0 && !(tN >= 3 && avgChunk >= 28.0) && !isOpenAiChunk));
     const isTc = i => /^tc_[A-Za-z0-9_-]{8,}$/.test(i);
-    if (rs.length && rs.some(isTc) && rs.every(i => isTc(i) || num(i)) && tx.every(i => num(i) || isTc(i))) {
-      return { fam: 'gpt', sure: tx.every(num), why: '思考块是 tc_ 短编号且无可见文字 + 正文数字编号（OpenAI 闭源思考格式）' };
-    }
-    if (all.every(num)) {
-      if (rs.length && f.rChars === 0) {
-        if ((f.rWireEmptyDeltas || 0) > 0 || (f.rE || 0) > (f.rBlocks || rs.length)) {
-          return { fam: 'claude', sure: true, why: '数字编号 + 空 reasoning-delta 流事件（Anthropic Claude 闭源思考专属特征）' };
-        }
-        return { fam: 'claude', sure: false, why: '数字编号 + 思考块内容为空（闭源思考被隐藏）' };
+    if (all.every(i => isTc(i) || num(i))) {
+      const hasSharedTc = rs.some(id => isTc(id) && tx.includes(id));
+      if (isOpenAiChunk || (rs.length > 0 && rs.some(isTc) && tN < 6 && tx.length > 0 && tx.every(num) && (f.rE || 0) === 0 && (f.rWireEmptyDeltas || 0) === 0)) {
+        return ret('gpt', true, `极碎流块(${avgChunk ? avgChunk.toFixed(1) + '字/块' : '细粒度工具流'}·OpenAI 闭源特征)`);
       }
-      if (!rs.length) return { fam: 'claude', sure: true, why: '纯数字流块编号、没有思考块（Claude / Gemini 闭源非思考模式）' };
+      if (isGeminiChunk) {
+        return ret('gemini', true, `大块文本流(${avgChunk.toFixed(1)}字/块·Google Gemini 特征)`);
+      }
+      if (isClaudeChunk || (rs.length > 0 && ((f.rWireEmptyDeltas || 0) > 0 || (f.rE || 0) > 0 || hasSharedTc))) {
+        return ret('claude', true, `中等词块流(${avgChunk ? avgChunk.toFixed(1) + '字/块' : '整块工具流'}·Anthropic Claude 闭源特征)`);
+      }
+      if (!rs.length && ((f.tools || 0) > 0 || (tN > 0 && tN <= 22 && tChars >= 320)) && (tN === 0 || avgChunk >= 25.0)) {
+        return ret('gemini', true, '编码零思考块 + 大块文本流（Google Gemini 特征）');
+      }
+      return null;
     }
     return null;
   },
   // 模型信息条目（Models.set）/ 抽卡识别结果
   entry(g, est) { return g && { name: this.NAME[g.fam] || g.fam, guess: true, fam: g.fam, sure: !!g.sure, why: g.why, internal: null, request: null, response: null, provider: '按回复格式推测', tier: null, routed: false, partial: false, est: est || null }; },
-  // 实时通道回放（identifyOld / 抓日志）：取最后一轮的片段推测
-  fromReplay(txt) { const use = this.lastTurn(txt); const g = this.guess(use); if (g) g.est = this.est(use, g.fam); return g; },
+  // 实时通道回放（支持传入原始 SSE 文本、Chat 实例或单条消息）
+  fromReplay(arg) {
+    if (!arg) return null;
+    if (typeof arg === 'string') {
+      const use = this.lastTurn(arg);
+      const g = this.guess(use);
+      if (g) g.est = this.est(use, g.fam);
+      return g;
+    }
+    if (typeof arg === 'object') {
+      const extractFromObj = obj => {
+        const fDirect = obj.fmt || obj._fmt || (Array.isArray(obj.messages) ? [...obj.messages].reverse().find(m => m?.role === 'assistant' && (m._fmt || m.fmt))?._fmt || [...obj.messages].reverse().find(m => m?.role === 'assistant' && (m._fmt || m.fmt))?.fmt : null);
+        if (fDirect && Array.isArray(fDirect.ids)) {
+          const g = this.guess(fDirect);
+          if (g) { g.est = this.est(fDirect, g.fam); if (obj.sid) obj.fmtGuess = g; return g; }
+        }
+        if (fDirect && Array.isArray(fDirect.rs)) {
+          const synth = this.fresh(0);
+          synth.tN = Number(fDirect.tN || 0);
+          synth.tChars = Number(fDirect.tChars || 0);
+          synth.tidCount = Number(fDirect.tidCount || 0);
+          synth.tidChars = Number(fDirect.tidChars || 0);
+          synth.rE = Number(fDirect.rE || 0);
+          synth.tools = Number(fDirect.tools || 0);
+          synth.done = true;
+          for (const r of fDirect.rs) {
+            synth.ids.push(['r', String(r.id ?? '0')]);
+            synth.rN += Number(r.n || 0);
+            synth.rChars += Number(r.chars || 0);
+          }
+          if (synth.tN > 0) synth.ids.push(['t', '0']);
+          const g = this.guess(synth);
+          if (g) { if (obj.sid) obj.fmtGuess = g; return g; }
+        }
+        return null;
+      };
+      const syncG = extractFromObj(arg);
+      if (syncG) return syncG;
+      if (arg.sid && typeof ExtCompat !== 'undefined' && typeof ExtCompat.replayChat === 'function') {
+        return Promise.resolve(ExtCompat.replayChat(arg)).then(() => extractFromObj(arg)).catch(() => null);
+      }
+    }
+    return null;
+  },
   // 回放里最后一轮（已结束）的收集结果
   lastTurn(txt) {
     const recs = []; const re = /^data: (.*)$/gm; let m;

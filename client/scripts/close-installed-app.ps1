@@ -111,7 +111,6 @@ function Stop-InstalledApp {
     }
     foreach ($item in $remaining) {
         if ($ExeName -ieq 'Brana AI.exe') {
-            try { & "$env:SystemRoot\System32\taskkill.exe" /F /T /PID $item.ProcessId 2>&1 | Out-Null } catch {}
             try { Stop-Process -Id $item.ProcessId -Force -ErrorAction SilentlyContinue } catch {}
         } else {
             $current = @(Get-InstalledProcesses $Roots $ExeName -IgnoreUnreadable | Where-Object { $_.ProcessId -eq $item.ProcessId })
@@ -138,10 +137,54 @@ function Stop-InstalledApp {
     throw 'The old application is still running. Close it or run setup as administrator, then retry.'
 }
 
+function Repair-UninstallRegistry {
+    $regPaths = @(
+        'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\2288686e-dfd2-53b4-b834-afc0293af524',
+        'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\2288686e-dfd2-53b4-b834-afc0293af524'
+    )
+    foreach ($rp in $regPaths) {
+        try {
+            if (-not (Test-Path -LiteralPath $rp)) { continue }
+            $prop = Get-ItemProperty -LiteralPath $rp -ErrorAction SilentlyContinue
+            $raw = [string]$prop.UninstallString
+            if ([string]::IsNullOrWhiteSpace($raw)) { continue }
+            $trimmed = $raw.Trim()
+            if ($trimmed.StartsWith('"')) {
+                if ($trimmed -match '^"([^"]+)"') {
+                    $uExe = $Matches[1]
+                    if (-not (Test-Path -LiteralPath $uExe)) {
+                        Remove-ItemProperty -LiteralPath $rp -Name 'UninstallString' -ErrorAction SilentlyContinue
+                    }
+                }
+            } elseif ($trimmed -match '^([A-Za-z]:\\.+?\.exe)(\s+.*)?$') {
+                $uExe = $Matches[1]
+                $uArgs = [string]$Matches[2]
+                if (Test-Path -LiteralPath $uExe) {
+                    Set-ItemProperty -LiteralPath $rp -Name 'UninstallString' -Value ('"' + $uExe + '"' + $uArgs) -ErrorAction SilentlyContinue
+                } else {
+                    Remove-ItemProperty -LiteralPath $rp -Name 'UninstallString' -ErrorAction SilentlyContinue
+                }
+            }
+        } catch {}
+    }
+}
+
 # Dot sourcing exposes the same implementation to isolated regression fixtures.
 if ($MyInvocation.InvocationName -ne '.') {
     try {
-        $roots = @(Get-InstallRoots @($InstallDir, $PreviousDir, $CurrentUserDir) | Select-Object -Unique)
+        $dirList = @($InstallDir, $PreviousDir, $CurrentUserDir)
+        if ($ExecutableName -ieq 'Brana AI.exe') {
+            Repair-UninstallRegistry
+            foreach ($extra in @($env:ANC_DIR,
+                (Join-Path $env:LOCALAPPDATA 'Programs\Brana AI'),
+                (Join-Path $env:LOCALAPPDATA 'Programs\Brana'),
+                (Join-Path $env:ProgramFiles 'Brana AI'))) {
+                if (-not [string]::IsNullOrWhiteSpace($extra) -and (Test-Path -LiteralPath $extra)) {
+                    $dirList += $extra
+                }
+            }
+        }
+        $roots = @(Get-InstallRoots $dirList | Select-Object -Unique)
         Stop-InstalledApp $roots $ExecutableName
         exit 0
     } catch {

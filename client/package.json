@@ -1,7 +1,7 @@
 {
   "name": "brana-client",
   "productName": "Brana AI",
-  "version": "0.13.162",
+  "version": "0.13.165",
   "description": "Cross-platform workspace client with multi-tab markdown rendering and session telemetry",
   "main": "src/main.js",
   "author": "755287249",
@@ -25,6 +25,8 @@
       "src/**/*",
       "ui/**/*",
       "!ui/gen/**",
+      "gen/**/*",
+      "data/**/*",
       "assets/**/*",
       "package.json",
       "licenses/**/*"

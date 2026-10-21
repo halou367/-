@@ -305,10 +305,11 @@ const FingerprintReview = (() => {
 
       const fpBlockedByOpen = isOpenThink && isClosedFpId(result.nearest?.id);
       const fpPctNow = (result?.signals?.relative_probability ?? result?.nearest?.probability ?? 0) * 100;
-      const revPctNow = Number(existingMi?.reverseMatch ?? existingMi?.confidence ?? 0);
+      const revPctNow = Number(existingMi?.reverseMatch ?? existingMi?.revPct ?? existingMi?.confidence ?? 0);
       const keepExistingName = fpBlockedByOpen || (existingMi?.name && (
-        (!existingMi.guess && !existingMi.reverseInferred && !existingMi.billingProbe) ||
-        ((existingMi.reverseInferred || existingMi.billingProbe) && !(isOpenThink && isClosedFpId(existingMi.name)) && (revPctNow >= fpPctNow)) ||
+        existingMi.userCorrected ||
+        (!existingMi.guess && !existingMi.reverseInferred && !existingMi.habitInferred && !existingMi.billingProbe) ||
+        ((existingMi.reverseInferred || existingMi.habitInferred || existingMi.billingProbe) && !(isOpenThink && isClosedFpId(existingMi.name)) && (revPctNow >= fpPctNow)) ||
         (auto && (!/\?$/.test(existingMi.name) && result.status !== 'clear'))
       ));
       const name = fpBlockedByOpen ? (existingMi?.name && !isClosedFpId(existingMi.name) ? existingMi.name : '开源模型') : (result.nearest.id + (result.status === 'clear' ? '' : '?'));
@@ -345,7 +346,7 @@ const FingerprintReview = (() => {
       if (typeof PelicanTest !== 'undefined' && PelicanTest.isRunning(chat)) return false;
       if (typeof Tabs !== 'undefined' && Tabs.cur?.sid !== chat.sid) return false;
       const mi = typeof Models !== 'undefined' ? Models.get(chat.sid) : null;
-      if (mi?.fingerprint) return false;
+      if (mi?.fingerprint || mi?.userCorrected || ((mi?.habitInferred || mi?.reverseInferred) && !mi?.pendingConfirm && !mi?.guess)) return false;
       const last = (chat.messages || []).at(-1), key = (chat.messages || []).length + ':' + (last?.id || '');
       if (chat.fpAutoKey === key) return false; chat.fpAutoKey = key;
       const found = scan(chat, null); if (!found.length) return false;

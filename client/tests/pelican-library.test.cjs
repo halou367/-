@@ -50,6 +50,18 @@ function createPelicanShotsHarness({ platform = 'desktop', sharedMem = new Map()
       attrs: attrs || {},
       style: (attrs && typeof attrs.style === 'object') ? { ...attrs.style } : {},
       className: attrs?.class || '',
+      classList: {
+        toggle(cls, force) {
+          const set = new Set(String(el.className || '').split(/\s+/).filter(Boolean));
+          const add = force === undefined ? !set.has(cls) : !!force;
+          if (add) set.add(cls); else set.delete(cls);
+          el.className = [...set].join(' ');
+          return add;
+        },
+        add(cls) { this.toggle(cls, true); },
+        remove(cls) { this.toggle(cls, false); },
+        contains(cls) { return String(el.className || '').split(/\s+/).includes(cls); },
+      },
       children: [],
       isConnected: true,
       get textContent() {
@@ -74,6 +86,7 @@ function createPelicanShotsHarness({ platform = 'desktop', sharedMem = new Map()
           if (sel === '.pel-cmp-card') return String(node.className || '').split(/\s+/).includes('pel-cmp-card');
           if (sel === '.pel-model-card') return String(node.className || '').split(/\s+/).includes('pel-model-card');
           if (sel === 'img') return node.tag === 'img';
+          if (sel === 'span') return node.tag === 'span';
           return false;
         };
         const walk = node => {
@@ -150,7 +163,8 @@ function createPelicanShotsHarness({ platform = 'desktop', sharedMem = new Map()
     h,
     icon: name => h('i', { class: 'ico-' + name }),
     modal: (title, body, foot, cls) => {
-      const back = h('div', { class: 'modal-back ' + (cls || '') }, h('div', { class: 'modal-t' }, title), body, h('div', { class: 'modal-f' }, ...(foot || [])));
+      const footKids = Array.isArray(foot) ? foot : (foot ? [foot] : []);
+      const back = h('div', { class: 'modal-back ' + (cls || '') }, h('div', { class: 'modal-t' }, title), body, h('div', { class: 'modal-f' }, ...footKids));
       modals.push(back);
       return back;
     },
@@ -522,7 +536,7 @@ test('v0.13.158: halou367 update worker repo, send-message timeout fix, >2 netwo
   // 5) Route changes only remind (never pause); only closed-source models suddenly producing open-source thinking pause
   const bpUiSrc = fs.readFileSync(path.join(ROOT, 'ui', 'billing-probe-ui.js'), 'utf8');
   const sqSrc = fs.readFileSync(path.join(ROOT, 'ui', 'send-queue.js'), 'utf8');
-  assert.ok(arSrc.includes('仅提醒，不暂停'));
+  assert.ok(arSrc.includes('路由切换提醒（不暂停）') || arSrc.includes('仅提醒，不暂停'));
   assert.ok(bpUiSrc.includes('wasClosedModel && latestHasOpenThink'));
   assert.ok(sqSrc.includes('if (chat._routePaused && !chat.thinkStopped) chat._routePaused = false;'));
 

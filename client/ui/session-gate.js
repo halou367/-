@@ -6,7 +6,7 @@ const SessionGate = {
     const retry = h('button', { type: 'button', class: 'link', onclick: () => checker.wake(true) }, '立即重试');
     const browse = h('button', { type: 'button', class: 'link', title: '免登录直接进入查阅模式，浏览和导出本账号缓存在本地的历史对话', onclick: () => { browseRequested = true; window.__BRANA_BROWSE_MODE = true; checker.cancel(); } }, '查阅模式');
     const manual = h('button', { type: 'button', class: 'link', onclick: () => {
-      if (state?.phase === 'offline' && !state?.challenge && !window.__routeFixture && !window.__fixture && typeof RegionIP !== 'undefined') {
+      if ((state?.phase === 'offline' || (state?.phase === 'waiting' && NetPolicy.transportError(state?.error))) && !state?.challenge && !window.__routeFixture && !window.__fixture && typeof RegionIP !== 'undefined') {
         browseRequested = true; window.__BRANA_BROWSE_MODE = true;
         try { UI.enterBrowseMode?.(); } catch {}
         try { RegionIP.open({ offlineAlert: true }); } catch {}
@@ -24,7 +24,8 @@ const SessionGate = {
       if (info.text !== lastText) { text.textContent = info.text; text.title = info.text; lastText = info.text; }
       spinner.hidden = !info.busy; retry.disabled = !info.retry;
       retry.textContent = info.busy ? '核对中' : '立即重试';
-      if (shown.phase === 'offline' && !shown.challenge && !modalShown && !window.__routeFixture && !window.__fixture) {
+      const isTransportWait = shown.phase === 'offline' || (shown.phase === 'waiting' && NetPolicy.transportError(shown.error));
+      if (isTransportWait && !shown.challenge && !modalShown && !window.__routeFixture && !window.__fixture) {
         modalShown = true;
         try {
           if (!early && typeof UI !== 'undefined' && typeof UI.enterBrowseMode === 'function') {

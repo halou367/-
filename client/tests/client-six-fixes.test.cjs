@@ -457,5 +457,22 @@ test('8. Habit & Reverse Inference accuracy: pure analyze() without self-reinfor
     const r = CHF.analyze({ sid: item.sid, messages: [] }, mEntry, { ignoreExactSid: true });
     assert.equal(r?.best?.canon, item.truth, `Session ${item.sid} expected ${item.truth} but got ${r?.best?.canon}`);
   }
+
+  // 5. Cross-vendor 3-band stream chunk separation (OpenAI vs Anthropic vs Google) & localStorage quota protection
+  chfCtx.setTimeout = () => 0;
+  chfCtx.clearTimeout = () => {};
+  const fmtSrc = fs.readFileSync(path.join(uiDir, 'fmt.js'), 'utf8');
+  vm.runInContext(fmtSrc + '; this.Fmt = Fmt;', chfCtx);
+  const gGpt = chfCtx.Fmt.guess({ tN: 106, tChars: 186, rChars: 0, tools: 4, ids: [['t', 'tc_zTeGj6PpzORHHN1hmrodx8']] });
+  const gClaude = chfCtx.Fmt.guess({ tN: 67, tChars: 1268, rChars: 0, tools: 2, ids: [['r', 'tc_f7bHFHYvWIkqFrUTnEocYm'], ['t', 'tc_lCEZmg-XCONGx-ZMDR30Fg']] });
+  const gGemini = chfCtx.Fmt.guess({ tN: 16, tChars: 910, rChars: 0, tools: 2, ids: [['r', 'tc_0K9BZg3YzH4R6PhrgdQMiL'], ['t', 'tc_PEimb9Mfwq1mUf_qLDl9sF']] });
+  assert.equal(gGpt?.fam, 'gpt', 'OpenAI 1.75 chars/delta stream classifies as gpt');
+  assert.equal(gClaude?.fam, 'claude', 'Anthropic 18.93 chars/delta stream classifies as claude');
+  assert.equal(gGemini?.fam, 'gemini', 'Google 56.88 chars/delta stream classifies as gemini even with tc_ reasoning');
+
+  const htmlPreviewSrc = fs.readFileSync(path.join(uiDir, 'html-preview.js'), 'utf8');
+  assert.ok(htmlPreviewSrc.includes('LOCAL_MAX_ROWS = 14') && htmlPreviewSrc.includes('LOCAL_MAX_CHARS = 550000'), 'PelicanShots must cap localStorage writes to prevent QuotaExceededError');
+  const coreSrc = fs.readFileSync(path.join(uiDir, 'core.js'), 'utf8');
+  assert.ok(coreSrc.includes('freeQuotaBloat'), 'Store must auto-evict bloated localStorage keys on QuotaExceededError');
 });
 

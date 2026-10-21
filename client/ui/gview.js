@@ -28,7 +28,7 @@ const Side = {
     if (this._mkRev !== rev) { c.clear(); this._mkRev = rev; }
     let k = c.get(nm); if (k) return k;
     const ver = Strength.ver10(nm) || 0, toks = String(nm).toLowerCase().split(/[^a-z0-9]+/).filter(Boolean), code = toks.map(t => this.CODE_RANK[t] || 0).reduce((m, x) => Math.max(m, x), 0);
-    k = { ver, major: Math.floor(ver + 1e-6), code, vid: Brand.of(nm) || '', lb: typeof Ranking !== 'undefined' ? Ranking.score(nm) : 1000, lv: Strength.level(nm) ?? -1 };
+    k = { ver, major: Math.floor(ver + 1e-6), code, vid: Brand.of(nm) || '', lb: typeof Ranking !== 'undefined' ? (typeof Ranking.family === 'function' ? Ranking.family(nm) : Ranking.score(nm)) : 1000, lv: Strength.level(nm) ?? -1 };
     if (c.size > 3000) c.clear(); c.set(nm, k); return k;
   },
   modelGroups(rs) {
@@ -78,24 +78,31 @@ const Side = {
     const rows = items.map((e, i) => {
       // 型号来源和卡片显示保持一致：标题同步 / 加密标题解出来的型号（Titles.view，卡片显示的就是它）→ 本地型号记录 → 标题文字。
       // 以前只看前者和原始标题，解不出的标题（跨设备同步的编码标题）会被当成「未识别」，同型号被拆成两处。
-      const gp = typeof TitleCipher !== 'undefined' && TitleCipher.decodeGoldPrefix ? TitleCipher.decodeGoldPrefix(e.title) : null;
-      const cleanTitle = gp ? (gp.cleanTitle || '') : String(e.localTitle || e.title || '');
-      const mi = Models.get(e.id), tv = typeof Titles !== 'undefined' ? Titles.view(e.id, e.title) : null, tvModel = (tv?.model && !/待解码/.test(tv.model) ? tv.model : '') || gp?.model || '';
+      const gpLocal = e.localTitle && typeof TitleCipher !== 'undefined' && TitleCipher.decodeGoldPrefix ? TitleCipher.decodeGoldPrefix(e.localTitle) : null;
+      const gpCloud = typeof TitleCipher !== 'undefined' && TitleCipher.decodeGoldPrefix ? TitleCipher.decodeGoldPrefix(e.title) : null;
+      const gp = gpLocal || gpCloud || null;
+      const cleanTitle = e.localTitle ? (gpLocal ? (gpLocal.cleanTitle || '') : String(e.localTitle)) : (gpCloud ? (gpCloud.cleanTitle || '') : String(e.title || ''));
+      const mi = Models.get(e.id), tv = typeof Titles !== 'undefined' ? Titles.view(e.id, e.title, e.localTitle) : null, tvModel = (tv?.model && !/待解码/.test(tv.model) ? tv.model : '') || gp?.model || '';
       const rawNote = tv?.note || (typeof Notes !== 'undefined' && Notes.get ? Notes.get(e.id) : '') || '';
       const noteCanon = rawNote ? Strength.canon(rawNote) : '';
       const noteModel = noteCanon && typeof Brand !== 'undefined' && Brand.of(noteCanon) ? noteCanon : '';
       let nm = Strength.canon(ConversationLabels.parse(tvModel || mi?.name || noteBase(cleanTitle)).name);
       if (noteModel && (!nm || !Brand.of(nm) || (Strength.parts?.(noteModel)?.tier && !Strength.parts?.(nm)?.tier))) nm = noteModel;
-      const key = (nm + ' ' + cleanTitle).toLowerCase();
+      const hasModel = !!(tvModel || mi?.name || noteModel);
+      const key = (nm + (hasModel ? '' : ' ' + cleanTitle)).toLowerCase();
       const vid = Brand.of(tvModel) || tv?.vid || Brand.of(mi?.name) || Brand.of(noteBase(cleanTitle)) || (noteModel ? Brand.of(noteModel) : null);
       const vname = vid && typeof Brand !== 'undefined' ? String(Brand.NAME?.[vid] || '').toLowerCase() : '';
       const hit = kw.length > 0 && kw.some(k => key.includes(k) || (!!vid && (k === vid || k === vname)));   // 厂商本身也算命中：名字里没写 claude 的 opus / sonnet 对话不会掉出目标组
-      const at = entAt(e) || 0;
-      const gpGold = !!(gp?.gold && !(typeof Gold !== 'undefined' && Gold.unmarkAt?.[e.id]));
+      const at = entAt(e) || (History?.uuidTs?.(e?.id) || 0);
+      const gpModelCanon = gp?.model ? Strength.canon(gp.model) : '';
+      const manualNow = typeof Gold !== 'undefined' ? (typeof Gold.manual === 'function' ? Gold.manual() : !!Gold.manual) : false;
+      const currentIsGold = Boolean(nm && Brand.of(nm) && typeof Gold !== 'undefined' && (manualNow ? Gold.has?.(nm) : Gold.isUnifiedGold?.(nm)));
+      const staleGpGold = Boolean(nm && Brand.of(nm) && !currentIsGold && (!gpModelCanon || gpModelCanon !== nm));
+      const gpGold = !!(gp?.gold && !staleGpGold && !(typeof Gold !== 'undefined' && Gold.unmarkAt?.[e.id]));
       return { e, i, vid, hit, vip: false, gpGold, nm, mid: vid ? this.modelId(nm, vid) : '', at, ver: vid ? (Strength.ver10(nm) || null) : null, lv: vid ? Strength.level(nm) : null, score: ConversationLabels.score(mi, noteBase(cleanTitle)) ?? gp?.score ?? null };
     });
     const grouped = rs => this.modelGroups(rs).map(g=>({group:'',rows:g.rows}));
-    const manual = Gold.manual;
+    const manual = typeof Gold !== 'undefined' ? (typeof Gold.manual === 'function' ? Gold.manual() : !!Gold.manual) : false;
     const hasUnifiedGold = typeof Gold !== 'undefined' && typeof Gold.isUnifiedGold === 'function';
     if (!kw.length) {
       for (const r of rows) {
@@ -104,18 +111,20 @@ const Side = {
       }
       return [{ group: '', rows: rows.sort((a, b) => (b.at - a.at) || (a.i - b.i)) }];
     }   // 不限：按时间排序，但收藏和全账号统一的金色标记在所有账号同步高亮
-    // 金色
+    // 金色（选了目标厂商：只有收藏和目标厂商点亮的型号是金色，其他厂商的金色传说变成普通）
     const pool = kw.length ? rows.filter(r => r.hit) : rows.filter(r => r.vid);
     const topVer = pool.reduce((m, r) => r.ver != null && r.lv != null && r.ver > m ? r.ver : m, -Infinity);
     const topLv = pool.reduce((m, r) => r.ver === topVer && r.lv != null ? Math.max(m, Math.round(r.lv)) : m, -Infinity);
     if (manual) { for (const r of rows) r.vip = !!(r.vid && Gold.has(r.nm)); }   // 手动点亮：设置 / 推理分排行里点亮的型号跨所有账号同步金色
-    else if (hasUnifiedGold) { for (const r of rows) r.vip = !!(r.vid && Gold.isUnifiedGold(r.nm)); }
+    else if (hasUnifiedGold) { for (const r of pool) r.vip = !!(r.vid && (Gold.isUnifiedGold(r.nm) || (Number.isFinite(topVer) && Number.isFinite(topLv) && r.ver === topVer && r.lv != null && Math.round(r.lv) === topLv))); }
     else if (Number.isFinite(topVer) && Number.isFinite(topLv)) for (const r of pool) r.vip = r.ver === topVer && r.lv != null && Math.round(r.lv) === topLv;
-    for (const r of rows) if (Fav.has(r.e.id) || (typeof Gold !== 'undefined' && Gold.hasChat?.(r.e.id)) || r.gpGold) r.vip = true;
+    for (const r of pool) if (Fav.has(r.e.id) || (typeof Gold !== 'undefined' && Gold.hasChat?.(r.e.id)) || r.gpGold) r.vip = true;
+    if (kw.length) { for (const r of rows) if (!r.hit && !Fav.has(r.e.id)) r.vip = false; }
     const out=[],vips=rows.filter(r=>r.vip);
     let rest=rows;
     if((manual||hasUnifiedGold)&&vips.length){out.push({group:'金色',rows:this.sortRows(vips),pinned:true,gold:true});rest=rest.filter(r=>!r.vip);}
-    if(sortOn){const pinned=rest.filter(r=>r.hit);if(pinned.length)out.push({group:'目标 · '+(s.targetName||''),rows:this.sortRows(pinned),pinned:true});rest=rest.filter(r=>!r.hit);}
+    if(sortOn||kw.length){const pinned=rest.filter(r=>r.hit);if(pinned.length)out.push({group:'目标 · '+(s.targetName||''),rows:this.sortRows(pinned),pinned:true});rest=rest.filter(r=>!r.hit);}
+    if(kw.length){for(const r of rest){r.vip=false;r.hit=false;r.tint='';r.gStart=false;}rest.sort(Side.cmp);for(const r of rest)out.push({group:'',rows:[r]});return out;}
     out.push(...grouped(rest));return out;
   },
 };

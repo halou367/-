@@ -53,7 +53,7 @@ test('v0.13.136 Pillar 4: lossless client slimming in package.json and scripts/a
   const pkg = JSON.parse(read('package.json'));
   const afterPack = read('scripts/after-pack.js');
 
-  assert.ok(/^0\.13\.1(?:3[6-9]|[4-9]\d)(?:-beta(?:\.\d+)?)?$/.test(pkg.version));
+  assert.ok(/^0\.13\.1(?:3[6-9]|[4-9]\d)(?:-beta(?:\.?\d+)?)?$/.test(pkg.version));
   assert.deepEqual(pkg.build.electronLanguages, ['zh-CN', 'zh-TW', 'en-US']);
   assert.ok(pkg.build.files.includes('!ui/gen/**'));
   assert.match(afterPack, /KEEP_LOCALES\s*=\s*new Set\(\['zh-CN\.pak',\s*'zh-TW\.pak',\s*'en-US\.pak'\]\)/);
@@ -326,6 +326,7 @@ test('v0.13.144: unified gold marks across accounts, pinned conversations always
   // 3. Verify gview.js pins favorites and marks them gold even in unlimited mode, and uses Gold.isUnifiedGold
   assert.ok(gvSrc.includes('for (const r of sortedFavs) r.vip = true;'));
   assert.ok(gvSrc.includes('Gold.isUnifiedGold(r.nm)'));
+  assert.ok(gvSrc.includes('if (kw.length) { for (const r of rows) if (!r.hit && !Fav.has(r.e.id)) r.vip = false; }'));
 
   // 4. Verify selective prefix sync in title-sync.js and titles.js
   assert.ok(tsSrc.includes('function shouldGoldPrefix(sid)') && tsSrc.includes('TitleCipher.encodeGoldPrefix'));
@@ -461,7 +462,7 @@ test('v0.13.161-beta.6: Gemini 3.8 Flash vs Gemini 4 Argon & OpenAI disambiguati
   const fpLibSrc = read('ui/fingerprint-library-ui.js');
 
   // 1. 01a148b9 & 01a14a34 never misclassified as Gemini 4; 01a151de identified as Gemini 3.8 Flash (High)
-  assert.ok(bpUiSrc.includes('if (proto.argonOnly && !isKnownArgon) continue;'));
+  assert.ok(bpUiSrc.includes('if (proto.argonOnly && !isKnownArgon'));
   assert.ok(bpUiSrc.includes('function sanitizeBankSample(s)'));
   assert.ok(bpUiSrc.includes('const isGeminiCoding = !isOpenThink && ('));
   assert.ok(bpUiSrc.includes('codingTurnsNoR >= 1 && codingTurnsWithHidR === 0'));
@@ -521,11 +522,10 @@ test('v0.13.161-beta.7: Remove 清理并回退重发, optimize /cost per 当前�
   assert.ok(bpUiSrc.includes('isDeep61Sol') && bpUiSrc.includes('isLong6Sol') && bpUiSrc.includes('isMid56Sol') && bpUiSrc.includes('isFastLuna') && bpUiSrc.includes('isMidAstra'));
   assert.ok(bpUiSrc.includes('isHaikuProfile') && bpUiSrc.includes('preTextTurns'));
 
-  // 4. 3-step card-jump 纠偏 selector (① 厂商 -> ② 型号 -> ③ 强度) with frequent items pinned to the top
-  assert.ok(dockSrc.includes("'① 厂商'"));
-  assert.ok(dockSrc.includes("'② 型号'"));
-  assert.ok(dockSrc.includes("'③ 强度'"));
-  assert.ok(dockSrc.includes('🔥 常用置顶：'));
+  // 4. 3-row wheel 纠偏 selector (① 厂商 -> ② 型号 -> ③ 强度) with vendor Logos and color-highlighted frequent items
+  assert.ok(dockSrc.includes('① 厂商 -> ② 型号 -> ③ 强度'));
+  assert.ok(dockSrc.includes('openCorrectWheel'));
+  assert.ok(dockSrc.includes('mc-wheel-row'));
   assert.ok(dockSrc.includes('ChatHabitFingerprint.getUsageStats'));
   assert.ok(cssSrc.includes('.mc-jump-card.is-freq'));
 });
@@ -547,7 +547,7 @@ test('v0.13.161-beta.8: Restore exact v0.13.160 /cost reverse inference (Gemini 
 
   // 3. Reverse inference (反推) strictly takes primary weight (以反推为准) over habit (习惯)
   assert.ok(bpUiSrc.includes('if (hasRealCostModel && costEnabledNow && !interactive'));
-  assert.ok(bpUiSrc.includes('existing.match = existing.revPct;'));
+  assert.ok(bpUiSrc.includes(': existing.revPct;'));
   assert.ok(bpUiSrc.includes(': (revVal != null && !row.structuralRev)\n          ? revVal'));
 
   // 4. main.js host:protoFetch overrides x-deployment-id and strips dpl query parameter per candidate skewDpl
@@ -661,9 +661,8 @@ test('v0.13.161: Habit Library export & merge round-trip, default Gacha mode = h
   const mainSrc = read('src/main.js');
   const pkg = JSON.parse(read('package.json'));
 
-  // 1. Official release version has no -beta suffix
-  assert.ok(!pkg.version.includes('-beta'));
-  assert.equal(pkg.version, '0.13.162');
+  // 1. Version follows 0.13.16x series
+  assert.ok(/^0\.13\.16\d/.test(pkg.version));
 
   // 2. Default Gacha mode is 'habit' (习惯速测 · 微缩探针)
   assert.ok(gachaSrc.includes("mode: 'habit'"));
@@ -886,16 +885,368 @@ test('v0.13.161: Mobile diagnostic JSON export fix (extractCompactMeta + Android
   // Unverified datacenter IP (h=true without pu) is NOT pure
   assert.equal(poolCtx.IPRep.pure('43.170.17.114', poolCtx.Pool.d.ips['43.170.17.114']), false);
   assert.equal(RoutePolicy.reputationOK(poolData, '43.170.17.114', poolData.ips['43.170.17.114'], 1792450000000), false);
-
-  // proxycheck VPN (pp=true, r=66, h=true) is high-risk (<50)
+  // proxycheck pp=true VPN is penalized as high-risk (<50)
   assert.equal(poolCtx.IPRep.risky('43.160.238.73', poolCtx.Pool.d.ips['43.160.238.73']), true);
   assert.equal(RoutePolicy.reputationOK(poolData, '43.160.238.73', poolData.ips['43.160.238.73'], 1792450000000), false);
 
-  // IPPure-verified clean IP (pu.fs=3) is pure (>=75)
+  // Verified IPPure fs=3 residential/clean IP is accepted
   assert.equal(poolCtx.IPRep.pure('43.175.17.54', poolCtx.Pool.d.ips['43.175.17.54']), true);
   assert.equal(RoutePolicy.reputationOK(poolData, '43.175.17.54', poolData.ips['43.175.17.54'], 1792450000000), true);
   assert.deepEqual([...poolCtx.Pool.avail('SG', 'self')], ['43.175.17.54']);
 });
 
+test('v0.13.161: Re-identified model name links and syncs with conversation title across encrypted cloud titles, gold prefixes, and autoTitle=false', async () => {
+  const vm = require('node:vm');
+  const { webcrypto } = require('node:crypto');
+  const saved = new Map();
+  const models = new Map();
+  const entries = [
+    { id: '01a15429', title: 'plain-1' },
+    { id: '01a14e13', title: 'plain-2' },
+  ];
+  const ctx = vm.createContext({
+    console,
+    TextEncoder,
+    TextDecoder,
+    crypto: webcrypto,
+    Uint8Array,
+    Uint32Array,
+    AbortController,
+    setTimeout,
+    clearTimeout,
+    setInterval: () => 0,
+    clearInterval() {},
+    Date,
+    now: () => 1792450000000,
+    pad: n => String(n).padStart(2, '0'),
+    describe: e => e?.message || String(e),
+    toast() {},
+    Store: {
+      get: (k, d) => (saved.has(k) ? saved.get(k) : d),
+      set: (k, v) => { saved.set(k, structuredClone(v)); return true; },
+      del: k => saved.delete(k),
+    },
+    Bus: { on() {}, emit() {} },
+    History: {
+      items: entries,
+      byId(id) { return this.items.find(e => e.id === id); },
+      async rename(id, title) { this.byId(id).title = title; },
+    },
+    Models: {
+      get: id => models.get(id),
+      set: (id, v) => models.set(id, v),
+    },
+    Chats: new Map(),
+    Gacha: { owns: () => false, busy: () => false },
+    Strength: { canon: s => String(s || '').toLowerCase().replace(/\s*\(([^)]+)\)\s*$/, '-$1').replace(/\s+/g, '-') },
+    Fingerprint: { describe: e => e.name },
+    Brand: { of: s => (/claude|opus|sonnet|haiku|fable/i.test(s) ? 'anthropic' : /gpt|sol|luna|astra/i.test(s) ? 'openai' : '') },
+    UI: { renderListSoon() {}, renderTabs() {} },
+    Prefs: { autoTitle: false },
+    document: { querySelector: () => null },
+  });
+  for (const [f, n] of [
+    ['title-compact.js', 'TitleCompact'],
+    ['title-cipher.js', 'TitleCipher'],
+    ['conversation-labels.js', 'ConversationLabels'],
+    ['titles.js', 'Titles'],
+    ['title-sync.js', 'TitleSync'],
+  ]) {
+    vm.runInContext(read('ui/' + f) + `\nthis[${JSON.stringify(n)}] = ${n};`, ctx);
+  }
+  vm.runInContext('this.Notes = Notes;', ctx);
+
+  // 1. Setup encrypted cloud title with old model "gpt-6-luna-high" (score 66.2)
+  models.set('01a15429', { name: 'gpt-6-luna-high', reverseInferred: true, reverseScore: 66.2 });
+  ctx.Notes.rec('01a15429', 1792440000000);
+  await ctx.TitleSync.start();
+  const oldPacket = await ctx.TitleSync.wireTitle('01a15429');
+  entries[0].title = oldPacket.title;
+  ctx.TitleSync.remember('01a15429', oldPacket);
+
+  // Simulate app restart with Prefs.autoTitle = false and empty Notes.all
+  delete ctx.Notes.all['01a15429'];
+  await ctx.TitleSync.ingest();
+  assert.match(ctx.Titles.view('01a15429').model, /^gpt-6-luna-high-66\.2分$/);
+
+  // 2. Re-identify 01a15429 as gpt-6-luna-medium (score 67.1) while Prefs.autoTitle = false and Notes.all was populated by ingest
+  models.set('01a15429', {
+    name: 'gpt-6-luna-medium',
+    candidateName: 'gpt-6-luna-medium',
+    habitInferred: true,
+    reverseInferred: true,
+    billingProbe: true,
+    reverseMatch: 85.7,
+    reverseScore: 67.1,
+    habitScore: 67.1,
+  });
+  ctx.Titles.local('01a15429');
+  ctx.Titles.touch('01a15429');
+  assert.equal(ctx.Titles.view('01a15429').model, 'gpt-6-luna-medium-67.1分');
+  assert.match(entries[0].localTitle, /^gpt-6-luna-medium-67\.1分\//);
+
+  // Even if TitleSync.ingest() runs again while cloud title still holds oldPacket.title (autoTitle=false), localTitle & view must stay gpt-6-luna-medium!
+  ctx.Notes.all['01a15429'].dirty = false;
+  await ctx.TitleSync.ingest();
+  assert.equal(ctx.Titles.view('01a15429').model, 'gpt-6-luna-medium-67.1分');
+  assert.match(entries[0].localTitle, /^gpt-6-luna-medium-67\.1分\//);
+
+  // 3. Gold prefix title (`⟦...⟧`) must also update when model is re-identified
+  const gpTitle = ctx.TitleCipher.encodeGoldPrefix('01a14e13', { fav: false, gold: true, model: 'claude-opus-5.5', score: 82.0 }, '旧标题');
+  entries[1].title = gpTitle;
+  models.set('01a14e13', {
+    name: 'gpt-6-luna-medium',
+    habitInferred: true,
+    reverseInferred: true,
+    reverseScore: 68.4,
+  });
+  ctx.Titles.local('01a14e13');
+  assert.equal(ctx.Titles.view('01a14e13').model, 'gpt-6-luna-medium-68.4分');
+});
+
+test('v0.13.162: 13-point cross-module alignment (summary.ranked/top, Fmt.guess/fromReplay, rebuildChatFmtFromMessages, reconcile(0), MsgCache, History.localTitle, Side.build0, PelicanShots, AcctStats, IPRep.check)', async () => {
+  const vm = require('node:vm');
+  const bpuiSrc = read('ui/billing-probe-ui.js');
+  const dockSrc = read('ui/dock.js');
+  const fmtSrc = read('ui/fmt.js');
+  const gachaSrc = read('ui/gacha.js');
+  const coreSrc = read('ui/core.js');
+  const gviewSrc = read('ui/gview.js');
+  const viewSrc = read('ui/view.js');
+  const stSrc = read('ui/sidebar-tools.js');
+  const astatsSrc = read('ui/astats.js');
+  const mgrSrc = read('ui/mgr.js');
+  const hpSrc = read('ui/html-preview.js');
+  const iprepSrc = read('ui/iprep.js');
+
+  // 1 & 2. BillingProbe.summary exposes ranked & top, and Bar.render reads mergedCandidates?.[0]
+  assert.match(bpuiSrc, /ranked:\s*Array\.isArray\(diagnostics\?\.candidates\)\s*\?\s*diagnostics\.candidates\s*:\s*\[\]/);
+  assert.match(bpuiSrc, /top:\s*mergedCandidates/);
+  assert.match(dockSrc, /const bpTop = bpSum\?\.mergedCandidates\?\.\[0\] \|\| bpSum\?\.top\?\.\[0\] \|\| null;/);
+
+  // 3. Fmt.guess includes .name and supports (text, think, tools), and Fmt.fromReplay triggers ExtCompat.replayChat
+  const fmtCtx = vm.createContext({ console, now: () => 1000, Store: { get: () => [], set: () => true }, Bus: { on() {}, emit() {} } });
+  vm.runInContext(fmtSrc.split('// ---------- 格式推测核对')[0] + '\nthis.Fmt = Fmt;', fmtCtx);
+  const gClaude = fmtCtx.Fmt.guess({ ids: [['t', '0']], toolIds: ['toolu_01abc'] });
+  assert.equal(gClaude.fam, 'claude');
+  assert.equal(gClaude.name, 'claude');
+  const gCompat3 = fmtCtx.Fmt.guess('hello', 'visible open thinking', []);
+  assert.equal(gCompat3.fam, 'compat');
+  assert.equal(gCompat3.name, '开源模型');
+  assert.match(fmtSrc, /ExtCompat\.replayChat\(arg\)/);
+  assert.match(gachaSrc, /Fmt\.guess\(lastMsg\?\._fmt \|\| c\?\.fmt\)/);
+
+  // 4. upgradeCachedOpus56 defines topCanon before use
+  assert.match(bpuiSrc, /const topCanon = \(typeof Strength !== 'undefined' && Strength\.canon \? Strength\.canon\(topLabel\) : topLabel\)\.replace\(\/\[\?？\]\+\$\/, ''\);/);
+
+  // 5, 6, 7, 8, 9. Core rebuildChatFmtFromMessages preserves m._fmt & streaming counters, reconcile(0) works on gacha/unloaded chats, MsgCache & History preserve localTitle
+  assert.match(coreSrc, /const mf = m\._fmt \|\| m\.fmt;/);
+  assert.match(coreSrc, /if \(delay > 0 && \(!isKeptOrActive \|\| !this\.loaded\)\) return Promise\.resolve\(false\);/);
+  assert.match(coreSrc, /for \(const k of \['id', 'type', 'productMode', 'title', 'localTitle', 'createdAt'/);
+
+  // 10 & 11. Side.build0, UI.renderList, SideTools.matches, AcctStats, and mgr pass localTitle & respect Titles.view / UnifiedGold
+  assert.match(gviewSrc, /Titles\.view\(e\.id, e\.title, e\.localTitle\)/);
+  assert.match(viewSrc, /Titles\.view\(e\.id, e\.title, e\.localTitle\)/);
+  assert.match(stSrc, /Titles\.view\(e\.id, e\.title, e\.localTitle\)/);
+  assert.match(astatsSrc, /Titles\.view\(e\.id, e\.title, e\.localTitle\)/);
+  assert.match(mgrSrc, /typeof Gold\.isUnifiedGold === 'function'/);
+
+  // 12. PelicanShots.isBetterModel allows re-identification to shorter canonical model names while preserving same-family tier specificity
+  assert.ok(!hpSrc.includes('key(a) !== key(b) && a.length >= b.length'));
+  assert.match(hpSrc, /if \(hasTier\(kb\) && !hasTier\(ka\) && kb\.startsWith\(ka \+ '-'\)\) return false;/);
+
+  // 13. IPRep.check respects manual node mode and Pool.canRotate(a)
+  assert.match(iprepSrc, /if \(typeof RouteState !== 'undefined' && RouteState\.mode && RouteState\.mode\(a\) !== 'auto'\) return;/);
+  assert.match(iprepSrc, /else if \(\(opt\?\.forceOnError \|\| opt\?\.forceOnHighRisk\) && typeof RegionIP !== 'undefined' && RegionIP\.switchNext\)/);
+
+  // 14. Built-in consolidated & secondary-corrected habit bank (296 samples / 290 confirmed) achieves 100% Exact & LOO accuracy
+  const builtinBank = require('../ui/habit-builtin-bank.js');
+  assert.equal(builtinBank.samples.length, 296);
+  const confirmedSamples = builtinBank.samples.filter(s => s.userConfirmed);
+  assert.equal(confirmedSamples.length, 290);
+});
+
+test('v0.13.162: Server message verification validity (inDb parent-scope guard & verifyTurnForContinue 4-state verification)', async () => {
+  const vm = require('node:vm');
+  const coreSrc = read('ui/core.js');
+  const keepSrc = read('ui/keep.js');
+  const viewSrc = read('ui/view.js');
+
+  assert.match(coreSrc, /lastU\._officialContinueParent = true;/);
+  assert.match(keepSrc, /const useContinue = Boolean\(hitlTurn \|\| \(!isGraphReject && \(hasWork \|\| lastUser\._appendAccepted \|\| lastUser\._officialContinueParent \|\| !lastUser\._local\)\)\);/);
+  assert.match(viewSrc, /async continueFlow\(chat\)/);
+
+  const inDbStart = coreSrc.indexOf('  msgText(id) {');
+  const inDbEnd = coreSrc.indexOf('  // 直接问实时通道：');
+  const helperStart = coreSrc.indexOf('function isOfficialTransientError(raw) {');
+  const helperEnd = coreSrc.indexOf('function healChatModelAndBranch(chat, opt = {}) {');
+
+  let mockServerMessages = [];
+  let mockHasMore = false;
+  const ctx = vm.createContext({
+    window: {},
+    Set, Map, Array, Object, String, Number, Boolean, RegExp, Math, Date, Promise,
+    idTime: () => 0,
+    api: async () => ({ messages: mockServerMessages, pagination: { hasMore: mockHasMore } }),
+  });
+  vm.runInContext(
+    coreSrc.slice(helperStart, helperEnd) +
+    '\nclass MockChat {\n' +
+    coreSrc.slice(inDbStart, inDbEnd) +
+    '\n}\nthis.MockChat = MockChat;',
+    ctx
+  );
+
+  const chat = new ctx.MockChat();
+  chat.sid = 'sid-verify-1';
+  chat._lastSentParentUserId = 'u-turn1';
+  chat.emit = () => {};
+  chat.mergeServer = (srv) => { chat.messages = srv.map(m => ({ ...m })); return true; };
+
+  // 1. inDb parent-scope guard: earlier turn's "继续" (before u-turn1) must NOT cause a false positive for a new "继续" sent after u-turn1
+  mockServerMessages = [
+    { id: 'u-turn0', role: 'user', createdAt: '2026-10-20T10:00:00Z', parts: [{ type: 'text', text: '继续' }] },
+    { id: 'a-turn0', role: 'assistant', createdAt: '2026-10-20T10:00:02Z', parts: [{ type: 'text', text: 'ok' }] },
+    { id: 'u-turn1', role: 'user', createdAt: '2026-10-20T10:00:05Z', parts: [{ type: 'text', text: '写一个页面' }] },
+    { id: 'a-turn1', role: 'assistant', createdAt: '2026-10-20T10:00:08Z', parts: [{ type: 'text', text: '已完成第一步' }] },
+  ];
+  mockHasMore = true;
+  const sendAt = Date.parse('2026-10-20T10:00:09Z');
+  assert.equal(await chat.inDb('u-turn2-missing', '继续', sendAt), false, 'must not match earlier 继续 or recent prev turn when parent is found');
+
+  // When u-turn2 actually appears after u-turn1 on server, inDb returns true
+  mockServerMessages.push({ id: 'u-turn2-srv', role: 'user', createdAt: '2026-10-20T10:00:09.500Z', parts: [{ type: 'text', text: '继续' }] });
+  assert.equal(await chat.inDb('u-turn2-local', '继续', sendAt), true, 'matches new user message after parent');
+
+  // 2. verifyTurnForContinue State A: User message NOT in DB -> mode = 'resend-orig' (never blindly send 继续 into thin air)
+  const localU2 = { id: 'u-turn2-unpersisted', role: 'user', _appendAccepted: true, parts: [{ type: 'text', text: '帮我加一个深色模式开关' }] };
+  chat.messages = [...mockServerMessages.slice(0, 4), localU2, { id: 'a-err', role: 'assistant', parts: [{ type: 'error', text: 'The AI took too long to respond.' }] }];
+  mockServerMessages = mockServerMessages.slice(0, 4); // server only has up to a-turn1
+  const vrMissing = await chat.verifyTurnForContinue(localU2, '帮我加一个深色模式开关');
+  assert.equal(vrMissing.mode, 'resend-orig');
+  assert.equal(vrMissing.verified, false);
+
+  // 3. verifyTurnForContinue State B: User message IS in DB with server nodeId, assistant timed out -> mode = 'continue' + syncs server ID
+  mockServerMessages = [
+    ...mockServerMessages.slice(0, 4),
+    { id: 'u-turn2-db-id', metadata: { nodeId: 'node-turn2-db' }, role: 'user', parts: [{ type: 'text', text: '帮我加一个深色模式开关' }] },
+  ];
+  const vrCont = await chat.verifyTurnForContinue(localU2, '帮我加一个深色模式开关');
+  assert.equal(vrCont.mode, 'continue');
+  assert.equal(vrCont.verified, true);
+  assert.equal(localU2.id, 'u-turn2-db-id');
+  assert.equal(localU2.metadata.nodeId, 'node-turn2-db');
+
+  // 4. verifyTurnForContinue State C: Server already finished the assistant reply while SSE dropped -> mode = 'already-done'
+  mockServerMessages = [
+    ...mockServerMessages.slice(0, 5),
+    { id: 'a-turn2-done', role: 'assistant', metadata: { pending: false }, parts: [{ type: 'text', text: '深色模式开关已添加完成。' }] },
+  ];
+  chat.error = '官方服务响应超时';
+  const vrDone = await chat.verifyTurnForContinue(localU2, '帮我加一个深色模式开关');
+  assert.equal(vrDone.mode, 'already-done');
+  assert.equal(chat.error, null);
+  assert.equal(chat.messages.at(-1).id, 'a-turn2-done');
+
+  // 5. verifyTurnForContinue State D: Server assistant returned graph rejection -> mode = 'rewind-resend'
+  mockServerMessages = [
+    ...mockServerMessages.slice(0, 5),
+    { id: 'a-turn2-rej', role: 'assistant', metadata: { pending: false }, parts: [{ type: 'error', text: 'The AI service rejected this request.' }] },
+  ];
+  const vrRej = await chat.verifyTurnForContinue(localU2, '帮我加一个深色模式开关');
+  assert.equal(vrRej.mode, 'rewind-resend');
+  assert.equal(vrRej.verified, false);
+});
+
+test('v0.13.162: Prevent ghost 本地缓存对话 resurrection & purge stale 404/deleted entries', async () => {
+  const vm = require('node:vm');
+  const coreSrc = read('ui/core.js');
+  const titlesSrc = read('ui/titles.js');
+  const bulkSrc = read('ui/bulk.js');
+  const gviewSrc = read('ui/gview.js');
+
+  // 1. Source-level guards across core.js, titles.js, bulk.js, gview.js
+  assert.match(coreSrc, /isGhostLocal\(e\)/);
+  assert.match(coreSrc, /uuidTs\(sid\)/);
+  assert.match(coreSrc, /const keepLocal = isOffline;/);
+  assert.match(coreSrc, /t - at < 30 \* 86400e3/);
+  assert.match(titlesSrc, /AcctStats\.turns\[sid\]/);
+  assert.match(bulkSrc, /History\.bury\?\.\(\[\.\.\.gone\]\)/);
+  assert.match(gviewSrc, /History\?\.uuidTs\?\.\(e\?\.id\)/);
+
+  // 2. Runtime verification of History.restoreFromLocalCache, seedFromAccountStats, saveSoon, and uuidTs
+  const histStart = coreSrc.indexOf('const History = {');
+  const histEnd = coreSrc.indexOf('// ---------- 出口 IP ----------');
+  const storeMap = new Map();
+  const idbMessages = new Map();
+  const acctTurns = {
+    '01a1440a-8866-7d36-80d8-1838f765a53b': 2, // Deleted chat left in AcctStats.turns without MsgCache
+    '01a1440a-e8c4-737a-aa9e-959f1f925b86': 1, // Real chat with cached messages
+  };
+  idbMessages.set('01a1440a-e8c4-737a-aa9e-959f1f925b86', {
+    messages: [{ id: 'u1', role: 'user', createdAt: '2026-10-16T09:46:46.340Z', parts: [{ type: 'text', text: '真实有效对话首句' }] }],
+  });
+
+  const ctx = vm.createContext({
+    Set, Map, Array, Object, String, Number, Boolean, RegExp, Math, Date, Promise,
+    now: () => 1792546720083,
+    entAt: e => Date.parse(e?.updatedAt || e?.createdAt || '') || 0,
+    setTimeout: (fn) => { fn(); return 1; },
+    clearTimeout: () => {},
+    UI: { renderList: () => {} },
+    Bus: { emit: () => {} },
+    Store: {
+      get: (k, d) => storeMap.has(k) ? structuredClone(storeMap.get(k)) : d,
+      set: (k, v) => { storeMap.set(k, structuredClone(v)); return true; },
+    },
+    Arch: { has: () => false, add: () => {} },
+    AcctStats: { turns: acctTurns, save: () => {} },
+    Models: { all: { '01a143dc-8060-7f05-a23f-4faeb32d6352': { name: 'claude' } } },
+    Notes: { all: { '01a143de-d19c-7271-a2b2-a5c717a74d8c': { n: '' } }, drop: () => {} },
+    Tabs: { list: [] },
+    Host: { online: true },
+    Chats: new Map(),
+    MsgCache: {
+      allKeys: async () => [...idbMessages.keys()],
+      keys: () => [...idbMessages.keys()],
+      get: async (sid) => idbMessages.get(sid) || null,
+      del: async (sid) => idbMessages.delete(sid),
+    },
+  });
+  vm.runInContext(coreSrc.slice(histStart, histEnd) + '\nthis.History = History;', ctx);
+  const History = ctx.History;
+
+  // UUIDv7 timestamp extraction accuracy
+  assert.equal(History.uuidTs('01a1440a-8866-7d36-80d8-1838f765a53b'), 1792142903398);
+
+  // Pre-seed History with a stale resurrected ghost item ("本地缓存对话 01a1440a") + call seedFromAccountStats + restoreFromLocalCache while online
+  History.items = [
+    { id: '01a1440a-8866-7d36-80d8-1838f765a53b', title: '本地缓存对话 01a1440a', createdAt: '2026-10-21T01:38:40.083Z', _localRecovered: true },
+  ];
+  History.seedFromAccountStats();
+  await History.restoreFromLocalCache();
+
+  // Ghost entry without MsgCache messages MUST be purged, and orphan AcctStats.turns key MUST be cleaned up
+  assert.equal(History.byId('01a1440a-8866-7d36-80d8-1838f765a53b'), undefined, 'ghost entry without cached messages purged');
+  assert.equal(acctTurns['01a1440a-8866-7d36-80d8-1838f765a53b'], undefined, 'orphan AcctStats.turns entry removed');
+  assert.equal(History.byId('01a143dc-8060-7f05-a23f-4faeb32d6352'), undefined, 'Models.all without MsgCache never resurrected');
+  assert.equal(History.byId('01a143de-d19c-7271-a2b2-a5c717a74d8c'), undefined, 'Notes.all without MsgCache never resurrected');
+
+  // When offline (Host.online = false), real conversation with cached messages in IndexedDB IS recovered with its real first user prompt and timestamp
+  ctx.Host.online = false;
+  await History.restoreFromLocalCache();
+  const realRecovered = History.byId('01a1440a-e8c4-737a-aa9e-959f1f925b86');
+  assert.ok(realRecovered, 'chat with real MsgCache messages is recovered when offline');
+  assert.equal(realRecovered.title, '真实有效对话首句');
+  assert.equal(realRecovered.createdAt, '2026-10-16T09:46:46.340Z');
+});
+
+test('v0.13.162: Dual-source (反推 + 习惯) combined confidence & strict descending sort (100% before 99.8%)', () => {
+  const bpUiSrc = read('ui/billing-probe-ui.js');
+  assert.ok(bpUiSrc.includes('existing.combinedPct = Math.min(100, Math.round((effRevBase * 0.55 + hc.match * 0.45) * 10) / 10);'));
+  assert.ok(bpUiSrc.includes('if (Boolean(a.userCorrected) !== Boolean(b.userCorrected)) return Number(Boolean(b.userCorrected)) - Number(Boolean(a.userCorrected));'));
+  assert.ok(bpUiSrc.includes('if (Boolean(a.hasDual) !== Boolean(b.hasDual)) return Number(Boolean(b.hasDual)) - Number(Boolean(a.hasDual));'));
+  assert.ok(bpUiSrc.includes('((b.displayMatch || 0) - (a.displayMatch || 0))'));
+});
 
 

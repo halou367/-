@@ -1567,7 +1567,7 @@ public class MainActivity extends Activity {
                 try { JSONObject f = new JSONObject(sp.getString("shared_fixedpw", "null")); String pw = decPw(f.optString("pw", "")); return f.optBoolean("on") && !pw.isEmpty() ? new JSONObject().put("on", true).put("pw", pw).toString() : "null"; } catch (Exception e) { return "null"; }
             }
             if ("caproute".equals(k)) { String c = capSpec(); try { return c.isEmpty() ? "null" : JSONObject.quote(c); } catch (Exception e) { return "null"; } }
-            if (!"prefs".equals(k) && !"gacha".equals(k) && !"nodes".equals(k) && !"nodesubs".equals(k) && !"proxyips".equals(k) && !"pippool".equals(k) && !"archbl".equals(k) && !"strsamples".equals(k) && !"fmtcal".equals(k) && !"gnode".equals(k) && !"pelshots".equals(k) && !"pelican".equals(k) && !(k != null && k.matches("(gacha|draft|gtok|signup|mailtok|webreg)@[\\w-]{1,64}"))) return "null";
+            if (!"prefs".equals(k) && !"gacha".equals(k) && !"nodes".equals(k) && !"nodesubs".equals(k) && !"proxyips".equals(k) && !"pippool".equals(k) && !"archbl".equals(k) && !"strsamples".equals(k) && !"fmtcal".equals(k) && !"gnode".equals(k) && !"pelshots".equals(k) && !"pelican".equals(k) && !(k != null && (k.matches("(gacha|draft|gtok|signup|mailtok|webreg)@[\\w-]{1,64}") || k.matches("(hist|models)@[\\w-]{1,64}")))) return "null";
             return sp.getString("shared_" + k, "null");
         }
         @JavascriptInterface public String sharedSet(String k, String v) {
@@ -1598,7 +1598,7 @@ public class MainActivity extends Activity {
                 }
                 return "true";
             }
-            if (!"prefs".equals(k) && !"gacha".equals(k) && !"nodes".equals(k) && !"nodesubs".equals(k) && !"proxyips".equals(k) && !"pippool".equals(k) && !"archbl".equals(k) && !"strsamples".equals(k) && !"fmtcal".equals(k) && !"pelshots".equals(k) && !"pelican".equals(k) && !(k != null && k.matches("(gacha|draft|gtok|signup|mailtok|webreg)@[\\w-]{1,64}"))) return "false";
+            if (!"prefs".equals(k) && !"gacha".equals(k) && !"nodes".equals(k) && !"nodesubs".equals(k) && !"proxyips".equals(k) && !"pippool".equals(k) && !"archbl".equals(k) && !"strsamples".equals(k) && !"fmtcal".equals(k) && !"pelshots".equals(k) && !"pelican".equals(k) && !(k != null && (k.matches("(gacha|draft|gtok|signup|mailtok|webreg)@[\\w-]{1,64}") || k.matches("(hist|models)@[\\w-]{1,64}")))) return "false";
             if (k.startsWith("signup@")) {
                 try {
                     JSONObject a; synchronized (acctLock) { a = find(k.substring(7)); }

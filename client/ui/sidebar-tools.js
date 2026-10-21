@@ -105,7 +105,11 @@ const SideTools = {
     this.ensure();const key=this.scope+'\n'+q+'\n'+vf;
     if(key!==this.filterKey){this.filterKey=key;CardSelect.clear();}
   },
-  matches(e,q) { return !q||[e.title,e.localTitle,Models.get(e.id)?.name,Notes.get(e.id),e.note,e.notes,e.remark,e.description].some(s=>typeof s==='string'&&s.toLowerCase().includes(q)); },
+  matches(e,q) {
+    if (!q) return true;
+    const tv = typeof Titles !== 'undefined' && Titles.view ? Titles.view(e.id, e.title, e.localTitle) : null;
+    return [e.title, e.localTitle, tv?.model, tv?.note, Models.get(e.id)?.name, Notes.get(e.id), e.note, e.notes, e.remark, e.description].some(s => typeof s === 'string' && s.toLowerCase().includes(q));
+  },
   rows() { this.ensure();return this.scope==='archived'?ArchiveHistory.items:History.items; },
   toggle() { CardSelect.mode=!CardSelect.mode;if(!CardSelect.mode)CardSelect.clear();UI.renderList(); },
   paintToolbar() {

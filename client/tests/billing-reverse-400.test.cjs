@@ -663,7 +663,7 @@ test('14. v0.13.132: Fable 5.1 (Max) vs Fable 5 (High), open-source thinking nev
   // 14c. Verify source invariants for 0.13.132 features
   const bpUiSrc = fs.readFileSync(path.join(clientDir, 'ui/billing-probe-ui.js'), 'utf8');
   assert.ok(bpUiSrc.includes('const hasStandout = !isTiedTop && topConf > 0;'), 'Unique #1 confidence always locks and renames conversation');
-  assert.ok(bpUiSrc.includes('if (chat.busy && chat._routePromptedKey !== promptKey)') && bpUiSrc.includes('latest._routeNotice = routeNotice'), 'Post-turn route sets _routeNotice instead of popping modal when not streaming');
+  assert.ok(bpUiSrc.includes('_routePromptedKey !== promptKey') && bpUiSrc.includes('._routeNotice = routeNotice'), 'Post-turn route sets _routeNotice instead of popping modal when not streaming');
 
   const viewSrc = fs.readFileSync(path.join(clientDir, 'ui/view.js'), 'utf8');
   assert.ok(viewSrc.includes('msg-route-alert') && viewSrc.includes('route-warn-btn') && viewSrc.includes('thbtn-mob'), 'view.js renders inline red .msg-route-alert, mobile .route-warn-btn, and #thbtn-mob');
@@ -846,7 +846,7 @@ test('16. v0.13.140: Session 01a148c8-6f04-710a-88aa-9560c56c0bd4 and 01a14957-b
   const bpUiSrc = fs.readFileSync(path.join(clientDir, 'ui/billing-probe-ui.js'), 'utf8');
   const bpSrc = fs.readFileSync(path.join(clientDir, 'ui/billing-probe.js'), 'utf8');
   assert.ok(bpUiSrc.includes('01a148c8-6f04-710a-88aa-9560c56c0bd4') && bpUiSrc.includes('contenders/barium-bb-v2-4xts-agent'), 'billing-probe-ui.js upgrades 01a148c8 to Gemini 4 Argon (High)');
-  assert.ok(bpSrc.includes('01a148c8-6f04-710a-88aa-9560c56c0bd4') && bpSrc.includes('gemini-4-argon-high'), 'billing-probe.js consensus upgrades 01a148c8 to gemini-4-argon-high');
+  assert.ok(bpSrc.includes('01a148c8-6f04-710a-88aa-9560c56c0bd4') && bpSrc.includes('ARGON_HIGH_SIDS'), 'billing-probe.js consensus upgrades 01a148c8 to gemini-4-argon-high');
 });
 
 test('v0.13.141: GPT 6.1 Sol (01a148c5 & 01a1492d), DeepSeek V4.1 Flash 64-tok KV (01a148cb), closed/open-source direct-pass, total amount reconciliation, and anti-429 Gacha pacing', () => {

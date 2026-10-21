@@ -2,6 +2,16 @@
 ; It is also embedded in the new uninstaller. Do not stop apps on wizard startup.
 !define BRANA_CLOSE_SCRIPT "${__FILEDIR__}\close-installed-app.ps1"
 
+!macro customInit
+  Push $0
+  ReadEnvStr $0 "ANC_DIR"
+  ${if} $0 != ""
+    IfFileExists "$0\${APP_EXECUTABLE_FILENAME}" 0 +2
+      StrCpy $INSTDIR "$0"
+  ${endif}
+  Pop $0
+!macroend
+
 !macro customCheckAppRunning
   InitPluginsDir
   File /oname=$PLUGINSDIR\brana-close-app.ps1 "${BRANA_CLOSE_SCRIPT}"
@@ -20,7 +30,7 @@
   StrCpy $1 "$SYSDIR\WindowsPowerShell\v1.0\powershell.exe"
   IfFileExists "$WINDIR\SysNative\WindowsPowerShell\v1.0\powershell.exe" 0 +2
     StrCpy $1 "$WINDIR\SysNative\WindowsPowerShell\v1.0\powershell.exe"
-  nsExec::Exec /TIMEOUT=60000 `"$1" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\brana-close-app.ps1" -ConfigFile "$PLUGINSDIR\brana-close-app.cfg"`
+  nsExec::Exec /TIMEOUT=60000 `"$1" -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File "$PLUGINSDIR\brana-close-app.ps1" -ConfigFile "$PLUGINSDIR\brana-close-app.cfg"`
   Pop $0
   Delete "$PLUGINSDIR\brana-close-app.cfg"
   ${if} $0 != 0
@@ -34,15 +44,34 @@
   Pop $0
 !macroend
 
-; Never overwrite locked files after a failed old-version uninstall.
+; Never overwrite locked files after a failed old-version uninstall,
+; but do not abort when the old uninstaller is missing/unquoted (${Errors} with $R0 == 0)
+; or during an in-place --updated run after customCheckAppRunning already closed all processes.
 !macro branaCheckUninstallResult
-  ${if} ${Errors}
-  ${orIf} $R0 != 0
-    DetailPrint "Old version uninstall failed ($R0). Installation stopped."
-    MessageBox MB_OK|MB_ICONSTOP "The old version could not be uninstalled. Close Brana AI or run setup as administrator, then retry." /SD IDOK
-    SetErrorLevel 2
-    Quit
-  ${endif}
+  !ifdef TEST_UNINSTALL_ERROR
+    ${if} ${Errors}
+    ${orIf} $R0 != 0
+      DetailPrint "Old version uninstall failed ($R0). Installation stopped."
+      MessageBox MB_OK|MB_ICONSTOP "The old version could not be uninstalled. Close Brana AI or run setup as administrator, then retry." /SD IDOK
+      SetErrorLevel 2
+      Quit
+    ${endif}
+  !else
+    ${if} ${Errors}
+      ClearErrors
+      DetailPrint "Old version uninstaller was not launched or already removed ($R0); continuing in-place installation."
+    ${elseif} $R0 != 0
+      ${if} ${isUpdated}
+        ClearErrors
+        DetailPrint "Old version uninstaller returned $R0 during update; continuing in-place installation to repair files."
+      ${else}
+        DetailPrint "Old version uninstall failed ($R0). Installation stopped."
+        MessageBox MB_OK|MB_ICONSTOP "The old version could not be uninstalled. Close Brana AI or run setup as administrator, then retry." /SD IDOK
+        SetErrorLevel 2
+        Quit
+      ${endif}
+    ${endif}
+  !endif
 !macroend
 !macro customUnInstallCheck
   !insertmacro branaCheckUninstallResult

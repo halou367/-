@@ -112,14 +112,22 @@ const Bulk = {
       }
       History.saveSoon();
     } else {
+      try { History.bury?.([...gone]); } catch {}
       History.items = History.items.filter(e => !gone.has(e.id)); History.saveSoon();
     }
     if (kind === 'arch') { try { LocalCache.drop(gone, { archived: true }); } catch {} }
     if (kind === 'del') {
       try { LocalCache.drop(gone); } catch {}
       for (const t of Tabs.list.filter(x => x.sid && gone.has(x.sid))) { try { Tabs.close(t.key); } catch {} }
-      let dm = false; for (const sid of gone) { const c = Chats.get(sid); if (c) { try { c.ctl?.abort(); } catch {} Chats.delete(sid); } if (Models.all[sid]) { delete Models.all[sid]; dm = true; } try { Notes.drop(sid); Trace.clear(sid); Fav.set(sid, false); } catch {} }
+      let dm = false, dt = false;
+      for (const sid of gone) {
+        const c = Chats.get(sid); if (c) { try { c.ctl?.abort(); } catch {} Chats.delete(sid); }
+        if (Models.all[sid]) { delete Models.all[sid]; dm = true; }
+        if (typeof AcctStats !== 'undefined' && AcctStats.turns && AcctStats.turns[sid]) { delete AcctStats.turns[sid]; dt = true; }
+        try { Notes.drop(sid); Trace.clear(sid); Fav.set(sid, false); } catch {}
+      }
       if (dm) Store.set('models', Models.all);
+      if (dt) try { AcctStats.save?.(); } catch {}
     }
     Bus.emit('history'); try { AcctStats.report(); } catch {} try { UI.renderList(); UI.renderTabs(); } catch {}
   },

@@ -46,7 +46,7 @@ const Traffic = {
       const end = () => { this.pend.delete(id); };
       p.then(r => {
         try {
-          if (!r || !r.body || typeof r.clone !== 'function') return end();
+          if ((o && o._selfTrackDown) || !r || !r.body || typeof r.clone !== 'function') return end();
           const rd = r.clone().body.getReader();
           const pump = () => rd.read().then(x => { if (x.done) return end(); const k = x.value && x.value.byteLength || 0; if (k) { this.down += k; this.lastDownAt = now(); this.add(kd, 0, k); } return pump(); });
           pump().catch(end);
@@ -195,9 +195,10 @@ let _visitState = null;
 function getOrCreateVisitId() {
   const t = now();
   const expired = v => !v || typeof v.id !== 'string' || !v.id || !(t - v.lastSeen < 1800000) || !(t - v.started < 43200000);
-  if (expired(_visitState) && typeof document !== 'undefined' && typeof document.cookie === 'string') {
+  if (expired(_visitState) && typeof document !== 'undefined') {
     try {
-      const m = document.cookie.split(';').map(x => x.trim()).find(x => x.startsWith('arena_visit_id='));
+      const ck = typeof document.cookie === 'string' ? document.cookie : '';
+      const m = ck.split(';').map(x => x.trim()).find(x => x.startsWith('arena_visit_id='));
       if (m) {
         const parsed = JSON.parse(decodeURIComponent(m.slice(15)));
         if (!expired(parsed)) _visitState = parsed;
@@ -354,7 +355,33 @@ const Host = (() => {
 // ---------- 本地存储（按账号分区天然隔离）----------
 const Store = {
   get(k, d) { try { const v = localStorage.getItem('anc:' + k); return v == null ? d : JSON.parse(v); } catch { return d; } },
-  set(k, v) { try { localStorage.setItem('anc:' + k, JSON.stringify(v)); return true; } catch { return false; } },
+  freeQuotaBloat(keepKey) {
+    try {
+      const target = 'anc:' + keepKey;
+      if ('anc:cap' !== target) try { localStorage.removeItem('anc:cap'); } catch {}
+      if ('anc:pelican-shots' !== target) {
+        try {
+          const ps = localStorage.getItem('anc:pelican-shots');
+          if (ps && ps.length > 600000) localStorage.removeItem('anc:pelican-shots');
+        } catch {}
+      }
+      const keys = [];
+      for (let i = 0; i < localStorage.length; i++) {
+        const lk = localStorage.key(i);
+        if (lk && lk !== target && (lk.startsWith('anc:trace:') || lk === 'anc:str:samples' || lk === 'anc:billing:costDocCache')) keys.push(lk);
+      }
+      for (const lk of keys) {
+        try { localStorage.removeItem(lk); } catch {}
+      }
+    } catch {}
+  },
+  set(k, v) {
+    const raw = JSON.stringify(v);
+    try { localStorage.setItem('anc:' + k, raw); return true; } catch {
+      this.freeQuotaBloat(k);
+      try { localStorage.setItem('anc:' + k, raw); return true; } catch { return false; }
+    }
+  },
   del(k) { try { localStorage.removeItem('anc:' + k); } catch {} },
 };
 const Prefs = Object.assign({ autoTitle: false, notify: true, enterSend: true, theme: 'auto', ipPoll: 60, acctCheckHours: 6, rcLang: 'zh-CN', thinkStop: true, routePausePrompt: true }, Store.get('prefs', {}));
@@ -515,7 +542,7 @@ const Pin = {
     if (!force && now() - this.ck < 2000) return; this.ck = now();
     this.ensureBillingFlags(Boolean(force));
     const v = this.vals();
-    if (!this.on()) { if (v.length) this.drop(); return; }
+    if (!this.on() || (!this.lockedDpl() && Prefs.pinOn !== true)) { if (v.length) this.drop(); return; }
     const d = this.dpl(); if (!force && v.length === 1 && v[0] === d) return;
     if (v.length && (v.length > 1 || v[0] !== d)) this.drop();
     try { document.cookie = `${this.NAME}=${d}; path=/; max-age=31536000; secure; samesite=lax`; } catch {}
@@ -761,6 +788,7 @@ const Models = {
     if (dirty) try { Store.set('models', raw); } catch {}
     return raw;
   })(),
+  get map() { return this.all; },
   get(sid) { return this.all[sid] || null; },
   set(sid, v) { if (v && typeof v.name === 'string' && typeof Strength !== 'undefined' && Strength.foldVer) {
       v = { ...v, name: Strength.canon ? Strength.canon(v.name) : Strength.foldVer(v.name) };
@@ -772,6 +800,7 @@ const Models = {
     const ks = Object.keys(this.all);
     if (ks.length > 3000) for (const k of ks.slice(0, ks.length - 3000)) delete this.all[k];
     Store.set('models', this.all);
+    try { if (typeof MsgCache !== 'undefined' && MsgCache.putMeta) void MsgCache.putMeta('models', this.all); } catch {}
     Bus.emit('models', sid);
   },
 };
@@ -818,27 +847,72 @@ async function api(path, opt = {}) {
   const init = { credentials: 'same-origin', cache: 'no-store', ...opt, headers: { ...(opt.json !== undefined ? { 'Content-Type': 'application/json' } : {}), ...(opt.headers || {}) } };
   if (opt.json !== undefined) { init.body = JSON.stringify(opt.json); init.method = init.method || 'POST'; delete init.json; }
   const retryCnt = Number(opt._retryCount) || (opt._retried ? 1 : 0);
-  delete init.noRelogin; delete init.timeout; delete init.bg; delete init._retried; delete init._retryCount; delete init._retried409;
+  const onProgress = typeof opt.onProgress === 'function' ? opt.onProgress : null;
+  const noApiRetry = !!opt.noApiRetry;
+  const isBg = !!opt.bg;
+  delete init.noRelogin; delete init.timeout; delete init.bg; delete init._retried; delete init._retryCount; delete init._retried409; delete init.onProgress; delete init.noApiRetry;
   const mark = NetHealth.mark(), read = /^(GET|HEAD)$/i.test(init.method || 'GET');
   const isCost = /\/api\/chat\/[^/]+\/cost\b/i.test(path);
-  if (!isCost && typeof Pin !== 'undefined' && typeof Pin.on === 'function' && !Pin.on() && typeof document !== 'undefined' && String(document.cookie || '').includes('__vdpl=')) {
+  const isChatRead = read && !isCost && /^\/api\/chat\/[^/?#]+(?:\/messages)?(?:\?|$)/i.test(path);
+  if (!isCost && typeof Pin !== 'undefined' && typeof Pin.drop === 'function' && typeof document !== 'undefined' && String(document.cookie || '').includes('__vdpl=') && (!Pin.on?.() || (!Pin.lockedDpl?.() && Prefs.pinOn !== true))) {
     try { Pin.drop(); } catch {}
   }
   if (read && /^\/api\//.test(path)) await ReadLimit.take(!!opt.bg);
-  const fault = e => { if (!opt.signal?.aborted && NetHealth.failed(e, mark)) Bus.emit('neterr', path); };
-  let res, text;
+  const fault = e => { if (!isBg && !isCost && !opt.signal?.aborted && NetHealth.failed(e, mark)) Bus.emit('neterr', path); };
+  const baseTimeout = opt.timeout ?? (read ? (isChatRead ? 35000 : NetPolicy.READ_MS) : 0);
+  const streamIdleMs = isChatRead ? Math.max(Number(baseTimeout) || 0, 45000) : Math.max(Number(baseTimeout) || 0, NetPolicy.READ_MS || 25000);
+  let res, text = '', headersReceived = false, bytesReceived = 0;
   try {
-    await NetPolicy.deadline(async signal => { res = await rawFetch(path, { ...init, signal }); text = await res.text(); },
-      { timeout: opt.timeout ?? (read ? NetPolicy.READ_MS : 0), signal: opt.signal });
+    await NetPolicy.deadline(async signal => {
+      res = await rawFetch(path, { ...init, signal, _selfTrackDown: true });
+      headersReceived = true;
+      if (isChatRead && res && res.ok) signal?.touch?.(streamIdleMs);
+      if (res && res.body && !res.bodyUsed && typeof res.body.getReader === 'function' && typeof TextDecoder !== 'undefined') {
+        const rd = res.body.getReader();
+        const dec = new TextDecoder();
+        const chunks = [];
+        const kd = typeof Traffic !== 'undefined' && typeof Traffic.kind === 'function' ? Traffic.kind(path) : null;
+        try {
+          for (;;) {
+            const { done, value } = await rd.read();
+            if (done) break;
+            const k = value && value.byteLength || 0;
+            if (k > 0) {
+              bytesReceived += k;
+              signal?.touch?.(streamIdleMs);
+              if (typeof Traffic !== 'undefined' && kd) {
+                Traffic.down += k; Traffic.lastDownAt = now(); Traffic.add(kd, 0, k, false);
+              }
+              chunks.push(dec.decode(value, { stream: true }));
+              if (onProgress) {
+                try { onProgress(bytesReceived); } catch {}
+              }
+            }
+          }
+          const tail = dec.decode();
+          if (tail) chunks.push(tail);
+          text = chunks.join('');
+        } finally {
+          try { rd.releaseLock(); } catch {}
+        }
+      } else {
+        text = await res.text();
+        if (text && typeof Traffic !== 'undefined' && typeof Traffic.kind === 'function') {
+          const k = text.length;
+          Traffic.down += k; Traffic.lastDownAt = now(); Traffic.add(Traffic.kind(path), 0, k, false);
+        }
+      }
+    }, { timeout: baseTimeout, signal: opt.signal });
   } catch (e) {
-    if (read && !isCost && retryCnt < 2 && !opt.signal?.aborted && typeof Host !== 'undefined' && typeof Host.info === 'function' && !e?.status && (e?.routeTimeout || /failed to fetch|fetch failed|network|ERR_|socket|eof|reset|closed/i.test(String(e?.message || e)))) {
-      if (e?.routeTimeout && typeof AutoRoute !== 'undefined' && AutoRoute.onErrorSwitch) void AutoRoute.onErrorSwitch(e, path);
+    if (read && !isCost && !noApiRetry && retryCnt < (isChatRead ? 1 : 2) && !opt.signal?.aborted && typeof Host !== 'undefined' && typeof Host.info === 'function' && !e?.status && (e?.routeTimeout || /failed to fetch|fetch failed|network|ERR_|socket|eof|reset|closed/i.test(String(e?.message || e)))) {
+      if (!isBg && retryCnt >= 1 && e?.routeTimeout && !headersReceived && bytesReceived === 0 && !isChatRead && typeof AutoRoute !== 'undefined' && AutoRoute.onErrorSwitch) void AutoRoute.onErrorSwitch(e, path);
       const isSwitching = () => (typeof NodeRoutes !== 'undefined' && NodeRoutes.manual > 0) || (typeof AutoRoute !== 'undefined' && AutoRoute.busy) || (typeof Pool !== 'undefined' && Pool.switching?.size > 0);
       if (isSwitching()) {
         for (let w = 0; w < 8 && isSwitching() && !opt.signal?.aborted; w++) await new Promise(r => setTimeout(r, 250));
       }
       await new Promise(r => setTimeout(r, retryCnt === 0 ? 500 : 900));
-      if (!opt.signal?.aborted) return api(path, { ...opt, _retried: true, _retryCount: retryCnt + 1 });
+      const nextTimeout = isChatRead ? Math.max(Number(opt.timeout) || 0, 45000) : opt.timeout;
+      if (!opt.signal?.aborted) return api(path, { ...opt, timeout: nextTimeout, onProgress, _retried: true, _retryCount: retryCnt + 1 });
     }
     fault(e);
     throw e;
@@ -866,7 +940,7 @@ async function api(path, opt = {}) {
     const ipLimited = !isCost && res.status === 429 && (read || /^\/(?:api|nextjs-api)\//.test(path));
     if (ipLimited) error.ipLimited = true;
     const prevRl = ReadLimit.until; if (res.status === 429 && (read || /^\/api\/chat\//.test(path))) ReadLimit.hit(error.retryAfterMs); if (isCost) ReadLimit.until = prevRl;
-    if (!isCost && typeof AutoRoute !== 'undefined' && AutoRoute.onErrorSwitch && [408, 500, 502, 503, 504, 520, 522, 524].includes(res.status)) void AutoRoute.onErrorSwitch(error, path);
+    if (!isBg && !isCost && typeof AutoRoute !== 'undefined' && AutoRoute.onErrorSwitch && [408, 502, 503, 504, 520, 522, 524].includes(res.status)) void AutoRoute.onErrorSwitch(error, path);
     throw error;
   }
   let value; try { value = text ? JSON.parse(text) : null; } catch { value = text; }
@@ -1578,13 +1652,40 @@ const MsgCache = (() => {
   }
   async function del(keys) { const d = await db(); if (!d || !keys.length) return; try { const st = d.transaction('c', 'readwrite').objectStore('c'); for (const k of keys) st.delete(k); } catch {} }
   function compactMsgs(rawMsgs) {
+    const truncStr = (s, lim = 16000) => (typeof s === 'string' && s.length > lim) ? s.slice(0, lim) + '\n…[cached]' : s;
+    const compactOut = (o, lim = 16000) => {
+      if (!o) return o;
+      if (typeof o === 'string') return o.length > lim ? truncStr(o, lim) : o;
+      if (typeof o !== 'object' || Array.isArray(o)) return o;
+      let oc = false;
+      const next = { ...o };
+      for (const k of ['stdout', 'stderr', 'content', 'text', 'raw']) {
+        if (typeof next[k] === 'string' && next[k].length > lim) { next[k] = truncStr(next[k], lim); oc = true; }
+        else if (next[k] && typeof next[k] === 'object' && !Array.isArray(next[k])) {
+          let sc = false;
+          const sub = { ...next[k] };
+          for (const sk of ['stdout', 'stderr', 'content', 'text', 'raw']) {
+            if (typeof sub[sk] === 'string' && sub[sk].length > lim) { sub[sk] = truncStr(sub[sk], lim); sc = true; }
+          }
+          if (sc) { next[k] = sub; oc = true; }
+        }
+      }
+      return oc ? next : o;
+    };
     let msgs = rawMsgs.filter(m => !m._local && !m.failed).slice(-200).map(({ v, ...m }) => m), js = JSON.stringify(msgs);
+    if (js.length > 4e6) {
+      msgs = msgs.map(m => ({ ...m, parts: (m.parts || []).map(p => {
+        if (!p || !p.output) return p;
+        const co = compactOut(p.output, 16000);
+        return co === p.output ? p : { ...p, output: co };
+      }) }));
+      js = JSON.stringify(msgs);
+    }
     if (js.length > CAP) {
       msgs = msgs.map(m => ({ ...m, parts: (m.parts || []).map(p => {
         if (!p || !p.output) return p;
-        if (typeof p.output === 'string' && p.output.length > 16000) return { ...p, output: p.output.slice(0, 16000) + '\n…[cached]' };
-        if (typeof p.output === 'object' && typeof p.output.stdout === 'string' && p.output.stdout.length > 16000) return { ...p, output: { ...p.output, stdout: p.output.stdout.slice(0, 16000) + '\n…[cached]' } };
-        return p;
+        const co = compactOut(p.output, 4000);
+        return co === p.output ? p : { ...p, output: co };
       }) }));
       js = JSON.stringify(msgs);
     }
@@ -1592,8 +1693,9 @@ const MsgCache = (() => {
     return { msgs, js };
   }
   async function writeNow(chat, allowBusy = false) {
-    if (!chat || chat.gacha || !chat.loaded || (chat.busy && !allowBusy)) return;
-    try { if (History.goneMap().has(chat.sid)) return; } catch {}
+    const hasMsgs = Array.isArray(chat?.messages) && chat.messages.length > 0;
+    if (!chat || (!chat.loaded && !hasMsgs) || (chat.busy && !allowBusy)) return;
+    try { if (History.goneMap().has(chat.sid)) return; if (typeof Arch !== 'undefined' && Arch.has?.(chat.sid)) return; } catch {}
     const d = await db(); if (!d) return;
     const { msgs, js } = compactMsgs(chat.messages || []);
     if (js.length > CAP || !msgs.length) return;
@@ -1602,13 +1704,45 @@ const MsgCache = (() => {
     const ix = idx(); ix[chat.sid] = now(); const ks = Object.keys(ix);
     if (ks.length > MAX) { const old = ks.sort((a, b) => ix[a] - ix[b]).slice(0, ks.length - MAX); for (const k of old) delete ix[k]; del(old); }
     Store.set('mc:idx', ix);
+    try { d.transaction('c', 'readwrite').objectStore('c').put(ix, '__meta__:mc:idx'); } catch {}
   }
   function put(chat) {
-    if (chat.gacha) return;
+    if (!chat || (typeof Arch !== 'undefined' && Arch.has?.(chat.sid))) return;
     clearTimeout(timers.get(chat.sid));
     timers.set(chat.sid, setTimeout(() => { timers.delete(chat.sid); void writeNow(chat, false); }, 2000));
   }
-  return { get, put, putNow: chat => writeNow(chat, true), keys: () => Object.keys(idx()), del: sid => { clearTimeout(timers.get(sid)); timers.delete(sid); const ix = idx(); delete ix[sid]; Store.set('mc:idx', ix); del([sid]); } };
+  async function getMeta(key) {
+    const d = await db(); if (!d) return null;
+    return new Promise(res => { try { const q = d.transaction('c').objectStore('c').get('__meta__:' + key); q.onsuccess = () => res(q.result || null); q.onerror = () => res(null); } catch { res(null); } });
+  }
+  async function putMeta(key, val) {
+    const d = await db(); if (!d) return;
+    try { d.transaction('c', 'readwrite').objectStore('c').put(val, '__meta__:' + key); } catch {}
+  }
+  async function allKeys() {
+    const memKeys = Object.keys(idx());
+    const d = await db(); if (!d) return memKeys;
+    return new Promise(res => {
+      try {
+        const q = d.transaction('c').objectStore('c').getAllKeys();
+        q.onsuccess = () => {
+          const idbKeys = (q.result || []).map(String).filter(k => k && !k.startsWith('__meta__:'));
+          const all = [...new Set([...memKeys, ...idbKeys])];
+          if (idbKeys.length > memKeys.length) {
+            try {
+              const ix = idx();
+              const t = now();
+              for (const k of idbKeys) if (!ix[k]) ix[k] = t;
+              Store.set('mc:idx', ix);
+            } catch {}
+          }
+          res(all);
+        };
+        q.onerror = () => res(memKeys);
+      } catch { res(memKeys); }
+    });
+  }
+  return { get, put, putNow: chat => writeNow(chat, true), keys: () => Object.keys(idx()), allKeys, getMeta, putMeta, del: sid => { clearTimeout(timers.get(sid)); timers.delete(sid); const ix = idx(); delete ix[sid]; Store.set('mc:idx', ix); del([sid]); } };
 })();
 
 const Chats = new Map();
@@ -1622,8 +1756,8 @@ class Chat {
     this.title = ''; this.v = 0; this.phase = ''; this.lastActivity = 0; this.runTok = null; this.identifying = false;
   }
   get busy() { return this.status === 'submitted' || this.status === 'streaming' || this.status === 'stopping'; }
-  emit() { if (this._emitT) { clearTimeout(this._emitT); this._emitT = 0; } this._lastEmitAt = now(); this.v++; if (this.wCtl && (this.busy || this.streaming)) { try { this.wCtl.abort(); } catch {} this.wCtl = null; } Bus.emit('chat', this); if (this.loaded && !this.busy && !this.gacha) MsgCache.put(this); }
-  emitStreamSoon(delay = 65) { if (this._emitT) return; const el = now() - (this._lastEmitAt || 0); if (el >= delay) { this.emit(); return; } this._emitT = setTimeout(() => { this._emitT = 0; this.emit(); }, Math.max(16, delay - el)); }
+  emit() { if (this._emitT) { clearTimeout(this._emitT); this._emitT = 0; } this._lastEmitAt = now(); this.v++; if (this.wCtl && (this.busy || this.streaming)) { try { this.wCtl.abort(); } catch {} this.wCtl = null; } Bus.emit('chat', this); if ((this.loaded || (Array.isArray(this.messages) && this.messages.length > 0)) && !this.busy) MsgCache.put(this); }
+  emitStreamSoon(delay = 20) { if (this._emitT) return; const el = now() - (this._lastEmitAt || 0); if (el >= delay) { this.emit(); return; } this._emitT = setTimeout(() => { this._emitT = 0; this.emit(); }, Math.max(12, delay - el)); }
   // 鼠标移到侧栏卡片上就先把对话内容拉下来，点开时直接用（30 秒内有效）
   prefetch() {
     if (this.loaded || this.loading || this._preP || (this._pre && now() - this._pre.at < 30000) || now() - (this._preAt || 0) < 180000) return;   // 同一个对话 3 分钟内只预读一次（鼠标反复划过不重复下载）
@@ -1636,7 +1770,7 @@ class Chat {
   }
   // 预热（窗口切换器 / 相邻窗口）：先放本地缓存秒出，再后台拉服务器最新内容；点开时 30 秒内直接用这份，不再等网络
   async warm() {
-    if (this.gacha || this.loaded || this.loading) return;
+    if (this.loaded || this.loading) return;
     if (!this.messages.length) { const x = await MsgCache.get(this.sid).catch(() => null); if (x?.messages?.length && !this.loaded && !this.loading && !this.messages.length) { this.messages = x.messages.map(m => ({ ...m, v: 0 })); this.cached = true; this.hasMore = !!x.more; this.emit(); } }
     if (this.loaded || this.loading) return;
     this.prefetch();
@@ -1653,6 +1787,27 @@ class Chat {
     this.token = t;
     const jwtExp = (jwt(t)?.exp || 0) * 1000;
     this.tokenExp = Number(exp) > now() ? Number(exp) : (jwtExp || (now() + 8 * 60000));
+    this.tokenAt = now();
+  }
+  async wakeSessionToken(force = false) {
+    const prevTok = this.token, prevExp = this.tokenExp;
+    const stale = !this.token || !this.tokenAt || (now() - this.tokenAt > 45000);
+    if (!force && !stale && (this.tokenExp || 0) - 120000 > now()) return this.token;
+    try {
+      const j = await api('/api/chat/trigger-token', { json: { sessionId: this.sid }, timeout: 10000 });
+      const tok = j?.token || j?.publicAccessToken;
+      if (typeof tok === 'string' && tok) {
+        const exp = Number(j?.expiresAt || j?.exp || 0);
+        this.setToken(tok, exp > 1e12 ? exp : exp > 1e9 ? exp * 1000 : 0);
+        return this.token;
+      }
+    } catch {}
+    if (prevTok && !this._badToks?.has(prevTok) && (prevExp || 0) > now() + 15000) {
+      this.token = prevTok;
+      this.tokenExp = prevExp;
+      return prevTok;
+    }
+    return this.ensureToken(force);
   }
   ensureToken(force) {
     if (this.tokenP) return this.tokenP;
@@ -1672,19 +1827,39 @@ class Chat {
   load(force) {
     if (this.loaded && !force) return Promise.resolve();
     // 秒开（含从浏览器模式切回 Scheme B 及常规点击）：先显示本地缓存并恢复 lastSeq；若历史 updatedAt 未变或刚缓存过，直接 0ms 完成加载并转后台静默对账
-    if (!this.messages.length && !this.gacha) MsgCache.get(this.sid).then(x => {
+    if (!this.messages.length) MsgCache.get(this.sid).then(x => {
       if (x?.messages?.length && !this.loaded && !this.messages.length) {
-        this.messages = x.messages.map(m => ({ ...m, v: 0 }));
+        this.messages = x.messages.map(m => {
+          if (m?.role === 'assistant' && !m.metadata?.pending && Array.isArray(m.parts)) {
+            for (const p of m.parts) {
+              if (p?.toolCallId && !Hitl.name(p) && /^(input-streaming|input-available)$/.test(p.state || '')) {
+                p.state = 'output-error';
+                if (!p.errorText) p.errorText = '未返回结果';
+              }
+            }
+          }
+          return { ...m, v: 0 };
+        });
         this.cached = true; this.hasMore = !!x.more;
         if (x.lastSeq && !this.lastSeq) this.lastSeq = String(x.lastSeq);
-        if (x.token && !this.token && (x.tokenExp || 0) > now() + 30000) { this.token = x.token; this.tokenExp = x.tokenExp; }
+        if (x.token && !this.token && (x.tokenExp || 0) > now() + 30000) { this.token = x.token; this.tokenExp = x.tokenExp; this.tokenAt = 0; }
         const histRow = typeof History !== 'undefined' ? History.byId?.(this.sid) : null;
         const lastCached = x.messages.at(-1);
-        const isIdleComplete = lastCached?.role === 'assistant' && !lastCached?.metadata?.pending && !this.busy;
-        const isUnchangedByHist = Boolean(isIdleComplete && histRow?.updatedAt && x.histUpdatedAt && histRow.updatedAt === x.histUpdatedAt);
-        if (!force && (isUnchangedByHist || (window.__ANC_FAST_RETURN && now() - (x.at || 0) < 30 * 60e3))) {
+        const isFastRet = Boolean(window.__ANC_FAST_RETURN);
+        const isIdleComplete = lastCached?.role === 'assistant' && !lastCached?.metadata?.pending && !(typeof isDeadAssistantMsg === 'function' && isDeadAssistantMsg(lastCached)) && !this.busy;
+        const isUnchangedByHist = Boolean(!isFastRet && isIdleComplete && histRow?.updatedAt && x.histUpdatedAt && histRow.updatedAt === x.histUpdatedAt);
+        if (!force && (isUnchangedByHist || (isFastRet && now() - (x.at || 0) < 30 * 60e3))) {
           this.cached = false; this.loaded = true; this.error = null; this._lastSyncedHistAt = histRow?.updatedAt || x.histUpdatedAt || null; this.emit();
-          if (!isUnchangedByHist) setTimeout(() => { if (this.loaded) this.quickSync(true); }, 20);
+          if (isFastRet) {
+            setTimeout(() => {
+              try { if (typeof History !== 'undefined' && History.refresh) void History.refresh(); } catch {}
+              if (this.loaded && !this.busy) void (this.resumeIncremental ? this.resumeIncremental('fast-return') : this.quickSync(true));
+            }, 30);
+          } else if (isUnchangedByHist) {
+            setTimeout(() => { if (this.loaded && !this.busy && typeof this.reconcile === 'function') void this.reconcile(0).catch(() => {}); }, 80);
+          } else {
+            setTimeout(() => { if (this.loaded) this.quickSync(true); }, 20);
+          }
           return;
         }
         this.emit();
@@ -1703,19 +1878,21 @@ class Chat {
     }
     return this.loading ||= (async () => {
       try {
-        if (!force && !this.gacha && !this.messages.length) {
+        if (!this.messages.length) {
           const x = await MsgCache.get(this.sid).catch(() => null);
+          if (this.loaded && !force) return;
           if (x?.messages?.length && !this.messages.length) {
             this.messages = x.messages.map(m => ({ ...m, v: 0 }));
             this.cached = true; this.hasMore = !!x.more;
-            if (x.lastSeq && !this.lastSeq) this.lastSeq = String(x.lastSeq);
             if (x.token && !this.token && (x.tokenExp || 0) > now() + 30000) { this.token = x.token; this.tokenExp = x.tokenExp; }
             const histRow = typeof History !== 'undefined' ? History.byId?.(this.sid) : null;
             const lastCached = x.messages.at(-1);
-            const isIdleComplete = lastCached?.role === 'assistant' && !lastCached?.metadata?.pending && !this.busy;
-            const isUnchangedByHist = Boolean(isIdleComplete && histRow?.updatedAt && x.histUpdatedAt && histRow.updatedAt === x.histUpdatedAt);
+            const isFastRet = Boolean(window.__ANC_FAST_RETURN);
+            const isIdleComplete = lastCached?.role === 'assistant' && !lastCached?.metadata?.pending && !(typeof isDeadAssistantMsg === 'function' && isDeadAssistantMsg(lastCached)) && !this.busy;
+            const isUnchangedByHist = Boolean(!force && !isFastRet && isIdleComplete && histRow?.updatedAt && x.histUpdatedAt && histRow.updatedAt === x.histUpdatedAt);
             if (isUnchangedByHist) {
               this.cached = false; this.loaded = true; this.error = null; this._lastSyncedHistAt = histRow.updatedAt; this.emit();
+              setTimeout(() => { if (this.loaded && !this.busy && typeof this.reconcile === 'function') void this.reconcile(0).catch(() => {}); }, 80);
               return;
             }
             this.emit();
@@ -1725,11 +1902,25 @@ class Chat {
         if (!force && this._pre && now() - this._pre.at < 30000 && this._pre.c?.messages?.at(-1)?.role !== 'user') c = this._pre.c;
         else if (!force && this._preP) c = await this._preP.catch(() => null);
         this._pre = null;
-        // 429：按 Retry-After（没有就指数退避）自动等一会儿再试几次，不再一次限流就直接报「加载失败」；半死连接 6.5 秒首包快速重连，不再傻等 30 秒
+        this.loadBytes = 0;
+        let lastProgEmit = 0;
+        const onProgress = bytes => {
+          this.loadBytes = bytes;
+          const tNow = now();
+          if (bytes >= 65536 && tNow - lastProgEmit >= 350) {
+            lastProgEmit = tNow;
+            this.emit();
+          }
+        };
+        // 超长上下文对话支持：追加 ?includeStreamToken=false&recoverRun=false 跳过服务端同步恢复与令牌签发阻塞（对齐官网 Web 行为），
+        // 首次连接超时给足 35 秒，重试 45 秒，且一旦响应头或数据分片到达即自动续期（流式空闲 45 秒），彻底根治超长上下文对话卡 20 秒超时。
         for (let waits = 0, netWaits = 0, fastRetried = false; !c;) {
           try {
-            const reqTimeout = (waits === 0 && netWaits === 0 && !fastRetried) ? 6500 : 22000;
-            c = await api('/api/chat/' + this.sid, { timeout: reqTimeout });
+            const reqTimeout = (waits === 0 && netWaits === 0 && !fastRetried) ? 35000 : 45000;
+            const chatQuery = (!this.busy && !this.streaming && !force && !window.__ANC_FAST_RETURN && fastRetried)
+              ? '?includeStreamToken=false&recoverRun=false'
+              : '?includeStreamToken=false';
+            c = await api('/api/chat/' + this.sid + chatQuery, { timeout: reqTimeout, noApiRetry: true, onProgress });
           } catch (e) {
             if (!fastRetried && waits === 0 && netWaits === 0 && !e?.status && (e?.routeTimeout || /超时|failed to fetch|fetch failed|network|ERR_|socket|eof|reset|closed/i.test(String(e?.message || e)))) {
               fastRetried = true;
@@ -1746,32 +1937,87 @@ class Chat {
             this.error = '请求过于频繁（429），' + Math.ceil(wait / 1000) + ' 秒后自动重试…'; this.emit(); await sleep(wait);
           }
         }
+        this.loadBytes = 0;
         const wasCached = this.cached; this.cached = false;
         // 打开对话时顺便同步列表里的名称（别的设备改名 / 校准后，不用来回切换多次才更新）
-        { const t = c?.title ?? c?.chat?.title, row = typeof History !== 'undefined' ? History.byId(this.sid) : null; if (typeof t === 'string' && t && row && row.title !== t) { row.title = t; delete row.localTitle; History.saveSoon(); Bus.emit('history'); } }
+        { const t = c?.title ?? c?.chat?.title, row = typeof History !== 'undefined' ? History.byId(this.sid) : null; if (typeof t === 'string' && t && row && row.title !== t) { row.title = t; const miNow = typeof Models !== 'undefined' ? Models.get(this.sid) : null; if (miNow?.name && !miNow.pendingConfirm && (!miNow.guess || miNow.userCorrected || miNow.habitInferred || miNow.reverseInferred || miNow.billingProbe) && typeof Titles !== 'undefined' && Titles.local) Titles.local(this.sid); else delete row.localTitle; History.saveSoon(); Bus.emit('history'); } }
         // 加载期间自己刚发出的消息（服务端还没有）保留在末尾，不被覆盖；替换掉缓存内容时强制重绘
         const srv = (c.messages || []).filter(m => !this._prunedDeadMsgIds?.has?.(m?.id)).map(m => ({ ...m, v: wasCached ? 1 : 0 })), ids = new Set(srv.map(m => m.id));
-        if (this.messages.length && !wasCached && typeof this.mergeServer === 'function') this.mergeServer(srv, this.live);
-        else { const byOld = new Map(this.messages.filter(m => m?.id).map(m => [m.id, m])); this.messages = [...srv.map(m => { const o = byOld.get(m.id); return o && (o._fmt || o._sseMeta) ? { ...m, _fmt: o._fmt, _sseMeta: o._sseMeta } : m; }), ...this.messages.filter(m => m._local && !ids.has(m.id))]; }
+        if (!srv.length && this.messages.length) {
+          // 服务端未返回有效消息时保留本地已缓存的正文，绝不清空
+        } else if (this.messages.length && !wasCached && typeof this.mergeServer === 'function') this.mergeServer(srv, this.live);
+        else {
+          const byOld = new Map(this.messages.filter(m => m?.id).map(m => [m.id, m]));
+          const oldAssts = this.messages.filter(m => m && m.role === 'assistant');
+          const srvAssts = srv.filter(m => m && m.role === 'assistant');
+          let asstOrd = 0;
+          const firstSrvId = srv[0]?.id;
+          const firstSrvIdx = firstSrvId ? this.messages.findIndex(m => m?.id === firstSrvId) : -1;
+          const olderPrefix = firstSrvIdx > 0 ? this.messages.slice(0, firstSrvIdx).filter(m => m && !m._local && !ids.has(m.id)) : [];
+          this.messages = [...olderPrefix, ...srv.map(m => {
+            const curAsstIdx = m?.role === 'assistant' ? asstOrd++ : -1;
+            const o = byOld.get(m.id) || (curAsstIdx >= 0 && oldAssts.length === srvAssts.length ? oldAssts[curAsstIdx] : null);
+            if (!o) return m;
+            let mergedParts = m.parts;
+            if (o.role === 'assistant' && Array.isArray(o.parts) && Array.isArray(m.parts)) {
+              const localReason = o.parts.filter(p => p && p.type === 'reasoning');
+              const srvHasReason = m.parts.some(p => p && p.type === 'reasoning');
+              if (localReason.length && !srvHasReason) mergedParts = [...localReason, ...m.parts];
+              const lIds = { reasoning: o.parts.filter(p => p?.type === 'reasoning' && p.id), text: o.parts.filter(p => p?.type === 'text' && p.id) }, idxMap = { reasoning: 0, text: 0 };
+              mergedParts = mergedParts.map(sp => (sp && (sp.type === 'reasoning' || sp.type === 'text') && !sp.id && lIds[sp.type]?.[idxMap[sp.type]]?.id) ? { ...sp, id: lIds[sp.type][idxMap[sp.type]++].id } : sp);
+            }
+            const extra = {};
+            if (o._fmt || m._fmt) extra._fmt = o._fmt || m._fmt;
+            if (o._sseMeta || m._sseMeta) extra._sseMeta = o._sseMeta || m._sseMeta;
+            if (o._sentAt || m._sentAt) extra._sentAt = o._sentAt || m._sentAt;
+            if (!m.metadata?.pending && (o._finishedAt || m._finishedAt)) extra._finishedAt = o._finishedAt || m._finishedAt;
+            if (o._turnModelLabel || m._turnModelLabel) extra._turnModelLabel = o._turnModelLabel || m._turnModelLabel;
+            return (mergedParts !== m.parts || Object.keys(extra).length) ? { ...m, parts: mergedParts, ...extra } : m;
+          }), ...this.messages.filter(m => m._local && !ids.has(m.id))];
+        }
         this.hasMore = !!c.pagination?.hasMore; this.cursor = c.pagination?.cursor || null;
         this.setToken(c.publicAccessToken);
         const sending = this.busy && this.messages.some(m => m._local);   // 载入完成前就发了消息：别打乱发送流程
         if (!(sending && this.awaitId)) this.lastSeq = c.lastEventId != null ? String(c.lastEventId) : null;
         this.loaded = true; this.error = null;
+        if (typeof MsgCache !== 'undefined' && MsgCache.putNow) void MsgCache.putNow(this).catch(() => {});
         try {
           if (typeof healChatModelAndBranch === 'function') healChatModelAndBranch(this);
-          if (this.hasMore && this.cursor && typeof findHealthyLastUser === 'function' && !findHealthyLastUser(this.messages) && typeof ensureHealthyHistoryLoaded === 'function') {
-            void ensureHealthyHistoryLoaded(this).then(() => {
-              try { if (typeof healChatModelAndBranch === 'function') healChatModelAndBranch(this); } catch {}
-            }).catch(() => {});
-          }
         } catch {}
         try { ExtCompat.replayChat(this); } catch {}
         const last = srv.at(-1); // a failed local input is not evidence that the server is generating
         // 停在提问卡片上等回答的那条也是 pending：它不是「正在回复」，不能当成忙（否则提交按钮一直不可用）
-        const pend = !!last && (last.role === 'user' || last.metadata?.pending) && !(last.role === 'assistant' && Hitl.idleWait(this));
-        for (const m of this.messages) if (m?.role === 'assistant' && m.metadata?.pending && (!pend || m !== last)) m.metadata = { ...m.metadata, pending: false };
-        if (sending) this.srvBusy = pend; else if (pend) this.status = 'streaming'; else if (!this.live) { this.status = 'idle'; this._lastSyncedHistAt = (typeof History !== 'undefined' && History.byId?.(this.sid)?.updatedAt) || null; }
+        const pend = !!last && (last.role === 'user' || (last.metadata?.pending && !(typeof isDeadAssistantMsg === 'function' && isDeadAssistantMsg(last)))) && !(last.role === 'assistant' && Hitl.idleWait(this));
+        for (const m of this.messages) {
+          if (m?.role !== 'assistant') continue;
+          if (m.metadata?.pending && (!pend || m !== last)) m.metadata = { ...m.metadata, pending: false };
+          if (!m.metadata?.pending && Array.isArray(m.parts)) {
+            for (const p of m.parts) {
+              if (p?.toolCallId && !Hitl.name(p) && /^(input-streaming|input-available)$/.test(p.state || '')) {
+                p.state = 'output-error';
+                if (!p.errorText) p.errorText = '未返回结果';
+              }
+            }
+          }
+        }
+        if (sending) this.srvBusy = pend;
+        else if (pend) {
+          this.status = 'streaming'; this.phase = '接收回复中';
+          const curTail = this.messages.at(-1);
+          if (curTail?.role === 'assistant' && !(typeof isDeadAssistantMsg === 'function' && isDeadAssistantMsg(curTail))) {
+            this.live = curTail;
+            this.parts.clear();
+            (curTail.parts || []).forEach(p => {
+              if (!p) return;
+              if (p.toolCallId) this.parts.set('tool:' + p.toolCallId, p);
+              if ((p.type === 'text' || p.type === 'reasoning') && p.id) this.parts.set(p.type[0] + ':' + p.id, p);
+            });
+          } else {
+            this.live = null; this.parts.clear();
+          }
+        } else if (!this.live) {
+          this.status = 'idle'; this._lastSyncedHistAt = (typeof History !== 'undefined' && History.byId?.(this.sid)?.updatedAt) || null;
+        }
         this.emit();
         // 刷新 / 重新载入时服务器上有一轮正在跑：快速补齐（700ms 上限，不阻塞实时流连接）
         if (pend && !sending && !this.gacha) { this.lastSeq = c.lastEventId != null ? String(Math.max(0, +c.lastEventId - 4000)) : null; await Promise.race([this.drain(2500, { keepIfFinished: true }).catch(() => null), sleep(700)]); if (this.lastSeq == null && c.lastEventId != null) this.lastSeq = String(c.lastEventId); }
@@ -1786,10 +2032,19 @@ class Chat {
             this.hasMore = !!cached.more;
           }
         }
-        if (this.messages.length && (typeof window !== 'undefined' && window.__BRANA_BROWSE_MODE || e?.status === 401 || e?.status === 403 || e?.net || e?.routeTimeout || !e?.status)) {
+        if (this.messages.length) {
           this.cached = false; this.loaded = true; this.error = null; this.emit();
           setTimeout(() => { if (this.loaded && !this.busy) this.quickSync?.(true); }, 3500);
           return;
+        }
+        if (e.status === 404) {
+          try {
+            const hRow = typeof History !== 'undefined' ? History.byId?.(this.sid) : null;
+            if (hRow && (hRow._localRecovered || /^本地缓存对话(\s|$)/i.test(String(hRow.title || '').trim()))) {
+              if (typeof LocalCache !== 'undefined' && LocalCache.drop) LocalCache.drop([this.sid]);
+              if (typeof History !== 'undefined' && History.bury) History.bury([this.sid]);
+            }
+          } catch {}
         }
         this.error = e.status === 404 ? '对话不存在或已删除' : e.status === 429 ? '加载失败：请求过于频繁（429），已按服务器要求等待重试仍被限流' + ((e.retryAfterMs || 0) > 0 ? '，服务端要求等待约 ' + Math.ceil(e.retryAfterMs / 1000) + ' 秒' : '') + '；稍等一会儿点刷新' : '加载失败：' + e.message; this.emit(); throw e;
       }
@@ -1803,7 +2058,8 @@ class Chat {
     this.gen++; try { this.ctl?.abort(); } catch {} this.streaming = false; this.ctl = null;
     this.fakeEnd = null; this.midTurnStall = null; this.errAt = 0; this.reloadAt = now(); this.reloadWhy = why || '';
     const last = this.messages.at(-1);
-    if (last && last.role === 'assistant') {
+    const lastIsHealthyAsst = Boolean(last && last.role === 'assistant' && !(typeof isDeadAssistantMsg === 'function' && isDeadAssistantMsg(last)));
+    if (lastIsHealthyAsst) {
       this.live = last; delete last._finishedAt;
       last.metadata = { ...(last.metadata || {}), pending: true };
       this.parts.clear();
@@ -1816,20 +2072,47 @@ class Chat {
         if ((p.type === 'text' || p.type === 'reasoning') && p.id) this.parts.set(p.type[0] + ':' + p.id, p);
       });
       last.v = (last.v || 0) + 1;
+    } else {
+      this.live = null;
+      this.parts.clear();
     }
     this.status = 'streaming'; this.phase = '增量同步'; this.emit();
     try {
-      const c = await api('/api/chat/' + this.sid, { timeout: 20000 }).catch(() => null);
+      const needRecover = Boolean(wasBusy || wasFake || why);
+      const incQuery = needRecover ? '?includeStreamToken=false' : '?includeStreamToken=false&recoverRun=false';
+      const c = await api('/api/chat/' + this.sid + incQuery, { timeout: 35000, noApiRetry: true }).catch(() => null);
       if (c?.messages?.length) {
         const ch = this.mergeServer(c.messages, null);
         if (c.publicAccessToken) this.setToken(c.publicAccessToken);
+        if (!this.gacha && typeof MsgCache !== 'undefined' && MsgCache.putNow) void MsgCache.putNow(this).catch(() => {});
         const srvLast = c.messages.at(-1);
         const curLast = this.messages.at(-1);
         const hasNewEvents = c.lastEventId != null && prevSeq != null && +c.lastEventId > prevSeq;
         const staleFakePend = !wasBusy && !!wasFake && srvLast?.role === 'assistant' && srvLast.id === last?.id && !hasNewEvents && !ch;
         const dbLaggedBehindLive = wasBusy && ((this._srvLagged && !staleFakePend) || (curLast && srvLast && curLast.id !== srvLast.id));
-        const srvPend = dbLaggedBehindLive || (!staleFakePend && !!srvLast && (srvLast.role === 'user' || srvLast.metadata?.pending) && !(srvLast.role === 'assistant' && Hitl.idleWait(this)));
-        if (curLast && curLast.role === 'assistant') this.live = curLast;
+        const srvPend = dbLaggedBehindLive || (!staleFakePend && !!srvLast && (srvLast.role === 'user' || (srvLast.metadata?.pending && !(typeof isDeadAssistantMsg === 'function' && isDeadAssistantMsg(srvLast)))) && !(srvLast.role === 'assistant' && Hitl.idleWait(this)));
+        if (curLast && curLast.role === 'assistant' && !(typeof isDeadAssistantMsg === 'function' && isDeadAssistantMsg(curLast))) {
+          this.live = curLast;
+          this.parts.clear();
+          (curLast.parts || []).forEach(p => {
+            if (!p) return;
+            if (p.toolCallId) this.parts.set('tool:' + p.toolCallId, p);
+            if ((p.type === 'text' || p.type === 'reasoning') && p.id) this.parts.set(p.type[0] + ':' + p.id, p);
+          });
+        } else {
+          this.live = null;
+          this.parts.clear();
+        }
+        if (!srvPend && (why === 'fast-return' || why === 'server-active') && c.lastEventId != null) {
+          this.lastSeq = String(Math.max(0, +c.lastEventId - 4000));
+          const d = await Promise.race([this.drain(1800, { keepIfFinished: true }).catch(() => null), sleep(650)]);
+          if (d?.open || d?.run) {
+            this.status = 'streaming'; this.phase = '接收回复中'; this.emit();
+            this.stream({ peek: false });
+            return true;
+          }
+          if (this.lastSeq == null) this.lastSeq = String(c.lastEventId);
+        }
         if (!srvPend) {
           if (c.lastEventId != null && (this.lastSeq == null || +c.lastEventId > +this.lastSeq)) this.lastSeq = String(c.lastEventId);
           let hadOpenTool = false;
@@ -1857,11 +2140,22 @@ class Chat {
           }
           return true;
         }
+        this.status = 'streaming'; this.phase = '接收回复中'; this.emit();
+        if ((!wasBusy || why === 'fast-return' || why === '手动重新载入') && c.lastEventId != null) {
+          this.lastSeq = String(Math.max(0, +c.lastEventId - 4000));
+          await Promise.race([this.drain(2000, { keepIfFinished: true }).catch(() => null), sleep(600)]);
+          if (this.lastSeq == null) this.lastSeq = String(c.lastEventId);
+        }
+      } else if (!wasBusy) {
+        if (lastIsHealthyAsst && last) last.metadata = { ...(last.metadata || {}), pending: false };
+        this.live = null; this.parts.clear(); this.status = 'idle'; this.phase = ''; this.emit();
+        this.stream({ peek: true });
+        return true;
       }
       if (wasBusy && this.lastSeq != null && +this.lastSeq > 2) this.lastSeq = String(Math.max(0, +this.lastSeq - 2));
       this.stream({ peek: false });
       return true;
-    } catch { this.stream({ peek: false }); return false; }
+    } catch { this.stream({ peek: !wasBusy }); return false; }
   }
   async reload(why, forceFull = false) {
     if (!forceFull && this.loaded && this.messages.length) return this.resumeIncremental(why);
@@ -1891,7 +2185,7 @@ class Chat {
     }
     this.olderLoading = true; this.emit();
     try {
-      const j = await api(`/api/chat/${this.sid}/messages?cursor=${encodeURIComponent(this.cursor)}&limit=20`);
+      const j = await api(`/api/chat/${this.sid}/messages?cursor=${encodeURIComponent(this.cursor)}&limit=20`, { timeout: 35000, noApiRetry: true });
       const have = new Set(this.messages.map(m => m.id));
       this.messages = [...(j.messages || []).filter(m => !have.has(m.id)).map(m => ({ ...m, v: 0 })), ...this.messages];
       const got = (j.messages || []).length;
@@ -1999,6 +2293,12 @@ class Chat {
       return this.skipHitlSend(text, opt);
     }
     if (this.busy) throw new Error('上一轮还在进行中');
+    if (!this.gacha && !opt.fingerprint) {
+      try {
+        this._gachaKept = true;
+        if (typeof Gacha !== 'undefined' && Gacha.unmarkCreatedSid) Gacha.unmarkCreatedSid(this.sid);
+      } catch {}
+    }
     if (!this.gacha && !opt.autoContinue && (this.thinkStopped || this.routedThink || this._hadOpenThinkStop || (this.messages || []).some(m => m?.metadata?.openThinkStopped || (m?.role === 'assistant' && (m?.parts || []).some(p => p?.type === 'reasoning' && /[^\s.…·。]/.test(String(p.text || ''))))))) {
       this._hadOpenThinkStop = true;
       this._allowOpenThink = true;
@@ -2006,6 +2306,26 @@ class Chat {
     const wasMidStall = !!(opt.autoContinue || opt.officialAutoResend || opt.retryOf?._streamRejected || this.fakeEnd || this.midTurnStall || (typeof KeepAlive !== 'undefined' && KeepAlive.isMidTurnStalled?.(this)));
     clearTimeout(this.tailT);
     if (this.streaming) { try { this.ctl?.abort(); } catch {} this.streaming = false; this.ctl = null; }
+    if (!opt.retryOf && this.messages.length) {
+      const prevTail = this.messages.at(-1);
+      const prevU = prevTail?.role === 'assistant' ? this.messages.at(-2) : (prevTail?.role === 'user' ? prevTail : null);
+      const prevErrTxt = String(this.errText || this.error || (prevTail?.role === 'assistant' && (prevTail.parts || []).find(p => p?.type === 'error')?.rawText) || (prevTail?.role === 'assistant' && (prevTail.parts || []).find(p => p?.type === 'error')?.text) || '');
+      const prevGraphRej = /The AI service rejected this request|\bagentic_session_nodes\b|\bFailed query:\s*select\b/i.test(prevErrTxt);
+      if (prevU?.role === 'user' && !prevU.failed && !prevGraphRej && (prevU._appendAccepted || prevU._officialContinueParent || !prevU._local)) {
+        prevU._officialContinueParent = true;
+        delete prevU._streamRejected;
+        if (prevTail?.role === 'assistant' && Array.isArray(prevTail.parts) && prevTail.parts.some(p => p?.type === 'error')) {
+          const nonErr = prevTail.parts.filter(p => p && p.type !== 'error');
+          if (!nonErr.filter(p => p.type !== 'step-start').length) {
+            if (prevTail.id) (this._prunedDeadMsgIds ||= new Set()).add(prevTail.id);
+            this.messages.pop();
+          } else {
+            prevTail.parts = nonErr;
+            prevTail.v = (prevTail.v || 0) + 1;
+          }
+        }
+      }
+    }
     if (opt.retryOf && (opt.retryOf._appendAccepted || opt.retryOf._streamRejected)) {
       const oldId = opt.retryOf.id, newId = uuid7();
       opt.retryOf.id = newId;
@@ -2022,6 +2342,7 @@ class Chat {
     // 自动续接（autoContinue）属于后台探针推进，不写入持久化待确认外发箱，也不弹出人机验证或残留红字气泡。
     if (!opt.autoContinue && Drafts.out(this, msg, text, opt) === false) throw Error('本地保存失败，输入未发送，请检查存储空间');
     if (!this.messages.includes(msg)) this.messages.push(msg);
+    msg._sentAt = msg._sentAt || now();
     msg._local = true; msg.deliveryUnknown = false; if (opt.queueIds) msg._queued = true; if (opt.retryOf) this._qPaused = '';
     if (!this.gacha) Bus.emit('sent', this.sid, now());
     this.status = 'submitted'; this.error = null; this.phase = opt.filesP ? '上传附件' : '发送中'; this.sentAt = now(); this.respAt = 0; this.finAt = 0; this.realTcAt = 0; this.endAt = 0; this.fakeEnd = null; this.midTurnStall = null; msg.failed = false;
@@ -2037,7 +2358,8 @@ class Chat {
       // 同时把实时通道读到最新（drain）：之前没读完的旧记录（上一轮的尾巴、多出来的 turn-complete）不会被当成这一轮的回复
       // 对话还没载入完（手机上刚切过来、显示的是缓存）：先等载入，拿到最新位置和状态再发
       if (!this.loaded && !this.gacha) { this.srvBusy = false; this.phase = '同步对话中'; msg._held = true; msg.v = (msg.v || 0) + 1; this.emit(); try { await Promise.race([(this.loading || this.load()).catch(() => {}), sleep(12000)]); } finally { delete msg._held; msg.v = (msg.v || 0) + 1; } this.phase = '发送中'; this.emit(); }
-      let [v3, di] = await Promise.all([opt.v2 ? null : Recaptcha.take('chat_submit').catch(() => null), this.ensureToken().catch(() => null).then(() => this.drain(900))]);
+      const canSkipDrain = Boolean(this.loaded && this.lastSeq != null && !this.srvBusy && (this.gacha || opt.hitl || wasMidStall || ((this.tcAt || this.endAt || this.recAt) && now() - Math.max(this.tcAt || 0, this.endAt || 0, this.recAt || 0) < 180000)));
+      let [v3, di] = await Promise.all([opt.v2 ? null : Recaptcha.take('chat_submit').catch(() => null), (this.wakeSessionToken ? this.wakeSessionToken() : this.ensureToken()).catch(() => null).then(() => canSkipDrain ? { max: +this.lastSeq, run: false } : this.drain(900))]);
       // 服务器上这个对话正有一轮在跑（网页 / 另一台设备 / 本机没在盯着的时候发起的）：先把那一轮接上显示出来，
       // 等它结束（再隔 2.5 秒）才发这条——回复中途插进去的消息服务器有时不会处理，一直显示「等待接单」
       // 实时通道没认出正在跑的一轮时，再用对话快照核对一次：最后一条助手消息还是 pending = 服务器仍在处理，不能把新消息塞进去（会被服务器排在后面、事后才冒出来）
@@ -2235,6 +2557,11 @@ class Chat {
     let priorHadClosed = false, priorHadOpenThink = false;
     const mName = String((typeof Models !== 'undefined' && Models.get(this.sid)?.name) || this._routeBaseline?.label || '');
     if (mName && !/开源|compat|qwen|deepseek|glm|kimi|minimax|llama|mistral|nemotron|inkling|beam|caveman|gemma/i.test(mName)) priorHadClosed = true;
+    if (priorMsgs.length >= 1) {
+      const firstAsst = priorMsgs[0];
+      const firstHadOpen = Boolean(firstAsst?.metadata?.openThinkStopped || (firstAsst?.parts || []).some(pp => pp?.type === 'reasoning' && /[^\s.…·。]/.test(String(pp.text || ''))));
+      if (!firstHadOpen) priorHadClosed = true;
+    }
     for (const pm of priorMsgs) {
       if (pm?.metadata?.openThinkStopped) priorHadOpenThink = true;
       for (const pp of pm.parts || []) {
@@ -2401,8 +2728,8 @@ class Chat {
   restream() { if (this.streaming) { this.gen++; this.ctl?.abort(); this.streaming = false; } this.stream(); }
   async stream({ peek = false } = {}) {
     if (this.streaming) return; this.streaming = true; this.peeking = !!peek;
-    const my = ++this.gen; let backoff = 600, authFails = 0, idleLoops = 0, retryIdx = 0, failWindowStart = 0, totalReconnects = 0;
-    const RETRY_STEPS = [600, 1000, 2000, 4000, 8000, 15000, 30000], RETRY_BUDGET_MS = 600000, MAX_RECONNECTS = 300;
+    const my = ++this.gen; let backoff = 200, authFails = 0, idleLoops = 0, retryIdx = 0, failWindowStart = 0, totalReconnects = 0;
+    const RETRY_STEPS = [300, 700, 1500, 3000, 6000, 12000], RETRY_BUDGET_MS = 600000, MAX_RECONNECTS = 300;
     try {
       while (my === this.gen) {
         if (++totalReconnects > MAX_RECONNECTS) break;
@@ -2475,10 +2802,13 @@ class Chat {
         if (peek && sawDone && !got) { if (this.status === 'streaming' && !this.live) { this.status = 'idle'; this.phase = ''; this.emit(); } break; }
         if (!this.busy && peek) break;
         peek = false;
-        if (got) { backoff = 600; retryIdx = 0; failWindowStart = 0; }
+        if (got) { backoff = 200; retryIdx = 0; failWindowStart = 0; }
         else {
           if (!failWindowStart) failWindowStart = now();
           else if (now() - failWindowStart > RETRY_BUDGET_MS) { this.error = '实时连接连续中断超过 10 分钟，请点击重新载入'; this.emit(); break; }
+        }
+        if (this.busy && this.live && !turnDone && !sawDone && typeof this.reconcile === 'function' && now() - (this.recoAt || 0) > 4000) {
+          void this.reconcile(0).catch(() => {});
         }
         if (!this.busy) { if (++idleLoops > 2) break; }
         await sleep(Math.max(backoff, retryWait));
@@ -2493,15 +2823,21 @@ class Chat {
   // 对话快照里最后一条助手消息是否还在 pending（服务器还在处理）。网络错误 / 未知 = false（不阻塞，交给原有的实时通道判断）
   async serverMidTurn(selfId) {
     try {
-      if (!this.live && (this.endAt || this.tcAt || this.finAt) && now() - Math.max(this.endAt || 0, this.tcAt || 0, this.finAt || 0) < 45000) return false;
-      if (this.loaded && Array.isArray(this.messages) && this.messages.length) {
-        const locLast = [...this.messages].reverse().find(m => m && m.id !== selfId && !m._local);
-        if (!locLast || locLast.role !== 'assistant' || !locLast.metadata?.pending || locLast._finishedAt) return false;
-      }
+      if (!this.live && (this.endAt || this.tcAt || this.finAt) && now() - Math.max(this.endAt || 0, this.tcAt || 0, this.finAt || 0) < 25000) return false;
       const j = await api('/api/chat/' + this.sid, { timeout: 6000, bg: true }), last = Array.isArray(j?.messages) ? j.messages.at(-1) : null;
+      if (j?.publicAccessToken) this.setToken?.(j.publicAccessToken);
+      if (Array.isArray(j?.messages) && Array.isArray(this.messages)) {
+        for (const sm of j.messages) {
+          if (sm?.role === 'user' && sm.metadata?.nodeId) {
+            const lm = this.messages.find(x => x && x.id === sm.id);
+            if (lm) lm.metadata = { ...(lm.metadata || {}), nodeId: sm.metadata.nodeId };
+          }
+        }
+      }
       if (!last || last.id === selfId || last.role !== 'assistant' || !last.metadata?.pending || Hitl.idleWait(this)) return false;
+      if (typeof isDeadAssistantMsg === 'function' && isDeadAssistantMsg(last)) return false;
       const loc = (this.messages || []).find(m => m.id === last.id);
-      if (loc && (loc.metadata?.pending === false || loc._finishedAt)) return false;
+      if (loc && loc._finishedAt && now() - loc._finishedAt < 30000) return false;
       return true;
     } catch (e) {
       return false;
@@ -2546,7 +2882,7 @@ class Chat {
       return false;
     }
   }
-  async settle(gap = 2500) {
+  async settle(gap = 450) {
     const w = gap - (now() - (this.tcAt || 0));
     if (w > 0 && w <= gap) { this.phase = '等待服务器就绪'; this.emit(); await sleep(w); }
   }
@@ -2558,17 +2894,85 @@ class Chat {
   msgText(id) { const m = (this.messages || []).find(x => x.id === id); return m ? (m.parts || []).filter(p => p.type === 'text').map(p => p.text || '').join('') : ''; }
   async inDb(id, text, at = 0) {
     try {
-      const j = await api(`/api/chat/${this.sid}`, { timeout: 20000 }); if (!Array.isArray(j?.messages)) return null;
-      if (j.messages.some(m => m.id === id)) return true;
+      const j = await api(`/api/chat/${this.sid}`, { timeout: 15000, noApiRetry: true }); if (!Array.isArray(j?.messages)) return null;
+      if (j?.publicAccessToken && typeof this.setToken === 'function') this.setToken(j.publicAccessToken);
+      if (j.messages.some(m => m && (m.id === id || m.metadata?.nodeId === id))) return true;
+      const parentId = this._lastSentParentUserId ? String(this._lastSentParentUserId) : '';
+      const parentIdx = parentId ? j.messages.findIndex(m => m && (String(m.id || '') === parentId || String(m.metadata?.nodeId || '') === parentId)) : -1;
+      let afterParentTurnIdx = parentIdx + 1;
+      if (parentIdx >= 0) {
+        while (afterParentTurnIdx < j.messages.length && j.messages[afterParentTurnIdx]?.role !== 'user') afterParentTurnIdx++;
+      }
+      const scope = parentIdx >= 0 ? j.messages.slice(afterParentTurnIdx) : j.messages;
       const norm = v => String(v || '').replace(/\s+/g, ' ').trim(), t = norm(text), body = m => norm((m.parts || []).filter(p => p.type === 'text').map(p => p.text || '').join('') || m.content || '');
-      const users = j.messages.filter(m => m.role === 'user'), ts = m => Date.parse(m.createdAt || m.created_at || '') || (typeof idTime === 'function' ? idTime(m?.id) : 0) || 0;
+      const users = scope.filter(m => m && m.role === 'user'), ts = m => Date.parse(m.createdAt || m.created_at || '') || (typeof idTime === 'function' ? idTime(m?.id) : 0) || 0;
       if (t && users.some(m => { const b = body(m); return b === t || (b.length > 8 && (b.includes(t) || t.includes(b))) || (t.length > 40 && b.slice(0, 40) === t.slice(0, 40)); })) return true;
-      if (at && users.some(m => ts(m) >= at - 15000)) return true;
-      if (at && j.messages.some(m => m.role === 'assistant' && !m.metadata?.pending && ts(m) >= at - 5000)) return true;
-      if (!j.pagination?.hasMore) return false;
+      if (at && users.some(m => ts(m) >= at - (parentIdx >= 0 ? 2000 : 15000))) return true;
+      if (at && scope.some(m => m && m.role === 'assistant' && !m.metadata?.pending && ts(m) >= at - (parentIdx >= 0 ? 1000 : 5000))) return true;
+      if (parentIdx >= 0 || !j.pagination?.hasMore || (at > 0 && j.messages.length > 0)) return false;
       const first = j.messages.map(ts).filter(Boolean)[0];
       return at && first && first < at - 15000 ? false : null;
     } catch { return null; }
+  }
+  async verifyTurnForContinue(lastUser, origText = '') {
+    if (!lastUser || typeof api !== 'function' || !this.sid) return { verified: true, mode: 'continue' };
+    try {
+      const j = await api(`/api/chat/${this.sid}?includeStreamToken=false&recoverRun=false`, { timeout: 6000, noApiRetry: true });
+      if (!Array.isArray(j?.messages)) return { verified: true, mode: 'continue' };
+      const norm = v => String(v || '').replace(/\s+/g, ' ').trim();
+      const body = m => norm((m?.parts || []).filter(p => p && p.type === 'text').map(p => p.text || '').join('') || m?.content || '');
+      const tNorm = norm(origText || body(lastUser));
+      const uid = String(lastUser.id || ''), unode = String(lastUser.metadata?.nodeId || '');
+      let uIdx = j.messages.findIndex(m => m && m.role === 'user' && (String(m.id || '') === uid || (unode && String(m.metadata?.nodeId || '') === unode) || (uid && String(m.metadata?.nodeId || '') === uid)));
+      const parentId = this._lastSentParentUserId ? String(this._lastSentParentUserId) : '';
+      const parentIdx = parentId ? j.messages.findIndex(m => m && (String(m.id || '') === parentId || String(m.metadata?.nodeId || '') === parentId)) : -1;
+      if (uIdx < 0 && tNorm) {
+        for (let i = j.messages.length - 1; i > parentIdx; i--) {
+          const m = j.messages[i];
+          if (!m || m.role !== 'user') continue;
+          const b = body(m);
+          if (b === tNorm || (b.length > 8 && (b.includes(tNorm) || tNorm.includes(b))) || (tNorm.length > 40 && b.slice(0, 40) === tNorm.slice(0, 40))) { uIdx = i; break; }
+        }
+      }
+      if (uIdx >= 0) {
+        const srvU = j.messages[uIdx];
+        if (srvU.id && srvU.id !== lastUser.id) lastUser.id = srvU.id;
+        if (srvU.metadata?.nodeId) lastUser.metadata = { ...(lastUser.metadata || {}), nodeId: srvU.metadata.nodeId };
+        lastUser._appendAccepted = true;
+        delete lastUser._local;
+        const afterMsgs = j.messages.slice(uIdx + 1);
+        const srvAsst = [...afterMsgs].reverse().find(m => m && m.role === 'assistant');
+        const srvErrTxt = srvAsst ? String((srvAsst.parts || []).find(p => p?.type === 'error')?.rawText || (srvAsst.parts || []).find(p => p?.type === 'error')?.text || '') : '';
+        if (/The AI service rejected this request|\bagentic_session_nodes\b|\bFailed query:\s*select\b/i.test(srvErrTxt)) {
+          return { verified: false, mode: 'rewind-resend', reason: 'graph-reject' };
+        }
+        if (srvAsst && typeof hasSubstantiveAssistantWork === 'function' && hasSubstantiveAssistantWork(srvAsst) && !srvAsst.metadata?.pending && !srvErrTxt) {
+          const stalled = typeof KeepAlive !== 'undefined' && KeepAlive.isMidTurnStalled ? KeepAlive.isMidTurnStalled(this, srvAsst) : null;
+          if (typeof this.mergeServer === 'function') this.mergeServer(j.messages, null);
+          if (!stalled) {
+            this.error = null; this.errText = ''; this._officialTurnErrAt = 0; this.emit();
+            return { verified: true, mode: 'already-done', srvUser: srvU };
+          }
+        }
+        if (srvAsst && srvAsst.metadata?.pending && !(typeof isDeadAssistantMsg === 'function' && isDeadAssistantMsg(srvAsst))) {
+          if (typeof this.mergeServer === 'function') this.mergeServer(j.messages, null);
+          this.error = null; this.errText = ''; this._officialTurnErrAt = 0;
+          this.restream();
+          return { verified: true, mode: 'server-busy', srvUser: srvU };
+        }
+        if (srvAsst && typeof hasSubstantiveAssistantWork === 'function' && hasSubstantiveAssistantWork(srvAsst) && typeof this.mergeServer === 'function') {
+          this.mergeServer(j.messages, null);
+        }
+        return { verified: true, mode: 'continue', srvUser: srvU };
+      }
+      const localHasWork = Boolean((this.messages || []).at(-1)?.role === 'assistant' && typeof hasSubstantiveAssistantWork === 'function' && hasSubstantiveAssistantWork((this.messages || []).at(-1)));
+      if (!localHasWork && (parentIdx >= 0 || !j.pagination?.hasMore)) {
+        return { verified: false, mode: 'resend-orig', reason: 'not-in-db' };
+      }
+      return { verified: true, mode: 'continue' };
+    } catch {
+      return { verified: true, mode: 'continue' };
+    }
   }
   // 直接问实时通道：从发送前的位置起，服务器写了哪些记录（只读已写入的，不等待）
   //   taken = 有分派记录且 inputId 是这条；busy = 有一轮正在进行（分派 / start 之后还没有 turn-complete）
@@ -2634,7 +3038,8 @@ class Chat {
     const alive = () => this.awaitId === id && this.busy && !this.live && !(this.oursAt > at);
     const taken = (why) => {
       this.oursAt = now(); this.dlv = 'taken'; this.phase = '服务器已接单，等待模型开始'; this.lostWhy = why; this.emit();
-      this.restream(); this.watchStart(id);
+      if (!this.streaming || now() - Math.max(this.byteAt || 0, this.recAt || 0, this.streamOpenAt || 0) > 12000) this.restream();
+      this.watchStart(id);
     };
     const tick = (ms) => {
       clearTimeout(this.lostT);
@@ -2642,7 +3047,7 @@ class Chat {
         if (!alive()) return;
         // 刚收到过记录（服务器在跑别的 / 本地通道正常）：再等等
         if (now() - (this.recAt || 0) < 5500) { tick(3500); return; }
-        const pk = await this.peekTurn(base, id);
+        const pk = await this.peekTurn(base, id, 3500, { settleCheck: true });
         if (!alive()) return;
         if (pk?.taken) return taken('peek');
         if (pk?.busy) { neg = 0; this.restream(); tick(8000); return; }
@@ -2656,8 +3061,10 @@ class Chat {
           tick(unk < 6 ? 6000 : 15000); return;
         }
         unk = 0;
-        if (!neg) { neg = 1; negAt = now(); tick(Math.max(6000, 18000 - (now() - at))); return; }
-        if (now() - negAt < 6000 || now() - at < 18000) { tick(Math.max(2000, 6000 - (now() - negAt), 18000 - (now() - at))); return; }
+        const minGap = msg?._queued ? 6000 : 3500;
+        const minAge = msg?._queued ? 18000 : 8500;
+        if (!neg) { neg = 1; negAt = now(); tick(Math.max(minGap, minAge - (now() - at))); return; }
+        if (now() - negAt < minGap || now() - at < minAge) { tick(Math.max(2000, minGap - (now() - negAt), minAge - (now() - at))); return; }
         neg = 0;
         if (msg?._queued) {
           // 队列消息：服务器可能已收下（在输入流里排队）但没开始处理——只读核对 + 唤醒（空的「停止」，条件和普通发送一样苛刻：实时通道和对话记录都明确空闲）。
@@ -2676,26 +3083,28 @@ class Chat {
         }
         n++; this.wakes = (this.wakes || 0) + 1; this.dlv = 'wake';
         this.wakeLog = (this.wakeLog || []).concat({ at: now(), id, pk: pk && pk.n }).slice(-10);
-        // 第 2 次：唤醒过一次服务器上仍然没有这条（多半是回复中途送达、被服务器丢掉了）→ 自动重新发送同一条（同一个 id，不会重复）
-        if (n === 2 && this.reSend?.id === id) {
-          this.phase = '服务器没收到这条，正在重新发送'; this.emit();
+        if (this.wakeSessionToken) { try { await this.wakeSessionToken(true); } catch {} }
+        else if (this.ensureToken) { try { await this.ensureToken(true); } catch {} }
+        if ((n === 1 || n === 2) && this.reSend?.id === id) {
+          this.phase = n === 1 ? '服务器没接单，正在唤醒并重新投递' : '服务器没收到这条，正在重新发送'; this.emit();
+          try { await this.append({ kind: 'stop' }); } catch {}
           try { await this.reSend.fn(); this.resent = (this.resent || 0) + 1; } catch {}
         } else {
           this.phase = '服务器没接单，正在唤醒' + (n > 1 ? '（第 ' + n + ' 次）' : ''); this.emit();
           try { await this.append({ kind: 'stop' }); } catch {}
         }
         if (!this.streaming) this.stream();
-        tick(15000);
+        tick(10000);
       }, ms);
     };
-    tick(8000);
+    tick(2800);
   }
   // 服务器已接单但迟迟没有开始输出：每 18 秒核对一次实时通道（漏了记录就补上），并在状态里显示已等待的时间
   watchStart(id) {
     clearTimeout(this.startT);
     this.startT = setTimeout(() => {
       if (this.awaitId !== id || !this.busy || this.live) return;
-      if (now() - (this.recAt || 0) > 15000) this.restream();
+      if (!this.streaming || now() - Math.max(this.byteAt || 0, this.recAt || 0, this.streamOpenAt || 0) > 25000) this.restream();
       this.watchStart(id);
     }, 18000);
   }
@@ -2741,7 +3150,7 @@ class Chat {
       this.wakeT = setTimeout(async () => {
         const ok = () => this.awaitId === id && this.busy && !this.live && !((this.dispAt || 0) > at) && !(this.oursAt > at);
         if (!ok()) return;
-        const pk = await this.peekTurn(base, id); if (!ok()) return;
+        const pk = await this.peekTurn(base, id, 3500, { settleCheck: true }); if (!ok()) return;
         if (pk?.taken || pk?.busy) { this.restream(); return; }
         const db = pk ? await this.inDb(id, this.msgText(id), this.appAt || 0) : null; if (!ok()) return;
         if (db === true) { this.oursAt = now(); this.dlv = 'taken'; this.phase = '服务器已接单，等待模型开始'; this.emit(); this.restream(); this.watchStart(id); return; }
@@ -2825,7 +3234,13 @@ class Chat {
       if (hm['trigger-control'] === 'turn-complete') {
         this.tcAt = this.realTcAt = now();
         if (this.foreignTurn()) { this.foreignDone(hm); return; }
-        this.finishTurn(hm['public-access-token'] || runTokIn(rec.headers.map(x => x?.[1]).join(' ')) || runTokIn(rec.body) || null); return 'done';
+        const lateTok = hm['public-access-token'] || runTokIn(rec.headers.map(x => x?.[1]).join(' ')) || runTokIn(rec.body) || null;
+        if (!this.live && this.endAt && now() - this.endAt < 15000) {
+          if (lateTok && lateTok !== this.idTok && /read:runs:run_/.test(JSON.stringify(jwt(lateTok)?.scopes || ''))) { this.runTok = lateTok; this.runAt = now(); Bus.emit('runtoken', this); this.identify(lateTok); }
+          if (!this.busy) return 'done';
+          if (!this.turnInput && this.sentAt >= this.endAt) return;
+        }
+        this.finishTurn(lateTok); return 'done';
       }
       // 运行一开始记录头里就带本轮运行令牌（read:runs）：立即开始识别模型，不等回复结束
       const hTok = hm['public-access-token'];
@@ -2842,7 +3257,13 @@ class Chat {
     if (tcc) {
       this.tcAt = this.realTcAt = now();
       if (this.foreignTurn()) { this.foreignDone({ 'public-access-token': tcc.publicAccessToken || rt || '' }); return; }
-      this.finishTurn(tcc.publicAccessToken || rt || null); return 'done';
+      const lateTok = tcc.publicAccessToken || rt || null;
+      if (!this.live && this.endAt && now() - this.endAt < 15000) {
+        if (lateTok && lateTok !== this.idTok && /read:runs:run_/.test(JSON.stringify(jwt(lateTok)?.scopes || ''))) { this.runTok = lateTok; this.runAt = now(); Bus.emit('runtoken', this); this.identify(lateTok); }
+        if (!this.busy) return 'done';
+        if (!this.turnInput && this.sentAt >= this.endAt) return;
+      }
+      this.finishTurn(lateTok); return 'done';
     }
     const ch = b?.data; if (ch?.type && !String(ch.type).startsWith('trigger:')) { this.recTs = +rec.timestamp || 0; try { this.apply(ch); } finally { this.recTs = 0; } }
   }
@@ -2885,9 +3306,16 @@ class Chat {
       // 不是自己发起的这一轮（网页 / 别的设备提交了回答或发了消息）：把那条用户消息补进来，提问卡片同步成已回答
       if (!this.gacha && (!this.awaitId || this.foreignTurn())) this.reconcile(700);
       this.live = m; this._contentKey = ''; this.parts.clear();
+      this._snapTextParts = []; this._snapReasonParts = [];
       for (const p of m.parts || []) {
         if (p?.toolCallId) this.parts.set('tool:' + p.toolCallId, p);
-        else if ((p?.type === 'text' || p?.type === 'reasoning') && p.id) this.parts.set(p.type[0] + ':' + p.id, p);
+        else if (p?.type === 'text') {
+          if (p.id) { p._replayBuf = ''; this.parts.set('t:' + p.id, p); }
+          else this._snapTextParts.push(p);
+        } else if (p?.type === 'reasoning') {
+          if (p.id) { p._replayBuf = ''; this.parts.set('r:' + p.id, p); }
+          else this._snapReasonParts.push(p);
+        }
       }
       this.status = this.status === 'stopping' ? 'stopping' : 'streaming'; this.phase = '生成中'; this.emit(); return;
     }
@@ -2905,9 +3333,50 @@ class Chat {
     // 回复格式识别（拿不到运行记录时按格式推测厂商）
     if (this.fmt) { try { Fmt.feed(this.fmt, ch, this.recTs || now()); const g = Fmt.guess(this.fmt); if (g && (g.fam !== this.fmtGuess?.fam || g.sure !== this.fmtGuess?.sure)) { this.fmtGuess = g; Bus.emit('fmt', this, g); } } catch {} }
     // 空闲时收到的零散记录（上一轮结束后的尾巴）不新建回复消息，避免多出一条重复 / 错位的回复
+    if (!this.live && ch?.toolCallId && /^(tool-input-delta|tool-input-available|tool-input-error|tool-output-available|tool-output-error|tool-output-denied|tool-approval-request)$/.test(t)) {
+      const ownerM = [...(this.messages || [])].reverse().find(x => x?.role === 'assistant' && Array.isArray(x.parts) && x.parts.some(p => p && p.toolCallId === ch.toolCallId));
+      if (ownerM) {
+        if (ownerM === this.messages.at(-1) && !this.stopReq && !Hitl.idleWait(this)) {
+          ownerM.metadata = { ...(ownerM.metadata || {}), pending: true };
+          delete ownerM._finishedAt;
+          this.live = ownerM;
+          this.status = 'streaming'; this.phase = '生成中';
+          this.parts.clear();
+          for (const p of ownerM.parts || []) {
+            if (p?.toolCallId) this.parts.set('tool:' + p.toolCallId, p);
+            else if ((p?.type === 'text' || p?.type === 'reasoning') && p.id) this.parts.set(p.type[0] + ':' + p.id, p);
+          }
+        } else {
+          const tp = ownerM.parts.find(p => p && p.toolCallId === ch.toolCallId);
+          if (tp) {
+            if (t === 'tool-input-delta' && tp.state !== 'output-available') tp.inputText = (tp.inputText || '') + (ch.inputTextDelta || '');
+            else if (t === 'tool-input-available' || t === 'tool-input-error') { tp.input = ch.input; tp.state = t === 'tool-input-error' ? 'output-error' : 'input-available'; if (ch.errorText) tp.errorText = ch.errorText; }
+            else if (t === 'tool-output-available') { tp.output = ch.output; tp.state = 'output-available'; tp.preliminary = !!ch.preliminary; delete tp.errorText; if (!tp.preliminary && tp._startAt && !tp._durMs) tp._durMs = Math.max(0, (this.recTs || now()) - tp._startAt); }
+            else if (t === 'tool-output-error') { tp.errorText = ch.errorText; tp.state = 'output-error'; }
+            else if (t === 'tool-output-denied') tp.state = 'output-denied';
+            else if (t === 'tool-approval-request') tp.state = 'approval-requested';
+            ownerM.v = (ownerM.v || 0) + 1;
+            this.emit();
+            return;
+          }
+        }
+      }
+    }
     if (!this.live && this.status === 'idle') {
       const lm = this.messages.at(-1);
-      const canPromote = (lm?.role === 'user' || lm?.metadata?.pending) && !Hitl.idleWait(this) && (t === 'start-step' || t === 'text-start' || t === 'text-delta' || t === 'reasoning-start' || t === 'reasoning-delta' || t === 'tool-input-start' || t === 'tool-input-available');
+      const isStreamChunk = (t === 'start-step' || t === 'text-start' || t === 'text-delta' || t === 'reasoning-start' || t === 'reasoning-delta' || t === 'tool-input-start' || t === 'tool-input-available' || t === 'tool-output-available');
+      const canReopenTailAsst = Boolean(lm?.role === 'assistant' && !lm.metadata?.pending && !this.stopReq && !Hitl.idleWait(this) && isStreamChunk);
+      if (canReopenTailAsst) {
+        lm.metadata = { ...(lm.metadata || {}), pending: true };
+        delete lm._finishedAt;
+        this.live = lm;
+        this.parts.clear();
+        for (const p of lm.parts || []) {
+          if (p?.toolCallId) this.parts.set('tool:' + p.toolCallId, p);
+          else if ((p?.type === 'text' || p?.type === 'reasoning') && p.id) this.parts.set(p.type[0] + ':' + p.id, p);
+        }
+      }
+      const canPromote = (lm?.role === 'user' || lm?.metadata?.pending || canReopenTailAsst) && !Hitl.idleWait(this) && isStreamChunk;
       if (canPromote) {
         this.status = 'streaming'; this.phase = '生成中';
         this.liveMsg(true);
@@ -2926,27 +3395,90 @@ class Chat {
     }
     const P = m.parts, find = id => this.parts.get(id);
     switch (t) {
-      case 'start-step': P.push({ type: 'step-start' }); break;
+      case 'start-step': if (P.at(-1)?.type !== 'step-start') P.push({ type: 'step-start' }); break;
       case 'finish-step': this.parts.forEach((p, k) => { if (!String(k).startsWith('tool:')) this.parts.delete(k); }); break;
       case 'text-start': case 'reasoning-start': {
         // 抽卡：正文后出现可见思考时按开关停止；不把它当作改派证明，已知闭源除外
-        const p = { type: t.split('-')[0], text: '', state: 'streaming', ...(ch.id != null ? { id: String(ch.id) } : {}) }; P.push(p); this.parts.set(t[0] + ':' + ch.id, p); this.phase = t === 'text-start' ? '输出中' : '思考中'; break; }
-      case 'text-delta': case 'reasoning-delta': { let p = find(t[0] + ':' + ch.id); if (!p) { p = { type: t.split('-')[0], text: '', state: 'streaming', ...(ch.id != null ? { id: String(ch.id) } : {}) }; P.push(p); this.parts.set(t[0] + ':' + ch.id, p); } if (p.type === 'reasoning' && /[^\s.…·。]/.test(String(ch.delta || ''))) { const firstVis = !/[^\s.…·。]/.test(p.text); const isClosed = (typeof ThinkingStatus !== 'undefined' && ThinkingStatus.isClosed(this)) || (typeof Fingerprint !== 'undefined' && Fingerprint.isClosedSourceStream?.(this)); if (!isClosed) { if (firstVis) { this.thinkGuard(p); try { if (typeof BillingProbe !== 'undefined' && typeof BillingProbe.markAsOpenSourceModel === 'function') BillingProbe.markAsOpenSourceModel(this); } catch {} } try { if (this.gacha?.skipCompatThinking && typeof Fingerprint !== 'undefined') Fingerprint.maybeStopCompat?.(this); } catch {} if (firstVis && this.gacha?.stopThink && !this.stopReq && P.some(x => x !== p && x.type === 'text' && String(x.text || '').trim())) { this.thinkStopped = true; this.routedThink = true; if (this.live) this.live.metadata = { ...(this.live.metadata || {}), openThinkStopped: true }; setTimeout(() => this.stop(), 0); } } } p.text += ch.delta || ''; if (t === 'text-delta') this.checkMidStreamRoute(t, ch); break; }
-      case 'text-end': case 'reasoning-end': { const p = find(t[0] + ':' + ch.id); if (p) p.state = 'done'; break; }
-      case 'tool-input-start': { const p = { type: ch.dynamic ? 'dynamic-tool' : 'tool-' + ch.toolName, toolName: ch.toolName, toolCallId: ch.toolCallId, state: 'input-streaming', inputText: '', _startAt: this.recTs || now() }; P.push(p); this.parts.set('tool:' + ch.toolCallId, p); this.phase = '调用 ' + ch.toolName; this.checkMidStreamRoute(t, ch); break; }
-      case 'tool-input-delta': { const p = find('tool:' + ch.toolCallId); if (p) p.inputText += ch.inputTextDelta || ''; break; }
+        const pType = t.split('-')[0], key = t[0] + ':' + ch.id;
+        let p = ch.id != null ? find(key) : null;
+        if (!p) {
+          const snapQ = pType === 'text' ? this._snapTextParts : this._snapReasonParts;
+          if (snapQ?.length) {
+            p = snapQ.shift();
+            if (ch.id != null) p.id = String(ch.id);
+            p.state = 'streaming';
+            p._replayBuf = '';
+          }
+        } else if (p.text) {
+          p._replayBuf = '';
+          p.state = 'streaming';
+        }
+        if (!p) {
+          p = { type: pType, text: '', state: 'streaming', ...(ch.id != null ? { id: String(ch.id) } : {}) };
+          P.push(p);
+        }
+        this.parts.set(key, p);
+        this.phase = t === 'text-start' ? '输出中' : '思考中';
+        break;
+      }
+      case 'text-delta': case 'reasoning-delta': {
+        const pType = t.split('-')[0], key = t[0] + ':' + ch.id;
+        let p = find(key);
+        if (!p) {
+          const snapQ = pType === 'text' ? this._snapTextParts : this._snapReasonParts;
+          if (snapQ?.length) {
+            p = snapQ.shift();
+            if (ch.id != null) p.id = String(ch.id);
+            p.state = 'streaming';
+            p._replayBuf = '';
+          } else {
+            p = { type: pType, text: '', state: 'streaming', ...(ch.id != null ? { id: String(ch.id) } : {}) };
+            P.push(p);
+          }
+          this.parts.set(key, p);
+        }
+        if (p.type === 'reasoning' && /[^\s.…·。]/.test(String(ch.delta || ''))) { const firstVis = !/[^\s.…·。]/.test(p.text); const isClosed = (typeof ThinkingStatus !== 'undefined' && ThinkingStatus.isClosed(this)) || (typeof Fingerprint !== 'undefined' && Fingerprint.isClosedSourceStream?.(this)); if (!isClosed) { if (firstVis) { this.thinkGuard(p); try { if (typeof BillingProbe !== 'undefined' && typeof BillingProbe.markAsOpenSourceModel === 'function') BillingProbe.markAsOpenSourceModel(this); } catch {} } try { if (this.gacha?.skipCompatThinking && typeof Fingerprint !== 'undefined') Fingerprint.maybeStopCompat?.(this); } catch {} if (firstVis && this.gacha?.stopThink && !this.stopReq && P.some(x => x !== p && x.type === 'text' && String(x.text || '').trim())) { this.thinkStopped = true; this.routedThink = true; if (this.live) this.live.metadata = { ...(this.live.metadata || {}), openThinkStopped: true }; setTimeout(() => this.stop(), 0); } } }
+        const dStr = ch.delta || '';
+        if (typeof p._replayBuf === 'string') {
+          p._replayBuf += dStr;
+          if (p._replayBuf.length >= (p.text || '').length || !String(p.text || '').startsWith(p._replayBuf)) {
+            p.text = p._replayBuf;
+            delete p._replayBuf;
+          }
+        } else {
+          p.text += dStr;
+        }
+        if (t === 'text-delta') this.checkMidStreamRoute(t, ch);
+        break;
+      }
+      case 'text-end': case 'reasoning-end': { const p = find(t[0] + ':' + ch.id); if (p) { if (typeof p._replayBuf === 'string') { if (p._replayBuf.length >= (p.text || '').length) p.text = p._replayBuf; delete p._replayBuf; } p.state = 'done'; } break; }
+      case 'tool-input-start': {
+        let p = find('tool:' + ch.toolCallId) || P.find(x => x && x.toolCallId === ch.toolCallId);
+        if (!p) {
+          p = { type: ch.dynamic ? 'dynamic-tool' : 'tool-' + ch.toolName, toolName: ch.toolName, toolCallId: ch.toolCallId, state: 'input-streaming', inputText: '', _startAt: this.recTs || now() };
+          P.push(p);
+        } else if (p.state !== 'output-available') {
+          p.inputText = '';
+          p.state = 'input-streaming';
+        }
+        this.parts.set('tool:' + ch.toolCallId, p);
+        this.phase = '调用 ' + ch.toolName;
+        this.checkMidStreamRoute(t, ch);
+        break;
+      }
+      case 'tool-input-delta': { const p = find('tool:' + ch.toolCallId) || P.find(x => x && x.toolCallId === ch.toolCallId); if (p && p.state !== 'output-available') p.inputText = (p.inputText || '') + (ch.inputTextDelta || ''); break; }
       case 'tool-input-available': case 'tool-input-error': {
-        let p = find('tool:' + ch.toolCallId);
+        let p = find('tool:' + ch.toolCallId) || P.find(x => x && x.toolCallId === ch.toolCallId);
         if (!p) { p = { type: ch.dynamic ? 'dynamic-tool' : 'tool-' + ch.toolName, toolName: ch.toolName, toolCallId: ch.toolCallId }; P.push(p); this.parts.set('tool:' + ch.toolCallId, p); }
         p.input = ch.input; p.state = t === 'tool-input-error' ? 'output-error' : 'input-available'; if (ch.errorText) p.errorText = ch.errorText;
         // 提问工具的参数能解析出题目：按「等待回答」显示面板（和网页一致），报错文字只留作诊断
         if (t === 'tool-input-error' && Hitl.name(p) === 'ask_user' && Array.isArray(Hitl.input(p)?.questions)) { p.state = 'input-available'; p.softError = ch.errorText || ''; }
         this.phase = '执行 ' + (ch.toolName || p.toolName || '工具'); break;
       }
-      case 'tool-output-available': { const p = find('tool:' + ch.toolCallId) || P.find(x => x.toolCallId === ch.toolCallId); if (p) { p.output = ch.output; p.state = 'output-available'; p.preliminary = !!ch.preliminary; if (!p.preliminary && p._startAt && !p._durMs) p._durMs = Math.max(0, (this.recTs || now()) - p._startAt); } break; }
+      case 'tool-output-available': { const p = find('tool:' + ch.toolCallId) || P.find(x => x.toolCallId === ch.toolCallId); if (p) { p.output = ch.output; p.state = 'output-available'; p.preliminary = !!ch.preliminary; delete p.errorText; if (!p.preliminary && p._startAt && !p._durMs) p._durMs = Math.max(0, (this.recTs || now()) - p._startAt); } break; }
       case 'tool-output-error': { const p = find('tool:' + ch.toolCallId) || P.find(x => x.toolCallId === ch.toolCallId); if (p) { if (Hitl.name(p) === 'ask_user' && /malformed|refresh and try again/i.test(String(ch.errorText || '')) && Array.isArray(Hitl.input(p)?.questions)) { p.softError = ch.errorText; if (p.state !== 'output-available') p.state = 'input-available'; } else { p.errorText = ch.errorText; p.state = 'output-error'; } } break; }
-      case 'tool-output-denied': { const p = find('tool:' + ch.toolCallId); if (p) p.state = 'output-denied'; break; }
-      case 'tool-approval-request': { const p = find('tool:' + ch.toolCallId); if (p) p.state = 'approval-requested'; break; }
+      case 'tool-output-denied': { const p = find('tool:' + ch.toolCallId) || P.find(x => x && x.toolCallId === ch.toolCallId); if (p) p.state = 'output-denied'; break; }
+      case 'tool-approval-request': { const p = find('tool:' + ch.toolCallId) || P.find(x => x && x.toolCallId === ch.toolCallId); if (p) p.state = 'approval-requested'; break; }
       case 'source-url': case 'source-document': case 'file': P.push({ ...ch }); break;
       case 'message-metadata': m.metadata = { ...m.metadata, ...(ch.messageMetadata || {}) }; break;
       case 'finish': {
@@ -2970,7 +3502,7 @@ class Chat {
             const stillOpen = (finMsg.parts || []).some(p => p.toolCallId && /^(input-streaming|input-available|approval-requested)$/.test(p.state || '') && !Hitl.name(p));
             if (!stillOpen) this.finishTurn(this.runTok || null, true);
           }
-        }, 4000);
+        }, 750);
         break;
       }
       case 'error': {
@@ -2979,13 +3511,29 @@ class Chat {
         if (/malformed|refresh and try again/i.test(rawErr) && P.some(x => Hitl.awaiting(x))) { this.softErr = rawErr; break; }
         const isOfficial = isOfficialTransientError(rawErr);
         const displayErr = formatOfficialErrorText(rawErr);
-        P.push({ type: 'error', text: displayErr, ...(displayErr !== rawErr ? { rawText: rawErr } : {}) });
+        if (!P.some(x => x && x.type === 'error' && x.text === displayErr)) {
+          P.push({ type: 'error', text: displayErr, ...(displayErr !== rawErr ? { rawText: rawErr } : {}) });
+        }
         this.error = displayErr || '模型返回错误'; this.errAt = now(); this.errText = rawErr;
         this._officialTurnErrAt = isOfficial ? this.errAt : 0;
         const lastU = [...this.messages].filter(x => x && x.role === 'user').at(-1);
-        if (lastU) lastU._streamRejected = true;
-        if (/The AI service rejected this request/i.test(rawErr) && this._lastSentParentUserId) {
-          (this._rejectedHealthyNodeIds ||= new Set()).add(String(this._lastSentParentUserId));
+        const isGraphReject = /The AI service rejected this request|\bagentic_session_nodes\b|\bFailed query:\s*select\b/i.test(rawErr);
+        if (lastU) {
+          if (isGraphReject) {
+            lastU._streamRejected = true;
+            delete lastU._officialContinueParent;
+          } else if (isOfficial && (lastU._appendAccepted || this.oursAt || P.length > 1 || !lastU._local)) {
+            lastU._officialContinueParent = true;
+            delete lastU._streamRejected;
+          } else if (!isHitlToolResultUserMsg(lastU)) {
+            lastU._streamRejected = true;
+          }
+        }
+        if (isGraphReject && this._lastSentParentUserId) {
+          const rejPid = String(this._lastSentParentUserId);
+          (this._rejectedHealthyNodeIds ||= new Set()).add(rejPid);
+          const rejU = (this.messages || []).find(x => x && x.role === 'user' && (String(x.metadata?.nodeId || '') === rejPid || String(x.id || '') === rejPid));
+          if (rejU) { delete rejU._officialContinueParent; rejU._streamRejected = true; }
         }
         if (this.busy && !this.stopReq) {
           clearTimeout(this._errTurnT);
@@ -2994,7 +3542,7 @@ class Chat {
             if (this.live === errMsg && this.busy && !this.stopReq) {
               this.finishTurn(this.runTok || null, true);
             }
-          }, 1200);
+          }, isOfficial && !isGraphReject ? 600 : 1200);
         }
         break;
       }
@@ -3005,7 +3553,7 @@ class Chat {
     ThinkingStatus.eventPhase(this, ch);
     try { Fingerprint.maybeStopCompat(this); Fingerprint.maybeGuardProbe(this); } catch {}
     if ((t === 'finish' || t === 'tool-output-available' || t === 'tool-input-available') && Hitl.idleWait(this)) this.armHitl();
-    if (t === 'text-delta' || t === 'reasoning-delta' || t === 'tool-input-delta') this.emitStreamSoon(65);
+    if (t === 'text-delta' || t === 'reasoning-delta' || t === 'tool-input-delta') this.emitStreamSoon(20);
     else this.emit();
   }
   // 提问卡片兜底：已经停在「等用户回应」，但结束标记迟迟没到（连接抖动 / 服务器没推）——4 秒内没有新记录就本地收尾，并和服务器对一次账
@@ -3047,7 +3595,7 @@ class Chat {
         if (p.state === 'streaming') p.state = 'done';
         if (p.toolCallId && !(Hitl.name(p) && !this.stopReq) && /^(input-streaming|input-available|approval-requested)$/.test(p.state || '')) {
           if (this.stopReq) { p.state = 'output-error'; p.errorText = '已停止'; }
-          else if (!this.fakeEnd) { p.state = 'output-error'; p.errorText = '未返回结果'; }
+          else { p.state = 'output-error'; if (!p.errorText) p.errorText = '未返回结果'; }
         }
         if (p.preliminary) p.preliminary = false;
       });
@@ -3074,16 +3622,21 @@ class Chat {
         (this._oOk ||= new Set()).add(ackId);
         try { if (typeof Drafts !== 'undefined') Drafts.ack?.(ackId); } catch {}
       }
+      if (Array.isArray(this.messages) && this.messages.length > 0) this.loaded = true;
     }
     this.emit();
+    if (this.loaded && typeof MsgCache !== 'undefined' && MsgCache.putNow) void MsgCache.putNow(this).catch(() => {});
     // 一轮结束后再看一眼实时通道：把尾巴读掉（位置保持最新），如果服务器接着又开了一轮（长任务续跑）就直接接上显示
     if (!this.gacha && !this.fakeEnd && !this.midTurnStall) { clearTimeout(this.tailT); this.tailT = setTimeout(() => { if (!this.busy && !this.streaming && !this.midTurnStall && !this.fakeEnd && this.loaded) this.stream({ peek: true }); }, 1500); }
     // 涉及提问卡片的一轮结束后，和服务器对一次账：回答（不管在哪提交的）、节点 id、卡片状态都以服务器为准
     // 每轮结束后都和服务器对一次账：漏掉的记录 / 别处的改动以服务器为准补齐（和网页一致，不必手动刷新）
     clearTimeout(this.hitlT);
-    if (!this.gacha) this.reconcile(this.messages.slice(-4).some(x => x.parts?.some(p => p.toolCallId && Hitl.name(p))) ? 1200 : 1800);
+    const isKeptOrActive = !this.gacha || (typeof History !== 'undefined' && History.byId?.(this.sid)) || (typeof Tabs !== 'undefined' && Tabs.cur?.sid === this.sid);
+    const recoDelay = this.messages.slice(-4).some(x => x.parts?.some(p => p.toolCallId && Hitl.name(p))) ? 900 : 1400;
+    if (!this.gacha) this.reconcile(recoDelay);
+    else if (isKeptOrActive) setTimeout(() => { if (!this.busy && !this.live && this.loaded) void this.reconcile(0).catch(() => {}); }, recoDelay);
     // 服务器记录有时比实时流晚几秒才写好：带提问卡片的一轮结束后再对一次账（卡片已经在就什么都不会变）
-    if (!this.gacha && this.messages.slice(-2).some(x => x.role === 'assistant' && x.parts?.some(p => p.toolCallId && Hitl.name(p)))) setTimeout(() => { if (!this.live && !this.busy && !this.streaming && this.loaded) this.converge(); }, 7000);
+    if (isKeptOrActive && this.messages.slice(-2).some(x => x.role === 'assistant' && x.parts?.some(p => p.toolCallId && Hitl.name(p)))) setTimeout(() => { if (!this.live && !this.busy && !this.streaming && this.loaded) this.converge(); }, 5500);
     try { ExtCompat.replayChat(this, true); } catch {}
     if (was !== 'idle') Bus.emit('turn', this, { forced, fake: !!this.fakeEnd, midStall: !!this.midTurnStall });
     if (this.error && /recaptcha|captcha/i.test(this.error) && this.sentAt && now() - this.sentAt < 180000) { if (this.rcV3) { this.rcV3 = false; IPRep.note('rc'); } setTimeout(() => Bus.emit('captcha', this), 0); }
@@ -3108,7 +3661,7 @@ class Chat {
       if (!g) return null;
       const old = Models.get(this.sid);
       const oldClosedOnOpen = openThink && tsKind !== 'closed-thinking' && !this.thinkStopped && !this.routedThink && old && /^(gpt|claude|gemini|grok|compat)/i.test(String(old.name || ''));
-      if (!oldClosedOnOpen && (old?.fingerprint || old?.reverseInferred || old?.billingProbe || old?.pendingConfirm || (old && old.name && !old.guess))) return null;
+      if (!oldClosedOnOpen && (old?.fingerprint || old?.reverseInferred || old?.habitInferred || old?.userCorrected || old?.billingProbe || old?.pendingConfirm || (old && old.name && !old.guess))) return null;
       const lastUser = [...(this.messages || [])].reverse().find(x => x?.role === 'user'), std = Fmt.stdPrompt?.((lastUser?.parts || []).filter(p => p.type === 'text').map(p => p.text || '').join('\n'));
       const est = g.est || (live && !this.busy ? Fmt.est(this.fmt, g.fam, std) : null) || (old?.guess && old.name === Fmt.NAME[g.fam] ? old.est : null);
       const e = Fmt.entry(g, est);
@@ -3180,7 +3733,7 @@ class Chat {
         const res = await rawFetch(OUT(this.sid), { headers: { Accept: 'text/event-stream', Authorization: 'Bearer ' + this.token, 'Timeout-Seconds': '5', 'X-Peek-Settled': '1', 'Last-Event-ID': String(Math.max(0, +(this.lastSeq || 0) - 400)) }, signal: ctl.signal, cache: 'no-store' });
         const txt = await res.text();
         tok = runTokIn(txt);
-        if (!tok || (jwt(tok)?.exp || 0) * 1000 < now()) { const g = Fmt.fromReplay(txt); if (g && this.guessModel(g)) { tok = null; this.identifying = false; this.idErr = null; this.emit(); return; } }
+        if (!tok || (jwt(tok)?.exp || 0) * 1000 < now()) { const lastAsst = [...(this.messages || [])].reverse().find(x => x?.role === 'assistant'); if (lastAsst && !lastAsst._fmt && typeof Fmt.lastTurn === 'function') lastAsst._fmt = Fmt.lastTurn(txt); const g = Fmt.fromReplay(txt); if (g && this.guessModel(g)) { tok = null; this.identifying = false; this.idErr = null; this.emit(); return; } }
       } finally { clearTimeout(tm); }
       if (!tok) throw new Error('没有找到运行记录');
       if ((jwt(tok)?.exp || 0) * 1000 < now()) throw new Error('运行令牌已过期（超过 1 小时），发送新消息后会自动识别');
@@ -3235,7 +3788,7 @@ Object.assign(Chat.prototype, {
               if (this.lastSeq !== cur) { ctl.abort(); break; }   // 位置被别的流程挪了：用新位置重新挂
             }
             fails = 0; this.wFails = 0;
-          } catch (e) { if (e?.name !== 'AbortError' || headerTimeout) { fails++; this.wFails = fails; if (my === this.wGen && typeof AutoRoute !== 'undefined') AutoRoute.fault(headerTimeout ? Object.assign(new Error('实时监听连接超时'), { routeTimeout: true }) : e, 'stream'); } }
+          } catch (e) { if (e?.name !== 'AbortError' || headerTimeout) { fails++; this.wFails = fails; } }
           finally { clearTimeout(headerTimer); clearTimeout(tm); if (this.wCtl === ctl) this.wCtl = null; }
           if (my !== this.wGen) break;
           if (hit && !this.busy && !this.streaming) { this.dbg?.('watch-hit', { seq: hit.seq, ty: hit.ty, mid: !!hit.mid }); this.remoteAt = now(); await this.remoteSync(hit).catch(() => {}); if (hit.mid) await sleep(2500); continue; }
@@ -3297,26 +3850,37 @@ Object.assign(Chat.prototype, {
         } else if (sp.toolCallId && !byTool.has(sp.toolCallId)) { o.parts.push(sp); byTool.set(sp.toolCallId, sp); patched = true; }
       }
       if (m.parts.length > o.parts.length) {
-        for (const tp of m.parts.slice(o.parts.length)) { if (!tp || (tp.toolCallId && byTool.has(tp.toolCallId))) continue; o.parts.push(tp); patched = true; }
+        for (const tp of m.parts.slice(o.parts.length)) {
+          if (!tp || tp.type === 'step-start' || (tp.toolCallId && byTool.has(tp.toolCallId))) continue;
+          if ((tp.type === 'text' || tp.type === 'reasoning') && o.parts.some(lp => lp?.type === tp.type && String(lp.text || '').trim() === String(tp.text || '').trim())) continue;
+          o.parts.push(tp); patched = true;
+        }
       }
       if (m.metadata) { const prevPend = o.metadata?.pending; o.metadata = { ...(o.metadata || {}), ...m.metadata }; if (prevPend !== o.metadata.pending) patched = true; }
       if (patched) o.v = (o.v || 0) + 1;
       return patched;
     };
     const partWeight = parts => (parts || []).reduce((acc, p) => {
-      if (!p || p.type === 'step-start') return acc;
+      if (!p || p.type === 'step-start' || p.type === 'error') return acc;
       if (p.type === 'text' || p.type === 'reasoning') return acc + String(p.text || '').length + 10;
       if (p.toolCallId || String(p.type || '').startsWith('tool-') || p.type === 'dynamic-tool') return acc + 50 + (p.output !== undefined ? 50 : 0);
       return acc + 5;
     }, 0);
     let changed = false, lagged = false;
+    const matchedLocal = new Set();
     const mid = srv.map((m, sIdx) => {
       let i = loc.get(m.id), o = i != null ? this.messages[i] : null;
       if (!o && m.role === 'assistant' && sIdx > 0) {
         const prevUi = loc.get(srv[sIdx - 1]?.id);
         const cand = prevUi != null ? this.messages[prevUi + 1] : null;
-        if (cand && cand.role === 'assistant' && !srv.some(x => x.id === cand.id)) o = cand;
+        if (cand && cand.role === 'assistant' && !srv.some(x => x.id === cand.id)) {
+          const mTools = new Set((m.parts || []).map(p => p?.toolCallId).filter(Boolean));
+          const cTools = (cand.parts || []).map(p => p?.toolCallId).filter(Boolean);
+          const toolConflict = mTools.size > 0 && cTools.length > 0 && !cTools.some(id => mTools.has(id));
+          if (!toolConflict) o = cand;
+        }
       }
+      if (o) matchedLocal.add(o);
       if (o && keep && o === keep) return o;
       if (o && o.role === 'assistant') {
         const hasNextUser = srv.slice(sIdx + 1).some(x => x && x.role === 'user');
@@ -3332,7 +3896,7 @@ Object.assign(Chat.prototype, {
           lagged = true; patchAssistantParts(o, m); return o;
         }
         if (!o._local && sig(o) === sig(m)) return o;
-        if (o.parts?.length >= 4 && patchAssistantParts(o, m)) { changed = true; return o; }
+        if ((m.metadata?.pending || ow > mw) && o.parts?.length >= 4 && patchAssistantParts(o, m)) { changed = true; return o; }
       }
       if (o && !o._local && sig(o) === sig(m)) return o;
       changed = true;
@@ -3344,12 +3908,15 @@ Object.assign(Chat.prototype, {
         const lIds = { reasoning: o.parts.filter(p => p?.type === 'reasoning' && p.id), text: o.parts.filter(p => p?.type === 'text' && p.id) }, idxMap = { reasoning: 0, text: 0 };
         mergedParts = mergedParts.map(sp => (sp && (sp.type === 'reasoning' || sp.type === 'text') && !sp.id && lIds[sp.type]?.[idxMap[sp.type]]?.id) ? { ...sp, id: lIds[sp.type][idxMap[sp.type]++].id } : sp);
       }
-      return { ...m, parts: mergedParts, _autoContinue: o?._autoContinue || m.metadata?.autoContinue, _streamed: o?._streamed, _finishedAt: o?._finishedAt, _fmt: o?._fmt, _sseMeta: o?._sseMeta, v: (o?.v || 0) + 1 };
+      if (m.role === 'assistant' && !m.metadata?.pending && Array.isArray(mergedParts)) {
+        mergedParts = mergedParts.map(sp => (sp?.toolCallId && !Hitl.name(sp) && /^(input-streaming|input-available)$/.test(sp.state || '')) ? { ...sp, state: 'output-error', errorText: sp.errorText || '未返回结果' } : sp);
+      }
+      return { ...m, parts: mergedParts, _autoContinue: o?._autoContinue || m.metadata?.autoContinue, _streamed: o?._streamed, _finishedAt: m.metadata?.pending ? undefined : o?._finishedAt, _fmt: o?._fmt, _sseMeta: o?._sseMeta, v: (o?.v || 0) + 1 };
     });
     const ids = new Set(srv.map(m => m.id));
     const srvLastTime = idTime(srv.at(-1)?.id) || 0;
     const tail = this.messages.filter((m, idx) => {
-      if (ids.has(m.id)) return false;
+      if (ids.has(m.id) || matchedLocal.has(m)) return false;
       if (m._local || (keep && m === keep)) return true;
       if (m.role === 'assistant' && partWeight(m.parts) > 0) {
         if (m._awaitingSnapshot) {
@@ -3361,6 +3928,7 @@ Object.assign(Chat.prototype, {
           lagged = true;
           return true;
         }
+        if (idx < this.messages.length - 1 || srv.at(-1)?.role === 'assistant') return false;
         const recFin = m._finishedAt && (now() - m._finishedAt < 60000);
         const isTrailing = idx >= this.messages.length - 2;
         const mTime = idTime(m.id) || 0;
@@ -3378,18 +3946,23 @@ Object.assign(Chat.prototype, {
   },
   // 和服务器对一次账（提问卡片的回答 / 别处提交的回答 / 别的设备发的消息）：正在输出的那条保持原对象不动
   reconcile(delay = 0) {
-    if (this.gacha || !this.loaded) return Promise.resolve(false);
+    const isKeptOrActive = !this.gacha || (typeof History !== 'undefined' && History.byId?.(this.sid)) || (typeof Tabs !== 'undefined' && Tabs.cur?.sid === this.sid);
+    if (delay > 0 && (!isKeptOrActive || !this.loaded)) return Promise.resolve(false);
+    if (!this.sid) return Promise.resolve(false);
     if (this.recP) return this.recP;
     this.recoAt = now();
     const live0 = this.live, v0 = live0?.v || 0, gen0 = this.gen || 0;
     return this.recP = (async () => {
       if (delay) await sleep(delay);
-      const c = await api('/api/chat/' + this.sid, { timeout: 20000 }).catch(() => null);
+      const isFg = typeof Tabs !== 'undefined' && Tabs.cur?.sid === this.sid;
+      const recQuery = (this.busy || this.live || this.fakeEnd || this.midTurnStall) ? '?includeStreamToken=false' : '?includeStreamToken=false&recoverRun=false';
+      const c = await api('/api/chat/' + this.sid + recQuery, { timeout: 35000, bg: !isFg, noApiRetry: true }).catch(() => null);
       if (!c?.messages?.length || this.loading) return false;
       if ((this.gen || 0) !== gen0 || (live0 && (this.live !== live0 || (live0.v || 0) !== v0))) return false;
       if (this.busy && !this.live && this.status === 'submitted') return false;   // 自己刚发出、还没开始回复：交给发送流程
       this._srvLagged = false;
       const ch = this.mergeServer(c.messages, this.live);
+      if (Array.isArray(this.messages) && this.messages.length > 0) this.loaded = true;
       const lagged = this._srvLagged;
       const last = c.messages.at(-1);
       const srvPend = !!last && (last.role === 'user' || last.metadata?.pending) && !(last.role === 'assistant' && Hitl.idleWait(this));
@@ -3400,6 +3973,7 @@ Object.assign(Chat.prototype, {
       else if (srvPend && !lagged && !this.busy && !this.streaming && !this.syncing) {
         if (last.role === 'assistant' && last.metadata?.pending) this.live = this.messages.find(m => m.id === last.id) || null;
         const baseSeq = c.lastEventId != null ? Math.max(1, +c.lastEventId - 4000) : 1;
+        this._remoteSyncSnap = { at: now(), c };
         if (this.remoteSync) void this.remoteSync({ seq: baseSeq, rewind: true, pend: true });
       } else if (!srvPend && !this.busy && !this.streaming && c.lastEventId != null) {
         this.lastSeq = String(c.lastEventId); this.fence = Math.max(this.fence || 0, +c.lastEventId);
@@ -3422,8 +3996,11 @@ Object.assign(Chat.prototype, {
     this.convAt = now();
     const live0 = this.live, v0 = live0?.v || 0, gen0 = this.gen || 0;
     return this.convP = (async () => {
-      const c = await api('/api/chat/' + this.sid, { timeout: 20000 }).catch(() => null);
-      if (!c?.messages?.length || this.loading || this.gacha) return false;
+      const isFg = typeof Tabs !== 'undefined' && Tabs.cur?.sid === this.sid;
+      const isKeptOrActive = !this.gacha || (typeof History !== 'undefined' && History.byId?.(this.sid)) || isFg;
+      const convQuery = (this.busy || this.live || this.fakeEnd || this.midTurnStall) ? '?includeStreamToken=false' : '?includeStreamToken=false&recoverRun=false';
+      const c = await api('/api/chat/' + this.sid + convQuery, { timeout: 35000, bg: !isFg, noApiRetry: true }).catch(() => null);
+      if (!c?.messages?.length || this.loading || !isKeptOrActive) return false;
       if ((this.gen || 0) !== gen0 || (live0 && (this.live !== live0 || (live0.v || 0) !== v0))) return false;
       const live = this.live, last = c.messages.at(-1);
       const srvPend = !!last && (last.role === 'user' || last.metadata?.pending) && !(last.role === 'assistant' && Hitl.idleWait(this));
@@ -3439,6 +4016,7 @@ Object.assign(Chat.prototype, {
           if (ch) this.saveCache?.();
           this.emit();
           const baseSeq = c.lastEventId != null ? Math.max(1, +c.lastEventId - 4000) : 1;
+          this._remoteSyncSnap = { at: now(), c };
           if (this.remoteSync) void this.remoteSync({ seq: baseSeq, rewind: true, pend: true });
           return true;
         }
@@ -3453,7 +4031,12 @@ Object.assign(Chat.prototype, {
         this.saveCache?.();
         this.emit(); return true;
       }
-      const sv = c.messages.find(x => x.id === live.id) || (last?.role === 'assistant' ? last : null);
+      const liveIdx = this.messages.indexOf(live);
+      const prevLocalUser = liveIdx > 0 ? [...this.messages.slice(0, liveIdx)].reverse().find(x => x && x.role === 'user') : null;
+      const prevUserInSrvIdx = prevLocalUser ? c.messages.findIndex(x => x && (x.id === prevLocalUser.id || (prevLocalUser.metadata?.nodeId && x.metadata?.nodeId === prevLocalUser.metadata.nodeId))) : -1;
+      const lastIsOlderTurn = Boolean(last && this.messages.some(x => x && x !== live && (x.id === last.id || (x.metadata?.nodeId && x.metadata?.nodeId === last.metadata?.nodeId))));
+      const canFallbackToLast = Boolean(last?.role === 'assistant' && !lastIsOlderTurn && (!prevLocalUser || (prevUserInSrvIdx >= 0 && prevUserInSrvIdx < c.messages.length - 1)));
+      const sv = c.messages.find(x => x && (x.id === live.id || (live.metadata?.nodeId && x.metadata?.nodeId === live.metadata.nodeId))) || (canFallbackToLast ? last : null);
       if (!sv || sv.role !== 'assistant' || live !== this.live || this.stopReq) return false;
       const body = x => (x.parts || []).filter(p => p.type !== 'step-start'), lp = body(live), sp = body(sv);
       const hasQuestions = p => Array.isArray(Hitl.input(p)?.questions) && Hitl.input(p).questions.length > 0;
@@ -3470,19 +4053,34 @@ Object.assign(Chat.prototype, {
       const tail = lp.at(-1), localAsk = !!tail && Hitl.awaiting(tail) && tail.state !== 'input-streaming' && (Hitl.name(tail) !== 'ask_user' || hasQuestions(tail));
       if (!srvAsk && !srvDone && !localAsk) return false;
       this.dbg?.('converge-adopt', { srvAsk, srvDone, localAsk });
-      if (srvAsk || srvDone) { live.id = sv.id; live.parts = JSON.parse(JSON.stringify(sv.parts || [])); live.metadata = { ...(live.metadata || {}), ...(sv.metadata || {}), pending: false }; }
+      if (srvAsk || srvDone) {
+        live.id = sv.id;
+        let nextParts = JSON.parse(JSON.stringify(sv.parts || []));
+        if (Array.isArray(live.parts) && Array.isArray(nextParts)) {
+          const localReason = live.parts.filter(p => p && p.type === 'reasoning');
+          const srvHasReason = nextParts.some(p => p && p.type === 'reasoning');
+          if (localReason.length && !srvHasReason) nextParts = [...localReason, ...nextParts];
+          const lIds = { reasoning: live.parts.filter(p => p?.type === 'reasoning' && p.id), text: live.parts.filter(p => p?.type === 'text' && p.id) }, idxMap = { reasoning: 0, text: 0 };
+          nextParts = nextParts.map(sp => (sp && (sp.type === 'reasoning' || sp.type === 'text') && !sp.id && lIds[sp.type]?.[idxMap[sp.type]]?.id) ? { ...sp, id: lIds[sp.type][idxMap[sp.type]++].id } : sp);
+        }
+        if (srvDone && Array.isArray(nextParts)) {
+          nextParts = nextParts.map(sp => (sp?.toolCallId && !Hitl.name(sp) && /^(input-streaming|input-available)$/.test(sp.state || '')) ? { ...sp, state: 'output-error', errorText: sp.errorText || '未返回结果' } : sp);
+        }
+        live.parts = nextParts;
+        live.metadata = { ...(live.metadata || {}), ...(sv.metadata || {}), pending: false };
+      }
       if (srvDone) { this.finAt = this.finAt || now(); this.realTcAt = this.realTcAt || now(); }
       this.parts.clear(); live.v = (live.v || 0) + 1;
       this.finishTurn(null, true); return true;
     })().finally(() => { this.convP = null; });
   },
-  // 前台对话的对账节奏（Sync 每 3 秒调一次）：空闲 20 秒一次；输出中超过 10 秒没有新记录，每 10 秒一次。若末尾是未回复的用户消息或未完成回复则 2.5 秒一次。
+  // 前台对话的对账节奏（Sync 每 3 秒调一次）：空闲 20 秒一次；输出中超过 20 秒没有新记录，按退避对账。若末尾是未回复的用户消息或未完成回复则 2.5 秒一次。
   tickConverge() {
     if (document.hidden || this.gacha || !this.loaded || this.loading || this.convP || this.syncing || ReadLimit.active()) return;
     const fgSid = typeof Tabs !== 'undefined' ? Tabs.cur?.sid : null;
     if (fgSid && Chats.get(fgSid)?.loading) return;
     const t = now(); if (!this.convAt) { this.convAt = t; return; }
-    if (this.live) { this.convGap = 0; if ((this.recAt || 0) > this.convAt) this.liveGap = 0; const lg = this.liveGap || 10000; if (t - (this.recAt || 0) > lg && t - this.convAt > lg) { this.liveGap = Math.min(60000, lg * 2); this.converge(); } return; }
+    if (this.live) { this.convGap = 0; if ((this.recAt || 0) > this.convAt) this.liveGap = 0; const lg = this.liveGap || 20000; if (t - (this.recAt || 0) > lg && t - this.convAt > lg) { this.liveGap = Math.min(60000, lg * 2); this.converge(); } return; }
     if (this.busy || this.streaming) { this.convGap = 0; return; }
     const lastMsg = this.messages.at(-1);
     const waitReply = !!lastMsg && (lastMsg.role === 'user' || lastMsg.metadata?.pending) && !Hitl.idleWait(this);
@@ -3510,20 +4108,38 @@ Object.assign(Chat.prototype, {
     try {
       const from = this.lastSeq;
       if (hit?.seq != null && (this.lastSeq == null || hit.rewind)) this.lastSeq = hit.seq > 0 ? String(hit.seq - 1) : null;
-      const info = await this.drain(3000, { keepIfFinished: !!hit?.pend });
-      const c = await api('/api/chat/' + this.sid, { timeout: 30000 }).catch(() => null);
+      const info = await this.drain(1500, { keepIfFinished: !!hit?.pend });
+      const snap = (this._remoteSyncSnap && now() - (this._remoteSyncSnap.at || 0) < 5000) ? this._remoteSyncSnap.c : null;
+      this._remoteSyncSnap = null;
+      const c = hit?.chatSnap || snap || await api('/api/chat/' + this.sid + '?includeStreamToken=false', { timeout: 35000, noApiRetry: true }).catch(() => null);
       if (this.busy || this.streaming) return;   // 这期间自己发了消息：交给自己的流程
-      if (c?.messages) { this.mergeServer(c.messages); this.setToken(c.publicAccessToken); }
+      if (c?.messages && !hit?.chatSnap && !snap) { this.mergeServer(c.messages); this.setToken(c.publicAccessToken); }
+      else if (c?.publicAccessToken) this.setToken(c.publicAccessToken);
       const last = c?.messages?.at(-1);
-      const srvPend = !!last && (last.role === 'user' || last.metadata?.pending) && !(last.role === 'assistant' && Hitl.idleWait(this));
+      const srvPend = !!last && (last.role === 'user' || (last.metadata?.pending && !(typeof isDeadAssistantMsg === 'function' && isDeadAssistantMsg(last)))) && !(last.role === 'assistant' && Hitl.idleWait(this));
       const act = hit?.mid ? (info?.act ?? info?.runSeq ?? null) : (info?.runSeq ?? info?.act ?? (hit?.seq && this.lastSeq === from ? hit.seq : null));   // 中途接上的（mid）：没有开头可重放，只用服务器记录
       if (act != null || srvPend) {
-        // 从这一轮的第一条记录（分派 / start）开始重放：还在跑就接着实时显示，已经跑完就一口气补完整
-        const startSeq = act != null ? act : (c?.lastEventId != null ? Math.max(1, +c.lastEventId - 3000) : 1);
-        this.lastSeq = String(Math.max(0, startSeq - 1)); this.fence = startSeq - 1;
-        this.status = 'streaming'; this.phase = '另一台设备发起的对话 · 同步中'; this.remote = true; this.error = null;
-        this.sentAt = now(); this.respAt = 0; this.finAt = 0; this.endAt = 0; this.live = null; this.parts.clear();
-        if (last?.role === 'assistant' && last?.metadata?.pending) this.live = this.messages.find(m => m.id === last.id) || null;
+        // drain 已经回放过的游标直接保持在 info.max，避免二次回退重放 4000 条记录与清空已挂载工具部件
+        if (info?.max != null) {
+          this.lastSeq = String(info.max); this.fence = info.max;
+        } else {
+          const startSeq = act != null ? act : (c?.lastEventId != null ? Math.max(1, +c.lastEventId - 3000) : 1);
+          this.lastSeq = String(Math.max(0, startSeq - 1)); this.fence = startSeq - 1;
+        }
+        this.status = 'streaming'; this.phase = '接收回复中'; this.remote = true; this.error = null;
+        this.sentAt = now(); this.respAt = 0; this.finAt = 0; this.endAt = 0;
+        const tailMsg = this.messages.at(-1);
+        if (tailMsg?.role === 'assistant' && !(typeof isDeadAssistantMsg === 'function' && isDeadAssistantMsg(tailMsg))) {
+          this.live = tailMsg;
+          this.parts.clear();
+          (tailMsg.parts || []).forEach(p => {
+            if (!p) return;
+            if (p.toolCallId) this.parts.set('tool:' + p.toolCallId, p);
+            if ((p.type === 'text' || p.type === 'reasoning') && p.id) this.parts.set(p.type[0] + ':' + p.id, p);
+          });
+        } else if (last?.role === 'assistant' && last?.metadata?.pending) {
+          this.live = this.messages.find(m => m.id === last.id) || null;
+        }
         this.emit(); this.restream();
       } else {
         if (!info && c?.lastEventId != null) this.lastSeq = String(c.lastEventId);
@@ -3669,6 +4285,7 @@ function isDeadAssistantMsg(m) {
   if (hasSubstantiveAssistantWork(m)) return false;
   if (m.metadata?.openThinkStopped || m.metadata?.aborted || m.metadata?.feedback?.interruption === 'stop' || m.metadata?.error) return true;
   if (m._routePivotRole === 'next' && m._turnModelLabel && isOpenCandidateName(m._turnModelLabel)) return true;
+  if (m.metadata?.pending && !m._finishedAt) return false;
   const parts = Array.isArray(m.parts) ? m.parts : [];
   if (!parts.length) return true;
   if (parts.some(p => p?.type === 'error')) return true;
@@ -3685,8 +4302,12 @@ function isDeadAssistantMsg(m) {
     String(p.type || '').startsWith('source-')
   ));
 }
-async function ensureHealthyHistoryLoaded(chat, maxPages = 8) {
+function isHitlToolResultUserMsg(u) {
+  return Boolean(u && u.role === 'user' && Array.isArray(u.parts) && u.parts.some(p => p && p.type === 'data-tool-results'));
+}
+async function ensureHealthyHistoryLoaded(chat, maxPages = 1) {
   if (!chat || typeof chat.loadOlder !== 'function') return;
+  if (Array.isArray(chat.messages) && chat.messages.some(m => m && m.role === 'user' && !m.failed)) return;
   for (let page = 0; page < maxPages; page++) {
     if (!chat.hasMore || !chat.cursor) break;
     if (findHealthyLastUser(chat.messages, null, chat._rejectedHealthyNodeIds)) break;
@@ -3719,10 +4340,11 @@ function findHealthyLastUser(msgs, excludeMsg = null, rejectedSet = null) {
     const u = msgs[i];
     const uKey = u ? String(u.metadata?.nodeId || u.id || '') : '';
     const isRejectedNode = !!(rejectedSet && typeof rejectedSet.has === 'function' && uKey && (rejectedSet.has(uKey) || rejectedSet.has(String(u.id || ''))));
-    if (!u || u === excludeMsg || u.role !== 'user' || u.failed || u._streamRejected || isRejectedNode) {
-      if (u && u !== excludeMsg && (u.failed || u._streamRejected || isRejectedNode || (u.role === 'assistant' && isDeadAssistantMsg(u)))) sawDeadTail = true;
+    if (!u || u === excludeMsg || u.role !== 'user' || u.failed || (u._streamRejected && !isHitlToolResultUserMsg(u)) || isRejectedNode) {
+      if (u && u !== excludeMsg && (u.failed || (u._streamRejected && !isHitlToolResultUserMsg(u)) || isRejectedNode || (u.role === 'assistant' && isDeadAssistantMsg(u)))) sawDeadTail = true;
       continue;
     }
+    if (isHitlToolResultUserMsg(u) || (u._officialContinueParent && !u._streamRejected && !isRejectedNode)) return u;
     let hasAssistant = false, hasHealthyAssistant = false;
     for (let j = i + 1; j < end; j++) {
       const m = msgs[j];
@@ -3736,18 +4358,21 @@ function findHealthyLastUser(msgs, excludeMsg = null, rejectedSet = null) {
     if (hasHealthyAssistant) return u;
     if (hasAssistant && !hasHealthyAssistant) {
       sawDeadTail = true;
+      if (!fallbackUser) fallbackUser = u;
       continue;
     }
     if (!hasAssistant && !sawDeadTail && !fallbackUser && i === end - 1) {
       fallbackUser = u;
     } else {
       sawDeadTail = true;
+      if (!fallbackUser) fallbackUser = u;
     }
   }
   return fallbackUser;
 }
 function rebuildChatFmtFromMessages(chat) {
   if (!chat) return;
+  const prev = chat.fmt;
   const nf = typeof Fmt !== 'undefined' && Fmt.fresh ? Fmt.fresh() : { ids: [], toolIds: [], rBlocks: 0, rChars: 0, rHead: '', tBlocks: 0, tChars: 0, head: '' };
   const msgs = Array.isArray(chat.messages) ? chat.messages : [];
   const healthyAsst = msgs.filter(m => m && m.role === 'assistant' && !isDeadAssistantMsg(m));
@@ -3755,12 +4380,29 @@ function rebuildChatFmtFromMessages(chat) {
   const firstIsClosed = healthyAsst.length > 0 && !msgHasVis(healthyAsst[0]) && (healthyAsst[0].parts || []).some(p => p?.type === 'reasoning' || /^(?:toolu_|srvtoolu_|call_)/i.test(String(p?.toolCallId || '')));
   for (const m of healthyAsst) {
     if (firstIsClosed && msgHasVis(m)) break;
+    const mf = m._fmt || m.fmt;
+    if (mf && typeof mf === 'object') {
+      for (const x of mf.ids || []) if (Array.isArray(x) && nf.ids.length < 32 && !nf.ids.some(y => y[0] === x[0] && y[1] === String(x[1]))) nf.ids.push([x[0], String(x[1])]);
+      for (const id of mf.toolIds || []) if (id && nf.toolIds.length < 32 && !nf.toolIds.includes(String(id))) nf.toolIds.push(String(id));
+      nf.tN = (nf.tN || 0) + Number(mf.tN || 0);
+      nf.rN = (nf.rN || 0) + Number(mf.rN || 0);
+      nf.tidCount = (nf.tidCount || 0) + Number(mf.tidCount || 0);
+      nf.tidChars = (nf.tidChars || 0) + Number(mf.tidChars || 0);
+      nf.rE = (nf.rE || 0) + Number(mf.rE || 0);
+      nf.rWireDeltas = (nf.rWireDeltas || 0) + Number(mf.rWireDeltas || 0);
+      nf.rWireEmptyDeltas = (nf.rWireEmptyDeltas || 0) + Number(mf.rWireEmptyDeltas || 0);
+      nf.tools = (nf.tools || 0) + Number(mf.tools || 0);
+      if (mf.t0 && (!nf.t0 || mf.t0 < nf.t0)) nf.t0 = mf.t0;
+      if (mf.tFirst && (!nf.tFirst || mf.tFirst < nf.tFirst)) nf.tFirst = mf.tFirst;
+      if (mf.tEnd && (!nf.tEnd || mf.tEnd > nf.tEnd)) nf.tEnd = mf.tEnd;
+      if (mf.done) nf.done = true;
+    }
     for (const p of m.parts || []) {
       if (!p) continue;
-      if (p.toolCallId && nf.toolIds.length < 16) nf.toolIds.push(String(p.toolCallId));
+      if (p.toolCallId && nf.toolIds.length < 32 && !nf.toolIds.includes(String(p.toolCallId))) nf.toolIds.push(String(p.toolCallId));
       if (p.type === 'reasoning') {
         nf.rBlocks = (nf.rBlocks || 0) + 1;
-        if (p.id && nf.ids.length < 16) nf.ids.push(['r', String(p.id)]);
+        if (p.id && nf.ids.length < 32 && !nf.ids.some(y => y[0] === 'r' && y[1] === String(p.id))) nf.ids.push(['r', String(p.id)]);
         const vis = typeof ThinkingStatus !== 'undefined' && ThinkingStatus.visible ? ThinkingStatus.visible(p) : Boolean(String(p.text || '').trim());
         if (vis) {
           const rt = String(p.text || '');
@@ -3769,12 +4411,23 @@ function rebuildChatFmtFromMessages(chat) {
         }
       } else if (p.type === 'text') {
         nf.tBlocks = (nf.tBlocks || 0) + 1;
-        if (p.id && nf.ids.length < 16) nf.ids.push(['t', String(p.id)]);
+        if (p.id && nf.ids.length < 32 && !nf.ids.some(y => y[0] === 't' && y[1] === String(p.id))) nf.ids.push(['t', String(p.id)]);
         const tt = String(p.text || '');
         nf.tChars = (nf.tChars || 0) + tt.length;
         if ((nf.head || '').length < 400) nf.head = (nf.head || '') + tt.slice(0, 400 - (nf.head || '').length);
       }
     }
+  }
+  if (prev && typeof prev === 'object' && !(prev.rChars > 0 && nf.rChars === 0)) {
+    for (const x of prev.ids || []) if (Array.isArray(x) && nf.ids.length < 32 && !nf.ids.some(y => y[0] === x[0] && y[1] === String(x[1]))) nf.ids.push([x[0], String(x[1])]);
+    for (const id of prev.toolIds || []) if (id && nf.toolIds.length < 32 && !nf.toolIds.includes(String(id))) nf.toolIds.push(String(id));
+    for (const k of ['tN', 'rN', 'tidCount', 'tidChars', 'rE', 'rWireDeltas', 'rWireEmptyDeltas', 'tools']) {
+      if ((prev[k] || 0) > (nf[k] || 0)) nf[k] = prev[k];
+    }
+    if (prev.t0 && !nf.t0) nf.t0 = prev.t0;
+    if (prev.tFirst && !nf.tFirst) nf.tFirst = prev.tFirst;
+    if (prev.tEnd && !nf.tEnd) nf.tEnd = prev.tEnd;
+    if (prev.done) nf.done = true;
   }
   chat.fmt = nf;
 }
@@ -3856,17 +4509,20 @@ function pruneDeadTailTurns(chat) {
       }
     }
   }
+  for (let k = msgs.length - 1; k > lastHealthyIdx; k--) {
+    const mk = msgs[k];
+    if (isHitlToolResultUserMsg(mk) || (mk?.role === 'user' && mk._officialContinueParent && !mk._streamRejected && !rej?.has?.(String(mk.metadata?.nodeId || mk.id || '')))) { lastHealthyIdx = k; break; }
+  }
   const tailSlice = msgs.slice(lastHealthyIdx + 1);
   if (!tailSlice.length) return null;
   const hasDeadEvidence = tailSlice.some(m => m && (
     (m.role === 'assistant' && isDeadAssistantMsg(m)) ||
-    (m.role === 'user' && (m.failed || m._streamRejected || m.metadata?.error || (rej?.has?.(String(m.metadata?.nodeId || m.id || '')))))
+    (m.role === 'user' && (m.failed || (m._streamRejected && !isHitlToolResultUserMsg(m)) || m.metadata?.error || (rej?.has?.(String(m.metadata?.nodeId || m.id || '')))))
   )) || tailSlice.filter(m => m && m.role === 'user').length > 1;
   if (!hasDeadEvidence) return null;
-  const deadUsers = tailSlice.filter(m => m && m.role === 'user');
+  const deadUsers = tailSlice.filter(m => m && m.role === 'user' && !isHitlToolResultUserMsg(m));
   if (!deadUsers.length) {
     const prunedSet = (chat._prunedDeadMsgIds ||= new Set());
-    for (const m of tailSlice) if (m?.id) prunedSet.add(m.id);
     msgs.splice(lastHealthyIdx + 1);
     return { lastUser: null, origText: '', prunedCount: tailSlice.length };
   }
@@ -4031,13 +4687,57 @@ const ENT_AT = new WeakMap();
 const entAt = e => { if (!e) return NaN; const raw = e.updatedAt || e.createdAt || ''; const c = ENT_AT.get(e); if (c && c[0] === raw) return c[1]; const v = Date.parse(String(raw).replace(' ', 'T').replace(/\+00$/, 'Z')); ENT_AT.set(e, [raw, v]); return v; };
 const History = {
   items: [], cursor: null, hasMore: true, loading: false, err: null, lastLoad: 0, seen: new Set(), ck: '',
+  isGhostLocal(e) {
+    return Boolean(e && (e._localRecovered || /^本地缓存对话(\s|$)/i.test(String(e.title || '').trim())));
+  },
+  uuidTs(sid) {
+    const m = /^([0-9a-f]{8})-([0-9a-f]{4})-7/i.exec(String(sid || '').trim());
+    if (!m) return 0;
+    const ms = parseInt(m[1] + m[2], 16);
+    return Number.isFinite(ms) && ms > 1700000000000 && ms < 2500000000000 ? ms : 0;
+  },
+  seedFromAccountStats() {
+    try {
+      const gone = this.goneMap?.() || new Map();
+      const vendors = (typeof UI !== 'undefined' && UI.host?.account?.status?.stats?.vendors) || null;
+      let modelsDirty = false, notesDirty = false;
+      if (vendors && typeof vendors === 'object') {
+        for (const vObj of Object.values(vendors)) {
+          const models = vObj?.models || {};
+          for (const [mName, mObj] of Object.entries(models)) {
+            for (const row of (mObj?.list || [])) {
+              if (!Array.isArray(row) || !row[0]) continue;
+              const [sid, atMs, , known, note] = row;
+              if (!sid || gone.has(sid) || (typeof Arch !== 'undefined' && Arch.has?.(sid))) continue;
+              if (mName && !/^(未识别|未知型号|待定)$/.test(String(mName).trim()) && typeof Models !== 'undefined' && Models.all && !Models.all[sid]?.name) {
+                Models.all[sid] = { ...(Models.all[sid] || {}), name: mName, sid, at: Number(atMs) || now(), habitInferred: !!known, pendingConfirm: false };
+                modelsDirty = true;
+              }
+              if (note && typeof Notes !== 'undefined' && Notes.all && !Notes.all[sid]?.v && !Notes.all[sid]?.n) {
+                Notes.all[sid] = { n: String(note), t: Number(atMs) || now() };
+                notesDirty = true;
+              }
+            }
+          }
+        }
+      }
+      if (modelsDirty) try { Store.set('models', Models.all); } catch {}
+      if (notesDirty) try { Store.set('notes2', Notes.all); } catch {}
+    } catch {}
+    return 0;
+  },
   // 本地轻量缓存：重启后先用上次的列表立刻显示，再在后台刷新（统计也直接用它）
   warm(acct) {
     const isFast = !acct || acct === 'fast' || acct === 'anon';
     if (!isFast) this.ck = 'hist:' + acct;
-    if (this.items.length) { Bus.emit('history'); return; }
+    if (this.items.length) {
+      this.seedFromAccountStats();
+      Bus.emit('history');
+      if (typeof UI !== 'undefined') void this.restoreFromLocalCache?.();
+      return;
+    }
     let c = !isFast ? Store.get(this.ck, null) : null;
-    if (!c || !Array.isArray(c.items) || !c.items.length) {
+    if (isFast && (!c || !Array.isArray(c.items) || !c.items.length)) {
       try {
         for (let i = 0; i < localStorage.length; i++) {
           const k = localStorage.key(i) || '';
@@ -4051,15 +4751,46 @@ const History = {
         }
       } catch {}
     }
-    if (!c || !Array.isArray(c.items) || !c.items.length) return;
-    this.items = c.items; this.dedupe(); this.cached = c.at || 0; this.full = false; this.fullAt = 0;
-    Bus.emit('history');
+    if (c && Array.isArray(c.items) && c.items.length) {
+      const gone = this.goneMap?.() || new Map();
+      const purgedGhosts = this._warmPurgedGhosts || (this._warmPurgedGhosts = new Set());
+      this.items = c.items.filter(e => {
+        if (!e?.id || gone.has(e.id) || (typeof Arch !== 'undefined' && Arch.has?.(e.id))) return false;
+        if (/^本地缓存对话(\s|$)/i.test(String(e.title || '').trim())) {
+          purgedGhosts.add(e.id);
+          return false;
+        }
+        return true;
+      });
+      this.dedupe(); this.cached = c.at || 0; this.full = false; this.fullAt = 0;
+      if (purgedGhosts.size > 0) this.saveSoon();
+    }
+    this.seedFromAccountStats();
+    if (this.items.length) Bus.emit('history');
+    if (typeof UI !== 'undefined') void this.restoreFromLocalCache?.();
   },
   saveSoon() {
     if (!this.ck) return; clearTimeout(this.saveT);
     this.saveT = setTimeout(() => {
-      const pick = e => { const o = {}; for (const k of ['id', 'type', 'productMode', 'title', 'createdAt', 'updatedAt', 'isArchived', 'isPinned', 'modality']) if (e[k] !== undefined) o[k] = e[k]; return o; };
-      Store.set(this.ck, { at: now(), full: !!this.full && this.items.length <= 5000, fullAt: this.fullAt || 0, items: this.items.filter(e => !e._pending).slice(0, 5000).map(pick) });
+      const pick = e => { const o = {}; for (const k of ['id', 'type', 'productMode', 'title', 'localTitle', 'createdAt', 'updatedAt', 'isArchived', 'isPinned', 'modality']) if (e[k] !== undefined) o[k] = e[k]; return o; };
+      const cleanItems = this.items.filter(e => !e._pending && !e._localRecovered && !/^本地缓存对话(\s|$)/i.test(String(e?.title || '').trim())).slice(0, 5000).map(pick);
+      if (!cleanItems.length) {
+        const prev = Store.get(this.ck, null);
+        const gone = this.goneMap?.() || new Map();
+        const prevAlive = Array.isArray(prev?.items) ? prev.items.filter(x => x?.id && !gone.has(x.id) && !/^本地缓存对话(\s|$)/i.test(String(x?.title || '').trim())) : [];
+        if (prevAlive.length > 0) return;
+      }
+      const payload = { at: now(), full: !!this.full && this.items.length <= 5000, fullAt: this.fullAt || 0, items: cleanItems };
+      Store.set(this.ck, payload);
+      if (cleanItems.length > 0) {
+        try { if (typeof MsgCache !== 'undefined' && MsgCache.putMeta) void MsgCache.putMeta(this.ck, payload); } catch {}
+        try {
+          const aid = (typeof UI !== 'undefined' && UI.host?.account?.id) || (this.ck.startsWith('hist:') ? this.ck.slice(5) : '');
+          if (aid && aid !== 'web' && aid !== 'fast' && aid !== 'anon' && typeof Host !== 'undefined' && Host.shared) {
+            void Promise.resolve(Host.shared('hist@' + aid, payload)).catch(() => {});
+          }
+        } catch {}
+      }
     }, 1500);
   },
   // Refresh and pagination mutate one cursor chain. Never let their responses commit out of order.
@@ -4075,11 +4806,11 @@ const History = {
       throw Object.assign(Error('历史列表响应格式异常，已保留本地列表；请刷新重试'), { historyStop: true });
     }
     const gone = this.goneMap();
-    return { entries: j.entries.filter(e => (e.type === 'agentic' || e.productMode) && !e.isArchived && !e.archivedAt && !gone.has(e.id)), cursor: p.hasMore ? p.cursor : null, hasMore: p.hasMore };
+    return { entries: j.entries.filter(e => (e.type === 'agentic' || e.productMode) && !e.isArchived && !e.archivedAt && !gone.has(e.id) && !(typeof Arch !== 'undefined' && Arch.has?.(e.id))), cursor: p.hasMore ? p.cursor : null, hasMore: p.hasMore };
   },
-  // 刚归档 / 删除的对话：服务器列表有几分钟延迟，期间刷新会把它们「带回来」。本机记住 3 天，列表里不再出现。
+  // 已归档 / 删除的对话：本机记住 30 天，防止本地残留统计或延迟列表把已删对话复活成「本地缓存对话」。
   goneMap() {
-    if (!this.gone) { let g = {}; try { g = Store.get('histgone', {}); } catch {} const t = now(); this.gone = new Map(Object.entries(g && typeof g === 'object' ? g : {}).filter(([, at]) => t - at < 3 * 86400e3)); }
+    if (!this.gone) { let g = {}; try { g = Store.get('histgone', {}); } catch {} const t = now(); this.gone = new Map(Object.entries(g && typeof g === 'object' ? g : {}).filter(([, at]) => t - at < 30 * 86400e3)); }
     return this.gone;
   },
   bury(ids) {
@@ -4091,9 +4822,19 @@ const History = {
     if (n !== this.items.length) { this.saveSoon(); Bus.emit('history'); }
   },
   merge(got, head = false) {
+    const prevById = new Map(this.items.map(e => [e.id, e]));
     const rows = new Map();
-    if (head) { for (const e of got) rows.set(e.id, e); for (const e of this.items) if (!rows.has(e.id)) rows.set(e.id, e); }
-    else { for (const e of this.items) rows.set(e.id, e); for (const e of got) rows.set(e.id, e); }
+    const withLocal = e => {
+      if (e.localTitle !== undefined) return e;
+      const p = prevById.get(e.id);
+      if (!p?.localTitle) return e;
+      const mi = typeof Models !== 'undefined' ? Models.get(e.id) : null;
+      const hasLocalMi = Boolean(mi?.name && !mi.pendingConfirm && (!mi.guess || mi.userCorrected || mi.habitInferred || mi.reverseInferred || mi.billingProbe));
+      if (p.title === e.title || hasLocalMi) return { ...e, localTitle: (hasLocalMi && typeof Titles !== 'undefined' && Titles.want ? Titles.want(e.id) : '') || p.localTitle };
+      return e;
+    };
+    if (head) { for (const e of got) rows.set(e.id, withLocal(e)); for (const e of this.items) if (!rows.has(e.id)) rows.set(e.id, e); }
+    else { for (const e of this.items) rows.set(e.id, e); for (const e of got) rows.set(e.id, withLocal(e)); }
     this.items = [...rows.values()];
     for (const e of got) this.seen.add(e.id);
   },
@@ -4101,14 +4842,25 @@ const History = {
     if (!this.scan || this.hasMore || this.err) return;
     const gone = this.goneMap?.() || new Map();
     const isOffline = (typeof Host !== 'undefined' && Host.online === false) || (typeof BrowseMode !== 'undefined' && BrowseMode.active?.());
-    const mcKeys = isOffline ? new Set(typeof MsgCache !== 'undefined' && MsgCache.keys ? MsgCache.keys() : []) : new Set();
+    const keepLocal = isOffline;
+    const mcKeys = keepLocal ? new Set([
+      ...(typeof MsgCache !== 'undefined' && MsgCache.keys ? MsgCache.keys() : []),
+    ]) : new Set();
     const removedIds = new Set();
     this.items = this.items.filter(e => {
-      const keep = !gone.has(e.id) && (this.seen.has(e.id) || !this.scan.baseline.has(e.id) || (isOffline && (e._localRecovered || mcKeys.has(e.id))) || Chats.get(e.id)?.busy);
+      if (!e?.id || gone.has(e.id) || (typeof Arch !== 'undefined' && Arch.has?.(e.id))) {
+        if (e?.id) removedIds.add(e.id);
+        return false;
+      }
+      if (!keepLocal && this.isGhostLocal(e) && !this.seen.has(e.id)) {
+        removedIds.add(e.id);
+        return false;
+      }
+      const keep = this.seen.has(e.id) || !this.scan.baseline.has(e.id) || (keepLocal && (e._localRecovered || mcKeys.has(e.id) || this.seen.size === 0)) || Chats.get(e.id)?.busy;
       if (!keep && e?.id) removedIds.add(e.id);
       return keep;
     });
-    if (!isOffline && removedIds.size > 0 && typeof Tabs !== 'undefined' && Array.isArray(Tabs.list)) {
+    if (!keepLocal && removedIds.size > 0 && typeof Tabs !== 'undefined' && Array.isArray(Tabs.list)) {
       for (const t of [...Tabs.list]) {
         if (t.kind === 'chat' && t.sid && removedIds.has(t.sid) && !Chats.get(t.sid)?.busy) {
           try { Tabs.close?.(t.key); } catch {}
@@ -4118,30 +4870,140 @@ const History = {
     this.full = true; this.fullAt = now();
   },
   async restoreFromLocalCache() {
-    try {
-      const isOffline = (typeof Host !== 'undefined' && Host.online === false) || (typeof BrowseMode !== 'undefined' && BrowseMode.active?.());
-      if (!isOffline) return;
-      const gone = this.goneMap?.() || new Map();
-      const existing = new Set((this.items || []).map(x => x?.id).filter(Boolean));
-      const sids = new Set([
-        ...(typeof MsgCache !== 'undefined' && MsgCache.keys ? MsgCache.keys() : []),
-        ...Object.keys((typeof Models !== 'undefined' && Models.map) || {}),
-      ]);
-      let added = 0;
-      for (const sid of sids) {
-        if (!sid || existing.has(sid) || gone.has(sid) || !/^[0-9a-f-]{8,64}$/i.test(sid)) continue;
-        const mi = typeof Models !== 'undefined' ? Models.get(sid) : null;
-        const cached = typeof MsgCache !== 'undefined' ? await MsgCache.get(sid).catch(() => null) : null;
-        const firstUser = Array.isArray(cached?.messages) ? cached.messages.find(m => m?.role === 'user') : null;
-        const firstTxt = (firstUser?.parts || []).find(p => p?.type === 'text')?.text || '';
-        const t = (typeof Titles !== 'undefined' && Titles.raw?.(sid)) || mi?.name || String(firstTxt).trim().slice(0, 48) || ('本地缓存对话 ' + sid.slice(0, 8));
-        const ts = cached?.at ? new Date(cached.at).toISOString() : new Date().toISOString();
-        this.items.push({ id: sid, title: t, createdAt: ts, updatedAt: ts, mode: 'agent', _localRecovered: true });
-        existing.add(sid);
-        added++;
-      }
-      if (added > 0) { this.saveSoon(); Bus.emit('history'); }
-    } catch {}
+    if (this._restoringP) return this._restoringP;
+    this._restoringP = (async () => {
+      try {
+        const isOffline = (typeof Host !== 'undefined' && Host.online === false) || (typeof BrowseMode !== 'undefined' && BrowseMode.active?.());
+        const gone = this.goneMap?.() || new Map();
+        this.seedFromAccountStats();
+        let added = 0;
+        let updated = 0;
+        // 清理之前遗留在列表或冷启动缓存中的「本地缓存对话 <sid8>」幽灵条目（无实际消息缓存或已被服务端排除）
+        const ghostCandidates = new Set(this._warmPurgedGhosts ? [...this._warmPurgedGhosts] : []);
+        if (this._warmPurgedGhosts) this._warmPurgedGhosts.clear();
+        if (Array.isArray(this.items) && this.items.length) {
+          const kept = [];
+          for (const item of this.items) {
+            if (!item?.id || gone.has(item.id) || (typeof Arch !== 'undefined' && Arch.has?.(item.id))) {
+              updated++;
+              continue;
+            }
+            if (this.isGhostLocal(item) && !this.seen.has(item.id)) {
+              const c = typeof MsgCache !== 'undefined' ? await MsgCache.get(item.id).catch(() => null) : null;
+              if (!Array.isArray(c?.messages) || !c.messages.length) {
+                ghostCandidates.add(item.id);
+                updated++;
+                continue;
+              }
+            }
+            kept.push(item);
+          }
+          if (kept.length !== this.items.length) this.items = kept;
+        }
+        if (ghostCandidates.size > 0) {
+          const confirmedGhosts = [];
+          let turnsDirty = false;
+          for (const gid of ghostCandidates) {
+            const c = typeof MsgCache !== 'undefined' ? await MsgCache.get(gid).catch(() => null) : null;
+            if (!Array.isArray(c?.messages) || !c.messages.length) {
+              confirmedGhosts.push(gid);
+              if (typeof AcctStats !== 'undefined' && AcctStats.turns && AcctStats.turns[gid]) {
+                delete AcctStats.turns[gid];
+                turnsDirty = true;
+              }
+              try { if (typeof Notes !== 'undefined' && Notes.all?.[gid] && !Notes.all[gid].n) Notes.drop?.(gid); } catch {}
+            }
+          }
+          if (turnsDirty) try { AcctStats.save?.(); } catch {}
+          if (confirmedGhosts.length > 0) {
+            try { this.bury?.(confirmedGhosts); } catch {}
+            updated++;
+          }
+        }
+        const existing = new Set((this.items || []).map(x => x?.id).filter(Boolean));
+        const aid = (typeof UI !== 'undefined' && UI.host?.account?.id) || (this.ck?.startsWith('hist:') ? this.ck.slice(5) : '');
+        try {
+          if (typeof MsgCache !== 'undefined' && MsgCache.getMeta) {
+            const metaModels = await MsgCache.getMeta('models').catch(() => null);
+            if (metaModels && typeof metaModels === 'object' && typeof Models !== 'undefined' && Models.all) {
+              let mDirty = false;
+              for (const [sid, mv] of Object.entries(metaModels)) {
+                if (sid && mv && !gone.has(sid) && !Models.all[sid]?.name) { Models.all[sid] = mv; mDirty = true; }
+              }
+              if (mDirty) try { Store.set('models', Models.all); } catch {}
+            }
+            // 仅当本地列表完全为空且尚未从服务端成功拉取时，才用备份列表做冷启动兜底
+            if (!this.items.length && !this.lastLoad && this.ck) {
+              const metaHist = await MsgCache.getMeta(this.ck).catch(() => null);
+              if (Array.isArray(metaHist?.items)) {
+                for (const e of metaHist.items) {
+                  const sid = e?.id;
+                  if (!sid || existing.has(sid) || gone.has(sid) || (typeof Arch !== 'undefined' && Arch.has?.(sid)) || this.isGhostLocal(e)) continue;
+                  this.items.push(e);
+                  existing.add(sid);
+                  added++;
+                }
+              }
+            }
+          }
+        } catch {}
+        try {
+          if (!this.items.length && !this.lastLoad && aid && aid !== 'web' && aid !== 'fast' && aid !== 'anon' && typeof Host !== 'undefined' && Host.shared) {
+            const sharedHist = await Promise.resolve(Host.shared('hist@' + aid)).catch(() => null);
+            if (Array.isArray(sharedHist?.items)) {
+              for (const e of sharedHist.items) {
+                const sid = e?.id;
+                if (!sid || existing.has(sid) || gone.has(sid) || (typeof Arch !== 'undefined' && Arch.has?.(sid)) || this.isGhostLocal(e)) continue;
+                this.items.push(e);
+                existing.add(sid);
+                added++;
+              }
+            }
+          }
+        } catch {}
+        // 只用真实存在本地消息缓存（MsgCache）的会话补齐标题，绝不凭空把 turns/notes/models 残留 key 伪造成「本地缓存对话」
+        const idbKeys = (typeof MsgCache !== 'undefined' && MsgCache.allKeys)
+          ? await MsgCache.allKeys().catch(() => [])
+          : (typeof MsgCache !== 'undefined' && MsgCache.keys ? MsgCache.keys() : []);
+        for (const sid of idbKeys) {
+          if (!sid || gone.has(sid) || (typeof Arch !== 'undefined' && Arch.has?.(sid)) || !/^[0-9a-f-]{8,64}$/i.test(sid)) continue;
+          const row = existing.has(sid) ? this.byId(sid) : null;
+          const needsEnrich = row && (this.isGhostLocal(row) || row.title === sid.slice(0, 8));
+          if (row && !needsEnrich) continue;
+          if (!row && !isOffline) continue;
+          const cached = typeof MsgCache !== 'undefined' ? await MsgCache.get(sid).catch(() => null) : null;
+          if (!Array.isArray(cached?.messages) || !cached.messages.length) continue;
+          const mi = typeof Models !== 'undefined' ? (Models.get?.(sid) || Models.all?.[sid] || null) : null;
+          const firstUser = cached.messages.find(m => m?.role === 'user');
+          const firstTxt = (firstUser?.parts || []).find(p => p?.type === 'text')?.text || (typeof firstUser?.content === 'string' ? firstUser.content : '') || '';
+          const cleanFirst = String(firstTxt).replace(/\s+/g, ' ').trim().slice(0, 48);
+          const noteTxt = (typeof Notes !== 'undefined' && Notes.get?.(sid)) || '';
+          const t = (typeof Titles !== 'undefined' && Titles.raw?.(sid)) || cleanFirst || mi?.name || noteTxt;
+          if (!t || /^本地缓存对话(\s|$)/i.test(t)) continue;
+          const fallbackMs = cached?.at || Date.parse(firstUser?.createdAt || '') || mi?.at || this.uuidTs(sid) || now();
+          const ts = cached?.histUpdatedAt || new Date(fallbackMs).toISOString();
+          if (row) {
+            if (t !== row.title) {
+              row.title = t;
+              delete row._localRecovered;
+              updated++;
+            }
+          } else if (isOffline) {
+            this.items.push({ id: sid, type: 'agentic', title: t, createdAt: ts, updatedAt: ts, mode: 'agent', _localRecovered: true });
+            existing.add(sid);
+            added++;
+          }
+        }
+        if (added > 0 || updated > 0) {
+          this.items.sort((a, b) => (entAt(b) || 0) - (entAt(a) || 0));
+          this.dedupe();
+          this.saveSoon();
+          Bus.emit('history');
+          try { if (typeof UI !== 'undefined') UI.renderList?.(); } catch {}
+        }
+      } catch {}
+    })().finally(() => { this._restoringP = null; });
+    return this._restoringP;
   },
   refresh(opt) {
     return this.refreshP ||= this.serial(() => this.refreshNow(opt)).finally(() => { this.refreshP = null; });
@@ -4186,14 +5048,19 @@ const History = {
       this.seen = new Set(); this.scan = { baseline, cursors: new Set() };
       this.merge(j.entries, true); this.cursor = j.cursor; this.hasMore = j.hasMore;
       const isOffline = (typeof Host !== 'undefined' && Host.online === false) || (typeof BrowseMode !== 'undefined' && BrowseMode.active?.());
-      if (!isOffline && j.entries.length > 0) {
+      const keepLocal = isOffline;
+      if (!keepLocal && j.entries.length > 0) {
         const minSrvTs = Date.parse(j.entries.at(-1)?.updatedAt || j.entries.at(-1)?.createdAt || '') || 0;
         const headRemoved = new Set();
         this.items = this.items.filter(e => {
           if (!e?.id || this.seen.has(e.id) || e._local || e._pending || Chats.get(e.id)?.busy) return true;
+          if (this.isGhostLocal(e)) {
+            headRemoved.add(e.id);
+            return false;
+          }
           if (!baseline.has(e.id)) return true;
           const eTs = Date.parse(e.updatedAt || e.createdAt || '') || 0;
-          if (!j.hasMore || e._localRecovered || (minSrvTs > 0 && eTs > minSrvTs + 1000)) {
+          if (!j.hasMore || (minSrvTs > 0 && eTs > minSrvTs + 1000)) {
             headRemoved.add(e.id);
             return false;
           }
@@ -4323,6 +5190,7 @@ const History = {
     const entry=this.byId(id);
     await api('/api/chat/' + encodeURIComponent(id) + '/archive', { method: 'POST', headers: { Accept: 'application/json' } });
     if(entry)ArchiveHistory.add([entry]);
+    try { Arch.add?.(id); } catch {}
     try { LocalCache.drop([id], { archived: true }); } catch {}
     this.bury([id]); this.items = this.items.filter(e => e.id !== id); this.saveSoon(); Bus.emit('history'); try { if (typeof AcctStats !== 'undefined') AcctStats.report?.(); } catch {}
   },
@@ -4510,20 +5378,21 @@ const ExtCompat = {
       let sawReasoning = false, reasoningDeltaCount = 0, reasoningTextLength = 0;
       let textDeltaCount = 0, textDeltaChars = 0, bashToolCount = 0, preToolTextChars = 0, interToolTextChars = 0;
       let seq = 1;
+      const MAX_REPLAY_RECORDS = 240;
       for (const m of assistants) {
         let seenToolInTurn = false, pendingInterText = 0;
         const ts = m.metadata?.timing?.completedAt || m.metadata?.timing?.startedAt || Date.now();
-        records.push({ seq_num: seq++, timestamp: ts, body: JSON.stringify({ data: { type: 'start', messageId: m.id } }) });
+        if (records.length < MAX_REPLAY_RECORDS) records.push({ seq_num: seq++, timestamp: ts, body: JSON.stringify({ data: { type: 'start', messageId: m.id } }) });
         for (const p of m.parts || []) {
           if (!p || !p.type) continue;
           if (p.type === 'reasoning') {
             sawReasoning = true;
-            records.push({ seq_num: seq++, timestamp: ts, body: JSON.stringify({ data: { type: 'reasoning-start', id: p.id || 'r' + seq } }) });
+            if (records.length < MAX_REPLAY_RECORDS) records.push({ seq_num: seq++, timestamp: ts, body: JSON.stringify({ data: { type: 'reasoning-start', id: p.id || 'r' + seq } }) });
             const rtxt = String(p.text || '');
             if (rtxt) {
               reasoningDeltaCount++;
               reasoningTextLength += rtxt.length;
-              records.push({ seq_num: seq++, timestamp: ts, body: JSON.stringify({ data: { type: 'reasoning-delta', delta: rtxt } }) });
+              if (records.length < MAX_REPLAY_RECORDS) records.push({ seq_num: seq++, timestamp: ts, body: JSON.stringify({ data: { type: 'reasoning-delta', delta: rtxt.length > 2048 ? rtxt.slice(0, 2048) : rtxt } }) });
             }
           } else if (p.type.startsWith('tool-') || p.type === 'dynamic-tool') {
             if (seenToolInTurn) { interToolTextChars += pendingInterText; pendingInterText = 0; }
@@ -4532,18 +5401,24 @@ const ExtCompat = {
             if (tid && !toolIds.includes(tid)) toolIds.push(tid);
             const tName = p.toolName || String(p.type).replace(/^tool-/, '');
             if (/bash|shell|run_command/i.test(tName)) bashToolCount++;
-            records.push({
-              seq_num: seq++,
-              timestamp: ts,
-              body: JSON.stringify({
-                data: {
-                  type: 'tool-input-start',
-                  toolCallId: tid,
-                  toolName: tName,
-                  input: p.input ?? p.inputText ?? {}
-                }
-              })
-            });
+            if (records.length < MAX_REPLAY_RECORDS) {
+              const rawIn = p.input ?? p.inputText ?? {};
+              const liteIn = typeof rawIn === 'string'
+                ? (rawIn.length > 512 ? rawIn.slice(0, 512) : rawIn)
+                : (rawIn && typeof rawIn === 'object' ? { command: typeof rawIn.command === 'string' ? rawIn.command.slice(0, 256) : undefined, path: rawIn.path || rawIn.file_path } : {});
+              records.push({
+                seq_num: seq++,
+                timestamp: ts,
+                body: JSON.stringify({
+                  data: {
+                    type: 'tool-input-start',
+                    toolCallId: tid,
+                    toolName: tName,
+                    input: liteIn
+                  }
+                })
+              });
+            }
           } else if (p.type === 'text' && p.text) {
             const txt = String(p.text);
             textDeltaCount++;
@@ -4551,10 +5426,10 @@ const ExtCompat = {
             const trimmed = txt.trim().length;
             if (!seenToolInTurn) preToolTextChars += trimmed;
             else pendingInterText += trimmed;
-            records.push({ seq_num: seq++, timestamp: ts, body: JSON.stringify({ data: { type: 'text-delta', delta: txt } }) });
+            if (records.length < MAX_REPLAY_RECORDS) records.push({ seq_num: seq++, timestamp: ts, body: JSON.stringify({ data: { type: 'text-delta', delta: txt.length > 2048 ? txt.slice(0, 2048) : txt } }) });
           }
         }
-        records.push({ seq_num: seq++, timestamp: ts, headers: [['trigger-control', 'turn-complete']], body: JSON.stringify({ data: { type: 'finish', messageId: m.id } }) });
+        if (records.length < MAX_REPLAY_RECORDS) records.push({ seq_num: seq++, timestamp: ts, headers: [['trigger-control', 'turn-complete']], body: JSON.stringify({ data: { type: 'finish', messageId: m.id } }) });
       }
 
       let prevMemo = (window.__atiSseMemo instanceof Map ? window.__atiSseMemo.get(sid) : window.__atiSseMemo?.[sid]) || null;
@@ -4648,7 +5523,20 @@ const ExtCompat = {
         via: 'fetch'
       };
       try {
-        window.__next_f = [[1, '1:' + JSON.stringify({ chatId: sid, id: sid, messages: chat.messages, pagination: { hasMore: !!chat.hasMore, cursor: chat.cursor || null } }) + '\n']];
+        const liteMsgs = chat.messages.slice(-30).map(m => !m ? m : ({
+          id: m.id,
+          role: m.role,
+          metadata: m.metadata,
+          parts: (m.parts || []).slice(0, 40).map(p => !p ? p : ({
+            type: p.type,
+            id: p.id,
+            toolCallId: p.toolCallId,
+            toolName: p.toolName,
+            state: p.state,
+            text: typeof p.text === 'string' && p.text.length > 2048 ? p.text.slice(0, 2048) : p.text
+          }))
+        }));
+        window.__next_f = [[1, '1:' + JSON.stringify({ chatId: sid, id: sid, messages: liteMsgs, pagination: { hasMore: !!chat.hasMore, cursor: chat.cursor || null } }) + '\n']];
       } catch {}
       window.postMessage({ __arenaDetector: 'ARENA_DETECTOR_V2_CAPTURE', payload }, '*');
       setTimeout(() => { try { window.__arenaBashTranslate?.scan?.(); } catch {} }, 60);
@@ -4716,7 +5604,7 @@ try {
       }
     }
     const old = Models.get(d.sid);
-    if (old && !old.guess && !old.fromTitle && !old.reverseInferred && !old.billingProbe && (old.response || (old.internal && !old.billingProbe) || old.fingerprint?.apiIdentity)) return;
+    if (old && (old.userCorrected || (!old.guess && !old.fromTitle && !old.reverseInferred && !old.habitInferred && !old.billingProbe && (old.response || (old.internal && !old.billingProbe) || old.fingerprint?.apiIdentity)))) return;
     const pend = Boolean(d.pendingConfirm || (d.tiedCount && d.tiedCount > 1) || conf < 88);
     Models.set(d.sid, {
       ...(old || {}),

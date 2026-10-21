@@ -16,26 +16,48 @@ function blocked(response) {
 // 报错写明卡在哪一步，不再一律说「节点不通」
 // IPPure 纯净度兜底：经同一条隧道请求 my.ippure.com/v1/info（报告的是「调用方」的出口 IP，即 Brana 看到的那个），
 // fraudScore 0–100 越高越危险；失败 / 超时只是没有这项数据，不影响线路检测结果
-async function ippure(ses, ms=2200, signal) {
+async function ippure(ses, ms=3200, signal) {
   const ctl=new AbortController(),t=setTimeout(()=>ctl.abort(),ms);
   const abort=()=>ctl.abort();if(signal?.aborted)abort();else signal?.addEventListener('abort',abort,{once:true});
   try { const r=await ses.fetch('https://my.ippure.com/v1/info',{method:'GET',signal:ctl.signal,credentials:'omit',cache:'no-store',redirect:'follow'}); if(!r.ok)return null;
-    const j=JSON.parse((await r.text()).slice(0,20000)), fs=Number(j?.fraudScore); if(!Number.isFinite(fs))return null;
-    return {fs:Math.max(0,Math.min(100,Math.round(fs))),ip:String(j.ip||'').slice(0,64),res:!!j.isResidential,bc:!!j.isBroadcast,dc:!!j.isDataCenter,org:String(j.asOrganization||'').slice(0,40)}; }
+    const j=JSON.parse((await r.text()).slice(0,20000)), ip=String(j?.ip||'').slice(0,64), org=String(j?.asOrganization||'').slice(0,40);
+    let fs=Number(j?.fraudScore);
+    if(!Number.isFinite(fs)){
+      if(!ip||!ip.includes(':'))return null;
+      fs=/cloudflare|oracle|amazon|google|microsoft|linode|akamai|vultr|digitalocean|hetzner|ovh|choopa|datacamp|contabo|zenlayer|cogent|hurricane/i.test(org)?15:8;
+    }
+    return {fs:Math.max(0,Math.min(100,Math.round(fs))),ip,res:j?.isResidential!==undefined?!!j.isResidential:/broadband|telecom|communications|cable|mobile|fpt|kt|ntt|softbank|kddi|comcast|verizon|charter/i.test(org),bc:!!j?.isBroadcast,dc:!!j?.isDataCenter,org}; }
   catch { return null; } finally { clearTimeout(t);signal?.removeEventListener('abort',abort); }
 }
-// ip-api（经隧道，查「调用方」）：是否代理 / 机房 / 移动网络，免费不限每日次数 —— 和 IPPure 一起测，保证测延迟时就评出纯净度
-async function ipapi(ses, ms=1800, signal) {
-  const ctl=new AbortController(),t=setTimeout(()=>ctl.abort(),ms);
-  const abort=()=>ctl.abort();if(signal?.aborted)abort();else signal?.addEventListener('abort',abort,{once:true});
-  try { const r=await ses.fetch('http://ip-api.com/json/?fields=status,query,isp,org,as,mobile,proxy,hosting',{method:'GET',signal:ctl.signal,credentials:'omit',cache:'no-store',redirect:'follow'}); if(!r.ok)return null;
-    const j=JSON.parse((await r.text()).slice(0,20000)); if(j?.status!=='success'||!j.query)return null;
-    return {ip:String(j.query).slice(0,64),h:!!j.hosting,px:!!j.proxy,m:!!j.mobile,isp:String(j.isp||j.org||'').slice(0,40),as:String(j.as||'').split(' ')[0].slice(0,12)}; }
-  catch { return null; } finally { clearTimeout(t);signal?.removeEventListener('abort',abort); }
+// ip-api（经隧道或按已实测出口 IP 查询）：是否代理 / 机房 / 移动网络，免费不限每日次数 —— 和 IPPure 一起测，保证测延迟时就评出纯净度
+async function ipapi(ses, ms=2500, signal, targetIp='') {
+  const qIp=String(targetIp||'').trim();
+  const baseUrl='http://ip-api.com/json/?fields=status,query,isp,org,as,mobile,proxy,hosting';
+  const tryFetch=async(url,fn)=>{
+    const ctl=new AbortController(),t=setTimeout(()=>ctl.abort(),ms);
+    const abort=()=>ctl.abort();if(signal?.aborted)abort();else signal?.addEventListener('abort',abort,{once:true});
+    try { const r=await fn(url,ctl.signal); if(!r?.ok)return null;
+      const j=JSON.parse((await r.text()).slice(0,20000)); if(j?.status!=='success'||!j.query)return null;
+      return {ip:String(j.query).slice(0,64),h:!!j.hosting,px:!!j.proxy,m:!!j.mobile,isp:String(j.isp||j.org||'').slice(0,40),as:String(j.as||'').split(' ')[0].slice(0,12)}; }
+    catch { return null; } finally { clearTimeout(t);signal?.removeEventListener('abort',abort); }
+  };
+  const viaSes=await tryFetch(baseUrl,(u,sig)=>ses.fetch(u,{method:'GET',signal:sig,credentials:'omit',cache:'no-store',redirect:'follow'}));
+  if(viaSes&&(!qIp||viaSes.ip.toLowerCase()===qIp.toLowerCase()))return viaSes;
+  if(qIp&&typeof fetch==='function'){
+    const directUrl='http://ip-api.com/json/'+encodeURIComponent(qIp)+'?fields=status,query,isp,org,as,mobile,proxy,hosting';
+    return await tryFetch(directUrl,(u,sig)=>fetch(u,{method:'GET',signal:sig,cache:'no-store',redirect:'follow'}));
+  }
+  return viaSes;
 }
-// 测延迟时顺带测纯净度：IPPure + ip-api 并行（同一条隧道）
-async function purity(ses, ms=2500, signal) { const [pure,ipa]=await Promise.all([ippure(ses,ms,signal),ipapi(ses,ms,signal)]); return {...(pure?{pure}:{}),...(ipa?{ipa}:{})}; }
-async function checkService(ses, timeout=6500) { const r=await checkService0(ses,timeout); if(r&&r.ok&&r.ip)Object.assign(r,await purity(ses,Math.min(2500,Math.max(50,timeout)))); return r; }
+// 测延迟时顺带测纯净度：IPPure + ip-api 并行（同一条隧道）；若已通过 Brana 实测且 IPPure 超时，按 ip-api 兜底给出纯净度评估
+async function purity(ses, ms=3200, signal, targetIp='') {
+  let [pure,ipa]=await Promise.all([ippure(ses,ms,signal),ipapi(ses,ms,signal,targetIp)]);
+  if(!pure&&targetIp&&ipa&&(!ipa.ip||ipa.ip.toLowerCase()===String(targetIp).trim().toLowerCase())){
+    pure={ip:String(targetIp).trim(),fs:ipa.px?65:12,res:!ipa.h&&!ipa.px,bc:false,dc:!!ipa.h,org:String(ipa.isp||'')};
+  }
+  return {...(pure?{pure}:{}),...(ipa?{ipa}:{})};
+}
+async function checkService(ses, timeout=6500) { const r=await checkService0(ses,timeout); if(r&&r.ok&&r.ip)Object.assign(r,await purity(ses,Math.min(3200,Math.max(50,timeout)),null,r.ip)); return r; }
 async function checkService0(ses, timeout=6500) {
   try { return await checkOnce(ses, timeout); }
   catch (e) { if (e.kind !== 'network') throw e; try { return await checkOnce(ses, Math.round(timeout * 1.1)); } catch (e2) { if (e2.kind === 'network' && e2.stage) e2.message += '（已重试 1 次）'; throw e2; } }

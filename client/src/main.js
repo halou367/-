@@ -65,7 +65,16 @@ process.on('uncaughtException', error => {
 app.on('child-process-gone', (_, details) => runtimeLog('child-process-gone', { kind: details.type, reason: details.reason, exitCode: details.exitCode }));
 const UA = `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${process.versions.chrome} Safari/537.36`;
 
-if (!app.requestSingleInstanceLock() || process.argv.includes('--quit-for-update')) { app.quit(); process.exit(0); }
+if (process.argv.includes('--quit-for-update')) { app.quit(); process.exit(0); }
+let hasSingleLock = app.requestSingleInstanceLock();
+if (!hasSingleLock && process.argv.includes('--updated')) {
+  const waitBuf = new Int32Array(new SharedArrayBuffer(4));
+  for (let i = 0; i < 20 && !hasSingleLock; i++) {
+    try { Atomics.wait(waitBuf, 0, 0, 250); } catch {}
+    hasSingleLock = app.requestSingleInstanceLock();
+  }
+}
+if (!hasSingleLock) { app.quit(); process.exit(0); }
 
 let BUNDLE = '';
 const loadBundle = () => { BUNDLE = build(path.join(__dirname, '..', 'ui'), VERSION); };
@@ -73,11 +82,62 @@ const loadBundle = () => { BUNDLE = build(path.join(__dirname, '..', 'ui'), VERS
 // ---------- 账号存储 ----------
 const dataFile = () => path.join(app.getPath('userData'), 'accounts.json');
 let DB = { accounts: [], open: [] };
+const isRichDB = d => {
+  if (!d || typeof d !== 'object' || !Array.isArray(d.accounts) || !d.accounts.length) return false;
+  if (d.accounts.length > 1) return true;
+  const a0 = d.accounts[0] || {};
+  if (a0.email || a0.proxy || a0.nodeId || (Number(a0.status?.stats?.total) || 0) > 0) return true;
+  if (Array.isArray(d.shared?.nodes) && d.shared.nodes.length > 0) return true;
+  if (d.shared && Object.keys(d.shared).some(k => k.startsWith('hist@') && d.shared[k]?.items?.length > 0)) return true;
+  return false;
+};
+const readBestBackupDB = file => {
+  try {
+    const dir = path.dirname(file), base = path.basename(file);
+    const cands = fs.readdirSync(dir)
+      .filter(n => n === base + '.bak' || n.startsWith(base + '.bak-'))
+      .map(n => { const p = path.join(dir, n); try { const st = fs.statSync(p); return { p, size: st.size, mtime: st.mtimeMs }; } catch { return null; } })
+      .filter(x => x && x.size > 64)
+      .sort((a, b) => b.mtime - a.mtime || b.size - a.size);
+    for (const c of cands) {
+      try {
+        const parsed = JSON.parse(fs.readFileSync(c.p, 'utf8').replace(/^\uFEFF/, ''));
+        if (isRichDB(parsed)) return parsed;
+      } catch {}
+    }
+  } catch {}
+  return null;
+};
 function loadDB() {
-  try { DB = { accounts: [], open: [], ...JSON.parse(fs.readFileSync(dataFile(), 'utf8')) }; } catch {}
+  const file = dataFile();
+  let loaded = false, recoveredFromBak = false;
+  for (let attempt = 0; attempt < 4 && !loaded; attempt++) {
+    try {
+      const raw = fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, '');
+      DB = { accounts: [], open: [], ...JSON.parse(raw) };
+      loaded = true;
+    } catch (err) {
+      if (attempt < 3 && fs.existsSync(file)) {
+        try { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 60); } catch {}
+      } else {
+        try {
+          if (fs.existsSync(file) && fs.statSync(file).size > 64) {
+            fs.copyFileSync(file, file + '.bak-' + Date.now());
+          }
+        } catch {}
+      }
+    }
+  }
+  if (!loaded || !isRichDB(DB)) {
+    const bakDB = readBestBackupDB(file);
+    if (bakDB) {
+      DB = { accounts: [], open: [], ...bakDB };
+      recoveredFromBak = true;
+    }
+  }
   if (!DB.accounts.length) DB.accounts.push({ id: newId(), name: '账号 1', proxy: '' });
   // 每个账号随机绑定一个指纹（旧账号第一次启动时补上），并自动修复被服务端去除了标点符号（. , - _ +）的邮箱
-  let ch = false;
+  let ch = recoveredFromBak;
   for (const a of DB.accounts) {
     if (!a.fp || !a.fp.seed) { a.fp = genFp(); ch = true; }
     const mtEmail = DB.shared?.['mailtok@' + a.id]?.email || DB.shared?.['regpw@' + a.id]?.email || '';
@@ -127,6 +187,90 @@ function loadDB() {
           }
         }
       }
+      try {
+        const curFile = dataFile();
+        const roamingRoot = path.dirname(path.dirname(curFile));
+        const sibFiles = [
+          path.join(roamingRoot, 'Brana AI Extension Test', 'accounts.json'),
+          path.join(roamingRoot, 'Arena Client', 'accounts.json'),
+        ].filter(f => f !== curFile && fs.existsSync(f));
+        let sibAccounts = [], sibShared = {};
+        for (const sf of sibFiles) {
+          try {
+            const sd = JSON.parse(fs.readFileSync(sf, 'utf8'));
+            if (Array.isArray(sd?.accounts)) sibAccounts.push(...sd.accounts);
+            if (sd?.shared && typeof sd.shared === 'object') Object.assign(sibShared, sd.shared);
+          } catch {}
+        }
+        const canonEm = e => { const r = String(e || '').trim().toLowerCase(); const [l, d] = r.split('@'); return d ? l.replace(/\+.*$/, '').replace(/[.,\-_]/g, '') + '@' + d : r; };
+        for (const a of (DB.accounts || [])) {
+          if (!a?.id) continue;
+          const curTotal = Number(a.status?.stats?.total) || 0;
+          const aEm = canonEm(a.email || a.name);
+          const sibAcct = sibAccounts.find(x => x && (x.id === a.id || (aEm && canonEm(x.email || x.name) === aEm)) && (Number(x.status?.stats?.total) || 0) > curTotal);
+          if (sibAcct?.status?.stats) {
+            if (curTotal === 0) {
+              a.status = { ...(a.status || {}), stats: sibAcct.status.stats };
+              ch = true;
+            } else if (sibAcct.status.stats.vendors && a.status?.stats?.vendors) {
+              const mv = JSON.parse(JSON.stringify(a.status.stats.vendors));
+              let addedStat = 0;
+              for (const [vk, vObj] of Object.entries(sibAcct.status.stats.vendors)) {
+                if (!mv[vk]) mv[vk] = { name: vObj.name || vk, n: 0, models: {} };
+                for (const [mk, mObj] of Object.entries(vObj?.models || {})) {
+                  if (!mv[vk].models[mk]) mv[vk].models[mk] = { n: 0, turns: 0, known: 0, list: [] };
+                  const dst = mv[vk].models[mk];
+                  const seen = new Set((dst.list || []).map(r => r?.[0]));
+                  for (const row of (mObj?.list || [])) {
+                    if (Array.isArray(row) && row[0] && !seen.has(row[0])) {
+                      dst.list.push(row);
+                      seen.add(row[0]);
+                      addedStat++;
+                    }
+                  }
+                  dst.list.sort((x, y) => (y[1] || 0) - (x[1] || 0));
+                  dst.n = dst.list.length;
+                }
+                mv[vk].n = Object.values(mv[vk].models).reduce((s, m) => s + (m.n || 0), 0);
+              }
+              if (addedStat > 0) {
+                const newTotal = Object.values(mv).reduce((s, v) => s + (v.n || 0), 0);
+                a.status.stats = { ...a.status.stats, total: newTotal, vendors: mv };
+                ch = true;
+              }
+            }
+          }
+          const hk = 'hist@' + a.id;
+          const sibHk = sibAcct ? 'hist@' + sibAcct.id : hk;
+          if (!DB.shared[hk]?.items?.length && (sibShared[hk]?.items?.length || sibShared[sibHk]?.items?.length)) {
+            DB.shared[hk] = sibShared[hk]?.items?.length ? sibShared[hk] : sibShared[sibHk];
+            ch = true;
+          }
+          const vendors = a.status?.stats?.vendors;
+          if (vendors && typeof vendors === 'object') {
+            const existing = new Set((DB.shared[hk]?.items || []).map(x => x?.id).filter(Boolean));
+            const items = Array.isArray(DB.shared[hk]?.items) ? [...DB.shared[hk].items] : [];
+            let hAdded = 0;
+            for (const vObj of Object.values(vendors)) {
+              for (const [mName, mObj] of Object.entries(vObj?.models || {})) {
+                for (const row of (mObj?.list || [])) {
+                  if (!Array.isArray(row) || !row[0] || existing.has(row[0])) continue;
+                  const [sid, atMs, , , , title] = row;
+                  const ts = new Date(Number(atMs) > 0 ? Number(atMs) : Date.now()).toISOString();
+                  items.push({ id: sid, type: 'agentic', title: String(title || mName || ('本地缓存对话 ' + String(sid).slice(0, 8))).trim(), createdAt: ts, updatedAt: ts });
+                  existing.add(sid);
+                  hAdded++;
+                }
+              }
+            }
+            if (hAdded > 0) {
+              items.sort((x, y) => (Date.parse(y.updatedAt || y.createdAt || '') || 0) - (Date.parse(x.updatedAt || x.createdAt || '') || 0));
+              DB.shared[hk] = { at: Date.now(), full: false, fullAt: 0, items };
+              ch = true;
+            }
+          }
+        }
+      } catch {}
     }
   } catch {}
   if (ch) saveDB();
@@ -135,12 +279,21 @@ function saveDB(strict = false) {
   const file = dataFile(), tmp = file + '.rename.tmp';
   try {
     fs.mkdirSync(path.dirname(file), { recursive: true });
-    if (strict) {
-      // Rename acknowledgement must not succeed after a failed write or truncate the original DB.
-      fs.writeFileSync(tmp, JSON.stringify(DB, null, 2)); fs.renameSync(tmp, file);
-    } else fs.writeFileSync(file, JSON.stringify(DB, null, 2));
+    const payload = JSON.stringify(DB, null, 2);
+    // Always write to tmp first and atomically replace file so concurrent/interrupted reads never see a truncated accounts.json.
+    fs.writeFileSync(tmp, payload);
+    try {
+      fs.renameSync(tmp, file);
+    } catch (re) {
+      if (strict) throw re;
+      try { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 30); fs.renameSync(tmp, file); }
+      catch { fs.copyFileSync(tmp, file); }
+    }
+    if (isRichDB(DB)) {
+      try { fs.copyFileSync(file, file + '.bak'); } catch {}
+    }
   } catch (e) { console.error(e); if (strict) throw e; }
-  finally { if (strict) { try { fs.unlinkSync(tmp); } catch {} } }
+  finally { try { if (fs.existsSync(tmp)) fs.unlinkSync(tmp); } catch {} }
 }
 const newId = () => crypto.randomBytes(5).toString('hex');
 const acct = id => DB.accounts.find(a => a.id === id);
@@ -289,6 +442,9 @@ async function applyProxy(a, {force=false,deferReload=false}={}) {
         let recoveryPage=false;try { recoveryPage=path.resolve(require('node:url').fileURLToPath(wc.getURL()))===path.resolve(OFFLINE); } catch {}
         if(!recoveryPage)await loadURLAlive(wc, 'about:blank');
         check(); await uaMeta(wc); check();
+      }
+      if (wc && !process.env.BRANA_EXTENSION_TEST_DATA && typeof wc.debugger?.sendCommand === 'function') {
+        await wc.debugger.sendCommand('Fetch.enable', { patterns: [{ urlPattern: 'https://arena.ai/robots.txt*' }] }).catch(() => {});
       }
       const changed=wc?.__privacyRefresh ? await wc.__privacyRefresh(snapshot) : false;check();
       if (wc && (wc.__privacyFailed || !wc.__uam || !wc.debugger.isAttached())) throw Error('隐私保护未就绪');
@@ -595,9 +751,29 @@ function keepViewport(w) {
 
 // ---------- 启动小窗：双击打开后立刻出现「加载中…」，界面准备好再切到主窗口 ----------
 let splash = null;
+let updRestoredOpen = null, updRestoredLast = '', updJustCompleted = false;
+const updStatePath = () => path.join(app.getPath('temp'), 'brana-ai-update', 'upd-state.json');
+function writeUpdRestartState(patch) {
+  if (!process.argv.includes('--updated') && !updJustCompleted) return false;
+  try {
+    const sf = updStatePath();
+    if (!fs.existsSync(sf)) return false;
+    const st = fs.statSync(sf);
+    if (Date.now() - st.mtimeMs > 180000) return false;
+    let cur = {};
+    try { cur = JSON.parse(fs.readFileSync(sf, 'utf8')) || {}; } catch {}
+    const next = { ...cur, ...patch };
+    fs.writeFileSync(sf, JSON.stringify(next), 'utf8');
+    return true;
+  } catch { return false; }
+}
 const BRANA_SVG = '<svg width=\"160\" height=\"34\" viewBox=\"0 0 442 94\" fill=\"none\" xmlns=\"http://www.w3.org/2000/svg\"><path d=\"M42.0341 39.5754C38.0998 39.5754 34.9132 42.8134 34.9132 46.811V91.9553H39.448V46.811C39.448 45.3539 40.6124 44.1708 42.0464 44.1708C43.4804 44.1708 44.6447 45.3539 44.6447 46.811V91.9553H49.1795V46.811C49.1795 42.8134 45.9929 39.5754 42.0586 39.5754H42.0341Z\" fill=\"currentColor\"/><path d=\"M79.7105 39.5754C75.7762 39.5754 72.5896 42.8134 72.5896 46.811V91.9553H77.1244V46.811C77.1244 45.3539 78.2888 44.1708 79.7228 44.1708C81.1567 44.1708 82.3211 45.3539 82.3211 46.811V91.9553H86.8559V46.811C86.8559 42.8134 83.6693 39.5754 79.735 39.5754H79.7105Z\" fill=\"currentColor\"/><path d=\"M60.8785 39.5754C56.9443 39.5754 53.7576 42.8134 53.7576 46.811V91.9553H58.2925V46.811C58.2925 45.3539 59.4568 44.1708 60.8908 44.1708C62.3248 44.1708 63.4891 45.3539 63.4891 46.811V91.9553H68.0239V46.811C68.0239 42.8134 64.8373 39.5754 60.903 39.5754H60.8785Z\" fill=\"currentColor\"/><path d=\"M105.036 20.81L108.174 15.2681H115.466L121.754 0H0L6.28747 15.2681H13.58L16.7053 20.81C10.6139 22.9271 5.60112 28.3071 5.60112 36.4144C5.60112 44.5217 11.3616 51.3836 19.99 51.3836C21.8775 51.3836 23.6301 50.9851 25.1867 50.2877V91.9699H29.7092V46.6139C31.131 44.6586 31.9644 42.2177 32.0257 39.453C32.0257 39.4157 32.0379 39.3659 32.0379 39.316C32.0379 39.2787 32.0257 39.2538 32.0257 39.2164C32.0257 39.1915 32.0379 39.1666 32.0379 39.1417C32.0379 39.1043 32.0257 39.067 32.0257 39.0172C31.9766 37.1491 31.4864 35.4056 30.6284 33.9236H91.1255C90.2675 35.4056 89.7773 37.1491 89.7282 39.0172C89.7282 39.067 89.716 39.1043 89.716 39.1417V39.316C89.716 39.316 89.7282 39.4157 89.7282 39.453C89.7895 42.2177 90.6229 44.6586 92.0447 46.6139V91.9699H96.5672V50.2877C98.1238 50.9851 99.8642 51.3836 101.764 51.3836C110.38 51.3836 116.153 44.2228 116.153 36.4144C116.153 28.6059 111.128 22.9271 105.036 20.81ZM9.30252 10.6603L6.80224 4.60784H114.952L112.451 10.6603H9.30252ZM102.953 15.2681L100.44 19.7141H21.3137L18.8011 15.2681H102.953ZM101.764 46.7758C97.3394 46.7758 94.2998 43.7371 94.2508 39.2662C94.2753 36.103 96.2853 33.9859 99.2023 33.9485H99.2881C101.114 33.9485 102.61 35.4803 102.61 37.0868V37.1616C102.573 38.0956 101.837 38.8179 100.918 38.8179C99.6681 38.8179 98.6508 39.8515 98.6508 41.1218C98.6508 42.3921 99.6681 43.4257 100.918 43.4257C104.35 43.4257 107.157 40.5988 107.157 37.0868C107.157 36.9748 107.132 36.8627 107.12 36.7631C106.936 32.6409 103.615 29.3532 99.2269 29.3532H60.8647L60.5705 29.3407H60.2641L22.527 29.3532C18.1393 29.3532 14.8178 32.6409 14.634 36.7631C14.6217 36.8627 14.5972 36.9748 14.5972 37.0868C14.5972 40.5988 17.4039 43.4257 20.8357 43.4257C22.0858 43.4257 23.1031 42.3921 23.1031 41.1218C23.1031 39.8515 22.0858 38.8179 20.8357 38.8179C19.9165 38.8179 19.1811 38.0956 19.1321 37.1616C19.1321 37.1367 19.1443 37.1118 19.1443 37.0868C19.1443 35.4803 20.6273 33.9485 22.4658 33.9485H22.5393C25.4686 33.9859 27.4786 36.103 27.5031 39.2662C27.4541 43.7371 24.4023 46.7758 19.99 46.7758C14.1805 46.7758 10.1359 42.006 10.1359 36.4144C10.1359 28.8675 15.9577 24.3094 23.1521 24.3094H98.6018C105.796 24.3094 111.618 28.8675 111.618 36.4144C111.618 42.006 107.573 46.7758 101.764 46.7758Z\" fill=\"currentColor\"/><path d=\"M5.587044534412955 4.097165991902827 17.381916329284753 5.214574898785415C17.506072874493928 17.754385964912274 17.506072874493928 30.170040485829958 17.506072874493928 42.585695006747635V47.800269905533064C17.506072874493928 60.960863697705804 17.506072874493928 73.99730094466936 17.381916329284753 86.78542510121457L5.587044534412955 87.90283400809716V92.0H43.82726045883941C74.61808367071525 92.0 83.68151147098516 78.96356275303644 83.68151147098516 66.67206477732793C83.68151147098516 54.0080971659919 74.8663967611336 45.19298245614035 53.387314439946024 43.08232118758434C72.13495276653171 39.854251012145745 78.46693657219973 31.287449392712546 78.46693657219973 21.72739541160594C78.46693657219973 9.063427800269906 69.52766531713901 0.0 46.931174089068826 0.0H5.587044534412955ZM34.88798920377868 46.06207827260459H41.84075573549258C58.10526315789474 46.06207827260459 65.67881241565452 52.766531713900136 65.67881241565452 66.92037786774628C65.67881241565452 80.32928475033738 57.2361673414305 87.53036437246963 43.08232118758435 87.53036437246963H35.26045883940621C34.88798920377868 74.49392712550608 34.88798920377868 61.08502024291498 34.88798920377868 46.06207827260459ZM35.26045883940621 4.5937921727395405H42.21322537112011C55.99460188933873 4.5937921727395405 61.45748987854251 11.049932523616732 61.45748987854251 22.099865047233465C61.45748987854251 34.63967611336032 54.50472334682861 41.84075573549258 40.72334682860999 41.84075573549258H34.88798920377868C34.88798920377868 29.052631578947363 34.88798920377868 16.76113360323886 35.26045883940621 4.5937921727395405Z\" transform=\"translate(124.4 0)\" fill=\"currentColor\"/><path d=\"M226.756 92.0345H198.418V87.6791C202.704 87.6791 204.729 87.6791 204.729 81.2668V43.2774C204.729 34.4455 204.609 33.9615 197.465 36.0183V31.6628L217.707 22.8309V37.3491C221.517 30.211 227.352 23.3148 233.781 23.3148C238.901 23.3148 242.711 26.7024 242.711 32.3887C242.711 37.2281 240.092 40.0108 236.163 40.0108C231.043 40.0108 230.09 34.8084 226.875 34.8084C224.494 34.8084 221.041 40.6157 217.707 47.3909V81.2668C217.707 87.6791 219.493 87.6791 226.756 87.6791V92.0345Z\" transform=\"translate(13.6 0)\" fill=\"currentColor\"/><path d=\"M379.993 93.4932C369.991 93.4932 362.49 86.96 362.49 76.5553C362.49 65.1826 367.967 58.7704 379.04 54.5359C384.16 52.6001 388.209 51.6323 391.662 49.5755C396.305 46.9138 397.496 44.1312 397.496 40.3806C397.496 33.8474 393.805 29.3709 387.613 29.3709C380.469 29.3709 378.445 32.6375 377.254 41.1065C376.897 43.7682 375.587 47.2768 370.944 47.2768C366.181 47.2768 364.276 44.3731 364.276 40.5016C364.276 31.5487 373.682 23.3217 388.685 23.3217C401.425 23.3217 409.76 29.7339 409.76 44.0102V79.9428C409.76 82.8465 410.951 84.1773 412.975 84.1773C415.118 84.1773 416.428 83.0885 417.738 81.6366L420 84.6613C418.571 87.323 415.237 93.1303 407.617 93.1303C401.902 93.1303 397.734 89.2587 397.139 82.9675C394.162 88.0489 389.042 93.4932 379.993 93.4932ZM374.992 73.8936C374.992 81.1527 379.636 84.9033 384.994 84.9033C390.709 84.9033 394.043 81.3947 397.139 76.3133V51.9952C396.186 53.2051 395.472 54.2939 392.971 55.8667C389.399 58.1655 388.566 58.4074 383.803 61.0691C377.969 64.3357 374.992 67.8443 374.992 73.8936Z\" transform=\"translate(-104.2 0)\" fill=\"currentColor\"/><path d=\"M326.059 92.0345H298.078V87.6791C302.364 87.6791 304.388 87.6791 304.388 81.2668V43.2774C304.388 34.4455 304.269 33.9615 297.125 36.0183V31.6628L317.367 22.8309V34.8084C322.01 28.7592 328.559 23.3148 336.775 23.3148C348.205 23.3148 354.635 30.6949 354.635 42.6725V81.2668C354.635 87.6791 356.659 87.6791 361.303 87.6791V92.0345H333.084V87.6791C339.632 87.6791 341.657 87.6791 341.657 81.2668V44.4873C341.657 36.8652 338.204 32.9936 332.012 32.9936C326.059 32.9936 321.177 36.7442 317.367 41.8256V81.2668C317.367 87.6791 319.153 87.6791 326.059 87.6791V92.0345Z\" transform=\"translate(20.7 0)\" fill=\"currentColor\"/><path d=\"M379.993 93.4932C369.991 93.4932 362.49 86.96 362.49 76.5553C362.49 65.1826 367.967 58.7704 379.04 54.5359C384.16 52.6001 388.209 51.6323 391.662 49.5755C396.305 46.9138 397.496 44.1312 397.496 40.3806C397.496 33.8474 393.805 29.3709 387.613 29.3709C380.469 29.3709 378.445 32.6375 377.254 41.1065C376.897 43.7682 375.587 47.2768 370.944 47.2768C366.181 47.2768 364.276 44.3731 364.276 40.5016C364.276 31.5487 373.682 23.3217 388.685 23.3217C401.425 23.3217 409.76 29.7339 409.76 44.0102V79.9428C409.76 82.8465 410.951 84.1773 412.975 84.1773C415.118 84.1773 416.428 83.0885 417.738 81.6366L420 84.6613C418.571 87.323 415.237 93.1303 407.617 93.1303C401.902 93.1303 397.734 89.2587 397.139 82.9675C394.162 88.0489 389.042 93.4932 379.993 93.4932ZM374.992 73.8936C374.992 81.1527 379.636 84.9033 384.994 84.9033C390.709 84.9033 394.043 81.3947 397.139 76.3133V51.9952C396.186 53.2051 395.472 54.2939 392.971 55.8667C389.399 58.1655 388.566 58.4074 383.803 61.0691C377.969 64.3357 374.992 67.8443 374.992 73.8936Z\" transform=\"translate(21.5 0)\" fill=\"currentColor\"/></svg>';
 function showSplash() {
   if (splash || process.env.BRANA_NO_SPLASH) return;
+  if (writeUpdRestartState({ step: 4, pct: 100, restartPct: 48, text: '正在载入新版内核并恢复原有的账号窗口…' })) {
+    splash = { __updProxy: true, isDestroyed: () => false, destroy() {} };
+    return;
+  }
   const dark = DB.theme?.bg ? !!DB.theme.dark : nativeTheme.shouldUseDarkColors, bg = themeBg(), fg = dark ? '#ecebe7' : '#262522', mut = dark ? '#a9a59d' : '#7a746b';
   splash = new BrowserWindow({ width: 340, height: 170, frame: false, resizable: false, maximizable: false, minimizable: true, fullscreenable: false, center: true, show: false, backgroundColor: bg, title: 'Brana AI', icon: ICON, skipTaskbar: false,
     webPreferences: { sandbox: !process.env.BRANA_NO_SANDBOX, contextIsolation: true, javascript: true } });
@@ -613,8 +789,21 @@ function showSplash() {
   keepRound(splash, 12);
   splash.on('closed', () => { splash = null; });
 }
-function splashText(t) { if (splash && !splash.isDestroyed()) splash.webContents.executeJavaScript('window.set&&set(' + JSON.stringify(t) + ')').catch(() => {}); }
-function closeSplash() { const s = splash; splash = null; if (s && !s.isDestroyed()) setTimeout(() => { try { s.destroy(); } catch {} }, 120); }
+function splashText(t) {
+  if (splash && splash.__updProxy) {
+    writeUpdRestartState({ step: 4, pct: 100, restartPct: /初始化界面/.test(String(t || '')) ? 88 : 72, text: '正在重启载入：' + String(t || '') });
+    return;
+  }
+  if (splash && !splash.isDestroyed()) splash.webContents.executeJavaScript('window.set&&set(' + JSON.stringify(t) + ')').catch(() => {});
+}
+function closeSplash() {
+  const s = splash; splash = null;
+  if (s && s.__updProxy) {
+    writeUpdRestartState({ step: 5, pct: 100, restartPct: 100, uiReady: true, done: true, text: '更新完成，客户端已载入并刷新就绪！' });
+    return;
+  }
+  if (s && !s.isDestroyed()) setTimeout(() => { try { s.destroy(); } catch {} }, 120);
+}
 
 // ---------- 窗口 ----------
 const wins = new Map(); // accountId -> BrowserWindow
@@ -715,11 +904,11 @@ async function openAccount(id, opt = {}) {
       if (canInlineShell) {
         try {
           if (wc.__clientShell && String(wc.getURL() || '').startsWith(UI_URL)) {
-            await wc.executeJavaScript('try{if(window.__anc){if(!window.__anc.UI.authed&&window.__anc.UI.enterBrowseMode)window.__anc.UI.enterBrowseMode();window.__anc.RegionIP?.open?.({offlineAlert:true});if(' + JSON.stringify(!manual) + ')window.__anc.AutoRoute?.request?.("network",true);}}catch{}');
-            return;
+            const handledInShell = await wc.executeJavaScript('try{if(window.__ANC_CLIENT_SHELL&&window.__anc&&document.getElementById("app")){if(!window.__anc.UI.authed&&window.__anc.UI.enterBrowseMode)window.__anc.UI.enterBrowseMode();window.__anc.RegionIP?.open?.({offlineAlert:true});if(' + JSON.stringify(!manual) + ')window.__anc.AutoRoute?.request?.("network",true);return true;}}catch{}return false;');
+            if (handledInShell) return;
           }
           await uaMeta(wc);
-          await wc.debugger.sendCommand('Fetch.enable', { patterns: [{ urlPattern: 'https://arena.ai/robots.txt?browse=1*' }] });
+          await wc.debugger.sendCommand('Fetch.enable', { patterns: [{ urlPattern: 'https://arena.ai/robots.txt*' }] });
           wc.session.__routeBlocked = false;
           const q = new URLSearchParams({ browse: '1', offline: '1', desc: String(desc || ''), code: String(code || ''), ...(manual ? { recovery: 'manual' } : {}) });
           await loadURLAlive(wc, UI_URL + '?' + q.toString(), 15000);
@@ -769,11 +958,16 @@ async function openAccount(id, opt = {}) {
   if (waitUi) splashText('连接 arena.ai' + via() + '…');
   wc.on('did-redirect-navigation', (e, url, inPlace, isMain) => { if (isMain) navigationFailures.redirect(url); });
   wc.on('did-start-navigation', (e, url, inPlace, isMain) => { if (isMain && !inPlace) { wc.__clientShell = String(url || '').startsWith(UI_URL); navigationFailures.started(url); retryTarget.remember(url); } if (isMain && waitUi && !shown) splashText('连接 arena.ai' + via() + '…'); });
+  wc.on('console-message', (_e, level, msg, line) => {
+    if (level >= 2) {
+      try { fs.appendFileSync(path.join(app.getPath('userData'), 'logs', 'renderer.log'), `[CONSOLE L${level} line=${line}] ${msg}\n`); } catch {}
+    }
+  });
   wc.on('dom-ready', () => {
     const u = wc.getURL();
     // 客户端界面（robots.txt）马上注入；浏览器模式的官网页面等官网自己先加载完（did-finish-load，最多等 2.5 秒）再注入 3.6MB 的客户端脚本，
     // 完整功能延后；轻量顶部栏与底部占位由 preload 在页面创建时挂载，dom-ready 仅兜底。
-    if (u.startsWith(UI_URL)) { wc.__clientShell = true; wc.executeJavaScript(BUNDLE).catch(e => console.error('inject', e)); }
+    if (u.startsWith(UI_URL)) { wc.__clientShell = true; wc.executeJavaScript(BUNDLE).catch(e => { console.error('inject', e); try { fs.appendFileSync(path.join(app.getPath('userData'), 'logs', 'renderer.log'), `[INJECT-ERR] ${e?.stack || e}\n`); } catch {} }); }
     else if (u.startsWith('https://arena.ai/')) {
       const seq = wc.__injSeq = (wc.__injSeq || 0) + 1; let fired = false;
       const go = () => { if (fired || wc.isDestroyed() || wc.__injSeq !== seq) return; fired = true; clearTimeout(t); wc.off('did-finish-load', go); if (wc.getURL().startsWith('https://arena.ai/') && !wc.getURL().startsWith(UI_URL)) wc.executeJavaScript(BUNDLE).catch(e => console.error('inject', e)); };
@@ -1488,7 +1682,26 @@ ipcMain.handle('host:logout', async e => {
 });
 ipcMain.handle('host:setTitle', (e, t) => { const w=BrowserWindow.fromWebContents(e.sender);if(w){const title=String(t||'');w.setTitle((title.startsWith(APP_TITLE)?title:APP_TITLE+' · '+title.replace(/^Brana(?: AI)?(?: ·)?\s*/, '')).slice(0,200));}return true; });
 // 图片：复制到剪贴板 / 另存为（对话里的附件图片、查看大图）
-ipcMain.handle('host:copyImage', (e, b64) => { try { const img = nativeImage.createFromBuffer(Buffer.from(String(b64 || ''), 'base64')); if (img.isEmpty()) return { error: '图片格式不支持' }; clipboard.writeImage(img); return { ok: true }; } catch (err) { return { error: String(err.message || err) }; } });
+ipcMain.handle('host:copyImage', async (e, b64) => {
+  try {
+    const buf = Buffer.from(String(b64 || ''), 'base64');
+    const img = nativeImage.createFromBuffer(buf);
+    if (img.isEmpty()) return { error: '图片格式不支持' };
+    if (typeof clipboard?.writeImage === 'function') {
+      clipboard.writeImage(img);
+      return { ok: true };
+    }
+    const pngBuf = img.toPNG();
+    const CI = require('electron').ClipboardItem || globalThis.ClipboardItem;
+    if (typeof CI === 'function' && typeof clipboard?.write === 'function') {
+      await clipboard.write([new CI({ 'image/png': new Blob([pngBuf], { type: 'image/png' }) })]);
+      return { ok: true };
+    }
+    return { error: '系统剪贴板接口不可用', fallback: true };
+  } catch (err) {
+    return { error: String(err.message || err), fallback: true };
+  }
+});
 ipcMain.handle('host:saveImage', async (e, name, b64) => {
   try {
     const w = BrowserWindow.fromWebContents(e.sender), safe = String(name || 'image.png').replace(/[\\/:*?"<>|]+/g, '_').slice(0, 120) || 'image.png';
@@ -1523,7 +1736,27 @@ ipcMain.handle('host:saveAs', async (e, name, mime, text) => {
 });
 ipcMain.handle('host:showFile', (e, fp) => { try { const f = String(fp || ''); if (f && require('fs').existsSync(f)) { shell.showItemInFolder(f); return true; } } catch {} return false; });
 ipcMain.handle('host:openExternal', (e, u) => { if (/^(https?:\/\/|mailto:)/i.test(String(u))) shell.openExternal(String(u)); return true; });
-ipcMain.handle('host:ready', e => { const w = BrowserWindow.fromWebContents(e.sender); if (w && w.__reveal) w.__reveal(); else if (w && !w.isVisible()) w.show(); return true; });
+ipcMain.handle('host:ready', e => {
+  const w = BrowserWindow.fromWebContents(e.sender);
+  if (w && w.__reveal) w.__reveal();
+  else if (w && !w.isVisible()) w.show();
+  if (process.argv.includes('--updated') || updJustCompleted) {
+    writeUpdRestartState({ step: 5, pct: 100, restartPct: 100, uiReady: true, done: true, text: '更新完成，客户端已载入并刷新就绪！' });
+    if (w && !w.__updRefreshed && !w.isDestroyed()) {
+      w.__updRefreshed = true;
+      const openCnt = shownIds().length || (DB.open || []).length || 1;
+      const msg = '🎉 更新完成（v' + VERSION + '），已恢复原有的 ' + openCnt + ' 个窗口并刷新就绪';
+      setTimeout(() => {
+        try {
+          if (!e.sender.isDestroyed()) {
+            e.sender.executeJavaScript(`try{if(window.__anc){window.__anc.History?.refresh?.();window.__anc.UI?.renderListSoon?.();window.__anc.UI?.renderTabs?.();window.__anc.toast?.(${JSON.stringify(msg)});}}catch{}`).catch(() => {});
+          }
+        } catch {}
+      }, 350);
+    }
+  }
+  return true;
+});
 ipcMain.handle('host:stage', (e, t) => { splashText(String(t || '').slice(0, 40)); return true; });
 // ProxyIP 批量检测：一个 xray 进程开 N 个入口（每个入口走同一个节点 + 不同 ProxyIP），
 // 每个入口 ① 读 arena.ai/cdn-cgi/trace 得出口 IP / 地区 / 延迟 ② 再请求 arena.ai/robots.txt 确认 Brana 能正常访问（不是验证页）
@@ -1550,7 +1783,7 @@ async function probeVia(i, port, ms, signal) {
     out.cold = out.ms; out.ms = Math.min(out.ms, Date.now() - t1);
     out.status = r.status; out.brana = r.status === 200 && /user-agent/i.test(r.text);
     if (!out.brana) out.error = r.status === 403 || r.status === 503 ? 'Brana 返回验证页（HTTP ' + r.status + '）' : r.status === 429 ? 'Brana 限流（429）' : 'Brana 访问异常（HTTP ' + r.status + '）';
-    else Object.assign(out, await RouteNative.purity(ses, 4000, signal));   // 测延迟顺带测纯净度：IPPure + ip-api（经同一条隧道，并行）
+    else Object.assign(out, await RouteNative.purity(ses, 3200, signal, out.ip));   // 测延迟顺带测纯净度：IPPure + ip-api（经同一条隧道，并行）
     return out;
   } catch (err) { return { ...out, error: err.name === 'AbortError' ? '超时' : String(err.message || err).replace(/^net::/, '') }; }
 }
@@ -1561,8 +1794,34 @@ async function directSession() {
   if (!directSes) { const ses = session.fromPartition('brana-direct'); await ses.setProxy({ mode: 'direct' }).catch(() => {}); directSes = ses; }
   return directSes;
 }
+async function subscriptionTunnelPorts(_wc, a) {
+  const ports = [];
+  const pushPort = p => { const n = Number(p); if (Number.isInteger(n) && n > 0 && n < 65536 && !ports.includes(n)) ports.push(n); };
+  const vlink = [
+    proxyStr(a),
+    DB?.shared?.pippool?.node,
+    ...(Array.isArray(DB?.shared?.nodes?.list) ? DB.shared.nodes.list.map(n => Vless.toLink?.(n) || n?.link || '') : []),
+    ...(Array.isArray(DB?.accounts) ? DB.accounts.map(x => proxyStr(x)) : [])
+  ].map(s => String(s || '').trim()).find(s => /^vless:\/\//i.test(s)) || '';
+  if (vlink) {
+    const subTun = tunnels.get('sub-native');
+    if (subTun?.port > 0 && subTun.proc?.exitCode === null) pushPort(subTun.port);
+    else {
+      const p = await Promise.race([ensureTunnel('sub-native', vlink, ''), new Promise(r => setTimeout(() => r(0), 3500))]).catch(() => 0);
+      pushPort(p);
+    }
+  }
+  if (a?.id) {
+    const at = tunnels.get(a.id);
+    if (at?.port > 0 && at.proc?.exitCode === null) pushPort(at.port);
+  }
+  for (const [k, t] of tunnels.entries()) {
+    if (!String(k).startsWith('ip-test-') && t?.port > 0 && t.proc?.exitCode === null) pushPort(t.port);
+  }
+  return ports;
+}
 // Subscription bootstrap is intentionally isolated from account web sessions.
-require('./subscription-ipc').setupSubscriptionFetch({ipcMain,authorize:e=>routeActor(e,true),accountFor:winAcct});
+require('./subscription-ipc').setupSubscriptionFetch({ipcMain,authorize:e=>routeActor(e,true),accountFor:winAcct,tunnelPortsFor:subscriptionTunnelPorts});
 ipcMain.handle('host:fetchText', async (e, url, opt) => {
   url = String(url || ''); if (!/^https?:\/\//i.test(url)) return { error: '地址不正确' };
   const publicData = opt?.publicData === true;
@@ -1777,12 +2036,62 @@ ipcMain.handle('host:updStart', async (e, o) => {
 const UPD_PEND = () => path.join(app.getPath('userData'), 'upd-pending.json');
 const updLog = t => { try { fs.appendFileSync(path.join(app.getPath('userData'), 'update.log'), new Date().toISOString() + ' v' + VERSION + ' ' + t + '\n'); } catch {} };
 let updFailed = null;
+function syncSiblingInstallDirs() {
+  if (process.platform !== 'win32' || !app.isPackaged || EXTENSION_TEST.testBuild) return;
+  try {
+    const curDir = path.dirname(process.execPath);
+    const curAsar = path.join(curDir, 'resources', 'app.asar');
+    if (!fs.existsSync(curAsar)) return;
+    const curStat = fs.statSync(curAsar);
+    const candidates = [
+      process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, 'Programs', 'Brana AI') : '',
+      process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, 'Programs', 'Brana') : '',
+      process.env.ProgramFiles ? path.join(process.env.ProgramFiles, 'Brana AI') : '',
+    ].filter(Boolean);
+    for (const dir of candidates) {
+      try {
+        if (path.resolve(dir).toLowerCase() === path.resolve(curDir).toLowerCase()) continue;
+        const dstExe = path.join(dir, path.basename(process.execPath));
+        const dstAsar = path.join(dir, 'resources', 'app.asar');
+        if (!fs.existsSync(dstExe) || !fs.existsSync(dstAsar)) continue;
+        const dstStat = fs.statSync(dstAsar);
+        if (dstStat.size !== curStat.size || Math.abs(dstStat.mtimeMs - curStat.mtimeMs) > 2000) {
+          const tmpAsar = dstAsar + '.upd-' + process.pid;
+          fs.copyFileSync(curAsar, tmpAsar);
+          fs.renameSync(tmpAsar, dstAsar);
+          updLog('已同步多路径安装目录 app.asar → ' + dir);
+        }
+      } catch {}
+    }
+  } catch {}
+}
 function checkPending() {
+  try { delete process.env.BRANA_UPDATING; } catch {}
+  if (process.argv.includes('--updated')) {
+    updJustCompleted = true;
+    setTimeout(syncSiblingInstallDirs, 1500);
+  }
+  try {
+    const sf = updStatePath();
+    if (fs.existsSync(sf)) {
+      const s = JSON.parse(fs.readFileSync(sf, 'utf8'));
+      if (Array.isArray(s?.openIds) && s.openIds.length) {
+        updRestoredOpen = s.openIds;
+        if (s.lastId) updRestoredLast = s.lastId;
+      }
+    }
+  } catch {}
   let p = null; try { p = JSON.parse(fs.readFileSync(UPD_PEND(), 'utf8')); } catch { return; }
+  if (Array.isArray(p?.open) && p.open.length) {
+    updRestoredOpen = p.open;
+    if (p.last) updRestoredLast = p.last;
+  }
   const newer = (a, b) => { const x = String(a || '').replace(/-.*/, '').split('.').map(Number), y = String(b || '').replace(/-.*/, '').split('.').map(Number); for (let i = 0; i < 3; i++) { if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) > (y[i] || 0); } return false; };
   if (VERSION === p.to || newer(VERSION, p.from)) {   // 装上了：清理安装包
+    updJustCompleted = true;
     updLog('更新成功 ' + p.from + ' → ' + VERSION); try { fs.unlinkSync(UPD_PEND()); } catch {}
-    if (p.file && p.kind === 'setup') setTimeout(() => { try { fs.unlinkSync(p.file); } catch {} }, 5000);
+    setTimeout(syncSiblingInstallDirs, 1500);
+    if (p.file && p.kind === 'setup') setTimeout(() => { if (UPD.phase === 'idle' && UPD.file !== p.file) { try { fs.unlinkSync(p.file); } catch {} } }, 5000);
     return;
   }
   if (Date.now() - (p.at || 0) > 3 * 86400e3) { try { fs.unlinkSync(UPD_PEND()); } catch {} return; }
@@ -1820,8 +2129,14 @@ ipcMain.handle('host:updManual', async () => {
   if (p.kind === 'portable') { shell.showItemInFolder(p.file); return { ok: true, folder: true, file: p.file }; }
   try { const open = shownIds(); if (open.length) DB.open = open; saveDB(); } catch {}
   quitting = true;
+  const appDir = path.dirname(process.execPath);
   try {
-    spawn(p.file, ['/NCRC', '--updated', '--force-run'], { detached: true, stdio: 'ignore' }).unref();
+    spawn(p.file, ['/NCRC', '--updated', '--force-run', '/D=' + appDir], {
+      detached: true,
+      stdio: 'ignore',
+      cwd: path.dirname(p.file),
+      env: { ...process.env, BRANA_UPDATING: '1', ANC_DIR: appDir, ANC_EXE: process.execPath },
+    }).unref();
   } catch (err) {
     const openErr = await shell.openPath(p.file); if (openErr) return { error: openErr };
   }
@@ -1843,34 +2158,47 @@ ipcMain.handle('host:updInstall', async () => {
       return { error: UPD.error };
     }
   }
-  try { const open = shownIds(); if (open.length) DB.open = open; saveDB(); } catch {}
+  const openBeforeUpd = shownIds();
+  try { if (openBeforeUpd.length) DB.open = openBeforeUpd; saveDB(); } catch {}
   quitting = true;
   for (const k of [...tunnels.keys()]) stopTunnel(k); killKids();
   await Promise.race([cookiePersistence.flushAll().catch(() => {}), new Promise(r => setTimeout(r, 1200))]);
-  try { fs.writeFileSync(UPD_PEND(), JSON.stringify({ from: VERSION, to: UPD.ver || '', file: UPD.file, kind, at: Date.now() })); } catch {}
+  const keepOpenIds = openBeforeUpd.length ? openBeforeUpd : (Array.isArray(DB.open) && DB.open.length ? DB.open : []);
+  try { fs.writeFileSync(UPD_PEND(), JSON.stringify({ from: VERSION, to: UPD.ver || '', file: UPD.file, kind, at: Date.now(), open: keepOpenIds, last: DB.last || '' })); } catch {}
   try {
     const updDir = path.dirname(UPD.file);
+    const appDir = path.dirname(process.execPath);
     const stateFile = path.join(updDir, 'upd-state.json');
     const progPs1 = path.join(updDir, 'brana-ai-progress.ps1');
+    const psExe = fs.existsSync('C:\\Windows\\SysNative\\WindowsPowerShell\\v1.0\\powershell.exe')
+      ? 'C:\\Windows\\SysNative\\WindowsPowerShell\\v1.0\\powershell.exe'
+      : 'powershell.exe';
     try {
       fs.writeFileSync(stateFile, JSON.stringify({
         from: VERSION,
         to: UPD.ver || '',
         step: 2,
         pct: 16,
-        text: '正在保存多账号状态并关闭旧版进程…',
+        restartPct: 0,
+        uiReady: false,
+        openIds: keepOpenIds,
+        openCount: Math.max(1, keepOpenIds.length),
+        lastId: DB.last || '',
+        text: '正在保存原来打开的 ' + Math.max(1, keepOpenIds.length) + ' 个窗口状态并关闭旧版进程…',
         oldPid: process.pid,
         exePath: process.execPath,
       }), 'utf8');
-      fs.writeFileSync(progPs1, [
+      // 必须写入 UTF-8 BOM (\uFEFF)，防止中文 Windows PowerShell 5.1 按 GBK 解析导致 "…" 吞掉引号报语法错误
+      fs.writeFileSync(progPs1, '\uFEFF' + [
         'param([string]$StatePath)',
+        'try { if ($PSScriptRoot) { Set-Location -LiteralPath $PSScriptRoot } } catch {}',
         'Add-Type -AssemblyName System.Windows.Forms, System.Drawing',
         '[System.Windows.Forms.Application]::EnableVisualStyles()',
-        '$state = @{ from = ""; to = ""; step = 2; pct = 16; text = "正在准备覆盖安装新版本…"; oldPid = 0 }',
+        '$state = @{ from = ""; to = ""; step = 2; pct = 16; restartPct = 0; uiReady = $false; openCount = 1; text = "正在准备覆盖安装新版本…"; oldPid = 0; exePath = "" }',
         'if (Test-Path -LiteralPath $StatePath) { try { $state = Get-Content -LiteralPath $StatePath -Raw -Encoding UTF8 | ConvertFrom-Json } catch {} }',
         '$f = New-Object System.Windows.Forms.Form',
-        '$f.Text = "Brana AI 正在自动更新"',
-        '$f.ClientSize = New-Object System.Drawing.Size(440, 215)',
+        '$f.Text = "Brana AI 正在自动更新与重启"',
+        '$f.ClientSize = New-Object System.Drawing.Size(460, 268)',
         '$f.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::FixedDialog',
         '$f.ControlBox = $false',
         '$f.MaximizeBox = $false',
@@ -1883,49 +2211,79 @@ ipcMain.handle('host:updInstall', async () => {
         '$fontBody  = New-Object System.Drawing.Font("Microsoft YaHei UI", 9, [System.Drawing.FontStyle]::Regular)',
         '$fontSmall = New-Object System.Drawing.Font("Microsoft YaHei UI", 8.25, [System.Drawing.FontStyle]::Regular)',
         '$lblTitle = New-Object System.Windows.Forms.Label',
-        '$lblTitle.Location = New-Object System.Drawing.Point(22, 18)',
-        '$lblTitle.Size = New-Object System.Drawing.Size(396, 24)',
+        '$lblTitle.Location = New-Object System.Drawing.Point(22, 16)',
+        '$lblTitle.Size = New-Object System.Drawing.Size(416, 24)',
         '$lblTitle.Font = $fontTitle',
         '$verSuffix = if ($state.to) { "  (v$($state.from) -> v$($state.to))" } else { "" }',
         '$lblTitle.Text = "Brana AI 正在安装更新$verSuffix"',
         '$lblStatus = New-Object System.Windows.Forms.Label',
-        '$lblStatus.Location = New-Object System.Drawing.Point(22, 48)',
-        '$lblStatus.Size = New-Object System.Drawing.Size(340, 20)',
+        '$lblStatus.Location = New-Object System.Drawing.Point(22, 42)',
+        '$lblStatus.Size = New-Object System.Drawing.Size(416, 20)',
         '$lblStatus.Font = $fontBody',
         '$lblStatus.ForeColor = [System.Drawing.Color]::FromArgb(165, 180, 252)',
         '$lblStatus.Text = [string]$state.text',
+        '$lblBar1 = New-Object System.Windows.Forms.Label',
+        '$lblBar1.Location = New-Object System.Drawing.Point(22, 68)',
+        '$lblBar1.Size = New-Object System.Drawing.Size(320, 18)',
+        '$lblBar1.Font = $fontSmall',
+        '$lblBar1.ForeColor = [System.Drawing.Color]::FromArgb(210, 210, 220)',
+        '$lblBar1.Text = "1. 更新安装进度"',
         '$lblPct = New-Object System.Windows.Forms.Label',
-        '$lblPct.Location = New-Object System.Drawing.Point(362, 48)',
-        '$lblPct.Size = New-Object System.Drawing.Size(56, 20)',
-        '$lblPct.Font = $fontBody',
+        '$lblPct.Location = New-Object System.Drawing.Point(362, 66)',
+        '$lblPct.Size = New-Object System.Drawing.Size(76, 18)',
+        '$lblPct.Font = $fontSmall',
         '$lblPct.TextAlign = [System.Drawing.ContentAlignment]::MiddleRight',
         '$lblPct.Text = "16%"',
         '$barBg = New-Object System.Windows.Forms.Panel',
-        '$barBg.Location = New-Object System.Drawing.Point(22, 74)',
-        '$barBg.Size = New-Object System.Drawing.Size(396, 10)',
+        '$barBg.Location = New-Object System.Drawing.Point(22, 88)',
+        '$barBg.Size = New-Object System.Drawing.Size(416, 9)',
         '$barBg.BackColor = [System.Drawing.Color]::FromArgb(45, 45, 53)',
         '$barFill = New-Object System.Windows.Forms.Panel',
         '$barFill.Location = New-Object System.Drawing.Point(0, 0)',
-        '$barFill.Size = New-Object System.Drawing.Size(64, 10)',
+        '$barFill.Size = New-Object System.Drawing.Size(66, 9)',
         '$barFill.BackColor = [System.Drawing.Color]::FromArgb(99, 102, 241)',
         '$barBg.Controls.Add($barFill)',
+        '$lblBar2 = New-Object System.Windows.Forms.Label',
+        '$lblBar2.Location = New-Object System.Drawing.Point(22, 106)',
+        '$lblBar2.Size = New-Object System.Drawing.Size(320, 18)',
+        '$lblBar2.Font = $fontSmall',
+        '$lblBar2.ForeColor = [System.Drawing.Color]::FromArgb(210, 210, 220)',
+        '$lblBar2.Text = "2. 客户端重启与载入进度"',
+        '$lblPct2 = New-Object System.Windows.Forms.Label',
+        '$lblPct2.Location = New-Object System.Drawing.Point(342, 104)',
+        '$lblPct2.Size = New-Object System.Drawing.Size(96, 18)',
+        '$lblPct2.Font = $fontSmall',
+        '$lblPct2.TextAlign = [System.Drawing.ContentAlignment]::MiddleRight',
+        '$lblPct2.Text = "等待安装…"',
+        '$bar2Bg = New-Object System.Windows.Forms.Panel',
+        '$bar2Bg.Location = New-Object System.Drawing.Point(22, 126)',
+        '$bar2Bg.Size = New-Object System.Drawing.Size(416, 9)',
+        '$bar2Bg.BackColor = [System.Drawing.Color]::FromArgb(45, 45, 53)',
+        '$bar2Fill = New-Object System.Windows.Forms.Panel',
+        '$bar2Fill.Location = New-Object System.Drawing.Point(0, 0)',
+        '$bar2Fill.Size = New-Object System.Drawing.Size(0, 9)',
+        '$bar2Fill.BackColor = [System.Drawing.Color]::FromArgb(56, 189, 248)',
+        '$bar2Bg.Controls.Add($bar2Fill)',
         '$lblSteps = New-Object System.Windows.Forms.Label',
-        '$lblSteps.Location = New-Object System.Drawing.Point(22, 96)',
-        '$lblSteps.Size = New-Object System.Drawing.Size(396, 80)',
+        '$lblSteps.Location = New-Object System.Drawing.Point(22, 146)',
+        '$lblSteps.Size = New-Object System.Drawing.Size(416, 82)',
         '$lblSteps.Font = $fontSmall',
         '$lblSteps.ForeColor = [System.Drawing.Color]::FromArgb(200, 200, 210)',
         '$lblFoot = New-Object System.Windows.Forms.Label',
-        '$lblFoot.Location = New-Object System.Drawing.Point(22, 182)',
-        '$lblFoot.Size = New-Object System.Drawing.Size(396, 20)',
+        '$lblFoot.Location = New-Object System.Drawing.Point(22, 236)',
+        '$lblFoot.Size = New-Object System.Drawing.Size(416, 20)',
         '$lblFoot.Font = $fontSmall',
         '$lblFoot.ForeColor = [System.Drawing.Color]::FromArgb(135, 135, 148)',
-        '$lblFoot.Text = "全程自动完成，安装完毕后将自动重新打开客户端，请勿重复点击图标"',
-        '$f.Controls.AddRange(@($lblTitle, $lblStatus, $lblPct, $barBg, $lblSteps, $lblFoot))',
+        '$lblFoot.Text = "全程自动完成，安装完毕后将自动恢复原有窗口并刷新客户端"',
+        '$f.Controls.AddRange(@($lblTitle, $lblStatus, $lblBar1, $lblPct, $barBg, $lblBar2, $lblPct2, $bar2Bg, $lblSteps, $lblFoot))',
         '$t0 = [DateTime]::UtcNow',
         '$dispPct = 16.0',
-        '$doneAt = $null',
+        '$dispRestartPct = 0.0',
+        '$step4At = $null',
+        '$readyAt = $null',
+        '$restarted = $false',
         '$timer = New-Object System.Windows.Forms.Timer',
-        '$timer.Interval = 200',
+        '$timer.Interval = 180',
         '$timer.Add_Tick({',
         '  $sec = [int]([DateTime]::UtcNow - $t0).TotalSeconds',
         '  if ($sec -gt 95) { $timer.Stop(); $f.Close(); return }',
@@ -1933,41 +2291,114 @@ ipcMain.handle('host:updInstall', async () => {
         '    try { $s = Get-Content -LiteralPath $StatePath -Raw -Encoding UTF8 | ConvertFrom-Json; if ($s) { $script:state = $s } } catch {}',
         '  }',
         '  $st = [int]($script:state.step)',
+        '  $newProcs = @(Get-Process -Name "Brana AI" -ErrorAction SilentlyContinue | Where-Object { $_.Id -ne $script:state.oldPid })',
+        '  if ($newProcs.Count -gt 0 -and $st -lt 4) { $st = 4 }',
         '  $targetPct = [double]($script:state.pct)',
-        '  if ($st -eq 3 -and $dispPct -ge 36 -and $dispPct -lt 91) { $dispPct = [Math]::Min(91.0, $dispPct + 0.45) }',
-        '  if ($targetPct -gt $dispPct) { $dispPct = $dispPct + [Math]::Max(1.2, ($targetPct - $dispPct) * 0.35) }',
+        '  if ($st -eq 3 -and $dispPct -ge 36 -and $dispPct -lt 94) { $dispPct = [Math]::Min(94.0, $dispPct + 0.55) }',
+        '  if ($st -ge 4) { $targetPct = 100.0 }',
+        '  if ($targetPct -gt $dispPct) { $dispPct = $dispPct + [Math]::Max(1.5, ($targetPct - $dispPct) * 0.42) }',
         '  if ($dispPct -gt 100) { $dispPct = 100 }',
         '  $pInt = [int][Math]::Round($dispPct)',
-        '  $lblPct.Text = "$pInt%"',
-        '  $barFill.Width = [int][Math]::Round(396 * $dispPct / 100.0)',
-        '  if ($script:state.text) { $lblStatus.Text = [string]$script:state.text }',
-        '  $m1 = "[√] 1. 下载并校验安装包完整性"',
-        '  $m2 = if ($st -gt 2) { "[√] 2. 保存多账号会话并关闭旧版进程" } else { "[●] 2. 保存多账号会话并关闭旧版进程…" }',
-        '  $m3 = if ($st -gt 3) { "[√] 3. 静默覆盖安装新版本核心组件" } elseif ($st -eq 3) { "[●] 3. 正在静默覆盖安装新版本核心组件…" } else { "[  ] 3. 静默覆盖安装新版本核心组件" }',
-        '  $m4 = if ($st -ge 5) { "[√] 4. 启动新版 Brana AI 并恢复窗口" } elseif ($st -eq 4) { "[●] 4. 正在启动新版 Brana AI 并恢复窗口…" } else { "[  ] 4. 启动新版 Brana AI 并恢复窗口" }',
-        '  $lblSteps.Text = "$m1`r`n$m2`r`n$m3`r`n$m4"',
-        '  $lblFoot.Text = ("已用时 {0:D2}:{1:D2} · 安装完成后自动启动，请勿关闭" -f [int]($sec / 60), ($sec % 60))',
+        '  $lblPct.Text = if ($pInt -ge 100) { "100% (完成)" } else { "$pInt%" }',
+        '  $barFill.Width = [int][Math]::Round(416 * $dispPct / 100.0)',
+        '  if ($pInt -ge 100) { $barFill.BackColor = [System.Drawing.Color]::FromArgb(16, 185, 129) }',
+        '  $winReady = $false',
         '  if ($st -ge 4) {',
-        '    $procs = @(Get-Process -Name "Brana AI" -ErrorAction SilentlyContinue | Where-Object { $_.Id -ne $script:state.oldPid -and $_.MainWindowHandle -ne 0 })',
-        '    if ($procs.Count -gt 0) { $timer.Stop(); $f.Close(); return }',
+        '    if (-not $script:step4At) { $script:step4At = [DateTime]::UtcNow }',
+        '    $procs = @($newProcs | Where-Object { $_.MainWindowHandle -ne 0 })',
+        '    if ($procs.Count -gt 0 -or $script:state.uiReady) { $winReady = $true }',
+        '    $targetR = if ($winReady) { 100.0 } elseif ($script:state.restartPct) { [double]$script:state.restartPct } else { 25.0 }',
+        '    if (-not $winReady -and $dispRestartPct -ge 20 -and $dispRestartPct -lt 92) { $dispRestartPct = [Math]::Min(92.0, $dispRestartPct + 1.1) }',
+        '    if ($targetR -gt $dispRestartPct) { $dispRestartPct = $dispRestartPct + [Math]::Max(2.2, ($targetR - $dispRestartPct) * 0.45) }',
+        '    if ($winReady) { $dispRestartPct = 100.0 }',
+        '    if ($dispRestartPct -gt 100) { $dispRestartPct = 100.0 }',
+        '    $rInt = [int][Math]::Round($dispRestartPct)',
+        '    $lblPct2.Text = if ($rInt -ge 100) { "100% (已就绪)" } else { "$rInt%" }',
+        '    $bar2Fill.Width = [int][Math]::Round(416 * $dispRestartPct / 100.0)',
+        '    if ($rInt -ge 100) { $bar2Fill.BackColor = [System.Drawing.Color]::FromArgb(16, 185, 129) }',
+        '    if (-not $winReady -and -not $script:restarted -and (([DateTime]::UtcNow - $script:step4At).TotalSeconds -ge 3.5)) {',
+        '      $script:restarted = $true',
+        '      $alive = @(Get-Process -Name "Brana AI" -ErrorAction SilentlyContinue | Where-Object { $_.Id -ne $script:state.oldPid })',
+        '      if ($alive.Count -eq 0 -and $script:state.exePath -and (Test-Path -LiteralPath $script:state.exePath)) {',
+        '        try { Start-Process -FilePath $script:state.exePath -ArgumentList "--updated" } catch {}',
+        '      }',
+        '    }',
         '  }',
-        '  if ($script:state.done) {',
-        '    if (-not $script:doneAt) { $script:doneAt = [DateTime]::UtcNow }',
-        '    elseif (([DateTime]::UtcNow - $script:doneAt).TotalSeconds -ge 2.2) { $timer.Stop(); $f.Close(); return }',
+        '  if ($script:state.text) { $lblStatus.Text = [string]$script:state.text }',
+        '  $openN = if ($script:state.openCount -and [int]$script:state.openCount -gt 0) { [int]$script:state.openCount } else { 1 }',
+        '  $m1 = "[√] 1. 下载并校验安装包完整性"',
+        '  $m2 = if ($st -gt 2) { "[√] 2. 保存原打开的 $openN 个窗口会话并关闭旧版进程" } else { "[●] 2. 正在保存原打开的 $openN 个窗口会话并关闭旧版进程…" }',
+        '  $m3 = if ($st -gt 3) { "[√] 3. 静默覆盖安装新版本核心组件" } elseif ($st -eq 3) { "[●] 3. 正在静默覆盖安装新版本核心组件…" } else { "[  ] 3. 静默覆盖安装新版本核心组件" }',
+        '  $m4 = if ($winReady) { "[√] 4. 已重启客户端并恢复原有 $openN 个窗口，完成刷新" } elseif ($st -ge 4) { "[●] 4. 正在重启客户端、载入更新并恢复原有 $openN 个窗口…" } else { "[  ] 4. 重启客户端、载入更新并恢复原有 $openN 个窗口" }',
+        '  $lblSteps.Text = "$m1`r`n$m2`r`n$m3`r`n$m4"',
+        '  $lblFoot.Text = ("已用时 {0:D2}:{1:D2} · 保持原有窗口与会话，请勿关闭" -f [int]($sec / 60), ($sec % 60))',
+        '  if ($winReady) {',
+        '    $lblStatus.Text = "√ 更新完成，已载入并刷新客户端！"',
+        '    $lblStatus.ForeColor = [System.Drawing.Color]::FromArgb(52, 211, 153)',
+        '    if (-not $script:readyAt) { $script:readyAt = [DateTime]::UtcNow }',
+        '    elseif (([DateTime]::UtcNow - $script:readyAt).TotalMilliseconds -ge 650) { $timer.Stop(); $f.Close(); return }',
+        '  } elseif ($script:state.err) {',
+        '    $lblStatus.ForeColor = [System.Drawing.Color]::FromArgb(248, 113, 113)',
+        '    if (-not $script:readyAt) { $script:readyAt = [DateTime]::UtcNow }',
+        '    elseif (([DateTime]::UtcNow - $script:readyAt).TotalSeconds -ge 3.0) { $timer.Stop(); $f.Close(); return }',
         '  }',
         '})',
         '$timer.Start()',
         '[void]$f.ShowDialog()',
       ].join('\r\n'), 'utf8');
-      const psExe = fs.existsSync('C:\\Windows\\SysNative\\WindowsPowerShell\\v1.0\\powershell.exe')
-        ? 'C:\\Windows\\SysNative\\WindowsPowerShell\\v1.0\\powershell.exe'
-        : 'powershell.exe';
-      spawn(psExe, ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden', '-Sta', '-File', progPs1, '-StatePath', stateFile], {
-        detached: true,
-        stdio: 'ignore',
-        windowsHide: true,
-      }).unref();
     } catch {}
+
+    // 使用 GUI 子系统的 wscript.exe + WScript.Shell.Run(..., 0, False) 启动，通过进程环境变量传递路径，彻底消除参数引号转义与 DETACHED_PROCESS 终端弹窗风暴
+    const launchHidden = (batPath, extraEnv) => {
+      const vbsPath = path.join(updDir, 'brana-ai-launch.vbs');
+      const mergedEnv = {
+        ...process.env,
+        ...extraEnv,
+        ANC_UPD_DIR: updDir,
+        ANC_PS_EXE: psExe,
+        ANC_PROG_PS1: progPs1,
+        ANC_BAT: batPath,
+      };
+      const wscriptExe = fs.existsSync('C:\\Windows\\System32\\wscript.exe') ? 'C:\\Windows\\System32\\wscript.exe' : 'wscript.exe';
+      try {
+        fs.writeFileSync(vbsPath, [
+          'On Error Resume Next',
+          'Set sh = CreateObject("WScript.Shell")',
+          'Set env = sh.Environment("PROCESS")',
+          'sh.CurrentDirectory = env("ANC_UPD_DIR")',
+          'q = Chr(34)',
+          'psCmd = q & env("ANC_PS_EXE") & q & " -NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -Sta -File " & q & env("ANC_PROG_PS1") & q & " -StatePath " & q & env("ANC_STATE") & q',
+          'batCmd = "cmd.exe /d /c " & q & q & env("ANC_BAT") & q & q',
+          'sh.Run psCmd, 0, False',
+          'sh.Run batCmd, 0, False',
+          '',
+        ].join('\r\n'), 'utf8');
+        spawn(wscriptExe, ['//B', '//Nologo', vbsPath], {
+          detached: true,
+          stdio: 'ignore',
+          windowsHide: true,
+          cwd: updDir,
+          env: mergedEnv,
+        }).unref();
+      } catch {
+        try {
+          spawn(psExe, ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden', '-Sta', '-File', progPs1, '-StatePath', stateFile], {
+            detached: false,
+            stdio: 'ignore',
+            windowsHide: true,
+            cwd: updDir,
+            env: mergedEnv,
+          }).unref();
+        } catch {}
+        spawn('cmd.exe', ['/d', '/c', batPath], {
+          detached: false,
+          stdio: 'ignore',
+          windowsHide: true,
+          cwd: updDir,
+          env: mergedEnv,
+        }).unref();
+      }
+    };
 
     if (kind === 'portable') {
       // 便携版：等本程序（和便携版外壳）退出后用新 exe 覆盖旧 exe 再打开；路径用环境变量传，中文路径也没问题
@@ -1975,95 +2406,92 @@ ipcMain.handle('host:updInstall', async () => {
       const bat = path.join(updDir, 'brana-ai-update.cmd');
       fs.writeFileSync(bat, [
         '@echo off',
+        'chcp 65001 >nul 2>&1',
+        'cd /d "%~dp0"',
         'set "BRANA_UPDATING=1"',
-        'echo {"from":"%ANC_FROM%","to":"%ANC_TO%","step":3,"pct":45,"text":"正在替换便携版程序文件…"} > "%ANC_STATE%"',
+        'echo {"from":"%ANC_FROM%","to":"%ANC_TO%","step":3,"pct":45,"openCount":%ANC_OPEN_CNT%,"oldPid":%ANC_PID%,"text":"正在替换便携版程序文件…"} > "%ANC_STATE%"',
         'set /a n=0',
         ':loop',
-        'ping -n 2 127.0.0.1 >nul',
+        '"%SystemRoot%\\System32\\ping.exe" -n 2 127.0.0.1 >nul 2>&1',
         'copy /y "%ANC_NEW%" "%ANC_OLD%" >nul 2>&1 && goto ok',
         'set /a n+=1',
         'if %n% lss 90 goto loop',
-        'echo {"from":"%ANC_FROM%","to":"%ANC_TO%","step":5,"pct":100,"done":true,"err":true,"text":"文件被占用，请手动替换"} > "%ANC_STATE%"',
+        'echo {"from":"%ANC_FROM%","to":"%ANC_TO%","step":5,"pct":100,"openCount":%ANC_OPEN_CNT%,"oldPid":%ANC_PID%,"done":true,"err":true,"text":"文件被占用，请手动替换"} > "%ANC_STATE%"',
         'explorer /select,"%ANC_NEW%"',
         'echo 1>"%ANC_NEW%.opened"',
         'exit /b 1',
         ':ok',
-        'echo {"from":"%ANC_FROM%","to":"%ANC_TO%","step":4,"pct":96,"text":"替换完成，正在启动新版 Brana AI…"} > "%ANC_STATE%"',
-        'del /f /q "%ANC_PEND%" >nul 2>&1',
+        'echo {"from":"%ANC_FROM%","to":"%ANC_TO%","step":4,"pct":100,"restartPct":24,"openCount":%ANC_OPEN_CNT%,"oldPid":%ANC_PID%,"text":"替换完成，正在启动新版客户端并恢复原有窗口…"} > "%ANC_STATE%"',
         'del "%ANC_NEW%" >nul 2>&1',
-        'start "" "%ANC_OLD%"',
-        'echo {"from":"%ANC_FROM%","to":"%ANC_TO%","step":5,"pct":100,"done":true,"text":"更新完成！"} > "%ANC_STATE%"',
+        'start "" "%ANC_OLD%" --updated',
+        'echo {"from":"%ANC_FROM%","to":"%ANC_TO%","step":4,"pct":100,"restartPct":38,"openCount":%ANC_OPEN_CNT%,"oldPid":%ANC_PID%,"text":"正在载入更新并恢复原来的账号窗口…"} > "%ANC_STATE%"',
         'exit /b 0',
         ''
-      ].join('\r\n'));
-      spawn('cmd.exe', ['/d', '/c', bat], {
-        detached: true,
-        stdio: 'ignore',
-        windowsHide: true,
-        env: { ...process.env, BRANA_UPDATING: '1', ANC_NEW: UPD.file, ANC_OLD: old, ANC_STATE: stateFile, ANC_PEND: UPD_PEND(), ANC_FROM: VERSION, ANC_TO: UPD.ver || '' },
-      }).unref();
+      ].join('\r\n'), 'utf8');
+      launchHidden(bat, { BRANA_UPDATING: '1', ANC_NEW: UPD.file, ANC_OLD: old, ANC_PID: String(process.pid), ANC_OPEN_CNT: String(Math.max(1, keepOpenIds.length)), ANC_STATE: stateFile, ANC_PEND: UPD_PEND(), ANC_FROM: VERSION, ANC_TO: UPD.ver || '' });
     } else {
       // 安装版：先等待所有多账号窗口与进程彻底退出，再静默运行新安装包覆盖安装并自动重开所有已打开账号
       const bat = path.join(updDir, 'brana-ai-install.cmd');
       fs.writeFileSync(bat, [
         '@echo off',
+        'chcp 65001 >nul 2>&1',
+        'cd /d "%~dp0"',
         'set "BRANA_UPDATING=1"',
-        'echo {"from":"%ANC_FROM%","to":"%ANC_TO%","step":2,"pct":22,"text":"正在关闭旧版窗口与后台进程…"} > "%ANC_STATE%"',
+        'echo {"from":"%ANC_FROM%","to":"%ANC_TO%","step":2,"pct":22,"openCount":%ANC_OPEN_CNT%,"oldPid":%ANC_PID%,"text":"正在关闭旧版窗口与后台进程…"} > "%ANC_STATE%"',
         'set /a w=0',
         ':waitexit',
-        'tasklist /FI "PID eq %ANC_PID%" 2>nul | find "%ANC_PID%" >nul',
+        '"%SystemRoot%\\System32\\tasklist.exe" /FI "PID eq %ANC_PID%" 2>nul | "%SystemRoot%\\System32\\find.exe" "%ANC_PID%" >nul 2>&1',
         'if errorlevel 1 goto closed',
-        'ping -n 2 127.0.0.1 >nul',
+        '"%SystemRoot%\\System32\\ping.exe" -n 2 127.0.0.1 >nul 2>&1',
         'set /a w+=1',
-        'if %w% lss 3 goto waitexit',
-        'taskkill /F /T /PID %ANC_PID% >nul 2>&1',
+        'if %w% lss 8 goto waitexit',
+        '"%SystemRoot%\\System32\\taskkill.exe" /F /PID %ANC_PID% >nul 2>&1',
         ':closed',
-        'taskkill /F /T /IM "Brana AI.exe" >nul 2>&1',
+        '"%SystemRoot%\\System32\\taskkill.exe" /F /IM "Brana AI.exe" >nul 2>&1',
         'taskkill /F /T /IM "xray.exe" >nul 2>&1',
-        'ping -n 2 127.0.0.1 >nul',
-        'echo {"from":"%ANC_FROM%","to":"%ANC_TO%","step":3,"pct":38,"text":"正在静默覆盖安装新版本核心组件…"} > "%ANC_STATE%"',
+        '"%SystemRoot%\\System32\\ping.exe" -n 2 127.0.0.1 >nul 2>&1',
+        'echo {"from":"%ANC_FROM%","to":"%ANC_TO%","step":3,"pct":38,"openCount":%ANC_OPEN_CNT%,"oldPid":%ANC_PID%,"text":"正在静默覆盖安装新版本核心组件…"} > "%ANC_STATE%"',
+        'start "" /wait "%ANC_NEW%" /NCRC --updated /S --force-run /D=%ANC_DIR%',
+        'if not errorlevel 1 goto installed',
+        'echo {"from":"%ANC_FROM%","to":"%ANC_TO%","step":3,"pct":64,"openCount":%ANC_OPEN_CNT%,"oldPid":%ANC_PID%,"text":"正在释放文件占用并自动重试静默安装…"} > "%ANC_STATE%"',
+        '"%SystemRoot%\\System32\\taskkill.exe" /F /IM "Brana AI.exe" >nul 2>&1',
+        'taskkill /F /T /IM "xray.exe" >nul 2>&1',
+        '"%SystemRoot%\\System32\\ping.exe" -n 3 127.0.0.1 >nul 2>&1',
         'start "" /wait "%ANC_NEW%" /NCRC --updated /S --force-run',
         'if not errorlevel 1 goto installed',
-        'echo {"from":"%ANC_FROM%","to":"%ANC_TO%","step":3,"pct":64,"text":"正在释放文件占用并自动重试静默安装…"} > "%ANC_STATE%"',
-        'taskkill /F /T /IM "Brana AI.exe" >nul 2>&1',
-        'taskkill /F /T /IM "xray.exe" >nul 2>&1',
-        'ping -n 3 127.0.0.1 >nul',
-        'start "" /wait "%ANC_NEW%" /NCRC --updated /S --force-run',
+        'echo {"from":"%ANC_FROM%","to":"%ANC_TO%","step":3,"pct":78,"openCount":%ANC_OPEN_CNT%,"oldPid":%ANC_PID%,"text":"正在打开安装程序完成更新…"} > "%ANC_STATE%"',
+        'start "" /wait "%ANC_NEW%" /NCRC --updated --force-run /D=%ANC_DIR%',
         'if not errorlevel 1 goto installed',
-        'echo {"from":"%ANC_FROM%","to":"%ANC_TO%","step":3,"pct":78,"text":"正在打开安装程序完成更新…"} > "%ANC_STATE%"',
-        'start "" /wait "%ANC_NEW%" /NCRC --updated --force-run',
-        'if not errorlevel 1 goto installed',
-        'echo {"from":"%ANC_FROM%","to":"%ANC_TO%","step":5,"pct":100,"done":true,"err":true,"text":"自动安装未完成，请在客户端内点击手动安装"} > "%ANC_STATE%"',
+        'echo {"from":"%ANC_FROM%","to":"%ANC_TO%","step":5,"pct":100,"openCount":%ANC_OPEN_CNT%,"oldPid":%ANC_PID%,"done":true,"err":true,"text":"自动安装未完成，请在客户端内点击手动安装"} > "%ANC_STATE%"',
         'echo 1>"%ANC_NEW%.opened"',
         'exit /b 1',
         ':installed',
-        'echo {"from":"%ANC_FROM%","to":"%ANC_TO%","step":4,"pct":96,"text":"安装完成，正在启动新版 Brana AI…"} > "%ANC_STATE%"',
-        'del /f /q "%ANC_PEND%" >nul 2>&1',
-        'ping -n 2 127.0.0.1 >nul',
-        'tasklist /FI "IMAGENAME eq Brana AI.exe" 2>nul | find /I "Brana AI.exe" >nul',
-        'if errorlevel 1 (',
-        '  if exist "%ANC_EXE%" start "" "%ANC_EXE%" --updated',
+        'set "BRANA_UPDATING="',
+        '"%SystemRoot%\\System32\\tasklist.exe" /FI "IMAGENAME eq Brana AI.exe" 2>nul | "%SystemRoot%\\System32\\find.exe" /I "Brana AI.exe" >nul 2>&1',
+        'if not errorlevel 1 exit /b 0',
+        'echo {"from":"%ANC_FROM%","to":"%ANC_TO%","step":4,"pct":100,"restartPct":28,"openCount":%ANC_OPEN_CNT%,"oldPid":%ANC_PID%,"text":"安装已完成，正在启动新版客户端并恢复原有窗口…"} > "%ANC_STATE%"',
+        'if exist "%ANC_EXE%" (',
+        '  start "" "%ANC_EXE%" --updated',
+        ') else if exist "%LOCALAPPDATA%\\Programs\\Brana AI\\Brana AI.exe" (',
+        '  start "" "%LOCALAPPDATA%\\Programs\\Brana AI\\Brana AI.exe" --updated',
+        ') else if exist "%ProgramFiles%\\Brana AI\\Brana AI.exe" (',
+        '  start "" "%ProgramFiles%\\Brana AI\\Brana AI.exe" --updated',
         ')',
-        'echo {"from":"%ANC_FROM%","to":"%ANC_TO%","step":5,"pct":100,"done":true,"text":"更新完成，正在打开窗口…"} > "%ANC_STATE%"',
         'exit /b 0',
         ''
-      ].join('\r\n'));
-      spawn('cmd.exe', ['/d', '/c', bat], {
-        detached: true,
-        stdio: 'ignore',
-        windowsHide: true,
-        env: {
-          ...process.env,
-          BRANA_UPDATING: '1',
-          ANC_NEW: UPD.file,
-          ANC_PID: String(process.pid),
-          ANC_EXE: process.execPath,
-          ANC_STATE: stateFile,
-          ANC_PEND: UPD_PEND(),
-          ANC_FROM: VERSION,
-          ANC_TO: UPD.ver || '',
-        },
-      }).unref();
+      ].join('\r\n'), 'utf8');
+      launchHidden(bat, {
+        BRANA_UPDATING: '1',
+        ANC_NEW: UPD.file,
+        ANC_PID: String(process.pid),
+        ANC_EXE: process.execPath,
+        ANC_DIR: appDir,
+        ANC_OPEN_CNT: String(Math.max(1, keepOpenIds.length)),
+        ANC_STATE: stateFile,
+        ANC_PEND: UPD_PEND(),
+        ANC_FROM: VERSION,
+        ANC_TO: UPD.ver || '',
+      });
     }
     updLog('开始自动安装（' + kind + '）→ ' + (UPD.ver || '?') + ' · ' + UPD.file);
   } catch (x) { updLog('启动安装失败：' + (x?.message || x)); return { error: '启动安装失败：' + (x?.message || x), file: UPD.file }; }
@@ -2252,7 +2680,7 @@ ipcMain.handle('host:noteAccount', (e, o) => {
     if (w && !w.isDestroyed() && w.__hidden) { clearTimeout(w.__reap); if (!g.busy && !w.__stats) w.__reap = setTimeout(() => { if (!w.isDestroyed() && w.__hidden && !w.__stats && !a.status?.gacha?.busy) destroyWindow(w); }, 60000); }
   }
   // 账号统计（本账号窗口自己算的：各厂商 / 各型号对话数、每个对话轮数），账号管理窗口和手机启动页用
-  if (o.stats && typeof o.stats === 'object') { try { const js = JSON.stringify(o.stats); if (js.length < 800000) st.stats = JSON.parse(js); } catch {} }
+  if (o.stats && typeof o.stats === 'object' && ((+o.stats.total || 0) > 0 || !(+st.stats?.total || 0))) { try { const js = JSON.stringify(o.stats); if (js.length < 800000) st.stats = JSON.parse(js); } catch {} }
   if (o.statsBusy !== undefined) st.statsBusy = String(o.statsBusy || '').slice(0, 60);
   if (o.statsDone) {
     st.statsBusy = ''; st.statsErr = String(o.statsErr || '').slice(0, 120); st.statsAt = Date.now();
@@ -2536,8 +2964,8 @@ ipcMain.handle('host:shared', (e, k, v) => {
     if (had !== spec) { const a = winAcct(e.sender); if (a && /^vless:/i.test(proxyStr(a))) return applyProxy(a).then(() => true, err => ({ error: String(err?.message || err) })); }   // 当前账号马上生效，其他账号下次连接 / 切换时生效
     return true;
   }
-  // gacha@<账号id>：每个账号自己的抽卡设置
-  if (!['prefs', 'gacha', 'nodes', 'nodesubs', 'proxyips', 'pippool', 'archbl', 'gold', 'pelshots', 'pelican', 'habitLearnBank', 'habitCalibration'].includes(k) && !/^(gacha|draft|gtok|signup|mailtok|webreg)@[\w-]{1,64}$/.test(String(k))) return null;
+  // gacha@<账号id>：每个账号自己的抽卡设置；hist@<账号id> / models@<账号id>：每个账号的对话列表与识别缓存备份
+  if (!['prefs', 'gacha', 'nodes', 'nodesubs', 'proxyips', 'pippool', 'archbl', 'gold', 'pelshots', 'pelican', 'habitLearnBank', 'habitCalibration'].includes(k) && !/^(gacha|draft|gtok|signup|mailtok|webreg|hist|models)@[\w-]{1,64}$/.test(String(k))) return null;
   DB.shared = DB.shared || {};
   if (k === 'habitLearnBank') {
     const bankFile = path.join(app.getPath('userData'), 'shared', 'habitLearnBank.json');
@@ -2568,6 +2996,21 @@ ipcMain.handle('host:shared', (e, k, v) => {
       '01a151de-5840-75e5-b5e0-9bf662f543dd',
       '01a151e0-c58e-7766-9c65-f7287592c61b',
     ]);
+    const SECONDARY_CORRECTION_SIDS = {
+      '01a155eb-ebaa-77ae-9173-fac511bb3c81': { model: 'gemini-3.8-flash-high', rawLabel: 'Gemini 3.8 Flash (High)', isOpen: false },
+      '01a155eb-ebaa-730a-922c-085044a25044': { model: 'gemini-3.8-flash-high', rawLabel: 'Gemini 3.8 Flash (High)', isOpen: false },
+      '01a14e79-62e7-7137-b869-c97ecd890fd0': { model: 'muse-spark-1.3-max', rawLabel: 'Muse Spark 1.3 (Max)', isOpen: false, autoTeacher: false },
+      '01a152c4-2ba1-70ee-9dd1-6a29ae84d75c': { model: 'muse-spark-1.3-max', rawLabel: 'Muse Spark 1.3 (Max)', isOpen: false, autoTeacher: false },
+      '01a152c2-c708-7859-9dac-3e2d6a45454f': { model: 'muse-spark-1.3-max', rawLabel: 'Muse Spark 1.3 (Max)', isOpen: false, autoTeacher: false },
+      '01a152c6-d4c7-7faa-a81d-64d4b1953661': { model: 'gpt-6-luna-max', rawLabel: 'GPT 6 Luna (Max)', isOpen: false, autoTeacher: false },
+      '01a152c4-dc79-71d2-acb9-3b47fecc25f6': { model: 'gpt-6-luna-max', rawLabel: 'GPT 6 Luna (Max)', isOpen: false, autoTeacher: true },
+      '01a14cea-e2bb-72ac-810d-ef8f38883bea': { model: 'gemini-3.8-flash-high', rawLabel: 'Gemini 3.8 Flash (High)', isOpen: false, autoTeacher: false },
+      '01a1580c-3b5a-7ac0-abe4-7afef0cc1035': { model: 'gpt-6-sol-max', rawLabel: 'GPT 6 Sol (Max)', isOpen: false, autoTeacher: false },
+      '01a1577d-ff3d-70b4-9e51-fef4931aebae': { model: 'gpt-6.1-sol-max', rawLabel: 'GPT 6.1 Sol (Max)', isOpen: false, autoTeacher: false },
+      '01a15779-4c90-77f8-b822-9e72acf9c3ca': { model: 'gpt-6.1-sol-high', rawLabel: 'GPT 6.1 Sol (High)', isOpen: false, autoTeacher: false },
+      '01a14a0d-bce9-7011-a76d-b1deea75c1d9': { model: 'gpt-6-luna-max', rawLabel: 'GPT 6 Luna (Max)', isOpen: false, autoTeacher: false },
+      '01a1577e-b0dd-714a-bfb4-1b0f1b7b1da1': { model: 'gemini-4-argon-high', rawLabel: 'Gemini 4 Argon (High)', isOpen: false, autoTeacher: false },
+    };
     const isCorrupt4000MetaObj = m => Boolean(m && Number(m.meanChars) === 4000 && (Number(m.writtenChars) || 0) === 0 && (Number(m.memoAvgChunk) || 0) === 0 && (Number(m.cps) === 1 || Number(m.cps) === 2 || (Number(m.totalTools) === 0 && (Number(m.write) > 0 || Number(m.askUser) > 0))));
     const isUnloaded4500StubMeta = m => Boolean(m && Number(m.meanChars) === 4500 && (Number(m.writtenChars) || 0) === 0 && (Number(m.avgTurnDurMs) || 0) === 0 && (Number(m.cps) || 0) === 0 && (Number(m.memoAvgChunk) || 0) === 0 && (Number(m.bash) || 0) === 0 && (Number(m.askUser) || 0) === 0 && (Number(m.lowerDoctype) || 0) === 0 && (Number(m.colorSchemeCss) || 0) === 0 && (Number(m.prefersReducedMotion) || 0) === 0 && (Number(m.sandboxLink) || 0) === 0 && (Number(m.svgSmilNoScript) || 0) === 0);
     const isSyntheticStubVecObj = v => Array.isArray(v) && v.length === 20 && v[12] === 0.8 && v[15] === 0.52 && v[2] === 0.05 && v[3] === 0;
@@ -2577,6 +3020,10 @@ ipcMain.handle('host:shared', (e, k, v) => {
       if (!s || s === '开源模型') return s;
       if (/gpt-5\.6-luna/i.test(s)) s = s.replace(/gpt-5\.6-luna/ig, 'gpt-6-luna');
       if (/barium-bb-v2-4xts(?:-agent)?/i.test(s)) s = s.replace(/barium-bb-v2-4xts(?:-agent)?/ig, 'gemini-4-argon');
+      if (/^muse(?:\s*\((low|medium|high|xhigh|max)\)|-(low|medium|high|xhigh|max))?$/i.test(s)) {
+        const mm = s.match(/(low|medium|high|xhigh|max)/i);
+        s = `muse-spark-1.3-${mm ? mm[1].toLowerCase() : 'max'}`;
+      }
       const bare = s.replace(/^[a-z0-9_.-]+\//i, '').replace(/\[[^\]]*\]\s*/g, '').trim();
       const em = bare.match(/\((none|minimal|low|medium|high|xhigh|max)\)\s*$/i);
       const eff = em ? em[1].toLowerCase() : '';
@@ -2586,8 +3033,24 @@ ipcMain.handle('host:shared', (e, k, v) => {
       if (eff && !slug.endsWith('-' + eff)) return `${slug}-${eff}`;
       return slug;
     };
+    const PURGED_STUB_SIDS = new Set([
+      '01a14d10-88e5-7e0d-a2dc-59b80e865028', '01a14d11-a5dc-773c-8c0c-88f6a16d6655', '01a148c7-9e1b-7544-884d-4e7cc1476a64',
+      '01a148c9-6c3a-7a2a-8827-1533a93e94fc', '01a148cb-d02d-7157-a3b8-6c2ba515919c', '01a148c8-3bb2-7e8b-8f07-96ab90bcb3c7',
+      '01a148b0-3e40-735d-b935-b35e51269c9f', '01a148b0-d9c4-733b-9bac-3812590714d8', '01a148c8-9b24-7f05-b708-d8bbf9dccd4a',
+      '01a14a32-3c2e-763f-96d6-e45e52177a3f', '01a152c4-b0d4-74c2-aa6a-8a9cbc1fdd3b', '01a152c6-7acb-70e6-ac17-41f3eb622d4b',
+      '01a152c1-d872-7793-bbad-11d49b1745f7', '01a152bd-e314-7d89-9f0a-5a5df088ecbc', '01a14a40-9a96-7b65-a13e-94b9e628abf2',
+      '01a14a40-c888-7f49-8a1a-9fd57fd0dbc9', '01a14a3e-f971-7d7d-a95e-35f5d62bf1ae', '01a14a31-8bb0-79c3-9fc2-bc22d58b036a',
+      '01a143cf-e9b8-7f73-a2b9-a4a0db718c19', '01a14d10-3266-7ef6-a4a3-b34b6dabc6a4', '01a14d10-0340-7ef5-aae6-faf9e510734a',
+      '01a148c7-756a-7c81-a63f-22d50224f13c', '01a148cc-9e87-75b8-8393-236014b1fdce', '01a148cb-63ae-73d2-83d7-00d699d5c1f3',
+      '01a148b8-5c68-738e-be33-3eda236291bf', '01a148b6-d121-76ee-88ca-bf631655c8fc', '01a148b5-0375-7a1b-86d4-97de60dee2c2',
+      '01a148b6-356c-79d6-b36a-6a65d4f3b61c', '01a148b3-4d8b-70b3-af44-bc93d21a6044', '01a148b2-e9df-7bc2-bcdc-44e32a4d5c63',
+      '01a148b0-990d-7c20-90c4-516e61a6d1a5', '01a148b0-1482-754b-8b8e-174d59e341d4', '01a148af-c6c0-7105-9d3a-46b1543d05f2',
+      '01a13890-9c70-7677-9b34-83ec17d57d29',
+    ]);
     const cleanBankSample = raw => {
       if (!raw || !raw.model || !Array.isArray(raw.vec)) return null;
+      const sidStr = String(raw.sid || '');
+      if (PURGED_STUB_SIDS.has(sidStr)) return null;
       const rawM = String(raw.model || '').trim();
       let m = canonHabitModel(rawM) || rawM;
       const sc = Number(raw.score);
@@ -2595,23 +3058,36 @@ ipcMain.handle('host:shared', (e, k, v) => {
       const out = { ...raw, model: m, score: validSc };
       delete out.id;
       if (!out.rawLabel && rawM !== m) out.rawLabel = rawM;
-      const sidStr = String(out.sid || '');
       if (KNOWN_DIAG_SIDS.has(sidStr)) out.importedFromDiag = true;
+      if (sidStr === '01a13ef8-3b56-7b99-a43b-d991064c46d8' || sidStr === '01a151de-5840-75e5-b5e0-9bf662f543dd') out.userConfirmed = true;
       if (sidStr === '01a155ea-7be8-75fe-8b49-773f6159cb3a' && /6-sol/i.test(m)) {
         m = canonHabitModel('Claude Opus 5.5 (Medium)');
         out.model = m;
         out.rawLabel = 'Claude Opus 5.5 (Medium)';
       }
-      if (sidStr === '01a155eb-ebaa-730a-922c-085044a25044' && /argon/i.test(m)) {
-        m = canonHabitModel('Gemini 3.8 Flash (High)');
+      if (SECONDARY_CORRECTION_SIDS[sidStr]) {
+        const corr = SECONDARY_CORRECTION_SIDS[sidStr];
+        m = canonHabitModel(corr.model) || corr.model;
         out.model = m;
-        out.rawLabel = 'Gemini 3.8 Flash (High)';
+        out.rawLabel = corr.rawLabel;
+        out.isOpen = corr.isOpen;
+        if (typeof corr.autoTeacher === 'boolean') out.autoTeacher = corr.autoTeacher;
       }
       if (isCorrupt4000MetaObj(out.meta)) {
         out.meta = null;
       }
-      if (!out.userConfirmed && !out.importedFromDiag && isSyntheticStubVecObj(out.vec)) {
-        return null;
+      if (isSyntheticStubVecObj(out.vec)) {
+        const hasRealTags = Array.isArray(out.tags) && out.tags.some(t => t && t !== '⚡ 反推自动纠偏样本');
+        if ((!out.userConfirmed && !out.importedFromDiag) || (out.meta === null && !hasRealTags && !out.importedFromDiag)) {
+          return null;
+        }
+      }
+      if (!out.importedFromDiag && out.meta && typeof out.meta === 'object') {
+        const mChk = Number(out.meta.memoAvgChunk) || 0;
+        const mCnt = Number(out.meta.memoDeltaCount) || 0;
+        if (mChk > 0 && mChk < 4.2 && mCnt >= 200) {
+          if (sidStr === '01a14584-b207-7580-95bc-9a59e277da76' || !out.userConfirmed) return null;
+        }
       }
       if (/gemini|google|argon/i.test(m)) {
         if (out.meta && out.meta.hidR === 4 && ((out.meta.memoAvgChunk || 0) >= 25 || (out.meta.writtenChars || 0) >= 25000)) {
@@ -2680,6 +3156,11 @@ ipcMain.handle('host:shared', (e, k, v) => {
       return { v: 1, protoCentroids, scoreOffsets, updatedAt: Math.max(base.updatedAt || 0, inc.updatedAt || 0, Date.now()) };
     };
     let diskSamples = [], diskCalib = {};
+    try {
+      const builtinBank = require('../ui/habit-builtin-bank.js');
+      if (Array.isArray(builtinBank?.samples)) diskSamples = mergeBankSamples(diskSamples, builtinBank.samples);
+      if (builtinBank?.calibration && typeof builtinBank.calibration === 'object') diskCalib = mergeCalibObj(diskCalib, builtinBank.calibration);
+    } catch {}
     for (const bf of bankFiles) {
       try {
         if (fs.existsSync(bf)) {
@@ -3194,9 +3675,9 @@ let quitting = false;
 app.on('before-quit', () => { quitting = true; const open = shownIds(); if (open.length) DB.open = open; saveDB(); });
 app.on('second-instance', (e, argv) => {
   if (Array.isArray(argv) && argv.includes('--quit-for-update')) { void quitForUpdate(0); return; }
-  const w = [...wins.values()].find(x => !x.isDestroyed() && !x.__hidden);
-  if (w) { if (w.isMinimized()) w.restore(); w.focus(); }
-  else void openAccountSafe(DB.last || DB.accounts[0].id);
+  const w = [...wins.values()].find(x => !x.isDestroyed() && !x.__hidden) || [...wins.values()].find(x => !x.isDestroyed());
+  if (w) { w.__hidden = false; if (!w.isVisible()) w.show(); if (w.isMinimized()) w.restore(); w.focus(); }
+  else void openAccountSafe(DB.last || DB.accounts[0]?.id);
 });
 app.on('window-all-closed', () => app.quit());
 
@@ -3225,9 +3706,22 @@ app.commandLine.appendSwitch('ignore-gpu-blocklist');
 app.whenReady().then(async () => {
   BrowserPrivacy.secureResolver(app);
   try { checkPending(); } catch {}
-  loadDB(); try { themeWas = DB.shared?.prefs?.theme; syncThemeSource(); } catch {} showSplash(); loadBundle(); menu();
+  loadDB();
+  if (updRestoredOpen && updRestoredOpen.length) {
+    const validOpen = updRestoredOpen.filter(id => acct(id));
+    if (validOpen.length) DB.open = validOpen;
+    if (updRestoredLast && acct(updRestoredLast)) DB.last = updRestoredLast;
+    try { saveDB(); } catch {}
+  }
+  try { themeWas = DB.shared?.prefs?.theme; syncThemeSource(); } catch {} showSplash(); loadBundle(); menu();
   gProbe().catch(() => {}); setInterval(() => gProbe().catch(() => {}), 5 * 60e3);
   const ids = (DB.open || []).filter(id => acct(id));
   if (!ids.length) ids.push(DB.last && acct(DB.last) ? DB.last : DB.accounts[0].id);
+  const savedLast = (DB.last && ids.includes(DB.last)) ? DB.last : ids[0];
   for (const id of ids) await openAccountSafe(id);
+  if (ids.length > 1) {
+    DB.open = ids;
+    DB.last = savedLast;
+    try { saveDB(); } catch {}
+  }
 }).catch(error => { runtimeLog('startup-failed', { kind: error.name, code: error.code }); closeSplash(); dialog.showErrorBox('Brana AI 启动失败', '请重试。账号数据未删除；诊断记录在数据目录 logs/runtime.jsonl。'); });

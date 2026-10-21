@@ -39,7 +39,7 @@ const RegionIP = {
     // 只列已评估为纯净的 IP（可用 / 冷却 / 被占用都是纯净的）；当前在用的始终显示
     return rows.filter(r=>r.current||['ok','cool','used'].includes(r.state)).sort((a,b)=>Number(b.current)-Number(a.current)||(order[a.state]-order[b.state])||(a.e.ms||9e9)-(b.e.ms||9e9)||a.k.localeCompare(b.k));
   },
-  async switchNext({owner,progress=()=>{}}={}) {
+  async switchNext({owner,progress=()=>{},noScreen=false}={}) {
     if(this.busy)return {ok:false,error:'正在切换，请勿重复点击'};
     this.busy=true;let locked='',writeStarted=false;
     try {
@@ -58,7 +58,7 @@ const RegionIP = {
         let keys=this.candidates(a,tried).slice(0,3);
         // 先评估纯净度：高风险的直接拉黑删除，绝不切换过去；一个干净的都没有 → 弹窗一直筛选到出现为止
         if(keys.length&&typeof IPRep!=='undefined'&&IPRep.rate){await IPRep.rate(keys).catch(()=>{});const ok=new Set(this.candidates(a,tried));keys=keys.filter(k=>ok.has(k));}
-        if(!keys.length&&!screened&&typeof IPRep!=='undefined'&&IPRep.screen){screened=true;progress('没有非高风险 IP，正在筛选…');const sr=await IPRep.screen(a.region,{exceptId:a.id});if(sr.cancelled)return {ok:false,cancelled:true};if(sr.ok){round--;continue;}}
+        if(!keys.length&&!screened&&!noScreen&&typeof IPRep!=='undefined'&&IPRep.screen){screened=true;progress('没有非高风险 IP，正在筛选…');const sr=await IPRep.screen(a.region,{exceptId:a.id});if(sr.cancelled)return {ok:false,cancelled:true};if(sr.ok){round--;continue;}}
         if(!keys.length)break;keys.forEach(k=>tried.add(k));
         progress('正在检测同地区候选 IP · 第 '+(round+1)+' 组');
         let res;

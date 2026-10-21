@@ -20,11 +20,21 @@ const TitleSync = (() => {
     score:m.score==null?null:Number(m.score.toFixed(1)),average:m.average==null?null:Number(m.average.toFixed(1)),
     tier:TitleCompact.tiers.includes(String(m.tier||'').toLowerCase())?String(m.tier||'').toLowerCase():'',revision:0}));
   const modelLabel = m => m ? ConversationLabels.unified(m) : '';
-  const modelStamp = mi => JSON.stringify([mi?.name,mi?.at,mi?.guess,mi?.pendingConfirm,mi?.routed,mi?.reverseMatch,mi?.reverseScore,mi?.reverseEffort,mi?.tier,mi?.est?.score,mi?.fingerprint?.skipped,mi?.fingerprint?.stopConfirmed,mi?.fingerprint?.result?.nearest?.id,mi?.fingerprint?.result?.signals?.relative_probability,mi?.fingerprint?.reasoning?.score,mi?.fingerprint?.avgProbeSec]);
+  const modelStamp = mi => JSON.stringify([mi?.name,mi?.at,mi?.guess,mi?.pendingConfirm,mi?.routed,mi?.userCorrected,mi?.reverseInferred,mi?.habitInferred,mi?.billingProbe,mi?.reverseMatch,mi?.confidence,mi?.revPct,mi?.match,mi?.reverseScore,mi?.habitScore,mi?.reverseEffort,mi?.reverseVer,mi?.tier,mi?.est?.score,mi?.fingerprint?.skipped,mi?.fingerprint?.stopConfirmed,mi?.fingerprint?.result?.nearest?.id,mi?.fingerprint?.result?.signals?.relative_probability,mi?.fingerprint?.reasoning?.score,mi?.fingerprint?.avgProbeSec]);
+  const hasReidentifiedModel = mi => Boolean(mi && mi.name && !mi.pendingConfirm && !/^(未识别|未知型号|待定)$/.test(String(mi.name).trim()) && (mi.userCorrected || mi.reverseInferred || mi.habitInferred || mi.billingProbe));
+  const canonLower = s => String(typeof Strength !== 'undefined' && Strength.canon ? Strength.canon(s) : (s || '')).replace(/[?？]+$/, '').trim().toLowerCase();
   const label = m => modelLabel(m) + '/' + noteFmt(m.time) + (m.note ? '/' + m.note : '');
   function restored(sid) {
+    const mi = typeof Models !== 'undefined' ? Models.get(sid) : null;
+    const reid = hasReidentifiedModel(mi);
     const x = cache.get(sid);
-    if (x?.generation === TitleCipher.generation) return x.meta;
+    if (x?.generation === TitleCipher.generation) {
+      if (reid && x.meta && canonLower(x.meta.model) !== canonLower(mi.name)) {
+        const reidSc = ConversationLabels.sane(numeric(mi.reverseScore ?? mi.habitScore ?? mi.est?.score));
+        return { ...x.meta, model: (typeof Strength !== 'undefined' && Strength.canon ? Strength.canon(mi.name) : mi.name), confidence: null, score: reidSc ?? x.meta.score ?? null };
+      }
+      return x.meta;
+    }
     if (typeof TitleCipher !== 'undefined' && typeof TitleCipher.decodeGoldPrefix === 'function') {
       const e = typeof History !== 'undefined' ? History.byId?.(sid) : null;
       const rawTitle = e?.title || (typeof Notes !== 'undefined' ? Notes.all?.[sid]?.c : '') || '';
@@ -33,7 +43,11 @@ const TitleSync = (() => {
         if (gp.fav && typeof Fav !== 'undefined' && !Fav.has(sid) && !(Fav.unfavAt && Fav.unfavAt[sid])) Fav.setQuiet(sid, true);
         if (gp.gold && typeof Gold !== 'undefined' && Gold.noteRestoredChat) Gold.noteRestoredChat(sid, gp);
         if (gp.model) {
-          return { version: 2, model: gp.model, confidence: null, score: gp.score ?? null, average: null, time: Number(Notes.all?.[sid]?.t) || now(), note: String(Notes.all?.[sid]?.n || ''), tier: '', source: 'fingerprint', revision: 0, fav: !!gp.fav, gold: !!gp.gold, v4: false, fromPrefix: true };
+          const effModel = reid ? (typeof Strength !== 'undefined' && Strength.canon ? Strength.canon(mi.name) : mi.name) : gp.model;
+          const effScore = (reid && canonLower(gp.model) !== canonLower(mi.name))
+            ? (ConversationLabels.sane(numeric(mi.reverseScore ?? mi.habitScore ?? mi.est?.score)) ?? null)
+            : (gp.score ?? null);
+          return { version: 2, model: effModel, confidence: null, score: effScore, average: null, time: Number(Notes.all?.[sid]?.t) || now(), note: String(Notes.all?.[sid]?.n || ''), tier: '', source: 'fingerprint', revision: 0, fav: !!gp.fav, gold: !!gp.gold, v4: false, fromPrefix: true };
         }
       }
     }
@@ -83,29 +97,31 @@ const TitleSync = (() => {
   }
   function build0(sid) {
     const mi = Models.get(sid), prior = restored(sid);
-    if (mi && mi.name && !/^(未识别|未知型号|待定)$/.test(String(mi.name).trim()) && (mi.habitInferred || mi.reverseInferred || mi.billingProbe || mi.userCorrected) && (mi.pendingConfirm || mi.guess)) {
+    const hasReidMi = hasReidentifiedModel(mi);
+    if (hasReidMi && (mi.pendingConfirm || mi.guess)) {
       mi.pendingConfirm = false;
       mi.guess = false;
     }
-    const n = Notes.all[sid] || (mi && !mi.pendingConfirm && !mi.guess && mi.name ? Notes.rec(sid) : null);
+    const n = Notes.all[sid] || (mi && !mi.pendingConfirm && (!mi.guess || hasReidMi) && mi.name ? Notes.rec(sid) : null);
     if (!n) return null;
-    if(n.modelData && n.modelData.model && !/^(未识别|未知型号|待定)$/.test(String(n.modelData.model).trim()) && n.modelStamp===modelStamp(mi))return {...n.modelData,time:Number(n.t)||n.modelData.time,note:String(n.n||''),revision:Number(n.modifiedAt)||n.modelData.revision};
+    if(n.modelData && n.modelData.model && !/^(未识别|未知型号|待定)$/.test(String(n.modelData.model).trim()) && n.modelStamp===modelStamp(mi) && (!hasReidMi || canonLower(n.modelData.model)===canonLower(mi.name)))return {...n.modelData,time:Number(n.t)||n.modelData.time,note:String(n.n||''),revision:Number(n.modifiedAt)||n.modelData.revision};
     const entry=History.byId(sid), raw=entry?.localTitle || (!TitleCipher.isEncoded(entry?.title) ? entry?.title : '') || '';
     const fp = mi?.fingerprint, parsed = ConversationLabels.parse(noteBase(raw));
     const measured=fp?ConversationLabels.fingerprintData(mi):null;
     // Format-based vendor guesses ("xxx（推测）") or pendingConfirm are never synced or shown as a model name.
-    const apiName=mi&&!mi.guess&&!mi.pendingConfirm?mi.name:'';
-    let model=mi?.pendingConfirm?'未识别':(String(measured?.model || apiName || prior?.model || (/推测/.test(parsed.name||'')?'':parsed.name) || '未识别').replace(/[（(]推测[）)]/g,'').trim()||'未识别');
+    const apiName=mi&&(!mi.guess||hasReidMi)&&!mi.pendingConfirm?(typeof Strength!=='undefined'&&Strength.canon?Strength.canon(mi.name):mi.name):'';
+    const preferredModel=hasReidMi?(apiName||measured?.model):(measured?.model||apiName);
+    let model=mi?.pendingConfirm?'未识别':(String(preferredModel || prior?.model || (/推测/.test(parsed.name||'')?'':parsed.name) || '未识别').replace(/[（(]推测[）)]/g,'').trim()||'未识别');
     if(/^未知型号\??$/.test(model))model='未识别';   // 中文占位名没法编码进标题，统一成「未识别」
-    if(fp?.skipped)return {...measured,time:Number(n.t)||now(),note:String(n.n||''),tier:'',source:'fingerprint',revision:Number(n.modifiedAt)||now()};
-    const samePrior=prior?.model===model, sameParsed=parsed.name===model;
-    const rawConfidence = measured?.confidence;
-    const confidence = fp ? numeric(rawConfidence) : ((samePrior ? prior?.confidence : null) ?? (sameParsed && parsed.confidence != null ? +parsed.confidence / 100 : null));
+    if(fp?.skipped && !hasReidMi)return {...measured,time:Number(n.t)||now(),note:String(n.n||''),tier:'',source:'fingerprint',revision:Number(n.modifiedAt)||now()};
+    const samePrior=canonLower(prior?.model)===canonLower(model), sameParsed=canonLower(parsed.name)===canonLower(model);
+    const rawConfidence = (hasReidMi && (!fp?.result?.nearest?.id || canonLower(fp.result.nearest.id)!==canonLower(model))) ? null : measured?.confidence;
+    const confidence = fp ? numeric(rawConfidence) : ((samePrior && !hasReidMi ? prior?.confidence : null) ?? (sameParsed && !hasReidMi && parsed.confidence != null ? +parsed.confidence / 100 : null));
     const sane = n => ConversationLabels.sane(numeric(n));
-    const score = (mi?.routed ? sane(mi?.reverseScore) : null) ?? sane(fp?.reasoning?.score) ?? sane(mi?.reverseScore) ?? sane(mi?.est?.score) ?? (samePrior?sane(prior?.score):null) ?? (sameParsed?sane(parsed.score):null);
+    const score = (mi?.routed ? sane(mi?.reverseScore) : null) ?? (hasReidMi ? sane(mi?.reverseScore ?? mi?.habitScore) : null) ?? sane(fp?.reasoning?.score) ?? sane(mi?.reverseScore ?? mi?.habitScore) ?? sane(mi?.est?.score) ?? (samePrior?sane(prior?.score):null) ?? (sameParsed?sane(parsed.score):null);
     const average = numeric(fp?.avgProbeSec) ?? (samePrior?prior?.average:null) ?? (sameParsed?numeric(parsed.average):null);
     return {model,confidence:confidence !== null ? Math.min(1,confidence) : null,score,average,
-      time:Number(n.t)||prior?.time||now(),note:String(n.n||''),tier:String((mi?.routed && mi?.reverseEffort) || mi?.tier || fp?.reasoning?.tier || (samePrior?prior?.tier:'') || ''),source:fp?'fingerprint':mi&&!mi.guess?'api':(samePrior?prior?.source:'')||'local',revision:Number(n.modifiedAt)||now()};
+      time:Number(n.t)||prior?.time||now(),note:String(n.n||''),tier:String((mi?.routed && mi?.reverseEffort) || mi?.tier || fp?.reasoning?.tier || (samePrior?prior?.tier:'') || ''),source:fp&&!hasReidMi?'fingerprint':mi&&(!mi.guess||hasReidMi)?'api':(samePrior?prior?.source:'')||'local',revision:Number(n.modifiedAt)||now()};
   }
   function displayText(text) {
     const s = String(text || '');
@@ -123,8 +139,24 @@ const TitleSync = (() => {
     // v4：云端的备注 / 收藏是权威值；v3 及更早没有这两项，保留本机的
     const note=meta.v4?meta.note:Object.prototype.hasOwnProperty.call(n,'n')?n.n:(meta.version===1?meta.note:'');
     if(meta.v4&&typeof Fav!=='undefined')Fav.setQuiet(sid,meta.fav);
+    const mi = typeof Models !== 'undefined' ? Models.get(sid) : null;
+    const reid = hasReidentifiedModel(mi);
     Object.assign(n,{n:note,t:meta.time,c:title,syncedData:signature(meta),modifiedAt:meta.revision,dirty:false,f:0,nx:0});
-    n.modelData={...meta,note:n.n};n.modelStamp=modelStamp(Models.get(sid));
+    if (reid && canonLower(meta.model) !== canonLower(mi.name)) {
+      const reidMeta = {
+        ...meta,
+        model: typeof Strength !== 'undefined' && Strength.canon ? Strength.canon(mi.name) : mi.name,
+        confidence: null,
+        score: ConversationLabels.sane(numeric(mi.reverseScore ?? mi.habitScore ?? mi.est?.score)) ?? null,
+        note: n.n,
+      };
+      n.modelData = reidMeta;
+      n.modelStamp = modelStamp(mi);
+      delete n.e; Notes.all[sid] = n;
+      const entry = History.byId(sid); if (entry) entry.localTitle = label(reidMeta);
+      return;
+    }
+    n.modelData={...meta,note:n.n};n.modelStamp=modelStamp(mi);
     delete n.e; Notes.all[sid]=n;
     const entry=History.byId(sid); if(entry)entry.localTitle=label({...meta,note:n.n});
   }
@@ -151,8 +183,8 @@ const TitleSync = (() => {
           Models.set(e.id, {
             ...(cur || {}),
             name: canon,
-            candidateName: canon,
             reverseScore: cur?.reverseScore ?? gp.score ?? undefined,
+            habitScore: cur?.habitScore ?? gp.score ?? undefined,
             est: cur?.est || (gp.score != null ? { score: gp.score, source: 'prefix' } : undefined),
             fromTitle: !cur?.habitInferred && !cur?.reverseInferred && !cur?.billingProbe && !cur?.userCorrected,
             sure: true,
@@ -180,7 +212,17 @@ const TitleSync = (() => {
         const title=e.title;
         if (!TitleCipher.isEncoded(title)) continue;
         const old=cache.get(e.id);
-        if (old?.title===title && old.generation===generation) { if(!Notes.all[e.id]?.dirty)e.localTitle=label({...old.meta,note:Notes.all[e.id]?.n??(old.meta.version===1?old.meta.note:'')}); continue; }
+        if (old?.title===title && old.generation===generation) {
+          if(!Notes.all[e.id]?.dirty) {
+            const mi = typeof Models !== 'undefined' ? Models.get(e.id) : null;
+            const reid = hasReidentifiedModel(mi);
+            const effMeta = (reid && canonLower(old.meta?.model) !== canonLower(mi.name))
+              ? { ...old.meta, model: typeof Strength !== 'undefined' && Strength.canon ? Strength.canon(mi.name) : mi.name, confidence: null, score: ConversationLabels.sane(numeric(mi.reverseScore ?? mi.habitScore ?? mi.est?.score)) ?? null }
+              : old.meta;
+            e.localTitle=label({...effMeta,note:Notes.all[e.id]?.n??(old.meta.version===1?old.meta.note:'')});
+          }
+          continue;
+        }
         if(failures.get(e.id)?.title===title && failures.get(e.id)?.generation===generation)continue;
         try {
           const meta=validate(await TitleCipher.decrypt(e.id,title));

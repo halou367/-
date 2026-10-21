@@ -3,13 +3,13 @@
 const Strength = (() => {
   const TIER_LV = { none: 0, minimal: 1, low: 2, medium: 3, high: 4, xhigh: 5, max: 6 };
   const TIER_RE = /^(none|minimal|low|medium|high|xhigh|max)$/i;
-  const VEND_RE = /^(gpt|chatgpt|claude|gemini|grok|kimi|qwen|qwq|deepseek|mimo|glm|llama|mistral|doubao|minimax|o[134])$/i;
+  const VEND_RE = /^(gpt|chatgpt|claude|gemini|grok|kimi|qwen|qwq|deepseek|beam|mimo|glm|llama|muse|mistral|doubao|minimax|o[134])$/i;
   const codes = new Set(Store.get('str:codes', ['spirit', 'golem', 'dxzui']));
   const addCode = c => { c = String(c || '').toLowerCase(); if (c && !codes.has(c) && codes.size < 200) { codes.add(c); partsMemo.clear(); Store.set('str:codes', [...codes]); } };
   // canon / parts 是纯函数，侧栏每次重绘都对每张卡片算好几遍：记住结果（parts 依赖代号表，代号表变了清空）
   const canonMemo = new Map(), partsMemo = new Map();
   const memo = (m, k, f) => { let v = m.get(k); if (v === undefined) { v = f(); if (m.size > 6000) m.clear(); m.set(k, v); } return v; };
-  const clean = n => { n = noVertex(String(n || '')).trim().replace(/^(?:models|contenders)\//i, ''); return /\s/.test(n) ? n : n.replace(/-(agent|public|vertex)$/i, ''); };
+  const clean = n => { n = noVertex(String(n || '')).trim().replace(/^(?:models|contenders|meta)\//i, ''); return /\s/.test(n) ? n : n.replace(/-(agent|public|vertex)$/i, ''); };
   const vendorFirst = n => VEND_RE.test(clean(n).split(/[-_/ ]/)[0] || '');
   const isCode = n => { n = clean(n); return !!n && !Brand.of(n) && /^[a-z][a-z0-9]{2,15}$/i.test(n) && !TIER_RE.test(n); };
 
@@ -26,11 +26,11 @@ const Strength = (() => {
       const tr = parenTier[1].toLowerCase();
       const stem = n.slice(0, parenTier.index).trim().replace(/\s+/g, '-').toLowerCase();
       n = stem.endsWith('-' + tr) ? stem : (stem + '-' + tr);
-    } else if (/\s/.test(n) && /^(?:claude|opus|sonnet|haiku|fable|gpt|chatgpt|o[134]|gemini|grok|kimi|qwen|deepseek|glm|minimax|mimo|llama|mistral|solar)\b/i.test(n)) {
+    } else if (/\s/.test(n) && /^(?:claude|opus|sonnet|haiku|fable|gpt|chatgpt|o[134]|gemini|grok|kimi|qwen|deepseek|beam|glm|minimax|mimo|llama|muse|mistral|solar)\b/i.test(n)) {
       n = n.trim().replace(/\s+/g, '-').toLowerCase();
     }
     n = n.replace(/(\d)(none|minimal|low|medium|high|xhigh|max)\b/gi, '$1-$2');
-    n = foldVer(n); n = n.replace(/gpt-5\.6-luna/ig, 'gpt-6-luna').replace(/\bbarium-bb-v2-4xts(?:-(?:agent|public|vertex))?(?:-(low|medium|high|max))?\b/ig, (_, t) => 'gemini-4-argon-' + String(t || 'high').toLowerCase()); n = n.replace(/\s*[·•・#]\s*\d{1,4}\s*$/, '').replace(/[-_]0\d{2}$/, '').trim(); if (!n) return '';   // 旧版序号后缀：opus-5.5 · 001 / -002 → 同一个型号
+    n = foldVer(n); n = n.replace(/^muse(?:-(low|medium|high|xhigh|max))?$/i, (_, t) => 'muse-spark-1.3-' + String(t || 'max').toLowerCase()).replace(/gpt-5\.6-luna/ig, 'gpt-6-luna').replace(/\bbarium-bb-v2-4xts(?:-(?:agent|public|vertex))?(?:-(low|medium|high|max))?\b/ig, (_, t) => 'gemini-4-argon-' + String(t || 'high').toLowerCase()); n = n.replace(/\s*[·•・#]\s*\d{1,4}\s*$/, '').replace(/[-_]0\d{2}$/, '').trim(); if (!n) return '';   // 旧版序号后缀：opus-5.5 · 001 / -002 → 同一个型号
     n = n.replace(/-(none|minimal|low|medium|high|xhigh|max)(?:-\1)+$/i, '-$1');   // opus-5-high-high → opus-5-high（档位重复）
     n = n.replace(/-([a-z][a-z0-9]{0,14})(?:-\1)+$/i, '-$1');   // fable-5-v2-v2 → fable-5-v2（后缀重复；只处理字母开头的，5-5 这种版本号不动）
     const m = /^[\w.\/:@+-]{3,90}$/.test(n) && /^([a-z][a-z0-9]{2,15})[-_]+(.+)$/i.exec(n);   // 只处理像型号 ID 的名字（不含空格）
@@ -103,12 +103,13 @@ const Strength = (() => {
       const n = m?.name && !m.guess && !m.pendingConfirm ? canon(m.name) : '';
       if (!n || !Brand.of(n) || /\s/.test(n)) continue;
       if (!S[n]) { S[n] = []; add.add(n); }
-      const bp = typeof BillingProbe !== 'undefined' ? BillingProbe.summary?.(sid) : null;
       const saneSc = v => okScore(v) ? v : null;
-      const sc = (m.routed && okScore(m.reverseScore))
+      const fastSc = (m.routed && okScore(m.reverseScore))
         ? m.reverseScore
-        : (saneSc(bookScore(sid)) ?? (m.fingerprint && !m.fingerprint.skipped ? saneSc(m.fingerprint.reasoning?.score) : null) ?? saneSc(m.est?.score) ?? saneSc(m.reverseScore) ?? saneSc(m.habitScore) ?? reverseDepthScore(sid, m, bp, null));
-      const k = 'mdl:' + sid;
+        : (saneSc(bookScore(sid)) ?? (m.fingerprint && !m.fingerprint.skipped ? saneSc(m.fingerprint.reasoning?.score) : null) ?? saneSc(m.est?.score) ?? saneSc(m.reverseScore) ?? saneSc(m.habitScore));
+      const needBp = !okScore(fastSc) || Boolean(typeof Chats !== 'undefined' && Chats.get?.(sid)?.loaded);
+      const bp = (needBp && typeof BillingProbe !== 'undefined') ? BillingProbe.summary?.(sid) : null;
+      const sc = okScore(fastSc) ? fastSc : reverseDepthScore(sid, m, bp, null);
       for (const otherName of Object.keys(S)) {
         if (otherName === n || !Array.isArray(S[otherName])) continue;
         const prevLen = S[otherName].length;
@@ -383,11 +384,13 @@ const Strength = (() => {
         if (!entry) byModel.set(name, entry = { scores: [], usds: [], outs: [], secs: [], at: 0, n: 0 });
         entry.n++;
         if ((m.at || 0) > entry.at) entry.at = m.at || 0;
-        const bp = typeof BillingProbe !== 'undefined' ? BillingProbe.summary?.(sid) : null;
-        const sc = (m.routed && okScore(m.reverseScore))
-          ? m.reverseScore
-          : (bookScore(sid) ?? (m.fingerprint && !m.fingerprint.skipped ? m.fingerprint.reasoning?.score : null) ?? m.est?.score ?? m.reverseScore ?? reverseDepthScore(sid, m, bp, null));
-        if (okScore(sc)) entry.scores.push(sc);
+        const reidSc = m.reverseScore ?? m.habitScore;
+        const fastSc = ((m.routed || m.userCorrected || m.habitInferred || m.reverseInferred || m.billingProbe) && okScore(reidSc))
+          ? reidSc
+          : (bookScore(sid) ?? (m.fingerprint && !m.fingerprint.skipped ? m.fingerprint.reasoning?.score : null) ?? m.est?.score ?? reidSc);
+        const needBp = !okScore(fastSc) || Boolean(typeof Chats !== 'undefined' && Chats.get?.(sid)?.loaded);
+        const bp = (needBp && typeof BillingProbe !== 'undefined') ? BillingProbe.summary?.(sid) : null;
+        const sc = okScore(fastSc) ? fastSc : reverseDepthScore(sid, m, bp, null);
         const charged = bp?.payment?.chargedUsd ?? m.chargedUsd;
         if (charged > 0) entry.usds.push(charged);
         const outTok = bp?.preimage?.latest?.output ?? m.reverseTokens?.output;
@@ -406,6 +409,10 @@ const Strength = (() => {
     return maxAt || Date.parse('2026-10-16T06:00:00.000Z') || Date.now();
   }
   function board() {
+    const mCount = Object.keys(Models.all || {}).length;
+    const bKey = 'board|' + rev + '|' + mCount;
+    const cachedBoard = cache.get(bKey);
+    if (cachedBoard && (Date.now() - cachedBoard.at) < 8000) return cachedBoard.rows;
     const mScores = collectModelScores();
     const allNames = new Set([...Object.keys(S), ...mScores.keys()]);
     const rows = [...allNames].map(name => {
@@ -447,7 +454,9 @@ const Strength = (() => {
     }
     const famMax = new Map(); for (const r of rows) famMax.set(r.fk, Math.max(famMax.get(r.fk) ?? -1, r.score ?? -1));
     for (const r of rows) r.pos = position(r, rows);
-    return rows.sort((a, b) => ((b.score != null ? 1 : 0) - (a.score != null ? 1 : 0)) || b.ver - a.ver || famMax.get(b.fk) - famMax.get(a.fk) || (b.score ?? -1) - (a.score ?? -1) || (b.lv ?? -1) - (a.lv ?? -1) || a.fk.localeCompare(b.fk) || a.name.localeCompare(b.name));
+    const sortedRows = rows.sort((a, b) => ((b.score != null ? 1 : 0) - (a.score != null ? 1 : 0)) || b.ver - a.ver || famMax.get(b.fk) - famMax.get(a.fk) || (b.score ?? -1) - (a.score ?? -1) || (b.lv ?? -1) - (a.lv ?? -1) || a.fk.localeCompare(b.fk) || a.name.localeCompare(b.name));
+    cache.set(bKey, { at: Date.now(), rows: sortedRows });
+    return sortedRows;
   }
   // 代号（spirit / golem / dxzui …）在同型号常规档位里的位置：「≈ high」「介于 low 和 medium 之间」「高于 max」
   function position(r, rows) {
@@ -581,7 +590,7 @@ const Gold = {
     return this._set;
   },
   autoSet() {
-    if (!this._autoSet || Date.now() - this._autoAt > 15000) {
+    if (!this._autoSet || Date.now() - this._autoAt > 120000) {
       this._autoAt = Date.now();
       const s = new Set();
       try {
@@ -613,7 +622,14 @@ const Gold = {
   hasChat(sid) {
     if (!sid) return false;
     if (this.chatSet().has(sid)) return true;
-    if (this.restoredChats.has(sid) && !this.unmarkAt?.[sid]) return true;
+    if (this.restoredChats.has(sid) && !this.unmarkAt?.[sid]) {
+      const gp = this.restoredChats.get(sid);
+      const mi = typeof Models !== 'undefined' ? Models.get?.(sid) : null;
+      const curNm = mi?.name ? Strength.canon(mi.name) : '';
+      const gpNm = gp?.model ? Strength.canon(gp.model) : '';
+      if (gpNm && curNm && typeof Brand !== 'undefined' && Brand.of(curNm) && gpNm !== curNm && !this.isUnifiedGold(curNm)) return false;
+      return true;
+    }
     return false;
   },
   noteRestoredChat(sid, gp) {
@@ -645,9 +661,15 @@ const Gold = {
     if (typeof Fav !== 'undefined' && Fav.has(sid)) return true;
     if (this.hasChat(sid)) return true;
     const gp = typeof TitleCipher !== 'undefined' && TitleCipher.decodeGoldPrefix ? TitleCipher.decodeGoldPrefix(rawTitle) : null;
-    if (gp?.gold && !this.unmarkAt?.[sid]) return true;
     const mi = typeof Models !== 'undefined' ? Models.get(sid) : null;
-    const nm = Strength.canon(mi?.name || gp?.model || '');
+    const hasReidMi = Boolean(mi?.name && !mi.pendingConfirm && !/^(未识别|未知型号|待定)$/.test(String(mi.name).trim()) && (mi.userCorrected || mi.reverseInferred || mi.habitInferred || mi.billingProbe || !mi.guess));
+    if (gp?.gold && !this.unmarkAt?.[sid]) {
+      if (!hasReidMi) return true;
+      const miCanon = Strength.canon(mi.name);
+      if (miCanon && typeof Brand !== 'undefined' && Brand.of(miCanon)) return this.isUnifiedGold(miCanon);
+      return true;
+    }
+    const nm = Strength.canon((hasReidMi ? mi.name : '') || mi?.name || gp?.model || '');
     if (nm && typeof Brand !== 'undefined' && Brand.of(nm) && this.isUnifiedGold(nm)) return true;
     return false;
   },
@@ -724,6 +746,7 @@ const Gold = {
   },
 };
 Bus.on('prefs', () => { Gold._set = null; Gold._autoSet = null; });
+Bus.on('strength', () => { Gold._autoSet = null; });
 
 // 推理分排行（横排）：每个型号一行，各档位横着排；有推理分的档位上色，没有的灰色；点档位 = 点亮 / 熄灭金色
 const GoldBoard = {

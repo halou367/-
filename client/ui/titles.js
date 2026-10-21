@@ -3,7 +3,7 @@ const BRANA_LOGO = '<svg class=\"brana-logo\" aria-label=\"Brana\" viewBox=\"0 0
 
 // ---------- 本地备注 / 展示名 + 口令加密云端名称（旧明文格式仅读取兼容）----------
 // 本地展示 = 模型/月-日-时:分/备注；云端只上传 TitleCipher 认证加密英文单词。
-// · 只改备注；模型段跟着识别结果走，时间段 = 最近一次自己发送的时间，都由软件自动同步。
+// · 时间段与最后一条对话内容对齐：优先取助手回复完成时间，尚未完成时取最近发送时间。
 // · 本地立即显示；云端改名（PATCH /api/history/agentic/{id}）等这一轮结束、空闲 6 秒以上才在后台发，一次一个，
 //   失败按 30 秒 / 2 分钟 / 10 分钟重试，不弹窗。
 const NOTE_RE = /^(.*?)\/(\d{1,2}-\d{1,2}-\d{1,2}:\d{2})(?:\/([\s\S]*))?$/;
@@ -119,20 +119,51 @@ const Titles = {
     return ConversationLabels.label(null,m).slice(0,90);
   },
   known(sid) { const m = Models.get(sid); const hasValidName = !!(m?.name && !/^(未识别|未知型号|待定)$/.test(String(m.name).trim())); return !!(m && (!m.pendingConfirm || hasValidName) && (((!m.guess || m.habitInferred || m.reverseInferred || m.billingProbe || m.userCorrected) && hasValidName) || m.fingerprint)); },
+  latestAt(sid) {
+    const chat = typeof Chats !== 'undefined' ? Chats.get(sid) : null;
+    const toMs = v => {
+      const n = Number(v);
+      if (Number.isFinite(n) && n > 0) return n;
+      if (typeof v === 'string' && v.trim() && !/^\d+(?:\.\d+)?$/.test(v.trim())) { const d = Date.parse(v); return Number.isFinite(d) ? d : 0; }
+      return 0;
+    };
+    let messageAt = 0;
+    for (const m of (Array.isArray(chat?.messages) ? chat.messages : [])) {
+      const tm = m?.metadata?.timing || {};
+      const idAt = typeof idTime === 'function' ? idTime(m?.id) : 0;
+      messageAt = Math.max(messageAt, ...[tm.completedAt, m?._finishedAt, m?._sentAt, tm.startedAt, m?.createdAt, m?.created_at, m?.timestamp, m?.at, idAt].map(toMs));
+    }
+    const entry = typeof History !== 'undefined' ? History.byId?.(sid) : null;
+    const histAt = toMs(entry?.updatedAt || entry?.createdAt || 0);
+    return Math.max(messageAt, Number(chat?.endAt) || 0, Number(chat?.sentAt) || 0, histAt);
+  },
+  timeAt(sid, at = 0) { return Math.max(Number(at) || 0, this.latestAt(sid)); },
   want(sid) {
-    const n = Notes.all[sid]; if (!n) return '';
     const mi = Models.get(sid);
+    const hasReid = !!(mi?.name && !/^(未识别|未知型号|待定)$/.test(String(mi.name).trim()) && (mi.habitInferred || mi.reverseInferred || mi.billingProbe || mi.userCorrected));
+    const n = Notes.all[sid] || (hasReid ? Notes.rec(sid) : null); if (!n) return '';
     if (mi?.pendingConfirm && !(mi?.name && !/^(未识别|未知型号|待定)$/.test(String(mi.name).trim()))) return '';
     const head = (this.model(sid) || '未识别') + '/' + noteFmt(n.t || now());
     return n.n ? head + '/' + n.n : head;
   },
-  // 自己发了一条消息：记下时间（抽卡发的那一轮不算）
+  // 用户发送时先记发送时间；回合完成后用最后一条内容的完成时间校准。
   sent(sid, at) {
     if (!sid || Gacha.owns?.(sid)) return;
-    const ts = at || now();
-    const n = Notes.rec(sid, ts); n.t = ts; if(typeof TitleSync!=='undefined')TitleSync.dirty(sid); Notes.save();
+    const ts = this.timeAt(sid, at || now());
+    const n = Notes.rec(sid, ts); if (n) n.t = Math.max(Number(n.t) || 0, ts);
+    if(typeof TitleSync!=='undefined')TitleSync.dirty(sid); Notes.save();
     if (typeof Tabs !== 'undefined' && Tabs.touchSid) try { Tabs.touchSid(sid, ts); } catch {}
     this.local(sid); this.kick();
+  },
+  // A turn's displayed date follows the completed assistant/content timestamp.
+  completed(sid, at) {
+    if (!sid) return;
+    const ts = this.timeAt(sid, at || now());
+    const n = Notes.rec(sid, ts); if (n) n.t = Math.max(Number(n.t) || 0, ts);
+    if (typeof TitleSync !== 'undefined') TitleSync.dirty(sid);
+    Notes.save();
+    if (typeof Tabs !== 'undefined' && Tabs.touchSid) try { Tabs.touchSid(sid, ts); } catch {}
+    this.local(sid); this.kick(800);
   },
   // 识别出（或换了）模型：已接管的对话更新模型段
   // 识别 / 校准指纹后：这个对话优先同步，不等全局空闲，也不排在批量迁移后面
@@ -140,7 +171,11 @@ const Titles = {
     if (!sid) return;
     const mi = Models.get(sid);
     if (mi?.pendingConfirm && !(mi?.name && !/^(未识别|未知型号|待定)$/.test(String(mi.name).trim()))) { UI.renderListSoon?.(); UI.renderTabs?.(); return; }
-    this.prio.add(sid); if (!Notes.owns(sid)) Notes.rec(sid); if(typeof TitleSync!=='undefined')TitleSync.dirty(sid); Notes.save(); this.local(sid); this.kick();
+    this.prio.add(sid);
+    const n = Notes.owns(sid) ? Notes.all[sid] : Notes.rec(sid);
+    if (n) { delete n.modelData; delete n.modelStamp; }
+    if (typeof TitleSync !== 'undefined') TitleSync.dirty(sid);
+    Notes.save(); this.local(sid); this.kick();
   },
   capture(sid,at) {
     if(!sid)return;
@@ -149,7 +184,8 @@ const Titles = {
       this.local(sid);
       return;
     }
-    const n=Notes.rec(sid,at);if(at)n.t=at;
+    const ts = this.timeAt(sid, at || 0);
+    const n=Notes.rec(sid,ts || undefined); if (ts) n.t=Math.max(Number(n.t)||0,ts);
     if (isGoldOrFav) this.prio.add(sid);
     TitleSync.dirty(sid);Notes.save();this.local(sid);
     this.kick(this.prio.has(sid) ? 1200 : 6500);
@@ -158,9 +194,16 @@ const Titles = {
   local(sid) {
     if (!sid) return;
     if (!Notes.owns(sid) && this.known(sid)) { Notes.rec(sid); Notes.save(); }
+    const n = Notes.all[sid];
+    if (n) { const ts = this.timeAt(sid, n.t || 0); if (ts > (Number(n.t) || 0)) { n.t = ts; Notes.save(); } }
     const want = this.want(sid); if (!want) return;
-    const e = History.byId(sid); if (e && e.title !== want) { e.localTitle = want; }
+    const e = History.byId(sid); if (e) { e.localTitle = want; }
+    const c = typeof Chats !== 'undefined' ? Chats.get(sid) : null;
+    if (c) { c.localTitle = want; }
     UI.renderListSoon?.(); UI.renderTabs?.();
+    if (typeof UI !== 'undefined' && UI.els?.chat?.sid === sid && typeof UI.renderChat === 'function') {
+      try { UI.renderChat(UI.els.chat, false); } catch {}
+    }
   },
   kick(ms = 6500) { if (ms === true) ms = 400; clearTimeout(this.t); this.t = setTimeout(() => this.tick(), ms); },   // kick(true) = 尽快（以前 true 被当成 1ms 且必须等 6 秒全局空闲，导致校准后名称迟迟不更新）
   idle() {
@@ -227,19 +270,21 @@ const Titles = {
       if (gp.fav && typeof Fav !== 'undefined' && !Fav.has(sid) && !(Fav.unfavAt && Fav.unfavAt[sid])) Fav.setQuiet(sid, true);
       if (gp.gold && typeof Gold !== 'undefined' && Gold.noteRestoredChat) Gold.noteRestoredChat(sid, gp);
     }
-    const e = sid ? History.byId(sid) : null, raw0 = (e && (e.localTitle || e.title)) || Chats.get(sid)?.title || fallback || '';
+    const e = sid ? History.byId(sid) : null, raw0 = (e && (e.localTitle || e.title)) || Chats.get(sid)?.localTitle || Chats.get(sid)?.title || fallback || '';
     const raw = (typeof TitleCipher !== 'undefined' && TitleCipher.isGoldPrefixed?.(raw0)) ? (TitleCipher.stripGoldPrefix(raw0) || '新对话') : raw0;
     const sp = splitNote(raw), mi = sid ? Models.get(sid) : null;
     const note = sid ? Notes.get(sid) || sp.note : sp.note;
     const hasValidMiName = !!(mi?.name && !/^(未识别|未知型号|待定)$/.test(String(mi.name).trim()));
+    const hasReidMi = !!(hasValidMiName && !mi?.pendingConfirm && (mi?.habitInferred || mi?.reverseInferred || mi?.billingProbe || mi?.userCorrected || !mi?.guess));
+    const isGoldNow = !!(sid && typeof Gold !== 'undefined' && typeof Gold.isChatGold === 'function' ? Gold.isChatGold(sid, cloudTitle) : (gp?.gold || (sid && typeof Gold !== 'undefined' && Gold.hasChat?.(sid))));
     if (mi?.pendingConfirm && !hasValidMiName && !gp?.model) {
-      return { vid: '', model: '', pendingConfirm: true, note, time: sp.time, title: raw, plain: '请继续沟通', gold: !!(gp?.gold || (sid && typeof Gold !== 'undefined' && Gold.hasChat?.(sid))) };
+      return { vid: '', model: '', pendingConfirm: true, note, time: sp.time, title: raw, plain: '请继续沟通', gold: isGoldNow };
     }
     const meta=sid&&typeof TitleSync!=='undefined'?(TitleSync.build(sid)||TitleSync.restored(sid)):null;
     const validMeta = (meta && meta.model && !/^(未识别|未知型号|待定)$/.test(String(meta.model).trim())) ? meta : null;
-    const model = validMeta ? TitleSync.modelLabel(validMeta) : (gp?.model ? ConversationLabels.format({ name: gp.model, confidence: null, score: gp.score ?? null }) : (!hasValidMiName&&typeof TitleCipher!=='undefined'&&TitleCipher.isEncoded(raw)?'加密名称（待解码）':ConversationLabels.label(mi,sp.composite?sp.base:raw)));
+    const model = validMeta ? TitleSync.modelLabel(validMeta) : (hasReidMi ? ConversationLabels.label(mi, sp.composite ? sp.base : raw) : (gp?.model ? ConversationLabels.format({ name: gp.model, confidence: null, score: gp.score ?? null }) : (!hasValidMiName&&typeof TitleCipher!=='undefined'&&TitleCipher.isEncoded(raw)?'加密名称（待解码）':ConversationLabels.label(mi,sp.composite?sp.base:raw))));
     const vid = Brand.of(model) || Brand.of(sp.base) || '';
-    return { vid, model: model || '', note, time: sp.time, title: raw, plain: !model ? ConversationLabels.label(null, sp.composite ? sp.base : raw) : '', gold: !!(gp?.gold || (sid && typeof Gold !== 'undefined' && Gold.hasChat?.(sid))) };
+    return { vid, model: model || '', note, time: sp.time, title: raw, plain: !model ? ConversationLabels.label(null, sp.composite ? sp.base : raw) : '', gold: isGoldNow };
   },
 };
 setInterval(() => Titles.tick(), 5000);
@@ -301,9 +346,14 @@ const LocalCache = {
     }
     try { Drafts.dropChats(list); } catch {}
     if (archived) return list.length;
-    let dm = false;
-    for (const sid of list) { if (Models.all[sid]) { delete Models.all[sid]; dm = true; } try { Notes.drop(sid); Fav.setQuiet?.(sid, false); } catch {} }
+    let dm = false, dt = false;
+    for (const sid of list) {
+      if (Models.all[sid]) { delete Models.all[sid]; dm = true; }
+      if (typeof AcctStats !== 'undefined' && AcctStats.turns && AcctStats.turns[sid]) { delete AcctStats.turns[sid]; dt = true; }
+      try { Notes.drop(sid); Fav.setQuiet?.(sid, false); } catch {}
+    }
     if (dm) Store.set('models', Models.all);
+    if (dt) try { AcctStats.save?.(); } catch {}
     try { Strength.bookDrop(list); } catch {}
     try { PelicanTest.drop(list); } catch {}
     try { Budget.drop(list); } catch {}

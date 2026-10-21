@@ -281,17 +281,17 @@ const NodeRoutes = (() => {
     }
     // Stream completed IPs immediately. Mutations re-check the current job INSIDE the write queue.
     async function probeMany(keys,link,onPart,j){
-      const modern=!!(Host.onProbeProgress&&P.streamProbe),size=modern?32:4,q=[];
+      const modern=!!(Host.onProbeProgress&&P.streamProbe),size=modern?16:4,q=[];
       for(let i=0;i<keys.length;i+=size)q.push(keys.slice(i,i+size));let fatal='';
       const worker=async()=>{while(q.length&&!fatal&&workLive(j)){
         const part=q.shift(),seen=new Set(),sources=new Map(part.map(k=>[k,P.d?.ips?.[k]?.src||'']));
         const receive=async(k,r)=>{
           if(!workLive(j)||seen.has(k)||!part.includes(k))return;seen.add(k);
-          await P.mutate(d=>{const e=d.ips[k];if(workLive(j)&&e&&!e.gone&&(e.src||'')===sources.get(k)&&!(d.drop?.[k]>j.started)&&!P.banned?.(k)){P.apply(d,k,r);if(typeof IPRep!=='undefined'&&!IPRep.trusted?.(k)&&(IPRep.impure?IPRep.impure(k,e):IPRep.risky?.(k,e)))P.banForever?.(d,k,'非纯净（一般/高风险） · 已永久拉黑');}});
+          await P.mutate(d=>{const e=d.ips[k];if(workLive(j)&&e&&!e.gone&&(e.src||'')===sources.get(k)&&!(d.drop?.[k]>j.started)&&!P.banned?.(k)){P.apply(d,k,r);if(typeof IPRep!=='undefined'&&!IPRep.trusted?.(k)&&IPRep.risky?.(k,e))P.banForever?.(d,k,'高风险 · 已永久拉黑');}});
           if(!workLive(j))return;pipBusy.delete(k);j.done++;if(!(r.ip&&r.brana))j.failed++;onPart?.([k],[r]);paintPoolSoon();
         };
-        const args={link,timeout:9000,signal:j.ctl.signal,cancelled:()=>!workLive(j),onItem:receive,onStage:stage=>{if(workLive(j)&&j.phase!=='probing'){j.phase=stage;paintWork();}}};
-        const r=P.streamProbe?await P.streamProbe(part,args):await Host.probe({link,pips:part,timeout:9000}).catch(e=>({error:String(e?.message||e)}));
+        const args={link,timeout:12000,signal:j.ctl.signal,cancelled:()=>!workLive(j),onItem:receive,onStage:stage=>{if(workLive(j)&&j.phase!=='probing'){j.phase=stage;paintWork();}}};
+        const r=P.streamProbe?await P.streamProbe(part,args):await Host.probe({link,pips:part,timeout:12000}).catch(e=>({error:String(e?.message||e)}));
         if(!workLive(j))return;
         if(r?.cancelled){fatal=r.error||'检测已取消';return;}
         if(Array.isArray(r)){for(const k of part)await receive(k,r.find(x=>x.pip===k)||{error:'未返回检测结果'});}
@@ -414,6 +414,9 @@ const NodeRoutes = (() => {
       if(!/^vless:/i.test(c?.proxy||'')||typeof IPRep==='undefined'||!IPRep.vet)return '';
       const targetPip=String(c?.proxyIp||'').trim()||(typeof Vless!=='undefined'&&Vless.proxyIpOf?String(Vless.proxyIpOf((()=>{try{return Vless.parse(c.proxy)?.path||'';}catch{return '';}})())||'').trim():'')||String(x?.ip||'').trim();
       if(!targetPip)return '';
+      if(x?.ip&&(x.pure||x.ipa)&&typeof Pool!=='undefined'&&Pool.mutate){
+        try{await Pool.mutate(d=>{if(x.pure)IPRep.putPu?.(d,x.ip,x.pure);if(x.ipa)IPRep.putIpa?.(d,x.ip,x.ipa);});}catch{}
+      }
       say?.('评估出口 IP 纯净度…');
       try{const v=await IPRep.vet(targetPip,x?.ip);if(!v.ok)return v.error;}catch{}
       return '';

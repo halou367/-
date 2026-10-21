@@ -64,6 +64,15 @@ const ThinkingStatus = (() => {
     const rawMsgs = Array.isArray(chat.messages) ? [...chat.messages] : [];
     if (chat.live && !rawMsgs.includes(chat.live)) rawMsgs.push(chat.live);
     const asstMsgs = rawMsgs.filter(m => m && m.role === 'assistant');
+    const curM = chat.sid && typeof Models !== 'undefined' ? Models.get(chat.sid) : null;
+    if (curM?.name && curM.name !== '开源模型' && !/开源|compat|qwen|deepseek|glm|kimi|minimax|llama|mistral|nemotron|inkling|beam|caveman|gemma/i.test(curM.name) && !curM.guess) {
+      sawClosed = true;
+    }
+    if (asstMsgs.length > 1) {
+      const firstAsst = asstMsgs[0];
+      const firstVisible = (firstAsst?.parts || []).some(p => p?.type === 'reasoning' && visible(p));
+      if (!firstVisible && !firstAsst?.metadata?.openThinkStopped) sawClosed = true;
+    }
     const nonStopped = asstMsgs.filter(m => !isStoppedMsg(m));
     const msgs = nonStopped.length ? nonStopped : asstMsgs;
     for (const m of msgs) {
@@ -79,10 +88,17 @@ const ThinkingStatus = (() => {
       }
       if (mHasVisible && !closedByApi && !sawClosed) {
         try {
-          if (chat.sid && !chat._closedLockedModel && typeof BillingProbe !== 'undefined' && typeof BillingProbe.markAsOpenSourceModel === 'function') {
+          if (chat.sid && !chat._closedLockedModel && !chat._openSourceMarked && !chat._openSourceMarking && typeof BillingProbe !== 'undefined' && typeof BillingProbe.markAsOpenSourceModel === 'function') {
             const curM = typeof Models !== 'undefined' ? Models.get(chat.sid) : null;
-            if (!curM || (!curM.userCorrected && !curM.manualOpenInferred && curM.name !== '开源模型')) {
-              BillingProbe.markAsOpenSourceModel(chat);
+            const isAlreadyOpenMarked = Boolean(curM && (curM.userCorrected || curM.manualOpenInferred || curM.name === '开源模型' || curM.reverseCandidateId === 'open-source' || curM.provider === '开源思考识别（免计费反推）' || curM.provider === '开源思考过滤'));
+            if (!isAlreadyOpenMarked) {
+              chat._openSourceMarking = true;
+              queueMicrotask(() => {
+                try { BillingProbe.markAsOpenSourceModel(chat); chat._openSourceMarked = true; } catch {}
+                finally { chat._openSourceMarking = false; }
+              });
+            } else {
+              chat._openSourceMarked = true;
             }
           }
         } catch {}
@@ -96,10 +112,17 @@ const ThinkingStatus = (() => {
         (ids.length > 0 && ids.every(i => /^\d+$/.test(i)) && /^\s*\*\*[^\n*]{2,80}\*\*/.test(String(f?.rHead || '')));
       if (!isClosedFmt) {
         try {
-          if (chat.sid && !chat._closedLockedModel && typeof BillingProbe !== 'undefined' && typeof BillingProbe.markAsOpenSourceModel === 'function') {
+          if (chat.sid && !chat._closedLockedModel && !chat._openSourceMarked && !chat._openSourceMarking && typeof BillingProbe !== 'undefined' && typeof BillingProbe.markAsOpenSourceModel === 'function') {
             const curM = typeof Models !== 'undefined' ? Models.get(chat.sid) : null;
-            if (!curM || (!curM.userCorrected && !curM.manualOpenInferred && curM.name !== '开源模型')) {
-              BillingProbe.markAsOpenSourceModel(chat);
+            const isAlreadyOpenMarked = Boolean(curM && (curM.userCorrected || curM.manualOpenInferred || curM.name === '开源模型' || curM.reverseCandidateId === 'open-source' || curM.provider === '开源思考识别（免计费反推）' || curM.provider === '开源思考过滤'));
+            if (!isAlreadyOpenMarked) {
+              chat._openSourceMarking = true;
+              queueMicrotask(() => {
+                try { BillingProbe.markAsOpenSourceModel(chat); chat._openSourceMarked = true; } catch {}
+                finally { chat._openSourceMarking = false; }
+              });
+            } else {
+              chat._openSourceMarked = true;
             }
           }
         } catch {}

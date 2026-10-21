@@ -30,20 +30,20 @@ const EnvCheck = {
       this.hiddenAt = 0;
     });
   },
-  // ---- 顶部小胶囊 ----
-  chip() {
+  // ---- 顶部小胶囊（后台自动自检默认静默，不弹出悬浮胶囊遮挡界面） ----
+  chip(silent = true) {
     this.el?.remove();
     const ring = h('i', { class: 'ec-ring' }), title = h('b', {}, '网络自检'), text = h('small', {}, '正在连接…'),
       dots = h('span', { class: 'ec-dots' }, ...['net', 'pure'].map(k => h('i', { 'data-k': k }))),
       bar = h('span', { class: 'ec-bar' }, h('i')), acts = h('span', { class: 'ec-acts' }),
       x = h('button', { type: 'button', class: 'ec-x', 'aria-label': '关闭', onclick: () => c.close() }, '×');
     const el = h('div', { class: 'ecap', role: 'status', 'aria-live': 'polite' }, ring, h('span', { class: 'ec-tx' }, h('span', { class: 'ec-hd' }, title, dots), text), acts, x, bar);
-    this.el = el;
+    this.el = silent ? null : el;
     let pct = 4, cap = 30, shown = false, timer = 0;
-    const fill = bar.firstChild, tick = setInterval(() => { if (pct < cap - 1) { pct += Math.max(0.3, (cap - pct) / 22); fill.style.width = pct + '%'; } }, 120);
+    const fill = bar.firstChild, tick = silent ? 0 : setInterval(() => { if (pct < cap - 1) { pct += Math.max(0.3, (cap - pct) / 22); fill.style.width = pct + '%'; } }, 120);
     const c = {
       el,
-      show() { if (shown || !el) return; shown = true; document.body.append(el); requestAnimationFrame(() => el.classList.add('in')); },
+      show() { if (silent || shown || !el) return; shown = true; document.body.append(el); requestAnimationFrame(() => el.classList.add('in')); },
       step(k, st, t, p) {
         el.querySelector(`.ec-dots i[data-k="${k}"]`).className = st;
         if (t != null) text.textContent = t;
@@ -52,11 +52,12 @@ const EnvCheck = {
       say(t) { text.textContent = t; },
       finish(cls, head, t, stay) {
         clearInterval(tick); clearTimeout(timer);
+        if (silent) { c.close(); return; }
         el.classList.add('done', cls); title.textContent = head; text.textContent = t; fill.style.width = '100%';
         this.show(); if (stay) return;
         timer = setTimeout(() => c.close(), cls === 'ok' ? 1800 : 6000);
       },
-      actions(list) { acts.replaceChildren(...list.map(([t, fn]) => h('button', { type: 'button', class: 'ec-btn', onclick: fn }, t))); },
+      actions(list) { if (!silent) acts.replaceChildren(...list.map(([t, fn]) => h('button', { type: 'button', class: 'ec-btn', onclick: fn }, t))); },
       close() { clearInterval(tick); clearTimeout(timer); el.classList.add('out'); setTimeout(() => el.remove(), 260); if (EnvCheck.el === el) EnvCheck.el = null; },
     };
     return c;
@@ -72,7 +73,7 @@ const EnvCheck = {
     if (!opt.force && (window.__ANC_FAST_RETURN || (this.last.ok && this.last.key === k && now() - this.last.at < 30 * 60e3) || (typeof NetHealth !== 'undefined' && NetHealth.recent()))) {
       return { ok: true, cached: true };
     }
-    const c = this.chip(), lazy = setTimeout(() => { if (alive()) c.show(); }, 600);
+    const c = this.chip(!opt.manual && !opt.showUI), lazy = setTimeout(() => { if (alive()) c.show(); }, 600);
     const t0 = now();
     try {
       // ① 连通：节点是根基。用原生内核测 generate_204（不经 WebView，不会被页面里的长连接挤占而误报超时）。
@@ -85,20 +86,26 @@ const EnvCheck = {
       if (vl) {
         try { await Nodes.load(); } catch {}
         batch = NodeSpeed.test(Nodes.list, { timeout: 2200 });   // 只测过期的；后台继续，不等
-        let r = NodeSpeed.get(a.proxy); if (!(r?.ok && now() - (r.at || 0) < 180e3)) r = null;
+        const hasPip = Boolean(String(a.proxyIp || '').trim());
+        let r = !hasPip ? NodeSpeed.get(a.proxy) : null; if (!(r?.ok && now() - (r.at || 0) < 180e3)) r = null;
         if (!r && ((IP.ip && !IP.err && now() - IP.at < 30000) || NetHealth.recent())) {
           r = { ok: true, ms: IP.rtt > 0 ? IP.rtt : 0 };
         }
         if (!r) {
           c.say('测试节点 ' + nodeName() + '…');
           const pollFast = (!(IP.ip && !IP.err && now() - IP.at < 15000)) ? IP.poll().then(() => (!IP.err && IP.ip) ? { ok: true, ms: IP.rtt || (now() - t0) } : null).catch(() => null) : Promise.resolve(null);
-          const speedFast = NodeSpeed.testOne(a.proxy, { rounds: 1, timeout: 2200 }).catch(() => null);
-          r = await Promise.race([
-            speedFast.then(x => x?.ok ? x : pollFast),
-            pollFast.then(x => x?.ok ? x : speedFast),
-            sleep(2800).then(() => null),
-          ]);
-          if (!r) { const g = NodeSpeed.get(a.proxy); r = g && now() - (g.at || 0) < 60e3 ? g : null; }
+          if (hasPip) {
+            void NodeSpeed.testOne(a.proxy, { rounds: 1, timeout: 2200 }).catch(() => null);
+            r = await Promise.race([pollFast, sleep(3500).then(() => null)]);
+          } else {
+            const speedFast = NodeSpeed.testOne(a.proxy, { rounds: 1, timeout: 2200 }).catch(() => null);
+            r = await Promise.race([
+              speedFast.then(x => x?.ok ? x : pollFast),
+              pollFast.then(x => x?.ok ? x : speedFast),
+              sleep(2800).then(() => null),
+            ]);
+            if (!r) { const g = NodeSpeed.get(a.proxy); r = g && now() - (g.at || 0) < 60e3 ? g : null; }
+          }
         }
         ok = !!r?.ok || (!IP.err && !!IP.ip && now() - IP.at < 15000); nodeMs = ok ? (r?.ms || IP.rtt || 0) : 0;
         if (!ok && NetHealth.recent()) ok = true;   // 对话请求刚成功过：线路显然是通的
@@ -128,6 +135,10 @@ const EnvCheck = {
         c.step('net', 'bad');
         c.finish('bad', vl ? '节点不通' : '网络不通', (vl ? '所有节点都没有测通' : (IP.err || '没有返回出口 IP')) + (opt.failover !== false ? '；已尝试自动切换' : ''), true);
         c.actions([['重试', () => void this.go({ ...opt, force: true })], ['地区 IP', () => { c.close(); try { RegionIP.open(); } catch {} }]]);
+        if (!window.__routeFixture && !window.__fixture && typeof RegionIP !== 'undefined' && !RegionIP.view) {
+          try { if (typeof UI !== 'undefined' && !UI.authed && typeof UI.enterBrowseMode === 'function') UI.enterBrowseMode(); } catch {}
+          try { RegionIP.open({ offlineAlert: true }); } catch {}
+        }
         this.saveLast({ key: k, at: now(), ok: false });
         return { ok: false };
       }

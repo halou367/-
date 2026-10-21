@@ -1479,12 +1479,22 @@
       }
     }
 
+    const evAvgChunk = Number(ev.avgChunk) || 0;
+    const isConfirmedOpenAiTc = ev.streamIdPrefix === 'openai-tc-empty' && (evAvgChunk === 0 || evAvgChunk <= 3.8);
+    const isConfirmedClaudeTc = ev.streamIdPrefix === 'claude-tc-empty' || (ev.streamIdPrefix === 'openai-tc-empty' && evAvgChunk >= 4.0 && evAvgChunk <= 28.0);
     if (!isOpenThinking && ev.streamIdPrefix === 'openai-rs') {
       if (proto === 'openai') matchedDims.push('SSE流ID:msg_/rs_(OpenAI)');
       else hardPen += 0.35;
-    } else if (!isOpenThinking && ev.streamIdPrefix === 'openai-tc-empty') {
+    } else if (!isOpenThinking && isConfirmedClaudeTc) {
+      if (proto === 'claude' || proto === 'anthropic') {
+        matchedDims.push('SSE思考块:tc_中等词块流(Anthropic特征)');
+        softPen -= 0.0045;
+      } else {
+        softPen += 0.0120;
+      }
+    } else if (!isOpenThinking && isConfirmedOpenAiTc) {
       if (proto === 'openai') {
-        matchedDims.push('SSE思考块:tc_加密隐藏(OpenAI特征)');
+        matchedDims.push('SSE思考块:tc_极碎流块(OpenAI特征)');
         softPen -= 0.0025;
       } else {
         softPen += 0.0060;
@@ -1508,7 +1518,7 @@
       ((t.stepCount || 1) >= 2 && (t.W || 0) === 0 && t.R > 0 && (t.R / (t.stepCount || 1)) >= 5500 && (t.R / (t.stepCount || 1)) <= 9200 && !/barium|argon|gemini/i.test(id))
     ));
     const evToolFamEarly = String(ev.toolFamily || '').toLowerCase();
-    const isOpenAiWireId = ev.streamIdPrefix === 'openai-rs' || ev.streamIdPrefix === 'openai-tc-empty';
+    const isOpenAiWireId = ev.streamIdPrefix === 'openai-rs' || isConfirmedOpenAiTc;
     let hasAstraOpenAiPrefix = false;
     let hasClaudeWarm12kPrefix = false;
     let maxAstraUTok = 0;
@@ -1535,11 +1545,11 @@
         hasClaudeWarm12kPrefix = true;
       }
     }
-    const isZeroCwAstraSession = !hasRowCW && evToolFamEarly !== 'claude' && evToolFamEarly !== 'anthropic' && !hasClaudeWarm12kPrefix && (
+    const isZeroCwAstraSession = !hasRowCW && !isConfirmedClaudeTc && evToolFamEarly !== 'claude' && evToolFamEarly !== 'anthropic' && !hasClaudeWarm12kPrefix && (
       hasAstraOpenAiPrefix || rows.length >= 2 || maxAstraUTok >= 150 || ev.hasPelicanSvg === true || isOpenAiWireId || evToolFamEarly === 'openai' || evToolFamEarly === 'gpt'
     );
-    const hasOpenAiBillingEvidence = !hasRowCW && (hasExact6603Turn || hasRow6603OpenAiPrefix || hasAstraOpenAiPrefix || isZeroCwAstraSession || isOpenAiWireId || evToolFamEarly === 'openai' || evToolFamEarly === 'gpt');
-    const hasClaudeBillingEvidence = hasRowCW || evToolFamEarly === 'claude' || evToolFamEarly === 'anthropic' || hasClaudeWarm12kPrefix;
+    const hasOpenAiBillingEvidence = !hasRowCW && !isConfirmedClaudeTc && (hasExact6603Turn || hasRow6603OpenAiPrefix || hasAstraOpenAiPrefix || isZeroCwAstraSession || isOpenAiWireId || evToolFamEarly === 'openai' || evToolFamEarly === 'gpt');
+    const hasClaudeBillingEvidence = hasRowCW || isConfirmedClaudeTc || evToolFamEarly === 'claude' || evToolFamEarly === 'anthropic' || hasClaudeWarm12kPrefix;
 
     if (isOpenThinking) {
       if (isClosedModel || (!isOpenModel && rawModel.supportsReasoning === false) || /barium|argon/i.test(id)) {
@@ -1551,10 +1561,12 @@
       if (isOpenModel || rawModel.supportsReasoning === false || /barium|argon/i.test(id)) {
         hardPen += 0.85;
       } else {
-        if (ev.reasoningSignature === 'markers-only' || (ev.reasoningSignature === 'empty-deltas' && (isOpenAiWireId || (hasOpenAiBillingEvidence && !hasClaudeBillingEvidence)))) {
+        const effMarkersOnly = (ev.reasoningSignature === 'markers-only' && !isConfirmedClaudeTc && (isOpenAiWireId || !(evAvgChunk >= 4.0 && evAvgChunk <= 28.0))) || (ev.reasoningSignature === 'empty-deltas' && (isOpenAiWireId || (hasOpenAiBillingEvidence && !hasClaudeBillingEvidence)));
+        const effEmptyDeltas = ev.reasoningSignature === 'empty-deltas' || isConfirmedClaudeTc;
+        if (effMarkersOnly) {
           if (proto === 'openai') matchedDims.push('思考流:markers-only(OpenAI)');
-          else if (!hasClaudeBillingEvidence) hardPen = Math.max(hardPen, /claude-fable-5\.1/i.test(id) ? 0.14 : 0.22);
-        } else if (ev.reasoningSignature === 'empty-deltas') {
+          else if (!hasClaudeBillingEvidence && isOpenAiWireId) hardPen = Math.max(hardPen, /claude-fable-5\.1/i.test(id) ? 0.14 : 0.22);
+        } else if (effEmptyDeltas) {
           if (proto === 'claude') matchedDims.push('思考流:empty-deltas(Claude)');
           else if (!hasOpenAiBillingEvidence) hardPen = Math.max(hardPen, /gpt-6-astra/i.test(id) ? 0.14 : 0.22);
         }

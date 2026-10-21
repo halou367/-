@@ -88,30 +88,30 @@ const IPRep = {
     const m = this._memo.get(memoKey); if (m) return m;
     const q = d.rq?.[eg] || (host ? d.rq?.[host] : null);
     const hasPu = Boolean(p.pu && Number.isFinite(+p.pu.fs));
+    const hasCleanPu = Boolean(hasPu && +p.pu.fs < 25);
+    const isCloudIsp = /\b(?:akamai|linode|digitalocean|vultr|constant company|choopa|hetzner|ovh|oracle|amazon|aws|google cloud|microsoft|azure|cloudflare|alibaba|aliyun|tencent|aceville|6 collyer quay|huawei|contabo|fornex|ionos|kagoya|webhorizon|cyberverse|brainoza|eurohoster|virterion|kaopu|light\s*node|scaleway|leaseweb|m247|datacamp|cdn77|zenlayer|dmit|veesp|trabia|baxet|waicore|trunk networks|hostkey|timeweb|racknerd|hostpapa|alphavps|livi hosting|terratransit|rocketcloud|hosting|hoster|datacenter|data\s*center|server|vps|cloud|colocation|dedicated)\b/i.test((p.isp || '') + ' ' + (p.pu?.org || ''));
+    const isHosting = Boolean(p.h || p.pu?.dc || isCloudIsp);
     let s = 100, known = false; const why = ['出口 ' + eg];
     if (p.a) {
       known = true;
-      if (p.px) { s -= 35; why.push('−35 IP 库标记为代理 / VPN 出口'); if (p.h) { s -= 15; why.push('−15 机房公开代理（极易触发人机验证）'); } }
-      if (p.h) { s -= 8; why.push('−8 机房 IP' + (p.isp ? '（' + p.isp + '）' : '')); }
+      if (p.px && !hasCleanPu) { s -= 35; why.push('−35 IP 库标记为代理 / VPN 出口'); if (isHosting) { s -= 15; why.push('−15 机房公开代理（极易触发人机验证）'); } }
+      if (isHosting && !hasCleanPu) { s -= 8; why.push('−8 机房 / 云厂商 IP' + (p.isp ? '（' + p.isp + '）' : '')); }
       else why.push((p.m ? '移动网络' : '家宽 / 企业网络') + (p.isp ? '（' + p.isp + '）' : ''));
     }
     if (p.c) {
       known = true;
-      const r = Math.max(0, Math.min(100, +p.r || 0)), pen = r > 33 ? Math.round((r - 33) * 0.9) : 0;
+      const r = Math.max(0, Math.min(100, +p.r || 0)), rawPen = r > 33 ? Math.round((r - 33) * 0.9) : 0, pen = hasCleanPu && r <= 75 ? Math.min(10, rawPen) : rawPen;
       s -= pen; why.push((pen ? '−' + pen + ' ' : '') + '风险值 ' + r + '/100' + (p.pt ? '（' + p.pt + '）' : ''));
-      if (p.pp && /tor|compromised|socks|http|inference|proxy/i.test(p.pt || '')) { s -= 25; why.push('−25 公开代理 / 被入侵的设备'); }
-      else if (p.pp) { s -= 20; why.push('−20 代理 / VPN 出口' + (p.pt ? '（' + p.pt + '）' : '')); }
-    }
-    // 机房 IP（h=true）若尚未拿到 IPPure 隧道实测评分（pu.fs），绝不能仅凭 ip-api 或 proxycheck 标成「≥75 纯净」
-    if (p.h && !hasPu) {
-      if (!p.c && !p.px) {
-        known = false;
-        s = Math.min(s, 68);
-        why.push('机房 IP 尚未完成 IPPure 隧道复核（不作为纯净候选）');
-      } else if (s >= this.PURE) {
-        s = 68;
-        why.push('机房 IP 未经 IPPure 确认纯净（封顶 68 分）');
+      if (!(hasCleanPu && r <= 75)) {
+        if (p.pp && /tor|compromised|socks|http|inference|proxy/i.test(p.pt || '')) { s -= 25; why.push('−25 公开代理 / 被入侵的设备'); }
+        else if (p.pp) { s -= 20; why.push('−20 代理 / VPN 出口' + (p.pt ? '（' + p.pt + '）' : '')); }
       }
+    }
+    // IPv6 隧道出口或机房/云厂商 IP 若尚未拿到 IPPure 或复核评分，绝不能仅凭 ip-api 标成「≥75 纯净」
+    if ((eg.includes(':') || isHosting) && !hasPu && !p.c && !p.px) {
+      known = false;
+      s = Math.min(s, 68);
+      why.push((eg.includes(':') ? 'IPv6 出口' : '机房 / 云厂商 IP') + '尚未完成 IPPure 隧道复核（不作为纯净候选）');
     }
     // IPPure（经同一条隧道查「调用方」出口）：fraudScore 0–100，≥50 即高风险 → 分数封顶 99−fs
     if (hasPu) {
@@ -119,8 +119,9 @@ const IPRep = {
       const fs = +p.pu.fs, cap = 99 - fs, band = fs < 15 ? '极度纯净' : fs < 25 ? '纯净' : fs < 40 ? '中性' : fs < 50 ? '轻微风险' : fs < 70 ? '高风险' : '极度风险';
       if (s > cap) { why.push('−' + (s - cap) + ' IPPure 风险值 ' + fs + '/100（' + band + '）'); s = cap; }
       else why.push('IPPure 风险值 ' + fs + '/100（' + band + '）');
-      if (p.pu.dc && p.pu.bc) { s -= 8; why.push('−8 机房广播 IP（易触发人机验证）'); }
-      why.push('IPPure：' + (p.pu.res ? '家宽' : p.pu.dc ? '机房' : '非家宽') + (p.pu.bc ? ' · 广播 IP' : ' · 原生 IP') + (p.pu.org ? '（' + p.pu.org + '）' : ''));
+      if (p.pu.dc && p.pu.bc) { s -= 8; why.push('−8 机房广播 IP（IPPure）'); }
+      else if (p.pu.res && fs < 25 && !p.px) { s = Math.min(100, s + 5); why.push('+5 住宅原生出口（IPPure）'); }
+      why.push('IPPure：' + (p.pu.res ? '家宽' : (p.pu.dc || isHosting) ? '机房' : '非家宽') + (p.pu.bc ? ' · 广播 IP' : ' · 原生 IP') + (p.pu.org ? '（' + p.pu.org + '）' : ''));
     }
     if (q) {
       const n = (q.ok || 0) + (q.rc || 0), rc = q.rc || 0, ok = q.ok || 0;
@@ -212,15 +213,21 @@ const IPRep = {
     eg = this.normIp(eg);
     if (!pu || !eg || !Number.isFinite(+pu.fs)) return;
     const puIp = this.normIp(pu.ip);
-    if (puIp && puIp !== eg) return;   // IPPure 看到的出口和 Brana 看到的不一致：不记，免得张冠李戴
-    d.rep ||= {}; (d.rep[eg] ||= {}).pu = { fs: +pu.fs, res: !!pu.res, bc: !!pu.bc, dc: !!pu.dc, org: String(pu.org || '').slice(0, 40), at: now() };
+    const isDualStack = Boolean(puIp && eg.includes(':') !== puIp.includes(':'));
+    if (puIp && puIp !== eg && !isDualStack) return;
+    const entry = { fs: +pu.fs, res: !!pu.res, bc: !!pu.bc, dc: !!pu.dc, org: String(pu.org || '').slice(0, 40), at: now() };
+    d.rep ||= {}; (d.rep[eg] ||= {}).pu = entry;
+    if (isDualStack && puIp) (d.rep[puIp] ||= {}).pu = entry;
   },
   // ip-api 经隧道查到的（调用方 = 出口）：等同批量查询结果
   putIpa(d, eg, x) {
     eg = this.normIp(eg);
     const xIp = this.normIp(x?.ip);
-    if (!x || !eg || (xIp && xIp !== eg)) return;
-    d.rep ||= {}; Object.assign(d.rep[eg] ||= {}, { a: now(), h: !!x.h, px: !!x.px, m: !!x.m, isp: String(x.isp || '').slice(0, 40), as: String(x.as || '').slice(0, 12) });
+    const isDualStack = Boolean(xIp && eg && eg.includes(':') !== xIp.includes(':'));
+    if (!x || !eg || (xIp && xIp !== eg && !isDualStack)) return;
+    const patch = { a: now(), h: !!x.h, px: !!x.px, m: !!x.m, isp: String(x.isp || '').slice(0, 40), as: String(x.as || '').split(' ')[0].slice(0, 12) };
+    d.rep ||= {}; Object.assign(d.rep[eg] ||= {}, patch);
+    if (isDualStack && xIp) Object.assign(d.rep[xIp] ||= {}, patch);
   },
   // 线路检测（确认 / 一键切换）带回的结果
   notePure(pip, r) {
@@ -240,7 +247,7 @@ const IPRep = {
       await Pool.load();
       const unk = keys.filter(k => { const e = Pool.d.ips?.[k]; return e && e.ok === true && !e.gone && !this.trusted(k) && !this.score(k, e).known; });
       const r = unk.length && Host.fetchText ? await this.rate(unk) : await Pool.clearRisk().then(x => ({ removed: x?.n || 0, banned: x?.skip || 0 }));
-      if (r?.removed || r?.banned) { if (typeof toast === 'function') toast('发现高风险 IP：已删除 ' + (r.removed || 0) + ' 个' + (r.banned ? '，拉黑 ' + r.banned + ' 个在用的（空闲时自动换走）' : '')); this.check(); }
+      if (r?.removed || r?.banned) this.check();
     } finally { this._fl = false; Bus.emit('pool'); }
   },
   // 手动选的 ProxyIP 确认前把关：先评估（IPPure 已随检测取回，否则 ip-api / proxycheck），高风险 → 拉黑删除并拒绝
@@ -256,16 +263,7 @@ const IPRep = {
     if (!r.known) return { ok: false, error: '出口 IP ' + pip + ' 暂时无法评估纯净度（评估服务没有结果），只能使用已确认纯净的 IP' };
     if (r.s >= this.PURE) return { ok: true, s: r.s, known: true };
     const used = Pool.usedMap(), x = pip.toLowerCase();
-    if (r.s >= this.TH) {
-      if (Pool.d?.ips?.[pip]?.src) {
-        await Pool.mutate(d => {
-          if (typeof Pool.banForever === 'function') Pool.banForever(d, pip, '纯净度一般（' + r.s + ' 分）· 已永久拉黑');
-          else { d.ban ||= {}; d.ban[x] = now(); d.drop ||= {}; d.drop[pip] = now(); if (d.ips[pip] && !used.has(x)) delete d.ips[pip]; }
-        }).catch(() => {});
-        Bus.emit('pool');
-      }
-      return { ok: false, s: r.s, error: '出口 IP ' + pip + ' 纯净度 ' + r.s + ' 分（一般），只能使用纯净（≥ ' + this.PURE + ' 分）的 IP' };
-    }
+    if (r.s >= this.TH) return { ok: false, s: r.s, error: '出口 IP ' + pip + ' 纯净度 ' + r.s + ' 分（一般），只能使用纯净（≥ ' + this.PURE + ' 分）的 IP' };
     await Pool.mutate(d => {
       if (typeof Pool.banForever === 'function') Pool.banForever(d, pip, '高风险（' + r.s + ' 分）· 已永久拉黑');
       else { d.ban ||= {}; d.ban[x] = now(); if (d.ips[pip] && !used.has(x)) { const e = d.ips[pip]; delete d.ips[pip]; if (!e.src) d.src = (d.src || []).filter(y => y !== pip); else { d.drop ||= {}; d.drop[pip] = now(); } } }
@@ -329,11 +327,26 @@ const IPRep = {
       const liveIp = this.normIp(!IP?.err && IP?.ip || '');
       const liveEntry = liveIp ? { ...(e || {}), eg: liveIp } : e;
       const isChainNode = /\/video\//i.test(a.proxy || '');
+      const isRisky = Boolean((k && e && this.risky(k, e)) || (liveIp && this.risky(k || liveIp, liveEntry)));
+      if (!isRisky && liveIp && this.pure(k || liveIp, liveEntry)) {
+        if (e?.banned || e?.gone || e?.ok === false || (k && Pool.d?.ban?.[k.toLowerCase()]) || Pool.d?.banEg?.[liveIp.toLowerCase()]) {
+          await Pool.mutate(d => {
+            if (k && d.ban) delete d.ban[k.toLowerCase()];
+            if (d.banEg) delete d.banEg[liveIp.toLowerCase()];
+            if (k && d.ips?.[k]) Object.assign(d.ips[k], { ok: true, gone: false, banned: false, err: '', fc: 0 });
+          }).catch(() => {});
+        }
+        return;
+      }
       const liveBad = Boolean(liveIp && (this.risky(k || liveIp, liveEntry) || Pool.d?.banEg?.[liveIp.toLowerCase()]));
-      const kBad = Boolean(k && !this.trusted(k) && (Pool.banned(k) || e?.gone || e?.ok === false || (e && this.risky(k, e))));
-      const kMissing = Boolean(!k && !isChainNode && (liveBad || (Pool.availAllPureLowestLatency?.(a.id)?.length > 0)));
+      const kBad = Boolean(k && !this.trusted(k) && (Pool.banned(k) || e?.gone || (!liveIp && e?.ok === false) || (e && this.risky(k, e))));
+      const kMissing = Boolean(!k && !isChainNode && liveBad);
       const forceImpure = Boolean(opt?.forceOnError && k && e && this.score(k, e).known && !this.pure(k, e));
       if (!(kBad || liveBad || kMissing || forceImpure)) return;
+      if (!opt?.forceOnError && !opt?.forceOnHighRisk) {
+        if (typeof RouteState !== 'undefined' && RouteState.mode && RouteState.mode(a) !== 'auto') return;
+        if (typeof Pool !== 'undefined' && Pool.canRotate && !Pool.canRotate(a)) return;
+      }
       const hard = kBad || liveBad || kMissing;
       if (!opt?.forceOnError && !opt?.forceOnHighRisk && now() - this.rotAt < (hard ? 15e3 : 30 * 60e3)) return;
       if ([...Chats.values()].some(c => c.busy) || document.querySelector('.rc-back') || this.screening) { clearTimeout(this.ct); this.ct = setTimeout(() => this.check(opt), 30e3); return; }
@@ -350,9 +363,10 @@ const IPRep = {
         const bestAny = Pool.availAllPureLowestLatency?.(a.id)?.[0];
         if (bestAny && (!targetCc || !a.region)) targetCc = Pool.d?.ips?.[bestAny]?.loc || targetCc || 'JP';
       }
+      const bgNoScreen = !opt?.forceOnError && !opt?.forceOnHighRisk;
       let r;
-      if (targetCc && Pool.canRotate(a)) r = await Pool.acquire(a, targetCc, { exclude: new Set(k ? [k] : []) });
-      else if (typeof RegionIP !== 'undefined' && RegionIP.switchNext) r = await RegionIP.switchNext({ owner: a.id });
+      if (targetCc && Pool.canRotate(a)) r = await Pool.acquire(a, targetCc, { exclude: new Set(k ? [k] : []), noScreen: bgNoScreen });
+      else if ((opt?.forceOnError || opt?.forceOnHighRisk) && typeof RegionIP !== 'undefined' && RegionIP.switchNext) r = await RegionIP.switchNext({ owner: a.id, noScreen: bgNoScreen });
       else return;
       if (r?.ok) {
         try { UI.host = await Host.info(); UI.renderAcct?.(); } catch {}
@@ -453,6 +467,15 @@ const IPRep = {
       else if (j && typeof j === 'object') await Pool.mutate(d => {
         d.rep ||= {}; d.pcq = d.pcq?.day === day ? d.pcq : { day, n: 0 }; d.pcq.n = (d.pcq.n || 0) + c.length;
         for (const ip of c) { const x = j[ip]; if (x && typeof x === 'object') Object.assign(d.rep[ip] ||= {}, { c: now(), r: +x.risk || 0, pt: String(x.type || '').slice(0, 20), pp: x.proxy === 'yes' }); }
+      });
+    }
+    if (!quota || egs.some(ip => rep()[ip]?.a && !rep()[ip]?.c && !rep()[ip]?.pu)) {
+      await Pool.mutate(d => {
+        d.rep ||= {};
+        for (const ip of egs) {
+          const p = d.rep[ip];
+          if (p && p.a && !p.c && !p.pu) Object.assign(p, { c: now(), r: p.px ? 85 : (p.h ? 15 : 0), pt: p.px ? 'VPN' : (p.h ? 'Hosting' : 'ISP'), pp: !!p.px });
+        }
       });
     }
     const x = await Pool.clearRisk().catch(() => ({ n: 0, skip: 0 }));

@@ -73,17 +73,21 @@ const KeepAlive = (() => {
     if (c.endStop || c.stopReq) return null;
     const msgs = c.messages || [];
     const tail = msgs.at(-1);
+    const hasErrPart = !!(tail?.role === 'assistant' && Array.isArray(tail.parts) && tail.parts.some(p => p && p.type === 'error'));
     const errOnlyTail = !!(tail?.role === 'assistant' && ((typeof isDeadAssistantMsg === 'function' && isDeadAssistantMsg(tail)) || (Array.isArray(tail.parts) && tail.parts.length > 0 && tail.parts.every(p => p && (p.type === 'error' || p.type === 'step-start')))));
-    let lastUser = errOnlyTail ? msgs.at(-2) : (tail?.role === 'user' ? tail : null);
+    let lastUser = (errOnlyTail || hasErrPart) ? msgs.at(-2) : (tail?.role === 'user' ? tail : null);
+    const isHitlUser = u => Boolean(u && u.role === 'user' && Array.isArray(u.parts) && u.parts.some(p => p && p.type === 'data-tool-results'));
     let lastHealthyIdx = -1;
     for (let i = msgs.length - 1; i >= 0; i--) {
       const m = msgs[i];
-      if (m && m.role === 'assistant' && !(typeof isDeadAssistantMsg === 'function' ? isDeadAssistantMsg(m) : (Array.isArray(m.parts) && m.parts.every(p => p && (p.type === 'error' || p.type === 'step-start'))))) {
+      if (!m) continue;
+      if (isHitlUser(m)) { lastHealthyIdx = i; break; }
+      if (m.role === 'assistant' && !(typeof isDeadAssistantMsg === 'function' ? isDeadAssistantMsg(m) : (Array.isArray(m.parts) && m.parts.every(p => p && (p.type === 'error' || p.type === 'step-start'))))) {
         lastHealthyIdx = i;
         break;
       }
     }
-    const deadUsers = msgs.slice(lastHealthyIdx + 1).filter(m => m && m.role === 'user');
+    const deadUsers = msgs.slice(lastHealthyIdx + 1).filter(m => m && m.role === 'user' && !isHitlUser(m));
     const getText = u => (u?.parts || []).filter(p => p && p.type === 'text').map(p => p.text || '').join('\n').trim();
     const isContinueFiller = u => /^(?:继续|continue|go on|keep going|接着|继续执行)[。.!！?？\s]*$/i.test(getText(u)) && !(u?.metadata?.uploads?.length > 0);
     if (deadUsers.length > 1) {
@@ -91,16 +95,21 @@ const KeepAlive = (() => {
       if (picked) lastUser = picked;
     }
     if (!lastUser || lastUser.role !== 'user') return null;
-    const maxResent = deadUsers.length ? deadUsers.reduce((mx, u) => Math.max(mx, Number(u?._officialErrAutoResent) || 0), 0) : (lastUser._officialErrAutoResent || 0);
-    if (maxResent >= 1) return null;
-    const partErr = errOnlyTail && Array.isArray(tail?.parts) ? tail.parts.find(p => p?.type === 'error') : null;
+    const hitlTurn = isHitlUser(lastUser);
+    const partErr = (errOnlyTail || hasErrPart) && Array.isArray(tail?.parts) ? tail.parts.find(p => p?.type === 'error') : null;
     const errTxt = String(c.errText || c.error || partErr?.rawText || partErr?.text || '').trim();
     if (!errTxt || LIMITED.test(errTxt)) return null;
     const isOfficial = (typeof isOfficialTransientError === 'function' && isOfficialTransientError(errTxt)) || OFFICIAL_ERR.test(errTxt);
     if (!isOfficial) return null;
-    const origText = (lastUser.parts || []).filter(p => p && p.type === 'text').map(p => p.text || '').join('\n');
+    const isGraphReject = /The AI service rejected this request|\bagentic_session_nodes\b|\bFailed query:\s*select\b/i.test(errTxt);
+    const hasWork = Boolean(tail?.role === 'assistant' && typeof hasSubstantiveAssistantWork === 'function' && hasSubstantiveAssistantWork(tail));
+    const useContinue = Boolean(hitlTurn || (!isGraphReject && (hasWork || lastUser._appendAccepted || lastUser._officialContinueParent || !lastUser._local)));
+    const maxResent = deadUsers.length ? deadUsers.reduce((mx, u) => Math.max(mx, Number(u?._officialErrAutoResent) || 0), 0) : (lastUser._officialErrAutoResent || 0);
+    const allowLimit = (isGraphReject && lastUser._officialContinuedOnce) ? 2 : 1;
+    if (maxResent >= allowLimit) return null;
+    const origText = (hitlTurn || useContinue) ? '继续' : (lastUser.parts || []).filter(p => p && p.type === 'text').map(p => p.text || '').join('\n');
     if (!origText.trim() && !(lastUser.metadata?.uploads?.length > 0)) return null;
-    return { lastUser, errTail: errOnlyTail ? tail : null, origText, errTxt };
+    return { lastUser, errTail: (errOnlyTail || hasErrPart) ? tail : null, origText, errTxt, isHitl: hitlTurn, useContinue, isGraphReject, hasWork };
   }
 
   function lastInfo(c) {
@@ -157,7 +166,7 @@ const KeepAlive = (() => {
     const leftMs = Math.max(0, p.at - now());
     if (leftMs > 0) {
       const pct = Math.max(5, Math.min(100, Math.round((1 - leftMs / (p.totalMs || 3000)) * 100)));
-      const shortLabel = p.kind === 'cont' ? '⚡ 自动续接' : (p.kind === 'resend-official' ? '⚡ 官方报错 · 自动重发原文' : '增量同步');
+      const shortLabel = p.kind === 'cont' ? '⚡ 自动续接' : (p.kind === 'resend-official' ? '⚡ 官方报错 · 自动续推' : '增量同步');
       if (visible(c)) Pill.show(c, shortLabel, [['×', () => cancel(c)]], 'graphic', pct);
       return;
     }
@@ -178,21 +187,60 @@ const KeepAlive = (() => {
       }
       const info = canAutoResendOfficialError(c);
       if (!info) return;
-      const pruned = typeof pruneDeadTailTurns === 'function' ? pruneDeadTailTurns(c) : null;
+      let useCont = Boolean(info.isHitl || info.useContinue);
+      if (useCont && !info.isHitl && typeof c.verifyTurnForContinue === 'function') {
+        const vr = await c.verifyTurnForContinue(info.lastUser, info.origText);
+        if (vr?.mode === 'already-done' || vr?.mode === 'server-busy') {
+          if (info.lastUser) info.lastUser._officialErrAutoResent = (info.lastUser._officialErrAutoResent || 0) + 1;
+          if (c.errAt) st.errSeen = c.errAt;
+          log(c, vr.mode === 'already-done' ? '核验服务端消息：本轮已在服务端完成，已自动同步结果' : '核验服务端消息：服务端仍在继续生成，已重连实时流');
+          return;
+        }
+        if (vr?.mode === 'resend-orig' || vr?.mode === 'rewind-resend') {
+          useCont = false;
+        }
+      }
+      const pruned = (!useCont && typeof pruneDeadTailTurns === 'function') ? pruneDeadTailTurns(c) : null;
       const lastUser = pruned?.lastUser || info.lastUser;
       const origText = pruned?.origText || info.origText;
       const errTail = info.errTail;
       lastUser._officialErrAutoResent = (lastUser._officialErrAutoResent || 0) + 1;
-      lastUser._streamRejected = true;
-      if (!pruned && errTail && c.messages.at(-1) === errTail) c.messages.pop();
+      if (useCont) {
+        lastUser._officialContinueParent = true;
+        lastUser._officialContinuedOnce = true;
+        delete lastUser._streamRejected;
+        if (errTail && c.messages.at(-1) === errTail) {
+          const nonErr = (errTail.parts || []).filter(pt => pt && pt.type !== 'error');
+          if (!nonErr.filter(pt => pt.type !== 'step-start').length) {
+            if (errTail.id) (c._prunedDeadMsgIds ||= new Set()).add(errTail.id);
+            c.messages.pop();
+          } else {
+            errTail.parts = nonErr;
+            errTail.v = (errTail.v || 0) + 1;
+          }
+        }
+      } else {
+        lastUser._streamRejected = true;
+        delete lastUser._officialContinueParent;
+        if (!pruned && errTail && c.messages.at(-1) === errTail) {
+          if (errTail.id) (c._prunedDeadMsgIds ||= new Set()).add(errTail.id);
+          c.messages.pop();
+        }
+      }
       c.error = null;
       c.errText = '';
       c._officialTurnErrAt = 0;
-      log(c, '检测到官方服务报错，已清理死节点并回退至上一正常节点自动重发原文（第 ' + lastUser._officialErrAutoResent + ' 次）');
+      log(c, useCont
+        ? '检测到官方服务报错/超时，保留当前节点进度并自动发送「继续」推进流程（第 ' + lastUser._officialErrAutoResent + ' 次）'
+        : '检测到官方服务拒绝节点，已清理死节点并回退至上一正常节点自动重发原文（第 ' + lastUser._officialErrAutoResent + ' 次）');
       try {
-        await c.send(origText, { files: lastUser.metadata?.uploads, retryOf: lastUser, officialAutoResend: true });
+        if (useCont) {
+          await c.send('继续', { autoContinue: true, officialAutoResend: true });
+        } else {
+          const fallbackText = (origText && origText !== '继续') ? origText : ((lastUser.parts || []).filter(pt => pt && pt.type === 'text').map(pt => pt.text || '').join('\n') || origText);
+          await c.send(fallbackText, { files: lastUser.metadata?.uploads, retryOf: lastUser, officialAutoResend: true });
+        }
       } catch (e) {
-        log(c, '自动重新发送原文失败：' + (e?.message || e), 'bad');
       }
       return;
     }
@@ -251,7 +299,7 @@ const KeepAlive = (() => {
       if (LIMITED.test(txt)) { st.errSeen = c.errAt; log(c, '出错：限流/验证类错误，不自动刷新'); }
       else if (canAutoResendOfficialError(c)) {
         if (!busy) {
-          if (propose(c, st, 'resend-official', '官方报错自动重发原文', 1, 2)) st.errSeen = c.errAt;
+          if (propose(c, st, 'resend-official', '官方报错自动续推', 2, 1)) st.errSeen = c.errAt;
         }
         return;
       } else if (pre) { st.errSeen = c.errAt; log(c, '出错：刚发送未开始，不自动刷新'); }
@@ -265,7 +313,7 @@ const KeepAlive = (() => {
     if (!busy) {
       if (!c.endStop && c.sentAt && t - c.sentAt < 180e3 && !(typeof SendQ !== 'undefined' && SendQ.of?.(c)?.length > 0)) {
         const resendInfo = canAutoResendOfficialError(c);
-        if (resendInfo && propose(c, st, 'resend-official', '官方报错自动重发原文', 1, 2)) {
+        if (resendInfo && propose(c, st, 'resend-official', '官方报错自动续推', 2, 1)) {
           if (c.errAt) st.errSeen = c.errAt;
           return;
         }
@@ -308,7 +356,7 @@ const KeepAlive = (() => {
       else if (t - st.noStreamAt > 14e3 && st.reconAt && t - st.reconAt > 8e3) return propose(c, st, 'noconn', '增量同步', 3, 1);
     } else {
       st.noStreamAt = 0;
-      if (quiet > 20e3 && (!info || (!info.open.length && !info.ask && !info.compact)) && t - (st.bgSyncAt || 0) > 20e3) {
+      if (quiet > 12e3 && (!info || (!info.ask && !info.compact)) && t - (st.bgSyncAt || 0) > 12e3) {
         st.bgSyncAt = t;
         void c.reconcile?.(0)?.catch?.(() => {});
       }
@@ -317,8 +365,8 @@ const KeepAlive = (() => {
     if (!info) return;
     const od = toolOverdue(c, st, info, t); if (od) return propose(c, st, 'tool', od, 2, 2);
     const prog = Math.max(st.sigAt, c.progAt || 0);
-    if (info.streaming && !info.reasoning && !info.open.length && !info.compact && !info.ask && t - prog > 28e3) return propose(c, st, 'stream', '增量同步', 3, 1);
-    if (!info.open.length && !info.compact && !info.ask && !info.reasoning && t - prog > 45e3) return propose(c, st, 'idle', '增量同步', 3, 1);
+    if (info.streaming && !info.reasoning && !info.open.length && !info.compact && !info.ask && t - prog > (c.streaming ? 55e3 : 28e3)) return propose(c, st, 'stream', '增量同步', 3, 1);
+    if (!info.open.length && !info.compact && !info.ask && !info.reasoning && t - prog > (c.streaming ? 75e3 : 45e3)) return propose(c, st, 'idle', '增量同步', 3, 1);
     if (info.open.length && t - prog > 900e3 && !od) return propose(c, st, 'idle', '增量同步', 2, 2);
     if (visible(c) && info.compact && t - st.sigAt > 4000) Pill.show(c, '上下文压缩', [], 'graphic', 60);
     else if (st.pillKind === 'info' || (st.pillKind === 'graphic' && !st.plan)) Pill.hide(c);

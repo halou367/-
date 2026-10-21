@@ -18,7 +18,7 @@
       return out;
     } catch { return []; }
   };
-  const MAX_MESSAGES = 3, MAX_SESSIONS = 40;
+  const MAX_MESSAGES = 24, MAX_SESSIONS = 60;
   function hasVisibleReasoningText(text) {
     const s = String(text || '').trim();
     if (!s || /^\(?(?:模型没有公开思考内容|未公开思考内容|model did not expose reasoning|thinking\.{0,3})\)?$/i.test(s)) return false;
@@ -31,6 +31,10 @@
     && !(m.parts || []).some(p => p.type === 'error');
   const msgHasVisReason = m => (m?.parts || []).some(p => (p?.type === 'reasoning' || p?.type === 'thinking') && hasVisibleReasoningText(p?.text || p?.content || ''));
   const msgIsClosed = m => !msgHasVisReason(m) && (m?.parts || []).some(p => p?.type === 'reasoning' || p?.type === 'thinking' || /^(?:toolu_|srvtoolu_|call_)/i.test(String(p?.toolCallId || '')));
+  const sliceKeepFirst = (arr, limit) => {
+    if (arr.length <= limit) return arr;
+    return [arr[0], ...arr.slice(-(limit - 1))];
+  };
   const completed = chat => {
     const all = (chat?.messages || []).filter(eligible);
     if (all.length >= 2 && msgIsClosed(all[0])) {
@@ -39,9 +43,9 @@
         if (msgHasVisReason(m)) break;
         preRoute.push(m);
       }
-      if (preRoute.length) return preRoute.slice(-MAX_MESSAGES);
+      if (preRoute.length) return sliceKeepFirst(preRoute, MAX_MESSAGES);
     }
-    return all.slice(-MAX_MESSAGES);
+    return sliceKeepFirst(all, MAX_MESSAGES);
   };
   // Reconstruct only the evidence consumed by the upstream pure parser. No prompt/tool result/credential is included.
   function captures(chat, cost, hints = new Map()) {
@@ -161,14 +165,10 @@
   ]);
   function consensus(state, model, latestId, catalog) {
     const fp = model?.fingerprint, fromFP = fp && !fp.apiIdentity && !fp.skipped && ['clear','close'].includes(fp.result?.status);
-    const isSelfReverse = Boolean((model?.reverseInferred || model?.billingProbe) && !fromFP && !model?.response && !model?.fingerprint?.apiIdentity);
+    const isSelfReverse = Boolean((model?.reverseInferred || model?.habitInferred || model?.billingProbe) && !fromFP && !model?.response && !model?.fingerprint?.apiIdentity);
     let name = fromFP ? fp.result?.nearest?.id || model.name : model?.name;
-    if (state?.sid && ARGON_HIGH_SIDS.has(state.sid) && /sonnet[-\s]*5|gpt[-\s]*6\.1[-\s]*sol|gpt[-\s]*6[-\s]*sol|claude-haiku/i.test(String(name || ''))) {
-      name = 'gemini-4-argon-high';
-    } else if (state?.sid && SOL_61_SIDS.has(state.sid) && !/gpt[-\s]*6\.1[-\s]*sol/i.test(String(name || ''))) {
-      name = SOL_61_SIDS.get(state.sid);
-    }
-    const source = fromFP ? '现有数字指纹' : model?.fromTitle ? '历史标题' : isSelfReverse ? '费用反推识别' : model?.guess ? '格式推测' : name ? '已有型号记录' : '';
+
+    const source = model?.userCorrected ? '手动纠偏确认' : fromFP ? '现有数字指纹' : model?.fromTitle ? '历史标题' : model?.habitInferred ? '对话习惯识别' : isSelfReverse ? '费用反推识别' : model?.guess ? '格式推测' : name ? '已有型号记录' : '';
     const out = { name:name || null, source, status:'waiting', text:'等待账单与已有识别自动核对' };
     const i = state.info, used = i?.result.unitPrice.used || [];
     if (!i || i.reason) return out;
@@ -214,7 +214,7 @@
     const msgs = completed(chat);
     if (!msgs.length) return {};
     let maxReason = 0, totalReasonParts = 0, visibleReasoning = false;
-    let visChars = 0, visTokens = 0, exactReasonTokens = 0, reasoningTextLength = 0, toolInputChars = 0, totalStepCount = 0, silentBashLoop = false;
+    let visChars = 0, visTokens = 0, exactReasonTokens = 0, reasoningTextLength = 0, toolInputChars = 0, totalStepCount = 0, totalPreToolChars = 0, totalInterToolChars = 0, silentBashLoop = false;
     let sawPelicanWord = Boolean(typeof root.PelicanTest !== 'undefined' && chat?.sid && root.PelicanTest?.result?.(chat.sid));
     let sawSvgTag = false;
     let hasAskUserTool = false, hasWebSearchTool = false;
@@ -269,6 +269,7 @@
         }
       }
       if (msgReason > maxReason) maxReason = msgReason;
+      totalPreToolChars += preToolChars; totalInterToolChars += interToolChars;
       if (bashCount >= 2 && preToolChars === 0 && interToolChars === 0) silentBashLoop = true;
       const mVisTok = typeof P.estimateTokens === 'function' ? P.estimateTokens(msgVisText) : Math.round(msgVisText.length / 3.5);
       const mReasonTok = typeof P.estimateTokens === 'function' ? P.estimateTokens(msgReasonText) : Math.round(msgReasonText.length / 3.5);
@@ -289,25 +290,37 @@
       visChars += msgVisText.length;
       visTokens += mVisTok;
     }
-    const fmt = chat?.fmt || msgs.at(-1)?._fmt;
+    const fmt = chat?.fmt || msgs.at(-1)?._fmt || msgs.at(-1)?.fmt;
     const tStart = Number(fmt?.t0 || fmt?.tStart) || 0;
     const lastIdForDur = msgs.at(-1)?.id;
     const fallbackDurMs = (lastIdForDur && msgDurationMsById[lastIdForDur]) || Object.values(msgDurationMsById).reduce((mx, v) => Math.max(mx, Number(v) || 0), 0);
     const durSec = fmt && fmt.tEnd > tStart ? (fmt.tEnd - tStart) / 1000 : (fmt?.gen > 0 ? fmt.gen / 1000 : (fallbackDurMs >= 50 ? fallbackDurMs / 1000 : 0));
     const turnDurationMs = durSec >= 0.05 ? Math.round(durSec * 1000) : 0;
-    const fmtChars = Number(fmt?.tChars) || visChars;
-    const fmtTN = Number(fmt?.tN) || 0;
-    let avgChunk = fmtTN >= 4 && fmtChars > 0 ? Number((fmtChars / fmtTN).toFixed(2)) : 0;
-    const cps = durSec >= 0.5 && fmtChars >= 60 ? Math.round(fmtChars / durSec) : null;
-    let fmtReasonBlocks = Number(fmt?.rBlocks || fmt?.rN || fmt?.rE) || 0;
-    let rWireDeltas = Number(fmt?.rWireDeltas) || 0;
+    let fmtTN = Number(fmt?.tN) || 0;
+    let fmtChars = Number(fmt?.tChars) || 0;
+    let fmtTidCount = Number(fmt?.tidCount) || 0;
+    let fmtTidChars = Number(fmt?.tidChars) || 0;
+    let fmtReasonBlocks = Number(fmt?.rBlocks || fmt?.rN || fmt?.rE || (Array.isArray(fmt?.rs) ? fmt.rs.length : 0)) || 0;
+    let rWireDeltas = Number(fmt?.rWireDeltas || fmt?.rWireEmptyDeltas || fmt?.rE) || 0;
     const fmtIds = Array.isArray(fmt?.ids) ? fmt.ids.slice() : [];
+    if (Array.isArray(fmt?.rs)) {
+      for (const r of fmt.rs) if (r?.id != null) fmtIds.push(['r', String(r.id)]);
+    }
     for (const m of msgs) {
-      const mf = m?._fmt;
+      const mf = m?._fmt || m?.fmt;
       if (mf && mf !== fmt) {
-        if ((Number(mf.rBlocks || mf.rN || mf.rE) || 0) > fmtReasonBlocks) fmtReasonBlocks = Number(mf.rBlocks || mf.rN || mf.rE) || 0;
-        if ((Number(mf.rWireDeltas) || 0) > rWireDeltas) rWireDeltas = Number(mf.rWireDeltas) || 0;
+        if (fmtTN === 0 && (Number(mf.tN) || 0) > 0) {
+          fmtTN += Number(mf.tN) || 0;
+          fmtChars += Number(mf.tChars) || 0;
+        }
+        fmtTidCount += Number(mf.tidCount) || 0;
+        fmtTidChars += Number(mf.tidChars) || 0;
+        const mfRBlocks = Number(mf.rBlocks || mf.rN || mf.rE || (Array.isArray(mf.rs) ? mf.rs.length : 0)) || 0;
+        if (mfRBlocks > fmtReasonBlocks) fmtReasonBlocks = mfRBlocks;
+        const mfWire = Number(mf.rWireDeltas || mf.rWireEmptyDeltas || mf.rE) || 0;
+        if (mfWire > rWireDeltas) rWireDeltas = mfWire;
         for (const x of mf.ids || []) fmtIds.push(x);
+        for (const r of mf.rs || []) if (r?.id != null) fmtIds.push(['r', String(r.id)]);
       }
       const meta = m?._sseMeta || (hints && typeof hints.get === 'function' ? hints.get(m.id) : null);
       if (meta) {
@@ -338,37 +351,51 @@
         }
       }
     }
+    if (!fmtChars) fmtChars = visChars;
+    let avgChunk = fmtTN >= 4 && fmtChars > 0 ? Number((fmtChars / fmtTN).toFixed(2)) : 0;
+    const cps = durSec >= 0.5 && fmtChars >= 60 ? Math.round(fmtChars / durSec) : null;
     if (fmtReasonBlocks > 0 && totalReasonParts === 0) {
       totalReasonParts = fmtReasonBlocks;
       if (fmtReasonBlocks > maxReason) maxReason = fmtReasonBlocks;
     }
     const rIds = fmtIds.filter(x => x && x[0] === 'r').map(x => String(x[1] || ''));
+    const tIds = fmtIds.filter(x => x && x[0] === 't').map(x => String(x[1] || ''));
     const allIds = fmtIds.map(x => String((x && x[1]) || '')).filter(Boolean);
     const hasCompatStreamId = allIds.some(i => /^(?:txt|reasoning)-\d+$/i.test(i) || /^[0-9a-z]{9}$/.test(i));
+    const hasSharedTcId = rIds.some(i => /^tc_[A-Za-z0-9_-]{8,}$/.test(i) && tIds.includes(i));
+    const fmtTidAvg = fmtTidCount > 0 ? fmtTidChars / fmtTidCount : 0;
+    const isOpenAiTcChunk = Boolean((fmtTN >= 15 && avgChunk > 0 && avgChunk <= 3.8) || (fmtTidCount >= 18 && fmtTidAvg > 0 && fmtTidAvg <= 22) || (rIds.length > 0 && fmtTN < 6 && tIds.length > 0 && tIds.every(i => /^\d+$/.test(i)) && rWireDeltas === 0));
+    const isGeminiTcChunk = Boolean(!isOpenAiTcChunk && fmtTN >= 3 && (fmtTN / Math.max(1, msgs.length)) <= 28 && avgChunk >= 28.0);
+    const isClaudeTcChunk = Boolean(!isOpenAiTcChunk && !isGeminiTcChunk && ((fmtTN >= 6 && avgChunk >= 4.0 && avgChunk <= 25.0) || (fmtTidCount > 0 && fmtTidCount <= 8 && toolIds.length > 0 && !(fmtTN >= 3 && avgChunk >= 28.0)) || rWireDeltas > 0 || hasSharedTcId));
+    if (isGeminiTcChunk && !visibleReasoning) {
+      totalReasonParts = 0;
+      maxReason = 0;
+    }
     let streamIdPrefix = null;
     if (allIds.some(i => /^(?:msg|rs)_[0-9a-fA-Z_-]{10,}/i.test(i))) streamIdPrefix = 'openai-rs';
-    else if (rIds.length > 0 && rIds.some(i => /^tc_[A-Za-z0-9_-]{8,}$/.test(i)) && !visibleReasoning && (Number(fmt?.rChars) || 0) === 0) streamIdPrefix = 'openai-tc-empty';
+    else if (isGeminiTcChunk && !visibleReasoning) streamIdPrefix = 'numeric-only';
+    else if (rIds.length > 0 && rIds.some(i => /^tc_[A-Za-z0-9_-]{8,}$/.test(i)) && !visibleReasoning && (Number(fmt?.rChars) || 0) === 0) {
+      streamIdPrefix = isClaudeTcChunk ? 'claude-tc-empty' : isOpenAiTcChunk ? 'openai-tc-empty' : null;
+    }
     else if (allIds.length > 0 && allIds.every(i => /^\d+$/.test(i))) streamIdPrefix = 'numeric-only';
     const isGeminiSummary = streamIdPrefix === 'numeric-only' && /^\s*\*\*[^\n*]{2,80}\*\*/.test(String(fmt?.rHead || ''));
     const hasClosedWireId = !hasCompatStreamId && isGeminiSummary;
     if (Number(fmt?.rChars) >= 2 && hasVisibleReasoningText(fmt?.rSample || fmt?.rHead || '')) visibleReasoning = true;
     if (hasClosedWireId && visibleReasoning) visibleReasoning = false;
-    if (visibleReasoning && streamIdPrefix && streamIdPrefix.startsWith('openai')) streamIdPrefix = null;
+    if (visibleReasoning && streamIdPrefix && (streamIdPrefix.startsWith('openai') || streamIdPrefix.startsWith('claude'))) streamIdPrefix = null;
     const isOpenAiWireId = streamIdPrefix === 'openai-rs' || streamIdPrefix === 'openai-tc-empty';
-    const hasLiveFmtStream = Boolean((fmt && ((Number(fmt.tN) || 0) > 0 || (Number(fmt.tools) || 0) > 0 || (Number(fmt.rBlocks) || 0) > 0 || (Array.isArray(fmt.ids) && fmt.ids.length > 0))) || fmtReasonBlocks > 0 || fmtIds.length > 0);
     let reasoningSignature = null;
     if (visibleReasoning) reasoningSignature = 'visible-text';
-    else if (totalReasonParts > 0 && isOpenAiWireId) reasoningSignature = 'markers-only';
-    else if (totalReasonParts > 0 && rWireDeltas > 0) reasoningSignature = 'empty-deltas';
-    else if (totalReasonParts > 0 && hasLiveFmtStream && rWireDeltas === 0) reasoningSignature = 'markers-only';
+    else if (totalReasonParts > 0 && (rWireDeltas > 0 || streamIdPrefix === 'claude-tc-empty' || isClaudeTcChunk)) reasoningSignature = 'empty-deltas';
+    else if (totalReasonParts > 0 && (isOpenAiWireId || isOpenAiTcChunk)) reasoningSignature = 'markers-only';
     const prevEv = chat?._streamEvidence || (typeof root.Models !== 'undefined' && chat?.sid ? root.Models.get?.(chat.sid)?.streamEvidence : null);
     if (prevEv && !visibleReasoning && !prevEv.visibleReasoning) {
-      if (!streamIdPrefix && prevEv.streamIdPrefix) streamIdPrefix = prevEv.streamIdPrefix;
+      if (!streamIdPrefix && prevEv.streamIdPrefix && (prevEv.streamIdPrefix !== 'openai-tc-empty' || isOpenAiTcChunk)) streamIdPrefix = prevEv.streamIdPrefix;
       if (totalReasonParts === 0 && (Number(prevEv.rBlocks) || 0) > 0) {
         totalReasonParts = Number(prevEv.rBlocks) || 1;
         if (totalReasonParts > maxReason) maxReason = totalReasonParts;
       }
-      if (!reasoningSignature && prevEv.reasoningSignature) reasoningSignature = prevEv.reasoningSignature;
+      if (!reasoningSignature && prevEv.reasoningSignature && (prevEv.reasoningSignature !== 'markers-only' || isOpenAiTcChunk)) reasoningSignature = prevEv.reasoningSignature;
       if (!(avgChunk > 0) && (Number(prevEv.avgChunk) || 0) > 0) avgChunk = Number(prevEv.avgChunk);
     }
     if (chat && typeof chat === 'object' && (streamIdPrefix || reasoningSignature || avgChunk > 0 || fmtReasonBlocks > 0 || totalReasonParts > 0)) {
@@ -404,6 +431,9 @@
       reasoningSignature,
       streamIdPrefix,
       avgChunk,
+      rAvgChunk: (rWireDeltas >= 2 && reasoningTextLength > 0) ? Number((reasoningTextLength / rWireDeltas).toFixed(2)) : 0,
+      preToolChars: totalPreToolChars,
+      interToolChars: totalInterToolChars,
       turnDurationMs,
       visChars,
       visTokens,

@@ -36,7 +36,7 @@ const PersonalFP = {
       q.onsuccess=()=>{const c=q.result;if(!c)return;if(!query){if(!advanced&&page){advanced=true;c.advance(page*30);return;}rows.push(c.value);if(rows.length<30)c.continue();return;}const r=c.value;if(String(r.model).toLowerCase().includes(query)){if(total>=page*30&&rows.length<30)rows.push(r);total++;}c.continue();};t.oncomplete=()=>resolve({rows,total});t.onerror=t.onabort=()=>reject(t.error||Error('记录读取失败'));});
   },
   readIdentity(source){
-    if(!source||source.guess||source.reverseInferred||source.billingProbe||source.fromTitle||source.routed||source.changed||source.routing||source.outcome)return null;
+    if(!source||source.guess||source.reverseInferred||source.habitInferred||source.userCorrected||source.billingProbe||source.fromTitle||source.routed||source.changed||source.routing||source.outcome)return null;
     if(new Set((source.internalNames||[]).map(n=>{const p=Strength.parts(n);return PersonalMath.idOf(p.family+(p.tier&&!PersonalMath.tiers.includes(p.tier)?'-'+p.tier:''));})).size>1)return null;
     const billed=source.internal&&(source.records||[]).some(r=>['usage','spend'].includes(r.kind)&&r.internal===source.internal);
     if(!source.response&&!(source.internal&&(Brand.of(source.internal)||billed)))return null;

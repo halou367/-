@@ -28,7 +28,7 @@ async function discover(ports,{signal,hosts=['127.0.0.1','::1'],concurrency=8}={
  await Promise.all(Array.from({length:Math.min(concurrency,queue.length)},async()=>{for(;;){const i=next++;if(i>=queue.length||signal?.aborted)return;const p=queue[i];if(await tcpOpen(p.host,p.port,{signal}))out[i]=p;}}));return out.filter(Boolean);
 }
 function createAgent(url,proxy,timeoutMs){
- if(!proxy)return url.protocol==='https:'?new https.Agent({keepAlive:false,rejectUnauthorized:true}):new http.Agent({keepAlive:false});
+ if(!proxy){const family=url.hostname.startsWith('[')||net.isIP(url.hostname)===6?6:4;return url.protocol==='https:'?new https.Agent({keepAlive:false,rejectUnauthorized:true,family}):new http.Agent({keepAlive:false,family});}
  const host=proxy.host==='::1'?'[::1]':proxy.host;
  if(proxy.scheme==='http'){const {HttpsProxyAgent}=require('https-proxy-agent');return new HttpsProxyAgent('http://'+host+':'+proxy.port,{keepAlive:false,rejectUnauthorized:true,timeout:timeoutMs});}
  const {SocksProxyAgent}=require('socks-proxy-agent');return new SocksProxyAgent('socks5h://'+host+':'+proxy.port,{keepAlive:false,rejectUnauthorized:true,timeout:timeoutMs});
@@ -63,7 +63,7 @@ async function fetchText(raw,{proxy=null,signal,timeoutMs=7000,maxBytes,request=
   throw error('REDIRECT_LIMIT');
  }finally{timer.close();}
 }
-function createSubscriptionFetcher({request=fetchText,discoverPorts=discover,totalMs=30000,directMs=8000,proxyMs=6500,parallel=3}={}){
+function createSubscriptionFetcher({request=fetchText,discoverPorts=discover,totalMs=30000,directMs=3500,proxyMs=6500,parallel=4}={}){
  return async function fetchSubscription(url,{preferredPorts=[],signal}={}){
   const start=Date.now(),attempts=[];let parsed;try{parsed=normalizeURL(url);}catch{return {error:'订阅地址不正确，请使用不含用户名和密码的 HTTP(S) 地址',code:'INVALID_SUBSCRIPTION_URL'};}
   const life=scopedAbort(signal,totalMs),left=()=>Math.max(0,totalMs-(Date.now()-start));

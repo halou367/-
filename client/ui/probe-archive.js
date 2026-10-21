@@ -13,14 +13,15 @@ const ProbeArchive = (() => {
   }
   function save(){while(done.size>5000)done.delete(done.keys().next().value);if(Store.set(key,{pending:[...queue.values()],done:[...done],retryAt})===false&&!storageWarned){storageWarned=true;toast('归档队列未写入本机；当前窗口会继续重试，请勿立即关闭','err');}}
   function soon(ms=1200){clearTimeout(timer);timer=setTimeout(()=>void drain(),ms);}
+  const canCleanup = (sid, chat) => typeof Gacha !== 'undefined' && typeof Gacha.canAutoCleanupChat === 'function' && Gacha.canAutoCleanupChat(sid, chat);
   function consider(chat,entry){
-    if(!thinking(entry?.fingerprint)||!chat?.sid)return false;
+    if(!thinking(entry?.fingerprint)||!chat?.sid||!canCleanup(chat.sid,chat))return false;
     load();if(done.get(chat.sid)===stamp(Models.get(chat.sid)||entry))return false;if(!queue.has(chat.sid)){queue.set(chat.sid,{sid:chat.sid,at:now(),next:0});save();}
     soon();return true;
   }
   function scan(){
     if(!started)return;load();
-    for(const [sid,entry]of Object.entries(Models.all||{}))if(thinking(entry?.fingerprint)&&History.byId(sid)&&!History.byId(sid).isArchived&&!queue.has(sid)&&done.get(sid)!==stamp(entry))queue.set(sid,{sid,at:now(),next:0});
+    for(const [sid,entry]of Object.entries(Models.all||{}))if(thinking(entry?.fingerprint)&&canCleanup(sid,typeof Chats!=='undefined'?Chats.get(sid):null)&&History.byId(sid)&&!History.byId(sid).isArchived&&!queue.has(sid)&&done.get(sid)!==stamp(entry))queue.set(sid,{sid,at:now(),next:0});
     save();if(queue.size)soon();
   }
   async function drain(){
@@ -29,7 +30,7 @@ const ProbeArchive = (() => {
       for(const [sid,item]of queue){
         if(owner()!==account||key!==scope)return;
         const entry=Models.get(sid),chat=Chats.get(sid),history=History.byId(sid);
-        if(entry&&!thinking(entry.fingerprint)){queue.delete(sid);continue;}
+        if((entry&&!thinking(entry.fingerprint))||!canCleanup(sid,chat)){queue.delete(sid);continue;}
         if(!history&&History.full){queue.delete(sid);continue;}
         if(!entry||!history||item.next>now())continue;
         if(history.isArchived){done.set(sid,stamp(entry));queue.delete(sid);continue;}

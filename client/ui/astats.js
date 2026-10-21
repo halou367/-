@@ -46,17 +46,21 @@ const AcctStats = {
     const activeItems = (History.items || []).filter(e => e?.id && !gone.has(e.id) && !e.isArchived && !e.archivedAt && !e._pending);
     for (const e of activeItems) {
       const mi = Models.get(e.id);
-      const fromM = !!(mi?.name && !mi.guess && !mi.pendingConfirm && this.validModelName(mi.name));
+      const isBareGuess = Boolean(mi?.guess && !mi.userCorrected && !mi.habitInferred && !mi.reverseInferred && !mi.billingProbe);
+      const fromM = !!(mi?.name && !isBareGuess && !mi.pendingConfirm && this.validModelName(mi.name));
+      const tv = typeof Titles !== 'undefined' && Titles.view ? Titles.view(e.id, e.title, e.localTitle) : null;
+      const tvBase = tv?.model && !/待解码/.test(tv.model) ? noteBase(tv.model) : '';
+      const fromTv = !isBareGuess && !!(tvBase && this.validModelName(tvBase) && (Strength.ver10(Strength.canon(tvBase)) != null || /(?:^|[-_.\s])\d/.test(tvBase)));
       const rawTitle = String(e.localTitle || e.title || '');
-      const gp = typeof TitleCipher !== 'undefined' && TitleCipher.decodeGoldPrefix ? TitleCipher.decodeGoldPrefix(rawTitle) : null;
+      const gp = typeof TitleCipher !== 'undefined' && TitleCipher.decodeGoldPrefix ? (TitleCipher.decodeGoldPrefix(rawTitle) || TitleCipher.decodeGoldPrefix(e.title)) : null;
       const fromPrefix = !!(gp?.model && this.validModelName(gp.model));
       const cleanRawTitle = gp ? (gp.cleanTitle || '') : rawTitle;
       const baseTitle = noteBase(cleanRawTitle);
       const fromTitle = !mi && this.validModelName(baseTitle) && (!/\s/.test(baseTitle) || /\s·\s/.test(cleanRawTitle)) && (Strength.ver10(Strength.canon(baseTitle)) != null || /(?:^|[-_.\s])\d/.test(baseTitle));
-      const rawNote = (typeof Notes !== 'undefined' && Notes.get ? Notes.get(e.id) : '') || '';
+      const rawNote = tv?.note || (typeof Notes !== 'undefined' && Notes.get ? Notes.get(e.id) : '') || '';
       const noteCanon = rawNote ? Strength.canon(rawNote) : '';
       const fromNote = !!(noteCanon && this.validModelName(noteCanon) && (Strength.ver10(noteCanon) != null || /(?:^|[-_.\s])\d/.test(noteCanon)));
-      let picked = fromM ? mi.name : (fromPrefix ? gp.model : (fromTitle ? baseTitle : (fromNote ? noteCanon : '')));
+      let picked = fromM ? mi.name : (fromTv ? tvBase : (fromPrefix ? gp.model : (fromTitle ? baseTitle : (fromNote ? noteCanon : ''))));
       if (fromNote && picked && Strength.parts?.(noteCanon)?.tier && !Strength.parts?.(Strength.canon(picked))?.tier) picked = noteCanon;
       const nm = picked ? (Strength.canon(picked) || '') : '';
       const vid = nm && this.validModelName(nm) ? (Brand.of(nm) || 'other') : 'other';
@@ -96,6 +100,15 @@ const AcctStats = {
     clearTimeout(this.repT);
     if (Host.platform === 'web' || (!History.lastLoad && !History.cached && !Array.isArray(History.items))) return;
     const stats = this.compute(), sig = JSON.stringify(stats.vendors) + ':' + stats.total + ':' + stats.full;
+    const prevTotal = Number(UI.host?.account?.status?.stats?.total) || 0;
+    if (stats.total === 0 && prevTotal > 0 && !(History.items || []).length) {
+      if (extra) {
+        const patch = { ...(extra || {}) };
+        delete patch.stats;
+        if (Object.keys(patch).length) Host.noteAccount?.(patch)?.catch?.(() => {});
+      }
+      return;
+    }
     const curId = UI.host?.account?.id;
     if (UI.host?.account) UI.host.account.status = { ...(UI.host.account.status || {}), stats };
     if (typeof LaunchPick !== 'undefined' && Array.isArray(LaunchPick.cache) && curId) {

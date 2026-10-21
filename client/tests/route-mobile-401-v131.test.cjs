@@ -70,7 +70,7 @@ test('Route pause prompt (10s countdown + Settings toggle) and immediate open-so
   const sq = fs.readFileSync(path.join(__dirname, '../ui/send-queue.js'), 'utf8');
   const bpui = fs.readFileSync(path.join(__dirname, '../ui/billing-probe-ui.js'), 'utf8');
 
-  assert.match(autoRoute, /askModelRoute\(chat,\s*\{\s*routeType\s*=\s*'model',\s*fromLabel\s*=\s*'',\s*toLabel\s*=\s*'',\s*reason\s*=\s*'',\s*seconds\s*=\s*10\s*\}/);
+  assert.match(autoRoute, /askModelRoute\(chat,\s*\{\s*routeType\s*=\s*'model',\s*fromLabel\s*=\s*'',\s*toLabel\s*=\s*'',\s*reason\s*=\s*'',(?:\s*toTurn\s*=\s*null,)?\s*seconds\s*=\s*10\s*\}/);
   assert.match(autoRoute, /检测到同型号的强度削弱，是否暂停对话？/);
   assert.match(autoRoute, /检测到路由到其他模型，是否暂停对话？/);
   assert.match(dock, /row\('路由弹窗倒计时暂停'/);
@@ -79,7 +79,7 @@ test('Route pause prompt (10s countdown + Settings toggle) and immediate open-so
   assert.match(core, /checkMidStreamRoute\(t,\s*ch\)/);
   assert.match(sq, /chat\._routePaused/);
   assert.match(bpui, /RouteConfirm\.askModelRoute\(chat/);
-  assert.match(bpui, /isOpenCandidateName\(routeToLabel \|\| best\.id\)/);
+  assert.match(bpui, /isOpenCandidateName\((?:routeToLabel \|\| best\.id|cleanTo)\)/);
 });
 
 test('Mobile account picker card tap, swipe-left delete, and import region-IP auto-matching parity with PC', () => {
@@ -131,16 +131,16 @@ test('One-shot billing lock, route/effort UI sync across all surfaces, (High) (H
   assert.match(bpui, /reverseCandidates:\s*Array\.isArray\(sum\.mergedCandidates\)/);
 
   // 3. Route/effort weakening synchronization across Models, Strength, ConversationLabels, TitleSync, Dock, and View
-  assert.match(bpui, /detectMessageRouteStep\(latest,\s*routeFromLabel,\s*routeToLabel,\s*detectedRouteType,\s*runningToolFam\)/);
+  assert.match(bpui, /detectMessageRouteStep\(latest,\s*cleanFrom,\s*cleanTo,\s*routeType,\s*runningToolFam\)/);
   assert.match(bpui, /Strength\.noteReverse\(sid,\s*nextEntry\)/);
-  assert.match(bpui, /text:\s*`路由提示：对话疑似 \$\{suspectedModel\}`/);
+  assert.match(bpui, /路由提示：对话疑似 \$\{(?:suspectedModel|toShort)\}`/);
   assert.match(strength, /function noteReverse\(sid,\s*entry\)/);
   assert.match(cl, /if \(entry\?\.routed\)\s*\{\s*const r = sane\(entry\?\.reverseScore\);/);
   assert.match(ts, /const score = \(mi\?\.routed \? sane\(mi\?\.reverseScore\) : null\)/);
   assert.match(dock, /m\?\.routed && savedModelName/);
   assert.match(view, /tr-route-tag/);
   assert.match(view, /`路由提示：对话疑似 \$\{p\._routeStart\.toLabel\}`/);
-  assert.match(view, /const rText = `路由提示：对话疑似 \$\{suspectedModel\}`;/);
+  assert.match(view, /路由提示：对话疑似 \$\{suspectedModel\}(?:\$\{stepSuffix\})?`;/);
   assert.match(view, /msg-turn-model/);
 
   // 4. Background /cost requests respect ReadLimit (no bg:false override)
