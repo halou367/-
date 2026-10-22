@@ -272,6 +272,16 @@ function loadDB() {
         }
       } catch {}
     }
+    if (Array.isArray(DB.accounts)) {
+      for (const a of DB.accounts) {
+        if (!a || typeof a !== 'object') continue;
+        const beforePw = a.pw;
+        if (a.pw || DB.shared?.['regpw@' + a.id]?.pw || DB.shared?.['mailtok@' + a.id]?.pw) {
+          resolveAccountPw(a);
+          if (a.pw !== beforePw) ch = true;
+        }
+      }
+    }
   } catch {}
   if (ch) saveDB();
 }
@@ -332,9 +342,112 @@ const pubLite = a => { const o = pub(a); if (o?.status?.stats) o.status = { ...o
 let saveT = 0; const saveSoon = () => { clearTimeout(saveT); saveT = setTimeout(saveDB, 800); };
 // 浏览器模式里登录过的第三方网站（目前只有 GitHub）：只看该账号分区里的 Cookie 名字，不发请求、不读密码；结果存进账号记录，切换账号的卡片据此显示站点标记
 const siteLogins = SiteLogins.createSiteLogins({ log: runtimeLog, read: id => acct(id)?.sites, write: (id, sites) => { const a = acct(id); if (!a) return; a.sites = sites; saveSoon(); } });
-// 密码只存本机：优先用系统钥匙串加密（safeStorage），不可用时退回 base64
+// 密码只存本机：优先用系统钥匙串加密（safeStorage），不可用时退回 base64；跨资料夹（正式版 / 测试版 / s 子目录）迁移后自动兜底解密并自愈重加密
+let _siblingMasterKeys = null;
+function getSiblingMasterKeys() {
+  if (_siblingMasterKeys) return _siblingMasterKeys;
+  _siblingMasterKeys = [];
+  if (process.platform !== 'win32' || process.env.BRANA_PERF_FIXTURE === '1') return _siblingMasterKeys;
+  try {
+    const appData = app.getPath('appData');
+    const userData = app.getPath('userData');
+    const candidates = [
+      path.join(userData, 'Local State'),
+      path.join(userData, 's', 'Local State'),
+      path.join(appData, 'Arena Client', 'Local State'),
+      path.join(appData, 'Brana AI', 'Local State'),
+      path.join(appData, 'Brana AI Extension Test', 'Local State'),
+      path.join(appData, 'Brana AI Extension Test', 's', 'Local State'),
+    ];
+    const seenB64 = new Set();
+    const toUnprotect = [];
+    for (const p of candidates) {
+      try {
+        if (!fs.existsSync(p)) continue;
+        const j = JSON.parse(fs.readFileSync(p, 'utf8'));
+        const ek = j?.os_crypt?.encrypted_key;
+        if (!ek || typeof ek !== 'string') continue;
+        const raw = Buffer.from(ek, 'base64');
+        if (raw.length <= 5 || raw.subarray(0, 5).toString('utf8') !== 'DPAPI') continue;
+        const dpapiB64 = raw.subarray(5).toString('base64');
+        if (seenB64.has(dpapiB64)) continue;
+        seenB64.add(dpapiB64);
+        toUnprotect.push(dpapiB64);
+      } catch {}
+    }
+    if (toUnprotect.length) {
+      const psCmd = `Add-Type -AssemblyName System.Security; @(${toUnprotect.map(b => `'${b}'`).join(',')}) | ForEach-Object { try { [Convert]::ToBase64String([System.Security.Cryptography.ProtectedData]::Unprotect([Convert]::FromBase64String($_), $null, [System.Security.Cryptography.DataProtectionScope]::CurrentUser)) } catch { '' } }`;
+      const r = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-Command', psCmd], { encoding: 'utf8', windowsHide: true, timeout: 4000 });
+      const lines = String(r.stdout || '').trim().split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+      for (const line of lines) {
+        try {
+          const mk = Buffer.from(line, 'base64');
+          if (mk.length === 32) _siblingMasterKeys.push(mk);
+        } catch {}
+      }
+    }
+  } catch {}
+  return _siblingMasterKeys;
+}
+function decSsWithKeys(b64) {
+  try {
+    const buf = Buffer.from(b64, 'base64');
+    if (buf.length < 31 || buf.subarray(0, 3).toString('utf8') !== 'v10') return '';
+    const iv = buf.subarray(3, 15), tag = buf.subarray(buf.length - 16), ct = buf.subarray(15, buf.length - 16);
+    for (const mk of getSiblingMasterKeys()) {
+      try {
+        const d = crypto.createDecipheriv('aes-256-gcm', mk, iv);
+        d.setAuthTag(tag);
+        const out = Buffer.concat([d.update(ct), d.final()]).toString('utf8');
+        if (out) return out;
+      } catch {}
+    }
+  } catch {}
+  return '';
+}
 function encPw(p) { if (!p) return ''; try { if (safeStorage.isEncryptionAvailable()) return 'ss:' + safeStorage.encryptString(p).toString('base64'); } catch {} return 'b64:' + Buffer.from(p, 'utf8').toString('base64'); }
-function decPw(v) { if (!v) return ''; try { if (v.startsWith('ss:')) return safeStorage.decryptString(Buffer.from(v.slice(3), 'base64')); if (v.startsWith('b64:')) return Buffer.from(v.slice(4), 'base64').toString('utf8'); } catch {} return ''; }
+function decPw(v) {
+  if (!v || typeof v !== 'string') return '';
+  if (v.startsWith('ss:')) {
+    const b64 = v.slice(3);
+    try {
+      const out = safeStorage.decryptString(Buffer.from(b64, 'base64'));
+      if (out) return out;
+    } catch {}
+    return decSsWithKeys(b64);
+  }
+  if (v.startsWith('b64:')) {
+    try { return Buffer.from(v.slice(4), 'base64').toString('utf8'); } catch {}
+  }
+  return '';
+}
+function resolveAccountPw(a) {
+  if (!a || typeof a !== 'object') return '';
+  const plain = decPw(a.pw);
+  if (plain) {
+    if (a.pw && a.pw.startsWith('ss:')) {
+      let nativeOk = false;
+      try { nativeOk = Boolean(safeStorage.decryptString(Buffer.from(a.pw.slice(3), 'base64'))); } catch {}
+      if (!nativeOk) {
+        const healed = encPw(plain);
+        if (healed && healed !== a.pw) { a.pw = healed; saveSoon(); }
+      }
+    }
+    return plain;
+  }
+  const reg = DB.shared?.['regpw@' + a.id];
+  const mt = DB.shared?.['mailtok@' + a.id];
+  for (const cand of [reg, mt]) {
+    if (!cand?.pw) continue;
+    if (cand.email && a.email && !AuthFlow.sameMailbox(cand.email, a.email)) continue;
+    const p = decPw(cand.pw);
+    if (p) {
+      if (!a.noAuto) { a.pw = encPw(p); saveSoon(); }
+      return p;
+    }
+  }
+  return '';
+}
 const byEmail = em => { const k = String(em || '').trim().toLowerCase(); return k ? DB.accounts.find(a => String(a.email || '').toLowerCase() === k || AuthFlow.sameMailbox(a.email, k)) : null; };
 
 // 代理解析：支持 http://host:port、socks5://host:port、host:port、http://user:pass@host:port
@@ -749,8 +862,27 @@ function keepViewport(w) {
 
 // ---------- 启动小窗：双击打开后立刻出现「加载中…」，界面准备好再切到主窗口 ----------
 let splash = null;
-let updRestoredOpen = null, updRestoredLast = '', updJustCompleted = false;
+let updRestoredOpen = null, updRestoredLast = '', updRestoredBounds = null, updJustCompleted = false;
 const updStatePath = () => path.join(app.getPath('temp'), 'brana-ai-update', 'upd-state.json');
+const updSessionPath = () => path.join(app.getPath('temp'), 'brana-ai-update', 'upd-session.json');
+function captureAllWindowBounds() {
+  try {
+    if (typeof wins === 'undefined' || !wins) return;
+    for (const w of wins.values()) {
+      if (w && !w.isDestroyed() && typeof w.__syncBounds === 'function') w.__syncBounds(false);
+    }
+  } catch {}
+}
+function collectSavedWindowBounds() {
+  captureAllWindowBounds();
+  const out = {};
+  try {
+    for (const a of (DB?.accounts || [])) {
+      if (a?.id && a?.winBounds && typeof a.winBounds === 'object') out[a.id] = a.winBounds;
+    }
+  } catch {}
+  return out;
+}
 function writeUpdRestartState(patch) {
   if (!process.argv.includes('--updated') && !updJustCompleted) return false;
   try {
@@ -872,8 +1004,35 @@ async function openAccount(id, opt = {}) {
   if (!hidden) showSplash();
   prepSession(a).__routeBlocked = true;
   if(typeof extensionCompat!=='undefined')extensionCompat.prepareSession(a.id,session.fromPartition(partOf(a.id)));
+  const wb = (() => {
+    try {
+      const raw = a.winBounds;
+      if (!raw || typeof raw !== 'object') return null;
+      const bw = Math.round(Number(raw.width)), bh = Math.round(Number(raw.height));
+      if (!Number.isFinite(bw) || !Number.isFinite(bh) || bw < 400 || bh < 300) return null;
+      const out = { width: Math.max(720, Math.min(8000, bw)), height: Math.max(480, Math.min(5000, bh)), maximized: !!raw.maximized };
+      const bx = Math.round(Number(raw.x)), by = Math.round(Number(raw.y));
+      if (Number.isFinite(bx) && Number.isFinite(by) && Math.abs(bx) < 32000 && Math.abs(by) < 32000) {
+        let vis = true;
+        if (typeof screen !== 'undefined' && typeof screen?.getAllDisplays === 'function') {
+          const ds = screen.getAllDisplays();
+          if (Array.isArray(ds) && ds.length) {
+            vis = ds.some(d => {
+              const r = d?.workArea || d?.bounds; if (!r) return false;
+              const ox = Math.min(bx + out.width, r.x + r.width) - Math.max(bx, r.x);
+              const oy = Math.min(by + out.height, r.y + r.height) - Math.max(by, r.y);
+              return ox >= 100 && oy >= 60;
+            });
+          }
+        }
+        if (vis) { out.x = bx; out.y = by; }
+      }
+      return out;
+    } catch { return null; }
+  })();
   const w = new BrowserWindow({
-    width: 1320, height: 880, minWidth: 720, minHeight: 480, title: `${APP_TITLE} · ${(a.email || '').split('@')[0] || a.name}`, show: false, icon: ICON,
+    ...(wb && wb.x != null && wb.y != null ? { x: wb.x, y: wb.y } : {}),
+    width: wb?.width || 1320, height: wb?.height || 880, minWidth: 720, minHeight: 480, title: `${APP_TITLE} · ${(a.email || '').split('@')[0] || a.name}`, show: false, icon: ICON,
     backgroundColor: themeBg(), autoHideMenuBar: true,
     // 不要系统白色标题栏：内容铺满窗口，标签栏当拖动区；Windows / Linux 右上角保留系统按钮并跟随主题色
     titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'hidden',
@@ -888,9 +1047,41 @@ async function openAccount(id, opt = {}) {
   wc.on('page-favicon-updated',(_e,urls)=>{wc.__bookmarkFavicons={page:wc.getURL(),urls};});
   const navigationFailures = createFailureOwner();
   const retryTarget = createRetryTarget(UI_URL); wc.__retryTarget = retryTarget;
+  const syncBounds = (immediate = false) => {
+    try {
+      if (!w || w.isDestroyed() || w.__hidden || typeof w.getBounds !== 'function') return;
+      const isMin = typeof w.isMinimized === 'function' && w.isMinimized();
+      const isMax = typeof w.isMaximized === 'function' && w.isMaximized();
+      const isFull = typeof w.isFullScreen === 'function' && w.isFullScreen();
+      if (isMin || isFull) return;
+      const curB = isMax && typeof w.getNormalBounds === 'function' ? w.getNormalBounds() : (!isMax ? w.getBounds() : a.winBounds);
+      if (curB && Number.isFinite(curB.width) && Number.isFinite(curB.height) && curB.width >= 400 && curB.height >= 300) {
+        a.winBounds = {
+          ...(Number.isFinite(curB.x) && Number.isFinite(curB.y) ? { x: Math.round(curB.x), y: Math.round(curB.y) } : {}),
+          width: Math.max(720, Math.round(curB.width)),
+          height: Math.max(480, Math.round(curB.height)),
+          maximized: !!isMax,
+        };
+        if (immediate) saveDB();
+        else if (typeof saveSoon === 'function') saveSoon();
+      }
+    } catch {}
+  };
+  w.__syncBounds = syncBounds;
+  let boundsT = 0;
+  const scheduleSyncBounds = () => { clearTimeout(boundsT); boundsT = setTimeout(() => syncBounds(false), 350); };
+  for (const ev of ['move', 'resize', 'maximize', 'unmaximize']) w.on(ev, scheduleSyncBounds);
   // 有启动小窗时：等界面搭好（host:ready）再显示主窗口，避免白屏 / 半成品
   const waitUi = !!splash && !hidden; let shown = false;
-  const reveal = () => { if (shown || w.isDestroyed()) return; if (w.__hidden) { closeSplash(); return; } shown = true; w.show(); closeSplash(); };
+  const reveal = () => {
+    if (shown || w.isDestroyed()) return;
+    if (w.__hidden) { closeSplash(); return; }
+    shown = true;
+    if (wb?.maximized && typeof w.maximize === 'function') { try { w.maximize(); } catch {} }
+    w.show();
+    closeSplash();
+    scheduleSyncBounds();
+  };
   w.__reveal = reveal;
   const offline = (desc, code = '', manual = false, url = '') => {
     if (w.isDestroyed() || w.__offlinePending) return;
@@ -941,7 +1132,15 @@ async function openAccount(id, opt = {}) {
       try {
         await extensionStore.ready(a.id); stage = 'route';
         await applyProxy(a); stage = 'load';
-        if (!w.isDestroyed()) { await loadURLAlive(wc, url || UI_URL, 45000, options); wc.__privacyNeedsReload=false; }
+        if (!w.isDestroyed()) {
+          const targetUrl = url || UI_URL;
+          const isFix = Boolean(process.env.BRANA_EXTENSION_TEST_DATA || /^(?:https?:\/\/|socks5:\/\/)?127\.0\.0\.1:(?:1|9|10)\b/i.test(String(proxyStr(a) || '')) || /@example\.invalid$/i.test(String(a?.email || '')));
+          if (!isFix && String(targetUrl).startsWith(UI_URL) && typeof wc.debugger?.sendCommand === 'function' && wc.debugger.isAttached()) {
+            try { await wc.debugger.sendCommand('Fetch.enable', { patterns: [{ urlPattern: 'https://arena.ai/robots.txt*', requestStage: 'Request' }] }); } catch {}
+          }
+          await loadURLAlive(wc, targetUrl, 45000, options);
+          wc.__privacyNeedsReload=false;
+        }
         return true;
       } catch (error) {
         if (w.isDestroyed() || ['ERR_ABORTED','ERR_RENDER_PROCESS_GONE','ERR_WEB_CONTENTS_DESTROYED'].includes(error.code)) return false;
@@ -1008,15 +1207,35 @@ async function openAccount(id, opt = {}) {
   // Destroying a window while CDP auto-attach is active crashes the whole main process,
   // which closed every account window at once.
   w.on('close', () => {
+    clearTimeout(boundsT);
+    if (!quitting && !w.__hidden) {
+      const curShown = shownIds();
+      const nowMs = Date.now();
+      if (!w.constructor.__closeBatch || nowMs - w.constructor.__closeBatch.at > 650) {
+        w.constructor.__closeBatch = { at: nowMs, openBefore: curShown.length ? [...curShown] : [id] };
+      } else {
+        w.constructor.__closeBatch.at = nowMs;
+      }
+    }
+    syncBounds(!quitting);
     releaseWindow(w);
   });
   w.on('closed', () => {
-    clearTimeout(w.__recoverT); runtimeLog('window-closed', { window: w.__runtimeId, reason: quitting ? 'quit' : 'closed' });
+    clearTimeout(boundsT); clearTimeout(w.__recoverT); runtimeLog('window-closed', { window: w.__runtimeId, reason: quitting ? 'quit' : 'closed' });
     if (wins.get(id) === w) wins.delete(id);
     if (!quitting) {
-      DB.open = shownIds(); saveDB();
+      const rem = shownIds();
+      if (rem.length) {
+        DB.open = rem;
+      } else if (!w.__hidden) {
+        const batch = w.constructor.__closeBatch;
+        DB.open = (batch && Date.now() - batch.at <= 800 && Array.isArray(batch.openBefore) && batch.openBefore.length > 1)
+          ? batch.openBefore
+          : [id];
+      }
+      saveDB();
       // 最后一个可见窗口关掉：后台抽卡的隐藏窗口一起关，程序退出（不留看不见的进程）
-      if (!w.__hidden && !shownIds().length && !(mgr && !mgr.isDestroyed())) for (const x of wins.values()) destroyWindow(x);
+      if (!w.__hidden && !rem.length && !(mgr && !mgr.isDestroyed())) for (const x of wins.values()) destroyWindow(x);
     }
   });
   void wc.__navigate(UI_URL);
@@ -1756,10 +1975,16 @@ ipcMain.handle('host:ready', e => {
   return true;
 });
 ipcMain.handle('host:stage', (e, t) => { splashText(String(t || '').slice(0, 40)); return true; });
+async function nodeOrDirectFetch(u, o, ds) {
+  if (typeof globalThis.fetch === 'function') {
+    try { return await globalThis.fetch(u, o); } catch (err) { if (o?.signal?.aborted) throw err; }
+  }
+  return ds ? ds.fetch(u, o) : fetch(u, o);
+}
 function purityCacheOpt(ds) {
   return {
     getCachedRep: ip => (ip && DB?.shared?.pippool?.rep) ? DB.shared.pippool.rep[ip] : null,
-    directFetch: ds ? (u, o) => ds.fetch(u, o) : null,
+    directFetch: (u, o) => nodeOrDirectFetch(u, o, ds),
     directIppure: true,
     onCacheRep: (ip, { pure, ipa }) => {
       if (!ip || !DB?.shared?.pippool) return;
@@ -2026,6 +2251,7 @@ ipcMain.handle('host:updStart', async (e, o) => {
     const ds = await directSession().catch(() => null);
     const fetchers = [
       ...candAccts.map(ca => (u, op) => session.fromPartition(partOf(ca.id)).fetch(u, op)),
+      (u, op) => nodeOrDirectFetch(u, op, ds),
       ...(ds ? [(u, op) => ds.fetch(u, op)] : []),
       (u, op) => session.defaultSession.fetch(u, op),
     ];
@@ -2122,11 +2348,25 @@ function cleanOrphanFindProcesses() {
 }
 function checkPending() {
   try { delete process.env.BRANA_UPDATING; } catch {}
-  try { cleanOrphanFindProcesses(); } catch {}
+  setTimeout(() => { try { cleanOrphanFindProcesses(); } catch {} }, 6000);
   if (process.argv.includes('--updated')) {
     updJustCompleted = true;
     setTimeout(syncSiblingInstallDirs, 1500);
   }
+  try {
+    const sessFile = updSessionPath();
+    if (fs.existsSync(sessFile)) {
+      const s = JSON.parse(fs.readFileSync(sessFile, 'utf8'));
+      if (Date.now() - (+s?.at || 0) < 30 * 60e3) {
+        if (Array.isArray(s?.openIds) && s.openIds.length) {
+          updRestoredOpen = s.openIds;
+          if (s.lastId) updRestoredLast = s.lastId;
+        }
+        if (s?.winBounds && typeof s.winBounds === 'object') updRestoredBounds = s.winBounds;
+      }
+      try { fs.unlinkSync(sessFile); } catch {}
+    }
+  } catch {}
   try {
     const sf = updStatePath();
     if (fs.existsSync(sf)) {
@@ -2135,6 +2375,7 @@ function checkPending() {
         updRestoredOpen = s.openIds;
         if (s.lastId) updRestoredLast = s.lastId;
       }
+      if (!updRestoredBounds && s?.winBounds && typeof s.winBounds === 'object') updRestoredBounds = s.winBounds;
     }
   } catch {}
   let p = null; try { p = JSON.parse(fs.readFileSync(UPD_PEND(), 'utf8')); } catch { return; }
@@ -2142,6 +2383,7 @@ function checkPending() {
     updRestoredOpen = p.open;
     if (p.last) updRestoredLast = p.last;
   }
+  if (!updRestoredBounds && p?.bounds && typeof p.bounds === 'object') updRestoredBounds = p.bounds;
   const newer = (a, b) => { const x = String(a || '').replace(/-.*/, '').split('.').map(Number), y = String(b || '').replace(/-.*/, '').split('.').map(Number); for (let i = 0; i < 3; i++) { if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) > (y[i] || 0); } return false; };
   if (VERSION === p.to || newer(VERSION, p.from)) {   // 装上了：清理安装包
     updJustCompleted = true;
@@ -2160,6 +2402,7 @@ function checkPending() {
 }
 function quitForUpdate() {
   try {
+    captureAllWindowBounds();
     const open = shownIds();
     if (open.length) DB.open = open;
     saveDB();
@@ -2183,7 +2426,7 @@ ipcMain.handle('host:updManual', async () => {
   }
   try { fs.unlinkSync(UPD_PEND()); } catch {} updFailed = null;
   if (p.kind === 'portable') { shell.showItemInFolder(p.file); return { ok: true, folder: true, file: p.file }; }
-  try { const open = shownIds(); if (open.length) DB.open = open; saveDB(); } catch {}
+  try { captureAllWindowBounds(); const open = shownIds(); if (open.length) DB.open = open; saveDB(); } catch {}
   quitting = true;
   const appDir = path.dirname(process.execPath);
   try {
@@ -2196,7 +2439,7 @@ ipcMain.handle('host:updManual', async () => {
   } catch (err) {
     const openErr = await shell.openPath(p.file); if (openErr) return { error: openErr };
   }
-  setTimeout(async () => { quitting = true; try { const open = shownIds(); if (open.length) DB.open = open; saveDB(); } catch {} for (const w of [...wins.values()]) destroyWindow(w); if (mgr && !mgr.isDestroyed()) destroyWindow(mgr); await cookiePersistence.flushAll().catch(() => {}); for (const k of [...tunnels.keys()]) stopTunnel(k); killKids(); app.exit(0); }, 500);
+  setTimeout(async () => { quitting = true; try { captureAllWindowBounds(); const open = shownIds(); if (open.length) DB.open = open; saveDB(); } catch {} for (const w of [...wins.values()]) destroyWindow(w); if (mgr && !mgr.isDestroyed()) destroyWindow(mgr); await cookiePersistence.flushAll().catch(() => {}); for (const k of [...tunnels.keys()]) stopTunnel(k); killKids(); app.exit(0); }, 500);
   return { ok: true };
 });
 ipcMain.handle('host:updFolder', () => { const f = updFailed?.file || UPD.file; if (!f || !fs.existsSync(f)) return { error: '安装包已经不在了，请重新下载' }; shell.showItemInFolder(f); return { ok: true, file: f }; });
@@ -2215,21 +2458,29 @@ ipcMain.handle('host:updInstall', async () => {
     }
   }
   const openBeforeUpd = shownIds();
+  const savedBounds = collectSavedWindowBounds();
   try { if (openBeforeUpd.length) DB.open = openBeforeUpd; saveDB(); } catch {}
   quitting = true;
   for (const k of [...tunnels.keys()]) stopTunnel(k); killKids();
   await Promise.race([cookiePersistence.flushAll().catch(() => {}), new Promise(r => setTimeout(r, 1200))]);
   const keepOpenIds = openBeforeUpd.length ? openBeforeUpd : (Array.isArray(DB.open) && DB.open.length ? DB.open : []);
-  try { fs.writeFileSync(UPD_PEND(), JSON.stringify({ from: VERSION, to: UPD.ver || '', file: UPD.file, kind, at: Date.now(), open: keepOpenIds, last: DB.last || '' })); } catch {}
+  try { fs.writeFileSync(UPD_PEND(), JSON.stringify({ from: VERSION, to: UPD.ver || '', file: UPD.file, kind, at: Date.now(), open: keepOpenIds, last: DB.last || '', bounds: savedBounds })); } catch {}
   try {
     const updDir = path.dirname(UPD.file);
     const appDir = path.dirname(process.execPath);
     const stateFile = path.join(updDir, 'upd-state.json');
+    const sessFile = path.join(updDir, 'upd-session.json');
     const progPs1 = path.join(updDir, 'brana-ai-progress.ps1');
     const psExe = fs.existsSync('C:\\Windows\\SysNative\\WindowsPowerShell\\v1.0\\powershell.exe')
       ? 'C:\\Windows\\SysNative\\WindowsPowerShell\\v1.0\\powershell.exe'
       : 'powershell.exe';
     try {
+      fs.writeFileSync(sessFile, JSON.stringify({
+        at: Date.now(),
+        openIds: keepOpenIds,
+        lastId: DB.last || '',
+        winBounds: savedBounds,
+      }), 'utf8');
       fs.writeFileSync(stateFile, JSON.stringify({
         from: VERSION,
         to: UPD.ver || '',
@@ -2240,6 +2491,7 @@ ipcMain.handle('host:updInstall', async () => {
         openIds: keepOpenIds,
         openCount: Math.max(1, keepOpenIds.length),
         lastId: DB.last || '',
+        winBounds: savedBounds,
         text: '正在保存原来打开的 ' + Math.max(1, keepOpenIds.length) + ' 个窗口状态并关闭旧版进程…',
         oldPid: process.pid,
         exePath: process.execPath,
@@ -2252,6 +2504,7 @@ ipcMain.handle('host:updInstall', async () => {
         '[System.Windows.Forms.Application]::EnableVisualStyles()',
         '$state = @{ from = ""; to = ""; step = 2; pct = 16; restartPct = 0; uiReady = $false; openCount = 1; text = "正在准备覆盖安装新版本…"; oldPid = 0; exePath = "" }',
         'if (Test-Path -LiteralPath $StatePath) { try { $state = Get-Content -LiteralPath $StatePath -Raw -Encoding UTF8 | ConvertFrom-Json } catch {} }',
+        '$initExePath = [string]$state.exePath',
         '$f = New-Object System.Windows.Forms.Form',
         '$f.Text = "Brana AI 正在自动更新与重启"',
         '$f.ClientSize = New-Object System.Drawing.Size(460, 268)',
@@ -2347,8 +2600,10 @@ ipcMain.handle('host:updInstall', async () => {
         '    try { $s = Get-Content -LiteralPath $StatePath -Raw -Encoding UTF8 | ConvertFrom-Json; if ($s) { $script:state = $s } } catch {}',
         '  }',
         '  $st = [int]($script:state.step)',
-        '  $newProcs = @(Get-Process -Name "Brana AI" -ErrorAction SilentlyContinue | Where-Object { $_.Id -ne $script:state.oldPid })',
-        '  if ($newProcs.Count -gt 0 -and $st -lt 4) { $st = 4 }',
+        '  $newProcs = @()',
+        '  if ($st -ge 4) {',
+        '    $newProcs = @(Get-Process -Name "Brana AI" -ErrorAction SilentlyContinue | Where-Object { $_.Id -ne $script:state.oldPid })',
+        '  }',
         '  $targetPct = [double]($script:state.pct)',
         '  if ($st -eq 3 -and $dispPct -ge 36 -and $dispPct -lt 94) { $dispPct = [Math]::Min(94.0, $dispPct + 0.55) }',
         '  if ($st -ge 4) { $targetPct = 100.0 }',
@@ -2375,8 +2630,9 @@ ipcMain.handle('host:updInstall', async () => {
         '    if (-not $winReady -and -not $script:restarted -and (([DateTime]::UtcNow - $script:step4At).TotalSeconds -ge 3.5)) {',
         '      $script:restarted = $true',
         '      $alive = @(Get-Process -Name "Brana AI" -ErrorAction SilentlyContinue | Where-Object { $_.Id -ne $script:state.oldPid })',
-        '      if ($alive.Count -eq 0 -and $script:state.exePath -and (Test-Path -LiteralPath $script:state.exePath)) {',
-        '        try { Start-Process -FilePath $script:state.exePath -ArgumentList "--updated" } catch {}',
+        '      $runExe = if ($script:state.exePath) { [string]$script:state.exePath } else { $initExePath }',
+        '      if ($alive.Count -eq 0 -and $runExe -and (Test-Path -LiteralPath $runExe)) {',
+        '        try { Start-Process -FilePath $runExe -ArgumentList "--updated" } catch {}',
         '      }',
         '    }',
         '  }',
@@ -2506,15 +2762,15 @@ ipcMain.handle('host:updInstall', async () => {
           'End If',
           '',
           'WriteState 2, 22, 0, "false", "false", "正在关闭旧版窗口与后台进程…"',
-          'For w = 1 To 8',
+          'For w = 1 To 24',
           '  Set col = wmi.ExecQuery("SELECT ProcessId FROM Win32_Process WHERE ProcessId = " & oldPid)',
           '  If col.Count = 0 Then Exit For',
-          '  WScript.Sleep 1000',
+          '  WScript.Sleep 250',
           'Next',
           'For Each p In wmi.ExecQuery("SELECT * FROM Win32_Process WHERE ProcessId = " & oldPid & " OR Name = \'Brana AI.exe\' OR Name = \'xray.exe\'")',
           '  p.Terminate()',
           'Next',
-          'WScript.Sleep 900',
+          'WScript.Sleep 350',
           'WriteState 3, 38, 0, "false", "false", "正在静默覆盖安装新版本核心组件…"',
           'rc = sh.Run(q & newFile & q & " /NCRC --updated /S --force-run /D=" & appDir, 0, True)',
           'If rc <> 0 Then',
@@ -2683,12 +2939,12 @@ const poolProbes=createPoolProbeRunner(async (e, o, job) => {
   // 仅链式代理（socks5/sstp）或直连检测接口网络不可达的条目回退到 xray 隧道实测
   const directResults = new Map();
   const directCands = (!isFix && o?.direct !== false)
-    ? pips.filter(p => !Vless.chainOf?.(p) && !/^(?:\[::1\]|localhost|127\.|0\.|10\.|192\.0\.2\.|198\.51\.100\.|203\.0\.113\.)/i.test(p))
+    ? pips.filter(p => Boolean(p && String(p).trim()) && !Vless.chainOf?.(p) && !/^(?:\[::1\]|localhost|127\.|0\.|10\.|192\.0\.2\.|198\.51\.100\.|203\.0\.113\.)/i.test(p))
     : [];
   if (directCands.length) {
     job.stage('probing');
     const ds = await directSession().catch(() => null);
-    const dsFetch = ds ? (u, op) => ds.fetch(u, op) : null;
+    const dsFetch = (u, op) => nodeOrDirectFetch(u, op, ds);
     const pOpt = purityCacheOpt(ds);
     const queue = [...directCands];
     const runDirectWorker = async () => {
@@ -2704,7 +2960,7 @@ const poolProbes=createPoolProbeRunner(async (e, o, job) => {
         }
       }
     };
-    await Promise.all(Array.from({ length: Math.min(12, directCands.length) }, runDirectWorker));
+    await Promise.all(Array.from({ length: Math.min(8, directCands.length) }, runDirectWorker));
     if (job.signal.aborted) return { cancelled: true };
   }
   const remPips = pips.filter(p => !directResults.has(p));
@@ -2732,7 +2988,21 @@ const poolProbes=createPoolProbeRunner(async (e, o, job) => {
     const ok = await poolWithAbort(waitPort(ports[ports.length - 1], 8000),job.signal);
     if (!ok || proc.exitCode !== null) return { error: 'xray 启动失败：' + log.trim().split(/\r?\n/).slice(-2).join(' ').slice(0, 200) };
     if(job.signal.aborted)return {cancelled:true};job.stage('probing');
-    const remRes = await Promise.all(remPips.map(async (p,i)=>{let result;try{result=await probeVia(lease*32+i,ports[i],ms,job.signal);}catch(err){result={error:String(err?.message||err)};}directResults.set(p,result);job.publish(p,result);return {pip:p,...result};}));
+    const remRes = new Array(remPips.length);
+    let nextIdx = 0;
+    const runXrayWorker = async () => {
+      while (nextIdx < remPips.length && !job.signal.aborted) {
+        const i = nextIdx++;
+        const p = remPips[i];
+        let result;
+        try { result = await probeVia(lease * 32 + i, ports[i], ms, job.signal); }
+        catch (err) { result = { error: String(err?.message || err) }; }
+        directResults.set(p, result);
+        job.publish(p, result);
+        remRes[i] = { pip: p, ...result };
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(6, remPips.length) }, runXrayWorker));
     if (!directCands.length) return remRes;
     return pips.map(p => ({ pip: p, ...(directResults.get(p) || {}) }));
   } finally { job.signal.removeEventListener('abort',stop);stop();setTimeout(()=>{try{fs.unlinkSync(file);}catch{}},1500); }
@@ -2852,23 +3122,28 @@ ipcMain.handle('host:localScan', (e, ports) => {
   const job = runLocalScan(e, list).finally(() => localScanJobs.delete(key)); localScanJobs.set(key, job); return job;
 });
 
-ipcMain.handle('host:getCred', e => { const a = winAcct(e.sender); if (!a || a.noAuto || !a.email || !a.pw) return null; const password = decPw(a.pw); return password ? { email: a.email, password } : null; });
-// 官网页面里注册 / 登录时输入的密码：该账号登录成功（邮箱一致）且还没保存过密码时，存进账号（之后会话过期可自动重新登录）
+ipcMain.handle('host:getCred', e => { const a = winAcct(e.sender); if (!a || a.noAuto || !a.email) return null; const password = resolveAccountPw(a); return password ? { email: a.email, password } : null; });
+// 官网页面里注册 / 登录时输入的密码：该账号登录成功（邮箱一致）且还没保存过有效密码时，存进账号（之后会话过期可自动重新登录）
 function promoteRegPw(a, email) {
   const k = 'regpw@' + a.id, p = DB.shared?.[k];
   const mt = DB.shared?.['mailtok@' + a.id];
   const em = String(email || '').trim();
   const richEm = AuthFlow.pickRichEmail(a.email || a.name || mt?.email || p?.email, em);
+  const hasValidPw = Boolean(a.pw && decPw(a.pw));
   if (p) {
     if (Date.now() - (p.at || 0) > 24 * 3600e3) { delete DB.shared[k]; saveSoon(); return; }
     if (p.email && em && !AuthFlow.sameMailbox(p.email, em)) return;
-    if (p.pw && (p.src === 'web' || !a.pw)) {
-      a.pw = p.pw; a.noAuto = false; if (!a.email && richEm) a.email = richEm;
+    if (p.pw && (p.src === 'web' || p.src === 'client' || !hasValidPw)) {
+      const nextPlain = decPw(p.pw);
+      a.pw = nextPlain ? encPw(nextPlain) : p.pw;
+      a.noAuto = false; if (!a.email && richEm) a.email = richEm;
       delete DB.shared[k]; saveSoon(); return;
     }
   }
-  if (!a.pw && mt?.pw && (!mt.email || !em || AuthFlow.sameMailbox(mt.email, em))) {
-    a.pw = mt.pw; a.noAuto = false; if (!a.email && richEm) a.email = richEm; saveSoon();
+  if (!hasValidPw && mt?.pw && (!mt.email || !em || AuthFlow.sameMailbox(mt.email, em))) {
+    const nextPlain = decPw(mt.pw);
+    a.pw = nextPlain ? encPw(nextPlain) : mt.pw;
+    a.noAuto = false; if (!a.email && richEm) a.email = richEm; saveSoon();
   }
 }
 ipcMain.handle('host:noteAccount', (e, o) => {
@@ -3894,7 +4169,13 @@ app.on('login', (event, wc, details, authInfo, cb) => {
 });
 
 let quitting = false;
-app.on('before-quit', () => { quitting = true; const open = shownIds(); if (open.length) DB.open = open; saveDB(); });
+app.on('before-quit', () => {
+  quitting = true;
+  captureAllWindowBounds();
+  const open = shownIds();
+  if (open.length) DB.open = open;
+  saveDB();
+});
 app.on('second-instance', (e, argv) => {
   if (Array.isArray(argv) && argv.includes('--quit-for-update')) { void quitForUpdate(0); return; }
   const w = [...wins.values()].find(x => !x.isDestroyed() && !x.__hidden) || [...wins.values()].find(x => !x.isDestroyed());
@@ -3929,12 +4210,19 @@ app.whenReady().then(async () => {
   BrowserPrivacy.secureResolver(app);
   try { checkPending(); } catch {}
   loadDB();
+  let dbRestored = false;
+  if (updRestoredBounds && typeof updRestoredBounds === 'object') {
+    for (const [id, b] of Object.entries(updRestoredBounds)) {
+      const a = acct(id);
+      if (a && b && typeof b === 'object') { a.winBounds = b; dbRestored = true; }
+    }
+  }
   if (updRestoredOpen && updRestoredOpen.length) {
     const validOpen = updRestoredOpen.filter(id => acct(id));
-    if (validOpen.length) DB.open = validOpen;
-    if (updRestoredLast && acct(updRestoredLast)) DB.last = updRestoredLast;
-    try { saveDB(); } catch {}
+    if (validOpen.length) { DB.open = validOpen; dbRestored = true; }
+    if (updRestoredLast && acct(updRestoredLast)) { DB.last = updRestoredLast; dbRestored = true; }
   }
+  if (dbRestored) { try { saveDB(); } catch {} }
   try { themeWas = DB.shared?.prefs?.theme; syncThemeSource(); } catch {} showSplash(); loadBundle(); menu();
   gProbe().catch(() => {}); setInterval(() => gProbe().catch(() => {}), 5 * 60e3);
   const ids = (DB.open || []).filter(id => acct(id));

@@ -107,10 +107,10 @@ const IPRep = {
         else if (p.pp) { s -= 20; why.push('−20 代理 / VPN 出口' + (p.pt ? '（' + p.pt + '）' : '')); }
       }
     }
-    // IPv6 隧道出口或机房/云厂商 IP 若尚未拿到 IPPure 或复核评分，绝不能仅凭 ip-api 标成「≥75 纯净」
-    if ((eg.includes(':') || isHosting) && !hasPu && !p.c && !p.px) {
+    // IPv6 隧道出口或机房/云厂商 IP 若尚未拿到 IPPure 或复核评分，绝不能仅凭 ip-api 标成「≥75 纯净」或直接误判为「<50 高风险永久拉黑」
+    if ((eg.includes(':') || isHosting || p.px) && !hasPu && !p.c) {
       known = false;
-      s = Math.min(s, 68);
+      s = Math.max(52, Math.min(s, 68));
       why.push((eg.includes(':') ? 'IPv6 出口' : '机房 / 云厂商 IP') + '尚未完成 IPPure 隧道复核（不作为纯净候选）');
     }
     // IPPure（经同一条隧道查「调用方」出口）：fraudScore 0–100，≥50 即高风险 → 分数封顶 99−fs
@@ -377,7 +377,8 @@ const IPRep = {
         const bestAny = Pool.availAllPureLowestLatency?.(a.id)?.[0];
         if (bestAny && (!targetCc || !a.region)) targetCc = Pool.d?.ips?.[bestAny]?.loc || targetCc || 'JP';
       }
-      const bgNoScreen = !opt?.forceOnError && !opt?.forceOnHighRisk;
+      if (!k && (!targetCc || !Pool.avail(targetCc, a.id).length)) return;
+      const bgNoScreen = !k || (!opt?.forceOnError && !opt?.forceOnHighRisk);
       let r;
       if (targetCc && Pool.canRotate(a)) r = await Pool.acquire(a, targetCc, { exclude: new Set(k ? [k] : []), noScreen: bgNoScreen });
       else if ((opt?.forceOnError || opt?.forceOnHighRisk) && typeof RegionIP !== 'undefined' && RegionIP.switchNext) r = await RegionIP.switchNext({ owner: a.id, noScreen: bgNoScreen });

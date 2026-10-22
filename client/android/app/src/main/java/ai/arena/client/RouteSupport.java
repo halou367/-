@@ -150,6 +150,25 @@ final class RouteSupport {
         a.start();b.start();try{a.join(6000);b.join(6000);}catch(InterruptedException ignored){}
         try{if(got[0]!=null)o.put("pure",got[0]);if(got[1]!=null)o.put("ipa",got[1]);}catch(Exception ignored){}
     }
+    static void purityDirect(String targetIp,JSONObject o){
+        if(targetIp==null||targetIp.trim().isEmpty())return;
+        final String qIp=targetIp.trim().replaceAll("^\\[|\\]$","");
+        try{
+            String[] r=fetchVia(java.net.Proxy.NO_PROXY,"http://ip-api.com/json/"+java.net.URLEncoder.encode(qIp,"UTF-8")+"?fields=status,query,isp,org,as,mobile,proxy,hosting",3500);
+            if("200".equals(r[0])){
+                JSONObject j=new JSONObject(r[1]);
+                if("success".equals(j.optString("status"))){
+                    boolean h=j.optBoolean("hosting"),px=j.optBoolean("proxy"),m=j.optBoolean("mobile");
+                    String isp=j.optString("isp",j.optString("org","")),as=j.optString("as","").split(" ")[0];
+                    JSONObject ipa=new JSONObject().put("ip",j.optString("query",qIp)).put("h",h).put("px",px).put("m",m).put("isp",isp).put("as",as);
+                    o.put("ipa",ipa);
+                    int fs=(h||px)?22:10;
+                    JSONObject pure=new JSONObject().put("fs",fs).put("ip",j.optString("query",qIp)).put("res",!h&&!px).put("bc",false).put("dc",h||px).put("org",isp);
+                    o.put("pure",pure);
+                }
+            }
+        }catch(Exception ignored){}
+    }
     static JSONObject check(java.net.Proxy proxy,long deadline) throws Exception {
         JSONObject trace=get(proxy,"/cdn-cgi/trace",deadline),bad=blocked(trace);if(bad!=null)return bad;
         String ip="",loc="";for(String line:trace.optString("text").split("\\n")){if(line.startsWith("ip="))ip=line.substring(3).trim();if(line.startsWith("loc="))loc=line.substring(4).trim();}
@@ -246,8 +265,11 @@ final class RouteSupport {
                 if(!request.optString("expectedConfig").isEmpty()&&!AuthRouteState.sameConfig(a,request.optString("expectedConfig")))throw new Exception("账号环境配置已改变");
                 if(!request.optString("expectedMode").isEmpty()&&!AuthRouteState.mode(a).equals(request.optString("expectedMode")))throw new Exception("线路策略已改变");
                 if(manual&&request.optBoolean("preservePolicy")&&!request.optString("mode").equals(AuthRouteState.mode(a)))throw new Exception("保留策略时不能改变连接模式");
-                if(!manual&&!AuthRouteState.recover(a))throw new Exception("当前模式不允许自动恢复");if(manual&&!AuthRouteState.validMode(request.optString("mode")))throw new Exception("连接模式无效");validate(owner,route,request);
-                old=new JSONObject(a.toString());JSONObject candidate=AuthRouteState.merge(a,route);if(!(manual&&request.optBoolean("preservePolicy")))AuthRouteState.prefs(candidate,manual?request.optString("mode"):AuthRouteState.mode(a));staged.put(owner,candidate);
+                boolean forceFailover=request.optBoolean("forceFailover");
+                if(!manual&&!forceFailover&&!AuthRouteState.recover(a))throw new Exception("当前模式不允许自动恢复");if(manual&&!AuthRouteState.validMode(request.optString("mode")))throw new Exception("连接模式无效");validate(owner,route,request);
+                String beforeMode=AuthRouteState.mode(a);
+                String nextMode=manual?request.optString("mode"):(forceFailover&&MainActivity.isVless(route.optString("proxy"))&&("direct".equals(beforeMode)||"proxy".equals(beforeMode))?(AuthRouteState.validMode(request.optString("mode"))?request.optString("mode"):"node"):beforeMode);
+                old=new JSONObject(a.toString());JSONObject candidate=AuthRouteState.merge(a,route);if(!(manual&&request.optBoolean("preservePolicy")))AuthRouteState.prefs(candidate,nextMode);staged.put(owner,candidate);
             }
             started=true;physical(staged.get(owner));
             synchronized(main.acctLock){if(main.find(owner)!=a||!AuthRouteState.signature(a).equals(AuthRouteState.signature(old)))throw new Exception("应用期间配置已改变");validate(owner,route,request);JSONObject candidate=staged.get(owner);for(String key:new String[]{"proxy","proxyIp","nodeId","region","xout","routeMode","routeAuto","nodeFailover","routeHome"})a.put(key,candidate.opt(key));a.put("routeAt",System.currentTimeMillis());try{persist();}catch(Exception error){for(String key:new String[]{"proxy","proxyIp","nodeId","region","xout","routeMode","routeAuto","nodeFailover","routeHome","routeAt"}){if(old.has(key))a.put(key,old.opt(key));else a.remove(key);}throw error;}}

@@ -1,8 +1,24 @@
 // Client UI adapter: Session telemetry & billing cost analytics view controller.
 const ChatHabitFingerprint = (() => {
   const BANK_KEY = 'habitLearnBank:v1';
-  const MAX_BANK_SAMPLES = 1200;
+  const MAX_BANK_SAMPLES = 1600;
   let sharedBankLoaded = false;
+
+  // 五级真值权重金字塔（5-Tier Truth Hierarchy）：
+  // 5 = T0 Battle 双子星同题揭晓 (9.5)
+  // 4 = T1 Battle 单边揭晓 / 诊断 JSON 真值 (8.0~8.5)
+  // 3 = T2 Direct 直连模式锁定真值 (6.5)
+  // 2 = T3 /cost 丢番图唯一解教师 (3.2) 或 T4 用户手动纠偏趋势参考 (1.8)
+  function getSampleTruthRank(s) {
+    if (!s || typeof s !== 'object') return 0;
+    if (s.truthTier === 'battle_paired' || (s.battleRevealed && s.battlePair?.partnerModel)) return 5;
+    if (s.battleRevealed || s.truthTier === 'battle_single' || /#[ab]$/i.test(String(s.sid || ''))) return 4;
+    if (s.importedFromDiag || s.truthTier === 'diag_verified') return 4;
+    if (s.directMode || s.truthTier === 'direct_locked') return 3;
+    if (s.userConfirmed && !s.autoTeacher) return 2;
+    if (s.userConfirmed || s.autoTeacher) return 1;
+    return 0;
+  }
 
   const isOpenName = s => {
     const id = String(s || '').toLowerCase();
@@ -751,6 +767,18 @@ const ChatHabitFingerprint = (() => {
     if (s.battleSide || /#[ab]$/i.test(sidStr)) {
       out.battleSide = s.battleSide || (/#b$/i.test(sidStr) ? 'b' : 'a');
     }
+    if (s.directMode || s.truthTier === 'direct_locked') out.directMode = true;
+    if (s.evalModality) out.evalModality = String(s.evalModality);
+    if (Array.isArray(s.tierVec) && s.tierVec.length === 12) {
+      out.tierVec = s.tierVec.map(v => Math.round((Number(v) || 0) * 1000) / 1000);
+    } else if (Array.isArray(s.meta?.tierVec) && s.meta.tierVec.length === 12) {
+      out.tierVec = s.meta.tierVec.map(v => Math.round((Number(v) || 0) * 1000) / 1000);
+    }
+    if (out.battleRevealed && !out.truthTier) {
+      out.truthTier = out.battlePair?.partnerModel ? 'battle_paired' : 'battle_single';
+    } else if (out.directMode && !out.truthTier) {
+      out.truthTier = 'direct_locked';
+    }
     // 自动纠偏测试 3 步菜单时误选的不存在组合 gpt-5.6-luna -> gpt-6-luna
     if (/gpt-5\.6-luna/i.test(mStr)) {
       mStr = mStr.replace(/gpt-5\.6-luna/ig, 'gpt-6-luna');
@@ -1167,6 +1195,10 @@ const ChatHabitFingerprint = (() => {
         for (const v of Object.values(raw.scoreOffsets)) {
           if (v && (Number(v.count) || 0) > 50) { v.count = 12; healed = true; }
         }
+        if (!raw.tierCentroids) raw.tierCentroids = {};
+        if (!raw.intraFamilyHyperplanes) raw.intraFamilyHyperplanes = {};
+        if (!raw.vendorTierDeltas) raw.vendorTierDeltas = {};
+        if (!raw.modalityProfiles) raw.modalityProfiles = {};
         if (healed && typeof Store !== 'undefined' && Store.set) {
           try { Store.set(CALIB_KEY, raw); } catch {}
         }
@@ -1176,11 +1208,15 @@ const ChatHabitFingerprint = (() => {
     } catch {}
     if (builtinCal && builtinCal.protoCentroids && builtinCal.scoreOffsets) {
       const seeded = {
-        v: 2,
+        v: 3,
         protoCentroids: { ...builtinCal.protoCentroids },
         scoreOffsets: { ...builtinCal.scoreOffsets },
         dimWeights: { ...(builtinCal.dimWeights || {}) },
         repelledModels: { ...(builtinCal.repelledModels || {}) },
+        tierCentroids: { ...(builtinCal.tierCentroids || {}) },
+        intraFamilyHyperplanes: { ...(builtinCal.intraFamilyHyperplanes || {}) },
+        vendorTierDeltas: { ...(builtinCal.vendorTierDeltas || {}) },
+        modalityProfiles: { ...(builtinCal.modalityProfiles || {}) },
         reverseCalib: builtinCal.reverseCalib || { effortScales: {}, tierLogPriors: {}, modelResidualBias: {}, updatedAt: 0 },
         updatedAt: builtinCal.updatedAt || Date.now(),
       };
@@ -1194,11 +1230,15 @@ const ChatHabitFingerprint = (() => {
       return seeded;
     }
     _cachedCalibration = {
-      v: 2,
+      v: 3,
       protoCentroids: {},
       scoreOffsets: {},
       dimWeights: {},
       repelledModels: {},
+      tierCentroids: {},
+      intraFamilyHyperplanes: {},
+      vendorTierDeltas: {},
+      modalityProfiles: {},
       reverseCalib: { effortScales: {}, tierLogPriors: {}, modelResidualBias: {}, updatedAt: 0 },
       updatedAt: 0,
     };
@@ -1217,6 +1257,10 @@ const ChatHabitFingerprint = (() => {
     if (cal && typeof cal === 'object') {
       if (!cal.dimWeights) cal.dimWeights = {};
       if (!cal.repelledModels) cal.repelledModels = {};
+      if (!cal.tierCentroids) cal.tierCentroids = {};
+      if (!cal.intraFamilyHyperplanes) cal.intraFamilyHyperplanes = {};
+      if (!cal.vendorTierDeltas) cal.vendorTierDeltas = {};
+      if (!cal.modalityProfiles) cal.modalityProfiles = {};
       if (!cal.reverseCalib) cal.reverseCalib = { effortScales: {}, tierLogPriors: {}, modelResidualBias: {}, updatedAt: 0 };
     }
     _cachedCalibration = cal;
@@ -1427,6 +1471,15 @@ const ChatHabitFingerprint = (() => {
     }
   }
 
+  function detectModelVendorId(canonOrLabel) {
+    const s = String(canonOrLabel || '').toLowerCase();
+    if (/gpt|openai|sol|astra|luna|terra/.test(s)) return 'openai';
+    if (/claude|anthropic|opus|sonnet|haiku|fable/.test(s)) return 'anthropic';
+    if (/gemini|google|argon|barium/.test(s)) return 'google';
+    if (/grok|x-ai/.test(s)) return 'xai';
+    return 'open';
+  }
+
   function recordTeacherCalibration(canonModel, feat, teacherScore, weight = 1.0, sid = '') {
     try {
       if (!canonModel || !feat) return;
@@ -1439,10 +1492,15 @@ const ChatHabitFingerprint = (() => {
         calibratedSessionKeys.add(dedupKey);
       }
       const cal = loadCalibration();
+      if (!cal.tierCentroids) cal.tierCentroids = {};
+      if (!cal.intraFamilyHyperplanes) cal.intraFamilyHyperplanes = {};
+      if (!cal.vendorTierDeltas) cal.vendorTierDeltas = {};
+      if (!cal.modalityProfiles) cal.modalityProfiles = {};
+      const effW = Math.max(0.25, Number(weight) || 1.0);
       if (Array.isArray(feat.vec) && feat.vec.length === 20) {
         const prev = cal.protoCentroids[k];
-        const n = Math.min(30, (prev?.count || 0) + 1);
-        const alpha = Math.max(0.08, Math.min(0.35, (Number(weight) || 1) / (n + 4)));
+        const n = Math.min(48, (prev?.count || 0) + 1);
+        const alpha = Math.max(0.06, Math.min(0.48, effW / (n * 1.4 + 3.5)));
         const nextVec = prev && Array.isArray(prev.vec) && prev.vec.length === 20
           ? prev.vec.map((v, i) => Math.round(((1 - alpha) * (Number(v) || 0) + alpha * (Number(feat.vec[i]) || 0)) * 1000) / 1000)
           : feat.vec.map(v => Math.round((Number(v) || 0) * 1000) / 1000);
@@ -1450,7 +1508,7 @@ const ChatHabitFingerprint = (() => {
         const nextMeta = {};
         if (curMeta) {
           for (const [mk, mv] of Object.entries(curMeta)) {
-            if (typeof mv === 'boolean') nextMeta[mk] = mv;
+            if (typeof mv === 'boolean' || Array.isArray(mv) || typeof mv === 'string') nextMeta[mk] = mv;
             else {
               const pv = Number(prev?.meta?.[mk] ?? mv) || 0;
               nextMeta[mk] = Math.round(((1 - alpha) * pv + alpha * (Number(mv) || 0)) * 100) / 100;
@@ -1459,11 +1517,75 @@ const ChatHabitFingerprint = (() => {
         }
         cal.protoCentroids[k] = { vec: nextVec, meta: curMeta ? nextMeta : (prev?.meta || null), count: n, updatedAt: Date.now() };
       }
+      // 同步更新 12 维同家族档位微差质心 tierCentroids 与多模态专有原型 modalityProfiles
+      const tv = Array.isArray(feat.tierVec) && feat.tierVec.length === 12
+        ? feat.tierVec
+        : (Array.isArray(feat.meta?.tierVec) && feat.meta.tierVec.length === 12 ? feat.meta.tierVec : null);
+      if (tv && !feat.anomalous) {
+        const prevT = cal.tierCentroids[k];
+        const prevW = Number(prevT?.truthWeightSum) || 0;
+        // 若已有高权重 Battle 真值质心，低权重手动猜测纠偏 (effW < 2.5) 仅施加微弱软牵引，绝不覆盖真值边界
+        const effectivePullW = (prevW >= 8.0 && effW < 2.5) ? (effW * 0.28) : effW;
+        const nextW = Math.min(240, prevW + effectivePullW);
+        const tAlpha = Math.max(0.05, Math.min(0.55, effectivePullW / Math.max(2.0, nextW)));
+        const nextTierVec = (prevT && Array.isArray(prevT.tierVec) && prevT.tierVec.length === 12)
+          ? prevT.tierVec.map((v, i) => Math.round(((1 - tAlpha) * (Number(v) || 0) + tAlpha * (Number(tv[i]) || 0)) * 1000) / 1000)
+          : tv.map(v => Math.round((Number(v) || 0) * 1000) / 1000);
+        const nextStdVec = (prevT && Array.isArray(prevT.stdVec) && prevT.stdVec.length === 12)
+          ? prevT.stdVec.map((sv, i) => {
+              const diff = Math.abs((Number(tv[i]) || 0) - (Number(nextTierVec[i]) || 0));
+              return Math.round(Math.max(0.04, Math.min(0.38, (1 - tAlpha * 0.5) * (Number(sv) || 0.12) + tAlpha * 0.5 * diff)) * 1000) / 1000;
+            })
+          : new Array(12).fill(0.12);
+        cal.tierCentroids[k] = {
+          tierVec: nextTierVec,
+          stdVec: nextStdVec,
+          count: Math.min(80, (prevT?.count || 0) + 1),
+          truthWeightSum: Math.round(nextW * 100) / 100,
+          updatedAt: Date.now(),
+        };
+        // 厂商级跨家族相对档位迁移向量（Factorized Vendor Tier Prior）
+        const parsed = parseModelFamilyAndTier(canon);
+        const vid = detectModelVendorId(canon);
+        if (parsed.tier && vid) {
+          cal.vendorTierDeltas[vid] = cal.vendorTierDeltas[vid] || {};
+          const pvT = cal.vendorTierDeltas[vid][parsed.tier];
+          const vn = Math.min(100, (pvT?.count || 0) + 1);
+          const vAlpha = Math.max(0.04, Math.min(0.35, effectivePullW / (vn * 2.2 + 4)));
+          cal.vendorTierDeltas[vid][parsed.tier] = {
+            tierVec: (pvT && Array.isArray(pvT.tierVec) && pvT.tierVec.length === 12)
+              ? pvT.tierVec.map((v, i) => Math.round(((1 - vAlpha) * (Number(v) || 0) + vAlpha * (Number(tv[i]) || 0)) * 1000) / 1000)
+              : [...nextTierVec],
+            count: vn,
+            updatedAt: Date.now(),
+          };
+        }
+        // 多模态专有习惯画像（文字 chat / 代码网页 webdev / 搜索 search / 图片 image / 视频 video / Agent 工具流）
+        const mod = String(feat.evalModality || (feat.totalTools > 0 ? 'agent' : 'chat')).toLowerCase();
+        if (mod) {
+          cal.modalityProfiles[mod] = cal.modalityProfiles[mod] || {};
+          const pm = cal.modalityProfiles[mod][k];
+          const mn = Math.min(50, (pm?.count || 0) + 1);
+          const mAlpha = Math.max(0.08, Math.min(0.45, effectivePullW / (mn * 1.5 + 3)));
+          cal.modalityProfiles[mod][k] = {
+            tierVec: (pm && Array.isArray(pm.tierVec) && pm.tierVec.length === 12)
+              ? pm.tierVec.map((v, i) => Math.round(((1 - mAlpha) * (Number(v) || 0) + mAlpha * (Number(tv[i]) || 0)) * 1000) / 1000)
+              : [...nextTierVec],
+            vec: (Array.isArray(feat.vec) && feat.vec.length === 20)
+              ? ((pm && Array.isArray(pm.vec) && pm.vec.length === 20)
+                  ? pm.vec.map((v, i) => Math.round(((1 - mAlpha) * (Number(v) || 0) + mAlpha * (Number(feat.vec[i]) || 0)) * 1000) / 1000)
+                  : feat.vec.map(v => Math.round((Number(v) || 0) * 1000) / 1000))
+              : (pm?.vec || null),
+            count: mn,
+            updatedAt: Date.now(),
+          };
+        }
+      }
       if (Number.isFinite(+teacherScore) && +teacherScore >= 10 && +teacherScore <= 100 && Number.isFinite(+feat.habitReasoningScore)) {
         const rawDelta = Math.max(-24, Math.min(24, (+teacherScore) - (+feat.habitReasoningScore)));
         const prevS = cal.scoreOffsets[k];
-        const sn = Math.min(30, (prevS?.count || 0) + 1);
-        const beta = Math.max(0.12, Math.min(0.45, 1 / (sn + 2)));
+        const sn = Math.min(40, (prevS?.count || 0) + 1);
+        const beta = Math.max(0.10, Math.min(0.48, effW / (sn * 1.5 + 3)));
         const nextOff = prevS ? ((1 - beta) * (Number(prevS.offset) || 0) + beta * rawDelta) : rawDelta;
         const nextMean = prevS ? ((1 - beta) * (Number(prevS.meanScore) || +teacherScore) + beta * (+teacherScore)) : (+teacherScore);
         cal.scoreOffsets[k] = {
@@ -1476,6 +1598,100 @@ const ChatHabitFingerprint = (() => {
       cal.updatedAt = Date.now();
       saveCalibration(cal);
     } catch {}
+  }
+
+  // Battle 双子星同题差分对比学习引擎（Pairwise Gemini Contrastive Engine）：
+  // 利用同一 Prompt、同一模态下 A/B 双模型的响应微差，直接训练同家族相邻档位分界超平面与跨家族去偏置锚点
+  function recordBattlePairwiseContrast(chat, canonA, featA, canonB, featB, voteValue = 'tie', evalModality = 'chat') {
+    try {
+      if (!canonA || !canonB || !featA || !featB) return null;
+      const tvA = Array.isArray(featA.tierVec) && featA.tierVec.length === 12 ? featA.tierVec : null;
+      const tvB = Array.isArray(featB.tierVec) && featB.tierVec.length === 12 ? featB.tierVec : null;
+      if (!tvA || !tvB) return null;
+      const cal = loadCalibration();
+      if (!cal.intraFamilyHyperplanes) cal.intraFamilyHyperplanes = {};
+      if (!cal.reverseCalib) cal.reverseCalib = { effortScales: {}, tierLogPriors: {}, modelResidualBias: {}, updatedAt: 0 };
+      const rc = cal.reverseCalib;
+      if (!rc.tierLogPriors) rc.tierLogPriors = {};
+      if (!rc.effortScales) rc.effortScales = {};
+
+      const pA = parseModelFamilyAndTier(canonA);
+      const pB = parseModelFamilyAndTier(canonB);
+      const idxA = EFFORT_TIER_ORDER.indexOf(pA.tier);
+      const idxB = EFFORT_TIER_ORDER.indexOf(pB.tier);
+
+      // 1. 同家族不同档位同题直接交锋（如 opus-5.5-high vs opus-5.5-medium）：直接更新线性判别超平面 w_{high>low}
+      if (pA.famKey && pA.famKey === pB.famKey && idxA >= 0 && idxB >= 0 && idxA !== idxB) {
+        const hiIsA = idxA > idxB;
+        const hiTier = hiIsA ? pA.tier : pB.tier;
+        const loTier = hiIsA ? pB.tier : pA.tier;
+        const tvHi = hiIsA ? tvA : tvB;
+        const tvLo = hiIsA ? tvB : tvA;
+        const pairKey = `${hiTier}>${loTier}`;
+        cal.intraFamilyHyperplanes[pA.famKey] = cal.intraFamilyHyperplanes[pA.famKey] || {};
+        const prevH = cal.intraFamilyHyperplanes[pA.famKey][pairKey];
+        const hn = Math.min(50, (prevH?.count || 0) + 1);
+        const hAlpha = Math.max(0.15, Math.min(0.60, 2.4 / (hn + 2)));
+        const rawDelta = tvHi.map((v, i) => (Number(v) || 0) - (Number(tvLo[i]) || 0));
+        const nextW = (prevH && Array.isArray(prevH.wVec) && prevH.wVec.length === 12)
+          ? prevH.wVec.map((w, i) => Math.round(((1 - hAlpha) * (Number(w) || 0) + hAlpha * rawDelta[i]) * 1000) / 1000)
+          : rawDelta.map(d => Math.round(d * 1000) / 1000);
+        const midProj = tvHi.reduce((acc, v, i) => acc + nextW[i] * (((Number(v) || 0) + (Number(tvLo[i]) || 0)) * 0.5), 0);
+        cal.intraFamilyHyperplanes[pA.famKey][pairKey] = {
+          wVec: nextW,
+          threshold: Math.round(midProj * 10000) / 10000,
+          count: hn,
+          modality: evalModality,
+          updatedAt: Date.now(),
+        };
+      }
+
+      // 2. 利用任意同家族已积累的不同档位 tierCentroids 自动合成/刷新相邻档位超平面（即使 A 和 B 来自不同对局）
+      for (const pCur of [pA, pB]) {
+        if (!pCur.famKey) continue;
+        cal.intraFamilyHyperplanes[pCur.famKey] = cal.intraFamilyHyperplanes[pCur.famKey] || {};
+        for (let ti = 1; ti < EFFORT_TIER_ORDER.length; ti++) {
+          for (let tj = 0; tj < ti; tj++) {
+            const tHi = EFFORT_TIER_ORDER[ti];
+            const tLo = EFFORT_TIER_ORDER[tj];
+            const cHiKey = String(formatFamilyTierCanon(pCur.baseLabel, tHi) || '').toLowerCase();
+            const cLoKey = String(formatFamilyTierCanon(pCur.baseLabel, tLo) || '').toLowerCase();
+            const centHi = cal.tierCentroids?.[cHiKey];
+            const centLo = cal.tierCentroids?.[cLoKey];
+            if (centHi?.tierVec?.length === 12 && centLo?.tierVec?.length === 12) {
+              const pk = `${tHi}>${tLo}`;
+              const existingH = cal.intraFamilyHyperplanes[pCur.famKey][pk];
+              const diffVec = centHi.tierVec.map((v, i) => {
+                const std = Math.max(0.06, ((Number(centHi.stdVec?.[i]) || 0.12) + (Number(centLo.stdVec?.[i]) || 0.12)) * 0.5);
+                return Math.round((((Number(v) || 0) - (Number(centLo.tierVec[i]) || 0)) / (std * 6)) * 1000) / 1000;
+              });
+              const blendedW = (existingH && Array.isArray(existingH.wVec) && existingH.wVec.length === 12)
+                ? existingH.wVec.map((w, i) => Math.round((w * 0.65 + diffVec[i] * 0.35) * 1000) / 1000)
+                : diffVec;
+              const midP = centHi.tierVec.reduce((acc, v, i) => acc + blendedW[i] * (((Number(v) || 0) + (Number(centLo.tierVec[i]) || 0)) * 0.5), 0);
+              cal.intraFamilyHyperplanes[pCur.famKey][pk] = {
+                wVec: blendedW,
+                threshold: Math.round(midP * 10000) / 10000,
+                count: Math.max(existingH?.count || 1, Math.min(centHi.count || 1, centLo.count || 1)),
+                updatedAt: Date.now(),
+              };
+            }
+          }
+        }
+        // 3. Battle 100% 真值反哺校准 /cost 账单反推的档位先验 tierLogPriors
+        if (pCur.famKey && pCur.tier) {
+          rc.tierLogPriors[pCur.famKey] = rc.tierLogPriors[pCur.famKey] || {};
+          const curP = Number(rc.tierLogPriors[pCur.famKey][pCur.tier]) || 0;
+          rc.tierLogPriors[pCur.famKey][pCur.tier] = Math.round(Math.max(-1.6, Math.min(1.6, curP + 0.22)) * 1000) / 1000;
+        }
+      }
+      rc.updatedAt = Date.now();
+      cal.updatedAt = Date.now();
+      saveCalibration(cal);
+      return true;
+    } catch {
+      return null;
+    }
   }
 
   function saveBank(samples, { replace = false, persistToHost = true } = {}) {
@@ -1491,8 +1707,8 @@ const ChatHabitFingerprint = (() => {
       if (!prev) {
         bySid.set(k, s);
       } else {
-        const sRank = (s.userConfirmed && !s.autoTeacher) || s.importedFromDiag ? 2 : (s.userConfirmed ? 1 : 0);
-        const pRank = (prev.userConfirmed && !prev.autoTeacher) || prev.importedFromDiag ? 2 : (prev.userConfirmed ? 1 : 0);
+        const sRank = getSampleTruthRank(s);
+        const pRank = getSampleTruthRank(prev);
         const win = (sRank > pRank) || (sRank === pRank && (s.at || 0) >= (prev.at || 0)) ? s : prev;
         const lose = win === s ? prev : s;
         const rich = pickRichBankVecMeta(win, lose);
@@ -1501,19 +1717,38 @@ const ChatHabitFingerprint = (() => {
           ...win,
           vec: rich.vec,
           meta: rich.meta,
+          tierVec: Array.isArray(win.tierVec) && win.tierVec.length === 12 ? win.tierVec : (Array.isArray(lose.tierVec) && lose.tierVec.length === 12 ? lose.tierVec : rich.meta?.tierVec),
           userConfirmed: Boolean(prev.userConfirmed || s.userConfirmed),
           autoTeacher: sRank > pRank ? Boolean(s.autoTeacher) : (pRank > sRank ? Boolean(prev.autoTeacher) : Boolean(win.autoTeacher)),
           importedFromDiag: Boolean(prev.importedFromDiag || s.importedFromDiag),
+          battleRevealed: Boolean(prev.battleRevealed || s.battleRevealed),
+          directMode: Boolean(prev.directMode || s.directMode),
+          weight: Math.max(Number(win.weight) || 1, Number(lose.weight) || 1),
         });
       }
     }
-    const clean = [...bySid.values()]
-      .sort((a, b) =>
-        (Number(Boolean(b.userConfirmed && !b.autoTeacher)) - Number(Boolean(a.userConfirmed && !a.autoTeacher))) ||
-        (Number(Boolean(b.userConfirmed || b.importedFromDiag)) - Number(Boolean(a.userConfirmed || a.importedFromDiag))) ||
-        ((b.at || 0) - (a.at || 0))
-      )
-      .slice(0, MAX_BANK_SAMPLES);
+    // 分层保量扩容策略（Stratified High-Capacity Retention）：
+    // 金库层（Battle 真值 + 诊断真值 + Direct 锁定真值）受独立保护，绝不被 autoTeacher 或普通纠偏挤出
+    const allDeduplicated = [...bySid.values()].sort((a, b) =>
+      (getSampleTruthRank(b) - getSampleTruthRank(a)) ||
+      ((Number(b.weight) || 1) - (Number(a.weight) || 1)) ||
+      ((b.at || 0) - (a.at || 0))
+    );
+    const goldPool = [];
+    const silverPool = [];
+    const bronzePool = [];
+    for (const s of allDeduplicated) {
+      const tr = getSampleTruthRank(s);
+      if (tr >= 3) goldPool.push(s);
+      else if (tr === 2) silverPool.push(s);
+      else bronzePool.push(s);
+    }
+    const keptGold = goldPool.slice(0, 1050);
+    const remAfterGold = Math.max(0, MAX_BANK_SAMPLES - keptGold.length);
+    const keptSilver = silverPool.slice(0, Math.min(silverPool.length, Math.max(320, Math.floor(remAfterGold * 0.65))));
+    const remAfterSilver = Math.max(0, MAX_BANK_SAMPLES - keptGold.length - keptSilver.length);
+    const keptBronze = bronzePool.slice(0, remAfterSilver);
+    const clean = [...keptGold, ...keptSilver, ...keptBronze];
     const cleanBySid = new Map();
     for (const s of clean) cleanBySid.set(s.sid || `${s.model}:${s.at || 0}`, s);
     _cachedBankSamples = clean;
@@ -1522,7 +1757,7 @@ const ChatHabitFingerprint = (() => {
     const cal = loadCalibration();
     const builtin = (typeof globalThis !== 'undefined' && globalThis.BUILTIN_HABIT_BANK) ? globalThis.BUILTIN_HABIT_BANK : null;
     const prevRaw = (typeof Store !== 'undefined' && Store.get) ? Store.get(BANK_KEY, null) : null;
-    const payload = { v: 2, builtinRev: builtin?.builtinRev || 0, updatedAt: Date.now(), replace: Boolean(replace || prevRaw?.replace), samples: clean, calibration: cal };
+    const payload = { v: 3, builtinRev: builtin?.builtinRev || 0, updatedAt: Date.now(), replace: Boolean(replace || prevRaw?.replace), samples: clean, calibration: cal };
     try { if (typeof Store !== 'undefined' && Store.set) Store.set(BANK_KEY, payload); } catch {}
     if (persistToHost) {
       try {
@@ -1562,8 +1797,8 @@ const ChatHabitFingerprint = (() => {
           added++;
           continue;
         }
-        const sRank = (s.userConfirmed && !s.autoTeacher) || s.importedFromDiag ? 2 : (s.userConfirmed ? 1 : 0);
-        const pRank = (prev.userConfirmed && !prev.autoTeacher) || prev.importedFromDiag ? 2 : (prev.userConfirmed ? 1 : 0);
+        const sRank = getSampleTruthRank(s);
+        const pRank = getSampleTruthRank(prev);
         if (pRank > sRank) {
           const rich = pickRichBankVecMeta(prev, s);
           if ((!prev.meta && rich.meta) || (isSyntheticStubVecSample(prev.vec) && !isSyntheticStubVecSample(rich.vec))) {
@@ -1578,8 +1813,10 @@ const ChatHabitFingerprint = (() => {
           ((s.at || 0) > (prev.at || 0)) ||
           (sRank >= 1 && String(s.model || '').toLowerCase() !== String(prev.model || '').toLowerCase()) ||
           (!prev.meta && Boolean(s.meta)) ||
+          (!prev.tierVec && Boolean(s.tierVec)) ||
           (isSyntheticStubVecSample(prev.vec) && !isSyntheticStubVecSample(s.vec)) ||
-          (Boolean(s.importedFromDiag) && !prev.importedFromDiag);
+          (Boolean(s.importedFromDiag) && !prev.importedFromDiag) ||
+          (Boolean(s.battleRevealed) && !prev.battleRevealed);
         if (shouldUpdate) {
           const win = ((sRank > pRank) || (sRank === pRank && (s.at || 0) >= (prev.at || 0))) ? s : prev;
           const lose = win === s ? prev : s;
@@ -1589,9 +1826,13 @@ const ChatHabitFingerprint = (() => {
             ...win,
             vec: rich.vec,
             meta: rich.meta,
+            tierVec: Array.isArray(win.tierVec) && win.tierVec.length === 12 ? win.tierVec : (Array.isArray(lose.tierVec) && lose.tierVec.length === 12 ? lose.tierVec : rich.meta?.tierVec),
             userConfirmed: Boolean(prev.userConfirmed || s.userConfirmed),
             autoTeacher: sRank > pRank ? Boolean(s.autoTeacher) : (pRank > sRank ? Boolean(prev.autoTeacher) : Boolean(win.autoTeacher)),
             importedFromDiag: Boolean(prev.importedFromDiag || s.importedFromDiag),
+            battleRevealed: Boolean(prev.battleRevealed || s.battleRevealed),
+            directMode: Boolean(prev.directMode || s.directMode),
+            weight: Math.max(Number(win.weight) || 1, Number(lose.weight) || 1),
             score: win.score != null && Number.isFinite(+win.score) ? +win.score : prev.score,
           });
           updated++;
@@ -1617,6 +1858,47 @@ const ChatHabitFingerprint = (() => {
               count: Math.max(cL, cR) + 1,
               updatedAt: Math.max(lc.updatedAt || 0, rc.updatedAt || 0, Date.now()),
             };
+          }
+        }
+        for (const [k, rt] of Object.entries(remoteCalib.tierCentroids || {})) {
+          if (!rt || typeof rt !== 'object' || !Array.isArray(rt.tierVec) || rt.tierVec.length !== 12) continue;
+          const lt = cal.tierCentroids?.[k];
+          if (!lt || !Array.isArray(lt.tierVec) || lt.tierVec.length !== 12) {
+            cal.tierCentroids[k] = rt;
+          } else if ((rt.updatedAt || 0) !== (lt.updatedAt || 0)) {
+            const wL = Math.max(1, Number(lt.truthWeightSum || lt.count) || 1);
+            const wR = Math.max(1, Number(rt.truthWeightSum || rt.count) || 1);
+            const totW = wL + wR;
+            cal.tierCentroids[k] = {
+              tierVec: lt.tierVec.map((v, i) => Math.round((((Number(v) || 0) * wL + (Number(rt.tierVec[i]) || 0) * wR) / totW) * 1000) / 1000),
+              stdVec: Array.isArray(lt.stdVec) && lt.stdVec.length === 12 && Array.isArray(rt.stdVec) && rt.stdVec.length === 12
+                ? lt.stdVec.map((sv, i) => Math.round((((Number(sv) || 0.12) * wL + (Number(rt.stdVec[i]) || 0.12) * wR) / totW) * 1000) / 1000)
+                : (rt.stdVec || lt.stdVec || new Array(12).fill(0.12)),
+              count: Math.max(Number(lt.count) || 1, Number(rt.count) || 1) + 1,
+              truthWeightSum: Math.round(Math.max(wL, wR, (wL + wR) * 0.65) * 100) / 100,
+              updatedAt: Math.max(lt.updatedAt || 0, rt.updatedAt || 0, Date.now()),
+            };
+          }
+        }
+        if (remoteCalib.intraFamilyHyperplanes && typeof remoteCalib.intraFamilyHyperplanes === 'object') {
+          cal.intraFamilyHyperplanes = cal.intraFamilyHyperplanes || {};
+          for (const [fk, fMap] of Object.entries(remoteCalib.intraFamilyHyperplanes)) {
+            if (!fMap || typeof fMap !== 'object') continue;
+            cal.intraFamilyHyperplanes[fk] = { ...(cal.intraFamilyHyperplanes[fk] || {}), ...fMap };
+          }
+        }
+        if (remoteCalib.vendorTierDeltas && typeof remoteCalib.vendorTierDeltas === 'object') {
+          cal.vendorTierDeltas = cal.vendorTierDeltas || {};
+          for (const [vk, vMap] of Object.entries(remoteCalib.vendorTierDeltas)) {
+            if (!vMap || typeof vMap !== 'object') continue;
+            cal.vendorTierDeltas[vk] = { ...(cal.vendorTierDeltas[vk] || {}), ...vMap };
+          }
+        }
+        if (remoteCalib.modalityProfiles && typeof remoteCalib.modalityProfiles === 'object') {
+          cal.modalityProfiles = cal.modalityProfiles || {};
+          for (const [mk, mMap] of Object.entries(remoteCalib.modalityProfiles)) {
+            if (!mMap || typeof mMap !== 'object') continue;
+            cal.modalityProfiles[mk] = { ...(cal.modalityProfiles[mk] || {}), ...mMap };
           }
         }
         for (const [k, rs] of Object.entries(remoteCalib.scoreOffsets || {})) {
@@ -1973,6 +2255,23 @@ const ChatHabitFingerprint = (() => {
       h3: 2,
       meanChars: savedMeanChars,
       nonCodeMeanChars: Number(pickMeta('nonCodeMeanChars', 0)),
+      evalModality: String(pickMeta('evalModality', chat?.evalModality || (savedSearch > 0 ? 'search' : (savedWrite > 0 || savedEdit > 0 ? 'webdev' : 'chat')))),
+      tierVec: Array.isArray(cleanSavedMeta?.tierVec) && cleanSavedMeta.tierVec.length === 12
+        ? cleanSavedMeta.tierVec
+        : [
+            Math.min(1, (savedHidR / Math.max(1, savedTurns)) * 0.22),
+            Math.min(1, (savedAvgDurMs / 1000) / 75),
+            savedCps > 0 ? Math.max(0, Math.min(1, 1 - (savedCps - 18) / 165)) : 0.45,
+            0.42,
+            Math.min(1, (savedMeanChars / 4200) * 0.55),
+            Math.min(1, 0.50 + (writtenCharsFromTag || savedMeanChars) / 24000),
+            Math.min(1, (cssRoot + raf + prefersReducedMotion + colorSchemeCss) * 0.18),
+            savedTotalTools > 0 ? Math.min(1, (savedTotalTools / Math.max(1, savedTurns)) / 9) : 0.35,
+            Math.min(1, parallelSteps * 0.25 + savedPreNarrate * 0.40),
+            savedSearch > 0 ? Math.min(1, savedSearch * 0.25) : 0.30,
+            0.78,
+            Math.min(1, Math.max(0.1, (habitReasoningScore - 20) / 78)),
+          ].map(v => Math.round((Number(v) || 0) * 1000) / 1000),
       ...(cleanSavedMeta || {}),
       isGeminiCoding: effIsGemini,
       codingTurnsNoR: effIsGemini ? 2 : 0,
@@ -2028,19 +2327,37 @@ const ChatHabitFingerprint = (() => {
     let pyHeredoc = 0, catHeredoc = 0, chainAnd = 0, rgSed = 0, gitCmd = 0;
     let cssRoot = 0, raf = 0, svgRich = 0, boxComment = 0, htmlMaxLen = 0, writtenChars = 0, claudeWarmPalette = 0;
     let lowerDoctype = 0, colorSchemeCss = 0, prefersReducedMotion = 0, svgSmilNoScript = 0, ariaLabelledby = 0, sandboxLink = 0;
-    let emDash = 0, cnColon = 0, curlyApostrophe = 0, unspacedEmDash = 0, h2 = 0, h3 = 0, totalChars = 0;
+    let emDash = 0, cnColon = 0, curlyApostrophe = 0, unspacedEmDash = 0, h2 = 0, h3 = 0, totalChars = 0, codeBlocks = 0;
     let askQCount = 0, askOptTotal = 0, askDescChars = 0, askDescCount = 0, askPeriodCount = 0, askIdHasUnderscore = 0, askIdBareIntent = 0;
     let askFormatOpt = 0, askTransformOpt = 0, askSolSig = 0, askSol56Sig = 0;
     let lunaNotSurePhrase = 0, solClarifyPhrase = 0, astraSelfContainedPhrase = 0, terraPhrase = 0;
     let straightApostrophe = 0, writeUnderscoreName = 0, genImg = 0, checkmarkEmoji = 0;
     let msgFmtTN = 0, msgFmtTChars = 0, msgFmtTidCount = 0, msgFmtTidChars = 0, hasLiveMsgFmt = false;
     let wireFam = '';
-    const firstUserMsg = allMsgs.find(m => m && m.role === 'user');
+    // 全模态（文字/图片/视频/代码网页/搜索）与同家族档位微差统计量（仅针对最近 3 轮对话）
+    let tableCount = 0, listLineCount = 0, selfCheckCount = 0, thinkStepLines = 0, thinkDurSumMs = 0, thinkDurCount = 0;
+    let codeOmissionCount = 0, codeDefensiveCount = 0;
+    let searchSourcesCount = 0, citationCount = 0, mediaImgCount = 0, mediaVideoCount = 0;
+    const turnRichnessArr = [];
+    const recentUserMsgs = allMsgs.filter(m => m && m.role === 'user').slice(-3);
+    const firstUserMsg = recentUserMsgs[0] || allMsgs.find(m => m && m.role === 'user');
     const firstUserTxt = String(firstUserMsg?.text || (Array.isArray(firstUserMsg?.parts) ? firstUserMsg.parts.map(p => p?.text || '').join(' ') : '') || '');
+    const recentUserTextAll = recentUserMsgs.map(u => String(u?.text || (Array.isArray(u?.parts) ? u.parts.map(p => p?.text || '').join(' ') : '') || '')).join('\n');
+    const promptConstraintHits = (recentUserTextAll.match(/必须|不要|严格|完整|详细|对比|证明|推导|步步|架构|并发|边界|优化|must|strictly|complete|comprehensive|edge case|architecture|step-by-step|benchmark/gi) || []).length;
+    const promptCodeHits = (recentUserTextAll.match(/```|<html|function\b|def\s+\w+|SELECT\s+|class\s+\w+/gi) || []).length;
+    const promptEntropy = Math.max(0.28, Math.min(1.0, 0.30 + Math.min(0.42, recentUserTextAll.length / 1800) + Math.min(0.18, promptConstraintHits * 0.045) + Math.min(0.10, promptCodeHits * 0.05)));
     const isMicroProbePrompt = Boolean(chat?._isMicroProbe || chat?.gacha?.mode === 'habit' || modelEntry?.habitFeatures?.meta?.isMicroProbeChat || /35[～~-]45\s*行以内|50\s*行以内|微缩面板|动态\s*SVG\s*状态徽章|动态内联\s*SVG\s*(?:几何图标|指示器|徽标)/i.test(firstUserTxt));
 
+    const scanCodeRigor = (src) => {
+      if (!src) return;
+      codeOmissionCount += (src.match(/\/\/\s*\.\.\.\s*(?:existing|rest|unchanged|same|省略|其余|保持不变)|#\s*\.\.\.\s*(?:existing|rest|省略)|\/\*\s*\.\.\.\s*(?:rest|省略)?\s*\*\//gi) || []).length;
+      codeDefensiveCount += (src.match(/\btry\s*\{|\bcatch\s*\(|\baria-[a-z-]+|\bprefers-reduced-motion\b|\bNumber\.isFinite\b|\bResizeObserver\b|\bIntersectionObserver\b|\bAbortController\b|\brequestAnimationFrame\b/g) || []).length;
+    };
+
     const scanHtmlHabits = (src) => {
-      if (!src || !/<!doctype html|<html\b|<svg\b/i.test(src)) return;
+      if (!src) return;
+      scanCodeRigor(src);
+      if (!/<!doctype html|<html\b|<svg\b/i.test(src)) return;
       if (src.length > htmlMaxLen) htmlMaxLen = src.length;
       if (/:root\s*\{/.test(src)) cssRoot++;
       if (/requestAnimationFrame/.test(src)) raf++;
@@ -2057,6 +2374,16 @@ const ChatHabitFingerprint = (() => {
     const scanTextHabits = (txt) => {
       if (!txt) return;
       totalChars += txt.length;
+      const fenceMatches = txt.match(/^```/gm);
+      if (fenceMatches && fenceMatches.length >= 2) {
+        codeBlocks += Math.floor(fenceMatches.length / 2);
+      } else if (/<!DOCTYPE html|<html\b/i.test(txt)) {
+        codeBlocks += 1;
+      }
+      tableCount += Math.min(12, Math.floor((txt.match(/^\|.+\|$/gm) || []).length / 2));
+      listLineCount += (txt.match(/^[\t ]*(?:[-*•]|\d+[.)])\s+/gm) || []).length;
+      selfCheckCount += (txt.match(/边界条件|注意(?:事项|点)|验证(?:如下|结果)|极端情况|权衡|edge case|caveat|trade-?off|corner case|sanity check|let['’]s verify|double-check/gi) || []).length;
+      citationCount += (txt.match(/\[\d+\]\([^)]+\)|\[\^?\d+\]|【\d+†/g) || []).length;
       emDash += (txt.match(/——|\s—\s/g) || []).length;
       cnColon += (txt.match(/\*\*[^*\n]{1,24}\*\*：|(?:已完成|绘制完成)：\*\*/g) || []).length;
       curlyApostrophe += (txt.match(/[A-Za-z]\u2019[A-Za-z]/g) || []).length;
@@ -2089,8 +2416,27 @@ const ChatHabitFingerprint = (() => {
           stepStarts++;
         } else if (ty === 'reasoning') {
           const rt = String(p.text || '').trim();
-          if (/[^\s.…·。]/.test(rt)) { visR++; turnVisR++; visRChars += rt.length; }
-          else { hidR++; turnHidR++; }
+          if (/[^\s.…·。]/.test(rt)) {
+            visR++;
+            turnVisR++;
+            visRChars += rt.length;
+            thinkStepLines += Math.max(1, (rt.match(/\n+|(?:^|\s)(?:1\.|step\s*\d|首先|其次|再看)/gi) || []).length);
+          } else {
+            hidR++;
+            turnHidR++;
+            thinkStepLines += 1;
+          }
+          const rDur = Number(p.durationMs || p.thinkingMs || p.metadata?.durationMs || 0);
+          if (rDur > 50 && rDur < 600000) {
+            thinkDurSumMs += rDur;
+            thinkDurCount++;
+          }
+        } else if (ty === 'source-url' || ty === 'source' || ty === 'grounding' || p.url && p.sourceId) {
+          searchSourcesCount++;
+        } else if (ty === 'image' || p.image || p.imageUrl || (ty === 'file' && /^image\//i.test(String(p.mediaType || p.mimeType || '')))) {
+          mediaImgCount++;
+        } else if (ty === 'video' || p.videoUrl || (ty === 'file' && /^video\//i.test(String(p.mediaType || p.mimeType || '')))) {
+          mediaVideoCount++;
         } else if (ty === 'text') {
           const txt = String(p.text || '');
           const tTrim = txt.trim();
@@ -2238,8 +2584,25 @@ const ChatHabitFingerprint = (() => {
         else silentToolTurns++;
       }
       if (!pHasParts(parts) && m.text) {
-        scanTextHabits(String(m.text || ''));
+        const mTxt = String(m.text || '');
+        turnTextChars += mTxt.length;
+        scanTextHabits(mTxt);
       }
+      if (Array.isArray(m?.sources)) searchSourcesCount += m.sources.length;
+      if (Array.isArray(m?.citations)) searchSourcesCount += m.citations.length;
+      if (Array.isArray(m?.experimental_attachments)) {
+        for (const att of m.experimental_attachments) {
+          const ct = String(att?.contentType || att?.mimeType || '');
+          if (/^image\//i.test(ct)) mediaImgCount++;
+          else if (/^video\//i.test(ct)) mediaVideoCount++;
+        }
+      }
+      const mThinkMs = Number(m?.metadata?.timing?.thinkingMs || m?.metadata?.thinkingDurationMs || 0);
+      if (mThinkMs > 50 && mThinkMs < 600000) {
+        thinkDurSumMs += mThinkMs;
+        thinkDurCount++;
+      }
+      turnRichnessArr.push(turnTextChars + (turnWrite + turnEdit + turnCodeBash) * 420 + (turnHidR + turnVisR) * 140);
     }
 
     function pHasParts(arr) { return Array.isArray(arr) && arr.length > 0; }
@@ -2252,18 +2615,6 @@ const ChatHabitFingerprint = (() => {
 
     const turns = Math.max(1, asstMsgs.length);
     const totalTools = bash + write + edit + read + present + search + askUser + otherTools;
-    if (visR > 0 && visRChars < 320 && (askIdHasUnderscore > 0 || askUserIntent > 0 || askSolSig > 0)) {
-      hidR += visR;
-      if (maxRInTurn < visR) maxRInTurn = visR;
-      visR = 0;
-      visRChars = 0;
-    }
-    const isFlash38LowIdentity = turns === 1 && totalTools === 0 && visR === 1 && visRChars < 1500 && totalChars >= 180 && totalChars <= 320;
-    if (isFlash38LowIdentity) {
-      visR = 0;
-    }
-    const thinkSt = (typeof ThinkingStatus !== 'undefined' && ThinkingStatus.of) ? ThinkingStatus.of(chat) : null;
-    const isOpenThink = Boolean(visR > 0 || (thinkSt?.kind === 'compat-thinking' && !chat?._closedLockedModel));
     const sidStr = String(chat?.sid || modelEntry?.sid || '');
     let sseMemoObj = (typeof window !== 'undefined' && window.__atiSseMemo instanceof Map && sidStr) ? (window.__atiSseMemo.get(sidStr) || null) : null;
     try {
@@ -2276,6 +2627,26 @@ const ChatHabitFingerprint = (() => {
     const bankMatchRaw = sidStr ? getBankSampleBySid(sidStr) : null;
     const bankMatch = (bankMatchRaw && (bankMatchRaw.userConfirmed || bankMatchRaw.importedFromDiag)) ? bankMatchRaw : null;
     const mKnownName = String(bankMatch?.model || '');
+    const isEvalChat = Boolean(chat?.isEvaluation || chat?.evalMode === 'battle' || chat?.evalMode === 'direct' || chat?.battleSide || /#[ab]$/i.test(sidStr));
+    const evalHintName = String(modelEntry?.name || modelEntry?.rawLabel || chat?.revealedModelName || chat?.directModelName || (isEvalChat ? mKnownName : '') || '').trim();
+    if (isEvalChat && visR > 0 && (!evalHintName || !isOpenName(evalHintName))) {
+      hidR += visR;
+      if (maxRInTurn < visR) maxRInTurn = visR;
+      visR = 0;
+    } else if (visR > 0 && visRChars < 320 && (askIdHasUnderscore > 0 || askUserIntent > 0 || askSolSig > 0)) {
+      hidR += visR;
+      if (maxRInTurn < visR) maxRInTurn = visR;
+      visR = 0;
+      visRChars = 0;
+    }
+    const isFlash38LowIdentity = !isEvalChat && turns === 1 && totalTools === 0 && visR === 1 && visRChars < 1500 && totalChars >= 180 && totalChars <= 320;
+    if (isFlash38LowIdentity) {
+      visR = 0;
+    }
+    const thinkSt = (typeof ThinkingStatus !== 'undefined' && ThinkingStatus.of) ? ThinkingStatus.of(chat) : null;
+    const isOpenThink = isEvalChat
+      ? Boolean(visR > 0 || (evalHintName && isOpenName(evalHintName)))
+      : Boolean(visR > 0 || (thinkSt?.kind === 'compat-thinking' && !chat?._closedLockedModel));
     const topRevCand = null;
     const msgFmtAvgChunk = (msgFmtTN >= 3 && msgFmtTChars > 0) ? Math.round((msgFmtTChars / msgFmtTN) * 10) / 10 : 0;
     const msgFmtTidAvg = (msgFmtTidCount >= 4 && msgFmtTidChars > 0) ? Math.round((msgFmtTidChars / msgFmtTidCount) * 10) / 10 : 0;
@@ -2341,31 +2712,36 @@ const ChatHabitFingerprint = (() => {
       )
     );
     if (!isOpenThink && hidR === 0 && visR === 0 && hasNonGoogleEvidence && geminiPyHelper === 0 && inlineHtmlEcho === 0 && (pyHeredoc === 0 || lowerDoctype > 0 || sandboxLink > 0 || prefersReducedMotion > 0 || knownRBlocks > 0) && (catHeredoc === 0 || prefersReducedMotion > 0 || knownRBlocks > 0)) {
-      hidR = knownRBlocks > 0 ? knownRBlocks : Math.max(turns, codingTurns * 2 || turns);
-      if (maxRInTurn === 0) maxRInTurn = Math.max(1, Math.round(hidR / turns));
-      if (codingTurns > 0) {
-        codingTurnsWithHidR = codingTurns;
-        codingTurnsNoR = 0;
+      if (!isEvalChat) {
+        hidR = knownRBlocks > 0 ? knownRBlocks : Math.max(turns, codingTurns * 2 || turns);
+        if (maxRInTurn === 0) maxRInTurn = Math.max(1, Math.round(hidR / turns));
+        if (codingTurns > 0) {
+          codingTurnsWithHidR = codingTurns;
+          codingTurnsNoR = 0;
+        }
       }
-    } else if (!isOpenThink && hidR > 0 && codingTurns > 0 && codingTurnsWithHidR === 0 && hasNonGoogleEvidence && geminiPyHelper === 0 && inlineHtmlEcho === 0 && (prefersReducedMotion > 0 || lowerDoctype > 0 || sandboxLink > 0 || knownRBlocks > 0)) {
+    } else if (!isEvalChat && !isOpenThink && hidR > 0 && codingTurns > 0 && codingTurnsWithHidR === 0 && hasNonGoogleEvidence && geminiPyHelper === 0 && inlineHtmlEcho === 0 && (prefersReducedMotion > 0 || lowerDoctype > 0 || sandboxLink > 0 || knownRBlocks > 0)) {
       codingTurnsWithHidR = codingTurns;
       codingTurnsNoR = 0;
     }
     const isGeminiCoding = !isOpenThink && (
       CONFIRMED_GEMINI_FLASH_SIDS.has(sidStr) ||
-      hasDefiniteGoogleBash ||
-      (!hasNonGoogleEvidence && (hidR === 0 && visR === 0)) ||
-      (!hasNonGoogleEvidence && codingTurnsNoR >= 1 && codingTurnsWithHidR === 0) ||
-      geminiPyHelper > 0 ||
-      inlineHtmlEcho > 0 ||
-      (!hasNonGoogleEvidence && codingTurnsNoR >= 1 && codingTurnsWithHidR === 0 && (catHeredoc > 0 || pyHeredoc > 0) && sandboxLink === 0 && lowerDoctype === 0 && colorSchemeCss === 0 && svgSmilNoScript === 0 && prefersReducedMotion === 0 && (askUser === 0 || hidR === 0))
+      (isEvalChat ? Boolean(/gemini|google|argon|barium/i.test(evalHintName) || isLiveGeminiFmt) : (
+        hasDefiniteGoogleBash ||
+        (!hasNonGoogleEvidence && (hidR === 0 && visR === 0)) ||
+        (!hasNonGoogleEvidence && codingTurnsNoR >= 1 && codingTurnsWithHidR === 0) ||
+        geminiPyHelper > 0 ||
+        inlineHtmlEcho > 0 ||
+        (!hasNonGoogleEvidence && codingTurnsNoR >= 1 && codingTurnsWithHidR === 0 && (catHeredoc > 0 || pyHeredoc > 0) && sandboxLink === 0 && lowerDoctype === 0 && colorSchemeCss === 0 && svgSmilNoScript === 0 && prefersReducedMotion === 0 && (askUser === 0 || hidR === 0))
+      ))
     );
 
-    // 从消息 timing / UUIDv7 时间戳 / streamEvidence 提取单轮耗时与流式吐字速度 cps
+    // 从最近 3 轮消息 timing / UUIDv7 时间戳 / streamEvidence 提取单轮耗时与流式吐字速度 cps（严禁加载更早轮次）
     let durSumMs = 0, durCount = 0;
+    const recentAsstSet = new Set(asstMsgs);
     for (let i = 0; i < allMsgs.length; i++) {
       const m = allMsgs[i];
-      if (!m || m.role !== 'assistant') continue;
+      if (!m || m.role !== 'assistant' || !recentAsstSet.has(m)) continue;
       const tm = m.metadata?.timing;
       if (tm?.startedAt && tm?.completedAt && tm.completedAt > tm.startedAt) {
         durSumMs += Math.min(3600000, tm.completedAt - tm.startedAt);
@@ -2385,6 +2761,9 @@ const ChatHabitFingerprint = (() => {
     const avgTurnDurMs = durCount > 0
       ? Math.round(durSumMs / durCount)
       : Number(streamEv?.turnDurationMs || streamEv?.thinkDurationMs || chat?.fmt?.turnMs) || 0;
+    const avgThinkDurMs = thinkDurCount > 0
+      ? Math.round(thinkDurSumMs / thinkDurCount)
+      : Number(streamEv?.thinkDurationMs || 0);
     const meanChars = (totalChars + writtenChars * 0.85) / turns;
     const nonCodeMeanChars = nonCodeTurns > 0 ? Math.round(nonCodeChars / nonCodeTurns) : Math.round(meanChars);
     const rPerTurn = (hidR + visR * 0.85) / turns;
@@ -2443,14 +2822,61 @@ const ChatHabitFingerprint = (() => {
     const htmlLenBonus = isMicroProbeChat ? (Math.max(htmlMaxLen, writtenChars) / 360) : (htmlMaxLen / 2400);
     const rawHtmlDepthBonus = htmlLenBonus + (cssRoot > 0 ? 2.5 : 0) + (raf > 0 || svgSmilNoScript > 0 ? 3.5 : 0) + (colorSchemeCss > 0 ? 2.0 : 0) + (prefersReducedMotion > 0 ? 2.0 : 0) + (ariaLabelledby > 0 ? 1.5 : 0) + (isMicroProbeChat && svgRich > 0 ? 1.5 : 0);
     const htmlDepthBonus = hasCompactMultiTurnSurge ? (rawHtmlDepthBonus * 0.18) : rawHtmlDepthBonus;
+    const searchDepthBonus = Math.min(8, searchSourcesCount * 0.8 + citationCount * 0.55 + tableCount * 0.8);
+    const proseRigorBonus = Math.min(6, selfCheckCount * 1.1 + codeDefensiveCount * 0.7 - codeOmissionCount * 1.4);
     const rawReasonScore = 38
       + Math.min(25, rPerTurn * 4.2)
       + Math.min(18, toolsPerTurn * 2.2)
       + Math.min(8, parallelSteps * 1.8)
       + Math.min(13, htmlDepthBonus)
-      + Math.min(6, effMeanChars / 2200);
+      + Math.min(6, effMeanChars / 2200)
+      + Math.max(0, searchDepthBonus * 0.45 + proseRigorBonus * 0.45);
     const habitReasoningScore = Math.round(Math.max(22, Math.min(98.5, rawReasonScore)) * 10) / 10;
 
+    // 自动判定当前会话所属的全模态类型（文字 chat / 代码网页 webdev / 搜索 search / 图片 image / 视频 video）
+    const explicitMod = String(chat?.evalModality || modelEntry?.evalModality || '').trim().toLowerCase();
+    const evalModality = explicitMod && /^(?:chat|webdev|search|image|video|agent)$/.test(explicitMod)
+      ? explicitMod
+      : (mediaVideoCount > 0)
+        ? 'video'
+        : (mediaImgCount > 0 || genImg > 0)
+          ? 'image'
+          : (searchSourcesCount > 0 || search > 0 || citationCount >= 2)
+            ? 'search'
+            : (codingTurns > 0 || htmlMaxLen >= 200 || codeBlocks >= 2)
+              ? 'webdev'
+              : 'chat';
+
+    // 多轮上下文持久度（2~3 轮时末轮相对于首轮的信息与工具完整度，区分 High/Max 与 Medium/Low）
+    const multiTurnPersistence = turnRichnessArr.length >= 2
+      ? Math.max(0.15, Math.min(1.0, (turnRichnessArr.at(-1) || 1) / Math.max(120, turnRichnessArr[0] || 1)))
+      : 0.78;
+
+    // 12 维同家族档位微差判别子空间向量 tierVec[0..11]（专用于分离 opus-5.5-medium vs high、sol-medium vs high 等）
+    const tierVec = [
+      Math.min(1, (rPerTurn * 0.22) + (thinkStepLines / turns) * 0.06 + (visRChars / turns) / 2400),
+      Math.min(1, (meanDurSec / Math.max(0.45, promptEntropy * 75))),
+      cps > 0 ? Math.max(0, Math.min(1, 1 - (cps - 18) / 165)) : durScale,
+      Math.min(1, ((h2 + h3) * 1.5 + tableCount * 2.5 + listLineCount * 0.35 + cnColon * 0.4) / Math.max(1, turns * 14)),
+      Math.min(1, (selfCheckCount * 0.26 + emDashRate * 0.34 + (effMeanChars / 4200) * 0.40)),
+      (codingTurns > 0 || codeBlocks > 0 || htmlMaxLen > 0)
+        ? Math.max(0, Math.min(1, 0.55 + Math.min(0.45, Math.max(htmlMaxLen, writtenChars, totalChars) / 18000) - codeOmissionCount * 0.28))
+        : charScale,
+      Math.min(1, (codeDefensiveCount * 0.14 + cssRoot * 0.16 + raf * 0.18 + svgRich * 0.16 + prefersReducedMotion * 0.18 + colorSchemeCss * 0.18)),
+      totalTools > 0 ? Math.min(1, (toolsPerTurn / 9) * 0.55 + editReadRatio * 0.45) : (stepScale * 0.75),
+      totalTools > 0 ? Math.min(1, parallelRate * 0.60 + preNarrate * 0.40) : Math.min(1, rPerTurn / 5),
+      (searchSourcesCount > 0 || citationCount > 0 || search > 0)
+        ? Math.min(1, (searchSourcesCount * 0.12 + citationCount * 0.09 + search * 0.18 + tableCount * 0.12))
+        : Math.min(1, (h2 + h3 + listLineCount * 0.2) / 10),
+      Math.round(multiTurnPersistence * 1000) / 1000,
+      Math.min(1, Math.max(0.08, ((habitReasoningScore - 20) / 78) / Math.max(0.55, promptEntropy))),
+    ].map(v => Math.round((Number(v) || 0) * 1000) / 1000);
+
+    const anomalous = Boolean(
+      chat?.status === 'error' ||
+      (avgTurnDurMs > 180000 && meanChars < 120 && totalTools === 0) ||
+      (meanChars < 12 && totalTools === 0 && mediaImgCount === 0 && mediaVideoCount === 0)
+    );
     // Human-readable matched habit tags for UI transparency
     const habitTags = [];
     if (isOpenThink) habitTags.push(`开源可见思考(${visR}段)`);
@@ -2564,6 +2990,8 @@ const ChatHabitFingerprint = (() => {
       unspacedEmDash,
       h2,
       h3,
+      totalChars,
+      codeBlocks,
       meanChars: Math.round(meanChars),
       nonCodeMeanChars,
       isMicroProbeChat,
@@ -2572,6 +3000,22 @@ const ChatHabitFingerprint = (() => {
       isFlash38LowIdentity,
       isOpenThink,
       wireFam,
+      evalModality,
+      tableCount,
+      listLineCount,
+      selfCheckCount,
+      thinkStepLines,
+      avgThinkDurMs,
+      codeOmissionCount,
+      codeDefensiveCount,
+      searchSourcesCount,
+      citationCount,
+      mediaImgCount,
+      mediaVideoCount,
+      multiTurnPersistence: Math.round(multiTurnPersistence * 1000) / 1000,
+      promptEntropy: Math.round(promptEntropy * 1000) / 1000,
+      anomalous,
+      tierVec,
       vec,
       habitReasoningScore,
       habitTags,
@@ -2623,6 +3067,37 @@ const ChatHabitFingerprint = (() => {
     }
     const rmse = Math.sqrt(sumSq / Math.max(1e-6, wTot));
     return Math.max(0, Math.min(1, 1 - rmse * 1.22));
+  }
+
+  // 12 维同家族档位微差子空间马氏/加权相似度（按模态动态聚焦激活子空间：文字/代码/搜索/图片/视频/Agent）
+  function tierVecSimilarity(tv1, tv2, evalModality = 'chat', stdVec = null) {
+    if (!Array.isArray(tv1) || !Array.isArray(tv2) || tv1.length !== 12 || tv2.length !== 12) return null;
+    const mod = String(evalModality || 'chat').toLowerCase();
+    // 0:thinkIntensity, 1:thinkDurNorm, 2:cpsToDepthRatio, 3:proseStructRichness, 4:selfCheckRigor,
+    // 5:codeCompleteness, 6:codeDefensiveDepth, 7:toolChainAutonomy, 8:parallelPlanning, 9:searchSynthesisDepth,
+    // 10:multiTurnPersistenceNorm, 11:effortToPromptRatio
+    const W = [2.4, 2.2, 1.9, 1.8, 2.1, 1.6, 1.6, 1.5, 1.4, 1.3, 1.5, 2.5];
+    if (mod === 'webdev') {
+      W[5] = 2.8; W[6] = 2.7; W[7] = 2.2; W[8] = 2.0; W[9] = 0.4;
+    } else if (mod === 'search') {
+      W[9] = 3.0; W[3] = 2.4; W[4] = 2.3; W[5] = 0.5; W[6] = 0.5;
+    } else if (mod === 'image' || mod === 'video') {
+      W[1] = 2.6; W[2] = 2.2; W[3] = 2.0; W[5] = 0.3; W[6] = 0.3; W[7] = 0.6;
+    } else if (mod === 'chat') {
+      W[0] = 2.7; W[1] = 2.5; W[3] = 2.3; W[4] = 2.5; W[11] = 2.7; W[7] = 0.6; W[8] = 0.6;
+    }
+    let sumSq = 0, wTot = 0;
+    for (let i = 0; i < 12; i++) {
+      const stdScale = Array.isArray(stdVec) && stdVec.length === 12
+        ? Math.max(0.55, Math.min(1.65, 0.14 / Math.max(0.05, Number(stdVec[i]) || 0.12)))
+        : 1.0;
+      const w = (W[i] || 1) * stdScale;
+      const d = (Number(tv1[i]) || 0) - (Number(tv2[i]) || 0);
+      sumSq += w * d * d;
+      wTot += w;
+    }
+    const rmse = Math.sqrt(sumSq / Math.max(1e-6, wTot));
+    return Math.max(0, Math.min(1, 1 - rmse * 1.18));
   }
 
   // ── 常用纠偏频次统计（驱动三次卡片跳转置顶 + 习惯先验微调）──
@@ -2758,6 +3233,21 @@ const ChatHabitFingerprint = (() => {
       solClarifyPhrase: feat.solClarifyPhrase || 0,
       astraSelfContainedPhrase: feat.astraSelfContainedPhrase || 0,
       terraPhrase: feat.terraPhrase || 0,
+      evalModality: feat.evalModality || 'chat',
+      tableCount: feat.tableCount || 0,
+      listLineCount: feat.listLineCount || 0,
+      selfCheckCount: feat.selfCheckCount || 0,
+      thinkStepLines: feat.thinkStepLines || 0,
+      avgThinkDurMs: feat.avgThinkDurMs || 0,
+      codeOmissionCount: feat.codeOmissionCount || 0,
+      codeDefensiveCount: feat.codeDefensiveCount || 0,
+      searchSourcesCount: feat.searchSourcesCount || 0,
+      citationCount: feat.citationCount || 0,
+      mediaImgCount: feat.mediaImgCount || 0,
+      mediaVideoCount: feat.mediaVideoCount || 0,
+      multiTurnPersistence: feat.multiTurnPersistence ?? 0.78,
+      promptEntropy: feat.promptEntropy ?? 0.45,
+      tierVec: Array.isArray(feat.tierVec) && feat.tierVec.length === 12 ? feat.tierVec : undefined,
       isGeminiCoding: Boolean(feat.isGeminiCoding),
       isOpenThink: Boolean(feat.isOpenThink),
     };
@@ -2767,7 +3257,13 @@ const ChatHabitFingerprint = (() => {
     if (!feat || !meta) return null;
     const fTools = feat.totalTools || 0;
     const mTools = meta.totalTools || 0;
-    if ((fTools === 0) !== (mTools === 0)) return 0.25;
+    // 跨模态桥接：若双方均有 12 维同家族档位微差向量 tierVec，即使一方是纯对话 Battle 而另一方是工具流，仍可通过 tierVec 提取档位与思维节奏共性
+    const tvSim = (Array.isArray(feat.tierVec) && feat.tierVec.length === 12 && Array.isArray(meta.tierVec) && meta.tierVec.length === 12)
+      ? tierVecSimilarity(feat.tierVec, meta.tierVec, feat.evalModality || meta.evalModality || 'chat')
+      : null;
+    if ((fTools === 0) !== (mTools === 0)) {
+      return tvSim != null ? Math.max(0.25, Math.min(0.68, 0.22 + tvSim * 0.48)) : 0.25;
+    }
     const fOnlyAsk = fTools > 0 && feat.askUser === fTools;
     const mOnlyAsk = mTools > 0 && meta.askUser === mTools;
     if (fOnlyAsk !== mOnlyAsk) return 0.30;
@@ -2805,7 +3301,160 @@ const ChatHabitFingerprint = (() => {
     addD(feat.prefersReducedMotion || 0, meta.prefersReducedMotion || 0, 2.0, 1.6);
     addD(feat.bash || 0, meta.bash || 0, 4.0, 1.5);
     addD(feat.write || 0, meta.write || 0, 2.0, 1.5);
-    return Math.max(0, Math.min(1, 1 - Math.sqrt(dSq / Math.max(1e-6, wSum))));
+    if ((feat.selfCheckCount || 0) > 0 || (meta.selfCheckCount || 0) > 0) {
+      addD(feat.selfCheckCount || 0, meta.selfCheckCount || 0, 4.0, 1.4);
+    }
+    if ((feat.codeDefensiveCount || 0) > 0 || (meta.codeDefensiveCount || 0) > 0) {
+      addD(feat.codeDefensiveCount || 0, meta.codeDefensiveCount || 0, 6.0, 1.5);
+    }
+    if ((feat.searchSourcesCount || 0) > 0 || (meta.searchSourcesCount || 0) > 0) {
+      addD(feat.searchSourcesCount || 0, meta.searchSourcesCount || 0, 8.0, 1.6);
+    }
+    const baseMetaSim = Math.max(0, Math.min(1, 1 - Math.sqrt(dSq / Math.max(1e-6, wSum))));
+    return tvSim != null ? (baseMetaSim * 0.72 + tvSim * 0.28) : baseMetaSim;
+  }
+
+  // 二阶段同家族相邻档位解耦判别器（Stage-2 Intra-Family Effort-Tier Disentangler）：
+  // 在 Stage-1 锁定候选模型家族后，专门使用 12 维档位微差子空间 tierVec、Battle 对偶超平面、多模态画像与厂商因子化档位先验，
+  // 精准分离 opus-5.5-medium vs high、6.1-sol-medium vs high vs xhigh、gemini-3.8-flash-medium vs high 等同家族相邻档位
+  function disentangleIntraFamilyTiers(scoreMap, feat, calib, bankByKey, isEvalAnalyze = false) {
+    try {
+      if (!scoreMap || !feat || !Array.isArray(feat.tierVec) || feat.tierVec.length !== 12) return;
+      const tv = feat.tierVec;
+      const mod = String(feat.evalModality || 'chat').toLowerCase();
+      const TIER_IDEAL_EFFORT = { low: 0.25, medium: 0.48, high: 0.68, xhigh: 0.81, max: 0.92 };
+
+      // 1. 若 calib.tierCentroids 中已有某家族的被揭晓档位（如 Claude Opus 5.5 (Medium)），但静态 PROTOTYPES 未实例化该档位，动态补齐进同家族候选池
+      if (calib?.tierCentroids && typeof calib.tierCentroids === 'object') {
+        for (const [ck, cent] of Object.entries(calib.tierCentroids)) {
+          if (!cent || !Array.isArray(cent.tierVec) || cent.tierVec.length !== 12 || scoreMap.has(ck)) continue;
+          const parsed = parseModelFamilyAndTier(ck);
+          if (!parsed.famKey || !parsed.tier) continue;
+          // 查找 scoreMap 中同家族基准条目
+          let sibling = null;
+          for (const item of scoreMap.values()) {
+            const pItem = parseModelFamilyAndTier(item.canon || item.label);
+            if (pItem.famKey === parsed.famKey && item.sim >= 0.78) {
+              if (!sibling || item.sim > sibling.sim) sibling = item;
+            }
+          }
+          if (sibling) {
+            const dispCanon = formatFamilyTierCanon(sibling.canon || sibling.label, parsed.tier);
+            scoreMap.set(ck, {
+              ...sibling,
+              id: `${parsed.famKey}-${parsed.tier}`,
+              label: dispCanon,
+              canon: dispCanon,
+              sim: Math.max(0.75, sibling.sim - 0.008),
+              tags: ['⚔️ Battle档位质心派生', ...(sibling.tags || []).slice(0, 4)],
+              userLearned: Boolean((cent.truthWeightSum || 0) >= 6.0),
+            });
+          }
+        }
+      }
+
+      // 2. 按 famKey 聚合候选家族，仅对头部高潜家族（最高 sim >= 0.78）执行家族内档位精排
+      const famGroups = new Map();
+      for (const [k, item] of scoreMap.entries()) {
+        if (!item) continue;
+        const p = parseModelFamilyAndTier(item.canon || item.label);
+        if (!p.famKey || !p.tier) continue;
+        if (!famGroups.has(p.famKey)) famGroups.set(p.famKey, []);
+        famGroups.get(p.famKey).push({ key: k, item, tier: p.tier, famKey: p.famKey, baseLabel: p.baseLabel });
+      }
+
+      for (const [famKey, members] of famGroups.entries()) {
+        if (members.length < 2) continue;
+        const maxFamSim = Math.max(...members.map(m => m.item.sim || 0));
+        if (maxFamSim < 0.78) continue;
+
+        const hyperMap = calib?.intraFamilyHyperplanes?.[famKey] || null;
+        const tierScores = new Map();
+
+        for (const m of members) {
+          let ev = 0;
+          let wSum = 0;
+
+          // (A) 该档位专属 Battle/Direct 真值质心匹配度（最高优先）
+          const cent = calib?.tierCentroids?.[m.key];
+          if (cent && Array.isArray(cent.tierVec) && cent.tierVec.length === 12) {
+            const cSim = tierVecSimilarity(tv, cent.tierVec, mod, cent.stdVec);
+            if (cSim != null) {
+              const truthConf = Math.min(1.0, (Number(cent.truthWeightSum) || (cent.count || 1) * 2) / 10.0);
+              const wCent = 2.6 * (0.45 + 0.55 * truthConf);
+              ev += (cSim - 0.76) * wCent;
+              wSum += wCent;
+            }
+          }
+
+          // (B) 当前模态（chat / webdev / search / image / video）专属档位画像匹配
+          const modProf = calib?.modalityProfiles?.[mod]?.[m.key];
+          if (modProf && Array.isArray(modProf.tierVec) && modProf.tierVec.length === 12) {
+            const mSim = tierVecSimilarity(tv, modProf.tierVec, mod);
+            if (mSim != null) {
+              const wMod = 1.65;
+              ev += (mSim - 0.76) * wMod;
+              wSum += wMod;
+            }
+          }
+
+          // (C) 厂商级跨家族档位相对先验（当该家族某档位尚缺直接样本时，借用同厂商如 Anthropic/OpenAI 同档位微差特征）
+          const vid = detectModelVendorId(m.item.canon || m.item.label);
+          const vPrior = calib?.vendorTierDeltas?.[vid]?.[m.tier];
+          if (vPrior && Array.isArray(vPrior.tierVec) && vPrior.tierVec.length === 12) {
+            const vpSim = tierVecSimilarity(tv, vPrior.tierVec, mod);
+            if (vpSim != null) {
+              const wVp = cent ? 0.55 : 1.15;
+              ev += (vpSim - 0.76) * wVp;
+              wSum += wVp;
+            }
+          }
+
+          // (D) Battle 同题对偶线性超平面 margin 投票（如 high>medium, max>high）
+          if (hyperMap && typeof hyperMap === 'object') {
+            for (const [pk, hObj] of Object.entries(hyperMap)) {
+              if (!hObj || !Array.isArray(hObj.wVec) || hObj.wVec.length !== 12) continue;
+              const [hiT, loT] = pk.split('>');
+              if (m.tier !== hiT && m.tier !== loT) continue;
+              const proj = tv.reduce((acc, val, idx) => acc + (Number(hObj.wVec[idx]) || 0) * (Number(val) || 0), 0);
+              const margin = proj - (Number(hObj.threshold) || 0);
+              const dir = m.tier === hiT ? 1 : -1;
+              const hConf = Math.min(1.0, (Number(hObj.count) || 1) / 4);
+              ev += Math.max(-0.18, Math.min(0.18, dir * margin * 1.35)) * (1.8 * hConf);
+              wSum += 1.2 * hConf;
+            }
+          }
+
+          // (E) 内禀 Prompt 复杂度归一化努力度曲线（兜底防漂移）
+          const idealE = TIER_IDEAL_EFFORT[m.tier] ?? 0.68;
+          const actualE = (Number(tv[11]) || 0.65) * 0.55 + (Number(tv[0]) || 0.5) * 0.25 + (Number(tv[4]) || 0.5) * 0.20;
+          const eDist = Math.abs(actualE - idealE);
+          ev += (0.18 - eDist) * 0.95;
+          wSum += 0.95;
+
+          const normEv = wSum > 0 ? (ev / wSum) : 0;
+          tierScores.set(m.key, normEv);
+        }
+
+        // 零均值中心化微调：保持该模型家族整体对外竞争力不变，仅在同家族内部拉开真实档位差距
+        const vals = [...tierScores.values()];
+        const meanEv = vals.reduce((a, b) => a + b, 0) / Math.max(1, vals.length);
+        let bestMember = null, bestRel = -999;
+        for (const m of members) {
+          const rel = (tierScores.get(m.key) || 0) - meanEv;
+          if (rel > bestRel) {
+            bestRel = rel;
+            bestMember = m;
+          }
+          const delta = Math.max(-0.026, Math.min(0.032, rel * 0.22));
+          m.item.sim = Math.max(0.12, Math.min(0.993, m.item.sim + delta));
+        }
+        if (bestMember && bestRel >= 0.035 && calib?.tierCentroids?.[bestMember.key]) {
+          const tag = `🎯 同族档位微差锁定(${bestMember.tier.toUpperCase()})`;
+          bestMember.item.tags = [tag, ...(bestMember.item.tags || []).filter(t => t !== tag).slice(0, 4)];
+        }
+      }
+    } catch {}
   }
 
   function analyze(chat, modelEntry = null, { ignoreExactSid = false } = {}) {
@@ -3415,28 +4064,50 @@ const ChatHabitFingerprint = (() => {
 
     // Blend with self-learned bank (`habitLearnBank:v1`, exact sid match locks 99.6%; cross-session samples apply top-3 k-NN nudge per class)
     const isSyntheticStubSample = s => !s || (Array.isArray(s.vec) && s.vec.length === 20 && s.vec[12] === 0.8 && s.vec[15] === 0.52 && s.vec[2] === 0.05 && s.vec[3] === 0 && (!s.meta || (Number(s.meta.meanChars) === 4500 && (Number(s.meta.writtenChars) || 0) === 0 && (Number(s.meta.avgTurnDurMs) || 0) === 0 && (Number(s.meta.cps) || 0) === 0 && (Number(s.meta.memoAvgChunk) || 0) === 0)));
+    const isEvalAnalyze = Boolean(chat?.isEvaluation || chat?.evalMode === 'battle' || chat?.evalMode === 'direct' || chat?.battleSide || /#[ab]$/i.test(sid));
     const bankByKey = new Map();
     for (const sample of bank) {
       if (!sample || !sample.model || !Array.isArray(sample.vec)) continue;
       if (CONFIRMED_GEMINI_FLASH_SIDS.has(sid) && /gemini[-\s]*4|argon|barium-bb-v2-4xts/i.test(String(sample.model || ''))) continue;
+      const truthRank = getSampleTruthRank(sample);
+      const isBattleOrDirectTruth = truthRank >= 3;
+      const isConfirmedSample = Boolean(sample.userConfirmed || sample.importedFromDiag || truthRank >= 2 || (sample.autoTeacher && (Number(sample.teacherConf) || 0) >= 85));
+      const isExactSid = Boolean(!ignoreExactSid && sid && sample.sid && String(sample.sid) === sid && (sample.userConfirmed || sample.importedFromDiag || isBattleOrDirectTruth) && !sample.autoTeacher);
       const sampleOpen = Boolean(sample.isOpen ?? isOpenName(sample.model));
-      if (sampleOpen !== feat.isOpenThink) continue;
-      const isConfirmedSample = Boolean(sample.userConfirmed || sample.importedFromDiag || (sample.autoTeacher && (Number(sample.teacherConf) || 0) >= 85));
-      const isExactSid = Boolean(!ignoreExactSid && sid && sample.sid && String(sample.sid) === sid && (sample.userConfirmed || sample.importedFromDiag) && !sample.autoTeacher);
+      if (!isExactSid && sampleOpen !== feat.isOpenThink && !((isEvalAnalyze || sample.battleRevealed || sample.directMode) && feat.visR === 0)) continue;
       if (!isExactSid && isSyntheticStubSample(sample)) continue;
-      let vSim = isExactSid ? 0.998 : vectorSimilarity(feat.vec, sample.vec, feat);
+      let vSim = isExactSid
+        ? 0.998
+        : (sample.battleRevealed || sample.directMode) && (feat.totalTools || 0) > 0 && (sample.meta?.totalTools || 0) === 0
+          ? vectorSimilarity(feat.vec, sample.vec, { ...feat, totalTools: 0, htmlMaxLen: 0, writtenChars: 0, cssRoot: 0, raf: 0, svgRich: 0, boxComment: 0 })
+          : vectorSimilarity(feat.vec, sample.vec, feat);
       if (!isExactSid && isConfirmedSample && !feat.isGeminiCoding && !Boolean(sample.meta?.isGeminiCoding) && sample.vec.length === 20 && feat.vec.length === 20 && sample.vec[0] !== feat.vec[0]) {
         const alignedVec = [...sample.vec];
         alignedVec[0] = feat.vec[0];
         alignedVec[1] = feat.vec[1];
-        vSim = Math.max(vSim, vectorSimilarity(feat.vec, alignedVec, feat) * 0.96);
+        vSim = Math.max(vSim, vectorSimilarity(feat.vec, alignedVec, (sample.battleRevealed || sample.directMode) ? { ...feat, totalTools: 0, htmlMaxLen: 0, writtenChars: 0 } : feat) * 0.96);
       }
-      const mSim = (!isExactSid && sample.meta) ? metaSimilarity(feat, sample.meta) : null;
-      const sim = isExactSid ? 0.998 : (mSim !== null ? (vSim * 0.52 + mSim * 0.48) : vSim);
+      const mSim = (!isExactSid && sample.meta)
+        ? ((sample.battleRevealed || sample.directMode) && (feat.totalTools || 0) > 0 && (sample.meta?.totalTools || 0) === 0
+            ? metaSimilarity({ ...feat, totalTools: 0, askUser: 0, meanChars: feat.nonCodeMeanChars || feat.meanChars }, { ...sample.meta, totalTools: 0, askUser: 0 })
+            : metaSimilarity(feat, sample.meta))
+        : null;
+      const sampleTierVec = Array.isArray(sample.tierVec) && sample.tierVec.length === 12
+        ? sample.tierVec
+        : (Array.isArray(sample.meta?.tierVec) && sample.meta.tierVec.length === 12 ? sample.meta.tierVec : null);
+      const tvSim = (!isExactSid && sampleTierVec && Array.isArray(feat.tierVec) && feat.tierVec.length === 12)
+        ? tierVecSimilarity(feat.tierVec, sampleTierVec, feat.evalModality || sample.evalModality || 'chat')
+        : null;
+      const basePairSim = mSim !== null ? (vSim * 0.52 + mSim * 0.48) : vSim;
+      const sim = isExactSid
+        ? 0.998
+        : (tvSim !== null
+            ? (basePairSim * 0.74 + tvSim * 0.26)
+            : basePairSim);
       if (!isExactSid && sim < 0.80) continue;
       const label = typeof Strength !== 'undefined' && Strength.canon ? Strength.canon(sample.model) : sample.model;
       const isManualExactSid = Boolean(isExactSid && sample.userConfirmed && !sample.autoTeacher);
-      if (!isManualExactSid) {
+      if (!isManualExactSid && !isEvalAnalyze && !sample.battleRevealed && !sample.directMode) {
         if (feat.isGeminiCoding && !/gemini|google/i.test(label)) continue;
         if (!feat.isGeminiCoding && /gemini|google|argon|barium/i.test(label)) continue;
         if ((isDefiniteOpenAiChunkStream || hasStrongOpenAiSig) && !/gpt|openai|sol|astra|luna|terra/i.test(label)) continue;
@@ -3444,7 +4115,7 @@ const ChatHabitFingerprint = (() => {
       }
       const k = String(label || sample.model).toLowerCase();
       if (!bankByKey.has(k)) bankByKey.set(k, []);
-      bankByKey.get(k).push({ sample, sim, mSim, isExactSid, isConfirmedSample, label, sampleOpen, softWeight: 1.0 });
+      bankByKey.get(k).push({ sample, sim, mSim, tvSim, truthRank, isExactSid, isConfirmedSample, label, sampleOpen, softWeight: 1.0 });
       // 弹性方向软邻域扩散（Elastic Soft-Target Neighborhood Pull）：非精确同会话命中时，将相似度向邻近思考档位与折射候选同步扩散
       if (!isExactSid && sample.softTargets && typeof sample.softTargets === 'object' && sim >= 0.82) {
         for (const [softModel, sWeight] of Object.entries(sample.softTargets)) {
@@ -3455,7 +4126,7 @@ const ChatHabitFingerprint = (() => {
           if (!sk || sk === k) continue;
           const softSim = Math.max(0.80, sim * (0.91 + sw * 0.25));
           if (!bankByKey.has(sk)) bankByKey.set(sk, []);
-          bankByKey.get(sk).push({ sample, sim: softSim, mSim, isExactSid: false, isConfirmedSample, label: sCanon, sampleOpen, softWeight: sw, isElasticNeighbor: true });
+          bankByKey.get(sk).push({ sample, sim: softSim, mSim, tvSim, truthRank: 2, isExactSid: false, isConfirmedSample, label: sCanon, sampleOpen, softWeight: sw, isElasticNeighbor: true });
         }
       }
       if (!isExactSid && sample.rejectedModel && sim >= 0.84) {
@@ -3470,26 +4141,35 @@ const ChatHabitFingerprint = (() => {
     const maxProtoSim = Math.max(0, ...[...scoreMap.values()].map(v => v.sim || 0));
     let winExactKey = null;
     for (const [k, hits] of bankByKey.entries()) {
-      hits.sort((a, b) => (Number(Boolean(b.isExactSid)) - Number(Boolean(a.isExactSid))) || (b.sim - a.sim));
+      hits.sort((a, b) =>
+        (Number(Boolean(b.isExactSid)) - Number(Boolean(a.isExactSid))) ||
+        ((b.sim + (b.truthRank >= 4 ? 0.018 : b.truthRank === 3 ? 0.010 : 0)) - (a.sim + (a.truthRank >= 4 ? 0.018 : a.truthRank === 3 ? 0.010 : 0)))
+      );
       const top = hits[0];
       const top3 = hits.slice(0, 3);
       const meanTopSim = top3.reduce((acc, h) => acc + h.sim, 0) / top3.length;
-      const effPullScale = top.isElasticNeighbor ? (0.55 + (Number(top.softWeight) || 0.25)) : 1.0;
+      const topTruthRank = top.truthRank || getSampleTruthRank(top.sample);
+      const isBattleOrDirectTop = topTruthRank >= 3;
+      const effPullScale = top.isElasticNeighbor
+        ? (0.55 + (Number(top.softWeight) || 0.25))
+        : (topTruthRank >= 4 ? 1.32 : topTruthRank === 3 ? 1.18 : 1.0);
       const nudge = top.isExactSid ? 0.45 : Math.max(0, (meanTopSim - 0.79) * (top.isConfirmedSample ? 0.22 : 0.09) * effPullScale);
       const isStrictTwin = !top.isExactSid && top.isConfirmedSample && !top.sample.autoTeacher && (
         (top.mSim !== null && top.mSim >= 0.92 && top.sim >= 0.92) ||
-        (meanTopSim >= 0.90 && hits.length >= 2)
+        (meanTopSim >= 0.90 && hits.length >= 2) ||
+        (isBattleOrDirectTop && top.sim >= 0.885 && (top.tvSim ?? 0.88) >= 0.86)
       );
-      const isStrongLearnedPull = !top.isExactSid && top.isConfirmedSample && meanTopSim >= 0.855;
+      const isStrongLearnedPull = !top.isExactSid && top.isConfirmedSample && (meanTopSim >= 0.855 || (isBattleOrDirectTop && meanTopSim >= 0.835));
       if (top.isExactSid) winExactKey = k;
       const existing = scoreMap.get(k);
       const isManualUserSample = Boolean(top.sample.userConfirmed && !top.sample.autoTeacher && !top.sample.importedFromDiag);
+      const truthMult = topTruthRank >= 4 ? 1.052 : topTruthRank === 3 ? 1.044 : isManualUserSample ? 1.036 : top.isConfirmedSample ? 1.012 : 0.975;
       if (existing) {
-        const kernelTarget = Math.min(0.990, meanTopSim * (isManualUserSample ? 1.042 : top.isConfirmedSample ? 1.012 : 0.975) + Math.min(0.035, Math.log10(1 + hits.length) * 0.016));
+        const kernelTarget = Math.min(0.992, meanTopSim * truthMult + Math.min(0.036, Math.log10(1 + hits.length) * 0.016));
         existing.sim = top.isExactSid
           ? 0.996
-          : isManualUserSample && (isStrictTwin || isStrongLearnedPull)
-            ? Math.min(top.isElasticNeighbor ? 0.976 : 0.991, Math.max(top.sim + (top.isElasticNeighbor ? 0.018 : 0.032), existing.sim * 0.25 + kernelTarget * 0.75))
+          : (isManualUserSample || isBattleOrDirectTop) && (isStrictTwin || isStrongLearnedPull)
+            ? Math.min(top.isElasticNeighbor ? 0.976 : (topTruthRank >= 4 ? 0.993 : 0.991), Math.max(top.sim + (top.isElasticNeighbor ? 0.018 : (topTruthRank >= 4 ? 0.038 : 0.032)), existing.sim * 0.25 + kernelTarget * 0.75))
             : existing.sim >= 0.94
               ? Math.min(0.968, existing.sim + nudge * 0.45)
               : isStrictTwin
@@ -3500,13 +4180,17 @@ const ChatHabitFingerprint = (() => {
         existing.learnedHits += hits.length;
         if (top.isExactSid || isStrictTwin || isStrongLearnedPull) {
           existing.userLearned = true;
-          const hitTag = top.sample.importedFromDiag
-            ? '📥 命中习惯库诊断导入 ✓'
-            : top.isElasticNeighbor
-              ? '🧭 命中弹性纠偏邻域牵引 ✓'
-              : top.sample.autoTeacher
-                ? '⚡ 已自动拟合反推结果 ✓'
-                : '★ 命中习惯库纠偏样本 ✓';
+          const hitTag = top.sample.battleRevealed
+            ? '⚔️ 命中Battle真值样本 ✓'
+            : top.sample.directMode
+              ? '🎯 命中Direct锁定样本 ✓'
+              : top.sample.importedFromDiag
+                ? '📥 命中习惯库诊断导入 ✓'
+                : top.isElasticNeighbor
+                  ? '🧭 命中弹性纠偏邻域牵引 ✓'
+                  : top.sample.autoTeacher
+                    ? '⚡ 已自动拟合反推结果 ✓'
+                    : '★ 命中习惯库纠偏样本 ✓';
           existing.tags = [hitTag, ...(existing.tags || []).filter(t => t !== hitTag).slice(0, 5)];
         }
       } else {
@@ -3518,8 +4202,8 @@ const ChatHabitFingerprint = (() => {
           canon: top.label,
           vendor: protoMatch?.vendor || (typeof Brand !== 'undefined' && Brand.of ? Brand.NAME?.[Brand.of(top.label)] : '') || '自学习',
           isOpen: top.sampleOpen,
-          sim: top.isExactSid ? 0.996 : isManualUserSample ? Math.min(top.isElasticNeighbor ? 0.974 : 0.988, meanTopSim * 1.02) : isStrictTwin ? Math.min(0.965, top.sim + 0.006) : isStrongLearnedPull ? Math.min(0.952, meanTopSim * 0.97) : Math.min(0.910, meanTopSim * 0.92),
-          tags: [top.sample.importedFromDiag && top.isExactSid ? '📥 命中习惯库诊断导入 ✓' : top.isElasticNeighbor ? '🧭 命中弹性纠偏邻域牵引 ✓' : top.isExactSid || isStrictTwin || isStrongLearnedPull ? '★ 命中习惯库纠偏样本 ✓' : '命中历史习惯样本', ...feat.habitTags.slice(0, 4)],
+          sim: top.isExactSid ? 0.996 : (isManualUserSample || isBattleOrDirectTop) ? Math.min(top.isElasticNeighbor ? 0.974 : (topTruthRank >= 4 ? 0.991 : 0.988), meanTopSim * (topTruthRank >= 4 ? 1.03 : 1.02)) : isStrictTwin ? Math.min(0.965, top.sim + 0.006) : isStrongLearnedPull ? Math.min(0.952, meanTopSim * 0.97) : Math.min(0.910, meanTopSim * 0.92),
+          tags: [top.sample.battleRevealed ? '⚔️ 命中Battle真值样本 ✓' : top.sample.directMode ? '🎯 命中Direct锁定样本 ✓' : top.sample.importedFromDiag && top.isExactSid ? '📥 命中习惯库诊断导入 ✓' : top.isElasticNeighbor ? '🧭 命中弹性纠偏邻域牵引 ✓' : top.isExactSid || isStrictTwin || isStrongLearnedPull ? '★ 命中习惯库纠偏样本 ✓' : '命中历史习惯样本', ...feat.habitTags.slice(0, 4)],
           learnedHits: hits.length,
           userLearned: top.isExactSid || isStrictTwin || isStrongLearnedPull,
         });
@@ -3550,6 +4234,9 @@ const ChatHabitFingerprint = (() => {
           item.sim = Math.min(item.sim, 0.885);
         }
       }
+    } else {
+      // Stage-2：在非精确同会话锁定时，执行同家族相邻档位微差解耦精排（Opus 5.5 Medium vs High、Sol Medium vs High 等）
+      disentangleIntraFamilyTiers(scoreMap, feat, calib, bankByKey, isEvalAnalyze);
     }
 
     const sorted = [...scoreMap.values()].sort((a, b) => (b.sim - a.sim) || ((b.userLearned ? 1 : 0) - (a.userLearned ? 1 : 0)));
@@ -3636,7 +4323,20 @@ const ChatHabitFingerprint = (() => {
     const optsObj = (typeof arg3 === 'number')
       ? { ...(arg4 && typeof arg4 === 'object' ? arg4 : {}), weight: arg3 }
       : (arg3 && typeof arg3 === 'object' ? arg3 : {});
-    const { userConfirmed = false, autoTeacher = false, teacherConf = 0, weight = 1.0, score = null, modelMeta = null, oldModel = null, battleRevealed = false, battleSide = null } = optsObj;
+    const {
+      userConfirmed = false,
+      autoTeacher = false,
+      teacherConf = 0,
+      weight = 1.0,
+      score = null,
+      modelMeta = null,
+      oldModel = null,
+      battleRevealed = false,
+      battlePaired = false,
+      battleSide = null,
+      directMode = false,
+      evalModality = null,
+    } = optsObj;
     if (!chat?.sid || !modelName) return null;
     const rawName = String(modelName || '').replace(/[?？]+$/, '').trim();
     if (!rawName || /^(未知型号|待定|未识别)$/.test(rawName)) return null;
@@ -3644,10 +4344,12 @@ const ChatHabitFingerprint = (() => {
       return null;
     }
     const canon = rawName === '开源模型' ? '开源模型' : (typeof Strength !== 'undefined' && Strength.canon ? Strength.canon(rawName) : rawName);
+    const isBattleRev = Boolean(battleRevealed || chat?.battleSide || /#[ab]$/i.test(String(chat.sid)));
+    const isDirectRev = Boolean(directMode || chat?.evalMode === 'direct' || chat?.directModelName);
     const known = modelMeta || (typeof Models !== 'undefined' ? Models.get(chat.sid) : null);
-    const feat = extractFeatures(chat, known);
+    const feat = extractFeatures(chat, (isBattleRev || isDirectRev) ? { ...(known || {}), name: canon, rawLabel: rawName, evalModality: evalModality || chat?.evalModality } : known);
     const isManualUserConfirm = Boolean(userConfirmed && !autoTeacher);
-    const isHighTrustTeacher = Boolean(isManualUserConfirm || (autoTeacher && (Number(teacherConf) || 0) >= 85));
+    const isHighTrustTeacher = Boolean(isBattleRev || isDirectRev || isManualUserConfirm || (autoTeacher && (Number(teacherConf) || 0) >= 85));
     if (!feat && !isHighTrustTeacher) return null;
     if (!isHighTrustTeacher && feat && feat.turns < 1) return null;
     const protoFallback = PROTOTYPES.find(p => String(Strength?.canon ? Strength.canon(p.label) : p.label).toLowerCase() === canon.toLowerCase() || p.label.toLowerCase() === rawName.toLowerCase());
@@ -3658,20 +4360,34 @@ const ChatHabitFingerprint = (() => {
     const idx = bank.findIndex(s => s && s.sid === chat.sid);
     const validScore = score != null && score !== '' && Number.isFinite(+score) && +score >= 10 && +score <= 100;
     const targetScore = validScore ? +score : (feat?.habitReasoningScore ?? 75);
+    // 5 级真值金字塔权重（Battle 对偶揭晓 9.5 > Battle 单边揭晓 8.5 > Direct 锁定 6.5 > 手动纠偏参考趋势 1.8）
+    const resolvedTruthTier = isBattleRev
+      ? (battlePaired ? 'battle_paired' : 'battle_single')
+      : isDirectRev
+        ? 'direct_locked'
+        : isManualUserConfirm
+          ? 'manual_correction'
+          : 'auto_teacher';
+    const resolvedWeight = isBattleRev
+      ? (battlePaired ? 9.5 : 8.5)
+      : isDirectRev
+        ? 6.5
+        : isManualUserConfirm
+          ? 1.8
+          : (isHighTrustTeacher ? 2.8 : (Number(weight) || 1.0));
     if (idx >= 0) {
       const prev = bank[idx];
+      const prevRank = getSampleTruthRank(prev);
+      const curRank = isBattleRev ? (battlePaired ? 5 : 4) : isDirectRev ? 3 : isManualUserConfirm ? 2 : 1;
       const prevScoreValid = prev.score != null && Number.isFinite(+prev.score) && +prev.score >= 10 && +prev.score <= 100;
       const hasRicherMeta = Boolean(feat && (chat?.messages?.length || 0) >= 2 && (!prev.meta || (prev.meta.turns || 0) < (feat.turns || 0) || (prev.vec?.[0] === 0 && feat.vec?.[0] === 1)));
-      const isPrevManualConfirm = Boolean(prev.userConfirmed && !prev.autoTeacher);
-      if (prev.importedFromDiag && !isManualUserConfirm && prevScoreValid) return prev;
-      if (isPrevManualConfirm && !isManualUserConfirm) {
+      if (prevRank > curRank && prevScoreValid) {
         if (hasRicherMeta && String(prev.model || '').toLowerCase() === String(canon || '').toLowerCase()) {
           const enriched = {
             ...prev,
             vec: vec.map(v => Math.round((Number(v) || 0) * 1000) / 1000),
+            tierVec: Array.isArray(feat?.tierVec) && feat.tierVec.length === 12 ? feat.tierVec : prev.tierVec,
             meta: extractCompactMeta(feat),
-            userConfirmed: true,
-            autoTeacher: false,
           };
           bank[idx] = enriched;
           saveBank(bank);
@@ -3679,54 +4395,81 @@ const ChatHabitFingerprint = (() => {
         }
         return prev;
       }
-      if (prev.userConfirmed && !isHighTrustTeacher && prevScoreValid) return prev;
-      if (autoTeacher && !isManualUserConfirm && prevScoreValid && !hasRicherMeta && String(prev.model || '').toLowerCase() === String(canon || '').toLowerCase() && prev.autoTeacher && Math.abs((Number(prev.score) || 0) - targetScore) < 0.2) {
+      if (autoTeacher && !isManualUserConfirm && !isBattleRev && !isDirectRev && prevScoreValid && !hasRicherMeta && String(prev.model || '').toLowerCase() === String(canon || '').toLowerCase() && prev.autoTeacher && Math.abs((Number(prev.score) || 0) - targetScore) < 0.2) {
         return prev;
       }
     }
     let elasticInfo = null;
-    if (isManualUserConfirm && feat) {
-      elasticInfo = recordElasticCorrection(chat, feat, oldModel || known?.name || known?.candidateName || '', canon, targetScore, 3.5);
+    if (isManualUserConfirm && !isBattleRev && !isDirectRev && feat) {
+      // 用户手动纠偏在 GPT 档位猜测中仅作参考趋势（软牵引权重 1.8），不覆写 Battle 真值质心
+      elasticInfo = recordElasticCorrection(chat, feat, oldModel || known?.name || known?.candidateName || '', canon, targetScore, 1.8);
     }
+    const resolvedModality = String(evalModality || feat?.evalModality || chat?.evalModality || 'chat').toLowerCase();
     const entry = {
       sid: chat.sid,
       model: canon,
       rawLabel: rawName,
-      isOpen: (battleRevealed || chat?.isEvaluation || chat?.battleSide || /#[ab]$/i.test(String(chat.sid))) ? Boolean(isOpenName(canon)) : Boolean(feat?.isOpenThink || isOpenName(canon)),
+      isOpen: (isBattleRev || isDirectRev || chat?.isEvaluation) ? Boolean(isOpenName(canon)) : Boolean(feat?.isOpenThink || isOpenName(canon)),
       score: targetScore,
       rawHabitScore: feat?.habitReasoningScore ?? null,
       vec: vec.map(v => Math.round((Number(v) || 0) * 1000) / 1000),
+      tierVec: Array.isArray(feat?.tierVec) && feat.tierVec.length === 12 ? feat.tierVec : undefined,
       meta: extractCompactMeta(feat),
-      tags: (feat?.habitTags && feat.habitTags.length) ? feat.habitTags.slice(0, 5) : [autoTeacher ? '⚡ 反推自动纠偏样本' : '✓ 用户手动纠偏样本'],
+      tags: (feat?.habitTags && feat.habitTags.length) ? feat.habitTags.slice(0, 5) : [isBattleRev ? '⚔️ Battle揭晓样本' : isDirectRev ? '🎯 Direct锁定样本' : autoTeacher ? '⚡ 反推自动纠偏样本' : '✓ 用户手动纠偏样本'],
       softTargets: elasticInfo?.softTargets || undefined,
       rejectedModel: elasticInfo?.rejectedModel || undefined,
       userConfirmed: isHighTrustTeacher,
-      autoTeacher: Boolean(autoTeacher && !isManualUserConfirm),
-      teacherConf: Number(teacherConf) || (isManualUserConfirm ? 100 : 0),
-      weight: isManualUserConfirm ? 3.5 : (isHighTrustTeacher ? 3.0 : weight),
-      battleRevealed: Boolean(battleRevealed || chat?.battleSide || /#[ab]$/i.test(String(chat.sid))),
+      autoTeacher: Boolean(autoTeacher && !isManualUserConfirm && !isBattleRev && !isDirectRev),
+      teacherConf: Number(teacherConf) || ((isBattleRev || isDirectRev || isManualUserConfirm) ? 100 : 0),
+      weight: resolvedWeight,
+      truthTier: resolvedTruthTier,
+      evalModality: resolvedModality,
+      battleRevealed: isBattleRev,
+      directMode: isDirectRev,
       battleSide: battleSide || chat?.battleSide || (/#b$/i.test(String(chat.sid)) ? 'b' : /#a$/i.test(String(chat.sid)) ? 'a' : undefined),
       at: Date.now(),
     };
     if (idx >= 0) bank[idx] = entry;
     else bank.unshift(entry);
     let cleanedBank = bank;
-    if (isManualUserConfirm && feat) {
+    // 回溯洗库与历史偏差自愈（Retroactive Bank Self-Healing）：
+    // 1) 当 Battle / Direct 揭晓 100% 真值时，自动清洗历史库中特征高度相似但被低置信度 autoTeacher 或手动猜测贴错档位的同家族噪声样本
+    if ((isBattleRev || isDirectRev) && feat && !feat.anomalous) {
+      const pTrue = parseModelFamilyAndTier(canon);
+      cleanedBank = bank.filter(s => {
+        if (!s || s === entry || s.sid === chat.sid) return true;
+        const sRank = getSampleTruthRank(s);
+        if (sRank >= 3) return true; // 绝不清理任何 Battle / Direct / 诊断真值
+        const sCanon = typeof Strength !== 'undefined' && Strength.canon ? Strength.canon(s.model) : (s.model || '');
+        const pSample = parseModelFamilyAndTier(sCanon);
+        if (s.autoTeacher && Array.isArray(s.vec) && vectorSimilarity(vec, s.vec, feat) >= 0.85 && String(sCanon).toLowerCase() !== String(canon).toLowerCase()) {
+          return false;
+        }
+        // 若是旧的手动猜测纠偏样本（sRank === 2），且与当前 Battle 真值属于同一家族不同档位、在 12 维档位子空间高度重合 (>= 0.91)，则将其软牵引向真值档位修正
+        if (sRank === 2 && pTrue.famKey && pSample.famKey === pTrue.famKey && pSample.tier !== pTrue.tier && Array.isArray(s.tierVec) && Array.isArray(feat.tierVec)) {
+          const tvS = tierVecSimilarity(feat.tierVec, s.tierVec, resolvedModality);
+          if (tvS != null && tvS >= 0.91) {
+            s.softTargets = { ...(s.softTargets || {}), [canon]: 0.48 };
+          }
+        }
+        return true;
+      });
+    } else if (isManualUserConfirm && !isBattleRev && feat) {
       const rejKey = String(elasticInfo?.rejectedModel || '').toLowerCase();
       cleanedBank = bank.filter(s => {
         if (!s || s === entry || s.sid === chat.sid) return true;
-        if (!s.autoTeacher || (s.userConfirmed && !s.autoTeacher) || s.importedFromDiag) return true;
+        if (getSampleTruthRank(s) >= 2) return true;
         const smKey = String(typeof Strength !== 'undefined' && Strength.canon ? Strength.canon(s.model) : (s.model || '')).toLowerCase();
         if (rejKey && smKey === rejKey) return false;
         if (Array.isArray(s.vec) && vectorSimilarity(vec, s.vec, feat) >= 0.78 && smKey !== String(canon).toLowerCase()) return false;
         return true;
       });
     }
-    if (isHighTrustTeacher && feat && !isManualUserConfirm) {
-      recordTeacherCalibration(canon, feat, targetScore, entry.weight, chat.sid);
+    if (feat && !feat.anomalous && (isBattleRev || isDirectRev || isManualUserConfirm || isHighTrustTeacher)) {
+      recordTeacherCalibration(canon, feat, targetScore, resolvedWeight, chat.sid);
     }
     saveBank(cleanedBank, { replace: cleanedBank.length !== bank.length });
-    if (isManualUserConfirm) recordModelUse(canon);
+    if (isManualUserConfirm || isBattleRev || isDirectRev) recordModelUse(canon);
     return entry;
   }
 
@@ -3893,7 +4636,7 @@ const ChatHabitFingerprint = (() => {
       const idx = bank.findIndex(s => s && s.sid === sid);
       if (idx >= 0) bank[idx] = entry;
       else bank.unshift(entry);
-      updateOnlineCalibration(canon, entry.vec, score, feat?.habitReasoningScore ?? score, 3.5, sid);
+      recordTeacherCalibration(canon, feat || { vec: entry.vec, tierVec: entry.meta?.tierVec, meta: entry.meta, habitReasoningScore: score }, score, 3.5, sid);
       importedCount++;
       lastModel = canon;
       recordModelUse(canon);
@@ -3942,8 +4685,17 @@ const ChatHabitFingerprint = (() => {
     return { kind: 'diagnostic', imported: importedCount, model: lastModel, total: bank.length };
   }
 
+  function isEvalSession(sidOrChat, hEntry = null) {
+    const c = (typeof sidOrChat === 'object' && sidOrChat) ? sidOrChat : (sidOrChat && typeof Chats !== 'undefined' ? Chats.get(sidOrChat) : null);
+    if (c && (c.isEvaluation || c.evalMode === 'battle' || c.evalMode === 'direct' || c._isVirtualBattleSide)) return true;
+    const sid = (typeof sidOrChat === 'string') ? sidOrChat : c?.sid;
+    const he = hEntry || (sid && typeof History !== 'undefined' && typeof History.byId === 'function' ? History.byId(sid) : null);
+    if (he && (he.type === 'evaluation' || he.mode === 'battle' || he.mode === 'direct' || he.mode === 'direct-battle' || he.mode === 'side-by-side')) return true;
+    return false;
+  }
+
   function identifyAndApply(chat, { force = false, fromCostFallback = false, interactive = false } = {}) {
-    if (!chat?.sid) return null;
+    if (!chat?.sid || isEvalSession(chat)) return null;
     const sid = chat.sid;
     const known = typeof Models !== 'undefined' ? Models.get(sid) : null;
     if (known?.userCorrected && !interactive && !CONFIRMED_GEMINI_FLASH_SIDS.has(sid)) return known;
@@ -4227,30 +4979,41 @@ const ChatHabitFingerprint = (() => {
   function rebuildCalibrationFromBank(samples) {
     const cleanList = Array.isArray(samples) ? samples : [];
     const freshCal = {
-      v: 2,
+      v: 3,
       updatedAt: Date.now(),
       protoCentroids: {},
+      tierCentroids: {},
+      intraFamilyHyperplanes: {},
+      vendorTierDeltas: {},
+      modalityProfiles: {},
       scoreOffsets: {},
-      metricDiag: new Array(20).fill(1),
+      dimWeights: {},
       repelledModels: {},
-      reverseCalib: { vendorBias: {}, familyBias: {}, effortScales: {} },
+      reverseCalib: { effortScales: {}, tierLogPriors: {}, modelResidualBias: {}, updatedAt: 0 },
     };
     saveCalibration(freshCal);
+    calibratedSessionKeys.clear();
     for (const s of cleanList.slice().reverse()) {
       if (!s || !s.model || !Array.isArray(s.vec)) continue;
-      if (s.softTargets && typeof s.softTargets === 'object') {
+      const synthFeat = {
+        vec: s.vec,
+        tierVec: s.tierVec || s.meta?.tierVec || null,
+        meta: s.meta || null,
+        evalModality: s.evalModality || s.meta?.evalModality || 'chat',
+        habitReasoningScore: s.rawHabitScore ?? s.score ?? 75,
+      };
+      if (s.softTargets && typeof s.softTargets === 'object' && !s.battleRevealed && !s.directMode) {
         const fakeChat = (typeof Chats !== 'undefined' && s.sid && Chats.get(s.sid)) || { sid: s.sid || '' };
         recordElasticCorrection(
           fakeChat,
-          { vec: s.vec, meta: s.meta || null, habitReasoningScore: s.rawHabitScore ?? s.score ?? 75 },
+          synthFeat,
           s.rejectedModel || '',
           s.model,
           s.score ?? 75,
-          s.weight || 3.5
+          s.weight || 1.8
         );
-      } else {
-        updateOnlineCalibration(s.model, s.vec, s.score, s.rawHabitScore ?? s.score, s.weight || 1, s.sid || '');
       }
+      recordTeacherCalibration(s.model, synthFeat, s.score ?? 75, s.weight || (s.battleRevealed ? 8.5 : s.directMode ? 6.5 : 1.8), s.sid || '');
     }
     return loadCalibration();
   }
@@ -4457,6 +5220,7 @@ const ChatHabitFingerprint = (() => {
       const samples = loadBank();
       const calibNow = loadCalibration();
       const userSamples = samples.filter(s => s.userConfirmed && !s.autoTeacher);
+      const battleSamples = samples.filter(s => s.battleRevealed);
       const diagSamples = samples.filter(s => s.importedFromDiag);
       const modelSet = new Set(samples.map(s => canonHabitModelName(s?.model || '').toLowerCase()).filter(Boolean));
       const centroidCnt = Object.keys(calibNow?.protoCentroids || {}).length;
@@ -4464,7 +5228,7 @@ const ChatHabitFingerprint = (() => {
       const revEffCnt = Object.keys(calibNow?.reverseCalib?.effortScales || {}).length + Object.keys(calibNow?.reverseCalib?.familyBias || {}).length;
       listWrap.replaceChildren();
       listWrap.append(h('div', { class: 'mc-gh', style: { marginBottom: '4px' } },
-        h('b', {}, `本机习惯库样本（全部账号共享统一库 · 共 ${samples.length} 条 · ${modelSet.size} 个型号 · 弹性纠偏 ${userSamples.length} 条 · 诊断导入 ${diagSamples.length} 条 · 双引擎校准[${centroidCnt}原型/${repelCnt}排斥/${revEffCnt}反推]）`)));
+        h('b', {}, `本机习惯库样本（全部账号共享统一库 · 共 ${samples.length} 条 · ${modelSet.size} 个型号 · 弹性纠偏 ${userSamples.length} 条${battleSamples.length ? ` · ⚔️ Battle揭晓 ${battleSamples.length} 条` : ''} · 诊断导入 ${diagSamples.length} 条 · 双引擎校准[${centroidCnt}原型/${repelCnt}排斥/${revEffCnt}反推]）`)));
       if (!samples.length) {
         listWrap.append(h('p', { class: 'note' }, '暂无自学习样本。可在上方选择已知模型的诊断 JSON（billing-*.json）或习惯库备份文件导入合并，或在右上角模型卡片点「纠偏」确认型号后自动沉淀。'));
         return;
@@ -4481,7 +5245,7 @@ const ChatHabitFingerprint = (() => {
         const fullRowTip = [tagText, softNeighbors.length ? `弹性邻域牵引：${softNeighbors.join(', ')}` : '', s.rejectedModel ? `对比排斥旧模型：${s.rejectedModel}` : ''].filter(Boolean).join('\n');
         listWrap.append(h('div', { class: 'mc-row', title: fullRowTip },
           h('span', { style: { flex: '1', minWidth: '0', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } },
-            (s.importedFromDiag ? '📥 诊断导入 · ' : (s.userConfirmed && !s.autoTeacher) ? '★ 弹性纠偏 · ' : '⚡ 自动沉淀 · ') + sidShort + elasticBadge + (tagText ? ' · ' + tagText.slice(0, 36) : '')),
+            (s.battleRevealed ? '⚔️ Battle揭晓 · ' : s.importedFromDiag ? '📥 诊断导入 · ' : (s.userConfirmed && !s.autoTeacher) ? '★ 弹性纠偏 · ' : '⚡ 自动沉淀 · ') + sidShort + elasticBadge + (tagText ? ' · ' + tagText.slice(0, 36) : '')),
           h('b', { style: { marginRight: '8px' } }, `${s.model}${s.score != null ? ` · 推理分 ${s.score}` : ''}`),
           h('button', {
             type: 'button',
@@ -4586,6 +5350,8 @@ const ChatHabitFingerprint = (() => {
     if (!chat || !chat.sid) return null;
     const targetPos = pos === 'b' ? 'b' : 'a';
     const baseSid = String(chat.sid).replace(/#[ab]$/i, '');
+    const rawRev = targetPos === 'b' ? (chat.voteState?.modelBName || null) : (chat.voteState?.modelAName || null);
+    const revealedModelName = (rawRev && !/^(未知|待定|Model [AB])$/i.test(String(rawRev).trim())) ? String(rawRev).trim() : null;
     const filteredMsgs = (Array.isArray(chat.messages) ? chat.messages : []).filter(m => {
       if (!m) return false;
       if (m.role === 'user') return true;
@@ -4602,18 +5368,61 @@ const ChatHabitFingerprint = (() => {
       sid: `${baseSid}#${targetPos}`,
       parentSid: baseSid,
       battleSide: targetPos,
+      revealedModelName,
       messages: filteredMsgs,
     };
   }
 
-  function analyzeBattleChat(chat) {
+  function analyzeBattleChat(chatOrSid, maybeChat = null) {
+    const chat = (chatOrSid && typeof chatOrSid === 'object') ? chatOrSid : (maybeChat && typeof maybeChat === 'object' ? maybeChat : (typeof Chats !== 'undefined' && typeof chatOrSid === 'string' ? Chats.get(chatOrSid) : null));
     if (!chat || !chat.sid) return null;
     const vChatA = buildSideVirtualChat(chat, 'a');
     const vChatB = buildSideVirtualChat(chat, 'b');
-    const featA = vChatA ? extractFeatures(vChatA, null) : null;
-    const featB = vChatB ? extractFeatures(vChatB, null) : null;
-    const anaA = vChatA && featA ? analyze(vChatA, null) : null;
-    const anaB = vChatB && featB ? analyze(vChatB, null) : null;
+    const hintA = vChatA?.revealedModelName ? { name: vChatA.revealedModelName } : null;
+    const hintB = vChatB?.revealedModelName ? { name: vChatB.revealedModelName } : null;
+    const featA = vChatA ? extractFeatures(vChatA, hintA) : null;
+    const featB = vChatB ? extractFeatures(vChatB, hintB) : null;
+    const anaA = vChatA && featA ? analyze(vChatA, hintA) : null;
+    const anaB = vChatB && featB ? analyze(vChatB, hintB) : null;
+
+    const ensureRevealedCandidate = (cands, revName, feat) => {
+      const list = Array.isArray(cands) ? [...cands] : [];
+      if (!revName || /^(未知|待定|Model [AB])$/i.test(revName)) return list.slice(0, 3);
+      const revCanon = typeof Strength !== 'undefined' && Strength.canon ? (Strength.canon(revName) || revName) : revName;
+      const revLower = String(revCanon).toLowerCase();
+      const rawLower = String(revName).toLowerCase();
+      const idx = list.findIndex(c => {
+        const cl = String(c?.canon || c?.label || c?.id || '').toLowerCase();
+        return cl === revLower || cl === rawLower || cl.includes(revLower) || revLower.includes(cl);
+      });
+      if (idx === 0) {
+        if ((list[0].match || 0) < 95) list[0] = { ...list[0], match: 99.2, habitPct: 99.2, confidence: 99.2, sim: 0.996 };
+        return list.slice(0, 3);
+      }
+      if (idx > 0) {
+        const mVal = Math.max(list[idx].match || 0, 99.2);
+        const item = { ...list[idx], match: mVal, habitPct: mVal, confidence: mVal, sim: Math.max(list[idx].sim || 0, 0.996) };
+        list.splice(idx, 1);
+        list.unshift(item);
+        return list.slice(0, 3);
+      }
+      list.unshift({
+        id: revName,
+        label: revName,
+        canon: revCanon,
+        vendor: (typeof Brand !== 'undefined' && Brand.of ? Brand.NAME?.[Brand.of(revName)] : '') || '',
+        isOpen: isOpenName(revName),
+        sim: 0.996,
+        match: 99.2,
+        habitPct: 99.2,
+        confidence: 99.2,
+        tags: ['⚔️ Battle揭晓样本 ✓', ...(feat?.habitTags || []).slice(0, 3)],
+        learnedHits: 1,
+        userLearned: true,
+      });
+      return list.slice(0, 3);
+    };
+
     const snap = {
       sid: chat.sid,
       at: Date.now(),
@@ -4622,7 +5431,7 @@ const ChatHabitFingerprint = (() => {
         hasReply: Boolean(featA && featA.turns > 0),
         features: featA,
         habitTags: anaA?.habitTags || featA?.habitTags || [],
-        candidates: Array.isArray(anaA?.candidates) ? anaA.candidates.slice(0, 3) : [],
+        candidates: ensureRevealedCandidate(anaA?.candidates, vChatA?.revealedModelName, featA),
         reasoningScore: anaA?.reasoningScore ?? featA?.habitReasoningScore ?? null,
         revealedName: chat.voteState?.modelAName || null,
       },
@@ -4631,7 +5440,7 @@ const ChatHabitFingerprint = (() => {
         hasReply: Boolean(featB && featB.turns > 0),
         features: featB,
         habitTags: anaB?.habitTags || featB?.habitTags || [],
-        candidates: Array.isArray(anaB?.candidates) ? anaB.candidates.slice(0, 3) : [],
+        candidates: ensureRevealedCandidate(anaB?.candidates, vChatB?.revealedModelName, featB),
         reasoningScore: anaB?.reasoningScore ?? featB?.habitReasoningScore ?? null,
         revealedName: chat.voteState?.modelBName || null,
       },
@@ -4644,28 +5453,56 @@ const ChatHabitFingerprint = (() => {
     if (!chat || !chat.sid) return null;
     const nameA = String(payload?.modelA?.name || chat.voteState?.modelAName || '').trim();
     const nameB = String(payload?.modelB?.name || chat.voteState?.modelBName || '').trim();
+    const validA = Boolean(nameA && !/^(未知|待定|Model A)/i.test(nameA));
+    const validB = Boolean(nameB && !/^(未知|待定|Model B)/i.test(nameB));
+    const isPaired = Boolean(validA && validB);
+    const evalModality = String(chat.evalModality || payload?.evalModality || 'chat').toLowerCase();
     const vChatA = buildSideVirtualChat(chat, 'a');
     const vChatB = buildSideVirtualChat(chat, 'b');
     let learnedA = null, learnedB = null;
-    if (vChatA && nameA && !/^(未知|待定|Model A)/i.test(nameA)) {
+    if (vChatA && validA) {
+      vChatA.evalModality = evalModality;
       learnedA = learnFromChat(vChatA, nameA, {
         userConfirmed: true,
         autoTeacher: false,
         teacherConf: 100,
-        weight: 3.5,
+        weight: isPaired ? 9.5 : 8.5,
         battleRevealed: true,
+        battlePaired: isPaired,
         battleSide: 'a',
+        evalModality,
       });
     }
-    if (vChatB && nameB && !/^(未知|待定|Model B)/i.test(nameB)) {
+    if (vChatB && validB) {
+      vChatB.evalModality = evalModality;
       learnedB = learnFromChat(vChatB, nameB, {
         userConfirmed: true,
         autoTeacher: false,
         teacherConf: 100,
-        weight: 3.5,
+        weight: isPaired ? 9.5 : 8.5,
         battleRevealed: true,
+        battlePaired: isPaired,
         battleSide: 'b',
+        evalModality,
       });
+    }
+    // 双子星同题差分对比学习：直接利用 A/B 在同一 Prompt 与同一模态下的响应差异训练同家族档位分界超平面
+    if (isPaired && vChatA && vChatB) {
+      try {
+        const featA = extractFeatures(vChatA, { name: learnedA?.model || nameA, evalModality });
+        const featB = extractFeatures(vChatB, { name: learnedB?.model || nameB, evalModality });
+        if (featA && featB) {
+          recordBattlePairwiseContrast(
+            chat,
+            learnedA?.model || nameA,
+            featA,
+            learnedB?.model || nameB,
+            featB,
+            payload?.vote || chat.voteState?.vote || 'tie',
+            evalModality
+          );
+        }
+      } catch {}
     }
     if (chat.voteState) {
       chat.voteState.learnedAt = Date.now();
@@ -4673,7 +5510,33 @@ const ChatHabitFingerprint = (() => {
       chat.voteState.learnedB = Boolean(learnedB);
     }
     analyzeBattleChat(chat);
+    // 联动刷新本机所有未锁定的历史与当前会话，使刚揭晓的 Battle 真值立即赋能全局识别
+    try { syncAllOpenAndKnownChats({ excludeSid: chat.sid }); } catch {}
     return { learnedA, learnedB };
+  }
+
+  // Direct 模式真值自动收割器（Direct-Mode Ground-Truth Harvester）：
+  // 用户在 Direct 模式下点名模型（如 claude-opus-5.5-medium / gpt-6.1-sol-high）进行文字、代码、搜索或图片对话时，
+  // 100% 确定底层型号真值，无需耗费投票即可自动沉淀高权重习惯与档位质心
+  function learnDirectSession(chat, explicitModelName = '') {
+    try {
+      if (!chat || !chat.sid) return null;
+      const rawModel = String(explicitModelName || chat.directModelName || chat.directModelId || '').trim();
+      if (!rawModel || /^(未知|待定|Model [AB])$/i.test(rawModel)) return null;
+      const hasCompletedAsst = Array.isArray(chat.messages) && chat.messages.some(m => m && m.role === 'assistant' && ((typeof m.text === 'string' && m.text.trim().length > 10) || (Array.isArray(m.parts) && m.parts.length > 0)));
+      if (!hasCompletedAsst) return null;
+      const evalModality = String(chat.evalModality || 'chat').toLowerCase();
+      return learnFromChat(chat, rawModel, {
+        userConfirmed: true,
+        autoTeacher: false,
+        teacherConf: 100,
+        weight: 6.5,
+        directMode: true,
+        evalModality,
+      });
+    } catch {
+      return null;
+    }
   }
 
   try { syncPricingReverseCalib(loadCalibration()); } catch {}
@@ -4682,7 +5545,10 @@ const ChatHabitFingerprint = (() => {
   return {
     extractFeatures,
     extractCompactMeta,
+    tierVecSimilarity,
+    getSampleTruthRank,
     recordElasticCorrection,
+    recordBattlePairwiseContrast,
     analyze,
     structuralReverse,
     learnFromChat,
@@ -4690,6 +5556,8 @@ const ChatHabitFingerprint = (() => {
     buildSideVirtualChat,
     analyzeBattleChat,
     learnBattleReveal,
+    learnDirectSession,
+    isEvalSession,
     loadCalibration,
     importDiagnosticJson,
     exportHabitBank,
@@ -5207,7 +6075,7 @@ const BillingProbe = (() => {
   const _markingOpenSids = new Set();
   function markAsOpenSourceModel(chat, { force = false } = {}) {
     const sid = typeof chat === 'string' ? chat : chat?.sid;
-    if (!sid) return null;
+    if (!sid || ChatHabitFingerprint.isEvalSession?.(chat)) return null;
     const c = typeof chat === 'object' && chat ? chat : (typeof Chats !== 'undefined' ? Chats.get(sid) : null);
     if (c?._killedOpenThink || (typeof Gacha !== 'undefined' && Gacha.isKilledOpenChat?.(sid))) return null;
     const known = typeof Models !== 'undefined' ? Models.get(sid) : null;
@@ -7828,6 +8696,7 @@ const BillingProbe = (() => {
   }
   function automatic(chat) {
     if (!chat?.sid || chat._inAutomatic) return;
+    if (ChatHabitFingerprint.isEvalSession?.(chat)) return;
     chat._inAutomatic = true;
     try {
       try { upgradeCachedOpus56(chat.sid); } catch {}
@@ -8310,7 +9179,7 @@ const BillingProbe = (() => {
   const bgSwept = new Set();
   let bgSweepTimer = 0, bgSweeping = false;
   function probeMidTurn(chat) {
-    if (!autoEnabled() || !chat?.sid || chat?.busy || chat?.gacha?.fingerprint || chat?.gacha?.mode === 'autoqa' || chat?.gacha?.mode === 'habit' || isOtherProbeBusy(chat)) return;
+    if (!autoEnabled() || !chat?.sid || chat?.busy || ChatHabitFingerprint.isEvalSession?.(chat) || chat?.gacha?.fingerprint || chat?.gacha?.mode === 'autoqa' || chat?.gacha?.mode === 'habit' || isOtherProbeBusy(chat)) return;
     if (!isCostProbeEnabled() || shouldSkipCostForOpenSource(chat) || globalCost429Until > now()) return;
     const lastAt = midTurnAt.get(chat) || 0;
     if (now() - lastAt < 2500) return;
@@ -8324,6 +9193,7 @@ const BillingProbe = (() => {
     }, 80);
   }
   function schedule(chat) {
+    if (ChatHabitFingerprint.isEvalSession?.(chat)) return;
     if (chat?.sid) {
       chat._lastTurnDoneAt = now();
       clearCachedCostDoc(chat.sid);
@@ -8395,7 +9265,7 @@ const BillingProbe = (() => {
     }, delay)));
   }
   async function invalidateAndRefresh(chat, forceNet = false) {
-    if (!chat?.sid) return null;
+    if (!chat?.sid || ChatHabitFingerprint.isEvalSession?.(chat)) return null;
     if (forceNet) clearCachedCostDoc(chat.sid);
     const stNow = engine.state(chat.sid);
     if (stNow) {
@@ -8441,7 +9311,7 @@ const BillingProbe = (() => {
   // - 正在识别排队中：已在后台识别延续队列中等待依次处理
   // - 待识别：尚未识别型号（并自动触发后台排队延续识别，无需人工点开对话）
   function identStatus(sid, mi) {
-    if (!sid) return null;
+    if (!sid || ChatHabitFingerprint.isEvalSession?.(sid)) return null;
     if (typeof Gacha !== 'undefined' && Gacha.stepOf && Gacha.stepOf(sid)) return null;
     if (!isChatUnidentified(sid, mi)) {
       queuedIdentSids.delete(sid);
@@ -8490,9 +9360,28 @@ const BillingProbe = (() => {
         }
       }
     }
+    // 清理未揭晓的 Battle 会话被误写入的单模型 localTitle 与 Models 记录
+    for (const e of (History.items || []).slice(0, 60)) {
+      if (!e?.id || !ChatHabitFingerprint.isEvalSession?.(e.id, e)) continue;
+      const isDirectOrRevealed = Boolean(e.mode === 'direct' || (e.modelAId && e.modelBId));
+      if (!isDirectOrRevealed) {
+        if (e.localTitle && !/vs|⚔️/i.test(String(e.localTitle))) {
+          delete e.localTitle;
+          try { History.saveSoon?.(); } catch {}
+        }
+        const mEval = typeof Models !== 'undefined' ? Models.get(e.id) : null;
+        if (mEval && !mEval.battleRevealed && !mEval.directMode) {
+          try {
+            if (typeof Models.del === 'function') Models.del(e.id);
+            else if (Models.map?.delete) { Models.map.delete(e.id); Models.saveSoon?.(); }
+          } catch {}
+        }
+      }
+    }
     // 扫描近期的未识别会话与显式入队会话（避免启动时拉取 80 个历史旧会话与重复请求 /cost）
     const candidates = (History.items || []).slice(0, 15).filter((e, idx) => {
       if (!e?.id || gone.has(e.id) || e.isArchived || e.archivedAt || gachaArchiveSids.has(e.id)) return false;
+      if (ChatHabitFingerprint.isEvalSession?.(e.id, e)) return false;
       if (bgSwept.has(e.id) && !queuedIdentSids.has(e.id)) return false;
       // 跳过正在活跃跑抽卡问答步骤的会话（等它问答跑完或中断后再由延续队列接手）
       if (typeof Gacha !== 'undefined' && Gacha.stepOf && Gacha.stepOf(e.id)) return false;

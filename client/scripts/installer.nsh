@@ -6,8 +6,14 @@
   Push $0
   ReadEnvStr $0 "ANC_DIR"
   ${if} $0 != ""
-    IfFileExists "$0\${APP_EXECUTABLE_FILENAME}" 0 +2
+    IfFileExists "$0\${APP_EXECUTABLE_FILENAME}" +2 0
+    IfFileExists "$0\*.*" 0 +7
       StrCpy $INSTDIR "$0"
+      StrCpy $hasPerMachineInstallation "0"
+      StrCpy $installMode "CurrentUser"
+      SetShellVarContext current
+      WriteRegStr HKCU "${INSTALL_REGISTRY_KEY}" InstallLocation "$0"
+      WriteRegStr HKLM "${INSTALL_REGISTRY_KEY}" InstallLocation "$0"
   ${endif}
   Pop $0
 !macroend
@@ -84,9 +90,19 @@
   CreateShortCut "$newStartMenuLink" "$appExe" "" "$appExe" 0 "" "" "${APP_DESCRIPTION}"
   ClearErrors
   WinShell::SetLnkAUMI "$newStartMenuLink" "${APP_ID}"
+  ${ifNot} ${isNoDesktopShortcut}
+    CreateShortCut "$newDesktopLink" "$appExe" "" "$appExe" 0 "" "" "${APP_DESCRIPTION}"
+    ClearErrors
+    WinShell::SetLnkAUMI "$newDesktopLink" "${APP_ID}"
+  ${endif}
   ${if} $installMode == "all"
     SetShellVarContext current
     Delete "$SMPROGRAMS\${SHORTCUT_NAME}.lnk"
+    ${ifNot} ${isNoDesktopShortcut}
+      CreateShortCut "$DESKTOP\${SHORTCUT_NAME}.lnk" "$appExe" "" "$appExe" 0 "" "" "${APP_DESCRIPTION}"
+      ClearErrors
+      WinShell::SetLnkAUMI "$DESKTOP\${SHORTCUT_NAME}.lnk" "${APP_ID}"
+    ${endif}
     SetShellVarContext all
   ${endif}
   StrCpy $launchLink "$appExe"

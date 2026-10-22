@@ -2,9 +2,10 @@
 const RegionIP = {
   busy:false, view:null,
   norm:x=>String(x||'').trim().toLowerCase(),
+  effReg(a) { return String(a?.region||a?.routeHome||IP.loc||'').trim().toUpperCase(); },
   signature(a) { return JSON.stringify([a?.id,a?.region||'',a?.proxy||'',a?.proxyIp||'',a?.nodeId||'']); },
   async read(owner) {
-    const [info,data,accounts]=await Promise.all([Host.info(),Host.shared('pippool'),Host.listAccounts(true)]);
+    const [info,data,accounts]=await Promise.all([Host.info(),Host.shared('pippool'),Host.listAccounts(true),typeof Nodes!=='undefined'&&Nodes.load?Nodes.load().catch(()=>{}):null]);
     const a=info?.account;
     if(!a?.id||(owner&&a.id!==owner)||(UI.host?.account?.id&&UI.host.account.id!==a.id))throw Error('当前账号已改变，请重新打开 IP 列表');
     if(data!=null&&(typeof data!=='object'||Array.isArray(data)||(data.ips&&(typeof data.ips!=='object'||Array.isArray(data.ips)))))throw Error('IP 列表格式异常，请刷新检查');
@@ -16,23 +17,23 @@ const RegionIP = {
     const current=this.norm(a.proxyIp),host=Pool.parse(current)?.host,other=Pool.parse(k)?.host;
     return this.norm(k)===current||!!(host&&other===host)||this.exits(a).has(this.norm(e?.eg));
   },
-  candidates(a,tried=new Set()) { return Pool.avail(a.region,a.id,tried).filter(k=>!this.same(k,Pool.d.ips[k],a)); },
+  candidates(a,tried=new Set()) { const cc=this.effReg(a); return Pool.avail(cc,a.id,tried).filter(k=>!this.same(k,Pool.d.ips[k],a)); },
   testing() { try { return [...Chats.values()].some(c => Fingerprint.isRunning(c) || (typeof PelicanTest !== 'undefined' && PelicanTest.isRunning(c))); } catch { return false; } },
   reason(a) {
     if(typeof FingerprintBatch!=='undefined'&&FingerprintBatch.busy)return '请先停止批量测指纹，再切换 IP';
     if(this.testing())return '有对话正在测指纹 / 鹈鹕测试，测完再切换 IP（换 IP 会让这一轮测试作废）';
     if(typeof RouteState!=='undefined'&&RouteState.locked(a))return '账号正在认证，线路已锁定；请完成或明确取消认证';
-    if(!a?.region)return '当前账号未绑定地区，不能自动挑选 IP';
+    if(!this.effReg(a))return '当前账号未绑定地区，不能自动挑选 IP';
     if(!isVless(a.proxy))return '当前不是地区 VLESS 连接，仅显示列表，不修改直连或本地代理';
     if(!(typeof NodeRoutes!=='undefined'&&NodeRoutes.adapter())&&(!Host.probe||!Host.saveAccount))return '当前平台不支持 IP 检测与切换';
     if(Gacha.busy())return '请先暂停抽卡，再手动切换 IP';
     return '';
   },
   rows(a) {
-    const cc=a?.region||IP.loc;
+    const cc=this.effReg(a);
     const rows=Pool.entries().filter(([,e])=>cc&&e.loc===cc).map(([k,e])=>({k,e,current:this.norm(k)===this.norm(a?.proxyIp),state:Pool.state(k,e,a?.id),same:this.same(k,e,a||{})}));
     if(typeof NodeRoutes!=='undefined')for(const row of rows){const measurement=NodeRoutes.cache.get(RoutePolicy.key({...a,proxyIp:row.k}));const r=measurement&&Date.now()-measurement.at<300000?measurement.result:null;row.e={...row.e,ms:RoutePolicy.good(r)?r.ms:0,eg:RoutePolicy.good(r)?r.ip:row.e.eg,nodeUnmeasured:!RoutePolicy.good(r)};}
-    const cur=String(a?.proxyIp||'').trim();if(cur&&a.region===cc&&!rows.some(r=>r.current))rows.unshift({k:cur,e:Pool.d?.ips?.[cur]||{},current:true,state:'wait',same:true});
+    const cur=String(a?.proxyIp||'').trim();if(cur&&(a.region===cc||this.effReg(a)===cc)&&!rows.some(r=>r.current))rows.unshift({k:cur,e:Pool.d?.ips?.[cur]||{},current:true,state:'wait',same:true});
     // 当前正在用的 IP：实时延迟通了就以实时为准，不再显示以前检测留下的「不可用 / 待检测」
     for(const row of rows)if(row.current){const live=IP.liveFor?IP.liveFor(row.k):0;if(live){row.e={...row.e,ms:live,eg:row.e.eg||IP.ip,nodeUnmeasured:false};if(row.state==='bad'||row.state==='wait')row.state='ok';}}
     const order={ok:0,cool:1,used:2,wait:3,risk:4,bad:5,ban:6};
@@ -106,6 +107,7 @@ const RegionIP = {
   lastNode(a) { const x=Store.get('lastnode:'+a.id,null); return x&&isVless(x.proxy)?x:null; },
   async setMode(k) {
     const v=this.view;if(!v||this.busy||v.loading)return;
+    if(!v.picker)try{this.mountPicker();}catch{}
     if(v.picker){ await v.picker.selectMode(k); this.paint(); return; }
     if(typeof FingerprintBatch!=='undefined'&&FingerprintBatch.busy){toast('请先停止批量测指纹','err');return;}
     if(this.testing()){toast('有对话正在测指纹 / 鹈鹕测试，测完再切换','err');return;}
@@ -114,14 +116,18 @@ const RegionIP = {
     try{
       const a=await this.read(v.owner),cur=this.modeOf(a);if(k===cur){v.message='';return;}
       if([...Chats.values()].some(c=>c.busy)&&!await Dialog.confirm({title:'切换连接模式',text:'有对话正在运行，切换网络可能中断回复。是否继续？',ok:'继续'}))return;
-      if(isVless(a.proxy))Store.set('lastnode:'+a.id,{proxy:a.proxy,proxyIp:a.proxyIp||'',nodeId:a.nodeId||'',region:a.region||''});
+      if(isVless(a.proxy))Store.set('lastnode:'+a.id,{proxy:a.proxy,proxyIp:a.proxyIp||'',nodeId:a.nodeId||'',region:this.effReg(a)});
       let next=null;
       if(k==='auto'||k==='node'){
-        if(isVless(a.proxy))next={proxy:a.proxy,proxyIp:a.proxyIp||'',nodeId:a.nodeId||'',region:a.region||''};
+        if(isVless(a.proxy))next={proxy:a.proxy,proxyIp:a.proxyIp||'',nodeId:a.nodeId||'',region:this.effReg(a)};
         else{
-          const last=this.lastNode(a),n=Pool.node(),cc=last?.region||a.routeHome||'';
-          if(last)next={...last};
-          else if(n&&cc){next={proxy:Pool.link(),nodeId:n.id||'',region:cc,proxyIp:Pool.pickSync(cc,a)||''};}
+          const last=this.lastNode(a);
+          const siblingVless=(Nodes.accts||[]).find(x=>x&&x.id!==a.id&&isVless(x.proxy));
+          const n=Pool.node()||(typeof NodeSpeed!=='undefined'&&NodeSpeed.best?.(Nodes.list))||(Array.isArray(Nodes.list)?Nodes.list[0]:null);
+          const cc=last?.region||this.effReg(a)||siblingVless?.region||'SG';
+          if(last)next={...last,region:last.region||cc};
+          else if(n){const link=typeof Vless!=='undefined'&&Vless.toLink?Vless.toLink(n):Pool.link();next={proxy:link,nodeId:n.id||'',region:cc,proxyIp:cc?(Pool.pickSync(cc,a)||''):''};}
+          else if(siblingVless){next={proxy:siblingVless.proxy,nodeId:siblingVless.nodeId||'',region:cc,proxyIp:cc?(Pool.pickSync(cc,a)||''):''};}
           else throw Error('还没有为这个账号选过节点和地区：请在账号设置「连接」里选「节点」并选择地区');
         }
       }else if(k==='direct')next={proxy:'direct',proxyIp:'',nodeId:'',region:''};
@@ -191,7 +197,7 @@ const RegionIP = {
     v.mode=h('div',{class:'pseg rip-mode',role:'tablist','aria-label':'连接模式'},mb('auto','自动','明确选择后比较全部节点、本机代理和直连；显示实际采用的线路。出口 IP 被 429 限流时自动换出口 IP'),mb('node','节点','先检测再固定；网络故障时先换已验证节点，再换纯净 ProxyIP'),mb('proxy','代理','本机代理（自动检测 Clash 7890 / v2rayN 等）或手动输入 http / socks5 地址'),mb('direct','直连','不走任何代理'));
     v.done=h('button',{type:'button',class:'rip-x',title:'关闭（离线时可直接查阅本地历史对话）','aria-label':'关闭',onclick:()=>this.close()},icon('x'));
     // 自动选择已覆盖「一键切换」：弹窗只保留模式 + 连接设置；关闭在右上角
-    v.back.append(h('div',{class:'modal region-ip',role:'dialog','aria-modal':'true','aria-labelledby':'region-ip-title'},h('div',{class:'rip-head'},h('div',{class:'rip-hl'},v.ipline,v.chips),v.refresh,v.done),h('div',{class:'modal-b'},v.mode,v.editor,v.info,v.list,v.status)));
+    v.back.append(h('div',{class:'modal region-ip',role:'dialog','aria-modal':'true','aria-labelledby':'region-ip-title'},h('div',{class:'rip-head'},h('div',{class:'rip-hl'},v.ipline,v.chips),v.done),h('div',{class:'modal-b'},v.mode,v.editor,v.info,v.list,v.status)));
     document.body.append(v.back);
     v.off=Bus.on('pool',()=>{if(!v.closed)this.paint();});v.tick=setInterval(()=>{if(!v.back.isConnected){if(!this.busy)this.close();return;}this.paint();},1000);
     void this.reload();v.done.focus();
@@ -199,7 +205,7 @@ const RegionIP = {
   paint() {
     const v=this.view;if(!v||v.closed)return;
     if(UI.host?.account?.id===v.owner)v.account=UI.host.account;
-    const a=v.account||{},cc=a.region||IP.loc,rows=this.rows(a),why=this.reason(a),keys=a.region?this.candidates(a):[];
+    const a=v.account||{},cc=this.effReg(a),rows=this.rows(a),why=this.reason(a),keys=cc?this.candidates(a):[];
     { // 头部：当前 IP（国旗 + 大号 IP）+ 地区 / 实时延迟 / 纯净度 / 线路
       const ip=IP.ip||'',f=flagOf(IP.loc||cc)||'🌐',ms=IP.rtt||IP.liveFor?.(a.proxyIp)||0;
       const rttTimeout=Boolean(IP.rttFail>0&&!IP.quietFail?.());
@@ -227,7 +233,7 @@ const RegionIP = {
         v.chips.replaceChildren(...chips); v.chips.hidden=!chips.length;
       }
     }
-    v.info.textContent='当前出口：'+(IP.ip||'未获取')+'\n当前 ProxyIP：'+(a.proxyIp||'未设置')+(a.region?'':'\n未绑定地区，仅按已知出口地区查看列表');
+    v.info.textContent='当前出口：'+(IP.ip||'未获取')+'\n当前 ProxyIP：'+(a.proxyIp||(isVless(a.proxy)?'未设置（节点本身代理）':'未设置（当前使用本地代理/直连）'))+(cc?'\n当前地区：'+cc:'\n未绑定地区，仅按已知出口地区查看列表');
     const sig=JSON.stringify(rows.map(r=>[r.k,r.current,r.state,r.same,r.e.eg,r.e.ms,Math.max(0,Math.ceil(((r.e.cool||0)-now())/60000))]));
     if(v.sig!==sig){v.sig=sig;v.list.replaceChildren(...rows.map(r=>{
       const label=r.current?('当前'+(r.state==='cool'?' · 冷却 '+Math.max(1,Math.ceil((r.e.cool-now())/60000))+' 分钟':'')):r.state==='cool'?'冷却 '+Math.max(1,Math.ceil((r.e.cool-now())/60000))+' 分钟':r.state==='ok'?(r.same?'相同出口':'可用'):({used:'其他账号占用',wait:'待检测',risk:'高风险',bad:'不可用',ban:'已拉黑'}[r.state]||r.state);

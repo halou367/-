@@ -270,7 +270,29 @@ const Titles = {
       if (gp.fav && typeof Fav !== 'undefined' && !Fav.has(sid) && !(Fav.unfavAt && Fav.unfavAt[sid])) Fav.setQuiet(sid, true);
       if (gp.gold && typeof Gold !== 'undefined' && Gold.noteRestoredChat) Gold.noteRestoredChat(sid, gp);
     }
-    const e = sid ? History.byId(sid) : null, raw0 = (e && (e.localTitle || e.title)) || Chats.get(sid)?.localTitle || Chats.get(sid)?.title || fallback || '';
+    const e = sid ? History.byId(sid) : null, cObj = sid ? Chats.get(sid) : null;
+    const isBattleSess = Boolean(cObj?.evalMode === 'battle' || (e?.type === 'evaluation' && (e?.mode === 'battle' || (!e?.mode && (e?.modelBId || !e?.modelAId)))));
+    if (isBattleSess) {
+      if (sid && typeof Models !== 'undefined' && Models.all && Models.all[sid] && !Models.all[sid].battleRevealed) {
+        delete Models.all[sid];
+        try { if (typeof Store !== 'undefined' && Store.set) Store.set('models', Models.all); } catch {}
+      }
+      const rawB = (e && (e.localTitle || e.title)) || cObj?.localTitle || cObj?.title || fallback || 'Battle 对战';
+      const spB = splitNote(rawB);
+      const noteB = sid ? Notes.get(sid) || spB.note : spB.note;
+      const mA = (cObj?.voteState?.voted && cObj?.voteState?.modelAName && !/^(未知|待定|Model A)$/i.test(cObj.voteState.modelAName))
+        ? cObj.voteState.modelAName
+        : (e?.modelAId && typeof ModelCatalog !== 'undefined' && ModelCatalog.resolveModelName ? ModelCatalog.resolveModelName(e.modelAId, cObj?.revealedModels) : (e?.modelAId || ''));
+      const mB = (cObj?.voteState?.voted && cObj?.voteState?.modelBName && !/^(未知|待定|Model B)$/i.test(cObj.voteState.modelBName))
+        ? cObj.voteState.modelBName
+        : (e?.modelBId && typeof ModelCatalog !== 'undefined' && ModelCatalog.resolveModelName ? ModelCatalog.resolveModelName(e.modelBId, cObj?.revealedModels) : (e?.modelBId || ''));
+      const vsPlain = (mA && mB && !/^[0-9a-f]{8}-[0-9a-f]{4}-/i.test(mA) && !/^[0-9a-f]{8}-[0-9a-f]{4}-/i.test(mB))
+        ? `${mA} vs ${mB}`
+        : (spB.composite ? spB.base : rawB);
+      const vidB = (mA && Brand.of(mA)) || (mB && Brand.of(mB)) || '';
+      return { vid: vidB, model: '', note: noteB, time: spB.time, title: rawB, plain: vsPlain, gold: false, isBattle: true };
+    }
+    const raw0 = (e && (e.localTitle || e.title)) || cObj?.localTitle || cObj?.title || fallback || '';
     const raw = (typeof TitleCipher !== 'undefined' && TitleCipher.isGoldPrefixed?.(raw0)) ? (TitleCipher.stripGoldPrefix(raw0) || '新对话') : raw0;
     const sp = splitNote(raw), mi = sid ? Models.get(sid) : null;
     const note = sid ? Notes.get(sid) || sp.note : sp.note;
@@ -381,6 +403,7 @@ const AutoId = {
   },
   async run1(chat) {
     const sid = chat.sid, e = History.byId(sid);
+    if (chat?.isEvaluation || chat?.evalMode === 'battle' || chat?.evalMode === 'direct' || e?.type === 'evaluation') return;
     if (typeof BillingProbe !== 'undefined' && typeof BillingProbe.automatic === 'function') {
       try { BillingProbe.automatic(chat); } catch {}
     }

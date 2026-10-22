@@ -378,7 +378,7 @@ Object.assign(UI, {
     this.authed = true;
     const a = this.host?.account || {};
     const cm = Store.get('me:u', null);
-    this.me = (cm && cm.id) ? cm : { id: a.id || 'browse', email: a.email || a.name || '本地查阅模式', name: (a.name || a.email || '查阅模式').split('@')[0], browseOnly: true };
+    this.me = (cm && cm.id) ? { ...cm, browseOnly: true } : { id: a.id || 'browse', email: a.email || a.name || '本地查阅模式', name: (a.name || a.email || '查阅模式').split('@')[0], browseOnly: true };
     try { document.querySelectorAll('.connbar, .route-recovery-note, .modal-back.auth-back').forEach(el => el.remove()); } catch {}
     try { History.warm(a.id || 'web'); void History.restoreFromLocalCache?.(); } catch {}
     try {
@@ -403,9 +403,10 @@ Object.assign(UI, {
         this.me = me.user;
         this.authed = true;
         Store.set('me:u', me.user);
+        try { if (typeof Acct !== 'undefined') Acct.report?.(); } catch {}
       }
       this.renderAcct?.();
-      void History.refresh?.({ noRelogin: true });
+      void History.refresh?.();
       void Pulse.poll?.();
       try { KeepAlive.start?.(); } catch {}
     } catch {}
@@ -420,7 +421,23 @@ Object.assign(UI, {
   /* 当前停在哪个对话，就直接打开官网的这个对话（https://arena.ai/agent/<id>）；新对话 / 没有对话时才打开首页 */
   browserTarget() {
     let sid = ''; try { sid = String(Tabs.cur?.sid || ''); } catch {}
-    return /^[\w-]{8,64}$/.test(sid) ? 'https://arena.ai/agent/' + sid : '';
+    if (/^[\w-]{8,64}$/.test(sid)) {
+      const ch = typeof Chats !== 'undefined' ? Chats.get(sid) : null;
+      const hRow = typeof History !== 'undefined' ? History.byId?.(sid) : null;
+      const isEval = Boolean(
+        ch?.isEvaluation ||
+        ch?.evalMode === 'battle' ||
+        ch?.evalMode === 'direct' ||
+        hRow?.type === 'evaluation' ||
+        hRow?.mode === 'battle' ||
+        hRow?.mode === 'direct' ||
+        hRow?.mode === 'direct-battle' ||
+        hRow?.mode === 'side-by-side'
+      );
+      return 'https://arena.ai/' + (isEval ? 'c/' : 'agent/') + sid;
+    }
+    const curMode = typeof ModeState !== 'undefined' && ModeState.getMode ? ModeState.getMode() : 'agent';
+    return curMode === 'battle' || curMode === 'direct' ? 'https://arena.ai/text' : '';
   },
   async browserMode() {
     const mask = this.showModeSwitchMask('正在切换至浏览器模式…', '正在保存会话缓存并等待网页完整渲染');
@@ -428,8 +445,11 @@ Object.assign(UI, {
     try {
       try {
         const curSid = String(Tabs.cur?.sid || '');
-        sessionStorage.setItem('anc:fast-return', JSON.stringify({ at: Date.now(), sid: curSid }));
-        sessionStorage.setItem('anc:mode-switching', JSON.stringify({ at: Date.now(), sid: curSid, target: this.browserTarget() || 'https://arena.ai/' }));
+        const tgt = this.browserTarget() || 'https://arena.ai/';
+        const isEval = /\/c\/|\/text\b/.test(tgt);
+        const curMode = (typeof Chats !== 'undefined' && curSid && Chats.get(curSid)?.evalMode) || (typeof ModeState !== 'undefined' && ModeState.getMode ? ModeState.getMode() : null);
+        sessionStorage.setItem('anc:fast-return', JSON.stringify({ at: Date.now(), sid: curSid, evalUrl: isEval, evalMode: isEval ? (curMode === 'direct' ? 'direct' : 'battle') : null }));
+        sessionStorage.setItem('anc:mode-switching', JSON.stringify({ at: Date.now(), sid: curSid, target: tgt }));
         if (typeof Chats !== 'undefined' && typeof MsgCache !== 'undefined' && MsgCache.putNow) {
           await Promise.all([...Chats.values()].filter(c => c?.loaded).slice(0, 6).map(c => MsgCache.putNow(c).catch(() => {})));
         }

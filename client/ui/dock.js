@@ -2,7 +2,7 @@
 Object.assign(ICON, {
   expand: '<path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/>', shrink: '<path d="M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5"/>', ext: '<path d="M14 4h6v6M20 4l-9 9"/><path d="M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/>',
   fingerprint: '<path d="M12 10a2 2 0 0 0-2 2c0 1.02-.1 2.51-.26 4"/><path d="M14 13.12c0 2.38 0 6.38-1 8.88"/><path d="M17.29 21.02c.12-.6.43-2.3.5-3.02"/><path d="M2 12a10 10 0 0 1 18-6"/><path d="M2 16h.01"/><path d="M21.8 16c.2-2 .131-5.354 0-6"/><path d="M5 19.5C5.5 18 6 15 6 12a6 6 0 0 1 .34-2"/><path d="M8.65 22c.21-.66.45-1.32.57-2"/><path d="M9 6.8a6 6 0 0 1 9 5.2v2"/>',
-  pelican: '<path d="M4 8.5C4 5.5 6 3.5 8.5 3.5c1.6 0 2.7.8 3.3 1.8L22 8.2l-9.3 1.3"/><path d="M12.7 9.5c-.9 1.6-2.6 2.1-4.4 1.7"/><path d="M4 8.5c0 3-1 5.5-1 7.5 0 3 2.6 4.5 6 4.5 4.5 0 8-2.5 8-6 0-1.8-1-3.2-2.6-3.8"/><circle cx="8" cy="6.4" r=".9" fill="currentColor" stroke="none"/>',
+  pelican: '<path d="M4 17c0-4.5 2.5-9 6.5-10.5a3.5 3.5 0 0 1 4.2 1.8L21 10l-6.5 2.2c-.5 2.8-2.8 4.8-6 4.8H4z"/>',
   doc: '<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5M8.5 13h7M8.5 17h5"/>', dl: '<path d="M12 4v11M7 10l5 5 5-5M5 20h14"/>', folder: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
   file: '<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/>', chevr: '<path d="M9 6l6 6-6 6"/>', chevl: '<path d="M15 6l-6 6 6 6"/>',
   pulse: '<path d="M3 12h4l3-8 4 16 3-8h4"/>', expand: '<path d="M4 9V4h5M20 15v5h-5M4 4l6 6M20 20l-6-6"/>', palette: '<path d="M12 3a9 9 0 1 0 0 18c1.1 0 1.5-.8 1.5-1.5 0-.9-.7-1.2-.7-2 0-.8.7-1.5 1.5-1.5H17a4 4 0 0 0 4-4c0-5-4-9-9-9z"/><circle cx="7.5" cy="11" r="1"/><circle cx="10" cy="7" r="1"/><circle cx="15" cy="7.5" r="1"/>', trophy: '<path d="M8 4h8v5a4 4 0 0 1-8 0zM8 6H5a3 3 0 0 0 3 4M16 6h3a3 3 0 0 1-3 4M12 13v4M8 20h8"/>', info: '<circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/>', check: '<path d="M5 12l5 5L20 7"/>',
@@ -1147,15 +1147,21 @@ const Dock = {
     const k = String(mod || '').toLowerCase();
     return map[k] || (mod ? String(mod) : 'Auto');
   },
+  _modeIcon(name) {
+    if (typeof ModeSwitcher !== 'undefined' && typeof ModeSwitcher._icon === 'function') {
+      return ModeSwitcher._icon(name);
+    }
+    return icon(name === 'swords' ? 'bolt' : 'check');
+  },
   renderBattleOverview(box, sid, chat) {
     const rawMod = chat?.modality || (typeof ModeState !== 'undefined' && ModeState.getModality ? ModeState.getModality() : 'auto') || 'auto';
     const modLabel = this.modalityLabel(rawMod);
     if (!chat) {
       const emptyHero = h('section', { class: 'mc-card mc-hero' },
         h('div', { class: 'mc-top' },
-          h('span', { class: 'vlogo', style: { width: '30px', height: '30px', fontSize: '16px' } }, '⚔️'),
+          h('span', { class: 'vlogo mc-mono-ico', style: { width: '30px', height: '30px' } }, this._modeIcon('swords')),
           h('div', { class: 'mc-name' },
-            h('div', { class: 'mc-fam' }, h('span', {}, '⚔️ Battle 匿名双模型盲测')),
+            h('div', { class: 'mc-fam' }, h('span', {}, 'Battle 匿名双模型盲测')),
             h('div', { class: 'mc-meta' }, `Modality: ${modLabel}`)
           )
         ),
@@ -1169,15 +1175,15 @@ const Dock = {
     const voteVal = chat.voteState?.value || null;
     const heroCard = h('section', { class: 'mc-card mc-hero' },
       h('div', { class: 'mc-top' },
-        h('span', { class: 'vlogo', style: { width: '30px', height: '30px', fontSize: '16px' } }, voted ? '✓' : '⚔️'),
+        h('span', { class: 'vlogo mc-mono-ico', style: { width: '30px', height: '30px' } }, voted ? icon('check') : this._modeIcon('swords')),
         h('div', { class: 'mc-name' },
-          h('div', { class: 'mc-fam' }, h('span', {}, voted ? '✓ Battle 模型身份已揭晓' : '⚔️ Battle 盲测进行中（待投票揭晓）')),
+          h('div', { class: 'mc-fam' }, h('span', {}, voted ? 'Battle 模型身份已揭晓' : 'Battle 盲测进行中')),
           h('div', { class: 'mc-meta' }, `Modality: ${modLabel} · 会话 ${String(sid || '').slice(0, 8)}`)
         )
       ),
       h('div', { class: 'mc-verdict', 'data-tone': voted ? 'ok' : 'busy', style: { marginTop: '8px' } },
         icon(voted ? 'check' : 'pulse'),
-        h('span', {}, voted ? '✓ 双方回复习惯已打标入库' : '实时采集 A / B 习惯中')
+        h('span', {}, voted ? '双方回复习惯已打标入库' : '实时采集 A / B 习惯特征中')
       )
     );
     box.append(heroCard);
@@ -1196,27 +1202,34 @@ const Dock = {
         || ''
       ).trim();
       const hasReveal = Boolean(voted && revealedName && !/^(未知|待定|Model [AB])$/i.test(revealedName));
-      const vid = hasReveal && typeof Brand !== 'undefined' && Brand.of ? Brand.of(revealedName) : '';
-      const isWinner = (isA && voteVal === 'model_a') || (!isA && voteVal === 'model_b');
-      const isTie = voteVal === 'tie';
-      const isBothBad = voteVal === 'both_bad';
-      const voteBadgeText = isWinner ? '🏆 胜出' : isTie ? '🤝 平局' : isBothBad ? '⚠️ 双差' : '';
+      const revModelId = isA ? chat.voteState?.modelAId : chat.voteState?.modelBId;
+      const revMeta = (hasReveal && Array.isArray(chat.revealedModels))
+        ? chat.revealedModels.find(m => m && (m.id === revModelId || m.publicName === revealedName || m.displayName === revealedName || m.name === revealedName))
+        : null;
+      const vid = hasReveal && typeof Brand !== 'undefined' && Brand.of ? Brand.of(revealedName + ' ' + (revMeta?.organization || '')) : '';
+      const orgFallback = revMeta?.organization ? String(revMeta.organization).replace(/^[a-z]/, c => c.toUpperCase()) : (/^hy[34]|hunyuan/i.test(revealedName) ? 'Tencent · Hunyuan' : '');
+      const vendorLabel = (vid && Brand?.NAME?.[vid]) ? Brand.NAME[vid] : orgFallback;
+      const isWinner = Boolean((isA && voteVal === 'model_a') || (!isA && voteVal === 'model_b'));
 
-      const card = h('section', { class: 'mc-card', 'data-battle-side': pos });
+      const card = h('section', {
+        class: 'mc-card mc-battle-side' + (isWinner ? ' is-winner' : ''),
+        'data-battle-side': pos,
+      });
+      const sideTagEl = h('span', { class: 'battle-side-tag' + (isWinner ? ' is-winner' : '') }, isA ? 'A' : 'B');
       const headerRow = h('div', { class: 'mc-top' },
         hasReveal && vid
           ? vlogo(vid, 24)
-          : h('span', { class: 'vlogo', style: { width: '24px', height: '24px', fontSize: '14px' } }, isA ? '🅰️' : '🅱️'),
+          : sideTagEl,
         h('div', { class: 'mc-name' },
           h('div', { class: 'mc-fam', style: { display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' } },
-            h('span', {}, hasReveal ? revealedName : (isA ? '🅰️ 匿名模型 A' : '🅱️ 匿名模型 B')),
-            voteBadgeText ? h('span', { class: 'mc-tier', 'data-lv': isWinner ? 5 : 3 }, voteBadgeText) : null,
-            hasReveal ? h('span', { class: 'mc-tier', 'data-lv': 4, title: '真实标签与回复特征已写入习惯库' }, '✓ 已写入习惯库') : null,
+            hasReveal && vid ? sideTagEl : null,
+            h('span', {}, hasReveal ? revealedName : (isA ? '匿名模型 A' : '匿名模型 B')),
+            hasReveal ? h('span', { class: 'mc-tier', title: '真实标签与回复特征已写入习惯库' }, '已入库') : null,
             sideSnap?.reasoningScore != null ? h('span', { class: 'mc-tier mc-reason-score', title: '习惯推理分' }, icon('brain'), Math.round(+sideSnap.reasoningScore)) : null
           ),
           h('div', { class: 'mc-meta' },
             hasReveal
-              ? `${isA ? 'Model A' : 'Model B'}${vid && Brand?.NAME?.[vid] ? ' · ' + Brand.NAME[vid] : ''}`
+              ? `${isA ? 'Model A' : 'Model B'}${vendorLabel ? ' · ' + vendorLabel : ''}`
               : `${isA ? 'Model A' : 'Model B'} · 盲测匿名侧`
           )
         )
@@ -1253,13 +1266,13 @@ const Dock = {
         const revNorm = hasReveal ? normName(revealedName) : '';
         cands.forEach((cand, idx) => {
           const cLbl = String(cand.label || cand.id || '');
-          const pct = Math.max(0, Math.min(100, Number(cand.match || 0)));
+          const pct = Math.max(0, Math.min(100, Number(cand.match ?? cand.habitPct ?? cand.confidence ?? 0)));
           const cNorm = normName(cLbl);
           const isHit = Boolean(revNorm && cNorm && (revNorm.includes(cNorm) || cNorm.includes(revNorm)));
           candBox.append(h('div', { class: 'mc-fp-row' + (idx === 0 || isHit ? ' top' : ''), title: cLbl },
             h('i', { class: 'mc-fp-bar', style: { width: pct + '%' } }),
             h('span', { class: 'mc-fp-n' }, idx + 1),
-            h('span', { class: 'mc-fp-m' }, cLbl, isHit ? h('b', { style: { marginLeft: '6px', color: 'var(--ok,#2fb36b)' } }, '🎯 习惯盲猜命中') : null),
+            h('span', { class: 'mc-fp-m' }, cLbl, isHit ? h('b', { style: { marginLeft: '6px', color: 'var(--fg)' } }, '· 盲猜命中') : null),
             h('b', { class: 'mc-fp-p' }, pct.toFixed(1) + '%')
           ));
         });
@@ -1301,7 +1314,7 @@ const Dock = {
 
     const heroCard = h('section', { class: 'mc-card mc-hero' },
       h('div', { class: 'mc-top' },
-        vid ? vlogo(vid, 30) : h('span', { class: 'vlogo', style: { width: '30px', height: '30px', fontSize: '16px' } }, '🎯'),
+        vid ? vlogo(vid, 30) : h('span', { class: 'vlogo mc-mono-ico', style: { width: '30px', height: '30px' } }, this._modeIcon('directTarget')),
         h('div', { class: 'mc-name', title: directModel },
           h('div', { class: 'mc-fam' },
             h('span', {}, fam || directModel),
@@ -1312,7 +1325,7 @@ const Dock = {
       ),
       h('div', { class: 'mc-verdict', 'data-tone': 'ok', style: { marginTop: '8px' } },
         icon('check'),
-        h('span', {}, `🎯 Direct 直连锁定 · 100% 确定 · ${modLabel}`)
+        h('span', {}, `Direct 直连锁定 · 100% 确定 · ${modLabel}`)
       )
     );
 
@@ -2065,13 +2078,13 @@ const Bar = {
     const botScore = lt?.botScore ?? bsState?.botScore ?? null;
     const botLv = typeof BotService !== 'undefined' && BotService.levelOf ? BotService.levelOf(botScore) : null;
     const it = (cls, title, ...kids) => h('span', { class: 'bi ' + cls, title }, ...kids);
+    const mob = Boolean((typeof isMob === 'function' && isMob()) || (typeof Host !== 'undefined' && Host.platform === 'android'));
     const kids = [...Bulk.barItems()];   // 一键归档 / 删除归档：最小化后的进度条
     kids.push(it('bmeter', '账号额度与官方 BotService 分数 · 点击展开 / 再点收起' + (botLv?.desc ? '\n' + botLv.desc : '') + (u == null && bt?.head ? '\n推断：' + bt.head + '\n' + bt.why : bt?.why ? '\n' + bt.why : ''), h('i', { class: 'meter' + (pct != null && pct < 10 ? ' low' : '') }, h('b', { style: { width: (pct ?? 0) + '%' } })),
       rem != null ? [h('span', { class: 'dim' }, u == null ? '≈美金' : '美金'), h('b', {}, (u == null ? '≈' : '') + '$' + (rem >= 100 ? Math.round(rem) : rem.toFixed(2))), all ? h('span', { class: 'dim' }, '/ $' + (all >= 100 ? Math.round(all) : all.toFixed(2))) : null, pct != null ? h('span', { class: 'dim' }, '· ' + pct + '%') : null, botScore != null ? h('span', { class: 'dim bot-score-tag', title: botLv?.desc || '' }, '· Bot ' + botScore) : null]
         : [h('span', { class: 'dim' }, '额度'), h('b', {}, pct != null ? pct + '%' : '—'), botScore != null ? h('span', { class: 'dim bot-score-tag', title: botLv?.desc || '' }, '· Bot ' + botScore) : null]));
-    kids.push(this.refreshBtn(sid));   // 刷新紧跟在额度右边；更新时间在点开额度后的「余额明细」里
-    const bpSum = sid && typeof BillingProbe !== 'undefined' ? BillingProbe.summary(sid) : null;
-    { // 本轮花费与对话总消耗：优先采用新计费 /cost 账单（含 P50×2 原像实扣），进行中或账单未到达时按新计费 P50×2 实时估算
+    const bpSum = (!mob && sid && typeof BillingProbe !== 'undefined') ? BillingProbe.summary(sid) : null;
+    if (!mob) { // 本轮花费与对话总消耗（仅桌面端显示，手机端底栏隐藏）
       const ch = sid ? Chats.get(sid) : null, bp = bpSum, bSid = sid && typeof Budget !== 'undefined' ? Budget.sid(sid) : null;
       const estNow = ch ? LiveEst.of(ch) : null, live = ch?.busy ? estNow : null, real = lt?.sum?.usd || 0, estU = lt?.sum?.usdEst || 0;
       const bpTurnExact = bp?.payment?.chargedUsd > 0 ? bp.payment.chargedUsd : null;
@@ -2084,33 +2097,28 @@ const Bar = {
       const all = bpSessExact ?? bpSessEff ?? (traceTot || bSid?.usd || (v > 0 ? v : 0));
       const allApprox = !(bpSessExact != null || traceTot > 0);
       const allTurns = bp?.sessionPayment?.turns || tot?.turns || bSid?.turns || (v > 0 ? 1 : 0);
-      if (v || all) kids.push(it('bcost', (ch?.busy ? '本轮进行中：按新计费 P50×2 实时估算' : bpTurnEff ? '本轮：新计费账单 ' + (bpTurnExact ? '实扣 ' : 'P50×2 折算 ') + fmtUsd(v) : '本轮：最近一轮 ' + (lt?.calls.length || estNow?.steps || 1) + ' 次调用') + (real ? '\nTrace 实际 ' + fmtUsd(real) : '') + (all ? '\n总：本对话 ' + allTurns + ' 轮合计 ' + (allApprox ? '≈' : '') + fmtUsd(all) : ''),
+      kids.push(it('bcost', (ch?.busy ? '本轮进行中：按新计费 P50×2 实时估算' : bpTurnEff ? '本轮：新计费账单 ' + (bpTurnExact ? '实扣 ' : 'P50×2 折算 ') + fmtUsd(v) : '本轮：最近一轮 ' + (lt?.calls.length || estNow?.steps || 1) + ' 次调用') + (real ? '\nTrace 实际 ' + fmtUsd(real) : '') + (all ? '\n总：本对话 ' + allTurns + ' 轮合计 ' + (allApprox ? '≈' : '') + fmtUsd(all) : ''),
         h('span', { class: 'dim' }, '对话消耗'), h('b', {}, v ? (approx ? '≈' : '') + fmtUsd(v) : '—'), h('span', { class: 'dim' }, '/'), h('b', {}, all ? (allApprox ? '≈' : '') + fmtUsd(all) : '—')));
     }
-    const miNow = (sid && typeof Models !== 'undefined' ? Models.get(sid) : null) || mi;
-    const bestNm = mi?.name || mi?.candidates?.[0]?.id || lt?.best || '';
     const bpTop = bpSum?.mergedCandidates?.[0] || bpSum?.top?.[0] || null;
-    const hRow = sid && typeof History !== 'undefined' ? History.byId?.(sid) : null;
-    const tvMod = sid && typeof Titles !== 'undefined' && typeof ConversationLabels !== 'undefined' ? ConversationLabels.parse(Titles.view(sid, hRow?.title || '', hRow?.localTitle)?.model || '')?.name : '';
-    const rawLtBest = lt?.best && !/^(none|minimal|low|medium|high|xhigh|max)$/i.test(String(lt.best).trim()) ? lt.best : '';
-    const hasReidMi = Boolean((!miNow?.guess || miNow?.userCorrected || miNow?.habitInferred || miNow?.reverseInferred || miNow?.billingProbe) && miNow?.name);
-    const bestBase = (hasReidMi && miNow?.name) || miNow?.candidateName || miNow?.reverseLabel || bpTop?.canon || bpTop?.label || tvMod || (!/^(none|minimal|low|medium|high|xhigh|max)$/i.test(bestNm) ? bestNm : '') || rawLtBest || '';
-    const baseHasTier = Boolean(bestBase && typeof Strength !== 'undefined' && Strength.parts && Strength.parts(bestBase).tier);
-    const bestEffort = (hasReidMi && baseHasTier) ? '' : (lt?.calls?.at(-1)?.effort && lt.calls.at(-1).effort !== 'conflict' ? lt.calls.at(-1).effort : (/^(none|minimal|low|medium|high|xhigh|max)$/i.test(String(lt?.best || '').trim()) ? String(lt.best).trim().toLowerCase() : ''));
-    const syncNm = bestBase ? (bestEffort && typeof Strength !== 'undefined' && Strength.withEffort ? Strength.withEffort(bestBase, bestEffort) : Strength.canon(bestBase)) : '';
-    if (syncNm && !/^(none|minimal|low|medium|high|xhigh|max)$/i.test(syncNm)) {
-      const nm = syncNm, vid = Brand.of(nm), disp = (typeof cardName === 'function' ? cardName(nm) : '') || nm;
-      kids.push(it('bmodel', nm, h('span', { class: 'dim' }, '模型'), h('b', {}, (vid ? Brand.NAME[vid] + ' ' : '') + disp)));
-    }
-    const upd = Math.max(u?.at || 0, p?.at || 0);
-    /* 刷新紧挨着额度 / 模型，更新时间放在刷新按钮右边 */
+    const bestNm = mi?.name || mi?.candidates?.[0]?.id || lt?.best || '';
+    const bestBase = bestNm || bpTop?.displayName || bpTop?.model || '';
+    const bestEffort = (sid && typeof Strength !== 'undefined' && typeof Strength.effort === 'function' ? Strength.effort(sid) : null) || bpTop?.effort || null;
+    const bestLabel = bestBase ? (typeof Strength !== 'undefined' && Strength.withEffort ? Strength.withEffort(bestBase, bestEffort) : bestBase) : ''; void bestLabel;
+    const upd = Math.max(u?.at || 0, p?.at || 0); void upd;
+    /* 底栏左侧仅保留对话消耗与三个功能图标，不显示刷新按钮与模型名称识别 */
     kids.push(LeaderPop.btn());
     kids.push(h('button',{class:'bi link fp-library-btn habit-library-btn bico',title:'习惯库：将确定知道是什么模型的诊断 JSON（billing-*.json）导入到习惯库中帮助习惯识别 · 管理纠偏自学习样本','aria-label': '习惯库',onclick:()=>typeof ChatHabitFingerprint!=='undefined'&&ChatHabitFingerprint.openManager?ChatHabitFingerprint.openManager():FingerprintLibrary.open()},icon('fingerprint')));
-    kids.push(h('button',{class:'bi link pel-library-btn bico',title:'鹈鹕测试库：全客户端共享鹈鹕测试图 · 导入合并 · 导出分享 · 多模型并排对比','aria-label':'鹈鹕测试库',onclick:()=>typeof PelicanShots!=='undefined'&&PelicanShots.table?.()},icon('pelican')));
-    kids.push(h('span', { class: 'grow' }));
+    kids.push(h('button',{class:'bi link pel-library-btn bico',title:'鹈鹕测试库：查看/导入/导出骑自行车鹈鹕 SVG 作品与评分，辅助后续同画像模型识别','aria-label': '鹈鹕测试库',onclick:()=>typeof PelicanShots!=='undefined'&&PelicanShots.openLibrary?PelicanShots.openLibrary():null},icon('pelican')));
     const run = [...Chats.values()].filter(c => c.busy).length; if (run) kids.push(it('', '进行中的对话', h('i', { class: 'dot' }), '进行中 ' + run));
-    if (Gacha.capOffer()) kids.push(Gacha.capCooling?.() ? h('button', { class: 'bi link bcap cool', title: '验证分数低，正在自动冷却后重试，不用操作；想马上继续也可以点一下手动验证', onclick: () => GPop.captcha() }, '验证冷却中 · 自动重试') : h('button', { class: 'bi link bcap', title: '抽卡遇到人机验证：点一下完成验证', onclick: () => GPop.captcha() }, '验 · 抽卡需要人机验证'));
-    else { const r = Gacha.run; if (r && (Gacha.busy() || r.status === 'hit')) kids.push(h('button', { class: 'bi link', onclick: () => GPop.openAny() }, `抽卡 ${r.completed}/${r.settings?.endless ? '∞' : r.settings?.maxAttempts} · 命中 ${(r.hits || []).length}`)); }
+    const curBarChat = sid && typeof Chats !== 'undefined' ? Chats.get(sid) : null;
+    const isBattleBarMode = curBarChat
+      ? Boolean((curBarChat.isEvaluation && curBarChat.evalMode === 'battle') || (typeof EvalView !== 'undefined' && EvalView.isBattleChat?.(curBarChat)))
+      : (typeof ModeState !== 'undefined' && typeof ModeState.getMode === 'function' && ModeState.getMode() === 'battle');
+    if (!isBattleBarMode) {
+      if (Gacha.capOffer()) kids.push(Gacha.capCooling?.() ? h('button', { class: 'bi link bcap cool', title: '验证分数低，正在自动冷却后重试，不用操作；想马上继续也可以点一下手动验证', onclick: () => GPop.captcha() }, '验证冷却中 · 自动重试') : h('button', { class: 'bi link bcap', title: '抽卡遇到人机验证：点一下完成验证', onclick: () => GPop.captcha() }, '验 · 抽卡需要人机验证'));
+      else { const r = Gacha.run; if (r && (Gacha.busy() || r.status === 'hit')) kids.push(h('button', { class: 'bi link', onclick: () => GPop.openAny() }, `抽卡 ${r.completed}/${r.settings?.endless ? '∞' : r.settings?.maxAttempts} · 命中 ${(r.hits || []).length}`)); }
+    }
     const a = UI.host?.account || {};
     // 出口图标：住宅 IP = 小房子，机房 IP = 小主机，其它 / 未知 = 地球；颜色 = 纯净度（绿 纯净 / 黄 一般 / 红 高风险 / 灰 未评估），旁边写纯净度百分比
     const ipRep = typeof IPRep !== 'undefined' && IPRep.cur ? IPRep.cur(a, IP.ip) : { label: '未评估', cls: 'r-none', kind: null, pct: null };

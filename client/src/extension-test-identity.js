@@ -23,6 +23,7 @@ function configure(app){
  }
  const root=chooseDataRoot({appData:app.getPath('appData'),override:process.env.BRANA_EXTENSION_TEST_DATA,isPackaged:app.isPackaged,executable:exe});
  fs.mkdirSync(path.join(root,'s'),{recursive:true});
+ try{const lsS=path.join(root,'s','Local State'),lsR=path.join(root,'Local State');if(fs.existsSync(lsS)){const js=JSON.parse(fs.readFileSync(lsS,'utf8')),jr=fs.existsSync(lsR)?JSON.parse(fs.readFileSync(lsR,'utf8')):{};if(js?.os_crypt?.encrypted_key&&jr?.os_crypt?.encrypted_key!==js.os_crypt.encrypted_key){jr.os_crypt={...(jr.os_crypt||{}),encrypted_key:js.os_crypt.encrypted_key};fs.writeFileSync(lsR,JSON.stringify(jr));}}}catch{}
  app.setName('Brana AI Extension Test');try{app.setAppUserModelId?.('ai.arena.client.extensiontest');}catch{}app.setPath('userData',root);app.setPath('sessionData',path.join(root,'s'));
  if(process.env.BRANA_EXTENSION_PACKAGED_SELF_TEST==='1')require('./extension-packaged-self-test').install(app,root);
  return {title:TITLE,dataRoot:root,testBuild:true};

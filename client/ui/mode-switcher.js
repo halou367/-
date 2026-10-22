@@ -27,43 +27,36 @@ function ensureModeSwitcherStyle() {
   const st = document.createElement('style');
   st.id = 'brana-mode-switcher-css';
   st.textContent = `
-.mode-bar-wrap{display:inline-flex;align-items:center;gap:5px;flex-wrap:nowrap;min-width:0;max-width:100%}
-.cbtn.mode-pill,.cbtn.modality-pill,.cbtn.direct-model-pill{display:inline-flex;align-items:center;gap:5px;height:28px;padding:0 9px;border-radius:999px;border:1px solid var(--bd);background:var(--bg2,var(--bg));color:var(--fg1,var(--fg));font-size:12px;font-weight:600;line-height:1;white-space:nowrap;transition:background .14s ease,border-color .14s ease,color .14s ease,box-shadow .14s ease;user-select:none;max-width:210px}
-.cbtn.mode-pill:hover,.cbtn.modality-pill:hover,.cbtn.direct-model-pill:hover,.cbtn.mode-pill.is-open,.cbtn.modality-pill.is-open,.cbtn.direct-model-pill.is-open{background:var(--hl,var(--bg3));border-color:var(--bd2,var(--bd))}
-.cbtn.mode-pill[data-mode="battle"]{border-color:color-mix(in srgb,var(--gold,#d4a017) 42%,var(--bd));background:color-mix(in srgb,var(--gold,#d4a017) 9%,var(--bg2,var(--bg)))}
-.cbtn.mode-pill[data-mode="direct"]{border-color:color-mix(in srgb,var(--ok,#2f9e5b) 40%,var(--bd));background:color-mix(in srgb,var(--ok,#2f9e5b) 8%,var(--bg2,var(--bg)))}
-.cbtn.mode-pill .ic,.cbtn.modality-pill .ic,.cbtn.direct-model-pill .ic{width:14px;height:14px;flex:none}
-.cbtn .mode-pill-chev{width:12px!important;height:12px!important;color:var(--fg3);margin-left:1px;opacity:.85}
-.cbtn .mode-pill-label{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.cbtn.direct-model-pill{max-width:220px}
-.cbtn.direct-model-pill .vlogo{flex:none}
-.mode-pop{position:fixed;z-index:95;min-width:256px;max-width:320px;background:var(--bg1,var(--card,var(--bg)));border:1px solid var(--bd);border-radius:14px;box-shadow:var(--sh,0 10px 32px rgba(0,0,0,.22));padding:6px;display:flex;flex-direction:column;gap:2px;backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);animation:modePopIn .14s cubic-bezier(.2,.8,.2,1)}
+.mode-bar-wrap{display:inline-flex;align-items:center;gap:2px;flex-wrap:nowrap;min-width:0;max-width:100%;flex:none}
+.cbtn.mode-pill,.cbtn.modality-pill,.cbtn.direct-model-pill{display:inline-grid;place-items:center;width:28px;height:28px;min-width:28px;max-width:28px;padding:0;border-radius:7px;border:1px solid transparent;background:transparent;color:var(--fg2);line-height:1;cursor:pointer;transition:background .14s ease,color .14s ease,border-color .14s ease;user-select:none;flex:none}
+.cbtn.mode-pill:hover,.cbtn.modality-pill:hover,.cbtn.direct-model-pill:hover,.cbtn.mode-pill.is-open,.cbtn.modality-pill.is-open,.cbtn.direct-model-pill.is-open{background:var(--hl,var(--bg3));color:var(--fg)}
+.cbtn.mode-pill .ic,.cbtn.modality-pill .ic,.cbtn.direct-model-pill .ic{width:16px;height:16px;flex:none;color:currentColor}
+.cbtn.direct-model-pill .vlogo,.cbtn.direct-model-pill .vi{flex:none;opacity:.85;filter:grayscale(1) contrast(1.05)}
+.cbtn.direct-model-pill:hover .vlogo,.cbtn.direct-model-pill:hover .vi,.cbtn.direct-model-pill.is-open .vlogo,.cbtn.direct-model-pill.is-open .vi{opacity:1}
+body.m .cbtn.mode-pill,body.m .cbtn.modality-pill,body.m .cbtn.direct-model-pill{width:32px;height:32px;min-width:32px;max-width:32px;border-radius:50%}
+.mode-pop{position:fixed;z-index:95;min-width:256px;max-width:320px;background:var(--card,var(--bg));border:1px solid var(--bd2,var(--bd));border-radius:14px;box-shadow:var(--sh,0 10px 32px rgba(0,0,0,.22));padding:6px;display:flex;flex-direction:column;gap:2px;backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);animation:modePopIn .14s cubic-bezier(.2,.8,.2,1)}
 .mode-pop.direct-model-pop{width:316px;max-width:calc(100vw - 20px);padding:8px}
 @keyframes modePopIn{from{opacity:0;transform:translateY(5px) scale(.985)}to{opacity:1;transform:translateY(0) scale(1)}}
-.mode-pop-item{display:flex;align-items:center;gap:10px;width:100%;padding:8px 10px;border-radius:10px;text-align:left;background:transparent;border:0;color:var(--fg1,var(--fg));cursor:pointer;transition:background .12s ease}
-.mode-pop-item:hover:not(.is-disabled){background:var(--hl,var(--bg3))}
-.mode-pop-item.is-active{background:color-mix(in srgb,var(--acc) 8%,var(--bg2,var(--bg)))}
-.mode-pop-item.is-disabled{opacity:.46;cursor:not-allowed}
-.mode-pop-ico{width:28px;height:28px;border-radius:8px;background:var(--bg2,var(--bg3));border:1px solid var(--bd);display:inline-grid;place-items:center;flex:none;color:var(--fg1,var(--fg))}
-.mode-pop-item.is-active .mode-pop-ico{border-color:color-mix(in srgb,var(--acc) 35%,var(--bd));background:var(--bg3)}
+.mode-pop-item{display:flex;align-items:center;gap:10px;width:100%;padding:8px 10px;border-radius:10px;text-align:left;background:transparent;border:0;color:var(--fg);cursor:pointer;transition:background .12s ease}
+.mode-pop-item:hover:not(.is-disabled){background:var(--hl,var(--bg2))}
+.mode-pop-item.is-active{background:var(--on,var(--bg3))}
+.mode-pop-item.is-disabled{opacity:.42;cursor:not-allowed}
+.mode-pop-ico{width:28px;height:28px;border-radius:8px;background:var(--bg2,var(--bg3));border:1px solid var(--bd);display:inline-grid;place-items:center;flex:none;color:var(--fg2)}
+.mode-pop-item.is-active .mode-pop-ico{border-color:var(--bd2);background:var(--card,var(--bg));color:var(--fg)}
 .mode-pop-ico .ic{width:15px;height:15px}
 .mode-pop-txt{display:flex;flex-direction:column;gap:1px;min-width:0;flex:1}
-.mode-pop-title{font-size:12.5px;font-weight:600;color:var(--fg1,var(--fg));display:flex;align-items:center;gap:6px;line-height:1.25}
-.mode-pop-sub{font-size:11px;color:var(--fg3);line-height:1.3;white-space: nowrap;overflow:hidden;text-overflow:ellipsis}
-.mode-pop-check{font-size:13px;font-weight:700;color:var(--fg1,var(--fg));margin-left:auto;padding-left:4px;flex:none}
+.mode-pop-title{font-size:12.5px;font-weight:600;color:var(--fg);display:flex;align-items:center;gap:6px;line-height:1.25}
+.mode-pop-sub{font-size:11px;color:var(--fg3);line-height:1.3;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mode-pop-check{font-size:13px;font-weight:700;color:var(--fg);margin-left:auto;padding-left:4px;flex:none}
 .mode-pop-sep{height:1px;background:var(--bd);margin:4px 6px}
 .mode-pop-search-wrap{display:flex;align-items:center;gap:6px;padding:6px 9px;margin-bottom:5px;border-radius:9px;border:1px solid var(--bd);background:var(--bg2,var(--bg))}
-.mode-pop-search-wrap:focus-within{border-color:var(--acc)}
+.mode-pop-search-wrap:focus-within{border-color:var(--fg3)}
 .mode-pop-search-wrap .ic{width:13.5px;height:13.5px;color:var(--fg3);flex:none}
-.mode-pop-search{width:100%;border:0;outline:0;background:transparent;color:var(--fg1,var(--fg));font-size:12px;padding:0}
+.mode-pop-search{width:100%;border:0;outline:0;background:transparent;color:var(--fg);font-size:12px;padding:0}
 .mode-pop-search::placeholder{color:var(--fg3)}
 .mode-pop-list{display:flex;flex-direction:column;gap:2px;max-height:290px;overflow-y:auto;padding-right:2px}
 .mode-pop-empty{padding:18px 10px;text-align:center;color:var(--fg3);font-size:12px}
 .mode-pop-org{font-size:10px;padding:1px 5px;border-radius:4px;background:var(--bg3);color:var(--fg2);font-weight:500;margin-left:auto}
-@media (max-width:760px){
-  .cbtn.mode-pill,.cbtn.modality-pill,.cbtn.direct-model-pill{height:26px;padding:0 7px;font-size:11.5px;max-width:135px}
-  .mode-bar-wrap{gap:4px}
-}
 `;
   document.head.appendChild(st);
 }
@@ -283,8 +276,27 @@ const ModeSwitcher = {
     pop.style.top = top + 'px';
   },
 
-  _resolveState(chat) {
-    const isExistingChat = Boolean(chat && chat.sid && ((Array.isArray(chat.messages) && chat.messages.length > 0) || chat.loaded));
+  _resolveState(chat, tab = null) {
+    const sid = chat?.sid || tab?.sid || null;
+    const hRow = (sid && typeof History !== 'undefined' && typeof History.byId === 'function')
+      ? History.byId(sid)
+      : null;
+    const isUnstartedEvalStub = Boolean(
+      chat?.isEvaluation &&
+      !tab?.sid &&
+      (!Array.isArray(chat?.messages) || chat.messages.length === 0) &&
+      !chat?.loaded &&
+      !hRow
+    );
+    const isExistingChat = Boolean(
+      sid && !isUnstartedEvalStub && (
+        Boolean(tab?.sid) ||
+        (Array.isArray(chat?.messages) && chat.messages.length > 0) ||
+        chat?.loaded ||
+        chat?.isEvaluation ||
+        hRow
+      )
+    );
     const stateMode = (typeof ModeState !== 'undefined' && typeof ModeState.getMode === 'function')
       ? ModeState.getMode()
       : (typeof ModeState !== 'undefined' && ModeState.mode ? ModeState.mode : 'agent');
@@ -293,11 +305,15 @@ const ModeSwitcher = {
       : (typeof ModeState !== 'undefined' && ModeState.modality ? ModeState.modality : 'chat');
 
     const curMode = isExistingChat
-      ? (chat.isEvaluation ? (chat.evalMode || 'battle') : 'agent')
+      ? (chat?.isEvaluation
+          ? (chat.evalMode || 'battle')
+          : (hRow && typeof ModeState !== 'undefined' && typeof ModeState.inferEntryMode === 'function'
+              ? ModeState.inferEntryMode(hRow)
+              : 'agent'))
       : (stateMode || 'agent');
 
     let curMod = isExistingChat
-      ? (chat.isEvaluation ? (chat.modality || stateMod) : stateMod)
+      ? (chat?.isEvaluation ? (chat.modality || stateMod) : (hRow?.modality || stateMod))
       : (stateMod || 'chat');
 
     if (curMode === 'direct' && (curMod === 'auto' || curMod === 'video')) {
@@ -342,7 +358,7 @@ const ModeSwitcher = {
       return;
     }
     this.closeAllPops();
-    const { isExistingChat, curMode } = this._resolveState(chat);
+    const { isExistingChat, curMode } = this._resolveState(chat, tab);
 
     const items = ['agent', 'battle', 'direct'].map(mId => {
       const meta = this.getModeMeta(mId);
@@ -353,19 +369,29 @@ const ModeSwitcher = {
         onclick: e => {
           e.stopPropagation();
           this.closeAllPops();
+          if (isExistingChat && mId !== curMode) {
+            if (typeof ModeState !== 'undefined' && typeof ModeState.setMode === 'function') {
+              ModeState.setMode(mId, { silent: true });
+            } else if (typeof ModeState !== 'undefined') {
+              ModeState.mode = mId;
+            }
+            try { if (typeof Pager !== 'undefined') Pager.clear?.(); } catch {}
+            try {
+              if (typeof Tabs !== 'undefined') {
+                if (typeof Tabs.newChat === 'function') Tabs.newChat();
+                else if (typeof Tabs.open === 'function') Tabs.open(null);
+              }
+            } catch {}
+            try { Bus?.emit?.('modechange', typeof ModeState !== 'undefined' && ModeState.snapshot ? ModeState.snapshot() : { mode: mId }); } catch {}
+            try { Bus?.emit?.('history'); } catch {}
+            try { Dock?.render?.(); } catch {}
+            return;
+          }
           if (typeof ModeState !== 'undefined' && typeof ModeState.setMode === 'function') {
-            ModeState.setMode(mId);
+            ModeState.setMode(mId, { forceEmit: true });
           } else if (typeof ModeState !== 'undefined') {
             ModeState.mode = mId;
             try { Bus?.emit?.('modechange', { mode: mId }); } catch {}
-          }
-          if (isExistingChat && mId !== curMode) {
-            try {
-              if (typeof Tabs !== 'undefined' && typeof Tabs.open === 'function') {
-                Tabs.open(null);
-                return;
-              }
-            } catch {}
           }
           try { wrap._repaint?.(); } catch {}
           try { UI?.showTab?.(); } catch {}
@@ -400,7 +426,7 @@ const ModeSwitcher = {
       return;
     }
     this.closeAllPops();
-    const { isExistingChat, curMode, curMod } = this._resolveState(chat);
+    const { isExistingChat, curMode, curMod } = this._resolveState(chat, tab);
 
     const buildModItem = modId => {
       const meta = this.getModalityMeta(modId);
@@ -425,21 +451,29 @@ const ModeSwitcher = {
             return;
           }
           this.closeAllPops();
-          if (typeof ModeState !== 'undefined' && typeof ModeState.setModality === 'function') {
-            ModeState.setModality(modId);
-          } else if (typeof ModeState !== 'undefined') {
-            ModeState.modality = modId;
-            try { Bus?.emit?.('modalitychange', { modality: modId }); } catch {}
-          }
           if (chat && chat.isEvaluation && (!Array.isArray(chat.messages) || chat.messages.length === 0)) {
             chat.modality = modId;
           } else if (isExistingChat && modId !== curMod) {
+            if (typeof ModeState !== 'undefined' && typeof ModeState.setModality === 'function') {
+              ModeState.setModality(modId, { silent: true });
+            } else if (typeof ModeState !== 'undefined') {
+              ModeState.modality = modId;
+            }
             try {
-              if (typeof Tabs !== 'undefined' && typeof Tabs.open === 'function') {
-                Tabs.open(null);
-                return;
+              if (typeof Tabs !== 'undefined') {
+                if (typeof Tabs.newChat === 'function') Tabs.newChat();
+                else if (typeof Tabs.open === 'function') Tabs.open(null);
               }
             } catch {}
+            try { Bus?.emit?.('modalitychange', typeof ModeState !== 'undefined' && ModeState.snapshot ? ModeState.snapshot() : { modality: modId }); } catch {}
+            try { Dock?.render?.(); } catch {}
+            return;
+          }
+          if (typeof ModeState !== 'undefined' && typeof ModeState.setModality === 'function') {
+            ModeState.setModality(modId, { forceEmit: true });
+          } else if (typeof ModeState !== 'undefined') {
+            ModeState.modality = modId;
+            try { Bus?.emit?.('modalitychange', { modality: modId }); } catch {}
           }
           try { wrap._repaint?.(); } catch {}
           try { UI?.showTab?.(); } catch {}
@@ -481,7 +515,7 @@ const ModeSwitcher = {
       return;
     }
     this.closeAllPops();
-    const { isExistingChat, curMod } = this._resolveState(chat);
+    const { isExistingChat, curMod } = this._resolveState(chat, tab);
     const curDirect = this._resolveDirectModel(chat, curMod);
     const curDirectId = curDirect?.id || curDirect?.name || '';
 
@@ -531,23 +565,32 @@ const ModeSwitcher = {
           onclick: e => {
             e.stopPropagation();
             this.closeAllPops();
+            if (chat && chat.isEvaluation && chat.evalMode === 'direct' && (!Array.isArray(chat.messages) || chat.messages.length === 0)) {
+              chat.modelAId = m.id;
+              chat.directModelName = mLabel;
+            } else if (isExistingChat && chat?.modelAId && chat.modelAId !== m.id) {
+              if (typeof ModeState !== 'undefined' && typeof ModeState.setDirectModel === 'function') {
+                ModeState.setDirectModel(m.id, { silent: true });
+              } else if (typeof ModeState !== 'undefined') {
+                ModeState.directModelId = m.id;
+                ModeState.directModelMeta = m;
+              }
+              try {
+                if (typeof Tabs !== 'undefined') {
+                  if (typeof Tabs.newChat === 'function') Tabs.newChat();
+                  else if (typeof Tabs.open === 'function') Tabs.open(null);
+                }
+              } catch {}
+              try { Bus?.emit?.('directmodelchange', m); } catch {}
+              try { Dock?.render?.(); } catch {}
+              return;
+            }
             if (typeof ModeState !== 'undefined' && typeof ModeState.setDirectModel === 'function') {
               ModeState.setDirectModel(m.id);
             } else if (typeof ModeState !== 'undefined') {
               ModeState.directModelId = m.id;
               ModeState.directModelMeta = m;
               try { Bus?.emit?.('directmodelchange', m); } catch {}
-            }
-            if (chat && chat.isEvaluation && chat.evalMode === 'direct' && (!Array.isArray(chat.messages) || chat.messages.length === 0)) {
-              chat.modelAId = m.id;
-              chat.directModelName = mLabel;
-            } else if (isExistingChat && chat?.modelAId && chat.modelAId !== m.id) {
-              try {
-                if (typeof Tabs !== 'undefined' && typeof Tabs.open === 'function') {
-                  Tabs.open(null);
-                  return;
-                }
-              } catch {}
             }
             try { wrap._repaint?.(); } catch {}
             try { Dock?.render?.(); } catch {}
@@ -616,42 +659,37 @@ const ModeSwitcher = {
       const curChat = (tab && tab.sid && typeof Chats !== 'undefined' && typeof Chats.get === 'function')
         ? (Chats.get(tab.sid) || chat)
         : chat;
-      const { curMode, curMod } = this._resolveState(curChat);
+      const { curMode, curMod } = this._resolveState(curChat, tab);
       const modeMeta = this.getModeMeta(curMode);
       const modMeta = this.getModalityMeta(curMod);
 
       const modeBtn = h('button', {
         type: 'button',
-        class: 'cbtn mode-pill',
+        class: 'ib cbtn mode-pill mode-icon-only',
         'data-mode': curMode,
         title: `当前模式：${modeMeta.label}（${modeMeta.desc}）· 点击切换`,
-        'aria-label': '切换对话模式',
+        'aria-label': `切换对话模式（当前：${modeMeta.label}）`,
         onclick: e => {
           e.stopPropagation();
           this._openModePop(modeBtn, tab, curChat, wrap);
         },
       },
-      this._icon(modeMeta.icon),
-      h('span', { class: 'mode-pill-label' }, modeMeta.label),
-      this._icon('chev', 'mode-pill-chev'));
-
+      this._icon(modeMeta.icon));
       const pills = [modeBtn];
 
       if (curMode === 'battle' || curMode === 'direct') {
         const modBtn = h('button', {
           type: 'button',
-          class: 'cbtn modality-pill',
+          class: 'ib cbtn modality-pill mode-icon-only',
           'data-modality': curMod,
           title: `当前测试模态：${modMeta.label}（${modMeta.desc}）· 点击切换`,
-          'aria-label': '切换测试模态',
+          'aria-label': `切换测试模态（当前：${modMeta.label}）`,
           onclick: e => {
             e.stopPropagation();
             this._openModalityPop(modBtn, tab, curChat, wrap);
           },
         },
-        this._icon(modMeta.icon),
-        h('span', { class: 'mode-pill-label' }, modMeta.label),
-        this._icon('chev', 'mode-pill-chev'));
+        this._icon(modMeta.icon));
         pills.push(modBtn);
       }
 
@@ -660,26 +698,40 @@ const ModeSwitcher = {
         const modelLabel = directModel?.displayName || directModel?.publicName || directModel?.name || directModel?.id || '选择模型';
         const directBtn = h('button', {
           type: 'button',
-          class: 'cbtn direct-model-pill',
+          class: 'ib cbtn direct-model-pill mode-icon-only',
           title: `当前直连模型：${modelLabel} · 点击切换模型`,
-          'aria-label': '选择 Direct 直连模型',
+          'aria-label': `选择 Direct 直连模型（当前：${modelLabel}）`,
           onclick: e => {
             e.stopPropagation();
             this._openDirectModelPop(directBtn, tab, curChat, wrap);
           },
         },
-        this._modelLogo(directModel, 15),
-        h('span', { class: 'mode-pill-label' }, modelLabel),
-        this._icon('chev', 'mode-pill-chev'));
+        this._modelLogo(directModel, 16));
         pills.push(directBtn);
       }
 
+      wrap.dataset.mode = curMode;
+      wrap.dataset.pills = String(pills.length);
       wrap.replaceChildren(...pills);
+      try {
+        const comp = wrap.closest?.('.composer') || (typeof document !== 'undefined' ? document.querySelector?.('#view .composer') : null);
+        const cbox = wrap.closest?.('.cbox') || (typeof document !== 'undefined' ? document.querySelector?.('#view .cbox') : null);
+        if (comp) comp.dataset.mode = curMode;
+        if (cbox) cbox.dataset.mode = curMode;
+        const gbtn = comp?.querySelector?.('.gbtn2:not([data-acct])');
+        if (gbtn) {
+          gbtn.style.display = curMode === 'battle' ? 'none' : '';
+          gbtn.hidden = curMode === 'battle';
+        }
+        if (curMode === 'battle' && typeof GPop !== 'undefined' && typeof GPop.isOpen === 'function' && GPop.isOpen() && !GPop.target) {
+          GPop.close?.();
+        }
+      } catch {}
     };
 
     wrap._repaint = paint;
-    paint();
     this._mountedBars.add(wrap);
+    paint();
     return wrap;
   },
 };

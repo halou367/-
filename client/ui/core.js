@@ -1094,15 +1094,39 @@ const Auth = {
   },
   // 访客会话（没有邮箱）不算登录
   real(u) { return u && u.email ? u : null; },
-  // 会话失效（401）时用本账号保存的密码自动重新登录；同一时间只登录一次，30 秒内不重复
-  relogin() {
-    if (AuthEnv.state?.locked || AuthEnv.starting || AuthEnv.operations || this.interactive) return Promise.resolve(false);
+  // 会话失效（401）时用本账号保存的密码自动重新登录；同一时间只登录一次，成功后 30 秒内不重复，失败后允许快速重试
+  relogin(opt = {}) {
+    if (AuthEnv.starting || AuthEnv.operations || this.interactive) return Promise.resolve(false);
+    if (opt?.force && this.busy && !this._reloginInFlight) this.busy = null;
     return this.busy ||= (async () => {
+      this._reloginInFlight = true;
+      let ok = false;
       try {
+        if (AuthEnv.state?.locked && (AuthEnv.state.kind === 'login' || AuthEnv.state.expired)) {
+          await AuthEnv.drop(['login']).catch(() => {});
+        }
+        if (AuthEnv.state?.locked) return false;
         const c = await Host.getCred().catch(() => null); if (!c?.email || !c?.password) return false;
-        await this.signIn(c.email, c.password); this.lastErr = ''; Bus.emit('relogin'); return true;
+        const liveUser = await this.signIn(c.email, c.password); this.lastErr = '';
+        ok = true;
+        if (liveUser && typeof UI !== 'undefined') {
+          window.__BRANA_BROWSE_MODE = false;
+          UI.me = liveUser;
+          UI.authed = true;
+          try { Store.set('me:u', liveUser); } catch {}
+          try { UI.renderAcct?.(); } catch {}
+          try { Acct.report?.(); } catch {}
+        }
+        if (typeof History !== 'undefined' && History.err) {
+          History.err = null;
+          History.blocked = false;
+        }
+        Bus.emit('relogin'); return true;
       } catch (e) { this.lastErr = e.message || String(e); return false; }
-      finally { setTimeout(() => { this.busy = null; }, 30000); }
+      finally {
+        this._reloginInFlight = false;
+        setTimeout(() => { this.busy = null; }, ok ? 30000 : 2000);
+      }
     })();
   },
 };
@@ -1139,8 +1163,12 @@ const Acct = {
     clearTimeout(this.t);
     this.t = setTimeout(() => {
       const q = Quota.chat, p = Pulse.v;
+      const isCached = Boolean(UI.me?.cached);
+      const isReal = Boolean(UI.me && !isCached && !UI.me.browseOnly && !(typeof window !== 'undefined' && window.__BRANA_BROWSE_MODE));
       Host.noteAccount({
-        email: UI.me?.email ? (UI.host?.account?.email || UI.me.email) : undefined, loggedIn: !!UI.me, ip: IP.ip || undefined, loc: IP.loc || undefined,
+        email: UI.me?.email && !UI.me?.browseOnly ? (UI.host?.account?.email || UI.me.email) : undefined,
+        ...(isCached ? {} : { loggedIn: isReal }),
+        ip: IP.ip || undefined, loc: IP.loc || undefined,
         quota: { pulse: p?.pulse ?? null, pulseAt: p?.at || null, usd: null, allowance: null, usdAt: null, chatRemaining: q?.remaining ?? null, chatLimit: q?.limit ?? null, blockedUntil: Quota.blockedUntil() || null, at: now() },
       })?.catch?.(() => {});
     }, 800);
@@ -1570,8 +1598,13 @@ const ProtocolSchema = (() => {
   function noteError(status) { if (status === 404 || status === 410 || status === 422) void autoSync(true); }
   return { outUrl, inUrl, learnFromScript, autoSync, noteError, get current() { return cur; } };
 })();
-const OUT = sid => ProtocolSchema.outUrl(sid);
-const IN = sid => ProtocolSchema.inUrl(sid);
+const resolveTriggerSid = sid => {
+  if (sid && typeof sid === 'object') return sid.triggerAddress || sid.sid || '';
+  const c = typeof Chats !== 'undefined' ? Chats.get(sid) : null;
+  return (c && c.triggerAddress) ? c.triggerAddress : sid;
+};
+const OUT = sid => ProtocolSchema.outUrl(resolveTriggerSid(sid));
+const IN = sid => ProtocolSchema.inUrl(resolveTriggerSid(sid));
 // ---------- 人在回路（HITL）：ask_user / propose_plan / add_voice / generate_image ----------
 const HITL_RE = /^(?:arena__)?(ask_user|add_voice|propose_plan|generate_image)$/;
 const Hitl = {
@@ -1645,16 +1678,67 @@ const Hitl = {
   blocked(chat) { return !!chat?.busy && !(chat.status === 'streaming' && Hitl.idleWait(chat)); },
 };
 
-// ---------- 对话本地缓存（IndexedDB，按账号分区）：打开对话时先秒开上次的内容，同时后台向服务器同步最新 ----------
+// ---------- 对话本地缓存（IndexedDB + localStorage 热缓存，按账号分区）：打开对话时先 0ms 秒开上次的内容，同时后台向服务器同步最新 ----------
 const MsgCache = (() => {
-  let dbp = null; const timers = new Map(), MAX = 5000, CAP = 20e6;
+  let dbp = null; const timers = new Map(), memHot = new Map(), MAX = 5000, CAP = 20e6, HOT_MAX = 6, HOT_CAP = 160000;
   const db = () => dbp ||= new Promise(res => { try { const r = indexedDB.open('anc-msgs', 1); r.onupgradeneeded = () => r.result.createObjectStore('c'); r.onsuccess = () => res(r.result); r.onerror = () => res(null); } catch { res(null); } });
   const idx = () => Store.get('mc:idx', {}) || {};
-  async function get(sid) {
-    const d = await db(); if (!d) return null;
-    return new Promise(res => { try { const q = d.transaction('c').objectStore('c').get(sid); q.onsuccess = () => res(q.result || null); q.onerror = () => res(null); } catch { res(null); } });
+  function putHot(sid, rec) {
+    if (!sid || !rec || !Array.isArray(rec.messages) || !rec.messages.length) return;
+    memHot.set(sid, rec);
+    while (memHot.size > 24) memHot.delete(memHot.keys().next().value);
+    try {
+      const hotMsgs = rec.messages.slice(-40);
+      const hotRec = { ...rec, messages: hotMsgs, more: Boolean(rec.more || rec.messages.length > hotMsgs.length) };
+      const raw = JSON.stringify(hotRec);
+      if (raw.length <= HOT_CAP) {
+        Store.set('mc:hot:' + sid, hotRec);
+        const lru = (Store.get('mc:hot:lru', []) || []).filter(k => k && k !== sid);
+        lru.push(sid);
+        while (lru.length > HOT_MAX) {
+          const oldKey = lru.shift();
+          if (oldKey) Store.del?.('mc:hot:' + oldKey);
+        }
+        Store.set('mc:hot:lru', lru);
+      }
+    } catch {}
   }
-  async function del(keys) { const d = await db(); if (!d || !keys.length) return; try { const st = d.transaction('c', 'readwrite').objectStore('c'); for (const k of keys) st.delete(k); } catch {} }
+  function getSync(sid) {
+    if (!sid) return null;
+    if (memHot.has(sid)) return memHot.get(sid) || null;
+    try {
+      const hot = Store.get('mc:hot:' + sid, null);
+      if (hot && Array.isArray(hot.messages) && hot.messages.length) {
+        memHot.set(sid, hot);
+        return hot;
+      }
+    } catch {}
+    return null;
+  }
+  async function get(sid) {
+    const d = await db(); if (!d) return getSync(sid);
+    return new Promise(res => {
+      try {
+        const q = d.transaction('c').objectStore('c').get(sid);
+        q.onsuccess = () => {
+          const r = q.result || getSync(sid) || null;
+          if (r && Array.isArray(r.messages) && r.messages.length) memHot.set(sid, r);
+          res(r);
+        };
+        q.onerror = () => res(getSync(sid));
+      } catch { res(getSync(sid)); }
+    });
+  }
+  async function del(keys) {
+    if (Array.isArray(keys)) {
+      for (const k of keys) {
+        memHot.delete(k);
+        try { Store.del?.('mc:hot:' + k); } catch {}
+      }
+    }
+    const d = await db(); if (!d || !keys.length) return;
+    try { const st = d.transaction('c', 'readwrite').objectStore('c'); for (const k of keys) st.delete(k); } catch {}
+  }
   function compactMsgs(rawMsgs) {
     const truncStr = (s, lim = 16000) => (typeof s === 'string' && s.length > lim) ? s.slice(0, lim) + '\n…[cached]' : s;
     const compactOut = (o, lim = 16000) => {
@@ -1700,17 +1784,22 @@ const MsgCache = (() => {
     const hasMsgs = Array.isArray(chat?.messages) && chat.messages.length > 0;
     if (!chat || (!chat.loaded && !hasMsgs) || (chat.busy && !allowBusy)) return;
     try { if (History.goneMap().has(chat.sid)) return; if (typeof Arch !== 'undefined' && Arch.has?.(chat.sid)) return; } catch {}
-    const d = await db(); if (!d) return;
     const { msgs, js } = compactMsgs(chat.messages || []);
     if (js.length > CAP || !msgs.length) return;
     const histUpdatedAt = (typeof History !== 'undefined' && History.byId?.(chat.sid)?.updatedAt) || null;
-    try { d.transaction('c', 'readwrite').objectStore('c').put({ at: now(), histUpdatedAt, messages: JSON.parse(js), more: chat.hasMore || msgs.length < chat.messages.length, lastSeq: chat.lastSeq || null, token: chat.token || null, tokenExp: chat.tokenExp || 0 }, chat.sid); } catch { return; }
+    const rec = { at: now(), histUpdatedAt, messages: JSON.parse(js), more: chat.hasMore || msgs.length < chat.messages.length, lastSeq: chat.lastSeq || null, token: chat.token || null, tokenExp: chat.tokenExp || 0, isEvaluation: !!chat.isEvaluation, evalMode: chat.evalMode || null };
+    putHot(chat.sid, rec);
+    const d = await db(); if (!d) return;
+    try { d.transaction('c', 'readwrite').objectStore('c').put(rec, chat.sid); } catch { return; }
     const ix = idx(); ix[chat.sid] = now(); const ks = Object.keys(ix);
     if (ks.length > MAX) { const old = ks.sort((a, b) => ix[a] - ix[b]).slice(0, ks.length - MAX); for (const k of old) delete ix[k]; del(old); }
     Store.set('mc:idx', ix);
     try { d.transaction('c', 'readwrite').objectStore('c').put(ix, '__meta__:mc:idx'); } catch {}
   }
-  function put(chat) {
+  function put(chat, doc) {
+    if (typeof chat === 'string') {
+      chat = (typeof Chats !== 'undefined' && Chats.get(chat)) || (doc && typeof doc === 'object' ? { sid: chat, loaded: true, ...doc } : null);
+    }
     if (!chat || (typeof Arch !== 'undefined' && Arch.has?.(chat.sid))) return;
     clearTimeout(timers.get(chat.sid));
     timers.set(chat.sid, setTimeout(() => { timers.delete(chat.sid); void writeNow(chat, false); }, 2000));
@@ -1746,7 +1835,7 @@ const MsgCache = (() => {
       } catch { res(memKeys); }
     });
   }
-  return { get, put, putNow: chat => writeNow(chat, true), keys: () => Object.keys(idx()), allKeys, getMeta, putMeta, del: sid => { clearTimeout(timers.get(sid)); timers.delete(sid); const ix = idx(); delete ix[sid]; Store.set('mc:idx', ix); del([sid]); } };
+  return { get, getSync, put, putNow: chat => writeNow(chat, true), keys: () => Object.keys(idx()), allKeys, getMeta, putMeta, del: sid => { clearTimeout(timers.get(sid)); timers.delete(sid); const ix = idx(); delete ix[sid]; Store.set('mc:idx', ix); del([sid]); } };
 })();
 
 const Chats = new Map();
@@ -1758,6 +1847,18 @@ class Chat {
     this.lastSeq = null; this.loaded = false; this.loading = null; this.hasMore = false; this.cursor = null;
     this.live = null; this.parts = new Map(); this.streaming = false; this.gen = 0; this.ctl = null;
     this.title = ''; this.v = 0; this.phase = ''; this.lastActivity = 0; this.runTok = null; this.identifying = false;
+  }
+  hydrateSync() {
+    if (this.loaded || this.messages.length || typeof MsgCache === 'undefined' || typeof MsgCache.getSync !== 'function') return false;
+    const x = MsgCache.getSync(this.sid);
+    if (!x || !Array.isArray(x.messages) || !x.messages.length) return false;
+    if (x.isEvaluation) { this.isEvaluation = true; if (x.evalMode) this.evalMode = x.evalMode; }
+    this.messages = x.messages.filter(m => !(typeof isPhantomFinishStub === 'function' && isPhantomFinishStub(m))).map(m => ({ ...m, v: 0 }));
+    this.cached = true;
+    this.hasMore = !!x.more;
+    if (x.lastSeq && !this.lastSeq) this.lastSeq = String(x.lastSeq);
+    if (x.token && !this.token && (x.tokenExp || 0) > now() + 30000) { this.token = x.token; this.tokenExp = x.tokenExp; this.tokenAt = 0; }
+    return true;
   }
   get busy() { return this.status === 'submitted' || this.status === 'streaming' || this.status === 'stopping'; }
   emit() { if (this._emitT) { clearTimeout(this._emitT); this._emitT = 0; } this._lastEmitAt = now(); this.v++; if (this.wCtl && (this.busy || this.streaming)) { try { this.wCtl.abort(); } catch {} this.wCtl = null; } Bus.emit('chat', this); if ((this.loaded || (Array.isArray(this.messages) && this.messages.length > 0)) && !this.busy) MsgCache.put(this); }
@@ -1789,16 +1890,25 @@ class Chat {
   setToken(t, exp) {
     if (!t || this._badToks?.has(t)) return;
     this.token = t;
-    const jwtExp = (jwt(t)?.exp || 0) * 1000;
+    const p = jwt(t);
+    if (Array.isArray(p?.scopes)) {
+      for (const sc of p.scopes) {
+        const m = /^(?:read|write):sessions:([0-9a-f-]{36})$/i.exec(String(sc || ''));
+        if (m) { this.triggerAddress = m[1]; break; }
+      }
+    }
+    const jwtExp = (p?.exp || 0) * 1000;
     this.tokenExp = Number(exp) > now() ? Number(exp) : (jwtExp || (now() + 8 * 60000));
     this.tokenAt = now();
   }
   async wakeSessionToken(force = false) {
+    if (this.isEvaluation || (typeof EvalEngine !== 'undefined' && EvalEngine.isEvalChat?.(this))) return null;
     const prevTok = this.token, prevExp = this.tokenExp;
     const stale = !this.token || !this.tokenAt || (now() - this.tokenAt > 45000);
     if (!force && !stale && (this.tokenExp || 0) - 120000 > now()) return this.token;
     try {
       const j = await api('/api/chat/trigger-token', { json: { sessionId: this.sid }, timeout: 10000 });
+      if (j?.triggerAddress) this.triggerAddress = j.triggerAddress;
       const tok = j?.token || j?.publicAccessToken;
       if (typeof tok === 'string' && tok) {
         const exp = Number(j?.expiresAt || j?.exp || 0);
@@ -1814,12 +1924,32 @@ class Chat {
     return this.ensureToken(force);
   }
   ensureToken(force) {
+    if (this.isEvaluation || (typeof EvalEngine !== 'undefined' && EvalEngine.isEvalChat?.(this))) return Promise.resolve(null);
     if (this.tokenP) return this.tokenP;
     if (!force && this.token && !this._badToks?.has(this.token) && this.tokenExp - 120000 > now()) return Promise.resolve(this.token);
     if (force && this.token) { this.markBadToken?.(this.token); this.token = null; this.tokenExp = 0; }
     // Send, live stream and read-only reconciliation share this account/chat's refresh.
     this.tokenP = (async () => {
-      const j = await api('/api/chat/trigger-token', { json: { sessionId: this.sid }, timeout: 20000 });
+      let j = null;
+      if (force === 'session') {
+        const tz = typeof currentTimezone === 'function' ? currentTimezone() : 'UTC';
+        j = await api('/api/chat/trigger-session', { json: { sessionId: this.sid, timezone: tz }, timeout: 20000 }).catch(() => null);
+      }
+      if (!j?.token && !j?.publicAccessToken) {
+        try {
+          j = await api('/api/chat/trigger-token', { json: { sessionId: this.sid }, timeout: 20000 });
+        } catch (err) {
+          if (err?.status === 403 && typeof EvalEngine !== 'undefined' && EvalEngine.isEvalChat?.(this)) return null;
+          if (err?.status === 404 || err?.status === 403) {
+            const tz = typeof currentTimezone === 'function' ? currentTimezone() : 'UTC';
+            j = await api('/api/chat/trigger-session', { json: { sessionId: this.sid, timezone: tz }, timeout: 15000 }).catch(() => null);
+            if (!j?.token && !j?.publicAccessToken) throw err;
+          } else {
+            throw err;
+          }
+        }
+      }
+      if (j?.triggerAddress) this.triggerAddress = j.triggerAddress;
       const token = j?.token || j?.publicAccessToken;
       if (typeof token !== 'string' || !token) throw new Error('无法获取会话令牌');
       const exp = Number(j?.expiresAt || j?.exp || 0);
@@ -1832,8 +1962,9 @@ class Chat {
     if (this.loaded && !force) return Promise.resolve();
     // 秒开（含从浏览器模式切回 Scheme B 及常规点击）：先显示本地缓存并恢复 lastSeq；若历史 updatedAt 未变或刚缓存过，直接 0ms 完成加载并转后台静默对账
     if (!this.messages.length) MsgCache.get(this.sid).then(x => {
+      if (x?.isEvaluation) { this.isEvaluation = true; if (x.evalMode) this.evalMode = x.evalMode; }
       if (x?.messages?.length && !this.loaded && !this.messages.length) {
-        this.messages = x.messages.map(m => {
+        this.messages = x.messages.filter(m => !(typeof isPhantomFinishStub === 'function' && isPhantomFinishStub(m))).map(m => {
           if (m?.role === 'assistant' && !m.metadata?.pending && Array.isArray(m.parts)) {
             for (const p of m.parts) {
               if (p?.toolCallId && !Hitl.name(p) && /^(input-streaming|input-available)$/.test(p.state || '')) {
@@ -1845,14 +1976,19 @@ class Chat {
           return { ...m, v: 0 };
         });
         this.cached = true; this.hasMore = !!x.more;
+        if (this.isEvaluation || (typeof EvalEngine !== 'undefined' && EvalEngine.isEvalChat?.(this))) {
+          this.emit();
+          return;
+        }
         if (x.lastSeq && !this.lastSeq) this.lastSeq = String(x.lastSeq);
         if (x.token && !this.token && (x.tokenExp || 0) > now() + 30000) { this.token = x.token; this.tokenExp = x.tokenExp; this.tokenAt = 0; }
         const histRow = typeof History !== 'undefined' ? History.byId?.(this.sid) : null;
-        const lastCached = x.messages.at(-1);
+        const lastCached = this.messages.at(-1);
         const isFastRet = Boolean(window.__ANC_FAST_RETURN);
-        const isIdleComplete = lastCached?.role === 'assistant' && !lastCached?.metadata?.pending && !(typeof isDeadAssistantMsg === 'function' && isDeadAssistantMsg(lastCached)) && !this.busy;
+        const hasInterruptedTail = typeof hasInterruptedToolPart === 'function' && hasInterruptedToolPart(lastCached);
+        const isIdleComplete = lastCached?.role === 'assistant' && !lastCached?.metadata?.pending && !hasInterruptedTail && !(typeof isDeadAssistantMsg === 'function' && isDeadAssistantMsg(lastCached)) && !this.busy;
         const isUnchangedByHist = Boolean(!isFastRet && isIdleComplete && histRow?.updatedAt && x.histUpdatedAt && histRow.updatedAt === x.histUpdatedAt);
-        if (!force && (isUnchangedByHist || (isFastRet && now() - (x.at || 0) < 30 * 60e3))) {
+        if (!force && !hasInterruptedTail && (isUnchangedByHist || (isFastRet && now() - (x.at || 0) < 30 * 60e3))) {
           this.cached = false; this.loaded = true; this.error = null; this._lastSyncedHistAt = histRow?.updatedAt || x.histUpdatedAt || null; this.emit();
           if (isFastRet) {
             setTimeout(() => {
@@ -1874,7 +2010,8 @@ class Chat {
         try {
           if (!this.messages.length) {
             const x = await MsgCache.get(this.sid).catch(() => null);
-            if (x?.messages?.length) { this.messages = x.messages.map(m => ({ ...m, v: 0 })); this.hasMore = !!x.more; }
+            if (x?.isEvaluation) { this.isEvaluation = true; if (x.evalMode) this.evalMode = x.evalMode; }
+            if (x?.messages?.length) { this.messages = x.messages.filter(m => !(typeof isPhantomFinishStub === 'function' && isPhantomFinishStub(m))).map(m => ({ ...m, v: 0 })); this.hasMore = !!x.more; }
           }
           this.cached = false; this.loaded = true; this.error = this.messages.length ? null : '本地暂无该对话的正文缓存'; this.emit();
         } finally { this.loading = null; }
@@ -1884,15 +2021,21 @@ class Chat {
       try {
         if (!this.messages.length) {
           const x = await MsgCache.get(this.sid).catch(() => null);
+          if (x?.isEvaluation) { this.isEvaluation = true; if (x.evalMode) this.evalMode = x.evalMode; }
           if (this.loaded && !force) return;
           if (x?.messages?.length && !this.messages.length) {
-            this.messages = x.messages.map(m => ({ ...m, v: 0 }));
+            this.messages = x.messages.filter(m => !(typeof isPhantomFinishStub === 'function' && isPhantomFinishStub(m))).map(m => ({ ...m, v: 0 }));
             this.cached = true; this.hasMore = !!x.more;
+            if (this.isEvaluation || (typeof EvalEngine !== 'undefined' && EvalEngine.isEvalChat?.(this))) {
+              this.loading = null;
+              return EvalEngine.loadChat(this, force);
+            }
             if (x.token && !this.token && (x.tokenExp || 0) > now() + 30000) { this.token = x.token; this.tokenExp = x.tokenExp; }
             const histRow = typeof History !== 'undefined' ? History.byId?.(this.sid) : null;
-            const lastCached = x.messages.at(-1);
+            const lastCached = this.messages.at(-1);
             const isFastRet = Boolean(window.__ANC_FAST_RETURN);
-            const isIdleComplete = lastCached?.role === 'assistant' && !lastCached?.metadata?.pending && !(typeof isDeadAssistantMsg === 'function' && isDeadAssistantMsg(lastCached)) && !this.busy;
+            const hasInterruptedTail = typeof hasInterruptedToolPart === 'function' && hasInterruptedToolPart(lastCached);
+            const isIdleComplete = lastCached?.role === 'assistant' && !lastCached?.metadata?.pending && !hasInterruptedTail && !(typeof isDeadAssistantMsg === 'function' && isDeadAssistantMsg(lastCached)) && !this.busy;
             const isUnchangedByHist = Boolean(!force && !isFastRet && isIdleComplete && histRow?.updatedAt && x.histUpdatedAt && histRow.updatedAt === x.histUpdatedAt);
             if (isUnchangedByHist) {
               this.cached = false; this.loaded = true; this.error = null; this._lastSyncedHistAt = histRow.updatedAt; this.emit();
@@ -1901,6 +2044,10 @@ class Chat {
             }
             this.emit();
           }
+        }
+        if (this.isEvaluation || (typeof EvalEngine !== 'undefined' && EvalEngine.isEvalChat?.(this))) {
+          this.loading = null;
+          return EvalEngine.loadChat(this, force);
         }
         let c = null;
         if (!force && this._pre && now() - this._pre.at < 30000 && this._pre.c?.messages?.at(-1)?.role !== 'user') c = this._pre.c;
@@ -1980,7 +2127,9 @@ class Chat {
           }), ...this.messages.filter(m => m._local && !ids.has(m.id))];
         }
         this.hasMore = !!c.pagination?.hasMore; this.cursor = c.pagination?.cursor || null;
-        this.setToken(c.publicAccessToken);
+        if (c.triggerAddress || c.session?.triggerAddress) this.triggerAddress = c.triggerAddress || c.session.triggerAddress;
+        if (c.taskId || c.session?.taskId) this.taskId = c.taskId || c.session.taskId;
+        this.setToken(c.publicAccessToken || c.session?.publicAccessToken);
         const sending = this.busy && this.messages.some(m => m._local);   // 载入完成前就发了消息：别打乱发送流程
         if (!(sending && this.awaitId)) this.lastSeq = c.lastEventId != null ? String(c.lastEventId) : null;
         this.loaded = true; this.error = null;
@@ -2029,8 +2178,17 @@ class Chat {
         // 更早的消息不再打开就全部拉下来（以前一个长对话会连发几十上百个请求）：滚动到顶部 / 点「加载更早的消息」时才加载，和网页一致
         if (!this.hasMore) setTimeout(() => { try { FingerprintReview?.auto?.(this); } catch {} }, 600);   // 没有指纹信息的对话：按历史里的指纹测试自动校准
       } catch (e) {
+        if (e?.status === 404 && typeof EvalEngine !== 'undefined' && !this._evalFallbackTried) {
+          this._evalFallbackTried = true;
+          try {
+            this.loading = null;
+            await EvalEngine.loadChat(this, true);
+            if (this.isEvaluation) return;
+          } catch {}
+        }
         if (!this.messages.length && !this.gacha) {
           const cached = await MsgCache.get(this.sid).catch(() => null);
+          if (cached?.isEvaluation) { this.isEvaluation = true; if (cached.evalMode) this.evalMode = cached.evalMode; }
           if (cached?.messages?.length) {
             this.messages = cached.messages.map(m => ({ ...m, v: 0 }));
             this.hasMore = !!cached.more;
@@ -2038,7 +2196,9 @@ class Chat {
         }
         if (this.messages.length) {
           this.cached = false; this.loaded = true; this.error = null; this.emit();
-          setTimeout(() => { if (this.loaded && !this.busy) this.quickSync?.(true); }, 3500);
+          if (!this.isEvaluation && !(typeof EvalEngine !== 'undefined' && EvalEngine.isEvalChat?.(this))) {
+            setTimeout(() => { if (this.loaded && !this.busy) this.quickSync?.(true); }, 3500);
+          }
           return;
         }
         if (e.status === 404) {
@@ -2057,21 +2217,32 @@ class Chat {
   }
   // 增量查漏补缺（不清空本地数百个已加载工具和消息，只按游标和 toolCallId 补齐缺失输出并续接实时流）
   async resumeIncremental(why) {
+    if (this.isEvaluation || (typeof EvalEngine !== 'undefined' && EvalEngine.isEvalChat?.(this))) {
+      if (this.busy && this._evalStreaming) return true;
+      if (why === 'fast-return' || why === '手动重新载入') {
+        try { await EvalEngine.loadChat(this, true); return true; } catch { return false; }
+      }
+      return true;
+    }
     if (!this.loaded || !this.messages.length) return this.reload(why, true);
     const wasBusy = this.busy, wasFake = this.fakeEnd, prevSeq = this.lastSeq != null ? +this.lastSeq : null;
     this.gen++; try { this.ctl?.abort(); } catch {} this.streaming = false; this.ctl = null;
     this.fakeEnd = null; this.midTurnStall = null; this.errAt = 0; this.reloadAt = now(); this.reloadWhy = why || '';
     const last = this.messages.at(-1);
-    const lastIsHealthyAsst = Boolean(last && last.role === 'assistant' && !(typeof isDeadAssistantMsg === 'function' && isDeadAssistantMsg(last)));
-    if (lastIsHealthyAsst) {
-      this.live = last; delete last._finishedAt;
+    const canReviveLast = Boolean(last && last.role === 'assistant' && !last.metadata?.aborted && !last.metadata?.openThinkStopped && last.metadata?.feedback?.interruption !== 'stop' && (
+      !(typeof isDeadAssistantMsg === 'function' && isDeadAssistantMsg(last)) ||
+      (typeof hasInterruptedToolPart === 'function' && hasInterruptedToolPart(last)) ||
+      last._forcedFinish
+    ));
+    if (canReviveLast) {
+      this.live = last; delete last._finishedAt; delete last._forcedFinish;
       last.metadata = { ...(last.metadata || {}), pending: true };
       this.parts.clear();
       (last.parts || []).forEach(p => {
         if (!p) return;
         if (p.toolCallId) {
           this.parts.set('tool:' + p.toolCallId, p);
-          if (p.state === 'output-error' && p.errorText === '未返回结果') { p.state = 'input-available'; delete p.errorText; }
+          if (p.state === 'output-error' && (p.errorText === '未返回结果' || p._interruptedPending)) { p.state = 'input-available'; delete p.errorText; delete p._interruptedPending; }
         }
         if ((p.type === 'text' || p.type === 'reasoning') && p.id) this.parts.set(p.type[0] + ':' + p.id, p);
       });
@@ -2082,20 +2253,31 @@ class Chat {
     }
     this.status = 'streaming'; this.phase = '增量同步'; this.emit();
     try {
-      const needRecover = Boolean(wasBusy || wasFake || why);
+      const needRecover = Boolean(wasBusy || wasFake || why || canReviveLast);
       const incQuery = needRecover ? '?includeStreamToken=false' : '?includeStreamToken=false&recoverRun=false';
-      const c = await api('/api/chat/' + this.sid + incQuery, { timeout: 35000, noApiRetry: true }).catch(() => null);
+      let got404 = false;
+      const c = await api('/api/chat/' + this.sid + incQuery, { timeout: 35000, noApiRetry: true }).catch(err => { if (err?.status === 404) got404 = true; return null; });
+      if (got404 && typeof EvalEngine !== 'undefined' && !this._evalFallbackTried) {
+        this._evalFallbackTried = true;
+        try {
+          await EvalEngine.loadChat(this, true);
+          if (this.isEvaluation) return true;
+        } catch {}
+      }
       if (c?.messages?.length) {
         const ch = this.mergeServer(c.messages, null);
-        if (c.publicAccessToken) this.setToken(c.publicAccessToken);
+        if (c.triggerAddress || c.session?.triggerAddress) this.triggerAddress = c.triggerAddress || c.session.triggerAddress;
+        if (c.taskId || c.session?.taskId) this.taskId = c.taskId || c.session.taskId;
+        if (c.publicAccessToken || c.session?.publicAccessToken) this.setToken(c.publicAccessToken || c.session?.publicAccessToken);
         if (!this.gacha && typeof MsgCache !== 'undefined' && MsgCache.putNow) void MsgCache.putNow(this).catch(() => {});
         const srvLast = c.messages.at(-1);
         const curLast = this.messages.at(-1);
         const hasNewEvents = c.lastEventId != null && prevSeq != null && +c.lastEventId > prevSeq;
-        const staleFakePend = !wasBusy && !!wasFake && srvLast?.role === 'assistant' && srvLast.id === last?.id && !hasNewEvents && !ch;
+        const srvMore = Boolean(c.more || c.session?.more);
+        const staleFakePend = !wasBusy && !!wasFake && srvLast?.role === 'assistant' && srvLast.id === last?.id && !hasNewEvents && !srvMore && !ch;
         const dbLaggedBehindLive = wasBusy && ((this._srvLagged && !staleFakePend) || (curLast && srvLast && curLast.id !== srvLast.id));
-        const srvPend = dbLaggedBehindLive || (!staleFakePend && !!srvLast && (srvLast.role === 'user' || (srvLast.metadata?.pending && !(typeof isDeadAssistantMsg === 'function' && isDeadAssistantMsg(srvLast)))) && !(srvLast.role === 'assistant' && Hitl.idleWait(this)));
-        if (curLast && curLast.role === 'assistant' && !(typeof isDeadAssistantMsg === 'function' && isDeadAssistantMsg(curLast))) {
+        const srvPend = dbLaggedBehindLive || srvMore || (!staleFakePend && !!srvLast && (srvLast.role === 'user' || (srvLast.metadata?.pending && !(typeof isDeadAssistantMsg === 'function' && isDeadAssistantMsg(srvLast)))) && !(srvLast.role === 'assistant' && Hitl.idleWait(this)));
+        if (curLast && curLast.role === 'assistant' && (!(typeof isDeadAssistantMsg === 'function' && isDeadAssistantMsg(curLast)) || (typeof hasInterruptedToolPart === 'function' && hasInterruptedToolPart(curLast)))) {
           this.live = curLast;
           this.parts.clear();
           (curLast.parts || []).forEach(p => {
@@ -2107,10 +2289,12 @@ class Chat {
           this.live = null;
           this.parts.clear();
         }
-        if (!srvPend && (why === 'fast-return' || why === 'server-active') && c.lastEventId != null) {
-          this.lastSeq = String(Math.max(0, +c.lastEventId - 4000));
+        if (!srvPend && (hasNewEvents || why === 'fast-return' || why === 'server-active' || why === '增量补齐' || why === '通道重连' || why === '增量恢复' || canReviveLast) && c.lastEventId != null) {
+          this.lastSeq = String(Math.max(0, (prevSeq != null && prevSeq < +c.lastEventId) ? prevSeq : +c.lastEventId - 4000));
           const d = await Promise.race([this.drain(1800, { keepIfFinished: true }).catch(() => null), sleep(650)]);
-          if (d?.open || d?.run) {
+          const liveHasOpenTool = Boolean(this.live && Array.isArray(this.live.parts) && this.live.parts.some(p => p?.toolCallId && !Hitl.name(p) && /^(input-streaming|input-available)$/.test(p.state || '')));
+          if (d?.open || d?.run || (liveHasOpenTool && !this.finAt)) {
+            if (this.live) { delete this.live._finishedAt; delete this.live._forcedFinish; this.live.metadata = { ...(this.live.metadata || {}), pending: true }; }
             this.status = 'streaming'; this.phase = '接收回复中'; this.emit();
             this.stream({ peek: false });
             return true;
@@ -2153,13 +2337,13 @@ class Chat {
       } else if (!wasBusy) {
         if (lastIsHealthyAsst && last) last.metadata = { ...(last.metadata || {}), pending: false };
         this.live = null; this.parts.clear(); this.status = 'idle'; this.phase = ''; this.emit();
-        this.stream({ peek: true });
+        if (c && !got404) this.stream({ peek: true });
         return true;
       }
       if (wasBusy && this.lastSeq != null && +this.lastSeq > 2) this.lastSeq = String(Math.max(0, +this.lastSeq - 2));
-      this.stream({ peek: false });
+      if (!got404) this.stream({ peek: false });
       return true;
-    } catch { this.stream({ peek: !wasBusy }); return false; }
+    } catch { if (wasBusy) this.stream({ peek: false }); return false; }
   }
   async reload(why, forceFull = false) {
     if (!forceFull && this.loaded && this.messages.length) return this.resumeIncremental(why);
@@ -2731,11 +2915,13 @@ class Chat {
   // ----- 实时流 -----
   restream() { if (this.streaming) { this.gen++; this.ctl?.abort(); this.streaming = false; } this.stream(); }
   async stream({ peek = false } = {}) {
+    if (this.isEvaluation || (typeof EvalEngine !== 'undefined' && EvalEngine.isEvalChat?.(this))) { if (!this._evalStreaming) this.streaming = false; return; }
     if (this.streaming) return; this.streaming = true; this.peeking = !!peek;
     const my = ++this.gen; let backoff = 200, authFails = 0, idleLoops = 0, retryIdx = 0, failWindowStart = 0, totalReconnects = 0;
     const RETRY_STEPS = [300, 700, 1500, 3000, 6000, 12000], RETRY_BUDGET_MS = 600000, MAX_RECONNECTS = 300;
     try {
       while (my === this.gen) {
+        if (this.isEvaluation || (typeof EvalEngine !== 'undefined' && EvalEngine.isEvalChat?.(this))) break;
         if (++totalReconnects > MAX_RECONNECTS) break;
         const ctl = new AbortController(); this.ctl = ctl; this.streamOpenAt = 0;
         let lastByte = now(), turnDone = false, got = 0, sawDone = false, connecting = false, headers = false, routeTimeout = false;
@@ -2746,7 +2932,7 @@ class Chat {
           if (connecting && now() - lastByte > (headers ? NetPolicy.IDLE_MS : NetPolicy.CONNECT_MS)) { routeTimeout = true; ctl.abort(); }
         }, 1000);
         try {
-          const usedTok = await this.ensureToken(authFails > 0);
+          const usedTok = await this.ensureToken(authFails > 1 ? 'session' : authFails > 0);
           if (my !== this.gen || ctl.signal.aborted) break;
           const h = { Accept: 'text/event-stream', Authorization: 'Bearer ' + usedTok, 'Timeout-Seconds': '120', 'X-Session-Settled': 'true' };
           if (this.lastSeq != null) h['Last-Event-ID'] = String(this.lastSeq);
@@ -2758,6 +2944,7 @@ class Chat {
           const cfMitigated = res.headers?.get?.('cf-mitigated') || '';
           if (/challenge/i.test(cfMitigated)) throw Object.assign(new HttpError(res.status || 403, 'Cloudflare 安全验证拦截（cf-mitigated: challenge），请切换代理或用网页模式通过验证', res), { responseFormat: true });
           if (res.status === 401 || res.status === 403) { this.markBadToken?.(usedTok); if (++authFails > 3) throw new HttpError(res.status, '实时通道拒绝访问', res); continue; }
+          if (res.status === 404 && authFails < 2) { this.markBadToken?.(usedTok); authFails = 2; continue; }
           if (!res.ok) throw new HttpError(res.status, await res.text().catch(() => ''), res);
           const type = res.headers?.get?.('content-type') || '';
           if ((type && !/^text\/event-stream(?:\s*;|$)/i.test(type)) || !body?.getReader) throw Object.assign(new HttpError(res.status, '实时通道返回了非事件流，请检查官方验证', res), { responseFormat: true });
@@ -2784,6 +2971,10 @@ class Chat {
           buf = '';
         } catch (e) {
           if (my !== this.gen) break;
+          if (this.isEvaluation || (typeof EvalEngine !== 'undefined' && EvalEngine.isEvalChat?.(this))) {
+            this.error = null;
+            break;
+          }
           failed = true;
           this.dbg?.('stream-err', { e: String(e?.name === 'AbortError' ? 'Abort' : e?.message || e).slice(0, 100), st: e?.status || 0, route: routeTimeout });
           if (typeof AutoRoute !== 'undefined' && (routeTimeout || e.name !== 'AbortError')) AutoRoute.fault(routeTimeout ? Object.assign(new Error('实时连接超时'), { routeTimeout: true }) : e, headers && routeTimeout ? 'network' : 'stream');
@@ -2791,6 +2982,7 @@ class Chat {
           if (e.name !== 'AbortError') {
             this.netErr = describe(e);
             if (e.responseFormat || (e.status >= 400 && e.status < 500 && e.status !== 429 && e.status !== 408)) {
+              if (peek && !this.busy) break;
               this.error = '实时通道错误：' + describe(e); this.emit(); if (e.responseFormat || ++idleLoops > 3) break;
             }
           }
@@ -3390,6 +3582,19 @@ class Chat {
     }
     // 已点停止：之后到达的输出不再显示（界面立刻停下，不跟着服务器再多吐几行）
     if (this.status === 'stopping' && /^(start-step|text-start|text-delta|reasoning-start|reasoning-delta|tool-input-start|tool-input-delta)$/.test(t)) return;
+    if (!this.live && /^(finish|finish-step|text-end|reasoning-end|message-metadata)$/.test(t)) {
+      if (t === 'message-metadata' && ch.messageMetadata && typeof ch.messageMetadata === 'object') {
+        const lastA = [...(this.messages || [])].reverse().find(x => x && x.role === 'assistant');
+        if (lastA) {
+          lastA.metadata = { ...(lastA.metadata || {}), ...ch.messageMetadata };
+          lastA.v = (lastA.v || 0) + 1;
+          this.emit();
+        }
+      } else {
+        this.dbg?.('drop', { ty: t, why: 'no-live-closing' });
+      }
+      return;
+    }
     const m = this.liveMsg(true); if (this.fmt && !m._fmt) m._fmt = this.fmt; m.v++;
     if (this.status === 'submitted') this.status = 'streaming';
     this.progAt = now();
@@ -3593,13 +3798,14 @@ class Chat {
     }
     if (m) {
       m._finishedAt = now();
+      m._forcedFinish = Boolean(forced && !this.finAt && !this.stopReq);
       m.metadata = { ...m.metadata, pending: false };
       if (!m.metadata.timing?.completedAt) m.metadata.timing = { ...(m.metadata.timing || {}), startedAt: m.metadata.timing?.startedAt || this.oursAt || this.dispAt || 0, completedAt: now() }; if (this.stopReq) { m.metadata.aborted = true; if (this.thinkStopped || this.routedThink) m.metadata.openThinkStopped = true; try { Strength.markAborted(this.sid); } catch {} }
       m.parts.forEach(p => {
         if (p.state === 'streaming') p.state = 'done';
         if (p.toolCallId && !(Hitl.name(p) && !this.stopReq) && /^(input-streaming|input-available|approval-requested)$/.test(p.state || '')) {
-          if (this.stopReq) { p.state = 'output-error'; p.errorText = '已停止'; }
-          else { p.state = 'output-error'; if (!p.errorText) p.errorText = '未返回结果'; }
+          if (this.stopReq) { p.state = 'output-error'; p.errorText = '已停止'; delete p._interruptedPending; }
+          else { p.state = 'output-error'; if (!p.errorText) p.errorText = '未返回结果'; if (forced && !this.finAt) p._interruptedPending = true; }
         }
         if (p.preliminary) p.preliminary = false;
       });
@@ -3824,8 +4030,8 @@ Object.assign(Chat.prototype, {
     const loc = new Map(this.messages.map((m, i) => [m.id, i]));
     const first = srv.findIndex(m => loc.has(m.id));
     let head;
-    if (first < 0) head = this.messages.filter(m => !m._local && idTime(m.id) && idTime(m.id) < idTime(srv[0].id));
-    else head = this.messages.slice(0, loc.get(srv[first].id)).filter(m => !srv.some(x => x.id === m.id));
+    if (first < 0) head = this.messages.filter(m => !m._local && !(typeof isPhantomFinishStub === 'function' && isPhantomFinishStub(m)) && idTime(m.id) && idTime(m.id) < idTime(srv[0].id));
+    else head = this.messages.slice(0, loc.get(srv[first].id)).filter(m => !srv.some(x => x.id === m.id) && !(typeof isPhantomFinishStub === 'function' && isPhantomFinishStub(m)));
     const sig = m => {
       const ps = m.parts || [], n = ps.length;
       let s = n + '|' + (m.metadata?.pending ? 1 : 0) + '|' + (m.metadata?.aborted ? 1 : 0);
@@ -3847,7 +4053,9 @@ Object.assign(Chat.prototype, {
         if (sp.toolCallId && byTool.has(sp.toolCallId)) {
           const lp = byTool.get(sp.toolCallId);
           if (sp.output !== undefined && (lp.output === undefined || lp.state !== sp.state)) {
-            lp.output = sp.output; lp.state = sp.state || 'output-available'; lp.preliminary = !!sp.preliminary; delete lp.errorText; patched = true;
+            lp.output = sp.output; lp.state = sp.state || 'output-available'; lp.preliminary = !!sp.preliminary; delete lp.errorText; delete lp._interruptedPending; patched = true;
+          } else if (lp.state === 'output-error' && (lp.errorText === '未返回结果' || lp._interruptedPending) && sp.state && sp.state !== 'output-error') {
+            lp.state = sp.state; if (sp.input && !lp.input) lp.input = sp.input; delete lp.errorText; delete lp._interruptedPending; patched = true;
           } else if (sp.input && !lp.input) {
             lp.input = sp.input; if (!lp.state || lp.state === 'input-streaming') lp.state = sp.state || 'input-available'; patched = true;
           }
@@ -3860,14 +4068,25 @@ Object.assign(Chat.prototype, {
           o.parts.push(tp); patched = true;
         }
       }
-      if (m.metadata) { const prevPend = o.metadata?.pending; o.metadata = { ...(o.metadata || {}), ...m.metadata }; if (prevPend !== o.metadata.pending) patched = true; }
+      if (m.metadata) {
+        const prevPend = o.metadata?.pending;
+        o.metadata = { ...(o.metadata || {}), ...m.metadata };
+        if (o.metadata.pending) { delete o._finishedAt; delete o._forcedFinish; }
+        if (prevPend !== o.metadata.pending) patched = true;
+      }
       if (patched) o.v = (o.v || 0) + 1;
       return patched;
     };
     const partWeight = parts => (parts || []).reduce((acc, p) => {
       if (!p || p.type === 'step-start' || p.type === 'error') return acc;
-      if (p.type === 'text' || p.type === 'reasoning') return acc + String(p.text || '').length + 10;
-      if (p.toolCallId || String(p.type || '').startsWith('tool-') || p.type === 'dynamic-tool') return acc + 50 + (p.output !== undefined ? 50 : 0);
+      if (p.type === 'text' || p.type === 'reasoning') {
+        const tLen = String(p.text || '').trim().length;
+        return tLen > 0 ? acc + tLen + 10 : acc;
+      }
+      if (p.toolCallId || String(p.type || '').startsWith('tool-') || p.type === 'dynamic-tool') {
+        const hasRealOut = p.output !== undefined && !(p.state === 'output-error' && (p.errorText === '未返回结果' || p._interruptedPending));
+        return acc + 50 + (hasRealOut ? 50 : 0);
+      }
       return acc + 5;
     }, 0);
     let changed = false, lagged = false;
@@ -3895,12 +4114,13 @@ Object.assign(Chat.prototype, {
           delete o._awaitingSnapshot;
         }
         const ow = partWeight(o.parts), mw = partWeight(m.parts);
+        const hasInterruptedLocal = Boolean(o._forcedFinish || (o.parts || []).some(p => p?.toolCallId && (p._interruptedPending || p.errorText === '未返回结果')));
         const recFin = o._finishedAt && (now() - o._finishedAt < 60000);
-        if ((recFin && m.metadata?.pending && !o.metadata?.pending) || (recFin && ow > mw)) {
+        if (!hasInterruptedLocal && ((recFin && m.metadata?.pending && !o.metadata?.pending) || (recFin && ow > mw))) {
           lagged = true; patchAssistantParts(o, m); return o;
         }
-        if (!o._local && sig(o) === sig(m)) return o;
-        if ((m.metadata?.pending || ow > mw) && o.parts?.length >= 4 && patchAssistantParts(o, m)) { changed = true; return o; }
+        if (!o._local && !hasInterruptedLocal && sig(o) === sig(m)) return o;
+        if (ow >= mw && !hasInterruptedLocal && (m.metadata?.pending || ow > mw) && o.parts?.length >= 4 && patchAssistantParts(o, m)) { changed = true; return o; }
       }
       if (o && !o._local && sig(o) === sig(m)) return o;
       changed = true;
@@ -3912,15 +4132,18 @@ Object.assign(Chat.prototype, {
         const lIds = { reasoning: o.parts.filter(p => p?.type === 'reasoning' && p.id), text: o.parts.filter(p => p?.type === 'text' && p.id) }, idxMap = { reasoning: 0, text: 0 };
         mergedParts = mergedParts.map(sp => (sp && (sp.type === 'reasoning' || sp.type === 'text') && !sp.id && lIds[sp.type]?.[idxMap[sp.type]]?.id) ? { ...sp, id: lIds[sp.type][idxMap[sp.type]++].id } : sp);
       }
-      if (m.role === 'assistant' && !m.metadata?.pending && Array.isArray(mergedParts)) {
+      if (m.role === 'assistant' && m.metadata?.pending && Array.isArray(mergedParts)) {
+        mergedParts = mergedParts.map(sp => (sp?.toolCallId && sp.state === 'output-error' && (sp.errorText === '未返回结果' || sp._interruptedPending)) ? { ...sp, state: 'input-available', errorText: undefined, _interruptedPending: undefined } : sp);
+      } else if (m.role === 'assistant' && !m.metadata?.pending && Array.isArray(mergedParts)) {
         mergedParts = mergedParts.map(sp => (sp?.toolCallId && !Hitl.name(sp) && /^(input-streaming|input-available)$/.test(sp.state || '')) ? { ...sp, state: 'output-error', errorText: sp.errorText || '未返回结果' } : sp);
       }
-      return { ...m, parts: mergedParts, _autoContinue: o?._autoContinue || m.metadata?.autoContinue, _streamed: o?._streamed, _finishedAt: m.metadata?.pending ? undefined : o?._finishedAt, _fmt: o?._fmt, _sseMeta: o?._sseMeta, v: (o?.v || 0) + 1 };
+      return { ...m, parts: mergedParts, _autoContinue: o?._autoContinue || m.metadata?.autoContinue, _streamed: o?._streamed, _finishedAt: m.metadata?.pending ? undefined : o?._finishedAt, _forcedFinish: m.metadata?.pending ? undefined : o?._forcedFinish, _fmt: o?._fmt, _sseMeta: o?._sseMeta, v: (o?.v || 0) + 1 };
     });
     const ids = new Set(srv.map(m => m.id));
     const srvLastTime = idTime(srv.at(-1)?.id) || 0;
     const tail = this.messages.filter((m, idx) => {
       if (ids.has(m.id) || matchedLocal.has(m)) return false;
+      if (typeof isPhantomFinishStub === 'function' && isPhantomFinishStub(m)) return false;
       if (m._local || (keep && m === keep)) return true;
       if (m.role === 'assistant' && partWeight(m.parts) > 0) {
         if (m._awaitingSnapshot) {
@@ -3933,7 +4156,7 @@ Object.assign(Chat.prototype, {
           return true;
         }
         if (idx < this.messages.length - 1 || srv.at(-1)?.role === 'assistant') return false;
-        const recFin = m._finishedAt && (now() - m._finishedAt < 60000);
+        const recFin = m._finishedAt && !m._forcedFinish && (now() - m._finishedAt < 60000);
         const isTrailing = idx >= this.messages.length - 2;
         const mTime = idTime(m.id) || 0;
         if (recFin || (isTrailing && (!srvLastTime || !mTime || mTime >= srvLastTime))) {
@@ -3959,7 +4182,8 @@ Object.assign(Chat.prototype, {
     return this.recP = (async () => {
       if (delay) await sleep(delay);
       const isFg = typeof Tabs !== 'undefined' && Tabs.cur?.sid === this.sid;
-      const recQuery = (this.busy || this.live || this.fakeEnd || this.midTurnStall) ? '?includeStreamToken=false' : '?includeStreamToken=false&recoverRun=false';
+      const tailInterrupted = typeof hasInterruptedToolPart === 'function' && hasInterruptedToolPart(this.messages?.at(-1));
+      const recQuery = (this.busy || this.live || this.fakeEnd || this.midTurnStall || tailInterrupted || (this.endAt && now() - this.endAt < 30000)) ? '?includeStreamToken=false' : '?includeStreamToken=false&recoverRun=false';
       const c = await api('/api/chat/' + this.sid + recQuery, { timeout: 35000, bg: !isFg, noApiRetry: true }).catch(() => null);
       if (!c?.messages?.length || this.loading) return false;
       if ((this.gen || 0) !== gen0 || (live0 && (this.live !== live0 || (live0.v || 0) !== v0))) return false;
@@ -4002,7 +4226,8 @@ Object.assign(Chat.prototype, {
     return this.convP = (async () => {
       const isFg = typeof Tabs !== 'undefined' && Tabs.cur?.sid === this.sid;
       const isKeptOrActive = !this.gacha || (typeof History !== 'undefined' && History.byId?.(this.sid)) || isFg;
-      const convQuery = (this.busy || this.live || this.fakeEnd || this.midTurnStall) ? '?includeStreamToken=false' : '?includeStreamToken=false&recoverRun=false';
+      const tailInterrupted = typeof hasInterruptedToolPart === 'function' && hasInterruptedToolPart(this.messages?.at(-1));
+      const convQuery = (this.busy || this.live || this.fakeEnd || this.midTurnStall || tailInterrupted || (this.endAt && now() - this.endAt < 30000)) ? '?includeStreamToken=false' : '?includeStreamToken=false&recoverRun=false';
       const c = await api('/api/chat/' + this.sid + convQuery, { timeout: 35000, bg: !isFg, noApiRetry: true }).catch(() => null);
       if (!c?.messages?.length || this.loading || !isKeptOrActive) return false;
       if ((this.gen || 0) !== gen0 || (live0 && (this.live !== live0 || (live0.v || 0) !== v0))) return false;
@@ -4184,7 +4409,10 @@ const Sync = {
   },
   tick() {
     const w = this.want();
-    for (const c of Chats.values()) { if (w.has(c.sid) && c.loaded && !c.gacha) c.watch(); else if (c.watching) c.unwatch(); }
+    for (const c of Chats.values()) {
+      if (c.isEvaluation || (typeof EvalEngine !== 'undefined' && EvalEngine.isEvalChat?.(c))) { if (c.watching) c.unwatch(); continue; }
+      if (w.has(c.sid) && c.loaded && !c.gacha) c.watch(); else if (c.watching) c.unwatch();
+    }
   },
   // 回到前台：长轮询多半已经断了 → 立刻重挂（从上次的位置往后读，期间别的设备做的事马上补上）
   kick() { for (const c of Chats.values()) if (c.watching) { c.unwatch(); } this.tick(); },
@@ -4277,11 +4505,21 @@ function isOpenCandidateName(s) {
   if (['deepseek', 'qwen', 'zhipu', 'moonshot', 'minimax', 'mistral', 'meta', 'stepfun', 'tencent', 'xiaomi', 'compat'].includes(vid)) return true;
   return /qwen|farris|paisley|deepseek|v4\.1|v3\.[12]|\br[12]-|glm|mimo|minimax|\bm[23]\.[0-9]|kimi|\bk2\.[0-9]|moonshot|mistral|hy3|hy4|hunyuan|step-5|stepfun|gpt-oss|llama|nemotron|beam|caveman|reflection|inkling|thinky|thinking-?machines|may26-chatbot4|\b\d+b[-_\s]+a\d+b\b|开源|国产|compat/i.test(id);
 }
+function hasInterruptedToolPart(m) {
+  return Boolean(m && m.role === 'assistant' && Array.isArray(m.parts) && m.parts.some(p => p && p.toolCallId && (p._interruptedPending || p.errorText === '未返回结果' || /^(input-streaming|input-available|approval-requested)$/.test(p.state || ''))));
+}
+function isPhantomFinishStub(m) {
+  if (!m || m.role !== 'assistant') return false;
+  if (m.metadata?.pending || m.metadata?.aborted || m.metadata?.openThinkStopped || m.metadata?.error || m.metadata?.feedback?.interruption === 'stop') return false;
+  const parts = Array.isArray(m.parts) ? m.parts : [];
+  return !parts.some(p => p && p.type !== 'step-start' && (p.type !== 'reasoning' || String(p.text || '').trim().length > 0));
+}
 function hasSubstantiveAssistantWork(m) {
   if (!m || m.role !== 'assistant') return false;
   const parts = Array.isArray(m.parts) ? m.parts : [];
   if (parts.some(p => p && p.type === 'text' && String(p.text || '').trim().length > 0)) return true;
   if (parts.some(p => p && (p.toolCallId || String(p.type || '').startsWith('tool-') || p.type === 'dynamic-tool') && p.state === 'output-available' && p.output?.status !== 'aborted' && p.output?.status !== 'error')) return true;
+  if (m.metadata?.pending && parts.some(p => p && (p.toolCallId || String(p.type || '').startsWith('tool-') || p.type === 'dynamic-tool') && /^(input-streaming|input-available|approval-requested)$/.test(p.state || ''))) return true;
   return false;
 }
 function isDeadAssistantMsg(m) {
@@ -4289,13 +4527,13 @@ function isDeadAssistantMsg(m) {
   if (hasSubstantiveAssistantWork(m)) return false;
   if (m.metadata?.openThinkStopped || m.metadata?.aborted || m.metadata?.feedback?.interruption === 'stop' || m.metadata?.error) return true;
   if (m._routePivotRole === 'next' && m._turnModelLabel && isOpenCandidateName(m._turnModelLabel)) return true;
-  if (m.metadata?.pending && !m._finishedAt) return false;
+  if (m.metadata?.pending && (!m._finishedAt || m._forcedFinish)) return false;
   const parts = Array.isArray(m.parts) ? m.parts : [];
   if (!parts.length) return true;
   if (parts.some(p => p?.type === 'error')) return true;
   const hasText = parts.some(p => p && p.type === 'text' && String(p.text || '').trim().length > 0);
   const toolParts = parts.filter(p => p && (p.toolCallId || String(p.type || '').startsWith('tool-') || p.type === 'dynamic-tool'));
-  if (!hasText && toolParts.length > 0 && toolParts.every(p => p.state === 'output-error' || p.state === 'input-available' || p.state === 'input-streaming' || p.output?.status === 'aborted')) return true;
+  if (!hasText && toolParts.length > 0 && !m.metadata?.pending && !m._forcedFinish && toolParts.every(p => p.state === 'output-error' || p.state === 'input-available' || p.state === 'input-streaming' || p.output?.status === 'aborted')) return true;
   return !parts.some(p => p && (
     (p.type === 'text' && String(p.text || '').trim().length > 0) ||
     (p.type === 'reasoning' && String(p.text || '').trim().length > 0) ||
@@ -4551,6 +4789,8 @@ try {
     window.formatOfficialErrorText = formatOfficialErrorText;
     window.isOpenCandidateName = isOpenCandidateName;
     window.isDeadAssistantMsg = isDeadAssistantMsg;
+    window.isPhantomFinishStub = isPhantomFinishStub;
+    window.hasInterruptedToolPart = hasInterruptedToolPart;
     window.ensureHealthyHistoryLoaded = ensureHealthyHistoryLoaded;
     window.findFirstHealthyUser = findFirstHealthyUser;
     window.findHealthyLastUser = findHealthyLastUser;
@@ -5079,7 +5319,26 @@ const History = {
         }
       }
       this.err = null; this.errKind = ''; this.retryAt = 0; this.lastLoad = now(); this.complete(); this.saveSoon();
-    } catch (e) { this.failure(e); this.blocked = true; this.retrySoon(); }
+    } catch (e) {
+      if (e?.status === 401 && opt.noRelogin && typeof Auth !== 'undefined' && typeof Auth.relogin === 'function') {
+        const relogged = await Auth.relogin().catch(() => false);
+        if (relogged) {
+          this.err = null;
+          this.errKind = '';
+          this.blocked = false;
+          setTimeout(() => { void this.refresh({ noRelogin: true }); }, 0);
+          Bus.emit('history');
+          return;
+        }
+      }
+      if (e?.status === 401 && (opt.noRelogin || (typeof window !== 'undefined' && window.__BRANA_BROWSE_MODE && this.items.length > 0 && !opt.manual))) {
+        this.err = null;
+        this.errKind = '';
+        this.blocked = false;
+      } else {
+        this.failure(e); this.blocked = true; this.retrySoon();
+      }
+    }
     Bus.emit('history');
   },
   // 失败后后台自动重试（20 秒、1 分钟、3 分钟），成功即停
@@ -5185,14 +5444,21 @@ const History = {
   },
   async remove(id) {
     if(typeof FingerprintBatch!=='undefined'&&FingerprintBatch.owns(id))throw Error('该对话在批量指纹队列中，请先停止测试');
-    await api('/api/chat/' + id, { method: 'DELETE' });
+    const entry=this.byId(id),isEval=Boolean(entry?.type==='evaluation'||entry?.mode==='battle'||entry?.mode==='direct'||Chats.get(id)?.isEvaluation);
+    await api((isEval ? '/api/history/evaluation/' : '/api/chat/') + id, { method: 'DELETE' });
     try { LocalCache.drop([id]); } catch {}
     this.items = this.items.filter(e => e.id !== id); ArchiveHistory.drop([id]); this.bury([id]); this.saveSoon(); Bus.emit('history'); try { if (typeof AcctStats !== 'undefined') AcctStats.report?.(); } catch {}
   },
   async archive(id) {
     if(typeof FingerprintBatch!=='undefined'&&FingerprintBatch.owns(id))throw Error('该对话在批量指纹队列中，请先停止测试');
-    const entry=this.byId(id);
-    await api('/api/chat/' + encodeURIComponent(id) + '/archive', { method: 'POST', headers: { Accept: 'application/json' } });
+    const entry=this.byId(id),isEval=Boolean(entry?.type==='evaluation'||entry?.mode==='battle'||entry?.mode==='direct'||Chats.get(id)?.isEvaluation);
+    if(isEval){
+      try{await api('/api/history/evaluation/'+encodeURIComponent(id),{method:'PATCH',json:{isArchived:true}});}
+      catch(e){if(e?.status!==404)await api('/api/chat/'+encodeURIComponent(id)+'/archive',{method:'POST',headers:{Accept:'application/json'}}).catch(e2=>{if(e2?.status!==404)throw e;});}
+    }else{
+      try{await api('/api/chat/' + encodeURIComponent(id) + '/archive', { method: 'POST', headers: { Accept: 'application/json' } });}
+      catch(e){if(e?.status===404)await api('/api/history/evaluation/'+encodeURIComponent(id),{method:'PATCH',json:{isArchived:true}}).catch(()=>{});else throw e;}
+    }
     if(entry)ArchiveHistory.add([entry]);
     try { Arch.add?.(id); } catch {}
     try { LocalCache.drop([id], { archived: true }); } catch {}

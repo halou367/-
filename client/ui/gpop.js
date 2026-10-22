@@ -35,6 +35,11 @@ Object.assign(GPop, {
   toggle(b) { if (this.isOpen()) { this.close(); return; } this.open(b); },
   // 从任意入口打开（Ctrl+G / 底栏抽卡进度 / 推理分排行）：锚在输入框旁的抽卡按钮上
   openAny() {
+    const curChat = (typeof Tabs !== 'undefined' && Tabs.cur?.sid && typeof Chats !== 'undefined') ? Chats.get(Tabs.cur.sid) : null;
+    const isBattle = curChat
+      ? Boolean((curChat.isEvaluation && curChat.evalMode === 'battle') || (typeof EvalView !== 'undefined' && EvalView.isBattleChat?.(curChat)))
+      : (typeof ModeState !== 'undefined' && typeof ModeState.getMode === 'function' && ModeState.getMode() === 'battle');
+    if (isBattle) { this.close(); return; }
     let b = [...document.querySelectorAll('.gbtn2:not([data-acct])')].find(x => x.getBoundingClientRect().width);
     if (!b) { Tabs.newChat(); setTimeout(() => { const x = [...document.querySelectorAll('.gbtn2:not([data-acct])')].find(y => y.getBoundingClientRect().width); if (x) this.open(x); }, 120); return; }
     if (!this.isOpen()) this.open(b);

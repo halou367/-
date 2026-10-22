@@ -203,7 +203,26 @@ const AccountPicker = {
     if (!alive()) return;
     const cur = UI.host?.account?.id, list = h('div', { class: 'acct-list lp-list', 'aria-label': '账号卡片' }), pager = h('div', { class: 'lp-pages' }), count = h('span', { class: 'dim' });
     management = AccountManagement.create(root, list, () => accounts, () => query);
-    const enter = a => { close(); if (a.id !== cur) Host.openAccount(a.id); };
+    const enter = a => {
+      close();
+      if (a.id !== cur) {
+        Host.openAccount(a.id);
+        return;
+      }
+      if (a.status?.loggedIn === false || (typeof window !== 'undefined' && window.__BRANA_BROWSE_MODE) || !UI.me || UI.me.cached || UI.me.browseOnly || /401|未登录|过期/.test(String(typeof History !== 'undefined' ? History.err || '' : ''))) {
+        void (async () => {
+          const ok = typeof Auth !== 'undefined' && typeof Auth.relogin === 'function'
+            ? await Auth.relogin({ force: true }).catch(() => false)
+            : false;
+          if (ok) {
+            try { await UI.recoverFromBrowseMode?.(); } catch {}
+            void History.refresh?.({ manual: true });
+          } else {
+            UI.loginGate?.('登录会话已过期，请输入密码重新登录');
+          }
+        })();
+      }
+    };
     const updateStates = () => { for (const c of cards) { const g = GPop.acctState(c._id, c._id === cur); if (c._g) GPop.paintAcct(c._g, g); this.paintRun(c, g); management.paint(c, c._account); } };
     const render = async () => {
       contextStop(); const run = ++generation; building = true; wheelStop(); management.beforeRender(); cards = [];

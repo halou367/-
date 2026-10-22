@@ -14,7 +14,7 @@ function overlay() {
     if (/(^|\.)arena\.ai$/i.test(location.hostname) && typeof MsgCache !== 'undefined' && typeof chatOf === 'function') {
       let seededSid = '';
       const syncBrowserChatToCache = () => {
-        const m = /^\/(?:agent|c|chat)\/([0-9a-f-]{36})\b/i.exec(location.pathname || '');
+        const m = /^\/agent\/([0-9a-f-]{36})\b/i.exec(location.pathname || '');
         const sid = m ? m[1] : '';
         if (!sid || sid === seededSid) return;
         seededSid = sid;
@@ -127,7 +127,7 @@ const WebLayer = (() => {
 })();
 const WebBar = (() => {
   let wrap = null, barEl = null, started = false;
-  const sidNow = () => (/^\/agent\/([\w-]+)/.exec(location.pathname) || [])[1] || null;
+  const sidNow = () => (/^\/(?:agent|c|chat)\/([\w-]+)/.exec(location.pathname) || [])[1] || null;
   function sheetText() {
     let c = typeof CSS === 'string' ? CSS : '';
     const faces = c.match(/@font-face\s*\{[^}]*\}/g) || [];
@@ -554,11 +554,39 @@ async function init() {
       UI.me = cmFast;
       try {
         History.warm('fast');
-        if (fastReturn.sid && /^[\w-]{4,64}$/.test(fastReturn.sid)) Tabs.open(fastReturn.sid);
+        if (fastReturn.sid && /^[\w-]{4,64}$/.test(fastReturn.sid)) {
+          const cFast = typeof chatOf === 'function' ? chatOf(fastReturn.sid) : null;
+          const isEvalFast = Boolean(fastReturn.evalUrl || (cFast && typeof EvalEngine !== 'undefined' && EvalEngine.isEvalChat?.(cFast)));
+          if (isEvalFast && cFast) {
+            if (typeof EvalEngine !== 'undefined' && EvalEngine.initEvalFields) {
+              EvalEngine.initEvalFields(cFast, fastReturn.evalMode ? { evalMode: fastReturn.evalMode } : {});
+            }
+            if (typeof ModeState !== 'undefined' && ModeState.setMode) {
+              const hRow = History.byId?.(fastReturn.sid);
+              const targetM = fastReturn.evalMode || (hRow ? ModeState.inferEntryMode(hRow) : (cFast.evalMode || 'battle'));
+              ModeState.setMode(targetM === 'agent' ? 'battle' : targetM, { silent: true });
+            }
+          }
+          Tabs.open(fastReturn.sid);
+        }
         else { Tabs.list = Tabs.list.filter(t => t && t.key); if (Tabs.list.length) { if (!Tabs.cur) Tabs.active = Tabs.list[0].key; UI.renderTabs(); UI.showTab(); } }
-        UI.renderAcct(); UI.shown();
+        UI.renderList?.(); UI.renderAcct(); UI.shown();
       } catch {}
     }
+  } else if (!window.__fixture && !window.__routeFixture && !/[?&](?:glogin|gfail|browse=1|offline=1)\b/.test(location.search) && !/^#reset=/.test(location.hash)) {
+    try {
+      const cmCold = Store.get('me:u', null);
+      History.warm('fast');
+      const hasColdCache = Boolean((cmCold && cmCold.id && !/@example\.invalid$/i.test(String(cmCold.email || ''))) || (History.items && History.items.length > 0));
+      if (hasColdCache) {
+        UI.me = (cmCold && cmCold.id) ? cmCold : { id: 'local', email: '' };
+        Tabs.list = Tabs.list.filter(t => t && t.key);
+        if (!Tabs.list.length) Tabs.newChat();
+        else { if (!Tabs.cur) Tabs.active = Tabs.list[0].key; UI.renderTabs(); UI.showTab(); }
+        UI.renderList?.(); UI.renderAcct(); UI.renderQuota();
+        UI.shown();
+      }
+    } catch {}
   }
   UI.host = await Host.info().catch(() => null) || {};
   try { EnvRefresh.init(); } catch {}
@@ -682,18 +710,19 @@ async function init() {
     Tabs.list = Tabs.list.filter(t => t && t.key);
     if (!Tabs.list.length) Tabs.newChat();
     else { if (!Tabs.cur) Tabs.active = Tabs.list[0].key; UI.renderTabs(); UI.showTab(); }
-    UI.renderListSoon?.();
+    try { const ta = $('#view textarea'); if (ta && !ta.value && Tabs.cur?.draft) ta.value = Tabs.cur.draft; } catch {}
+    UI.renderList?.(); UI.renderListSoon?.();
   };
   {
-    if (!window.__fixture && !window.__routeFixture) {
-      try { await Promise.race([History.restoreFromLocalCache?.() || Promise.resolve(), sleep(500)]); } catch {}
+    if (!window.__fixture && !window.__routeFixture && (!History.items || !History.items.length)) {
+      try { await Promise.race([History.restoreFromLocalCache?.() || Promise.resolve(), sleep(60)]); } catch {}
     } else {
       try { void History.restoreFromLocalCache?.(); } catch {}
     }
     const cm = Store.get('me:u', null);
     const hasLocalState = !!(History.items?.length || Store.get('tabs', null)?.length || Store.get('tabs:v1', null)?.list?.length || Tabs.list?.length || (typeof MsgCache !== 'undefined' && MsgCache.keys?.()?.length));
     const isFixtureAcct = Boolean(window.__fixture || window.__routeFixture || /@example\.invalid$/i.test(String(UI.host?.account?.email || '')) || /^(?:https?:\/\/|socks5:\/\/)?127\.0\.0\.1:(?:1|9|10)\b/i.test(String(UI.host?.account?.proxy || '')));
-    const hasConfiguredAccount = Boolean(!isFixtureAcct && (UI.host?.account?.email || UI.host?.account?.hasPw || UI.host?.account?.hasPassword));
+    const hasConfiguredAccount = Boolean(!isFixtureAcct && (UI.host?.account?.id || UI.host?.account?.email || UI.host?.account?.hasPw || UI.host?.account?.hasPassword));
     if ((cm && cm.id && (!expectedEmail || sameAcctEmail(cm.email, expectedEmail))) || hasLocalState || hasConfiguredAccount) {
       const em = expectedEmail || cm?.email || UI.host?.account?.email || UI.host?.account?.name || '本地账号';
       UI.me = (cm && cm.id) ? cm : { id: UI.host?.account?.id || 'local', email: em, name: String(em).split('@')[0] };
@@ -724,7 +753,7 @@ async function init() {
   const connOk = () => { conn.bar?.remove(); conn.bar = null; conn.n = 0; };
   // Cached UI/read-only refreshes do not wait behind a slow account metadata endpoint.
   // Authentication, saved credentials and automatic task resume still require /api/me.
-  if (early) { void History.refresh({ noRelogin: true }); void Pulse.poll(); KeepAlive.start(); }
+  if (early) { KeepAlive.start(); }
   if ((/[?&]browse=1\b/.test(location.search) || window.__BRANA_BROWSE_MODE) && !(typeof EnvRefresh !== 'undefined' && EnvRefresh.justRefreshed)) {
     const isOfflineBoot = /[?&]offline=1\b/.test(location.search);
     if (isOfflineBoot) {
@@ -769,11 +798,13 @@ async function init() {
           // Read retries may recover automatically; an unconfirmed authentication POST is never replayed.
           if (e.net && await connWait(describe(e), e.slow) !== 'gate') continue;
           connOk();
+          try { Host.noteAccount?.({ loggedIn: false })?.catch?.(() => {}); } catch {}
           if (early && !window.__fixture && !window.__routeFixture) { UI.enterBrowseMode('自动登录暂未完成（' + describe(e) + '）· 已保留本地缓存对话'); return; }
           UI.renderAcct(); return UI.loginGate('自动登录失败：' + describe(e));
         }
       }
     } else if (early && !window.__fixture && !window.__routeFixture) {
+      try { Host.noteAccount?.({ loggedIn: false })?.catch?.(() => {}); } catch {}
       UI.enterBrowseMode('已保留本地缓存对话 · 登录会话过期，可直接查阅本地记录');
       return;
     }
@@ -891,7 +922,9 @@ async function init() {
   if (needShell) shell(); else { UI.renderTabs(); }
   UI.shown();
   // 只取第一页（最近 50 条），更早的在侧栏滚到底时再加载（和网页一致）；不再启动时 + 每 4 分钟把全部历史翻一遍
-  if (!History.refreshP && !History.lastLoad) History.refresh(); setInterval(() => History.auto('tick'), 60000);   // 每分钟看一眼，距上次请求满 3 分钟才真的拉
+  if (History.err) { History.err = null; History.blocked = false; }
+  if (!History.lastLoad) void History.refresh();
+  setInterval(() => History.auto('tick'), 60000);   // 每分钟看一眼，距上次请求满 3 分钟才真的拉
   ProbeArchive.start();
   KeepAlive.start();
   // 启动就加载 reCAPTCHA（让它从一开始就观察页面上的正常操作），但不在启动瞬间取令牌：
@@ -923,7 +956,7 @@ async function init() {
   window.__ancFront = () => { try { Chrome.apply(); IP.poll(); History.auto('front'); UI.renderGachaBadge?.(); Sync.kick(); if (typeof PelicanShots !== 'undefined') PelicanShots.pull?.(false, true); } catch {} };
   Sync.start();
   // 窗口重新可见时，检查没有在流式接收的进行中对话
-  document.addEventListener('visibilitychange', () => { if (!document.hidden) { for (const c of Chats.values()) if (c.busy && !c.streaming) c.stream(); IP.poll(); } });
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) { for (const c of Chats.values()) if (c.busy && !c.streaming && !c.isEvaluation && !(typeof EvalEngine !== 'undefined' && EvalEngine.isEvalChat?.(c))) c.stream(); IP.poll(); } });
 }
 
 function boot() {
@@ -942,7 +975,7 @@ function boot() {
     try { const A = window.BranaAndroid; if (A?.insets) { const [t, b] = JSON.parse(A.insets()); const st = document.documentElement.style; st.setProperty('--sa-top', t + 'px'); st.setProperty('--sa-bottom', b + 'px'); } } catch {}
     // 从选账号页进入的新页面：一开始就盖上进度层，并马上让外壳切过来（用进度层代替「正在切换」转圈）
     if (Host.platform === 'android' && Host.takeEnter?.()) { EnterFlow.go(); requestAnimationFrame(() => requestAnimationFrame(() => UI.shown())); }
-    setTimeout(() => { try { window.BranaHost?.ready?.()?.catch?.(() => {}); } catch {} }, 60); init().catch(e => { console.error(e); toast('初始化失败：' + e.message, 'err'); UI.shown(); }); setTimeout(() => UI.shown(), 8000); };
+    setTimeout(() => { try { window.BranaHost?.ready?.()?.catch?.(() => {}); } catch {} }, 320); init().catch(e => { console.error(e); toast('初始化失败：' + e.message, 'err'); UI.shown(); }); setTimeout(() => UI.shown(), 8000); };
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start, { once: true }); else start();
 }
 boot();

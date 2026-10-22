@@ -107,5 +107,230 @@ const PelicanTest = (() => {
       return null;
     } finally { active.delete(chat); chat.probeProgress = ''; try { chat.emit(); } catch {} }
   }
-  return { start, isRunning, result, of: result, all, merge, drop };
+
+  let _activeMenuPop = null;
+  let _activeMenuBtn = null;
+  let _menuGlobalBound = false;
+
+  function closeMenu() {
+    try {
+      if (_activeMenuPop) {
+        _activeMenuPop.remove();
+        _activeMenuPop = null;
+      }
+      if (_activeMenuBtn) {
+        _activeMenuBtn.classList.remove('is-open');
+        _activeMenuBtn = null;
+      }
+      if (typeof document !== 'undefined') {
+        document.querySelectorAll('.pel-test-pop').forEach(el => {
+          try { el.remove(); } catch {}
+        });
+        document.querySelectorAll('.pel-test-btn.is-open,.pelbtn.is-open').forEach(el => {
+          el.classList.remove('is-open');
+        });
+      }
+    } catch {}
+  }
+
+  function ensureMenuBindings() {
+    if (_menuGlobalBound || typeof document === 'undefined') return;
+    _menuGlobalBound = true;
+    document.addEventListener('pointerdown', e => {
+      if (!_activeMenuPop) return;
+      const t = e.target;
+      if (t && (_activeMenuPop.contains(t) || (_activeMenuBtn && _activeMenuBtn.contains(t)))) return;
+      closeMenu();
+    }, true);
+    document.addEventListener('keydown', e => {
+      if (e.key === 'Escape' && _activeMenuPop) {
+        e.stopPropagation();
+        closeMenu();
+      }
+    }, true);
+    if (typeof window !== 'undefined') {
+      window.addEventListener('resize', () => {
+        if (_activeMenuPop) closeMenu();
+      }, { passive: true });
+    }
+  }
+
+  async function runQuickTest(kind = 'pelican', opts = {}) {
+    closeMenu();
+    const tab = opts.tab || (typeof Tabs !== 'undefined' ? Tabs.cur : null);
+    const chat = opts.chat || (tab?.sid && typeof Chats !== 'undefined' ? Chats.get(tab.sid) : null);
+    const curMode = opts.mode || (chat?.isEvaluation ? (chat.evalMode || 'battle') : (typeof ModeState !== 'undefined' && ModeState.getMode ? ModeState.getMode() : 'agent'));
+
+    if (chat && isRunning(chat)) {
+      await start(chat);
+      return null;
+    }
+    if (chat && chat.busy) {
+      if (chat.isEvaluation && typeof chat.stop === 'function') {
+        await chat.stop();
+        return null;
+      }
+      if (typeof toast === 'function') toast('请等待当前回复或任务结束', 'err');
+      return null;
+    }
+
+    const normKind = String(kind || 'pelican').toLowerCase();
+    if ((normKind === 'pelican' || normKind === 'svg') && chat && chat.sid && !chat.isEvaluation) {
+      return start(chat);
+    }
+
+    let prompt = '';
+    if (normKind === 'pelican' || normKind === 'svg') {
+      prompt = (typeof GachaPrompts !== 'undefined' && typeof GachaPrompts.svg === 'function')
+        ? GachaPrompts.svg()
+        : 'Create a new standalone HTML file. Use inline SVG to show a 2D animation of a pelican pedaling a bicycle forward. Keep the scene clean and the movement smooth. Output the completed file directly; do not run tests or checks.';
+    } else if (normKind === 'habit' || normKind === 'micro' || normKind === 'probe') {
+      prompt = (typeof GachaPrompts !== 'undefined' && typeof GachaPrompts.habit === 'function')
+        ? GachaPrompts.habit()
+        : '请在工作区创建并保存一个自包含的单文件 `.html` 卡片，内联一个极简 2D 动态 SVG 状态徽章，全文控制在 35～45 行以内，随后用中文分 2～3 条加粗要点总结你的设计与动效实现。';
+    } else {
+      const ta = (typeof UI !== 'undefined' && UI.els?.composer?.querySelector?.('textarea'))
+        || (typeof document !== 'undefined' ? document.querySelector?.('#view .composer textarea') : null);
+      const typed = String(ta?.value || '').trim();
+      if (typed) {
+        prompt = typed;
+      } else if (typeof GachaPrompts !== 'undefined' && typeof GachaPrompts.autoqaOne === 'function') {
+        prompt = GachaPrompts.autoqaOne(1);
+      } else {
+        prompt = '请无需调用任何工具，直接用中文分 2 条简短加粗要点说明如果为卡片组件增加深色模式，你会如何调整配色与对比度（80 字以内）？';
+      }
+    }
+
+    if (typeof UI !== 'undefined' && typeof UI.sendQuickTestPrompt === 'function') {
+      return UI.sendQuickTestPrompt(prompt, { tab, chat, kind: normKind, mode: curMode });
+    }
+    if (chat && chat.sid && typeof chat.send === 'function') {
+      if (normKind === 'habit' || normKind === 'micro' || normKind === 'probe') chat._isMicroProbe = true;
+      if (normKind === 'pelican' || normKind === 'svg') chat._isPelicanTest = true;
+      await chat.send(prompt, []);
+      return { ok: true, kind: normKind, prompt, chat };
+    }
+    if (typeof createChat === 'function') {
+      const created = await createChat(prompt, {
+        ...(curMode === 'battle' || curMode === 'direct' ? { evalMode: curMode } : {}),
+      });
+      if (created) {
+        if (normKind === 'habit' || normKind === 'micro' || normKind === 'probe') created._isMicroProbe = true;
+        if (normKind === 'pelican' || normKind === 'svg') created._isPelicanTest = true;
+      }
+      return { ok: true, kind: normKind, prompt, chat: created };
+    }
+    return null;
+  }
+
+  function openMenu(anchorBtn, opts = {}) {
+    const chat = opts.chat || (opts.tab?.sid && typeof Chats !== 'undefined' ? Chats.get(opts.tab.sid) : null);
+    if (chat && (isRunning(chat) || (chat.isEvaluation && chat.busy))) {
+      void runQuickTest('pelican', opts);
+      return null;
+    }
+    if (_activeMenuBtn === anchorBtn && _activeMenuPop) {
+      closeMenu();
+      return null;
+    }
+    closeMenu();
+    try { if (typeof ModeSwitcher !== 'undefined' && ModeSwitcher.closeAllPops) ModeSwitcher.closeAllPops(); } catch {}
+    ensureMenuBindings();
+
+    const makeIcon = name => {
+      try {
+        if (typeof icon === 'function') return icon(name);
+      } catch {}
+      const span = document.createElement('span');
+      span.textContent = name === 'pelican' ? '🦩' : name === 'fingerprint' ? '🧬' : '⚡';
+      return span;
+    };
+
+    const items = [
+      {
+        kind: 'pelican',
+        title: '鹈鹕测试',
+        sub: '发送英文 2D 鹈鹕骑车动态 SVG 标准题，测试动画与思考强度',
+        ico: 'pelican',
+      },
+      {
+        kind: 'habit',
+        title: '微缩探针测试',
+        sub: '发送 35～45 行 HTML+SVG 微缩徽章探针，单轮点亮 20 维习惯特征',
+        ico: 'fingerprint',
+      },
+      {
+        kind: 'text',
+        title: '快速发送文字进行测试',
+        sub: '无需工具调用，快速发送短文字测试题对比响应速度与行文习惯',
+        ico: 'send',
+      },
+    ];
+
+    const pop = document.createElement('div');
+    pop.className = 'mode-pop pel-test-pop menu';
+    pop.setAttribute('data-ks', '');
+    pop.setAttribute('role', 'menu');
+    pop.setAttribute('aria-label', '快速测试菜单');
+    pop.onclick = e => e.stopPropagation();
+
+    for (const item of items) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'mode-pop-item pel-test-item';
+      btn.setAttribute('data-test-kind', item.kind);
+      btn.onclick = e => {
+        e.stopPropagation();
+        void runQuickTest(item.kind, opts);
+      };
+      const icoWrap = document.createElement('span');
+      icoWrap.className = 'mode-pop-ico';
+      icoWrap.appendChild(makeIcon(item.ico));
+
+      const txtWrap = document.createElement('span');
+      txtWrap.className = 'mode-pop-txt';
+      const titleEl = document.createElement('span');
+      titleEl.className = 'mode-pop-title';
+      titleEl.textContent = item.title;
+      const subEl = document.createElement('span');
+      subEl.className = 'mode-pop-sub';
+      subEl.textContent = item.sub;
+      txtWrap.appendChild(titleEl);
+      txtWrap.appendChild(subEl);
+
+      btn.appendChild(icoWrap);
+      btn.appendChild(txtWrap);
+      pop.appendChild(btn);
+    }
+
+    if (typeof document !== 'undefined' && document.body) {
+      document.body.appendChild(pop);
+    }
+    if (anchorBtn?.classList) anchorBtn.classList.add('is-open');
+    _activeMenuPop = pop;
+    _activeMenuBtn = anchorBtn;
+
+    try {
+      if (anchorBtn && typeof anchorBtn.getBoundingClientRect === 'function') {
+        const rect = anchorBtn.getBoundingClientRect();
+        const vw = (typeof window !== 'undefined' && window.innerWidth) || 1024;
+        const vh = (typeof window !== 'undefined' && window.innerHeight) || 768;
+        const popRect = pop.getBoundingClientRect?.() || { width: 280, height: 180 };
+        const pw = popRect.width || 280;
+        const ph = popRect.height || 180;
+        let left = Math.round(rect.right - pw);
+        if (left + pw > vw - 10) left = Math.max(10, vw - pw - 10);
+        if (left < 10) left = 10;
+        let top = Math.round(rect.bottom + 8);
+        if (top + ph > vh - 10 && rect.top - ph - 8 >= 10) {
+          top = Math.round(rect.top - ph - 8);
+        }
+        pop.style.left = left + 'px';
+        pop.style.top = top + 'px';
+      }
+    } catch {}
+    return pop;
+  }
+
+  return { start, isRunning, result, of: result, all, merge, drop, openMenu, closeMenu, runQuickTest };
 })();

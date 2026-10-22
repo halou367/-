@@ -365,6 +365,7 @@ const Trace = (() => {
   }
   // 旧对话：回放实时通道，收集最近几轮的运行令牌（1 小时内有效）
   async function discover(chat) {
+    if (!chat || chat.isEvaluation || (typeof EvalEngine !== 'undefined' && EvalEngine.isEvalChat?.(chat))) return 0;
     try {
       await chat.ensureToken();
       const ctl = new AbortController(); const tm = setTimeout(() => ctl.abort(), 12000);
@@ -397,7 +398,7 @@ const Trace = (() => {
   // ---------- 自动：回合开始 / 进行中 / 结束 ----------
   const liveT = new Map();
   function watch(chat) {
-    if (liveT.has(chat.sid) || Prefs.traceLive === false) return;
+    if (!chat || chat.isEvaluation || (typeof EvalEngine !== 'undefined' && EvalEngine.isEvalChat?.(chat)) || liveT.has(chat.sid) || Prefs.traceLive === false) return;
     const tick = async () => {
       if (!chat.busy) { liveT.delete(chat.sid); return; }
       // 后台 / 最小化 / 没打开这个对话时也继续读（间隔放长），不等这一轮结束

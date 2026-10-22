@@ -1,7 +1,7 @@
 {
   "name": "brana-client",
   "productName": "Brana AI",
-  "version": "0.13.166",
+  "version": "0.13.167",
   "description": "Cross-platform workspace client with multi-tab markdown rendering and session telemetry",
   "main": "src/main.js",
   "author": "755287249",
@@ -71,3 +71,4 @@
     "socks-proxy-agent": "8.0.5"
   }
 }
+

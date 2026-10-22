@@ -757,7 +757,16 @@ const Tabs = {
     this.save(); UI.renderTabs(); UI.showTab();
   },
   // 抽卡不再单独开标签页：直接弹出和油猴脚本一样的抽卡面板
-  openGacha() { if (!UI.me) { UI.loginGate('请先登录，再开始抽卡'); return null; } GPop.openAny(); return null; },
+  openGacha() {
+    const curChat = this.cur?.sid && typeof Chats !== 'undefined' ? Chats.get(this.cur.sid) : null;
+    const isBattle = curChat
+      ? Boolean((curChat.isEvaluation && curChat.evalMode === 'battle') || (typeof EvalView !== 'undefined' && EvalView.isBattleChat?.(curChat)))
+      : (typeof ModeState !== 'undefined' && typeof ModeState.getMode === 'function' && ModeState.getMode() === 'battle');
+    if (isBattle) { try { GPop.close?.(); } catch {} return null; }
+    if (!UI.me) { UI.loginGate('请先登录，再开始抽卡'); return null; }
+    GPop.openAny();
+    return null;
+  },
   openPower(mode) {
     if (mode && typeof PView !== 'undefined') PView.mode = mode;
     const titles = { rank: '模型排行榜', power: '推理分排行', price: '价格排行榜' };
@@ -1391,7 +1400,8 @@ const R = {
     const lines = R.countLinesFast(text);
     const running = !!seg?.running;
     const ext = String(seg?.ext || 'html').toUpperCase();
-    const dispTitle = seg?.title ? `${seg.title} (${vpath})` : `内嵌 ${ext} 页面 (${vpath})`;
+    const posTag = m?.participantPosition === 'a' ? 'Model A · ' : m?.participantPosition === 'b' ? 'Model B · ' : '';
+    const dispTitle = seg?.title ? `${posTag}${seg.title} (${vpath})` : `${posTag}内嵌 ${ext} 页面 (${vpath})`;
     let d = null;
     const sidOf = el => el?.closest?.('[data-wsid]')?.getAttribute('data-wsid') || chat?.sid || (typeof Tabs !== 'undefined' ? Tabs.cur?.sid : null) || null;
     const getTxt = () => d?.__inlineCode || text;
@@ -2316,7 +2326,7 @@ const UI = {
     if (vf) frag.append(h('button', { class: 'vfbar', title: '点一下显示全部', onclick: () => { Prefs.vf = ''; savePrefs(); this.renderList(); } }, VIcon.el(vf, 12), '只看 ' + (Brand.NAME[vf] || vf), h('span', { class: 'grow' }), icon('x')));
     if (!archived && History.retrying) frag.prepend(h('div', { class: 'lnote', role: 'status' }, h('i', { class: 'spin' }), '列表刷新较慢，正在自动重试…'));
     else if (!archived && History.err && History.items.length && (History.limited() || History.errKind === 'limit')) { const left = Math.max(0, Math.ceil((Math.max(History.retryAt || 0, ReadLimit.until || 0) - now()) / 1000)); frag.prepend(h('div', { class: 'lnote', role: 'status', title: History.err }, left ? '列表暂缓刷新：服务器限流冷却中，约 ' + left + ' 秒后自动更新（不影响对话）' : '列表稍后自动更新（不影响对话）')); }
-    else if (!archived && History.err) { const retry = h('button', { class: 'btn ghost sm', onclick: async () => { retry.disabled = true; retry.textContent = '刷新中…'; await History.refresh(); if (!History.err) await History.loadAll(); } }, '刷新重试'); frag.prepend(h('div', { class: History.items.length ? 'lnote bad' : 'empty', role: 'status' }, (History.items.length ? '列表刷新失败（已显示本地列表，稍后自动重试）：' : '') + History.err, retry)); }
+    else if (!archived && History.err) { const retry = h('button', { class: 'btn ghost sm', onclick: async () => { retry.disabled = true; retry.textContent = '刷新中…'; const is401 = /401|未登录|过期/.test(String(History.err || '')); if (is401 && typeof Auth !== 'undefined' && typeof Auth.relogin === 'function') { const ok = await Auth.relogin({ force: true }).catch(() => false); if (!ok && (!UI.me || UI.me.cached || UI.me.browseOnly || window.__BRANA_BROWSE_MODE)) { UI.loginGate?.('登录会话已过期，请输入密码重新登录'); return; } } await History.refresh({ manual: true }); if (!History.err) await History.loadAll(); } }, '刷新重试'); frag.prepend(h('div', { class: History.items.length ? 'lnote bad' : 'empty', role: 'status' }, (History.items.length ? '列表刷新失败（已显示本地列表，稍后自动重试）：' : '') + History.err, retry)); }
     const groups=Side.build(items);CardSelect.reconcile(groups.flatMap(g=>g.rows.map(r=>r.e.id)));
     for (const g of groups) {
       if (g.group && g.rows.length && !g.pinned) { const k = 'g|' + (g.fav ? '\u2605fav' : g.group); const el = (!this._cards.has(k) && old.get(k)?.el) || h('div', { class: 'lgroup' + (g.gold ? ' gold' : '') + (g.fav ? ' fav' : '') }, g.gold || g.fav ? '★ ' + g.group : g.group); this._cards.set(k, { el }); frag.append(el); }
@@ -2506,7 +2516,20 @@ const UI = {
     // 手机：左右相邻的窗口在后台预热，并搭成真正的页停在当前页下面（横向画卷）
     if (isMob() && t) { clearTimeout(this.warmT); this.warmT = setTimeout(() => { try { Warm.near(Warm.around(Tabs.active, 3).slice(1)); } catch {} }, 700); }
     GPop.close?.(); try { Palette.show(); } catch {}
-    const sidNow = t && !t.kind ? t.sid : null; try { ExtCompat.syncUrl(sidNow); } catch {} if (WS.sid !== sidNow || !WS.data) WS.load(sidNow);
+    const sidNow = t && !t.kind ? t.sid : null;
+    if (sidNow && typeof ModeState !== 'undefined' && typeof ModeState.getMode === 'function') {
+      const cNow = Chats.get(sidNow);
+      const hNow = typeof History !== 'undefined' ? History.byId?.(sidNow) : null;
+      const chatMode = cNow?.isEvaluation
+        ? (cNow.evalMode || 'battle')
+        : hNow
+          ? ModeState.inferEntryMode(hNow)
+          : (cNow?.messages?.length ? 'agent' : null);
+      if (chatMode && chatMode !== ModeState.getMode()) {
+        ModeState.setMode(chatMode, { silent: true });
+      }
+    }
+    try { ExtCompat.syncUrl(sidNow); } catch {} if (WS.sid !== sidNow || !WS.data) WS.load(sidNow);
     setTimeout(() => { try { Sync.tick(); } catch {} }, 300);
     setTimeout(() => { try { const c = t?.sid && !t.kind ? Chats.get(t.sid) : null; if (c) { FingerprintReview.auto(c); FingerprintBatch.autoVerify?.(c); } } catch {} }, 1500);   // 切回一个已经读完的对话：没有指纹信息就按历史里的指纹测试自动校准
     setTimeout(() => { this.layout(); Bar.render(); }, 0);
@@ -2549,13 +2572,21 @@ const UI = {
         thread.append(h('div', { class: 'hero' }, h('div', { class: 'hero-t' }, '有什么可以帮你？'), h('div', { class: 'hero-s' }, defSub)));
       }
       const curMode = typeof ModeState !== 'undefined' && typeof ModeState.getMode === 'function' ? ModeState.getMode() : 'agent';
-      head.append(h('div', { class: 'chead-t' }, curMode === 'battle' ? '新对话 · Battle 盲测' : curMode === 'direct' ? '新对话 · Direct 直连' : '新对话'));
+      head.replaceChildren(...K(
+        h('div', { class: 'chead-t' },
+          curMode === 'battle' && typeof ModeSwitcher !== 'undefined' && typeof ModeSwitcher._icon === 'function' ? ModeSwitcher._icon('swords') : null,
+          h('span', { class: 'chead-n' }, curMode === 'battle' ? '新对话 · Battle 盲测' : curMode === 'direct' ? '新对话 · Direct 直连' : '新对话')
+        ),
+        h('span', { class: 'grow' }),
+        this.renderPelicanMenuBtn(t, null, curMode)
+      ));
       if (!side) this.autoFocus(composer, kbWas);
       return;
     }
     // 可视高度变了（手机弹出输入法把输入框顶上去、输入框变高）：聊天内容跟着一起往上顶，保持底部对齐，不是原地不动被盖住
     { let lastH = 0; const ro = new ResizeObserver(() => { if (!scroller.isConnected) { ro.disconnect(); return; } const hh = scroller.clientHeight; if (lastH && hh && hh !== lastH) { if (P.stick !== false) scroller.scrollTop = scroller.scrollHeight; else scroller.scrollTop += lastH - hh; } if (hh) lastH = hh; }); ro.observe(scroller); P.resizeObserver=ro; }
     const sv = this.scrolls.get(t.key); P.stick = sv ? sv.stick : true;
+    try { chat.hydrateSync?.(); } catch {}
     this.renderChat(chat, true);
     if (sv && !sv.stick) scroller.scrollTop = sv.top;
     if (!chat.loaded && !chat.loading) chat.load().catch(() => {}); else if (chat.loaded && !chat.loading) chat.quickSync?.();
@@ -2595,7 +2626,7 @@ const UI = {
     const battleTitle = isBattleChat
       ? (chat.voteState?.voted
         ? `${chat.voteState.modelAName || 'Model A'} vs ${chat.voteState.modelBName || 'Model B'}`
-        : '⚔️ Battle 盲测 · Model A vs Model B')
+        : 'Battle 盲测 · Model A vs Model B')
       : '';
     const hsig = [phase, chat.sid, isBattleChat, isDirectChat, battleTitle, chat.voteState?.voted, chat.voteState?.value, typeof BillingProbe !== 'undefined' && BillingProbe.isRunning?.(chat), PelicanTest.isRunning(chat), !!mi?.fingerprint, !!chat.probeNumbers?.length, FingerprintBatch.busy, !!chat.gacha, Fingerprint.isRunning(chat), chat.probeProgress, tip, v.vid, st, v.note, v.model, v.plain, v.time, mi?.routed, chat.identifying, !mi && chat.idErr, WS.shown, chat.busy, chat.phase, chat.sentAt].join('\u0001');
     if (E.hsig !== hsig) {
@@ -2603,17 +2634,20 @@ const UI = {
       if (isBattleChat) {
         E.head.replaceChildren(...K(
           h('div', { class: 'chead-t', title: chat.title || battleTitle },
+            (typeof ModeSwitcher !== 'undefined' && typeof ModeSwitcher._icon === 'function') ? ModeSwitcher._icon('swords') : null,
             h('span', { class: 'chead-n' }, battleTitle),
             chat.modality ? h('span', { class: 'badge dim' }, String(chat.modality).toUpperCase()) : null,
-            chat.voteState?.voted ? h('span', { class: 'badge ok' }, '✓ 已揭晓并入库') : h('span', { class: 'badge dim' }, '盲测中')
+            chat.voteState?.voted ? h('span', { class: 'badge dim' }, '已揭晓并入库') : h('span', { class: 'badge dim' }, '盲测中')
           ),
           h('span', { class: 'grow' }),
+          this.renderPelicanMenuBtn(Tabs.cur, chat, 'battle'),
           h('button', { class: 'ib mdbtn', title: '导出这个对话的全部内容为 Markdown', onclick: () => void ChatExport.run(chat) }, icon('doc')),
           chat.busy ? h('span', { class: 'phase' }, h('i', { class: 'spin' }), h('span', { class: 'ph-t' }, phase), chat.sentAt ? h('span', { class: 'dim anc-since', 'data-since': chat.sentAt }, '') : null) : null
         ));
       } else {
         E.head.replaceChildren(...K(h('div', { class: 'chead-t', title: tip, 'aria-label': 'Session cumulative cost' }, stLogo(v.vid || Brand.of(mi?.name), 18, st), h('span', { class: 'chead-n' }, ...[].concat(v.note || metricName(mi?.name || v.model, cardName) || v.plain || '对话')), v.note && (mi?.name || v.model) ? h('span', { class: 'chead-md' }, '-', ...[].concat(metricName(mi?.name || v.model, cardName))) : null),
-          isDirectChat ? h('span', { class: 'badge ok' }, '🎯 Direct 直连') : null,
+          isDirectChat ? h('span', { class: 'badge dim' }, 'Direct 直连') : null,
+          isDirectChat && typeof EvalView !== 'undefined' && typeof EvalView.renderRegenBtn === 'function' ? EvalView.renderRegenBtn(chat, (chat.messages || []).findLast(m => m && m.role === 'assistant'), 'a', Boolean(chat.busy), null) : null,
           window.__BRANA_BROWSE_MODE ? h('button', { type: 'button', class: 'badge warn browse-badge', title: '当前处于离线/免登查阅模式，点击返回登录或重连', onclick: () => { window.__BRANA_BROWSE_MODE = false; UI.loginGate('已退出查阅模式，请登录或刷新连接'); } }, '查阅模式 · 退出') : null,
           mi?.routed ? (() => {
             const rType = mi.routeType === 'effort' ? '强度削弱' : '路由换模';
@@ -2647,7 +2681,7 @@ const UI = {
             : !isEvalChat && !mi && chat.idErr ? h('button', { class: 'badge dim link', title: chat.idErr + '（点一下重试）', onclick: () => chat.identifyOld() }, '未识别') : null,
           h('span', { class: 'grow' }),
           !isEvalChat ? h('button', { class: 'ib revbtn' + (typeof BillingProbe !== 'undefined' && BillingProbe.isRunning?.(chat) ? ' run' : ''), 'aria-label': typeof BillingProbe !== 'undefined' && BillingProbe.isRunning?.(chat) ? '停止反推' : '费用反推', disabled: (chat.busy && !(typeof BillingProbe !== 'undefined' && BillingProbe.isRunning?.(chat))) || PelicanTest.isRunning(chat), title: typeof BillingProbe !== 'undefined' && BillingProbe.isRunning?.(chat) ? '停止反推识别' + (chat.probeProgress ? '（' + chat.probeProgress + '）' : '') : '反推识别：点一下读取账单与对话记录/工具调用，按最高置信度反推并锁定当前对话的真实模型与推理分。', onclick: () => void BillingProbe.reverseIdentify(chat, { interactive: true }) }, icon('pulse')) : null,
-          !isEvalChat ? h('button', { class: 'ib pelbtn' + (PelicanTest.isRunning(chat) ? ' run' : ''), 'aria-label': PelicanTest.isRunning(chat) ? '停止鹈鹕' : '鹈鹕测试', disabled: (chat.busy && !PelicanTest.isRunning(chat)), title: PelicanTest.isRunning(chat) ? '停止鹈鹕测试' + (chat.probeProgress ? '（' + chat.probeProgress + '）' : '') : '鹈鹕测试：点一下直接开测：发 1 条英文鹈鹕 SVG 标准题，量思考时长算推理分（没思考不计分），思考一结束就停。再点一下停止。', onclick: () => void PelicanTest.start(chat) }, icon('pelican')) : null,
+          !isEvalChat ? h('button', { class: 'ib pelbtn' + (PelicanTest.isRunning(chat) ? ' run' : ''), 'aria-label': PelicanTest.isRunning(chat) ? '停止鹈鹕' : '鹈鹕测试', disabled: (chat.busy && !PelicanTest.isRunning(chat)), title: PelicanTest.isRunning(chat) ? '停止鹈鹕测试' + (chat.probeProgress ? '（' + chat.probeProgress + '）' : '') : '鹈鹕与探针测试：点击可选择鹈鹕测试、微缩探针测试或快速发送文字进行测试。', onclick: e => { e.stopPropagation(); if (PelicanTest.isRunning(chat)) { void PelicanTest.start(chat); return; } if (typeof PelicanTest !== 'undefined' && typeof PelicanTest.openMenu === 'function') PelicanTest.openMenu(e.currentTarget, { tab: Tabs.cur, chat, mode: 'agent' }); else void PelicanTest.start(chat); } }, icon('pelican')) : isDirectChat ? this.renderPelicanMenuBtn(Tabs.cur, chat, 'direct') : null,
           h('button', { class: 'ib mdbtn', title: '导出这个对话的全部内容（正文、思考、bash 命令和输出、工具调用）为 Markdown，自己选保存位置', onclick: () => void ChatExport.run(chat) }, icon('doc')),
           !isEvalChat ? h('button', { class: 'ib wsbtn', title: WS.shown ? '收起工作区' : '显示工作区（沙盒文件）', onclick: () => { WS.set(!WS.shown); scheduleChat(chat); } }, icon('folder')) : null,
           chat.busy ? h('span', { class: 'phase' }, h('i', { class: 'spin' }), h('span', { class: 'ph-t' }, phase), chat.sentAt ? h('span', { class: 'dim anc-since', 'data-since': chat.sentAt }, '') : null) : null));
@@ -2706,6 +2740,7 @@ const UI = {
       }
       chat.messages.forEach((m, i) => {
         if (m._held) return;
+        if (chat.live !== m && typeof isPhantomFinishStub === 'function' && isPhantomFinishStub(m)) return;
         const isLast = i === lastIdx || (i === lastIdx - 1 && chat.messages[lastIdx]?.role === 'user' && false);
         const seg = segMeta[i] || null;
         const segKey = seg ? (seg.head ? 'H' : seg.mid ? 'M' : seg.tail ? 'T' : '') + (seg.hideFoot ? '0' : '1') + ':' + (seg.turnStartAt || 0) : '';
@@ -2999,26 +3034,18 @@ const UI = {
     ta.value = tab.draft || '';
     // 手机：文字快碰到厂商按钮（这一行放不下、要换行了）时，厂商按钮才移到发送按钮上方（带动画），输入框横向让出这一格；
     // 字数少、一行放得下时厂商按钮留在原位
-    const LIFT = 38;   // 厂商按钮宽 36 + 间距 2
-    const fits = (b) => {
-      const v = ta.value; if (!v.trim()) return true; if (/\n/.test(v)) return false;
-      const cs = getComputedStyle(ta), cv = UI._mcv ||= document.createElement('canvas').getContext('2d');
-      cv.font = cs.fontStyle + ' ' + cs.fontWeight + ' ' + cs.fontSize + ' ' + cs.fontFamily;
-      const pad = (parseFloat(cs.paddingLeft) || 0) + (parseFloat(cs.paddingRight) || 0);
-      const room = ta.clientWidth - pad - (b.classList.contains('has-txt') ? LIFT : 0) - 6;   // 按「厂商按钮在原位」时的宽度算，留一点余量：挨到按钮前就上移
-      return cv.measureText(v).width <= room;
-    };
+    const fits = () => true;
     const autosize = () => {
       const b = ta.parentElement;
-      if (b && b.classList.contains('cbox') && isMob()) {
-        const lift = !fits(b);
-        if (b.classList.contains('has-txt') !== lift) { b.classList.toggle('has-txt', lift); b.classList.remove('g-up', 'g-down'); void b.offsetWidth; b.classList.add(lift ? 'g-up' : 'g-down'); }
+      if (b && b.classList.contains('cbox')) {
+        b.classList.remove('has-txt', 'g-up', 'g-down');
       }
-      // 输入框跟着内容长高（最多约半屏），再多才出现滚动条；带附件时也一样，不会被挤压
+      // 统一两行输入框（上方文本、下方功能栏），高度按内容自适应生长
       const maxH = Math.round(Math.max(160, Math.min(innerHeight * (isMob() ? 0.35 : 0.45), 520)));
-      ta.style.maxHeight = maxH + 'px'; ta.style.height = 'auto'; ta.style.height = Math.min(ta.scrollHeight, maxH) + 'px'; ta.style.overflowY = ta.scrollHeight > maxH ? 'auto' : 'hidden'; };
+      ta.style.maxHeight = maxH + 'px'; ta.style.height = 'auto'; ta.style.height = Math.min(ta.scrollHeight, maxH) + 'px'; ta.style.overflowY = ta.scrollHeight > maxH ? 'auto' : 'hidden';
+    };
     const btn = h('button', { class: 'sendbtn', type: 'submit', title: '发送', 'aria-label': 'Send message', onclick: () => go() }, icon('send'));
-    const chint = h('span', { class: 'chint' }, chat ? '' : '受 reCAPTCHA 保护');
+    const chint = h('span', { class: 'chint' }, chat ? '' : '');
     // 附件：每个标签页各自一组。选中 / 粘贴 / 拖入的瞬间就在输入框里显示本地预览，同时后台开始上传（显示进度）；
     // 按发送不用等上传：消息立即出现在对话里，上传完成后自动发出（新对话需要附件才能创建，会等上传完成）
     const atts = this.atts.get(tab.key) || []; this.atts.set(tab.key, atts);
@@ -3148,7 +3175,7 @@ const UI = {
             const hint = chint, show = () => { if (hint && list.some(a => a.state === 'up')) hint.textContent = '上传附件 ' + Math.round(list.reduce((x, a) => x + (a.pct || 0), 0) / list.length * 100) + '%，完成后自动创建对话…'; };
             for (const a of list) a.subs.add(show); show();
             files = await filesP;
-            if (hint) hint.textContent = '受 reCAPTCHA 保护';
+            if (hint) hint.textContent = '';
           }
           await this.startNew(tab, text, ta, null, files);
         }
@@ -3212,7 +3239,7 @@ const UI = {
       }
       if (e.key === 'Enter' && !e.isComposing && e.keyCode !== 229 && ((Prefs.enterSend && !e.shiftKey && !e.ctrlKey && !e.metaKey) || (!Prefs.enterSend && (e.ctrlKey || e.metaKey)))) { e.preventDefault(); if (!ta.value.trim() && !atts.length && tab.sid && Chats.get(tab.sid)?.busy) return; go(); }   // 进行中按回车：有内容 = 加入队列；空的不做任何事（停止只能点按钮）
     });
-    setTimeout(() => { if (isMob() && ta.value.trim() && !fits(ta.parentElement)) ta.parentElement?.classList.add('has-txt'); autosize(); }, 0);
+    setTimeout(() => { autosize(); }, 0);
     setTimeout(paintAtt, 0); setTimeout(paintQ, 0);
     const pm = h('div', { contenteditable: 'true', role: 'textbox', translate: 'no', class: 'tiptap ProseMirror prose prose-sm', tabindex: '-1', 'data-placeholder': 'What would you like to do?' }, h('p', { dir: 'auto', 'data-placeholder': 'What would you like to do?', class: 'is-empty is-editor-empty' }, h('br', { class: 'ProseMirror-trailingBreak' })));
     const pmWrap = h('div', { class: 'editor-content ext-pm-bridge' }, pm);
@@ -3248,12 +3275,20 @@ const UI = {
     pmObserver.observe(pm, { childList: true, subtree: true, characterData: true });
     ta.addEventListener('input', syncPmFromTa);
     syncPmFromTa();
-    const box = h('div', { class: 'cbox', onclick: e => { if (e.target === e.currentTarget) ta.focus(); },
+    const resolvedMode = (typeof ModeSwitcher !== 'undefined' && typeof ModeSwitcher._resolveState === 'function')
+      ? ModeSwitcher._resolveState(chat, tab).curMode
+      : ((chat?.isEvaluation ? (chat.evalMode || 'battle') : (typeof ModeState !== 'undefined' && typeof ModeState.getMode === 'function' ? ModeState.getMode() : 'agent')) || 'agent');
+    const gpopBtn = GPop.btn();
+    if (gpopBtn && resolvedMode === 'battle') {
+      gpopBtn.style.display = 'none';
+      gpopBtn.hidden = true;
+    }
+    const box = h('div', { class: 'cbox', 'data-mode': resolvedMode, onclick: e => { if (e.target === e.currentTarget) ta.focus(); },
       ondragover: e => { if ([...(e.dataTransfer?.types || [])].includes('Files')) { e.preventDefault(); box.classList.add('drop'); } },
       ondragleave: () => box.classList.remove('drop'),
       ondrop: e => { box.classList.remove('drop'); const fs = [...(e.dataTransfer?.files || [])]; if (fs.length) { e.preventDefault(); addFiles(fs); } } },
-      qrow, chips, ta, pmWrap, h('div', { class: 'crow' }, plus, fin, typeof ModeSwitcher !== 'undefined' ? ModeSwitcher.renderBar(tab, chat) : null, chint, h('span', { class: 'grow' }), Cap.btn(), GPop.btn(), btn));
-    const composer = h('div', { class: 'composer' }, box);
+      qrow, chips, ta, pmWrap, h('div', { class: 'crow' }, plus, fin, typeof ModeSwitcher !== 'undefined' ? ModeSwitcher.renderBar(tab, chat) : null, chint, h('span', { class: 'grow' }), Cap.btn(), gpopBtn, btn));
+    const composer = h('div', { class: 'composer', 'data-mode': resolvedMode }, box);
     slash = SlashCommands.bind(composer, ta, { fingerprint: () => {
       const c = tab.sid ? chatOf(tab.sid) : null;
       const r = Fingerprint.command(c, '/测指纹', { attachments: !!atts.length });
@@ -3302,7 +3337,7 @@ const UI = {
       History.auto('new');   // 新对话：20 秒内最多拉一次（第一轮回复完成时还会再排一次拿服务器标题）
     } catch (e) {
       unpend();
-      if (hint) hint.textContent = '受 reCAPTCHA 保护';
+      if (hint) hint.textContent = '';
       if (e.status === 403 && /recaptcha/i.test(e.body || '')) {
         toast('需要人机验证', 'err');
         const tok = await Recaptcha.v2().catch(() => null);
@@ -3311,7 +3346,60 @@ const UI = {
       }
       if (e.status === 429) { const q = Quota.chat; const wait = q?.retryAt ? Math.max(0, Math.ceil((q.retryAt - now()) / 60000)) : null; throw new Error('新对话额度用完（429）' + (wait ? `，约 ${wait} 分钟后恢复` : '')); }
       throw e;
-    } finally { if (hint && hint.textContent === '正在创建对话…') hint.textContent = '受 reCAPTCHA 保护'; }
+    } finally { if (hint && hint.textContent === '正在创建对话…') hint.textContent = ''; }
+  },
+  renderPelicanMenuBtn(tab, chat, mode) {
+    const curMode = mode || (chat?.isEvaluation ? (chat.evalMode || 'battle') : (typeof ModeState !== 'undefined' && typeof ModeState.getMode === 'function' ? ModeState.getMode() : 'agent'));
+    const isRun = Boolean(chat && ((typeof PelicanTest !== 'undefined' && PelicanTest.isRunning?.(chat)) || (chat.isEvaluation && chat.busy)));
+    const btn = h('button', {
+      type: 'button',
+      class: 'ib pel-test-btn pelbtn' + (isRun ? ' run' : ''),
+      'data-mode': curMode,
+      'aria-label': isRun ? '停止测试' : '鹈鹕测试与快速探针菜单',
+      'aria-haspopup': 'menu',
+      title: isRun
+        ? '停止当前测试'
+        : '点击选择测试：鹈鹕测试 · 微缩探针测试 · 快速发送文字进行测试',
+      onclick: e => {
+        e.stopPropagation();
+        if (typeof PelicanTest !== 'undefined' && typeof PelicanTest.openMenu === 'function') {
+          PelicanTest.openMenu(btn, { tab: tab || Tabs.cur, chat, mode: curMode });
+        } else if (chat && typeof PelicanTest !== 'undefined' && typeof PelicanTest.start === 'function') {
+          void PelicanTest.start(chat);
+        }
+      },
+    }, icon('pelican'));
+    return btn;
+  },
+  async sendQuickTestPrompt(prompt, opts = {}) {
+    const text = String(prompt || '').trim();
+    if (!text) return null;
+    const kind = String(opts.kind || 'pelican').toLowerCase();
+    const tab = opts.tab || (typeof Tabs !== 'undefined' ? (Tabs.cur || Tabs.newChat()) : null);
+    const chat = opts.chat || (tab?.sid && typeof Chats !== 'undefined' ? Chats.get(tab.sid) : null);
+    if (chat && chat.sid) {
+      if (chat.busy || chat.sending) {
+        if (typeof toast === 'function') toast('当前对话正在生成中，请稍候', 'err');
+        return null;
+      }
+      if (kind === 'habit' || kind === 'micro' || kind === 'probe') chat._isMicroProbe = true;
+      if (kind === 'pelican' || kind === 'svg') chat._isPelicanTest = true;
+      if ((kind === 'pelican' || kind === 'svg') && !chat.isEvaluation && typeof PelicanTest !== 'undefined' && typeof PelicanTest.start === 'function') {
+        return PelicanTest.start(chat);
+      }
+      await chat.send(text, []);
+      return { ok: true, kind, prompt: text, chat };
+    }
+    const ta = this.els?.composer?.querySelector?.('textarea')
+      || (typeof document !== 'undefined' ? document.querySelector?.('#view .composer textarea') : null)
+      || { value: '' };
+    await this.startNew(tab, text, ta, null, []);
+    const created = (tab?.sid && typeof Chats !== 'undefined') ? Chats.get(tab.sid) : null;
+    if (created) {
+      if (kind === 'habit' || kind === 'micro' || kind === 'probe') created._isMicroProbe = true;
+      if (kind === 'pelican' || kind === 'svg') created._isPelicanTest = true;
+    }
+    return { ok: true, kind, prompt: text, chat: created };
   },
   renderQuota() { Bar.render(); },
   renderIP() { this.renderAcct(); },
@@ -3371,7 +3459,7 @@ if (typeof Bus !== 'undefined') {
   Bus.on('modechange', () => { try { UI.renderList(); UI.showTab(); } catch {} });
   Bus.on('modalitychange', () => { try { UI.showTab(); } catch {} });
   Bus.on('directmodelchange', () => { try { UI.showTab(); } catch {} });
-  Bus.on('eval:vote-revealed', () => { try { if (UI.els?.chat) UI.renderChat(UI.els.chat, true); UI.renderListSoon?.(); } catch {} });
+  Bus.on('eval:vote-revealed', () => { try { if (UI.els?.chat) UI.renderChat(UI.els.chat, true); UI.renderTabs?.(); UI.renderListSoon?.(); } catch {} });
   Bus.on('eval:stream', payload => { try { if (payload?.chat && UI.els?.chat === payload.chat) scheduleChat(payload.chat); } catch {} });
 }
 const SINCE = document.getElementsByClassName('anc-since');

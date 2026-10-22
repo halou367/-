@@ -31,19 +31,33 @@ function Get-InstallRoots {
 function Get-InstalledProcesses {
     param([string[]]$Roots, [string]$ExeName, [switch]$IgnoreUnreadable)
     # No username/locale-sensitive tasklist output, and no global kill by image name.
-    $cimCmd = Get-Command Get-CimInstance -ErrorAction SilentlyContinue
+    # Bypass third-party PowerShell modules (such as ProcessEx\ProcessEx.psm1) that hijack Get-CimInstance and fail on spaces in 'Brana AI.exe'.
+    $localFn = Get-Item -LiteralPath 'Function:\Get-CimInstance' -ErrorAction SilentlyContinue
     $escapedExe = $ExeName.Replace("'", "''")
-    $procItems = if ($cimCmd -and $cimCmd.CommandType -eq 'Function') {
+    $procItems = if ($localFn -and [string]::IsNullOrEmpty($localFn.ModuleName)) {
         @(Get-CimInstance Win32_Process)
     } else {
-        @(Get-CimInstance Win32_Process -Filter "Name='$escapedExe' OR Name='xray.exe'")
+        try {
+            @(CimCmdlets\Get-CimInstance -ClassName Win32_Process -Filter "Name='$escapedExe' OR Name='xray.exe'" -ErrorAction Stop)
+        } catch {
+            $baseName = [IO.Path]::GetFileNameWithoutExtension($ExeName)
+            @(Microsoft.PowerShell.Management\Get-Process -Name @($baseName, 'xray') -ErrorAction SilentlyContinue | ForEach-Object {
+                $pPath = $null
+                try { $pPath = $_.Path } catch {}
+                [pscustomobject]@{
+                    Name = ($_.ProcessName + '.exe')
+                    ProcessId = $_.Id
+                    ExecutablePath = $pPath
+                }
+            })
+        }
     }
     foreach ($item in $procItems) {
         if ($item.Name -ine $ExeName -and $item.Name -ine 'xray.exe') { continue }
         $execPath = $item.ExecutablePath
         if (-not $execPath) {
             try {
-                $proc = Get-Process -Id $item.ProcessId -ErrorAction SilentlyContinue
+                $proc = Microsoft.PowerShell.Management\Get-Process -Id $item.ProcessId -ErrorAction SilentlyContinue
                 if ($proc -and $proc.Path) { $execPath = $proc.Path }
                 elseif (-not $proc -and $item.ProcessId -ne 123) { continue }
             } catch {}
@@ -78,7 +92,7 @@ function Stop-InstalledApp {
             foreach ($root in $Roots) {
                 $mainExe = [IO.Path]::Combine($root, $ExeName)
                 if (Test-Path -LiteralPath $mainExe) {
-                    try { Start-Process -FilePath $mainExe -ArgumentList '--quit-for-update' -WindowStyle Hidden -ErrorAction SilentlyContinue | Out-Null } catch {}
+                    try { Microsoft.PowerShell.Management\Start-Process -FilePath $mainExe -ArgumentList '--quit-for-update' -WindowStyle Hidden -ErrorAction SilentlyContinue | Out-Null } catch {}
                 }
             }
             $grace = [DateTime]::UtcNow.AddMilliseconds(1500)
@@ -93,7 +107,7 @@ function Stop-InstalledApp {
         }
     } else {
         foreach ($item in $initial) {
-            $process = Get-Process -Id $item.ProcessId -ErrorAction SilentlyContinue
+            $process = Microsoft.PowerShell.Management\Get-Process -Id $item.ProcessId -ErrorAction SilentlyContinue
             if ($process) {
                 try { $null = $process.CloseMainWindow() }
                 catch {
@@ -111,11 +125,11 @@ function Stop-InstalledApp {
     }
     foreach ($item in $remaining) {
         if ($ExeName -ieq 'Brana AI.exe') {
-            try { Stop-Process -Id $item.ProcessId -Force -ErrorAction SilentlyContinue } catch {}
+            try { Microsoft.PowerShell.Management\Stop-Process -Id $item.ProcessId -Force -ErrorAction SilentlyContinue } catch {}
         } else {
             $current = @(Get-InstalledProcesses $Roots $ExeName -IgnoreUnreadable | Where-Object { $_.ProcessId -eq $item.ProcessId })
             if ($current.Count) {
-                try { Stop-Process -Id $item.ProcessId -Force -ErrorAction Stop }
+                try { Microsoft.PowerShell.Management\Stop-Process -Id $item.ProcessId -Force -ErrorAction Stop }
                 catch {
                     if (@(Get-InstalledProcesses $Roots $ExeName -IgnoreUnreadable | Where-Object { $_.ProcessId -eq $item.ProcessId }).Count) { throw }
                 }
@@ -130,7 +144,7 @@ function Stop-InstalledApp {
             return
         }
         foreach ($item in $remaining) {
-            try { Stop-Process -Id $item.ProcessId -Force -ErrorAction SilentlyContinue } catch {}
+            try { Microsoft.PowerShell.Management\Stop-Process -Id $item.ProcessId -Force -ErrorAction SilentlyContinue } catch {}
         }
         Start-Sleep -Milliseconds 200
     } while ([DateTime]::UtcNow -lt $deadline)
@@ -138,6 +152,25 @@ function Stop-InstalledApp {
 }
 
 function Repair-UninstallRegistry {
+    # Clean up stale per-user paths accidentally written into HKLM so NSIS does not hijack per-user updates into Brana
+    try {
+        $hklmApp = 'HKLM:\Software\2288686e-dfd2-53b4-b834-afc0293af524'
+        if (Test-Path -LiteralPath $hklmApp) {
+            $loc = [string](Get-ItemProperty -LiteralPath $hklmApp -ErrorAction SilentlyContinue).InstallLocation
+            if ($loc -match '\\AppData\\Local\\Programs(\\|$)' -or (-not [string]::IsNullOrWhiteSpace($env:ANC_DIR))) {
+                if (-not [string]::IsNullOrWhiteSpace($env:ANC_DIR)) {
+                    Set-ItemProperty -LiteralPath $hklmApp -Name 'InstallLocation' -Value $env:ANC_DIR -ErrorAction SilentlyContinue
+                }
+            }
+        }
+        if (-not [string]::IsNullOrWhiteSpace($env:ANC_DIR)) {
+            $hkcuApp = 'HKCU:\Software\2288686e-dfd2-53b4-b834-afc0293af524'
+            if (-not (Test-Path -LiteralPath $hkcuApp)) {
+                New-Item -Path $hkcuApp -Force -ErrorAction SilentlyContinue | Out-Null
+            }
+            Set-ItemProperty -LiteralPath $hkcuApp -Name 'InstallLocation' -Value $env:ANC_DIR -ErrorAction SilentlyContinue
+        }
+    } catch {}
     $regPaths = @(
         'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\2288686e-dfd2-53b4-b834-afc0293af524',
         'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\2288686e-dfd2-53b4-b834-afc0293af524'
@@ -145,6 +178,13 @@ function Repair-UninstallRegistry {
     foreach ($rp in $regPaths) {
         try {
             if (-not (Test-Path -LiteralPath $rp)) { continue }
+            if ($env:BRANA_UPDATING) {
+                # During in-place update, customCheckAppRunning has already closed all processes;
+                # skip launching the old version's uninstaller (which may contain older unpatched scripts that fail on ProcessEx.psm1 and loop 5 times).
+                Remove-ItemProperty -LiteralPath $rp -Name 'UninstallString' -ErrorAction SilentlyContinue
+                Remove-ItemProperty -LiteralPath $rp -Name 'QuietUninstallString' -ErrorAction SilentlyContinue
+                continue
+            }
             $prop = Get-ItemProperty -LiteralPath $rp -ErrorAction SilentlyContinue
             $raw = [string]$prop.UninstallString
             if ([string]::IsNullOrWhiteSpace($raw)) { continue }

@@ -313,8 +313,12 @@ public class MainActivity extends Activity {
             return ips;
         } finally { c.disconnect(); }
     }
+    static final java.util.concurrent.ConcurrentHashMap<String, String[]> dnsCache = new java.util.concurrent.ConcurrentHashMap<>();
     JSONArray bootstrapDns(String name) throws Exception {
         if (!name.matches("[A-Za-z0-9.-]{1,253}")) throw new Exception("无效节点域名");
+        String dkey = name.toLowerCase(java.util.Locale.ROOT);
+        String[] dc = dnsCache.get(dkey);
+        if (dc != null && Long.parseLong(dc[1]) > System.currentTimeMillis()) return new JSONArray(dc[0]);
         final java.util.concurrent.ExecutorService pool = java.util.concurrent.Executors.newFixedThreadPool(BOOT_DOH.length);
         final java.util.concurrent.ExecutorCompletionService<JSONArray> cs = new java.util.concurrent.ExecutorCompletionService<>(pool);
         StringBuilder errs = new StringBuilder();
@@ -324,7 +328,7 @@ public class MainActivity extends Activity {
             for (int i = 0; i < BOOT_DOH.length; i++) {
                 long left = until - System.currentTimeMillis(); if (left <= 0) break;
                 java.util.concurrent.Future<JSONArray> f = cs.poll(left, java.util.concurrent.TimeUnit.MILLISECONDS); if (f == null) break;
-                try { JSONArray v = f.get(); if (v != null && v.length() > 0) return v; } catch (Exception e) { Throwable t = e.getCause() != null ? e.getCause() : e; if (errs.length() < 300) errs.append(t.getClass().getSimpleName()).append(": ").append(t.getMessage()).append("; "); }
+                try { JSONArray v = f.get(); if (v != null && v.length() > 0) { dnsCache.put(dkey, new String[]{v.toString(), String.valueOf(System.currentTimeMillis() + 60000L)}); return v; } } catch (Exception e) { Throwable t = e.getCause() != null ? e.getCause() : e; if (errs.length() < 300) errs.append(t.getClass().getSimpleName()).append(": ").append(t.getMessage()).append("; "); }
             }
         } finally { pool.shutdownNow(); }
         throw new Exception("节点域名无法解析（加密 DNS 全部失败，禁止系统 DNS 回退）" + (errs.length() > 0 ? "：" + errs : ""));
@@ -333,13 +337,15 @@ public class MainActivity extends Activity {
     // JSON DoH (any HTTPS resolver; alidns / 1.1.1.1 / dns.google as fallbacks). Cloudflare rotates keys, so live first,
     // then last-known-good, then the built-in key.
     static final String DEFAULT_ECH_DOMAIN = "cloudflare-ech.com", DEFAULT_ECH_DOH = "https://dns.alidns.com/dns-query";
-    static final String BUILTIN_ECH = "AEX+DQBBmQAgACD7Shh1d6qs0wpKexZQye4mLOUQsE3TN9MW0nZe3I37bwAEAAEAAQASY2xvdWRmbGFyZS1lY2guY29tAAA=";
+    static final String BUILTIN_ECH = "AEX+DQBB9QAgACDxa/EHa0pNtQCaPvsahQYiCriBsFmBKnHqu5Ds7FevEQAEAAEAAQASY2xvdWRmbGFyZS1lY2guY29tAAA=";
     static final String STALE_ECH = "AEX+DQBBrwAgACB3V6T2X69/mCGQn8NhU8fkBpvDcuxha8C+xpuUHFRPGQAEAAEAAQASY2xvdWRmbGFyZS1lY2guY29tAAA=";
+    static final String STALE_ECH_2 = "AEX+DQBBmQAgACD7Shh1d6qs0wpKexZQye4mLOUQsE3TN9MW0nZe3I37bwAEAAEAAQASY2xvdWRmbGFyZS1lY2guY29tAAA=";
+    static final String STALE_ECH_3 = "AE3+DQBFTQAgACBlwB13ip+UAr5g/fd8sS7C+M/b8V2y+H6f2I5h9W7e1wAEAAEAAQASY2xvdWRmbGFyZS1lY2guY29tAAA=";
     static final java.util.concurrent.ConcurrentHashMap<String, String[]> echCache = new java.util.concurrent.ConcurrentHashMap<>();
     static final java.util.concurrent.ConcurrentHashMap<String, String> echLastGood = new java.util.concurrent.ConcurrentHashMap<>();
     String resolveEch(String raw) throws Exception {
         raw = raw == null ? "" : raw.trim();
-        if (raw.equals(STALE_ECH)) raw = DEFAULT_ECH_DOMAIN + "+" + DEFAULT_ECH_DOH;
+        if (raw.equals(STALE_ECH) || raw.equals(STALE_ECH_2) || raw.equals(STALE_ECH_3)) raw = DEFAULT_ECH_DOMAIN + "+" + DEFAULT_ECH_DOH;
         String domain = "", doh = "";
         int scheme = raw.indexOf("://"), plus = raw.indexOf('+');
         if (scheme >= 0) { if (plus > 0 && plus < scheme) { domain = raw.substring(0, plus).trim(); doh = raw.substring(plus + 1).trim(); } else doh = raw; }
@@ -354,10 +360,10 @@ public class MainActivity extends Activity {
         String q = "name=" + URLEncoder.encode(domain, "UTF-8") + "&type=";
         java.util.LinkedHashSet<String> urls = new java.util.LinkedHashSet<>();
         String host = du.getHost().toLowerCase(java.util.Locale.ROOT);
-        if (host.endsWith("alidns.com")) urls.add("https://" + du.getAuthority() + "/resolve?" + q + "65");
+        if (host.endsWith("alidns.com")) { urls.add("https://223.5.5.5/resolve?" + q + "65"); urls.add("https://223.6.6.6/resolve?" + q + "65"); urls.add("https://" + du.getAuthority() + "/resolve?" + q + "65"); }
         else if (host.endsWith("dns.google")) urls.add("https://" + du.getAuthority() + "/resolve?" + q + "HTTPS");
         else urls.add(doh + (doh.contains("?") ? "&" : "?") + q + "HTTPS");
-        urls.add("https://dns.alidns.com/resolve?" + q + "65"); urls.add("https://1.1.1.1/dns-query?" + q + "HTTPS"); urls.add("https://dns.google/resolve?" + q + "HTTPS");
+        urls.add("https://223.5.5.5/resolve?" + q + "65"); urls.add("https://223.6.6.6/resolve?" + q + "65"); urls.add("https://dns.alidns.com/resolve?" + q + "65"); urls.add("https://1.1.1.1/dns-query?" + q + "HTTPS"); urls.add("https://dns.google/resolve?" + q + "HTTPS");
         java.util.regex.Pattern pat = java.util.regex.Pattern.compile("ech=\\\\?[\"']?([A-Za-z0-9+/=_-]{20,})");
         for (String u : urls) {
             HttpURLConnection h = null;
@@ -2114,8 +2120,80 @@ public class MainActivity extends Activity {
         }
         @JavascriptInterface public String probeStart(final String json) { final String id = newId(); probeJobs.put(id, ""); Thread t = new Thread(() -> probeJobs.put(id, probeSync(json))); t.setDaemon(true); t.start(); return id; }
         @JavascriptInterface public String probeGet(String id) { String r = id == null ? null : probeJobs.get(id); if (r == null) return "{\"error\":\"检测任务不存在\"}"; if (r.isEmpty()) return ""; probeJobs.remove(id); return r; }
+        final java.util.concurrent.Semaphore probeXrayGate = new java.util.concurrent.Semaphore(1);
+        JSONObject checkProxyIpDirect(String pip, int tmo) {
+            if (pip == null) return null;
+            String p = pip.trim();
+            if (p.isEmpty() || p.matches("(?i)^(?:socks5|https?|turn|sstp)://.*") || p.matches("(?i)^(?:\\[::1\\]|localhost|127\\.|0\\.|10\\.|192\\.0\\.2\\.|198\\.51\\.100\\.|203\\.0\\.113\\.).*")) return null;
+            String target = p.matches(".*:\\d{1,5}$") ? p : (p.contains(":") && !p.startsWith("[") ? "[" + p + "]:443" : p + ":443");
+            HttpURLConnection c = null;
+            long t0 = System.currentTimeMillis();
+            try {
+                String u = "https://api.check.proxyip.cmliussss.net/check?proxyip=" + URLEncoder.encode(target, "UTF-8");
+                c = (HttpURLConnection) new URL(u).openConnection(java.net.Proxy.NO_PROXY);
+                c.setConnectTimeout(Math.min(5500, tmo));
+                c.setReadTimeout(Math.min(6500, tmo));
+                c.setUseCaches(false);
+                c.setInstanceFollowRedirects(true);
+                c.setRequestProperty("Accept", "application/json");
+                c.setRequestProperty("User-Agent", "Mozilla/5.0");
+                int code = c.getResponseCode();
+                if (code != 200) return null;
+                StringBuilder sb = new StringBuilder();
+                try (BufferedReader br = new BufferedReader(new InputStreamReader(c.getInputStream(), StandardCharsets.UTF_8))) {
+                    String line; while ((line = br.readLine()) != null && sb.length() < 24576) sb.append(line);
+                }
+                JSONObject j = new JSONObject(sb.toString());
+                long elapsed = Math.max(1L, System.currentTimeMillis() - t0);
+                JSONObject pr = j.optJSONObject("probe_results");
+                JSONObject v4 = pr != null ? pr.optJSONObject("ipv4") : null;
+                JSONObject v6 = pr != null ? pr.optJSONObject("ipv6") : null;
+                JSONObject probe = (v4 != null && v4.optBoolean("ok") && v4.optJSONObject("exit") != null) ? v4
+                    : (v6 != null && v6.optBoolean("ok") && v6.optJSONObject("exit") != null) ? v6 : null;
+                JSONObject exit = probe != null ? probe.optJSONObject("exit") : null;
+                if (exit == null && j.optJSONArray("info") != null && j.optJSONArray("info").length() > 0) exit = j.optJSONArray("info").optJSONObject(0);
+                if (exit == null) exit = j.optJSONObject("info");
+                String ip = (exit != null ? exit.optString("ip", "") : "").trim();
+                if (ip.isEmpty()) ip = j.optString("ip", "").trim();
+                String loc = (exit != null ? exit.optString("country", "") : "").trim().toUpperCase(java.util.Locale.ROOT);
+                if (loc.isEmpty()) loc = j.optString("country", "").trim().toUpperCase(java.util.Locale.ROOT);
+                if (j.optBoolean("success") && !ip.isEmpty()) {
+                    long netMs = probe != null ? Math.max(1L, probe.optLong("http_ms", probe.optLong("connect_ms", elapsed))) : elapsed;
+                    JSONObject bm = exit != null ? exit.optJSONObject("botManagement") : j.optJSONObject("botManagement");
+                    int botScore = (bm != null && bm.has("score")) ? bm.optInt("score", 100) : 100;
+                    boolean ok = botScore >= 10;
+                    JSONObject out = new JSONObject()
+                        .put("pip", pip)
+                        .put("ip", ip)
+                        .put("loc", loc)
+                        .put("ms", netMs)
+                        .put("cold", Math.max(netMs, elapsed))
+                        .put("status", ok ? 200 : 403)
+                        .put("brana", ok)
+                        .put("via", "direct-check");
+                    if (!ok) out.put("error", "Brana 返回验证页（botScore " + botScore + "）");
+                    else RouteSupport.purityDirect(ip, out);
+                    return out;
+                }
+                String errMsg = (v4 != null && !v4.optString("error", "").isEmpty()) ? v4.optString("error")
+                    : (v6 != null && !v6.optString("error", "").isEmpty()) ? v6.optString("error")
+                    : j.optString("message", j.optString("error", "ProxyIP 不可用"));
+                return new JSONObject()
+                    .put("pip", pip)
+                    .put("ms", 0)
+                    .put("cold", elapsed)
+                    .put("status", 502)
+                    .put("brana", false)
+                    .put("via", "direct-check")
+                    .put("error", errMsg);
+            } catch (Exception e) {
+                return null;
+            } finally {
+                if (c != null) try { c.disconnect(); } catch (Exception ignored) {}
+            }
+        }
         String probeSync(String json) {
-            Process proc = null; File cf = null;
+            Process proc = null; File cf = null; boolean xrayLocked = false;
             try {
                 JSONObject o = new JSONObject(json); JSONArray outs = o.getJSONArray("outs"); final JSONArray pips = o.optJSONArray("pips");
                 final int n = Math.min(outs.length(), 32);
@@ -2124,12 +2202,44 @@ public class MainActivity extends Activity {
                 final String durl = o.optString("url", "").matches("^https://[A-Za-z0-9.-]+(:\\d+)?/[\\w./?=&%-]*$") ? o.optString("url") : "https://www.gstatic.com/generate_204";
                 final int tmo = Math.max(delay ? 2000 : 4000, Math.min(30000, o.optInt("timeout", delay ? 5000 : 12000)));
                 if (n == 0) return "[]";
+                final JSONObject[] finalRes = new JSONObject[n];
+                final java.util.List<Integer> remIdx = new java.util.ArrayList<>();
+                if (!delay && pips != null && pips.length() > 0 && o.optBoolean("direct", true)) {
+                    java.util.concurrent.ExecutorService dex = java.util.concurrent.Executors.newFixedThreadPool(Math.min(n, 8));
+                    java.util.List<java.util.concurrent.Future<JSONObject>> dfs = new java.util.ArrayList<>();
+                    for (int i = 0; i < n; i++) {
+                        final String pip = pips.optString(i, "");
+                        final JSONObject ob = outs.optJSONObject(i);
+                        final String wsPath = ob != null && ob.optJSONObject("streamSettings") != null && ob.optJSONObject("streamSettings").optJSONObject("wsSettings") != null
+                            ? ob.optJSONObject("streamSettings").optJSONObject("wsSettings").optString("path", "") : "";
+                        final boolean isVideoChain = wsPath.toLowerCase(java.util.Locale.ROOT).contains("/video/");
+                        dfs.add(dex.submit(() -> isVideoChain ? null : checkProxyIpDirect(pip, tmo)));
+                    }
+                    for (int i = 0; i < n; i++) {
+                        JSONObject dx = null;
+                        try { dx = dfs.get(i).get(tmo + 3000L, java.util.concurrent.TimeUnit.MILLISECONDS); } catch (Exception ignored) {}
+                        if (dx != null && (dx.has("ip") || dx.has("error"))) finalRes[i] = dx;
+                        else remIdx.add(i);
+                    }
+                    dex.shutdownNow();
+                    if (remIdx.isEmpty()) {
+                        JSONArray r = new JSONArray();
+                        for (int i = 0; i < n; i++) r.put(finalRes[i]);
+                        return r.toString();
+                    }
+                } else {
+                    for (int i = 0; i < n; i++) remIdx.add(i);
+                }
+                if (!probeXrayGate.tryAcquire(25, java.util.concurrent.TimeUnit.SECONDS)) throw new Exception("检测内核繁忙，请稍后重试");
+                xrayLocked = true;
                 File exe = xrayExe(); if (exe == null) throw new Exception("没有找到内置 xray 内核");
-                final int[] ports = new int[n]; JSONArray ins = new JSONArray(), obs = new JSONArray(), rules = new JSONArray();
-                for (int i = 0; i < n; i++) {
+                final int rn = remIdx.size();
+                final int[] ports = new int[rn]; JSONArray ins = new JSONArray(), obs = new JSONArray(), rules = new JSONArray();
+                for (int i = 0; i < rn; i++) {
+                    int origIdx = remIdx.get(i);
                     int p; do { p = freePort(); } while (contains(ports, i, p)); ports[i] = p;
                     ins.put(new JSONObject().put("tag", "in" + i).put("listen", "127.0.0.1").put("port", p).put("protocol", "http").put("settings", new JSONObject()));
-                    obs.put(new JSONObject(outs.getJSONObject(i).toString()).put("tag", "p" + i));
+                    obs.put(new JSONObject(outs.getJSONObject(origIdx).toString()).put("tag", "p" + i));
                     rules.put(new JSONObject().put("type", "field").put("inboundTag", new JSONArray().put("in" + i)).put("outboundTag", "p" + i));
                 }
                 obs.put(new JSONObject().put("tag", "block").put("protocol", "blackhole"));
@@ -2143,19 +2253,21 @@ public class MainActivity extends Activity {
                 final InputStream pin = proc.getInputStream(); final StringBuilder plog = new StringBuilder();
                 Thread rd = new Thread(() -> { try { BufferedReader br = new BufferedReader(new InputStreamReader(pin, StandardCharsets.UTF_8)); String l; while ((l = br.readLine()) != null) synchronized (plog) { plog.append(l).append('\n'); if (plog.length() > 4000) plog.delete(0, plog.length() - 3000); } } catch (Exception ignored) {} });
                 rd.setDaemon(true); rd.start();
-                if (!waitPort(ports[n - 1], 8000, proc)) throw new Exception("xray 启动失败：" + tail(plog));
-                java.util.concurrent.ExecutorService ex = java.util.concurrent.Executors.newFixedThreadPool(Math.min(n, delay ? 32 : 12));
+                if (!waitPort(ports[rn - 1], 8000, proc)) throw new Exception("xray 启动失败：" + tail(plog));
+                java.util.concurrent.ExecutorService ex = java.util.concurrent.Executors.newFixedThreadPool(Math.min(rn, delay ? 32 : 8));
                 java.util.List<java.util.concurrent.Future<JSONObject>> fs = new java.util.ArrayList<>();
-                for (int i = 0; i < n; i++) { final int k = i; fs.add(ex.submit(() -> delay ? delayOne(ports[k], durl, tmo) : probeOne(ports[k], tmo))); }
-                JSONArray r = new JSONArray();
-                for (int i = 0; i < n; i++) {
+                for (int i = 0; i < rn; i++) { final int k = i; fs.add(ex.submit(() -> delay ? delayOne(ports[k], durl, tmo) : probeOne(ports[k], tmo))); }
+                for (int i = 0; i < rn; i++) {
+                    int origIdx = remIdx.get(i);
                     JSONObject x; try { x = fs.get(i).get(tmo * 2L + 3000, java.util.concurrent.TimeUnit.MILLISECONDS); } catch (Exception e) { x = new JSONObject().put("error", "超时"); }
-                    x.put("pip", pips != null ? pips.optString(i, "") : ""); r.put(x);
+                    x.put("pip", pips != null ? pips.optString(origIdx, "") : ""); finalRes[origIdx] = x;
                 }
                 ex.shutdownNow();
+                JSONArray r = new JSONArray();
+                for (int i = 0; i < n; i++) r.put(finalRes[i] != null ? finalRes[i] : new JSONObject().put("pip", pips != null ? pips.optString(i, "") : "").put("error", "失败"));
                 return r.toString();
             } catch (Exception e) { try { return new JSONObject().put("error", String.valueOf(e.getMessage())).toString(); } catch (Exception x) { return "{\"error\":\"失败\"}"; } }
-            finally { if (proc != null) { try { proc.destroy(); } catch (Exception ignored) {} } if (cf != null) { try { cf.delete(); } catch (Exception ignored) {} } }
+            finally { if (proc != null) { try { proc.destroy(); } catch (Exception ignored) {} } if (cf != null) { try { cf.delete(); } catch (Exception ignored) {} } if (xrayLocked) probeXrayGate.release(); }
         }
         // 图片保存到相册（Android 10+ 走 MediaStore，不需要存储权限；更早的系统存到 App 自己的图片目录）
         @JavascriptInterface public String saveImage(String name, String mime, String b64) {

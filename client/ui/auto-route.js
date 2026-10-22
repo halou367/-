@@ -263,6 +263,12 @@ const AutoRoute = {
       const cc=String(loc||(typeof IP!=='undefined'&&!IP.err?IP.loc:'')||'').trim().toUpperCase();
       const a=typeof UI!=='undefined'?UI.host?.account:null;
       if(!cc||!a?.id||RouteState.locked(a))return false;
+      if(isVless(a.proxy)&&!a.proxyIp&&!a.region){
+        if(!a.routeHome)a.routeHome=cc;
+        this.saveLastGood(a);
+        try{UI.renderAcct?.();if(typeof Bar!=='undefined')Bar.render?.();}catch{}
+        return false;
+      }
       const changed=a.region!==cc||a.routeHome!==cc;
       if(changed){
         a.region=cc;
@@ -297,7 +303,7 @@ const AutoRoute = {
     this.netErrorCount=0;
     return 0;
   },
-  canFailover(a=UI.host?.account){return !!this.adapter&&!!a&&!RouteState.locked(a)&&!this.authPending&&(RouteState.canRecover(a)||isVless(a.proxy)||Boolean(a.proxyIp));},
+  canFailover(a=UI.host?.account){return !!this.adapter&&!!a&&!RouteState.locked(a)&&!this.authPending&&(RouteState.canRecover(a)||isVless(a.proxy)||Boolean(a.proxyIp)||(typeof Nodes!=='undefined'&&Array.isArray(Nodes.list)&&Nodes.list.length>0));},
   enabled(){return this.canFailover(UI.host?.account);},
   init(){
     if(this.initialized)return;this.initialized=true;

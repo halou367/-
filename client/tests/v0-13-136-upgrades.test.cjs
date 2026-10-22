@@ -1323,24 +1323,484 @@ test('v0.13.165: EdgeTunnel request-saving optimizations (lazy pool probe, 7-day
   assert.equal(directRes.ipa.as, 'AS2516');
 });
 
-test('v0.13.166: 4-Agent ModeSwitcher (Max/Battle/Direct), Modality selector, EvalView dual-column vote bar, and Battle Habit Auto-Learning', () => {
+test('v0.13.166: 4-Agent ModeSwitcher (Max/Battle/Direct), Modality selector, EvalView dual-column vote bar, Battle Habit Auto-Learning, and Sidebar 401 Recovery', () => {
   const evalCore = read('ui/eval-core.js');
   const modeSw = read('ui/mode-switcher.js');
   const evalView = read('ui/eval-view.js');
   const sideTools = read('ui/sidebar-tools.js');
   const dock = read('ui/dock.js');
   const bpUi = read('ui/billing-probe-ui.js');
+  const boot = read('ui/boot.js');
+  const core = read('ui/core.js');
+  const view = read('ui/view.js');
+  const bulk = read('ui/bulk.js');
   const bundle = read('src/bundle.js');
 
   assert.ok(bundle.includes("'eval-core.js'") && bundle.includes("'mode-switcher.js'") && bundle.includes("'eval-view.js'"));
   assert.ok(evalCore.includes('const ModeState =') && evalCore.includes('const ModelCatalog =') && evalCore.includes('const EvalEngine ='));
+  assert.ok(evalCore.includes('targetMsg.metadata.timing.completedAt = tNow') && evalCore.includes('targetMsg.metadata._fmt = targetMsg._fmt'));
   assert.ok(modeSw.includes('const ModeSwitcher =') && modeSw.includes('renderBar(tab, chat)'));
   assert.ok(evalView.includes('const EvalView =') && evalView.includes('renderBattleThread(chat, threadEl, scrollerEl)') && evalView.includes('renderVoteBar(chat)'));
   assert.ok(sideTools.includes('ModeState.matchesHistoryEntry(e, curMode)'));
   assert.ok(dock.includes('renderBattleOverview(box, sid, chat)') && dock.includes('renderDirectOverview(box, sid, chat)'));
   assert.ok(bpUi.includes('buildSideVirtualChat') && bpUi.includes('analyzeBattleChat') && bpUi.includes('learnBattleReveal'));
+  assert.ok(bpUi.includes('⚔️ Battle揭晓') && bpUi.includes('sample.battleRevealed'));
+  assert.ok(boot.includes('if (History.err) { History.err = null; History.blocked = false; }'));
+  assert.ok(core.includes("await AuthEnv.drop(['login']).catch(() => {});"));
+  assert.ok(core.includes("(isEval ? '/api/history/evaluation/' : '/api/chat/') + id"));
+  assert.ok(bulk.includes("'/api/history/evaluation/' + encodeURIComponent(id)"));
+  assert.ok(view.includes('ModeState.setMode(chatMode, { silent: true })'));
+
+  // RSC Flight parser (/c/:id), current VOTE_NEXT_ACTION, UUID Direct models, isEvalSession guards, and /c/:id browser routing
+  const accounts = read('ui/accounts.js');
+  const webbar = read('ui/webbar.js');
+  const astats = read('ui/astats.js');
+  const titles = read('ui/titles.js');
+  assert.ok(evalCore.includes('parseEvalFlightFromHtml') && evalCore.includes('fetchEvalSessionData'));
+  assert.ok(evalCore.includes('60c09be8dfaa9c507f73e0d2a17d7e887bbda2c815') && evalCore.includes('didInspectBothMobileHorizontalResponses: true'));
+  assert.ok(evalCore.includes('buildEvalRouterStateTree') && evalCore.includes("'Next-Router-State-Tree'") && evalCore.includes("'X-Deployment-Id'"));
+  assert.ok(evalCore.includes('resolveModelUuid') && evalCore.includes('ingestInitialModels'));
+  assert.ok(bpUi.includes('isEvalSession') && bpUi.includes('ChatHabitFingerprint.isEvalSession'));
+  assert.ok(bpUi.includes('totalChars,') && bpUi.includes('codeBlocks,') && bpUi.includes('ensureRevealedCandidate'));
+  assert.ok(titles.includes('const isBattleSess =') && titles.includes('`${mA} vs ${mB}`'));
+  assert.ok(astats.includes("e.type !== 'evaluation'"));
+  assert.ok(accounts.includes("(isEval ? 'c/' : 'agent/')"));
+  assert.ok(webbar.includes("sessionStorage.setItem('anc:fast-return'"));
+
+  const keep = read('ui/keep.js');
+  const trace = read('ui/trace.js');
+  assert.ok(evalCore.includes('readLocalEvalCache(sid)') && evalCore.includes('m.participantPosition === \'a\''));
+  assert.ok(evalCore.includes('Chat.prototype.reload = function') && evalCore.includes('Chat.prototype.resumeIncremental = function') && evalCore.includes('Chat.prototype.stream = function'));
+  assert.ok(evalCore.includes('chat._evalStreaming = true'));
+  assert.ok(keep.includes('function isEval(c)') && keep.includes('if (isEval(c))'));
+  assert.ok(trace.includes('EvalEngine.isEvalChat?.(chat)'));
+  assert.ok(core.includes('resolveTriggerSid') && core.includes("'/api/chat/trigger-session'"));
+  assert.ok(modeSw.includes('ModeState.setMode(mId, { silent: true })') && modeSw.includes('this._resolveState(chat, tab)'));
 });
 
+test('v0.13.166-beta6: Native VLESS node fallback when ProxyIPs fail/absent, Direct-to-VLESS failover, live ECH update, and Android direct-check & scan circuit-breaker', async () => {
+  const P = require('../ui/route-policy');
+  const proxyDns = read('src/proxy-dns.js');
+  const mainJs = read('src/main.js');
+  const routeNative = read('src/route-native.js');
+  const mainJava = read('android/app/src/main/java/ai/arena/client/MainActivity.java');
+  const routeSupportJava = read('android/app/src/main/java/ai/arena/client/RouteSupport.java');
+  const nodeRoutes = read('ui/node-routes.js');
+  const poolJs = read('ui/pool.js');
+  const autoRouteJs = read('ui/auto-route.js');
 
+  // 1. Live ECH key + IP-literal DoH fallback + Android direct-check & xray gate
+  assert.ok(proxyDns.includes('AEX+DQBB9QAgACDxa/EHa0pNtQCaPvsahQYiCriBsFmBKnHqu5Ds7FevEQAEAAEAAQASY2xvdWRmbGFyZS1lY2guY29tAAA='));
+  assert.ok(proxyDns.includes('https://223.5.5.5/resolve'));
+  assert.ok(mainJs.includes('directCands') && mainJs.includes('Boolean(p && String(p).trim())'));
+  assert.ok(routeNative.includes('o.forceFailover'));
+  assert.ok(mainJava.includes('AEX+DQBB9QAgACDxa/EHa0pNtQCaPvsahQYiCriBsFmBKnHqu5Ds7FevEQAEAAEAAQASY2xvdWRmbGFyZS1lY2guY29tAAA='));
+  assert.ok(mainJava.includes('checkProxyIpDirect') && mainJava.includes('probeXrayGate') && mainJava.includes('dnsCache'));
+  assert.ok(routeSupportJava.includes('purityDirect') && routeSupportJava.includes('forceFailover'));
+  assert.ok(/nativeFallback:\s*true/.test(nodeRoutes) && /consecFail\s*>=\s*24/.test(nodeRoutes));
+  assert.ok(/consecFail\s*>=\s*24/.test(poolJs) && /Array\.isArray\(Nodes\.list\)/.test(autoRouteJs));
+
+  // 2. When all ProxyIPs fail or pool has no usable ProxyIPs, RoutePolicy.Engine falls back to bare VLESS node (proxyIp: '', nativeFallback: true)
+  const a = { id: 'own', proxy: 'vless://node1', proxyIp: 'dead-pip', nodeId: 'n1', region: 'JP', routeMode: 'node', routeAuto: false, nodeFailover: true };
+  const writes = [];
+  const data = {
+    account: a,
+    nodes: [{ id: 'n1', link: 'vless://node1' }, { id: 'n2', link: 'vless://node2' }],
+    pool: { rep: {}, ips: { 'bad-pip': { ok: true, loc: 'JP', ms: 50 } } },
+    accounts: [a],
+    enabled: true,
+  };
+  const engine = new P.Engine({
+    retryMs: 0,
+    allowCrossRegionEscape: true,
+    now: () => 100000,
+    read: async () => structuredClone(data),
+    link: n => n.link,
+    probe: async c => {
+      // All ProxyIP candidates fail; bare VLESS node (proxyIp === '') succeeds with Cloudflare WARP exit (fs: 67)
+      if (!c.proxyIp && c.proxy === 'vless://node1') {
+        return { ok: true, service: true, realtime: true, ip: '104.28.165.253', loc: 'TW', ms: 120, ticket: 'bare-proof', pure: { fs: 67 } };
+      }
+      return { ok: false, kind: 'network', error: 'ProxyIP timeout' };
+    },
+    local: async () => [],
+    apply: async o => { writes.push(o); return { ok: true, account: { ...a, ...o.route } }; },
+  });
+  const res = await engine.run('error-switch', true);
+  assert.equal(res.ok, true);
+  assert.equal(res.changed, true);
+  assert.equal(res.nativeFallback, true);
+  assert.equal(writes[0].route.proxy, 'vless://node1');
+  assert.equal(writes[0].route.proxyIp, '');
+  assert.equal(writes[0].route.region, '');
+
+  // 3. When in Direct mode ('direct') and direct connection cannot connect, RoutePolicy.Engine fails over to a working VLESS node
+  const directAcct = { id: 'own2', proxy: 'direct', proxyIp: '', nodeId: '', region: '', routeMode: 'direct', routeAuto: false, nodeFailover: false };
+  const directWrites = [];
+  const directData = {
+    account: directAcct,
+    nodes: [{ id: 'n1', link: 'vless://node1' }],
+    pool: { rep: {}, ips: {} },
+    accounts: [directAcct],
+    enabled: true,
+  };
+  const directEngine = new P.Engine({
+    retryMs: 0,
+    allowCrossRegionEscape: true,
+    now: () => 100000,
+    read: async () => structuredClone(directData),
+    link: n => n.link,
+    probe: async c => {
+      if (c.proxy === 'direct') return { ok: false, kind: 'network', error: 'direct blocked' };
+      return { ok: true, service: true, realtime: true, ip: '104.28.165.253', loc: 'TW', ms: 110, ticket: 'direct-escape-proof', pure: { fs: 67 } };
+    },
+    local: async () => [],
+    apply: async o => { directWrites.push(o); return { ok: true, account: { ...directAcct, ...o.route, routeMode: o.mode || 'node', nodeFailover: true } }; },
+  });
+  const directRes = await directEngine.run('network', true);
+  assert.equal(directRes.ok, true);
+  assert.equal(directRes.changed, true);
+  assert.equal(directWrites[0].forceFailover, true);
+  assert.equal(directWrites[0].mode, 'node');
+  assert.equal(directWrites[0].route.proxy, 'vless://node1');
+
+  // 4. ProxyIP direct-check uses Node fetch fallback (bypassing blocked 1.1.1.1 DoH), bounds xray fallback concurrency,
+  //    does not mass-ban datacenter ProxyIPs when only ip-api.com (px:true, h:true) ran before IPPure, and Battle vote
+  //    uses live Next-Action ID + dynamic chunk scanner + recursive Flight parser.
+  const evalCore = read('ui/eval-core.js');
+  const iprepJs = read('ui/iprep.js');
+  assert.ok(mainJs.includes('async function nodeOrDirectFetch(u, o, ds)'));
+  assert.ok(mainJs.includes('const runXrayWorker = async () =>'));
+  assert.ok(iprepJs.includes('if ((eg.includes(\':\') || isHosting || p.px) && !hasPu && !p.c)'));
+  assert.ok(evalCore.includes('6045a00021608b43c2ded349d9d98204449e22d4b0'));
+  assert.ok(evalCore.includes('dpl_8Gb6m6m38M8S2WQCSdYVhF5iPnfC'));
+  assert.ok(evalCore.includes('async function discoverLiveVoteAction(sid)'));
+  assert.ok(evalCore.includes('const inspectFlightNode = (node, depth = 0) =>'));
+});
+
+test('v0.13.167: Instant cold-start localStorage paint without white screen, per-account window bounds (winBounds) persistence across close/restart/update, and updater progress window fixes', () => {
+  const mainJs = read('src/main.js');
+  const bootJs = read('ui/boot.js');
+  const coreJs = read('ui/core.js');
+  const viewJs = read('ui/view.js');
+
+  // 1. Synchronous localStorage hot message cache (mc:hot:<sid>) and hydrateSync() in UI.fillView
+  assert.ok(coreJs.includes("Store.get('mc:hot:' + sid, null)"));
+  assert.ok(coreJs.includes('function getSync(sid)'));
+  assert.ok(coreJs.includes('hydrateSync() {'));
+  assert.ok(viewJs.includes('chat.hydrateSync?.();'));
+
+  // 2. t=0ms cold-cache paint in boot.js init() + synchronous UI.renderList() in shell() + local Fetch.enable for UI_URL
+  assert.ok(bootJs.includes("const cmCold = Store.get('me:u', null);"));
+  assert.ok(bootJs.includes('UI.renderList?.(); UI.renderListSoon?.();'));
+  assert.ok(mainJs.includes("wc.debugger.sendCommand('Fetch.enable', { patterns: [{ urlPattern: 'https://arena.ai/robots.txt*', requestStage: 'Request' }] })"));
+
+  // 3. Per-account window position & size (winBounds) restoration, screen clamping, and closeBatch multi-window preservation
+  assert.ok(mainJs.includes('width: wb?.width || 1320, height: wb?.height || 880'));
+  assert.ok(mainJs.includes('w.__syncBounds = syncBounds;'));
+  assert.ok(mainJs.includes("if (wb?.maximized && typeof w.maximize === 'function')"));
+  assert.ok(mainJs.includes('w.constructor.__closeBatch'));
+  assert.ok(mainJs.includes('function captureAllWindowBounds()'));
+  assert.ok(mainJs.includes('function collectSavedWindowBounds()'));
+
+  // 4. Updater session persistence (upd-session.json) and progress window child-process guard ($st -ge 4)
+  assert.ok(mainJs.includes("const updSessionPath = () => path.join(app.getPath('temp'), 'brana-ai-update', 'upd-session.json');"));
+  assert.ok(mainJs.includes("'$initExePath = [string]$state.exePath'"));
+  assert.ok(mainJs.includes("'  if ($st -ge 4) {'"));
+  assert.ok(mainJs.includes("'  WScript.Sleep 250'"));
+
+  // 5. Cross-profile DPAPI master key sync, sibling safeStorage fallback, resolveAccountPw/promoteRegPw self-healing, and 401 session recovery
+  const idJs = read('src/extension-test-identity.js');
+  const acJs = read('ui/accounts.js');
+  const apJs = read('ui/account-picker.js');
+  assert.ok(idJs.includes("const lsS=path.join(root,'s','Local State')"));
+  assert.ok(mainJs.includes('function getSiblingMasterKeys()'));
+  assert.ok(mainJs.includes('function decSsWithKeys(b64)'));
+  assert.ok(mainJs.includes('function resolveAccountPw(a)'));
+  assert.ok(mainJs.includes("p.src === 'web' || p.src === 'client' || !hasValidPw"));
+  assert.ok(coreJs.includes('relogin(opt = {})'));
+  assert.ok(coreJs.includes("const isCached = Boolean(UI.me?.cached);"));
+  assert.ok(acJs.includes('? { ...cm, browseOnly: true }'));
+  assert.ok(viewJs.includes("UI.loginGate?.('登录会话已过期，请输入密码重新登录')"));
+  assert.ok(apJs.includes("UI.loginGate?.('登录会话已过期，请输入密码重新登录')"));
+});
+
+test('v0.13.168: V3.0 Battle 100% ground-truth super-weight anchoring, all-modality feature extraction, Direct-mode truth harvesting, and intra-family tier disentanglement', () => {
+  const vm = require('node:vm');
+  const bpUiSrc = read('ui/billing-probe-ui.js');
+  const storeMap = new Map();
+  const ctx = vm.createContext({
+    console,
+    Date,
+    Math,
+    Set,
+    Map,
+    Array,
+    Object,
+    String,
+    Number,
+    Boolean,
+    RegExp,
+    JSON,
+    Promise,
+    Store: {
+      get: (k, d) => (storeMap.has(k) ? structuredClone(storeMap.get(k)) : d),
+      set: (k, v) => { storeMap.set(k, structuredClone(v)); return true; },
+    },
+    Strength: {
+      canon: s => {
+        const str = String(s || '').trim();
+        if (/claude-opus-5\.5-medium/i.test(str)) return 'Claude Opus 5.5 (Medium)';
+        if (/claude-opus-5\.5-high/i.test(str)) return 'Claude Opus 5.5 (High)';
+        if (/claude-opus-5\.5-max/i.test(str)) return 'Claude Opus 5.5 (Max)';
+        if (/gpt-6\.1-sol-medium/i.test(str)) return 'GPT 6.1 Sol (Medium)';
+        if (/gpt-6\.1-sol-high/i.test(str)) return 'GPT 6.1 Sol (High)';
+        return str;
+      },
+    },
+    Brand: { of: () => 'anthropic', NAME: { anthropic: 'Anthropic', openai: 'OpenAI' } },
+    Models: { all: {}, get: () => null, set: () => {} },
+    Chats: new Map(),
+    Bus: { on() {}, emit() {} },
+  });
+  vm.runInContext(bpUiSrc.split('const BillingProbe =')[0] + '\nthis.ChatHabitFingerprint = ChatHabitFingerprint;', ctx);
+  const FP = ctx.ChatHabitFingerprint;
+
+  // 1. Verify V3.0 exports and 5-tier truth hierarchy
+  assert.equal(typeof FP.getSampleTruthRank, 'function');
+  assert.equal(typeof FP.tierVecSimilarity, 'function');
+  assert.equal(typeof FP.recordBattlePairwiseContrast, 'function');
+  assert.equal(typeof FP.learnDirectSession, 'function');
+  assert.equal(FP.getSampleTruthRank({ battleRevealed: true, truthTier: 'battle_paired' }), 5);
+  assert.equal(FP.getSampleTruthRank({ battleRevealed: true }), 4);
+  assert.equal(FP.getSampleTruthRank({ directMode: true }), 3);
+  assert.equal(FP.getSampleTruthRank({ userConfirmed: true, autoTeacher: false }), 2);
+  assert.equal(FP.getSampleTruthRank({ autoTeacher: true }), 1);
+
+  // 2. Simulate a paired Battle reveal between Claude Opus 5.5 (High) and Claude Opus 5.5 (Medium) on the same coding/prose prompt
+  const battleChat = {
+    sid: '01a16000-0000-7000-8000-000000000001',
+    isEvaluation: true,
+    evalMode: 'battle',
+    evalModality: 'webdev',
+    voteState: {
+      voted: true,
+      vote: 'model-a-better',
+      modelAName: 'claude-opus-5.5-high',
+      modelBName: 'claude-opus-5.5-medium',
+    },
+    messages: [
+      { id: 'u1', role: 'user', text: '请实现一个严格完整、支持无障碍与边界条件检查的响应式数据面板，不要省略任何代码。' },
+      {
+        id: 'a1',
+        role: 'assistant',
+        participantPosition: 'a',
+        metadata: { timing: { startedAt: 1000, completedAt: 49000, thinkingMs: 18500 } },
+        parts: [
+          { type: 'reasoning', text: '' },
+          { type: 'reasoning', text: '' },
+          { type: 'reasoning', text: '' },
+          {
+            type: 'text',
+            text: '## 完整架构与边界条件验证\n\n**核心设计**：采用 `:root` 变量与 `prefers-reduced-motion` 无障碍降级。注意边界条件与权衡验证如下：\n- 验证空数据状态\n- 验证高并发刷新\n\n```html\n<!DOCTYPE html><html><head><style>:root { --bg: #FAF8F5; } @media (prefers-reduced-motion: reduce) {}</style></head><body><svg aria-labelledby="t"><linearGradient id="g"/></svg><script>try { if (Number.isFinite(1)) requestAnimationFrame(() => {}); } catch (e) {}</script></body></html>\n```\n' + '详细实现说明与完整逻辑演进。'.repeat(120),
+          },
+        ],
+      },
+      {
+        id: 'b1',
+        role: 'assistant',
+        participantPosition: 'b',
+        metadata: { timing: { startedAt: 1000, completedAt: 14000, thinkingMs: 3200 } },
+        parts: [
+          { type: 'reasoning', text: '' },
+          {
+            type: 'text',
+            text: '### 面板简要示例\n\n```html\n<html><body><div>// ... existing code omitted ...</div></body></html>\n```\n简短说明。',
+          },
+        ],
+      },
+    ],
+  };
+
+  const revOut = FP.learnBattleReveal(battleChat, {
+    evalModality: 'webdev',
+    vote: 'model-a-better',
+    modelA: { name: 'claude-opus-5.5-high' },
+    modelB: { name: 'claude-opus-5.5-medium' },
+  });
+  assert.ok(revOut.learnedA && revOut.learnedB);
+  assert.equal(revOut.learnedA.weight, 9.5);
+  assert.equal(revOut.learnedA.truthTier, 'battle_paired');
+  assert.equal(revOut.learnedB.weight, 9.5);
+  assert.equal(revOut.learnedB.truthTier, 'battle_paired');
+  assert.equal(revOut.learnedA.tierVec.length, 12);
+  assert.equal(revOut.learnedB.tierVec.length, 12);
+
+  const cal = FP.loadCalibration();
+  assert.equal(cal.v, 3);
+  assert.ok(cal.tierCentroids['claude opus 5.5 (high)']);
+  assert.ok(cal.tierCentroids['claude opus 5.5 (medium)']);
+  assert.ok(cal.intraFamilyHyperplanes['claude-opus-5.5']?.['high>medium']);
+  assert.ok(cal.modalityProfiles?.webdev?.['claude opus 5.5 (high)']);
+
+  // 3. Verify manual correction (rank 2, weight 1.8) cannot overwrite a Battle ground-truth sample (rank 5, weight 9.5)
+  const attemptManualOverwrite = FP.learnFromChat(
+    { sid: '01a16000-0000-7000-8000-000000000001#a', messages: battleChat.messages },
+    'Claude Opus 5.5 (Medium)',
+    { userConfirmed: true, autoTeacher: false }
+  );
+  assert.equal(attemptManualOverwrite.model, 'Claude Opus 5.5 (High)');
+  assert.equal(attemptManualOverwrite.truthTier, 'battle_paired');
+
+  // 4. Verify Direct-mode truth harvesting across Search modality
+  const directSearchChat = {
+    sid: '01a16000-0000-7000-8000-000000000002',
+    isEvaluation: true,
+    evalMode: 'direct',
+    evalModality: 'search',
+    directModelName: 'gpt-6.1-sol-high',
+    messages: [
+      { id: 'u2', role: 'user', text: '对比最新基准数据并列出引用来源表格' },
+      {
+        id: 'a2',
+        role: 'assistant',
+        sources: [{ url: 'https://example.com/1' }, { url: 'https://example.com/2' }, { url: 'https://example.com/3' }],
+        parts: [
+          { type: 'reasoning', text: '' },
+          { type: 'text', text: '根据最新检索结果 [1](https://example.com/1) 与 [2](https://example.com/2)：\n\n| 模型 | 得分 |\n|---|---|\n| Sol | 95 |\n\n- 关键结论一\n- 关键结论二' },
+        ],
+      },
+    ],
+  };
+  const directLearned = FP.learnDirectSession(directSearchChat);
+  assert.ok(directLearned);
+  assert.equal(directLearned.model, 'GPT 6.1 Sol (High)');
+  assert.equal(directLearned.truthTier, 'direct_locked');
+  assert.equal(directLearned.weight, 6.5);
+  assert.equal(directLearned.evalModality, 'search');
+  assert.ok(directLearned.meta.searchSourcesCount >= 3);
+  assert.ok(directLearned.meta.citationCount >= 2);
+});
+
+test('v0.13.166: cloud-running agent turn continuity, phantom finish guard, and unified region/node routing state', () => {
+  const coreSrc = read('ui/core.js');
+  const viewSrc = read('ui/view.js');
+  const rpSrc = read('ui/route-policy.js');
+  const ripSrc = read('ui/region-ip.js');
+  const nrSrc = read('ui/node-routes.js');
+
+  assert.match(coreSrc, /function isPhantomFinishStub\(m\)/, 'core.js should define isPhantomFinishStub');
+  assert.match(coreSrc, /function hasInterruptedToolPart\(m\)/, 'core.js should define hasInterruptedToolPart');
+  assert.match(coreSrc, /if \(!this\.live && \/\^\(finish\|finish-step\|text-end\|reasoning-end\|message-metadata\)\$\/\.test\(t\)\)/, 'apply(ch) must not call liveMsg(true) on closing events when !this.live');
+  assert.match(coreSrc, /lp\.state === 'output-error' && \(lp\.errorText === '未返回结果' \|\| lp\._interruptedPending\) && sp\.state && sp\.state !== 'output-error'/, 'patchAssistantParts must heal client-interrupted tool error states back to server active state');
+  assert.match(viewSrc, /if \(chat\.live !== m && typeof isPhantomFinishStub === 'function' && isPhantomFinishStub\(m\)\) return;/, 'view.js must skip rendering empty phantom finish stubs');
+
+  assert.match(rpSrc, /if\(!winner&&mode==='node'&&\(strategy==='auto'\|\|canDirectEscape\)\)/, 'route-policy.js must not overwrite node-mode accounts with 127.0.0.1:7890 local proxy');
+  assert.match(ripSrc, /effReg\(a\)\s*\{\s*return String\(a\?\.region\|\|a\?\.routeHome\|\|IP\.loc\|\|''\)\.trim\(\)\.toUpperCase\(\);/, 'region-ip.js must resolve effective region from region, routeHome, or IP.loc');
+  assert.match(ripSrc, /Nodes\.load\?Nodes\.load\(\)\.catch\(\(\)=>\{\}\):null/, 'RegionIP.read() must load shared Nodes');
+  assert.match(nrSrc, /let selNode=current\.nodeId\|\|\(P\?\.d\?\.node\|\|''\),cc=current\.region\|\|account\.routeHome/, 'NodeRoutes.field must fall back to Pool.d.node and account.routeHome');
+});
+
+test('v0.13.169: Battle mode hides Gacha controls and renders top-bar Pelican button with Pelican Test, Micro-Probe Test, and Quick Text Test', async () => {
+  const vm = require('node:vm');
+  const viewSrc = read('ui/view.js');
+  const pelSrc = read('ui/pelican-test.js');
+  const msSrc = read('ui/mode-switcher.js');
+  const gpopSrc = read('ui/gpop.js');
+  const dockSrc = read('ui/dock.js');
+  const cssSrc = read('ui/app.css');
+
+  // 1. Static verification: Gacha hidden in Battle mode, Pelican menu button rendered in new chat & Battle chat headers
+  assert.ok(viewSrc.includes('this.renderPelicanMenuBtn(t, null, curMode)'));
+  assert.ok(viewSrc.includes("this.renderPelicanMenuBtn(Tabs.cur, chat, 'battle')"));
+  assert.ok(viewSrc.includes('async sendQuickTestPrompt(prompt, opts = {})'));
+  assert.ok(viewSrc.includes("if (gpopBtn && resolvedMode === 'battle')"));
+  assert.ok(msSrc.includes("gbtn.style.display = curMode === 'battle' ? 'none' : ''"));
+  assert.ok(gpopSrc.includes("if (isBattle) { this.close(); return; }"));
+  assert.ok(dockSrc.includes('if (!isBattleBarMode)'));
+  assert.ok(cssSrc.includes('.composer[data-mode="battle"] .gbtn2:not([data-acct])'));
+
+  // 2. Runtime verification of PelicanTest.openMenu and PelicanTest.runQuickTest (pelican, habit, text)
+  const sentPrompts = [];
+  const appendedPops = [];
+  const makeNode = (tag = 'div') => ({
+    tag,
+    className: '',
+    style: {},
+    attrs: {},
+    children: [],
+    classList: {
+      _s: new Set(),
+      add(c) { this._s.add(c); },
+      remove(c) { this._s.delete(c); },
+      contains(c) { return this._s.has(c); },
+    },
+    setAttribute(k, v) { this.attrs[k] = v; },
+    getAttribute(k) { return this.attrs[k]; },
+    appendChild(ch) { this.children.push(ch); return ch; },
+    remove() { this.removed = true; },
+    getBoundingClientRect() { return { left: 800, right: 828, top: 12, bottom: 40, width: 28, height: 28 }; },
+  });
+
+  const ctx = vm.createContext({
+    console,
+    AbortController,
+    Store: { get: () => ({}), set: () => true },
+    now: () => Date.now(),
+    toast: () => {},
+    describe: e => String(e?.message || e),
+    sleep: async () => {},
+    icon: name => { const n = makeNode('svg'); n.iconName = name; return n; },
+    GachaPrompts: {
+      svg: () => 'Create a new standalone HTML file with animated pelican SVG.',
+      habit: () => '请在工作区创建并保存一个自包含的单文件 .html 卡片，全文控制在 35～45 行以内。',
+      autoqaOne: () => '请无需调用任何工具，直接用中文分 2 条简短加粗要点说明深色模式对比度调整（80 字以内）？',
+    },
+    ModeState: { getMode: () => 'battle' },
+    Tabs: { cur: { key: 't1', sid: null } },
+    Chats: new Map(),
+    UI: {
+      sendQuickTestPrompt: async (prompt, opts) => {
+        sentPrompts.push({ prompt, opts });
+        return { ok: true, kind: opts.kind, prompt };
+      },
+    },
+    document: {
+      body: { appendChild(el) { appendedPops.push(el); return el; } },
+      createElement: tag => makeNode(tag),
+      addEventListener() {},
+      querySelectorAll: () => [],
+      querySelector: () => null,
+    },
+    window: { innerWidth: 1280, innerHeight: 800, addEventListener() {} },
+  });
+
+  vm.runInContext(pelSrc + '\nthis.PelicanTest = PelicanTest;', ctx);
+  const PT = ctx.PelicanTest;
+  assert.equal(typeof PT.openMenu, 'function');
+  assert.equal(typeof PT.runQuickTest, 'function');
+
+  const anchorBtn = makeNode('button');
+  const pop = PT.openMenu(anchorBtn, { mode: 'battle' });
+  assert.ok(pop);
+  assert.equal(pop.children.length, 3);
+  assert.deepEqual(
+    pop.children.map(btn => btn.getAttribute('data-test-kind')),
+    ['pelican', 'habit', 'text']
+  );
+
+  // Trigger all 3 test modes in Battle mode
+  await PT.runQuickTest('pelican', { mode: 'battle' });
+  await PT.runQuickTest('habit', { mode: 'battle' });
+  await PT.runQuickTest('text', { mode: 'battle' });
+
+  assert.equal(sentPrompts.length, 3);
+  assert.equal(sentPrompts[0].opts.kind, 'pelican');
+  assert.match(sentPrompts[0].prompt, /pelican/i);
+  assert.equal(sentPrompts[1].opts.kind, 'habit');
+  assert.match(sentPrompts[1].prompt, /35～45 行以内/);
+  assert.equal(sentPrompts[2].opts.kind, 'text');
+  assert.match(sentPrompts[2].prompt, /无需调用任何工具/);
+});
 
 

@@ -5,7 +5,11 @@
 // 节点自带 ECH 时沿用节点的；填 none 表示这个节点不用 ECH。
 const DEFAULT_ECH = 'cloudflare-ech.com+https://dns.alidns.com/dns-query';
 const DEFAULT_STATIC_ECH = DEFAULT_ECH; // 兼容旧名称
-const STALE_ECH = new Set(['AEX+DQBBrwAgACB3V6T2X69/mCGQn8NhU8fkBpvDcuxha8C+xpuUHFRPGQAEAAEAAQASY2xvdWRmbGFyZS1lY2guY29tAAA=']);
+const STALE_ECH = new Set([
+  'AEX+DQBBrwAgACB3V6T2X69/mCGQn8NhU8fkBpvDcuxha8C+xpuUHFRPGQAEAAEAAQASY2xvdWRmbGFyZS1lY2guY29tAAA=',
+  'AEX+DQBBmQAgACD7Shh1d6qs0wpKexZQye4mLOUQsE3TN9MW0nZe3I37bwAEAAEAAQASY2xvdWRmbGFyZS1lY2guY29tAAA=',
+  'AE3+DQBFTQAgACBlwB13ip+UAr5g/fd8sS7C+M/b8V2y+H6f2I5h9W7e1wAEAAEAAQASY2xvdWRmbGFyZS1lY2guY29tAAA=',
+]);
 const needsDefaultEch = n => n && n.security === 'tls' && (!n.ech || STALE_ECH.has(n.ech));
 const Nodes = {
   list: [], pips: [], accts: [], loaded: false, ready: null,

@@ -43,7 +43,7 @@ const AcctStats = {
   compute() {
     const V = {}, rows = [];
     const gone = typeof History.goneMap === 'function' ? History.goneMap() : new Map();
-    const activeItems = (History.items || []).filter(e => e?.id && !gone.has(e.id) && !e.isArchived && !e.archivedAt && !e._pending);
+    const activeItems = (History.items || []).filter(e => e?.id && !gone.has(e.id) && !e.isArchived && !e.archivedAt && !e._pending && e.type !== 'evaluation' && e.mode !== 'battle' && e.mode !== 'direct');
     for (const e of activeItems) {
       const mi = Models.get(e.id);
       const isBareGuess = Boolean(mi?.guess && !mi.userCorrected && !mi.habitInferred && !mi.reverseInferred && !mi.billingProbe);

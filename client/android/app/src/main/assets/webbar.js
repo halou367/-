@@ -183,7 +183,16 @@
   $('.back').onclick = () => history.back();
   $('.fwd').onclick = () => history.forward();
   $('.rel').onclick = () => location.reload();
-  $('.home').onclick = () => { showLoader('正在切换回客户端模式…', '正在同步会话与本地状态，请稍候', 4000); if(window.BranaBrowser?.back)void window.BranaBrowser.back().catch(()=>{hideLoader();location.href = HOME;});else location.href = HOME; };
+  $('.home').onclick = () => {
+    try {
+      const m = /^\/(agent|c|chat)\/([\w-]{4,64})/i.exec(location.pathname || '');
+      const curSid = m ? m[2] : '';
+      const evalUrl = Boolean(m && m[1].toLowerCase() !== 'agent');
+      if (curSid) sessionStorage.setItem('anc:fast-return', JSON.stringify({ at: Date.now(), sid: curSid, evalUrl }));
+    } catch {}
+    showLoader('正在切换回客户端模式…', '正在同步会话与本地状态，请稍候', 4000);
+    if(window.BranaBrowser?.back)void window.BranaBrowser.back().catch(()=>{hideLoader();location.href = HOME;});else location.href = HOME;
+  };
   const go = () => {
     const u = norm(inp.value);
     if (!u) { inp.classList.add('bad'); inp.title = '请输入完整的 https 网址，例如 outlook.live.com'; return; }
@@ -226,13 +235,13 @@
   const skin = /(^|\.)arena\.ai$/i.test(location.hostname) ? (() => {
     const isDark = () => { const r = document.documentElement; return r.classList.contains('dark') || r.dataset.theme === 'dark' || (!r.classList.contains('light') && matchMedia('(prefers-color-scheme: dark)').matches); };
     const css = d => `
-      :is([data-sidebar],aside,nav) a[href^="/agent/"]{display:flex!important;align-items:center;min-height:32px!important;padding:0 8px 0 9px!important;border-radius:7px!important;
+      :is([data-sidebar],aside,nav) :is(a[href^="/agent/"],a[href^="/c/"]){display:flex!important;align-items:center;min-height:32px!important;padding:0 8px 0 9px!important;border-radius:7px!important;
         font-size:12.5px!important;font-weight:600!important;line-height:1.25!important;margin:0 0 1px!important;transition:background .12s}
-      :is([data-sidebar],aside,nav) a[href^="/agent/"]:hover{background:${d ? 'rgba(255,255,255,.07)' : '#ebe9e4'}!important}
-      :is([data-sidebar],aside,nav) a[href^="/agent/"].anc-on,:is([data-sidebar],aside,nav) a[href^="/agent/"].anc-on:hover{
+      :is([data-sidebar],aside,nav) :is(a[href^="/agent/"],a[href^="/c/"]):hover{background:${d ? 'rgba(255,255,255,.07)' : '#ebe9e4'}!important}
+      :is([data-sidebar],aside,nav) :is(a[href^="/agent/"].anc-on,a[href^="/c/"].anc-on),:is([data-sidebar],aside,nav) :is(a[href^="/agent/"].anc-on,a[href^="/c/"].anc-on):hover{
         background:${d ? 'rgba(216,211,202,.24)' : '#8c7664'}!important;color:${d ? '#f4f3f0' : '#fff'}!important;
         box-shadow:none!important}   /* 和客户端一致：纯色填充、不描边；深色 = 背景和普通卡片之间的中间色 */
-      :is([data-sidebar],aside,nav) a[href^="/agent/"].anc-on *{color:inherit!important}
+      :is([data-sidebar],aside,nav) :is(a[href^="/agent/"].anc-on,a[href^="/c/"].anc-on) *{color:inherit!important}
       /* 整页铺满「窗口减去浏览条」：官网用 h-svh / min-h-svh（= 整个窗口高）排版，再加上浏览条的位置就多出一截、出现整页上下滚动条。
          把这些「一屏高」改成「一屏高 − 浏览条」，和普通浏览器里一样随窗口大小自适应，内部区域各自滚动。 */
       /* --anc-fill = 窗口高 − 顶部浏览条 − 底部客户端信息条（没有信息条时 --anc-foot 为 0） */
@@ -245,11 +254,11 @@
     const sheet = new CSSStyleSheet(); let mode = null;
     const paint = () => { const d = isDark(); if (d !== mode) { mode = d; sheet.replaceSync(css(d)); } };
     const attach = () => { if (!document.adoptedStyleSheets.includes(sheet)) document.adoptedStyleSheets = [...document.adoptedStyleSheets, sheet]; };
-    // 当前对话 = 地址里的 /agent/<id>；官网是单页应用，换对话不一定触发 popstate，所以随定时器一起核对
+    // 当前对话 = 地址里的 /agent/<id> 或 /c/<id>；官网是单页应用，换对话不一定触发 popstate，所以随定时器一起核对
     const mark = () => {
-      const m = /^\/agent\/([\w-]+)/.exec(location.pathname), id = m ? m[1] : '';
-      for (const a of document.querySelectorAll('a.anc-on')) if (!id || !a.getAttribute('href')?.startsWith('/agent/' + id)) a.classList.remove('anc-on');
-      if (id) for (const a of document.querySelectorAll('a[href^="/agent/' + id + '"]')) if (a.closest('[data-sidebar],aside,nav')) a.classList.add('anc-on');
+      const m = /^\/(?:agent|c|chat)\/([\w-]+)/.exec(location.pathname), id = m ? m[1] : '';
+      for (const a of document.querySelectorAll('a.anc-on')) if (!id || !(a.getAttribute('href')?.startsWith('/agent/' + id) || a.getAttribute('href')?.startsWith('/c/' + id))) a.classList.remove('anc-on');
+      if (id) for (const a of document.querySelectorAll(`a[href^="/agent/${id}"],a[href^="/c/${id}"]`)) if (a.closest('[data-sidebar],aside,nav')) a.classList.add('anc-on');
     };
     // 兜底：官网换了写法（行内 100vh / 别的类名）导致整页又能上下滚：把正好「一屏高」的外层容器标出来，同样减去浏览条；同时允许沙盒预览 iframe 内触发下载
     const fit = () => {

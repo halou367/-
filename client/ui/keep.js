@@ -144,8 +144,12 @@ const KeepAlive = (() => {
     if (recent.length >= MAX_WIN || st.hist.filter(x => x.pk === pk).length >= max) return { ok: false, n: recent.length || st.hist.length };
     return { ok: true };
   }
-  function restream(c, st, why) { st.recon++; st.reconAt = now(); log(c, '重连实时通道：' + why); c.restream(); }
+  function isEval(c) {
+    return Boolean(!c || c.isEvaluation || c.evalMode === 'battle' || c.evalMode === 'direct' || (typeof EvalEngine !== 'undefined' && EvalEngine.isEvalChat?.(c)));
+  }
+  function restream(c, st, why) { if (isEval(c)) return; st.recon++; st.reconAt = now(); log(c, '重连实时通道：' + why); c.restream(); }
   function propose(c, st, kind, why, max = 2, countSec = COUNT) {
+    if (isEval(c)) return false;
     const pk = kind + '|' + (c.messages?.at(-1)?.id || '') + '|' + (c.messages?.at(-1)?.parts?.length || 0);
     if (st.cancelled.has(pk)) return true;
     if (st.plan || c.gacha) return false;
@@ -277,6 +281,7 @@ const KeepAlive = (() => {
   }
 
   function check(c) {
+    if (isEval(c)) { if (c?._ka?.plan || c?._ka?.pill) { c._ka.plan = null; Pill.hide(c); } return; }
     if (typeof AutoRoute !== 'undefined' && AutoRoute.enabled() && (AutoRoute.busy || now() - AutoRoute.lastChanged < 5000)) { if (c._ka?.plan?.kind === 'conn') { c._ka.plan = null; Pill.hide(c); } return; }
     if (!c.loaded || c.loading) return;
     const st = S(c), t = now();
@@ -407,7 +412,7 @@ const KeepAlive = (() => {
     let w = null;
     try { w = new Worker(URL.createObjectURL(new Blob(['setInterval(()=>postMessage(0),1000)'], { type: 'text/javascript' }))); w.onmessage = tick; } catch { w = null; }
     if (!w) setInterval(tick, 1000);
-    const wake = () => { for (const c of Chats.values()) if (c.busy && c.loaded) { const st = S(c); if (now() - Math.max(c.byteAt || 0, c.connAt || 0) > 15e3 && now() - st.reconAt > 15e3) restream(c, st, '后台恢复'); } tick(); };
+    const wake = () => { for (const c of Chats.values()) if (c.busy && c.loaded && !isEval(c)) { const st = S(c); if (now() - Math.max(c.byteAt || 0, c.connAt || 0) > 15e3 && now() - st.reconAt > 15e3) restream(c, st, '后台恢复'); } tick(); };
     document.addEventListener('visibilitychange', () => { if (!document.hidden) wake(); });
     addEventListener('online', wake); addEventListener('focus', () => setTimeout(tick, 50));
     let rel = null; setInterval(() => { const busy = [...Chats.values()].some(c => c.busy); if (busy && !rel) { try { navigator.locks?.request('anc-keepalive', () => new Promise(r => { rel = r; })).catch(() => {}); } catch {} } else if (!busy && rel) { rel(); rel = null; } }, 3000);

@@ -39,7 +39,11 @@ const ModeState = {
       const mod = (this.modality === 'auto' || this.modality === 'video') ? 'chat' : (this.modality || 'chat');
       const list = ModelCatalog.getModelsForModality(mod);
       if (!Array.isArray(list) || !list.length) return;
-      const found = this.directModelId ? list.find(m => m.id === this.directModelId || m.name === this.directModelId) : null;
+      const rawId = this.directModelId ? String(this.directModelId).trim() : '';
+      const rawTail = rawId.includes('/') ? rawId.split('/').pop() : rawId;
+      const found = rawId
+        ? list.find(m => m.id === rawId || m.slug === rawId || m.name === rawId || m.name === rawTail || (Array.isArray(m.aliases) && (m.aliases.includes(rawId) || m.aliases.includes(rawTail))))
+        : null;
       const picked = found || list[0];
       if (picked) {
         this.directModelId = picked.id;
@@ -203,44 +207,221 @@ const ModeState = {
   },
 };
 
+let cachedWebDeploymentId = 'dpl_8Gb6m6m38M8S2WQCSdYVhF5iPnfC';
+try {
+  if (typeof Store !== 'undefined' && Store.get) {
+    const savedDpl = Store.get('eval:webDplId', '');
+    if (savedDpl && /^dpl_[A-Za-z0-9]+$/.test(savedDpl) && savedDpl !== 'dpl_6nPiGVx1iAXDm3emfbFNUFD8Zy1E') {
+      cachedWebDeploymentId = savedDpl;
+    }
+  }
+} catch {}
+
+const updateWebDeploymentIdFromHtml = (html) => {
+  if (!html || typeof html !== 'string') return cachedWebDeploymentId;
+  const m = /[?&]dpl=(dpl_[A-Za-z0-9]+)/.exec(html);
+  if (m && m[1]) {
+    cachedWebDeploymentId = m[1];
+    try {
+      if (typeof Store !== 'undefined' && Store.set) Store.set('eval:webDplId', cachedWebDeploymentId);
+    } catch {}
+  }
+  return cachedWebDeploymentId;
+};
+
+const parseFlightStreamRows = (full) => {
+  const textChunks = new Map();
+  const jsonChunks = new Map();
+  const parsedCache = new Map();
+  if (!full || typeof full !== 'string') return { textChunks, jsonChunks, resolveRefs: v => v };
+  let pos = 0;
+  while (pos < full.length) {
+    const colon = full.indexOf(':', pos);
+    if (colon < 0) break;
+    const rawId = full.slice(pos, colon).trim();
+    const id = rawId.includes('\n') ? rawId.slice(rawId.lastIndexOf('\n') + 1).trim() : rawId;
+    if (full[colon + 1] === 'T') {
+      const comma = full.indexOf(',', colon + 2);
+      if (comma < 0) break;
+      const byteLen = parseInt(full.slice(colon + 2, comma), 16);
+      if (Number.isFinite(byteLen) && byteLen > 0) {
+        const restBuf = new TextEncoder().encode(full.slice(comma + 1));
+        const strVal = new TextDecoder().decode(restBuf.slice(0, byteLen));
+        textChunks.set(id, strVal);
+        pos = comma + 1 + strVal.length;
+        if (full[pos] === '\n') pos++;
+        continue;
+      }
+    }
+    const nl = full.indexOf('\n', colon + 1);
+    const end = nl < 0 ? full.length : nl;
+    const lineBody = full.slice(colon + 1, end).trim();
+    if (id && lineBody) jsonChunks.set(id, lineBody);
+    pos = end + 1;
+  }
+
+  const resolveRefs = (val, depth = 0) => {
+    if (depth > 10 || val == null) return val;
+    if (typeof val === 'string') {
+      if (val === '$undefined') return undefined;
+      if (val.startsWith('$D')) return val.slice(2);
+      if (val.startsWith('$') && /^[@L]?[\da-f]+$/i.test(val.slice(1))) {
+        const refId = val.replace(/^\$[@L]?/, '');
+        if (textChunks.has(refId)) return textChunks.get(refId);
+        if (parsedCache.has(refId)) return parsedCache.get(refId);
+        if (jsonChunks.has(refId)) {
+          let rawBody = jsonChunks.get(refId);
+          if (rawBody && /^[A-Za-z][{\["]/.test(rawBody)) rawBody = rawBody.slice(1);
+          if (rawBody && (rawBody.startsWith('{') || rawBody.startsWith('[') || rawBody.startsWith('"'))) {
+            try {
+              const p = JSON.parse(rawBody);
+              const resolved = resolveRefs(p, depth + 1);
+              parsedCache.set(refId, resolved);
+              return resolved;
+            } catch {}
+          }
+        }
+      }
+      return val;
+    }
+    if (Array.isArray(val)) return val.map(x => resolveRefs(x, depth + 1));
+    if (typeof val === 'object') {
+      const out = {};
+      for (const [k, v] of Object.entries(val)) out[k] = resolveRefs(v, depth + 1);
+      return out;
+    }
+    return val;
+  };
+
+  return { textChunks, jsonChunks, resolveRefs };
+};
+
+const parseEvalFlightFromHtml = (html) => {
+  if (!html || typeof html !== 'string') return { initialState: null, initialModels: null };
+  updateWebDeploymentIdFromHtml(html);
+  const chunks = [];
+  const re = /self\.__next_f\.push\(\[1,("(?:\\.|[^"\\])*")\]\)/g;
+  let m;
+  while ((m = re.exec(html)) !== null) {
+    try { chunks.push(JSON.parse(m[1])); } catch {}
+  }
+  if (!chunks.length) return { initialState: null, initialModels: null };
+  const full = chunks.join('');
+  const { jsonChunks, resolveRefs } = parseFlightStreamRows(full);
+
+  let initialState = null;
+  let initialModels = null;
+  for (const [, body] of jsonChunks.entries()) {
+    if (!initialState && body.includes('"initialState"') && body.includes('"messages"')) {
+      try {
+        const parsed = JSON.parse(body);
+        const walk = (node) => {
+          if (!node || typeof node !== 'object' || initialState) return;
+          if (node.initialState && typeof node.initialState === 'object') {
+            const candidate = resolveRefs(node.initialState);
+            if (candidate && Array.isArray(candidate.messages)) {
+              initialState = candidate;
+              return;
+            }
+          }
+          if (Array.isArray(node)) node.forEach(walk);
+          else Object.values(node).forEach(walk);
+        };
+        walk(parsed);
+      } catch {}
+    }
+    if (!initialModels && body.includes('"initialModels"')) {
+      try {
+        const parsed = JSON.parse(body);
+        const walk = (node) => {
+          if (!node || typeof node !== 'object' || initialModels) return;
+          if (node.initialModels) {
+            const candidate = resolveRefs(node.initialModels);
+            if (Array.isArray(candidate) && candidate.length) {
+              initialModels = candidate;
+              return;
+            }
+          }
+          if (Array.isArray(node)) node.forEach(walk);
+          else Object.values(node).forEach(walk);
+        };
+        walk(parsed);
+      } catch {}
+    }
+  }
+  return { initialState, initialModels };
+};
+
 const ModelCatalog = (() => {
   const CACHE_KEY = 'eval.modelCatalog.v1';
   const CACHE_TTL = 10 * 60 * 1000;
+  const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   const ARENA_TO_MODALITY = {
+    chat: 'chat',
     text: 'chat',
     vision: 'chat',
     document: 'chat',
+    webdev: 'webdev',
     code: 'webdev',
     'image-to-code': 'webdev',
+    image: 'image',
     'text-to-image': 'image',
     'image-edit': 'image',
     'multi-image-edit': 'image',
     search: 'search',
+    video: 'video',
     'text-to-video': 'video',
     'image-to-video': 'video',
     'video-to-video': 'video',
   };
 
   const FALLBACK_MODELS = [
-    { id: 'claude-opus-4-6', name: 'claude-opus-4-6', publicName: 'Claude Opus 4.6', displayName: 'Claude Opus 4.6', organization: 'Anthropic', provider: 'anthropic', modalities: ['chat', 'webdev', 'search'], rank: 1, userSelectable: true },
-    { id: 'claude-sonnet-4-6', name: 'claude-sonnet-4-6', publicName: 'Claude Sonnet 4.6', displayName: 'Claude Sonnet 4.6', organization: 'Anthropic', provider: 'anthropic', modalities: ['chat', 'webdev', 'search'], rank: 2, userSelectable: true },
-    { id: 'gpt-5.4-high', name: 'gpt-5.4-high', publicName: 'GPT-5.4 High', displayName: 'GPT-5.4 High', organization: 'OpenAI', provider: 'openai', modalities: ['chat', 'webdev', 'search'], rank: 3, userSelectable: true },
-    { id: 'gpt-5.2-high', name: 'gpt-5.2-high', publicName: 'GPT-5.2 High', displayName: 'GPT-5.2 High', organization: 'OpenAI', provider: 'openai', modalities: ['chat', 'webdev', 'search'], rank: 4, userSelectable: true },
-    { id: 'gemini-3.1-pro-preview', name: 'gemini-3.1-pro-preview', publicName: 'Gemini 3.1 Pro', displayName: 'Gemini 3.1 Pro', organization: 'Google', provider: 'google', modalities: ['chat', 'webdev', 'search'], rank: 5, userSelectable: true },
-    { id: 'gemini-2.5-pro', name: 'gemini-2.5-pro', publicName: 'Gemini 2.5 Pro', displayName: 'Gemini 2.5 Pro', organization: 'Google', provider: 'google', modalities: ['chat', 'webdev', 'search'], rank: 6, userSelectable: true },
-    { id: 'grok-4', name: 'grok-4', publicName: 'Grok 4', displayName: 'Grok 4', organization: 'xAI', provider: 'xai', modalities: ['chat', 'webdev', 'search'], rank: 7, userSelectable: true },
-    { id: 'deepseek-r1-0528', name: 'deepseek-r1-0528', publicName: 'DeepSeek R1 0528', displayName: 'DeepSeek R1 0528', organization: 'DeepSeek', provider: 'deepseek', modalities: ['chat', 'webdev'], rank: 8, userSelectable: true },
-    { id: 'deepseek-v3.2', name: 'deepseek-v3.2', publicName: 'DeepSeek V3.2', displayName: 'DeepSeek V3.2', organization: 'DeepSeek', provider: 'deepseek', modalities: ['chat', 'webdev'], rank: 9, userSelectable: true },
-    { id: 'qwen3-235b-a22b-instruct-2507', name: 'qwen3-235b-a22b-instruct-2507', publicName: 'Qwen3 235B A22B', displayName: 'Qwen3 235B A22B', organization: 'Alibaba', provider: 'qwen', modalities: ['chat', 'webdev'], rank: 10, userSelectable: true },
-    { id: 'glm-4.6', name: 'glm-4.6', publicName: 'GLM-4.6', displayName: 'GLM-4.6', organization: 'Zhipu', provider: 'zhipu', modalities: ['chat', 'webdev'], rank: 11, userSelectable: true },
-    { id: 'kimi-k2.5', name: 'kimi-k2.5', publicName: 'Kimi K2.5', displayName: 'Kimi K2.5', organization: 'Moonshot', provider: 'moonshot', modalities: ['chat', 'webdev'], rank: 12, userSelectable: true },
-    { id: 'gpt-image-1.5', name: 'gpt-image-1.5', publicName: 'GPT Image 1.5', displayName: 'GPT Image 1.5', organization: 'OpenAI', provider: 'openai', modalities: ['image'], rank: 1, userSelectable: true },
-    { id: 'imagen-4.0-generate-preview', name: 'imagen-4.0-generate-preview', publicName: 'Imagen 4', displayName: 'Imagen 4', organization: 'Google', provider: 'google', modalities: ['image'], rank: 2, userSelectable: true },
-    { id: 'flux-1.1-pro-ultra', name: 'flux-1.1-pro-ultra', publicName: 'FLUX 1.1 Pro Ultra', displayName: 'FLUX 1.1 Pro Ultra', organization: 'Black Forest Labs', provider: 'bfl', modalities: ['image'], rank: 3, userSelectable: true },
-    { id: 'seedream-4.0', name: 'seedream-4.0', publicName: 'Seedream 4.0', displayName: 'Seedream 4.0', organization: 'ByteDance', provider: 'bytedance', modalities: ['image'], rank: 4, userSelectable: true },
-    { id: 'veo-3', name: 'veo-3', publicName: 'Veo 3', displayName: 'Veo 3', organization: 'Google', provider: 'google', modalities: ['video'], rank: 1, userSelectable: true },
-    { id: 'sora-2', name: 'sora-2', publicName: 'Sora 2', displayName: 'Sora 2', organization: 'OpenAI', provider: 'openai', modalities: ['video'], rank: 2, userSelectable: true },
-    { id: 'kling-2.1-master', name: 'kling-2.1-master', publicName: 'Kling 2.1 Master', displayName: 'Kling 2.1 Master', organization: 'Kuaishou', provider: 'kuaishou', modalities: ['video'], rank: 3, userSelectable: true },
+    // Real Arena UUID-keyed Direct-selectable models (from Arena SSR initialModels)
+    { id: '01a0681c-b561-76b6-b338-a44ff0cff460', slug: 'gemini-3.8-flash-high', name: 'gemini-3.8-flash-high', publicName: 'Gemini 3.8 Flash High', displayName: 'Gemini 3.8 Flash High', organization: 'Google', provider: 'google', modalities: ['chat', 'webdev', 'search'], rank: 9, rankByModality: { chat: 9 }, userSelectable: true },
+    { id: '019f19f2-41f1-7c6d-9891-48d02fd9952c', slug: 'claude-sonnet-5-high', name: 'claude-sonnet-5-high', publicName: 'Claude Sonnet 5 High', displayName: 'Claude Sonnet 5 High', organization: 'Anthropic', provider: 'anthropic', modalities: ['chat', 'webdev', 'search'], rank: 10, rankByModality: { chat: 58 }, userSelectable: true },
+    { id: '019ce973-84c9-7030-9f88-1ebbf2edeb14', slug: 'claude-opus-4-6', name: 'claude-opus-4-6', publicName: 'Claude Opus 4.6', displayName: 'Claude Opus 4.6', organization: 'Anthropic', provider: 'anthropic', modalities: ['chat', 'webdev', 'search'], rank: 11, rankByModality: { chat: 23, webdev: 3, search: 4 }, userSelectable: true },
+    { id: '019cbd0a-d2e9-7540-9651-8fb7bc7bc483', slug: 'claude-sonnet-4-6', name: 'claude-sonnet-4-6', publicName: 'Claude Sonnet 4.6', displayName: 'Claude Sonnet 4.6', organization: 'Anthropic', provider: 'anthropic', modalities: ['chat', 'webdev', 'search'], rank: 12, rankByModality: { chat: 30, webdev: 5, search: 11 }, userSelectable: true },
+    { id: '019d3995-9b7a-730d-b779-227ad61ecc9b', slug: 'gpt-5.4-high', name: 'gpt-5.4-high', publicName: 'GPT-5.4 High', displayName: 'GPT-5.4 High', organization: 'OpenAI', provider: 'openai', modalities: ['chat', 'webdev', 'search'], rank: 13, rankByModality: { chat: 26, webdev: 8, search: 5 }, userSelectable: true },
+    { id: '019e71ea-1e1d-740f-9c2d-dab5869ff108', slug: 'gpt-5.5-instant', name: 'gpt-5.5-instant', publicName: 'GPT-5.5 Instant', displayName: 'GPT-5.5 Instant', organization: 'OpenAI', provider: 'openai', modalities: ['chat', 'webdev', 'search'], rank: 14, rankByModality: { chat: 43 }, userSelectable: true },
+    { id: '019b82a4-f728-72bf-b563-bd8fd0fb9db6', slug: 'gpt-5.2-high', name: 'gpt-5.2-high', publicName: 'GPT-5.2 High', displayName: 'GPT-5.2 High', organization: 'OpenAI', provider: 'openai', modalities: ['chat', 'webdev', 'search'], rank: 15, rankByModality: { chat: 42, webdev: 17 }, userSelectable: true },
+    { id: '019cbfae-9988-799f-833f-d9ef5fb8b92e', slug: 'gemini-3.1-pro-preview', name: 'gemini-3.1-pro-preview', publicName: 'Gemini 3.1 Pro', displayName: 'Gemini 3.1 Pro', organization: 'Google', provider: 'google', modalities: ['chat', 'webdev', 'search'], rank: 16, rankByModality: { chat: 25, webdev: 9, search: 9 }, userSelectable: true },
+    { id: '019773f3-3a42-772b-b4f5-c2eeb5fb22d6', slug: 'gemini-2.5-pro', name: 'gemini-2.5-pro', publicName: 'Gemini 2.5 Pro', displayName: 'Gemini 2.5 Pro', organization: 'Google', provider: 'google', modalities: ['chat', 'webdev', 'search'], rank: 17, rankByModality: { chat: 59, webdev: 38, search: 22 }, userSelectable: true },
+    { id: '019ff69c-dae8-708a-ae20-1ce80775d94d', slug: 'grok-4.6-high', name: 'grok-4.6-high', publicName: 'Grok 4.6 High', displayName: 'Grok 4.6 High', organization: 'xAI', provider: 'xai', modalities: ['chat', 'webdev', 'search'], rank: 18, rankByModality: { chat: 70 }, userSelectable: true },
+    { id: '01982bb3-7f7a-75c6-86c8-334a0db9b245', slug: 'grok-4', name: 'grok-4', publicName: 'Grok 4', displayName: 'Grok 4', organization: 'xAI', provider: 'xai', modalities: ['chat', 'webdev', 'search'], rank: 19, rankByModality: { chat: 109, search: 18 }, userSelectable: true },
+    { id: '019fc887-69e7-7308-a353-36da657fc18e', slug: 'qwen3.8-max', name: 'qwen3.8-max', publicName: 'Qwen 3.8 Max', displayName: 'Qwen 3.8 Max', organization: 'Alibaba', provider: 'qwen', modalities: ['chat', 'webdev'], rank: 20, rankByModality: { webdev: 12, chat: 35 }, userSelectable: true },
+    { id: '019e128d-bc7d-744c-8854-67a38b15b3a1', slug: 'qwen3.7-max-preview', name: 'qwen3.7-max-preview', publicName: 'Qwen 3.7 Max Preview', displayName: 'Qwen 3.7 Max Preview', organization: 'Alibaba', provider: 'qwen', modalities: ['chat', 'webdev'], rank: 21, rankByModality: { chat: 41, webdev: 14 }, userSelectable: true },
+    { id: '01a14ae7-0d76-74af-80ac-33cf2b2322aa', slug: 'deepseek-v4.1-flash-max', name: 'deepseek-v4.1-flash-max', publicName: 'DeepSeek V4.1 Flash Max', displayName: 'DeepSeek V4.1 Flash Max', organization: 'DeepSeek', provider: 'deepseek', modalities: ['chat', 'webdev'], rank: 22, rankByModality: { webdev: 13, chat: 38 }, userSelectable: true },
+    { id: '019ebf6a-94d4-7649-b704-1dbbd5eb0942', slug: 'glm-5.2 (max)', name: 'glm-5.2 (max)', publicName: 'GLM 5.2 (Max)', displayName: 'GLM 5.2 (Max)', organization: 'Zhipu', provider: 'zhipu', modalities: ['chat', 'webdev'], rank: 23, rankByModality: { chat: 32, webdev: 6 }, userSelectable: true },
+    { id: '019b7b2f-fc57-7c65-b4ef-fd8db34f448e', slug: 'deepseek-v3.2', name: 'deepseek-v3.2', publicName: 'DeepSeek V3.2', displayName: 'DeepSeek V3.2', organization: 'DeepSeek', provider: 'deepseek', modalities: ['chat', 'webdev'], rank: 26, rankByModality: { chat: 77, webdev: 37 }, userSelectable: true },
+    { id: '01980d0b-8126-7f5b-a749-bd6ef7bc7f56', slug: 'qwen3-235b-a22b-instruct-2507', name: 'qwen3-235b-a22b-instruct-2507', publicName: 'Qwen3 235B A22B', displayName: 'Qwen3 235B A22B', organization: 'Alibaba', provider: 'qwen', modalities: ['chat', 'webdev'], rank: 27, rankByModality: { chat: 78, webdev: 45 }, userSelectable: true },
+    { id: '01999a31-f487-73a1-8e8f-2a5256f74a38', slug: 'glm-4.6', name: 'glm-4.6', publicName: 'GLM-4.6', displayName: 'GLM-4.6', organization: 'Zhipu', provider: 'zhipu', modalities: ['chat', 'webdev'], rank: 28, rankByModality: { chat: 86, webdev: 35 }, userSelectable: true },
+    { id: '019ca4eb-110d-7271-9040-811b08a19686', slug: 'kimi-k2.5', name: 'kimi-k2.5', publicName: 'Kimi K2.5', displayName: 'Kimi K2.5', organization: 'Moonshot', provider: 'moonshot', modalities: ['chat', 'webdev'], rank: 29, rankByModality: { chat: 44, webdev: 10 }, userSelectable: true },
+    { id: '019b7b1f-fa1d-7d5c-96f9-4731f5ca5a0f', slug: 'gpt-image-1.5', name: 'gpt-image-1.5', publicName: 'GPT Image 1.5', displayName: 'GPT Image 1.5', organization: 'OpenAI', provider: 'openai', modalities: ['image'], rank: 1, rankByModality: { image: 1 }, userSelectable: true },
+    { id: '0197c947-98b0-7768-8696-c7a5f32d9c95', slug: 'imagen-4.0-generate-preview', name: 'imagen-4.0-generate-preview', publicName: 'Imagen 4', displayName: 'Imagen 4', organization: 'Google', provider: 'google', modalities: ['image'], rank: 2, rankByModality: { image: 8 }, userSelectable: true },
+    { id: '0196a1fa-682f-769b-9067-7ff3472e21f7', slug: 'flux-1.1-pro-ultra', name: 'flux-1.1-pro-ultra', publicName: 'FLUX 1.1 Pro Ultra', displayName: 'FLUX 1.1 Pro Ultra', organization: 'Black Forest Labs', provider: 'bfl', modalities: ['image'], rank: 3, rankByModality: { image: 17 }, userSelectable: true },
+    { id: '01995d54-9e77-7435-94d1-962091285872', slug: 'seedream-4.0', name: 'seedream-4.0', publicName: 'Seedream 4.0', displayName: 'Seedream 4.0', organization: 'ByteDance', provider: 'bytedance', modalities: ['image'], rank: 4, rankByModality: { image: 7 }, userSelectable: true },
+    { id: '019861f0-5a72-73bc-a3a5-fd84d8974239', slug: 'veo-3', name: 'veo-3', publicName: 'Veo 3', displayName: 'Veo 3', organization: 'Google', provider: 'google', modalities: ['video'], rank: 1, rankByModality: { video: 12 }, userSelectable: true },
+    { id: '0199dc4a-1e80-764c-89c6-7227cd5fd44c', slug: 'sora-2', name: 'sora-2', publicName: 'Sora 2', displayName: 'Sora 2', organization: 'OpenAI', provider: 'openai', modalities: ['video'], rank: 2, rankByModality: { video: 5 }, userSelectable: true },
+    { id: '0197e687-7707-7556-b7a9-247b148fa0a1', slug: 'kling-2.1-master', name: 'kling-2.1-master', publicName: 'Kling 2.1 Master', displayName: 'Kling 2.1 Master', organization: 'Kuaishou', provider: 'kuaishou', modalities: ['video'], rank: 3, rankByModality: { video: 14 }, userSelectable: true },
+    // Battle-only & Agent next-gen models (used for Battle reveal resolution & habit learning; non-UUIDs are excluded from Direct selection)
+    { id: 'anthropic/claude-opus-5.6', name: 'claude-opus-5.6', publicName: 'Claude Opus 5.6', displayName: 'Claude Opus 5.6', organization: 'Anthropic', provider: 'anthropic', modalities: ['chat', 'webdev', 'search'], rank: 101, userSelectable: false },
+    { id: 'anthropic/claude-opus-5.5', name: 'claude-opus-5.5', publicName: 'Claude Opus 5.5', displayName: 'Claude Opus 5.5', organization: 'Anthropic', provider: 'anthropic', modalities: ['chat', 'webdev', 'search'], rank: 102, userSelectable: false },
+    { id: 'anthropic/claude-sonnet-5.5', name: 'claude-sonnet-5.5', publicName: 'Claude Sonnet 5.5', displayName: 'Claude Sonnet 5.5', organization: 'Anthropic', provider: 'anthropic', modalities: ['chat', 'webdev', 'search'], rank: 103, userSelectable: false },
+    { id: 'anthropic/claude-fable-5.1', name: 'claude-fable-5.1', publicName: 'Claude Fable 5.1', displayName: 'Claude Fable 5.1', organization: 'Anthropic', provider: 'anthropic', modalities: ['chat', 'webdev', 'search'], rank: 104, userSelectable: false },
+    { id: 'anthropic/claude-haiku-5.5', name: 'claude-haiku-5.5', publicName: 'Claude Haiku 5.5', displayName: 'Claude Haiku 5.5', organization: 'Anthropic', provider: 'anthropic', modalities: ['chat', 'webdev', 'search'], rank: 105, userSelectable: false },
+    { id: 'openai/gpt-6.1-sol', name: 'gpt-6.1-sol', publicName: 'GPT 6.1 Sol', displayName: 'GPT 6.1 Sol', organization: 'OpenAI', provider: 'openai', modalities: ['chat', 'webdev', 'search'], rank: 106, userSelectable: false },
+    { id: 'openai/gpt-6-astra', name: 'gpt-6-astra', publicName: 'GPT 6 Astra', displayName: 'GPT 6 Astra', organization: 'OpenAI', provider: 'openai', modalities: ['chat', 'webdev', 'search'], rank: 107, userSelectable: false },
+    { id: 'openai/gpt-6-luna', name: 'gpt-6-luna', publicName: 'GPT 6 Luna', displayName: 'GPT 6 Luna', organization: 'OpenAI', provider: 'openai', modalities: ['chat', 'webdev', 'search'], rank: 108, userSelectable: false },
+    { id: 'google/gemini-4-argon', name: 'gemini-4-argon', publicName: 'Gemini 4 Argon', displayName: 'Gemini 4 Argon', organization: 'Google', provider: 'google', modalities: ['chat', 'webdev', 'search'], rank: 109, userSelectable: false },
+    { id: 'google/gemini-3.8-flash', name: 'gemini-3.8-flash', publicName: 'Gemini 3.8 Flash', displayName: 'Gemini 3.8 Flash', organization: 'Google', provider: 'google', modalities: ['chat', 'webdev', 'search'], rank: 110, userSelectable: false },
+    { id: 'xai/grok-4.7', name: 'grok-4.7', publicName: 'Grok 4.7', displayName: 'Grok 4.7', organization: 'xAI', provider: 'xai', modalities: ['chat', 'webdev', 'search'], rank: 111, userSelectable: false },
+    { id: 'deepseek/deepseek-v4.1-flash-1017', name: 'deepseek-v4.1-flash', publicName: 'DeepSeek V4.1 Flash', displayName: 'DeepSeek V4.1 Flash', organization: 'DeepSeek', provider: 'deepseek', modalities: ['chat', 'webdev'], rank: 112, userSelectable: false },
+    { id: 'alibaba/qwen3.8-max', name: 'qwen-3.8-max', publicName: 'Qwen 3.8 Max', displayName: 'Qwen 3.8 Max', organization: 'Alibaba', provider: 'qwen', modalities: ['chat', 'webdev'], rank: 113, userSelectable: false },
+    { id: 'zhipu/glm-5.3', name: 'glm-5.3', publicName: 'GLM 5.3', displayName: 'GLM 5.3', organization: 'Zhipu', provider: 'zhipu', modalities: ['chat', 'webdev'], rank: 114, userSelectable: false },
+    { id: 'moonshot/kimi-k3', name: 'kimi-k3', publicName: 'Kimi K3', displayName: 'Kimi K3', organization: 'Moonshot', provider: 'moonshot', modalities: ['chat', 'webdev'], rank: 115, userSelectable: false },
+    { id: 'reflection/beam-1.0-501b-a23b', name: 'beam-1.0-501b-a23b', publicName: 'Beam 1.0 501B A23B', displayName: 'Beam 1.0 501B A23B', organization: 'Reflection AI', provider: 'reflection', modalities: ['chat', 'webdev'], rank: 116, userSelectable: false },
+    { id: 'meta/muse-spark-1.3', name: 'muse-spark-1.3', publicName: 'Muse Spark 1.3', displayName: 'Muse Spark 1.3', organization: 'Meta', provider: 'meta', modalities: ['chat', 'webdev'], rank: 117, userSelectable: false },
+    { id: 'deepseek-r1-0528', name: 'deepseek-r1-0528', publicName: 'DeepSeek R1 0528', displayName: 'DeepSeek R1 0528', organization: 'DeepSeek', provider: 'deepseek', modalities: ['chat', 'webdev'], rank: 125, userSelectable: false },
   ];
 
   let models = [...FALLBACK_MODELS];
@@ -254,7 +435,14 @@ const ModelCatalog = (() => {
     for (const m of models) {
       if (!m) continue;
       if (m.id) byIdMap.set(String(m.id), m);
-      if (m.name) byIdMap.set(String(m.name).toLowerCase(), m);
+      if (m.slug) {
+        byIdMap.set(String(m.slug), m);
+        byIdMap.set(String(m.slug).toLowerCase(), m);
+      }
+      if (m.name) {
+        byIdMap.set(String(m.name), m);
+        byIdMap.set(String(m.name).toLowerCase(), m);
+      }
       if (m.publicName) byIdMap.set(String(m.publicName).toLowerCase(), m);
       if (m.displayName) byIdMap.set(String(m.displayName).toLowerCase(), m);
     }
@@ -269,6 +457,7 @@ const ModelCatalog = (() => {
       if (!id) return;
       const existing = map.get(id) || {
         id,
+        slug: item.slug || undefined,
         name: String(item.name || item.publicName || item.displayName || id),
         publicName: String(item.publicName || item.displayName || item.name || id),
         displayName: String(item.displayName || item.publicName || item.name || id),
@@ -280,8 +469,21 @@ const ModelCatalog = (() => {
         rankByModality: {},
         userSelectable: item.userSelectable !== false && item.isSelectable !== false,
       };
-      if (modTag && !existing.modalities.includes(modTag)) {
-        existing.modalities.push(modTag);
+      if (item.rankByModality && typeof item.rankByModality === 'object') {
+        Object.assign(existing.rankByModality, item.rankByModality);
+        for (const [rk, rv] of Object.entries(item.rankByModality)) {
+          if (rv == null || !Number.isFinite(Number(rv))) continue;
+          const mapped = ARENA_TO_MODALITY[String(rk).toLowerCase()] || null;
+          if (mapped && !existing.modalities.includes(mapped)) existing.modalities.push(mapped);
+        }
+      }
+      const outCap = item.capabilities?.outputCapabilities;
+      if (outCap && typeof outCap === 'object') {
+        if (outCap.text && !existing.modalities.includes('chat')) existing.modalities.push('chat');
+        if (outCap.code && !existing.modalities.includes('webdev')) existing.modalities.push('webdev');
+        if (outCap.search && !existing.modalities.includes('search')) existing.modalities.push('search');
+        if (outCap.image && !existing.modalities.includes('image')) existing.modalities.push('image');
+        if (outCap.video && !existing.modalities.includes('video')) existing.modalities.push('video');
       }
       if (Array.isArray(item.modalities)) {
         for (const mm of item.modalities) {
@@ -289,11 +491,15 @@ const ModelCatalog = (() => {
           if (mapped && !existing.modalities.includes(mapped)) existing.modalities.push(mapped);
         }
       }
-      if (item.rankByModality && typeof item.rankByModality === 'object') {
-        Object.assign(existing.rankByModality, item.rankByModality);
+      if (modTag && !existing.modalities.includes(modTag) && (!outCap || existing.modalities.length === 0)) {
+        existing.modalities.push(modTag);
       }
-      if (modTag && existing.rankByModality[modTag] === undefined) {
-        existing.rankByModality[modTag] = Number.isFinite(Number(item.rank)) ? Number(item.rank) : (idx + 1);
+      if (modTag && existing.rankByModality[modTag] === undefined && Number.isFinite(Number(item.rank))) {
+        existing.rankByModality[modTag] = Number(item.rank);
+      }
+      const finiteRanks = Object.values(existing.rankByModality).map(Number).filter(Number.isFinite);
+      if (finiteRanks.length && !Number.isFinite(Number(item.rank))) {
+        existing.rank = Math.min(...finiteRanks);
       }
       map.set(id, existing);
     };
@@ -304,11 +510,13 @@ const ModelCatalog = (() => {
           const modTag = ARENA_TO_MODALITY[String(group.arena || group.modality || '').toLowerCase()] || 'chat';
           group.models.forEach((m, i) => mergeModel(m, modTag, i));
         } else if (group && (group.id || group.name)) {
-          mergeModel(group, ARENA_TO_MODALITY[String(group.arena || group.modality || 'text').toLowerCase()] || 'chat', map.size);
+          const hasArenaTag = Boolean(group.arena || group.modality);
+          const modTag = hasArenaTag ? (ARENA_TO_MODALITY[String(group.arena || group.modality).toLowerCase()] || 'chat') : null;
+          mergeModel(group, modTag, map.size);
         }
       }
     } else if (raw && typeof raw === 'object') {
-      const arr = Array.isArray(raw.models) ? raw.models : Array.isArray(raw.arenas) ? raw.arenas : [];
+      const arr = Array.isArray(raw.models) ? raw.models : Array.isArray(raw.initialModels) ? raw.initialModels : Array.isArray(raw.arenas) ? raw.arenas : [];
       if (arr.length) return normalizeCatalogPayload(arr);
       for (const [k, v] of Object.entries(raw)) {
         if (Array.isArray(v)) {
@@ -320,16 +528,32 @@ const ModelCatalog = (() => {
 
     for (const fb of FALLBACK_MODELS) {
       if (!map.has(fb.id)) {
-        map.set(fb.id, { ...fb, rankByModality: {} });
+        map.set(fb.id, { ...fb, rankByModality: { ...(fb.rankByModality || {}) } });
       }
     }
     return [...map.values()];
   }
 
+  function ingestInitialModels(rawModels) {
+    if (!Array.isArray(rawModels) || !rawModels.length) return false;
+    const parsed = normalizeCatalogPayload(rawModels);
+    if (!parsed.length) return false;
+    rebuildIndex(parsed);
+    loadedAt = Date.now();
+    try {
+      if (typeof Store !== 'undefined' && Store.set) {
+        Store.set(CACHE_KEY, { at: loadedAt, models: parsed });
+      }
+    } catch {}
+    try { ModeState._ensureDirectModelValid(); } catch {}
+    return true;
+  }
+
   try {
     const cached = typeof Store !== 'undefined' && Store.get ? Store.get(CACHE_KEY, null) : null;
     if (cached && Array.isArray(cached.models) && cached.models.length) {
-      rebuildIndex(cached.models);
+      const normalizedCached = normalizeCatalogPayload(cached.models);
+      rebuildIndex(normalizedCached);
       loadedAt = Number(cached.at) || 0;
     }
   } catch {}
@@ -340,8 +564,8 @@ const ModelCatalog = (() => {
     }
     if (loadingP) return loadingP;
     loadingP = (async () => {
+      const fetchFn = typeof rawFetch === 'function' ? rawFetch : fetch;
       try {
-        const fetchFn = typeof rawFetch === 'function' ? rawFetch : fetch;
         const res = await fetchFn('/nextjs-api/model-catalog', {
           method: 'GET',
           cache: 'no-store',
@@ -350,16 +574,23 @@ const ModelCatalog = (() => {
         });
         if (res && res.ok) {
           const data = await res.json();
-          const parsed = normalizeCatalogPayload(data);
-          if (parsed.length) {
-            rebuildIndex(parsed);
-            loadedAt = Date.now();
-            try {
-              if (typeof Store !== 'undefined' && Store.set) {
-                Store.set(CACHE_KEY, { at: loadedAt, models: parsed });
-              }
-            } catch {}
-            try { ModeState._ensureDirectModelValid(); } catch {}
+          if (ingestInitialModels(Array.isArray(data) ? data : (data?.models || data?.initialModels || [data]))) {
+            return models;
+          }
+        }
+      } catch {}
+      try {
+        const resHtml = await fetchFn('/text', {
+          method: 'GET',
+          cache: 'no-store',
+          credentials: 'same-origin',
+          headers: { Accept: 'text/html,application/xhtml+xml' },
+        });
+        if (resHtml && resHtml.ok) {
+          const html = await resHtml.text();
+          const { initialModels } = parseEvalFlightFromHtml(html);
+          if (Array.isArray(initialModels) && initialModels.length) {
+            ingestInitialModels(initialModels);
           }
         }
       } catch {}
@@ -377,7 +608,12 @@ const ModelCatalog = (() => {
       if (!Array.isArray(m.modalities) || !m.modalities.length) return mod === 'chat';
       return m.modalities.includes(mod);
     });
-    const list = filtered.length ? filtered : FALLBACK_MODELS.filter(m => (m.modalities || ['chat']).includes(mod));
+    const uuidOnly = filtered.filter(m => UUID_RE.test(String(m.id || '')));
+    const list = uuidOnly.length
+      ? uuidOnly
+      : filtered.length
+        ? filtered
+        : FALLBACK_MODELS.filter(m => m.userSelectable !== false && (m.modalities || ['chat']).includes(mod));
     return [...list].sort((a, b) => {
       const ra = a.rankByModality?.[mod] ?? a.rank ?? 999;
       const rb = b.rankByModality?.[mod] ?? b.rank ?? 999;
@@ -388,7 +624,18 @@ const ModelCatalog = (() => {
   function getModelById(id) {
     if (!id) return null;
     const key = String(id).trim();
-    return byIdMap.get(key) || byIdMap.get(key.toLowerCase()) || null;
+    const tail = key.includes('/') ? key.split('/').pop() : key;
+    return byIdMap.get(key) || byIdMap.get(key.toLowerCase()) || byIdMap.get(tail) || byIdMap.get(tail.toLowerCase()) || null;
+  }
+
+  function resolveModelUuid(id, modality = 'chat') {
+    const raw = String(id || '').trim();
+    if (UUID_RE.test(raw)) return raw;
+    const hit = getModelById(raw);
+    if (hit && UUID_RE.test(String(hit.id || ''))) return String(hit.id);
+    const list = getModelsForModality(modality);
+    const fallback = list.find(m => UUID_RE.test(String(m?.id || '')));
+    return fallback ? String(fallback.id) : (raw || '019ce973-84c9-7030-9f88-1ebbf2edeb14');
   }
 
   function resolveModelName(id, revealedModels = []) {
@@ -407,15 +654,28 @@ const ModelCatalog = (() => {
     ARENA_TO_MODALITY,
     FALLBACK_MODELS,
     ensureLoaded,
+    ingestInitialModels,
     getModelsForModality,
     getModelById,
+    resolveModelUuid,
     resolveModelName,
     get all() { return models; },
   };
 })();
 
 const EvalEngine = (() => {
-  const VOTE_NEXT_ACTION = '60353f7027df227e704beac966d87b6957fc086a39';
+  const VOTE_NEXT_ACTION = '6045a00021608b43c2ded349d9d98204449e22d4b0';
+  const PREV_VOTE_NEXT_ACTION = '60c09be8dfaa9c507f73e0d2a17d7e887bbda2c815';
+  const LEGACY_VOTE_NEXT_ACTION = '60353f7027df227e704beac966d87b6957fc086a39';
+  let cachedVoteActionId = VOTE_NEXT_ACTION;
+  try {
+    if (typeof Store !== 'undefined' && Store.get) {
+      const savedAct = Store.get('eval:voteActionId', '');
+      if (savedAct && /^[0-9a-f]{40,44}$/i.test(savedAct) && savedAct !== PREV_VOTE_NEXT_ACTION && savedAct !== LEGACY_VOTE_NEXT_ACTION) {
+        cachedVoteActionId = savedAct;
+      }
+    }
+  } catch {}
 
   function genUuid() {
     if (typeof uuid7 === 'function') return uuid7();
@@ -492,6 +752,7 @@ const EvalEngine = (() => {
       const hRow = typeof History !== 'undefined' ? History.byId?.(chat.sid) : null;
       chat.modality = hRow?.modality || ModeState.getModality() || 'chat';
     }
+    if (chat.modality && chat.modality !== 'auto') chat.evalModality = chat.modality;
     if (opts.modelAId !== undefined) chat.modelAId = opts.modelAId;
     else if (chat.modelAId === undefined) chat.modelAId = null;
     if (opts.modelBId !== undefined) chat.modelBId = opts.modelBId;
@@ -516,7 +777,13 @@ const EvalEngine = (() => {
   function isEvalChat(chat) {
     if (!chat) return false;
     if (chat.isEvaluation) return true;
-    const hRow = typeof History !== 'undefined' ? History.byId?.(chat.sid) : null;
+    if (chat.evalMode === 'battle' || chat.evalMode === 'direct') {
+      initEvalFields(chat, { evalMode: chat.evalMode });
+      return true;
+    }
+    const sid = chat.sid;
+    const hRow = (typeof History !== 'undefined' && sid ? History.byId?.(sid) : null)
+      || (typeof Arch !== 'undefined' && sid && Array.isArray(Arch.items) ? Arch.items.find(x => x && x.id === sid) : null);
     if (hRow && (hRow.type === 'evaluation' || hRow.mode === 'battle' || hRow.mode === 'direct' || hRow.mode === 'direct-battle' || hRow.mode === 'side-by-side')) {
       initEvalFields(chat, {
         evalMode: ModeState.inferEntryMode(hRow) === 'direct' ? 'direct' : 'battle',
@@ -526,7 +793,144 @@ const EvalEngine = (() => {
       });
       return true;
     }
+    if (sid) {
+      const cachedEval = readLocalEvalCache(sid);
+      if (cachedEval && typeof cachedEval === 'object' && (cachedEval.mode || Array.isArray(cachedEval.messages) || Array.isArray(cachedEval.maskedEvaluations))) {
+        const mMode = String(cachedEval.mode || '').toLowerCase() === 'direct' ? 'direct' : 'battle';
+        initEvalFields(chat, {
+          evalMode: mMode,
+          modality: cachedEval.modality || 'chat',
+          modelAId: cachedEval.modelAId || null,
+          modelBId: cachedEval.modelBId || null,
+        });
+        return true;
+      }
+      const mi = typeof Models !== 'undefined' ? Models.get?.(sid) : null;
+      if (mi && (mi.battleRevealed || mi.directMode || mi.modelA || mi.modelB || mi.source === 'battle' || mi.source === 'direct')) {
+        initEvalFields(chat, { evalMode: (mi.directMode || mi.source === 'direct') ? 'direct' : 'battle' });
+        return true;
+      }
+    }
+    if (Array.isArray(chat.messages) && chat.messages.some(m => m && (m.participantPosition === 'a' || m.participantPosition === 'b' || m.evaluationSessionId))) {
+      const hasB = chat.messages.some(m => m && m.participantPosition === 'b');
+      initEvalFields(chat, { evalMode: hasB ? 'battle' : (chat.evalMode || 'battle') });
+      return true;
+    }
     return false;
+  }
+
+  function readLocalEvalCache(sid) {
+    if (!sid || typeof localStorage === 'undefined') return null;
+    try {
+      const raw = localStorage.getItem('arena:evaluation-session-cache:v1:' + sid);
+      if (!raw) return null;
+      const parsed = JSON.parse(raw);
+      return (parsed && typeof parsed === 'object') ? (parsed.evaluation || parsed.session || parsed.data || parsed) : null;
+    } catch {
+      return null;
+    }
+  }
+
+  function writeLocalEvalCache(sid, evalObj) {
+    if (!sid || !evalObj || typeof localStorage === 'undefined') return;
+    try {
+      localStorage.setItem('arena:evaluation-session-cache:v1:' + sid, JSON.stringify(evalObj));
+    } catch {}
+  }
+
+  function mergeEvalObjects(primary, secondary) {
+    if (!primary) return secondary || null;
+    if (!secondary) return primary;
+    const out = { ...secondary, ...primary };
+    if ((!Array.isArray(out.messages) || !out.messages.length) && Array.isArray(secondary.messages)) {
+      out.messages = secondary.messages;
+    }
+    if ((!Array.isArray(out.revealedModels) || !out.revealedModels.length) && Array.isArray(secondary.revealedModels)) {
+      out.revealedModels = secondary.revealedModels;
+    }
+    if ((!Array.isArray(out.pairwiseFeedbacks) || !out.pairwiseFeedbacks.length) && Array.isArray(secondary.pairwiseFeedbacks)) {
+      out.pairwiseFeedbacks = secondary.pairwiseFeedbacks;
+    }
+    return out;
+  }
+
+  async function fetchEvalSessionData(sid) {
+    const lsCached = readLocalEvalCache(sid);
+    const fetchFn = typeof rawFetch === 'function' ? rawFetch : fetch;
+    let fromFlight = null;
+    try {
+      const res = await fetchFn('/c/' + encodeURIComponent(sid), {
+        method: 'GET',
+        cache: 'no-store',
+        credentials: 'same-origin',
+        headers: { Accept: 'text/html,application/xhtml+xml,application/json' },
+      });
+      if (res && res.ok) {
+        const ct = String(res.headers?.get?.('content-type') || '').toLowerCase();
+        const text = await res.text();
+        if (ct.includes('application/json') || (text.trim().startsWith('{') && !text.includes('__next_f'))) {
+          try {
+            const j = JSON.parse(text);
+            fromFlight = j?.evaluation || j?.session || j?.data || j;
+          } catch {}
+        } else {
+          const { initialState, initialModels } = parseEvalFlightFromHtml(text);
+          if (Array.isArray(initialModels) && initialModels.length) {
+            try { ModelCatalog.ingestInitialModels(initialModels); } catch {}
+          }
+          if (initialState && typeof initialState === 'object') {
+            fromFlight = initialState;
+          }
+        }
+      }
+    } catch {}
+
+    if (fromFlight) {
+      const merged = mergeEvalObjects(fromFlight, lsCached);
+      writeLocalEvalCache(sid, merged);
+      return merged;
+    }
+
+    try {
+      const data = await api('/api/evaluation/' + encodeURIComponent(sid), { timeout: 20000 });
+      if (data && typeof data === 'object') {
+        const evalObj = data.evaluation || data.session || data.data || data;
+        const merged = mergeEvalObjects(evalObj, lsCached);
+        writeLocalEvalCache(sid, merged);
+        return merged;
+      }
+    } catch {}
+
+    if (lsCached && Array.isArray(lsCached.messages) && lsCached.messages.length) {
+      return lsCached;
+    }
+    return null;
+  }
+
+  function orderTurnMessages(mapped) {
+    if (!Array.isArray(mapped) || mapped.length <= 2) return mapped;
+    const out = [];
+    let asstBucket = [];
+    const flushBucket = () => {
+      if (!asstBucket.length) return;
+      asstBucket.sort((x, y) => {
+        const px = x.participantPosition === 'b' ? 1 : 0;
+        const py = y.participantPosition === 'b' ? 1 : 0;
+        return px - py;
+      });
+      out.push(...asstBucket);
+      asstBucket = [];
+    };
+    for (const m of mapped) {
+      if (m && m.role === 'assistant') {
+        asstBucket.push(m);
+      } else {
+        flushBucket();
+        out.push(m);
+      }
+    }
+    flushBucket();
+    return out;
   }
 
   async function loadChat(chat, force = false) {
@@ -536,7 +940,7 @@ const EvalEngine = (() => {
     initEvalFields(chat);
     chat.loading = (async () => {
       try {
-        const data = await api('/api/evaluation/' + encodeURIComponent(chat.sid), { timeout: 30000 });
+        const data = await fetchEvalSessionData(chat.sid);
         if (!data || typeof data !== 'object') throw new Error('评测对话数据为空');
         const evalObj = data.evaluation || data.session || data.data || data;
         const modeRaw = evalObj.mode || data.mode || chat.evalMode || 'battle';
@@ -561,12 +965,12 @@ const EvalEngine = (() => {
         let detectedAId = evalObj.modelAId || data.modelAId || chat.modelAId || null;
         let detectedBId = evalObj.modelBId || data.modelBId || chat.modelBId || null;
 
-        const mapped = [];
+        const rawMapped = [];
         for (const m of rawMsgs) {
           if (!m || typeof m !== 'object') continue;
           if (m.role === 'user') {
             const uTxt = extractUserText(m.content ?? m.text ?? m.parts);
-            mapped.push({
+            rawMapped.push({
               id: m.id || genUuid(),
               role: 'user',
               text: uTxt,
@@ -582,7 +986,8 @@ const EvalEngine = (() => {
             if (pos === 'a' && mId) detectedAId = mId;
             if (pos === 'b' && mId) detectedBId = mId;
             const st = String(m.status || 'success').toLowerCase();
-            mapped.push({
+            const restoredFmt = m._fmt || m.metadata?._fmt || null;
+            rawMapped.push({
               id: m.id || genUuid(),
               role: 'assistant',
               participantPosition: pos,
@@ -592,6 +997,7 @@ const EvalEngine = (() => {
               failureReason: m.failureReason || null,
               createdAt: m.createdAt || new Date().toISOString(),
               parts: buildAssistantParts(m),
+              ...(restoredFmt ? { _fmt: restoredFmt } : {}),
               metadata: {
                 ...(m.metadata || {}),
                 pending: st === 'pending' || st === 'streaming',
@@ -601,9 +1007,50 @@ const EvalEngine = (() => {
           }
         }
 
+        const mapped = orderTurnMessages(rawMapped);
+
+        try {
+          if (typeof MsgCache !== 'undefined' && typeof MsgCache.get === 'function') {
+            const cachedDoc = await MsgCache.get(chat.sid).catch(() => null);
+            if (Array.isArray(cachedDoc?.messages)) {
+              const cachedById = new Map(cachedDoc.messages.filter(x => x?.id).map(x => [x.id, x]));
+              for (const mm of mapped) {
+                const cm = cachedById.get(mm.id);
+                if (!cm) continue;
+                if (!mm._fmt && (cm._fmt || cm.metadata?._fmt)) mm._fmt = cm._fmt || cm.metadata._fmt;
+                if (cm.metadata?.timing?.completedAt && !mm.metadata?.timing?.completedAt) {
+                  mm.metadata = mm.metadata || {};
+                  mm.metadata.timing = { ...(mm.metadata.timing || {}), ...cm.metadata.timing };
+                }
+              }
+            }
+          }
+        } catch {}
+
         chat.messages = mapped;
         chat.modelAId = detectedAId;
         chat.modelBId = detectedBId;
+
+        const hRow = typeof History !== 'undefined' ? History.byId?.(chat.sid) : null;
+        if (hRow) {
+          hRow.type = 'evaluation';
+          hRow.mode = chat.evalMode;
+          if (chat.modality) hRow.modality = chat.modality;
+          if (chat.title && !hRow.title) hRow.title = chat.title;
+        }
+
+        if (chat.evalMode === 'battle') {
+          if (hRow && hRow.localTitle && !/vs|⚔️/i.test(String(hRow.localTitle))) {
+            delete hRow.localTitle;
+            try { History.saveSoon?.(); } catch {}
+          }
+          try {
+            if (typeof Models !== 'undefined' && Models.all && Models.all[chat.sid] && !Models.all[chat.sid].battleRevealed) {
+              delete Models.all[chat.sid];
+              if (typeof Store !== 'undefined' && Store.set) Store.set('models', Models.all);
+            }
+          } catch {}
+        }
 
         const fb = chat.pairwiseFeedbacks.at(-1) || null;
         if (chat.evalMode === 'battle' && (fb || detectedAId || detectedBId)) {
@@ -622,7 +1069,6 @@ const EvalEngine = (() => {
               modelAName: aName,
               modelBName: bName,
             };
-            const hRow = typeof History !== 'undefined' ? History.byId?.(chat.sid) : null;
             if (hRow) {
               if (aId) hRow.modelAId = aId;
               if (bId) hRow.modelBId = bId;
@@ -645,6 +1091,7 @@ const EvalEngine = (() => {
         } else if (chat.evalMode === 'direct' && detectedAId) {
           const dName = ModelCatalog.resolveModelName(detectedAId, chat.revealedModels);
           chat.directModelName = dName;
+          if (chat.modality && chat.modality !== 'auto') chat.evalModality = chat.modality;
           try {
             if (typeof Models !== 'undefined' && Models.set && dName) {
               Models.set(chat.sid, {
@@ -656,6 +1103,9 @@ const EvalEngine = (() => {
                 at: Date.now(),
               });
             }
+            if (dName && typeof ChatHabitFingerprint !== 'undefined' && typeof ChatHabitFingerprint.learnDirectSession === 'function') {
+              ChatHabitFingerprint.learnDirectSession(chat, dName);
+            }
           } catch {}
         }
 
@@ -663,7 +1113,18 @@ const EvalEngine = (() => {
         chat.cached = false;
         chat.error = null;
         chat.status = 'idle';
+        try {
+          if (typeof MsgCache !== 'undefined' && typeof MsgCache.put === 'function' && chat.messages.length) {
+            void MsgCache.put(chat.sid, { messages: chat.messages, at: Date.now() });
+          }
+        } catch {}
+        try {
+          if (chat.evalMode === 'battle' && typeof ChatHabitFingerprint !== 'undefined' && typeof ChatHabitFingerprint.analyzeBattleChat === 'function') {
+            ChatHabitFingerprint.analyzeBattleChat(chat);
+          }
+        } catch {}
         chat.emit();
+        try { if (typeof Dock !== 'undefined' && Dock.render) Dock.render(); } catch {}
       } catch (e) {
         chat.error = '加载评测对话失败：' + (e?.message || e);
         chat.emit();
@@ -744,6 +1205,7 @@ const EvalEngine = (() => {
 
       if (code === '0') {
         const chunk = typeof val === 'string' ? val : String(val ?? '');
+        if (!targetMsg.metadata.timing.firstTokenAt) targetMsg.metadata.timing.firstTokenAt = tNow;
         if (targetMsg.metadata.timing.reasoningStartedAt && !targetMsg.metadata.timing.reasoningCompletedAt) {
           targetMsg.metadata.timing.reasoningCompletedAt = tNow;
           targetMsg.metadata.timing.thinkingMs = tNow - targetMsg.metadata.timing.reasoningStartedAt;
@@ -755,10 +1217,12 @@ const EvalEngine = (() => {
           targetMsg._fmt.tN += 1;
           targetMsg._fmt.tChars += chunk.length;
           targetMsg._fmt.lastAt = tNow;
+          targetMsg.metadata._fmt = targetMsg._fmt;
         }
         targetMsg.v = (targetMsg.v || 0) + 1;
       } else if (code === 'g') {
         const chunk = typeof val === 'string' ? val : String(val ?? '');
+        if (!targetMsg.metadata.timing.firstTokenAt) targetMsg.metadata.timing.firstTokenAt = tNow;
         if (!targetMsg.metadata.timing.reasoningStartedAt) {
           targetMsg.metadata.timing.reasoningStartedAt = tNow;
         }
@@ -769,6 +1233,7 @@ const EvalEngine = (() => {
           targetMsg._fmt.rN += 1;
           targetMsg._fmt.rChars += chunk.length;
           targetMsg._fmt.lastAt = tNow;
+          targetMsg.metadata._fmt = targetMsg._fmt;
         }
         targetMsg.v = (targetMsg.v || 0) + 1;
       } else if (code === '2' && Array.isArray(val)) {
@@ -804,6 +1269,9 @@ const EvalEngine = (() => {
           targetMsg.metadata.timing.reasoningCompletedAt = tNow;
           targetMsg.metadata.timing.thinkingMs = tNow - targetMsg.metadata.timing.reasoningStartedAt;
         }
+        targetMsg.metadata.timing.completedAt = tNow;
+        targetMsg.metadata.timing.turnDurationMs = Math.max(0, tNow - (targetMsg.metadata.timing.startedAt || tNow));
+        if (targetMsg._fmt) targetMsg.metadata._fmt = targetMsg._fmt;
         targetMsg.v = (targetMsg.v || 0) + 1;
       } else if (code === '3') {
         targetMsg.metadata.pending = false;
@@ -813,6 +1281,9 @@ const EvalEngine = (() => {
       }
 
       chat.lastActivity = tNow;
+      chat.byteAt = tNow;
+      chat.progAt = tNow;
+      chat.respAt = chat.respAt || tNow;
       chat.emitStreamSoon?.(24);
       if (typeof Bus !== 'undefined' && typeof Bus.emit === 'function') {
         try { Bus.emit('eval:stream', { sid: chat.sid, pos, chat }); } catch {}
@@ -822,6 +1293,11 @@ const EvalEngine = (() => {
     while (true) {
       const { value, done } = await reader.read();
       if (done) break;
+      const rNow = Date.now();
+      chat.byteAt = rNow;
+      chat.progAt = rNow;
+      chat.respAt = chat.respAt || rNow;
+      chat.lastActivity = rNow;
       buf += decoder.decode(value, { stream: true });
       let nl;
       while ((nl = buf.indexOf('\n')) >= 0) {
@@ -832,9 +1308,23 @@ const EvalEngine = (() => {
     }
     if (buf.trim()) handleLine(buf);
 
+    const endNow = Date.now();
     for (const m of [msgA, msgB]) {
       if (!m) continue;
-      if (m.metadata) m.metadata.pending = false;
+      if (m.metadata) {
+        m.metadata.pending = false;
+        if (m.metadata.timing) {
+          if (m.metadata.timing.reasoningStartedAt && !m.metadata.timing.reasoningCompletedAt) {
+            m.metadata.timing.reasoningCompletedAt = endNow;
+            m.metadata.timing.thinkingMs = endNow - m.metadata.timing.reasoningStartedAt;
+          }
+          if (!m.metadata.timing.completedAt) {
+            m.metadata.timing.completedAt = endNow;
+            m.metadata.timing.turnDurationMs = Math.max(0, endNow - (m.metadata.timing.startedAt || endNow));
+          }
+        }
+        if (m._fmt) m.metadata._fmt = m._fmt;
+      }
       if (!m.status || m.status === 'pending' || m.status === 'streaming') m.status = 'success';
       for (const p of m.parts || []) {
         if (p && p.state === 'streaming') p.state = 'done';
@@ -924,8 +1414,14 @@ const EvalEngine = (() => {
       chat.voteState.value = null;
     }
 
+    const startNow = Date.now();
     chat.status = 'streaming';
     chat.streaming = true;
+    chat._evalStreaming = true;
+    chat.connAt = startNow;
+    chat.streamOpenAt = startNow;
+    chat.byteAt = startNow;
+    chat.progAt = startNow;
     chat.phase = isBattle ? '双模型盲测生成中…' : '直连模型生成中…';
     const ctl = new AbortController();
     chat.ctl = ctl;
@@ -946,6 +1442,14 @@ const EvalEngine = (() => {
         ? '/nextjs-api/stream/create-evaluation'
         : `/nextjs-api/stream/post-to-evaluation/${encodeURIComponent(chat.sid)}`;
 
+      let resolvedDirectModelId = null;
+      if (chat.evalMode === 'direct') {
+        const rawMid = chat.modelAId || ModeState.directModelId || '';
+        resolvedDirectModelId = ModelCatalog.resolveModelUuid(rawMid, effectiveModality);
+        chat.modelAId = resolvedDirectModelId;
+        msgA.modelId = resolvedDirectModelId;
+      }
+
       const payload = {
         id: chat.sid,
         mode: chat.evalMode,
@@ -953,12 +1457,13 @@ const EvalEngine = (() => {
         userMessageId,
         modelAMessageId: msgAId,
         ...(isBattle ? { modelBMessageId: msgBId } : {}),
-        ...(chat.evalMode === 'direct' && chat.modelAId ? { modelAId: chat.modelAId } : {}),
+        ...(chat.evalMode === 'direct' && resolvedDirectModelId ? { modelAId: resolvedDirectModelId } : {}),
         userMessage: {
           id: userMessageId,
           role: 'user',
           content: text,
           experimental_attachments: attachments,
+          metadata: {},
         },
         messages: [
           {
@@ -977,6 +1482,7 @@ const EvalEngine = (() => {
       };
 
       const fetchFn = typeof rawFetch === 'function' ? rawFetch : fetch;
+      chat.connAt = Date.now();
       let res = await fetchFn(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Accept: '*/*' },
@@ -1010,6 +1516,12 @@ const EvalEngine = (() => {
         throw new Error(errTxt || `HTTP ${res.status}`);
       }
 
+      const respNow = Date.now();
+      chat.respAt = respNow;
+      chat.byteAt = respNow;
+      chat.progAt = respNow;
+      chat.streamOpenAt = respNow;
+
       if (res.body && typeof res.body.getReader === 'function') {
         await parseStream(res.body.getReader(), chat, msgA, msgB);
       } else {
@@ -1027,22 +1539,43 @@ const EvalEngine = (() => {
 
       chat.status = 'idle';
       chat.streaming = false;
+      chat._evalStreaming = false;
       chat.phase = '';
       chat.error = null;
       if (userMsg) delete userMsg._local;
+      try {
+        if (typeof MsgCache !== 'undefined' && typeof MsgCache.put === 'function' && chat.messages.length) {
+          void MsgCache.put(chat.sid, { messages: chat.messages, at: Date.now() });
+        }
+      } catch {}
+      chat.evalModality = effectiveModality;
+      try {
+        if (chat.evalMode === 'battle' && typeof ChatHabitFingerprint !== 'undefined' && typeof ChatHabitFingerprint.analyzeBattleChat === 'function') {
+          ChatHabitFingerprint.analyzeBattleChat(chat);
+        } else if (chat.evalMode === 'direct' && typeof ChatHabitFingerprint !== 'undefined' && typeof ChatHabitFingerprint.learnDirectSession === 'function') {
+          const dName = chat.directModelName || ModelCatalog.resolveModelName(chat.modelAId || ModeState.directModelId, chat.revealedModels);
+          if (dName) {
+            chat.directModelName = dName;
+            ChatHabitFingerprint.learnDirectSession(chat, dName);
+          }
+        }
+      } catch {}
       try { if (typeof History !== 'undefined' && History.touched) History.touched(chat.sid); } catch {}
       if (typeof Bus !== 'undefined' && typeof Bus.emit === 'function') {
         try { Bus.emit('turn', chat, { eval: true }); } catch {}
       }
       chat.emit();
+      try { if (typeof Dock !== 'undefined' && Dock.render) Dock.render(); } catch {}
     } catch (e) {
       if (e?.name === 'AbortError') {
         chat.status = 'idle';
         chat.streaming = false;
+        chat._evalStreaming = false;
         chat.phase = '已停止';
       } else {
         chat.status = 'idle';
         chat.streaming = false;
+        chat._evalStreaming = false;
         chat.error = '生成失败：' + (e?.message || e);
         msgA.status = 'failed';
         msgA.failureReason = e?.message || String(e);
@@ -1058,6 +1591,7 @@ const EvalEngine = (() => {
     } finally {
       chat.ctl = null;
       chat.streaming = false;
+      chat._evalStreaming = false;
     }
   }
 
@@ -1070,8 +1604,9 @@ const EvalEngine = (() => {
 
     if (evalMode === 'direct') {
       const dm = ModeState.getDirectModel() || ModelCatalog.getModelsForModality(modality)[0] || null;
-      chat.modelAId = dm?.id || ModeState.directModelId || 'claude-opus-4-6';
-      chat.directModelName = dm?.displayName || dm?.publicName || dm?.name || chat.modelAId;
+      const rawMid = dm?.id || ModeState.directModelId || '019ce973-84c9-7030-9f88-1ebbf2edeb14';
+      chat.modelAId = ModelCatalog.resolveModelUuid(rawMid, modality);
+      chat.directModelName = dm?.displayName || dm?.publicName || dm?.name || ModelCatalog.resolveModelName(chat.modelAId);
       try {
         if (typeof Models !== 'undefined' && Models.set) {
           Models.set(sid, {
@@ -1160,6 +1695,124 @@ const EvalEngine = (() => {
     await streamTurn(chat, text, { isFirst: false, v2: opt.v2, files: opt.files, userMsg });
   }
 
+  function buildEvalRouterStateTree(sid) {
+    try {
+      const tree = [
+        '',
+        {
+          children: [
+            ['locale', 'en', 'd', null],
+            {
+              children: [
+                '(app)',
+                {
+                  children: [
+                    '(chat-shell)',
+                    {
+                      children: [
+                        '(with-sidebar)',
+                        {
+                          children: [
+                            '(fade)',
+                            {
+                              children: [
+                                '(evaluation)',
+                                {
+                                  children: [
+                                    'c',
+                                    {
+                                      children: [
+                                        ['id', String(sid || ''), 'd', null],
+                                        { children: ['__PAGE__', {}, null, null] },
+                                        null,
+                                        null,
+                                      ],
+                                    },
+                                    null,
+                                    null,
+                                  ],
+                                },
+                                null,
+                                null,
+                              ],
+                            },
+                            null,
+                            null,
+                          ],
+                        },
+                        null,
+                        null,
+                      ],
+                    },
+                    null,
+                    null,
+                    16,
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+        null,
+        null,
+        true,
+      ];
+      return encodeURIComponent(JSON.stringify(tree));
+    } catch {
+      return '';
+    }
+  }
+
+  async function discoverLiveVoteAction(sid) {
+    const fetchFn = typeof rawFetch === 'function' ? rawFetch : fetch;
+    const urls = sid ? [`/c/${encodeURIComponent(sid)}`, '/text'] : ['/text'];
+    for (const u of urls) {
+      try {
+        const r = await fetchFn(u, {
+          method: 'GET',
+          cache: 'no-store',
+          credentials: 'same-origin',
+          headers: { Accept: 'text/html,application/xhtml+xml' },
+        });
+        if (!r || !r.ok) continue;
+        const html = await r.text();
+        updateWebDeploymentIdFromHtml(html);
+        const chunks = [...new Set([...html.matchAll(/\/_next\/static\/chunks\/([^"'?\s]+\.js)(?:\?dpl=[^"'\s&]+)?/g)].map(m => m[1]))];
+        if (!chunks.length) continue;
+        let found = '';
+        const queue = [...chunks];
+        const scanWorker = async () => {
+          while (queue.length && !found) {
+            const ch = queue.shift();
+            if (!ch) break;
+            try {
+              const cr = await fetchFn(`/_next/static/chunks/${ch}${cachedWebDeploymentId ? '?dpl=' + encodeURIComponent(cachedWebDeploymentId) : ''}`, {
+                method: 'GET',
+                credentials: 'same-origin',
+              });
+              if (!cr || !cr.ok) continue;
+              const js = await cr.text();
+              if (!js.includes('createPairwiseFeedback')) continue;
+              const m = /createServerReference\)\(\s*["']([0-9a-f]{40,44})["'][^)]*["']createPairwiseFeedback["']/i.exec(js)
+                || /["']([0-9a-f]{40,44})["'][^;]{0,160}["']createPairwiseFeedback["']/i.exec(js);
+              if (m && m[1]) {
+                found = m[1];
+                cachedVoteActionId = found;
+                try {
+                  if (typeof Store !== 'undefined' && Store.set) Store.set('eval:voteActionId', cachedVoteActionId);
+                } catch {}
+                return;
+              }
+            } catch {}
+          }
+        };
+        await Promise.all(Array.from({ length: Math.min(6, queue.length) }, scanWorker));
+        if (found) return found;
+      } catch {}
+    }
+    return cachedVoteActionId;
+  }
+
   async function submitVote(sid, voteValue = 'tie') {
     const chat = typeof Chats !== 'undefined' ? Chats.get(sid) : null;
     if (!chat) throw new Error('未找到当前对战会话');
@@ -1176,57 +1829,114 @@ const EvalEngine = (() => {
 
     let modelAId = null;
     let modelBId = null;
-    let revealedModels = chat.revealedModels || [];
+    let revealedModels = Array.isArray(chat.revealedModels) ? [...chat.revealedModels] : [];
+    let actionError = '';
 
     try {
       const recaptchaV3Token = (typeof Recaptcha !== 'undefined' && Recaptcha.v3)
         ? await Recaptcha.v3('pairwise_feedback').catch(() => null)
         : null;
 
+      const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+      const validModelAId = (chat.modelAId && uuidRe.test(String(chat.modelAId))) ? String(chat.modelAId) : undefined;
+      const validModelBId = (chat.modelBId && uuidRe.test(String(chat.modelBId))) ? String(chat.modelBId) : undefined;
+
       const actionBody = JSON.stringify([
         {
           evaluationSessionId: sid,
           messageAId: msgA.id,
           messageBId: msgB.id,
+          ...(validModelAId ? { modelAId: validModelAId } : {}),
+          ...(validModelBId ? { modelBId: validModelBId } : {}),
           value: voteValue,
+          didInspectBothMobileHorizontalResponses: true,
           recaptchaV3Token,
         },
       ]);
 
       const fetchFn = typeof rawFetch === 'function' ? rawFetch : fetch;
-      const resp = await fetchFn(`/c/${encodeURIComponent(sid)}`, {
-        method: 'POST',
-        headers: {
+      const inspectFlightNode = (node, depth = 0) => {
+        if (depth > 8 || !node || typeof node !== 'object') return;
+        if (Array.isArray(node)) {
+          if (node.length && node[0] && typeof node[0] === 'object' && (node[0].publicName || node[0].displayName || (node[0].id && node[0].organization))) {
+            if (!revealedModels.length) revealedModels = node;
+          }
+          for (const item of node) inspectFlightNode(item, depth + 1);
+          return;
+        }
+        if (node.success === false && node.error) {
+          actionError = String(node.error);
+        }
+        if (node.modelAId && typeof node.modelAId === 'string') modelAId = modelAId || node.modelAId;
+        if (node.modelBId && typeof node.modelBId === 'string') modelBId = modelBId || node.modelBId;
+        if (Array.isArray(node.revealedModels) && node.revealedModels.length) {
+          revealedModels = node.revealedModels;
+        }
+        for (const sub of [node.a, node.data, node.evaluation, node.result, node.initialState]) {
+          if (sub && typeof sub === 'object') inspectFlightNode(sub, depth + 1);
+        }
+      };
+
+      const parseActionFlight = (flightText) => {
+        if (!flightText || typeof flightText !== 'string') return;
+        const { jsonChunks, resolveRefs } = parseFlightStreamRows(flightText);
+        for (const [, rawChunk] of jsonChunks.entries()) {
+          if (!rawChunk) continue;
+          const rawBody = /^[A-Za-z][{\["]/.test(rawChunk) ? rawChunk.slice(1) : rawChunk;
+          if (!rawBody.startsWith('{') && !rawBody.startsWith('[')) continue;
+          try {
+            const parsed = resolveRefs(JSON.parse(rawBody));
+            inspectFlightNode(parsed, 0);
+          } catch {}
+        }
+      };
+
+      const routerStateTree = buildEvalRouterStateTree(sid);
+      let actionNotFoundSeen = false;
+      const tryPostVoteAction = async (actionId, dplHeader) => {
+        if (!actionId) return;
+        const headers = {
           Accept: 'text/x-component',
           'Content-Type': 'text/plain;charset=UTF-8',
-          'Next-Action': VOTE_NEXT_ACTION,
-        },
-        body: actionBody,
-        credentials: 'same-origin',
-      }).catch(() => null);
+          'Next-Action': actionId,
+        };
+        if (routerStateTree) headers['Next-Router-State-Tree'] = routerStateTree;
+        if (dplHeader) headers['X-Deployment-Id'] = dplHeader;
+        const resp = await fetchFn(`/c/${encodeURIComponent(sid)}`, {
+          method: 'POST',
+          headers,
+          body: actionBody,
+          credentials: 'same-origin',
+        }).catch(() => null);
+        if (!resp) return;
+        if (resp.headers?.get?.('x-nextjs-action-not-found') === '1') {
+          actionNotFoundSeen = true;
+          return;
+        }
+        if (resp.ok) {
+          const flightText = await resp.text().catch(() => '');
+          parseActionFlight(flightText);
+        }
+      };
 
-      if (resp && resp.ok) {
-        const flightText = await resp.text().catch(() => '');
-        for (const line of flightText.split('\n')) {
-          const idx = line.indexOf('{');
-          if (idx < 0) continue;
-          const sub = line.slice(idx);
-          if (!sub.includes('modelAId') && !sub.includes('revealedModels')) continue;
-          try {
-            const obj = JSON.parse(sub);
-            const cand = obj?.data || obj?.evaluation || obj?.result || obj;
-            if (cand?.modelAId) modelAId = cand.modelAId;
-            if (cand?.modelBId) modelBId = cand.modelBId;
-            if (Array.isArray(cand?.revealedModels)) revealedModels = cand.revealedModels;
-          } catch {}
+      const candidateActions = [...new Set([cachedVoteActionId, VOTE_NEXT_ACTION, PREV_VOTE_NEXT_ACTION, LEGACY_VOTE_NEXT_ACTION].filter(Boolean))];
+      for (const actionId of candidateActions) {
+        await tryPostVoteAction(actionId, cachedWebDeploymentId);
+        if (modelAId && modelBId) {
+          cachedVoteActionId = actionId;
+          try { if (typeof Store !== 'undefined' && Store.set) Store.set('eval:voteActionId', cachedVoteActionId); } catch {}
+          break;
         }
       }
 
       if (!modelAId || !modelBId) {
-        const data = await api('/api/evaluation/' + encodeURIComponent(sid), { timeout: 20000 }).catch(() => null);
-        const evalObj = data?.evaluation || data?.session || data?.data || data;
+        const prevDpl = cachedWebDeploymentId;
+        const prevAct = cachedVoteActionId;
+        const evalObj = await fetchEvalSessionData(sid).catch(() => null);
         if (evalObj) {
-          if (Array.isArray(evalObj.revealedModels)) revealedModels = evalObj.revealedModels;
+          if (Array.isArray(evalObj.revealedModels) && evalObj.revealedModels.length) {
+            revealedModels = evalObj.revealedModels;
+          }
           const fb = Array.isArray(evalObj.pairwiseFeedbacks) ? evalObj.pairwiseFeedbacks.at(-1) : null;
           modelAId = modelAId || fb?.modelAId || evalObj.modelAId || null;
           modelBId = modelBId || fb?.modelBId || evalObj.modelBId || null;
@@ -1239,20 +1949,93 @@ const EvalEngine = (() => {
             }
           }
         }
+        if (!modelAId || !modelBId) {
+          // Discover live Next-Action ID from Arena's current JS chunks if action was rotated on redeploy
+          if (actionNotFoundSeen || cachedWebDeploymentId !== prevDpl) {
+            await discoverLiveVoteAction(sid).catch(() => null);
+          }
+          const retryActions = [...new Set([cachedVoteActionId, VOTE_NEXT_ACTION].filter(Boolean))];
+          const retryDpls = [...new Set([cachedWebDeploymentId, ''].filter(d => d !== undefined))];
+          for (const act of retryActions) {
+            for (const dpl of retryDpls) {
+              if (act === prevAct && dpl === prevDpl && !actionNotFoundSeen) continue;
+              await tryPostVoteAction(act, dpl);
+              if (modelAId && modelBId) break;
+            }
+            if (modelAId && modelBId) break;
+          }
+        }
+      }
+
+      if (!modelAId || !modelBId) {
+        const errMsg = actionError || '投票未能提交到服务器（模型尚未揭晓），请稍后重试';
+        if (typeof toast === 'function') toast(errMsg, 'err');
+        throw new Error(errMsg);
+      }
+
+      if (Array.isArray(revealedModels) && revealedModels.length) {
+        try { ModelCatalog.ingestInitialModels(revealedModels); } catch {}
       }
 
       chat.revealedModels = revealedModels;
-      if (modelAId) {
-        chat.modelAId = modelAId;
-        msgA.modelId = modelAId;
-      }
-      if (modelBId) {
-        chat.modelBId = modelBId;
-        msgB.modelId = modelBId;
-      }
+      chat.modelAId = modelAId;
+      chat.modelBId = modelBId;
+      msgA.modelId = modelAId;
+      msgB.modelId = modelBId;
+      const fbItem = {
+        id: genUuid(),
+        evaluationSessionId: sid,
+        messageAId: msgA.id,
+        messageBId: msgB.id,
+        modelAId,
+        modelBId,
+        value: voteValue,
+      };
+      chat.pairwiseFeedbacks = [...(Array.isArray(chat.pairwiseFeedbacks) ? chat.pairwiseFeedbacks : []), fbItem];
 
-      const modelAName = modelAId ? ModelCatalog.resolveModelName(modelAId, revealedModels) : 'Model A';
-      const modelBName = modelBId ? ModelCatalog.resolveModelName(modelBId, revealedModels) : 'Model B';
+      try {
+        const lsCur = readLocalEvalCache(sid) || {
+          id: sid,
+          title: chat.title || '',
+          mode: chat.evalMode || 'battle',
+          modality: chat.modality || 'chat',
+          messages: (chat.messages || []).map(m => ({
+            id: m.id,
+            role: m.role,
+            content: m.role === 'user' ? (m.text || extractUserText(m.content || m.parts)) : extractContentText(m.parts || m.content),
+            reasoning: m.role === 'assistant' ? (m.parts || []).filter(p => p?.type === 'reasoning').map(p => p.text || '').join('') : undefined,
+            experimental_attachments: m.experimental_attachments || [],
+            parentMessageIds: m.parentMessageIds || [],
+            participantPosition: m.participantPosition,
+            modelId: m.modelId || null,
+            evaluationSessionId: sid,
+            status: m.status || 'success',
+          })),
+        };
+        lsCur.modelAId = modelAId;
+        lsCur.modelBId = modelBId;
+        lsCur.revealedModels = revealedModels;
+        if (Array.isArray(lsCur.messages)) {
+          for (const m of lsCur.messages) {
+            if (!m || m.role !== 'assistant') continue;
+            if (m.id === msgA.id || m.participantPosition === 'a') m.modelId = modelAId;
+            else if (m.id === msgB.id || m.participantPosition === 'b') m.modelId = modelBId;
+          }
+        }
+        lsCur.pairwiseFeedbacks = [...(Array.isArray(lsCur.pairwiseFeedbacks) ? lsCur.pairwiseFeedbacks : []), fbItem];
+        lsCur.savedAt = Date.now();
+        writeLocalEvalCache(sid, lsCur);
+      } catch {}
+
+      try {
+        if (typeof Models !== 'undefined' && Models.all && Models.all[sid] && !Models.all[sid].battleRevealed) {
+          delete Models.all[sid];
+          if (typeof Store !== 'undefined' && Store.set) Store.set('models', Models.all);
+        }
+      } catch {}
+
+      const modelAName = ModelCatalog.resolveModelName(modelAId, revealedModels);
+      const modelBName = ModelCatalog.resolveModelName(modelBId, revealedModels);
 
       chat.voteState = {
         voted: true,
@@ -1268,8 +2051,9 @@ const EvalEngine = (() => {
 
       const hRow = typeof History !== 'undefined' ? History.byId?.(sid) : null;
       if (hRow) {
-        if (modelAId) hRow.modelAId = modelAId;
-        if (modelBId) hRow.modelBId = modelBId;
+        hRow.modelAId = modelAId;
+        hRow.modelBId = modelBId;
+        if (hRow.localTitle && !/vs|⚔️/i.test(String(hRow.localTitle))) delete hRow.localTitle;
         try { History.saveSoon?.(); } catch {}
       }
 
@@ -1293,6 +2077,59 @@ const EvalEngine = (() => {
       chat.emit();
       throw e;
     }
+  }
+
+  async function regenerateTurn(chat, opts = {}) {
+    if (!chat) return false;
+    initEvalFields(chat);
+    if (chat.streaming || chat._evalStreaming) {
+      try { chat.ctl?.abort?.(); } catch {}
+      chat.streaming = false;
+      chat._evalStreaming = false;
+      chat.status = 'ready';
+    }
+    const targetUserMsg = opts.turn?.user || opts.userMsg || (Array.isArray(chat.messages) ? chat.messages.findLast(m => m && m.role === 'user') : null);
+    if (!targetUserMsg) {
+      if (chat.sid) {
+        await loadChat(chat, true).catch(() => {});
+        return true;
+      }
+      return false;
+    }
+    const userText = (targetUserMsg.parts || []).filter(p => p && p.type === 'text' && p.text).map(p => p.text).join('\n')
+      || String(targetUserMsg.content || '').trim();
+    if (!userText) {
+      if (chat.sid) {
+        await loadChat(chat, true).catch(() => {});
+        return true;
+      }
+      return false;
+    }
+
+    const uIdx = chat.messages.indexOf(targetUserMsg);
+    const userMsgsBefore = uIdx >= 0
+      ? chat.messages.slice(0, uIdx + 1).filter(m => m && m.role === 'user').length
+      : 1;
+    const isFirstTurn = userMsgsBefore <= 1;
+
+    if (uIdx >= 0) {
+      let endIdx = chat.messages.length;
+      for (let i = uIdx + 1; i < chat.messages.length; i++) {
+        if (chat.messages[i]?.role === 'user') {
+          endIdx = i;
+          break;
+        }
+      }
+      chat.messages.splice(uIdx + 1, endIdx - (uIdx + 1));
+    }
+
+    targetUserMsg.id = genUuid();
+    await streamTurn(chat, userText, {
+      isFirst: isFirstTurn && !chat.loaded,
+      isRetry: true,
+      userMsg: targetUserMsg,
+    });
+    return true;
   }
 
   function hookChatPrototype() {
@@ -1344,6 +2181,7 @@ const EvalEngine = (() => {
         if (isEvalChat(this)) {
           try { this.ctl?.abort(); } catch {}
           this.streaming = false;
+          this._evalStreaming = false;
           this.status = 'idle';
           this.phase = '已停止';
           this.emit();
@@ -1351,6 +2189,135 @@ const EvalEngine = (() => {
         }
         return origStop.call(this, opt);
       };
+    }
+
+    const origReload = Chat.prototype.reload;
+    if (typeof origReload === 'function') {
+      Chat.prototype.reload = function (why, forceFull = false) {
+        if (isEvalChat(this)) {
+          if (this.busy && this._evalStreaming) return Promise.resolve(false);
+          this.error = null;
+          this.phase = '重新载入中';
+          this.emit();
+          return loadChat(this, true).then(() => true, () => false);
+        }
+        return origReload.call(this, why, forceFull);
+      };
+    }
+
+    const origResumeInc = Chat.prototype.resumeIncremental;
+    if (typeof origResumeInc === 'function') {
+      Chat.prototype.resumeIncremental = function (why) {
+        if (isEvalChat(this)) {
+          if (this.busy && this._evalStreaming) return Promise.resolve(true);
+          if (why === 'fast-return' || why === '手动重新载入') {
+            return loadChat(this, true).then(() => true, () => false);
+          }
+          return Promise.resolve(true);
+        }
+        return origResumeInc.call(this, why);
+      };
+    }
+
+    const origStream = Chat.prototype.stream;
+    if (typeof origStream === 'function') {
+      Chat.prototype.stream = function (opt) {
+        if (isEvalChat(this)) {
+          if (!this._evalStreaming) this.streaming = false;
+          if (/^实时通道错误/.test(String(this.error || ''))) {
+            this.error = null;
+            this.emit();
+          }
+          return Promise.resolve();
+        }
+        return origStream.call(this, opt);
+      };
+    }
+
+    const origRestream = Chat.prototype.restream;
+    if (typeof origRestream === 'function') {
+      Chat.prototype.restream = function () {
+        if (isEvalChat(this)) return;
+        return origRestream.apply(this, arguments);
+      };
+    }
+
+    const origEnsureToken = Chat.prototype.ensureToken;
+    if (typeof origEnsureToken === 'function') {
+      Chat.prototype.ensureToken = function (force) {
+        if (isEvalChat(this)) return Promise.resolve(null);
+        return origEnsureToken.call(this, force);
+      };
+    }
+
+    const origWakeSessionToken = Chat.prototype.wakeSessionToken;
+    if (typeof origWakeSessionToken === 'function') {
+      Chat.prototype.wakeSessionToken = function (force) {
+        if (isEvalChat(this)) return Promise.resolve(null);
+        return origWakeSessionToken.call(this, force);
+      };
+    }
+
+    const origWatch = Chat.prototype.watch;
+    if (typeof origWatch === 'function') {
+      Chat.prototype.watch = function () {
+        if (isEvalChat(this)) return Promise.resolve();
+        return origWatch.apply(this, arguments);
+      };
+    }
+
+    const origDrain = Chat.prototype.drain;
+    if (typeof origDrain === 'function') {
+      Chat.prototype.drain = function () {
+        if (isEvalChat(this)) return Promise.resolve({ max: null, run: false });
+        return origDrain.apply(this, arguments);
+      };
+    }
+
+    const origServerMidTurn = Chat.prototype.serverMidTurn;
+    if (typeof origServerMidTurn === 'function') {
+      Chat.prototype.serverMidTurn = function () {
+        if (isEvalChat(this)) return Promise.resolve(false);
+        return origServerMidTurn.apply(this, arguments);
+      };
+    }
+
+    for (const fnName of ['reconcile', 'converge', 'tickConverge', 'quickSync', 'remoteSync', 'scoreOld', 'identifyOld', 'loadAll', 'loadOlder']) {
+      const origFn = Chat.prototype[fnName];
+      if (typeof origFn === 'function') {
+        Chat.prototype[fnName] = function () {
+          if (isEvalChat(this)) return Promise.resolve(false);
+          return origFn.apply(this, arguments);
+        };
+      }
+    }
+
+    const origWarm = Chat.prototype.warm;
+    if (typeof origWarm === 'function') {
+      Chat.prototype.warm = function () {
+        if (isEvalChat(this)) return loadChat(this, false);
+        return origWarm.apply(this, arguments);
+      };
+    }
+
+    if (typeof Bus !== 'undefined' && typeof Bus.on === 'function') {
+      Bus.on('history', () => {
+        try {
+          if (typeof Chats === 'undefined' || !Chats.values) return;
+          for (const c of Chats.values()) {
+            if (!c || !isEvalChat(c)) continue;
+            if (c.streaming && !c._evalStreaming) {
+              c.gen = (c.gen || 0) + 1;
+              try { c.ctl?.abort(); } catch {}
+              c.streaming = false;
+            }
+            if (/^实时通道错误|无法获取会话令牌/.test(String(c.error || ''))) {
+              c.error = null;
+              c.emit();
+            }
+          }
+        } catch {}
+      });
     }
 
     if (typeof createChat === 'function' && !createChat._evalWrapped) {
@@ -1378,11 +2345,14 @@ const EvalEngine = (() => {
     extractUserText,
     extractContentText,
     buildAssistantParts,
+    parseEvalFlightFromHtml,
+    fetchEvalSessionData,
     loadChat,
     resolveAutoModality,
     createEvalChat,
     sendFollowUp,
     streamTurn,
+    regenerateTurn,
     parseStream,
     submitVote,
     hookChatPrototype,

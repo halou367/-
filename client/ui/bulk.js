@@ -2,17 +2,35 @@
 const Bulk = {
   K: {
     arch: { name: '一键归档', verb: '归档', store: 'archBlQ', conc: 4, cls: 'arch', ic: 'archive',
-      req: id => rawFetch('/api/chat/' + encodeURIComponent(id) + '/archive', { method: 'POST', headers: { Accept: 'application/json' }, credentials: 'same-origin', cache: 'no-store' }) },
+      req: async id => {
+        const e = typeof History !== 'undefined' ? History.byId?.(id) : null;
+        if (e?.type === 'evaluation' || e?.mode === 'battle' || e?.mode === 'direct') {
+          const r = await rawFetch('/api/history/evaluation/' + encodeURIComponent(id), { method: 'PATCH', headers: { 'Content-Type': 'application/json', Accept: 'application/json' }, body: JSON.stringify({ isArchived: true }), credentials: 'same-origin', cache: 'no-store' });
+          if (r.ok || r.status === 401 || r.status === 429) return r;
+        }
+        return rawFetch('/api/chat/' + encodeURIComponent(id) + '/archive', { method: 'POST', headers: { Accept: 'application/json' }, credentials: 'same-origin', cache: 'no-store' });
+      } },
     unarch: { name: '恢复到对话', verb: '恢复', store: 'archUnQ', conc: 4, cls: 'unarch', ic: 'refresh',
       req: async id => {
-        const r = await rawFetch('/api/chat/' + encodeURIComponent(id) + '/unarchive', { method: 'POST', headers: { Accept: 'application/json' }, credentials: 'same-origin', cache: 'no-store' });
-        if (r.ok || r.status === 404 || r.status === 401 || r.status === 429) return r;
         const e = (typeof ArchiveHistory !== 'undefined' && ArchiveHistory.byId?.(id)) || (typeof History !== 'undefined' && History.byId?.(id));
         const t = e?.type || 'agentic';
+        if (t === 'evaluation') {
+          const rEval = await rawFetch('/api/history/evaluation/' + encodeURIComponent(id), { method: 'PATCH', headers: { 'Content-Type': 'application/json', Accept: 'application/json' }, body: JSON.stringify({ isArchived: false }), credentials: 'same-origin', cache: 'no-store' });
+          if (rEval.ok || rEval.status === 401 || rEval.status === 429) return rEval;
+        }
+        const r = await rawFetch('/api/chat/' + encodeURIComponent(id) + '/unarchive', { method: 'POST', headers: { Accept: 'application/json' }, credentials: 'same-origin', cache: 'no-store' });
+        if (r.ok || r.status === 401 || r.status === 429) return r;
         return rawFetch('/api/history/' + t + '/' + encodeURIComponent(id), { method: 'PATCH', headers: { 'Content-Type': 'application/json', Accept: 'application/json' }, body: JSON.stringify({ isArchived: false }), credentials: 'same-origin', cache: 'no-store' });
       } },
     del: { name: '批量删除对话', verb: '删除', store: 'archDelQ', conc: 6, cls: 'del', ic: 'trash',
-      req: id => rawFetch('/api/chat/' + encodeURIComponent(id), { method: 'DELETE', credentials: 'same-origin', cache: 'no-store' }) },
+      req: async id => {
+        const e = (typeof History !== 'undefined' && History.byId?.(id)) || (typeof ArchiveHistory !== 'undefined' && ArchiveHistory.byId?.(id));
+        if (e?.type === 'evaluation' || e?.mode === 'battle' || e?.mode === 'direct') {
+          const r = await rawFetch('/api/history/evaluation/' + encodeURIComponent(id), { method: 'DELETE', credentials: 'same-origin', cache: 'no-store' });
+          if (r.ok || r.status === 401 || r.status === 429) return r;
+        }
+        return rawFetch('/api/chat/' + encodeURIComponent(id), { method: 'DELETE', credentials: 'same-origin', cache: 'no-store' });
+      } },
   },
   q: {},          // kind → 正在跑的任务
   busy: {},       // kind → 正在统计（还没开始跑）

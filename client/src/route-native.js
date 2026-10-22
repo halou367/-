@@ -229,7 +229,7 @@ async function purity(ses, ms=3200, signal, targetIp='', opt=null) {
   if(!pure&&targetIp&&ipa&&(!ipa.ip||ipa.ip.toLowerCase()===String(targetIp).trim().toLowerCase())){
     const bmScore=Number(cmExit?.botManagement?.score);
     const bmCorp=Boolean(cmExit?.botManagement?.corporateProxy);
-    let fallbackFs=ipa.px?65:(ipa.h||bmCorp?16:12);
+    let fallbackFs=ipa.px?22:(ipa.h||bmCorp?16:12);
     if(Number.isFinite(bmScore)&&bmScore>0&&bmScore<30&&!ipa.px)fallbackFs=Math.max(fallbackFs,Math.min(75,99-bmScore));
     pure={ip:String(targetIp).trim(),fs:fallbackFs,res:!ipa.h&&!ipa.px&&!bmCorp,bc:false,dc:!!(ipa.h||bmCorp),org:String(ipa.isp||'')};
   }
@@ -245,8 +245,15 @@ async function checkProxyIpDirect(pip, ms=9000, signal=null, directFetch=null, o
   if(isReservedOrFixtureTarget(raw, opt?.allowTestNet === true))return null;
   const hasPort=/:\d{1,5}$/.test(raw);
   const target=hasPort?raw:(raw.includes(':')&&!raw.startsWith('[')?`[${raw}]:443`:`${raw}:443`);
-  const doFetch=typeof directFetch==='function'?directFetch:(typeof fetch==='function'?fetch:null);
-  if(!doFetch)return null;
+  const primaryFetch=typeof directFetch==='function'?directFetch:(typeof fetch==='function'?fetch:null);
+  if(!primaryFetch)return null;
+  const doFetch=async(u,o)=>{
+    try{return await primaryFetch(u,o);}
+    catch(e){
+      if(o?.signal?.aborted||typeof fetch!=='function'||primaryFetch===fetch)throw e;
+      return await fetch(u,o);
+    }
+  };
   const bases=['https://api.check.proxyip.cmliussss.net','https://check.proxyip.cmliussss.net'];
   for(const base of bases){
     if(signal?.aborted)return {cancelled:true};
@@ -367,7 +374,8 @@ function createApply({find,owner,validate,apply,persist,publicAccount,now=Date.n
       if(find(a.id)!==a||signature(a)!==signature(o.expected)||State.signature(a)!==beforeConfig||State.mode(a)!==beforeMode||State.locked(a)||(!manual&&!o.forceFailover&&!State.canRecover(a)))throw Error('配置已改变，取消应用');
       validate(a,o.route,o,event);
       for(const k of ['proxy','proxyIp','nodeId','region'])a[k]=String(o.route[k]||'');
-      Object.assign(a,manual&&o.preservePolicy===true?{routeMode:beforeMode,routeAuto:old.routeAuto!==false,nodeFailover:old.nodeFailover===true}:State.prefs(manual?o.mode:beforeMode));
+      const targetMode=manual?o.mode:(o.forceFailover&&/^vless:/i.test(String(o.route?.proxy||''))&&(beforeMode==='direct'||beforeMode==='proxy')?(State.MODES.includes(o.mode)?o.mode:'node'):beforeMode);
+      Object.assign(a,manual&&o.preservePolicy===true?{routeMode:beforeMode,routeAuto:old.routeAuto!==false,nodeFailover:old.nodeFailover===true}:State.prefs(targetMode));
       a.routeHome=String(o.route.routeHome||o.route.region||old.routeHome||old.region||'');a.routeAt=now();a.tunErr=candidate.tunErr||'';
       try{persist();}catch(e){for(const k of Object.keys(old))if(old[k]===undefined)delete a[k];else a[k]=old[k];throw e;}
       return {ok:true,account:publicAccount(a)};

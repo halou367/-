@@ -48,6 +48,17 @@ const DEFAULT_PIP_SRC = ['proxyip.cmliussss.net', ...DEFAULT_PIP_CC.map(cc => 'p
 const DEFAULT_PIP_V = 1;
 
 const Pool = {
+  fromSrc(e, line) {
+    if (!e || !line) return false;
+    return e.src === line || (Array.isArray(e.srcs) && e.srcs.includes(line));
+  },
+  isCfOfficialIp(k) {
+    const host = String(k || '').trim().replace(/^\[|\]$/g, '').split(':')[0];
+    const m = /^(\d+)\.(\d+)\.(\d+)\.(\d+)$/.exec(host);
+    if (!m) return false;
+    const a = +m[1], b = +m[2], c = +m[3];
+    return (a === 104 && b >= 16 && b <= 31) || (a === 172 && b >= 64 && b <= 71) || (a === 162 && (b === 158 || b === 159)) || (a === 108 && b === 162 && c >= 192) || (a === 198 && b === 41 && c >= 128) || (a === 141 && b === 101 && c >= 64 && c <= 127) || (a === 188 && b === 114 && c >= 96 && c <= 111);
+  },
   COLO_CC: { hkg: 'HK', sin: 'SG', nrt: 'JP', kix: 'JP', fuk: 'JP', icn: 'KR', tpe: 'TW', khh: 'TW', lax: 'US', sjc: 'US', sea: 'US', ord: 'US', iad: 'US', ewr: 'US', dfw: 'US', mia: 'US', atl: 'US', den: 'US', phx: 'US', pdx: 'US', bos: 'US', yyz: 'CA', yvr: 'CA', yul: 'CA', lhr: 'GB', man: 'GB', cdg: 'FR', mrs: 'FR', fra: 'DE', muc: 'DE', dus: 'DE', ber: 'DE', ams: 'NL', arn: 'SE', hel: 'FI', waw: 'PL', dme: 'RU', led: 'RU', zrh: 'CH', rix: 'LV', bom: 'IN', del: 'IN', maa: 'IN', syd: 'AU', mel: 'AU', gru: 'BR', ist: 'TR', mxp: 'IT', fco: 'IT', mad: 'ES', vie: 'AT', dub: 'IE' },
   edgeTunnelCountryFeed(cc) {
     const c = String(cc || '').trim().toUpperCase();
@@ -113,16 +124,22 @@ const Pool = {
     let x = null; try { x = await Host.shared('pippool'); } catch {}
     if (x && x.v) {
       this.d = { ...this.blank(), ...x, ips: x.ips || {}, src: Array.isArray(x.src) ? x.src : [] };
-      const hasV158Poison = !this.d.unpoisonV163 && (
+      const hasV158Poison = (!this.d.unpoisonV163 || !this.d.unpoisonV167) && (
         (Object.keys(this.d.ban || {}).length + Object.keys(this.d.drop || {}).length >= 20) ||
-        Object.values(this.d.ips || {}).some(e => e && e.banned === true)
+        Object.values(this.d.ips || {}).filter(e => e && (e.banned === true || /CLOSED|关闭|重置/i.test(String(e.err || '')))).length >= 10
       );
       this.d.unpoisonV163 = 1;
+      this.d.unpoisonV167 = 1;
       if (hasV158Poison) {
         this.d.ban = {};
         this.d.drop = {};
         this.d.banEg = {};
         this.d.pcq = { day: '', n: 0 };
+        if (this.d.rep && typeof this.d.rep === 'object') {
+          for (const r of Object.values(this.d.rep)) {
+            if (r && r.px && r.pu && +r.pu.fs === 65) delete r.pu;
+          }
+        }
         const srcSet = new Set(this.d.src || []);
         const used = this.usedMap?.() || new Map();
         for (const [k, e] of Object.entries(this.d.ips || {})) {
@@ -131,12 +148,20 @@ const Pool = {
             delete this.d.ips[k];
             continue;
           }
-          if (e.banned) {
+          if (e.banned || (e.ok === false && /CLOSED|关闭|重置|超时|502|连接失败/i.test(String(e.err || '')))) {
             delete e.gone;
             delete e.banned;
             delete e.banReason;
             e.cool = 0;
-            if (e.ok === false && !e.eg) { delete e.ok; e.fc = 0; e.err = ''; }
+            if (e.ok === false) { delete e.ok; e.fc = 0; e.err = ''; }
+          }
+        }
+        if (this.d.dom && typeof this.d.dom === 'object') {
+          for (const dm of Object.values(this.d.dom)) {
+            if (dm && dm.ok === false && /CLOSED|关闭|重置|超时|连接失败/i.test(String(dm.err || ''))) {
+              delete dm.ok;
+              dm.err = '';
+            }
           }
         }
         for (const l of this.d.src || []) {
@@ -154,6 +179,7 @@ const Pool = {
       const cnt = new Map(); for (const a of Nodes.accts) if (a.nodeId && Nodes.get(a.nodeId)) cnt.set(a.nodeId, (cnt.get(a.nodeId) || 0) + 1);
       d.node = [...cnt].sort((a, b) => b[1] - a[1])[0]?.[0] || (Nodes.list.length === 1 ? Nodes.list[0].id : '');  // 多个节点又没账号在用：交给 autoNode 实测挑
       for (const l of d.src) { const p = this.parse(l); if (p?.ip || p?.chain) d.ips[p.line] = { ip: p.host, port: p.port, src: '', ...(p.chain ? { chain: p.chain } : {}) }; }
+      for (const k of Object.keys(d.ips || {})) { if (this.isCfOfficialIp(k) || (!d.ips[k]?.src && !(d.src || []).includes(k))) delete d.ips[k]; }
       this.d = d; if (d.src.length || d.node) Host.shared('pippool', d).catch(() => {});
     }
     return this.d;
@@ -204,7 +230,7 @@ const Pool = {
   async resolve(host, force) {
     const c = this.dns.get(host); if (!force && c && now() - c.at < 60e3) return c.ips;
     // 原生直连解析（桌面：主进程直连加密 DoH；安卓：系统 DNS + 直连 DoH）—— 页面 fetch 会走账号代理（本机代理没开 = 解析失败 0/0）
-    if (Host.resolve) { const r = await Host.resolve(host).catch(() => null); const ips = (r || []).filter(x => /^\d{1,3}(\.\d{1,3}){3}$/.test(x)); if (ips.length) { this.dns.set(host, { at: now(), ips }); return ips; }
+    if (Host.resolve) { const r = await Host.resolve(host).catch(() => null); const ips = (r || []).filter(x => /^\d{1,3}(\.\d{1,3}){3}(:\d{1,5})?$/.test(x)); if (ips.length) { this.dns.set(host, { at: now(), ips }); return ips; }
       // 桌面版：主进程直连加密 DNS 已经查过所有解析器，不再用页面 fetch（那会走账号代理 / 本机代理）
       if (Host.platform !== 'android') return []; }
     const qs = [['https://223.5.5.5/resolve?type=1&name=', {}], ['https://1.12.12.12/dns-query?type=A&name=', { accept: 'application/dns-json' }], ['https://dns.alidns.com/resolve?type=1&name=', {}], ['https://cloudflare-dns.com/dns-query?type=A&name=', { accept: 'application/dns-json' }], ['https://dns.google/resolve?type=A&name=', {}]];
@@ -215,7 +241,7 @@ const Pool = {
     };
     const ok = (await Promise.all(qs.map(one))).filter(Boolean);
     if (!ok.length) return c ? c.ips : null;
-    const ips = [...new Set(ok.flat())].filter(x => /^\d{1,3}(\.\d{1,3}){3}$/.test(x));
+    const ips = [...new Set(ok.flat())].filter(x => /^\d{1,3}(\.\d{1,3}){3}(:\d{1,5})?$/.test(x));
     this.dns.set(host, { at: now(), ips }); return ips;
   },
   // 重新解析一个域名来源：新 IP 加入（待检测），消失的 IP 移除（有账号在用的先标记 gone，换 IP 时跳过）
@@ -228,21 +254,33 @@ const Pool = {
     const used = this.usedMap();
     return this.mutate(d => {
       if(!live())return {added:[],removed:0,cancelled:true};
-      const added = []; let removed = 0; const want = new Set(ips.map(ip => ip + (p.port ? ':' + p.port : '')));
+      const added = []; let removed = 0; const want = new Set(ips.map(ip => ip.includes(':') ? ip : ip + (p.port ? ':' + p.port : '')));
       // 永久拉黑 / 淘汰过的 IP（ban / drop / banEg）：非强制刷新时不再加回池子；点击「检查」强制刷新（force=true）时解除临时淘汰重新检测
       for (const k of want) {
-        const low = k.toLowerCase(), rawIp = k.split(':')[0].toLowerCase(), e = d.ips[k];
+        const low = k.toLowerCase(), [rawHost, rawPort] = k.split(':'), rawIp = rawHost.toLowerCase(), e = d.ips[k];
         if (!force && (d.ban?.[low] || d.ban?.[rawIp] || d.banEg?.[rawIp] || (!e && (d.drop?.[k] || d.drop?.[low] || d.drop?.[rawIp])))) continue;
         if (force) {
           if (d.ban) { delete d.ban[low]; if (rawIp) delete d.ban[rawIp]; }
           if (d.drop) { delete d.drop[k]; delete d.drop[low]; if (rawIp) delete d.drop[rawIp]; }
         }
-        if (!e) { d.ips[k] = { ip: k.split(':')[0], port: p.port, src: p.line }; added.push(k); }
-        else if (force || (!e.banned && !d.ban?.[low])) { if (!e.src || !(d.src || []).includes(e.src)) e.src = p.line; e.gone = false; if (force) { e.banned = false; e.cool = 0; } }
+        if (!e) { d.ips[k] = { ip: rawHost, port: rawPort || p.port || '', src: p.line, srcs: [p.line] }; added.push(k); }
+        else if (force || (!e.banned && !d.ban?.[low])) {
+          if (!e.src || !(d.src || []).includes(e.src)) e.src = p.line;
+          const srcs = Array.isArray(e.srcs) ? e.srcs.filter(s => (d.src || []).includes(s)) : (e.src && (d.src || []).includes(e.src) ? [e.src] : []);
+          if (!srcs.includes(p.line)) srcs.push(p.line);
+          e.srcs = srcs;
+          e.gone = false;
+          if (force) { e.banned = false; e.cool = 0; }
+        }
       }
-      for (const [k, e] of Object.entries(d.ips)) if (e.src === p.line && !want.has(k)) {
+      for (const [k, e] of Object.entries(d.ips)) if (this.fromSrc(e, p.line) && !want.has(k)) {
         // 已实测纯净的 IP 或正在等待首轮扫描的 IP 不因 DNS 轮询变化而误删，一直保留到 6 小时复检确认不可用为止
         if ((e.ok === true && typeof IPRep !== 'undefined' && IPRep.pure?.(k, e)) || e.ok === null) continue;
+        if (Array.isArray(e.srcs) && e.srcs.length > 1) {
+          e.srcs = e.srcs.filter(s => s !== p.line);
+          if (e.src === p.line) e.src = e.srcs[0] || '';
+          continue;
+        }
         if (used.has(k)) e.gone = true; else delete d.ips[k];
         removed++;
       }
@@ -287,7 +325,18 @@ const Pool = {
       for (const tok of line.split(/[,，;；\s|]+/)) if (tok) put(tok);
     }
     if (!out.size) for (const m of t.matchAll(/(?:(?:socks5|https?|turn|sstp):\/\/[^\s"'<>,;|\\]+)|\b\d{1,3}(?:\.\d{1,3}){3}(?::\d{1,5})?\b/gi)) put(m[0]);
-    return [...out.values()].slice(0, 100000);
+    if (out.size > 240) {
+      const byCc = new Map(), picked = [];
+      for (const item of out.values()) {
+        const c = item.loc || '_', n = byCc.get(c) || 0;
+        if (n >= 16) continue;
+        byCc.set(c, n + 1);
+        picked.push(item);
+        if (picked.length >= 240) break;
+      }
+      return picked;
+    }
+    return [...out.values()].slice(0, 240);
   },
   // 拉取一个 API 来源：新出口加入（待检测），内容里没了的移除（已验证纯净的保留，有账号在用的先标记 gone）；拉取失败 / 内容为空不动现有的
   async refreshApi(line, force, options = {}) {
@@ -349,7 +398,7 @@ const Pool = {
     });
     const todo = fresh.filter(p => p.ip || p.chain).map(p => p.line).filter(k => this.d.ips[k] && this.d.ips[k].ok !== true);
     const doms = [...new Set(fresh.filter(p => !p.ip && !p.chain && !p.api).map(p => p.line))], okDoms = [];
-    for (const l of [...new Set(fresh.filter(p => p.api).map(p => p.line))]) { onStep?.('拉取 API：' + l); const r = await this.refreshApi(l, true); if (r.err) apiErr.push(l + '：' + r.err); else todo.push(...this.entries().filter(([, e]) => e.src === l && !e.gone && e.ok !== true).map(([k]) => k)); }
+    for (const l of [...new Set(fresh.filter(p => p.api).map(p => p.line))]) { onStep?.('拉取 API：' + l); const r = await this.refreshApi(l, true); if (r.err) apiErr.push(l + '：' + r.err); else todo.push(...this.entries().filter(([, e]) => Pool.fromSrc(e, l) && !e.gone && e.ok !== true).map(([k]) => k)); }
     let i = 0;
     for (const l of doms) {
       onStep?.('解析域名 ' + (++i) + '/' + doms.length + '：' + l);
@@ -357,7 +406,7 @@ const Pool = {
       if (r.err) bad.push(l + '（解析失败）');
       else {
         okDoms.push(l);
-        todo.push(...this.entries().filter(([, e]) => e.src === l && !e.gone && e.ok !== true).map(([k]) => k));
+        todo.push(...this.entries().filter(([, e]) => Pool.fromSrc(e, l) && !e.gone && e.ok !== true).map(([k]) => k));
       }
     }
     return { todo: [...new Set(todo)], doms: okDoms, bad, apiErr, lines: fresh.length };
@@ -382,14 +431,14 @@ const Pool = {
     lines = [...new Set((lines || this.domains()).filter(l => { const p = this.parse(l); return p && !p.ip && !p.chain && !p.api; }))];
     if (!lines.length) return { done: 0 };
     if (!this.link() || !Host.probe) return { done: 0, error: '请先选择 VLESS 节点' };
-    for (const l of lines) if (!this.entries().some(([, e]) => e.src === l && !e.gone)) { onStep?.('解析域名 ' + l); await this.refreshSrc(l).catch(() => {}); }
+    for (const l of lines) if (!this.entries().some(([, e]) => Pool.fromSrc(e, l) && !e.gone)) { onStep?.('解析域名 ' + l); await this.refreshSrc(l).catch(() => {}); }
     const tried = new Set(), result = {};
     const run = async () => {
       for (let round = 0; round < 2; round++) {
         const pick = [];
         for (const l of lines) {
           if (result[l]?.ok) continue;
-          const ks = this.entries().filter(([k, e]) => e.src === l && !e.gone && !tried.has(k) && !this.banned(k)).sort(([, x], [, y]) => (y.ok === true) - (x.ok === true) || (x.ok === false) - (y.ok === false) || (x.ms || 9e9) - (y.ms || 9e9)).map(([k]) => k);
+          const ks = this.entries().filter(([k, e]) => Pool.fromSrc(e, l) && !e.gone && !tried.has(k) && !this.banned(k)).sort(([, x], [, y]) => (y.ok === true) - (x.ok === true) || (x.ok === false) - (y.ok === false) || (x.ms || 9e9) - (y.ms || 9e9)).map(([k]) => k);
           if (ks[0]) { pick.push([l, ks[0]]); tried.add(ks[0]); }
         }
         if (!pick.length) break;
@@ -420,7 +469,7 @@ const Pool = {
     let tested = 0;
     const probeBatch = async () => {
       for (let batch = 0; batch < 4 && have() < want; batch++) {
-        const keys = this.entries().filter(([k, e]) => srcs.has(e.src) && !e.gone && !this.banned(k) && !this.owner(k) && (e.ok == null || (e.ok === true && e.loc === cc && now() - (e.at || 0) > 3 * 3600e3))).map(([k]) => k).sort(() => Math.random() - .5).slice(0, 8);
+        const keys = this.entries().filter(([k, e]) => ((srcs.has(e.src) || (Array.isArray(e.srcs) && e.srcs.some(s => srcs.has(s)))) || (Array.isArray(e.srcs) && e.srcs.some(s => srcs.has(s)))) && !e.gone && !this.banned(k) && !this.owner(k) && (e.ok == null || (e.ok === true && e.loc === cc && now() - (e.at || 0) > 3 * 3600e3))).map(([k]) => k).sort(() => Math.random() - .5).slice(0, 8);
         if (!keys.length) break;
         log?.(regionLabel(cc) + '：检测 ' + keys.length + ' 个候选 IP（已有可用 ' + have() + ' 个）…');
         await this.probe(keys).catch(() => {}); tested += keys.length;
@@ -462,8 +511,8 @@ const Pool = {
   },
   // 域名状态按它解析出的 IP 的实测结果汇总（全部检测后用）：有一个可用就算可用，地区取最多的，延迟取最低
   domSummarize(lines) {
-    return this.mutate(d => { d.dom ||= {}; for (const l of lines) { const es = Object.entries(d.ips).filter(([, e]) => e.src === l && !e.gone && e.ok != null); if (!es.length) continue;
-      const ok = es.filter(([, e]) => e.ok), cnt = {}; for (const [, e] of ok) if (e.loc) cnt[e.loc] = (cnt[e.loc] || 0) + 1;
+    return this.mutate(d => { d.dom ||= {}; for (const l of lines) { const es = Object.entries(d.ips).filter(([, e]) => Pool.fromSrc(e, l) && !e.gone && e.ok != null); if (!es.length) continue;
+      const ok = es.filter(([k, e]) => { const st = this.state(k, e); return st === 'ok' || st === 'used'; }), cnt = {}; for (const [, e] of ok) if (e.loc) cnt[e.loc] = (cnt[e.loc] || 0) + 1;
       const loc = Object.entries(cnt).sort((a, b) => b[1] - a[1])[0]?.[0] || d.dom[l]?.loc || '', ms = ok.reduce((m, [, e]) => e.ms > 0 && (!m || e.ms < m) ? e.ms : m, 0);
       d.dom[l] = { ok: ok.length > 0, loc, ms, at: now(), ip: ok[0]?.[0] || es[0][0], err: ok.length ? '' : (es[0][1].err || '连接失败'), n: es.length, nok: ok.length }; } });
   },
@@ -571,7 +620,7 @@ const Pool = {
   },
   regionCandidates(cc) {
     const sources=this.regionSources(cc);
-    return this.entries().filter(([k,e])=>!e.gone&&!this.banned(k)&&(e.loc===cc||sources.has(e.src)))
+    return this.entries().filter(([k,e])=>!e.gone&&!this.banned(k)&&(e.loc===cc||((sources.has(e.src) || (Array.isArray(e.srcs) && e.srcs.some(s => sources.has(s)))) || (Array.isArray(e.srcs) && e.srcs.some(s => sources.has(s))))))
       .sort(([ka,a],[kb,b])=>Number(this.sourceRegionHint(b.src)===cc)-Number(this.sourceRegionHint(a.src)===cc)||Number(b.ok==null)-Number(a.ok==null)||(a.ms||9e9)-(b.ms||9e9)||ka.localeCompare(kb));
   },
   // Streaming on new desktop runtimes; final-array fallback on older hosts.
@@ -617,6 +666,10 @@ const Pool = {
   },
   async probe(keys, onProg, options = {}) {
     keys=[...new Set(keys)].filter(k=>this.d.ips[k]&&!this.d.ips[k].gone&&!this.banned(k));if(!keys.length)return {done:0};
+    if(keys.length>96){
+      keys.sort((ka,kb)=>{const x=this.d.ips[ka]||{},y=this.d.ips[kb]||{};return ((y.ok===true?2:y.ok==null?1:0)-(x.ok===true?2:x.ok==null?1:0))||((x.fc||0)-(y.fc||0))||((x.ms||9e9)-(y.ms||9e9));});
+      keys=keys.slice(0,96);
+    }
     // 如果后台全量扫描正在进行且未指定独立取消信号，直接将新 IP 动态插队到当前扫描队列最前面优先检测
     if(this._activeScan&&!options.signal&&this.job){
       const act=this._activeScan,fresh=keys.filter(k=>!act.seenKeys.has(k));
@@ -632,7 +685,7 @@ const Pool = {
       return this.job;
     }
     const run=async()=>{
-      let link=this.link(),done=0,failed=0,fatal='',foDone=false;
+      let link=this.link(),done=0,failed=0,consecFail=0,okSeen=0,fatal='',foDone=false;
       const live=()=>!options.signal?.aborted&&Boolean(this.link()||link);
       if(!live())return {done:0,cancelled:true};
       const size=Host.onProbeProgress?32:4,queue=[],completed=new Set(),seenKeys=new Set(keys),callbacks=onProg?[onProg]:[];
@@ -656,7 +709,8 @@ const Pool = {
               }
             }
           });
-          if(!live()||completed.has(k))return;completed.add(k);done++;if(!(result.ip&&result.brana))failed++;
+          if(!live()||completed.has(k))return;completed.add(k);done++;
+          if(result.ip&&result.brana){okSeen++;consecFail=0;}else{failed++;consecFail++;}
           Object.assign(state,{done,failed});Bus.emit('pool');
           for(const cb of callbacks){try{cb(done,state.total);}catch{}}
         };
@@ -675,7 +729,8 @@ const Pool = {
         if(options.allowFailover!==false&&!foDone&&((!Array.isArray(r)&&/节点|xray/.test(r?.error||'')&&Nodes.list.length>1)||(part.length>=6&&Array.isArray(r)&&r.every(x=>!x.ip&&x.via!=='direct-check')))&&this.entries().some(([k,e])=>e.ok&&!part.includes(k))){
           foDone=true;const f=await this.failover();if(f.ok){link=this.link();r=await one(part);}
         }
-        if(!Array.isArray(r))fatal=r?.error||'检测失败';
+        if(!Array.isArray(r)){fatal=r?.error||'检测失败';return;}
+        if(consecFail>=24&&okSeen===0){fatal='连续 '+consecFail+' 个候选连接失败，已自动停止全量扫描（可直接使用节点自身代理兜底）';return;}
       }};
       try{await Promise.all(Array.from({length:Math.min(2,queue.length)},worker));if(!live())return {done,cancelled:true};if(fatal)throw Error(fatal);return {done};}
       finally{if(this._activeScan?.state===state)this._activeScan=null;if(this.prog===state){this.prog=null;Bus.emit('pool');}}
@@ -1532,7 +1587,7 @@ const ProxySet = {
             h('button', { class: 'ib xs', title: '移除', onclick: () => Pool.removeKey(k) }, icon('x'))));
       };
       // 两个列表：「IP」= 直接导入的裸 IP；「域名解析」= 每个域名一行（点开看它解析出的 IP）
-      const MAX = 300, bare = show.filter(([, e]) => !e.src);
+      const MAX = 300, srcSet = new Set(Pool.d.src || []), bare = show.filter(([k, e]) => !e.src && srcSet.has(k));
       list.replaceChildren(...K(...(bare.length ? bare.slice(0, MAX).map(row) : [h('p', { class: 'note' }, es.some(([, e]) => !e.src) ? '没有匹配的 IP' : '没有直接导入的 IP（在上面一行一个粘贴 IP，点「检查」）')]), bare.length > MAX ? h('p', { class: 'note' }, '还有 ' + (bare.length - MAX) + ' 个未显示，点地区筛选') : null));
       listCnt.textContent = String(bare.length);
       const doms = Pool.d.src.filter(l => Pool.isSrc(l)), openD = ProxySet.openDom ||= new Set();
@@ -1540,12 +1595,18 @@ const ProxySet = {
       const drows = [];
       for (const l of doms) {
         const api = Pool.isApi(l), ad = api ? Pool.d.api?.[l] : null;
-        const mine = es.filter(([, e]) => e.src === l), n = mine.length, okE = mine.filter(([, e]) => e.ok), ok = okE.length, dd = api ? null : Pool.d.dom?.[l], cc = api ? Pool.apiLoc(okE) : Pool.domLoc(l), ms = okE.reduce((m, [, e]) => e.ms > 0 && (!m || e.ms < m) ? e.ms : m, 0) || (dd?.ok ? dd.ms : 0);
-        const vis = show.filter(([, e]) => e.src === l); if (f && !vis.length) continue; domIps += n;
+        const mine = es.filter(([, e]) => Pool.fromSrc(e, l));
+        const vis = show.filter(([, e]) => Pool.fromSrc(e, l)).sort((a, b) => ord[Pool.state(...a)] - ord[Pool.state(...b)] || (a[1].ms || 9e9) - (b[1].ms || 9e9));
+        if (f && !vis.length) continue;
+        const scope = f ? vis : mine, n = scope.length;
+        const okE = scope.filter(([k, e]) => { const s = Pool.state(k, e); return s === 'ok' || s === 'used'; });
+        const ok = okE.length, dd = api ? null : Pool.d.dom?.[l], cc = api ? Pool.apiLoc(okE.length ? okE : scope) : Pool.domLoc(l);
+        const ms = okE.reduce((m, [, e]) => e.ms > 0 && (!m || e.ms < m) ? e.ms : m, 0) || (!f && dd?.ok && ok ? dd.ms : 0);
+        domIps += mine.length;
         const on = openD.has(l);
         drows.push(h('div', { class: 'ps-drow' + (on ? ' open' : '') + (n && !ok && mine.some(([, e]) => e.ok === false) ? ' bad' : ''), role: 'button', tabindex: '0', 'aria-expanded': String(on), title: api ? Pool.apiTip(l, n, ok) : l + '\n解析出 ' + n + ' 个 IP，' + ok + ' 个可用（使用前都会重新解析）' + (dd?.err && !ok ? '\n' + dd.err : '') + '\n点击展开 / 收起', onclick: e => { if (e.target.closest('button')) return; on ? openD.delete(l) : openD.add(l); render(); } },
           icon('chev', 'ps-dchev'), api ? h('span', { class: 'ps-dn mono' }, h('b', { class: 'ps-api' }, 'API'), Pool.apiName(l), ad?.err ? h('small', { class: 'ps-apierr' }, ' · ' + ad.err) : null) : h('span', { class: 'ps-dn mono' }, l), h('span', { class: 'ps-dl' }, cc ? ccF(cc) : ''), h('span', { class: 'ps-dc' + (ok ? ' ok' : '') }, n ? ok + '/' + n : api ? (ad?.err ? '失败' : '未拉取') : '未解析'), h('span', { class: 'ps-dm' }, ms ? ms + 'ms' : ''),
-          h('button', { class: 'ib xs', title: api ? '重新拉取这个 API 并检测它的全部出口' : '重新解析并检测这个域名的全部 IP', 'aria-label': '检测 ' + l, onclick: async () => { if (api) say('拉取 API：' + Pool.apiName(l), 'busy'); const y = await Pool.refreshSrc(l, true).catch(e => ({ err: cleanErr(e) })); if (y?.err) { say(Pool.apiName(l) + '：' + y.err, 'bad'); return; } const ks = Pool.entries().filter(([, e]) => e.src === l && !e.gone).map(([k]) => k); await runProbe(ks, api ? Pool.apiName(l) : l); if (!api) await Pool.domSummarize([l]); } }, icon('refresh')),
+          h('button', { class: 'ib xs', title: api ? '重新拉取这个 API 并检测它的全部出口' : '重新解析并检测这个域名的全部 IP', 'aria-label': '检测 ' + l, onclick: async () => { if (api) say('拉取 API：' + Pool.apiName(l), 'busy'); const y = await Pool.refreshSrc(l, true).catch(e => ({ err: cleanErr(e) })); if (y?.err) { say(Pool.apiName(l) + '：' + y.err, 'bad'); return; } const ks = Pool.entries().filter(([, e]) => Pool.fromSrc(e, l) && !e.gone).map(([k]) => k); await runProbe(ks, api ? Pool.apiName(l) : l); if (!api) await Pool.domSummarize([l]); } }, icon('refresh')),
           h('button', { class: 'ib xs', title: api ? '移除这个 API 和它的全部出口' : '移除这个域名和它解析出的 IP', 'aria-label': '移除 ' + l, onclick: async () => { if (await Dialog.confirm({ title: api ? '移除 API' : '移除域名', text: '移除「' + (api ? Pool.apiName(l) : l) + '」和它' + (api ? '的 ' : '解析出的 ') + n + ' 个' + (api ? '出口' : ' IP') + '？', ok: '移除', danger: true })) Pool.removeSrc(l); } }, icon('x'))));
         if (on) drows.push(h('div', { class: 'ps-dips' }, ...(vis.length ? vis.slice(0, 120).map(row) : [h('p', { class: 'note' }, api ? (ad?.err || '还没有拉取到出口') : '还没有解析出 IP')])));
       }
