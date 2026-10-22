@@ -35,10 +35,19 @@ async function findBrowser() {
 // 握手阶段的读取器：一直收着数据，按需取 n 个字节；握手完 stop() 后把剩下的数据交给转发
 function reader(sock) {
   const st = { buf: Buffer.alloc(0), wake: null, dead: false };
-  const on = d => { st.buf = Buffer.concat([st.buf, d]); st.wake?.(); };
+  const on = d => { st.buf = st.buf.length ? Buffer.concat([st.buf, d]) : d; st.wake?.(); };
   const cl = () => { st.dead = true; st.wake?.(); };
   sock.on('data', on); sock.on('close', cl);
   st.read = async n => { while (st.buf.length < n) { if (st.dead) throw new Error('closed'); await new Promise(r => { st.wake = r; }); st.wake = null; } const b = st.buf.subarray(0, n); st.buf = st.buf.subarray(n); return b; };
+  st.readUntil = async (delim, max = 8192) => {
+    for (;;) {
+      const idx = st.buf.indexOf(delim);
+      if (idx >= 0) { const end = idx + delim.length, b = st.buf.subarray(0, end); st.buf = st.buf.subarray(end); return b.toString('latin1'); }
+      if (st.buf.length > max) throw new Error('bad proxy reply');
+      if (st.dead) throw new Error('closed');
+      await new Promise(r => { st.wake = r; }); st.wake = null;
+    }
+  };
   st.stop = () => { sock.off('data', on); sock.off('close', cl); const rest = st.buf; st.buf = Buffer.alloc(0); return rest; };
   return st;
 }
@@ -59,8 +68,7 @@ function upstreamConnect(up, host, port) {
         } else {
           const auth = up.user ? 'Proxy-Authorization: Basic ' + Buffer.from(up.user + ':' + (up.pass || '')).toString('base64') + '\r\n' : '';
           s.write(`CONNECT ${host}:${port} HTTP/1.1\r\nHost: ${host}:${port}\r\n${auth}\r\n`);
-          let head = '';
-          while (!head.includes('\r\n\r\n')) { head += (await st.read(1)).toString('latin1'); if (head.length > 8192) throw new Error('bad proxy reply'); }
+          const head = await st.readUntil('\r\n\r\n', 8192);
           if (!/^HTTP\/1\.[01] 200/.test(head)) throw new Error(head.split('\r\n')[0]);
         }
         s.setTimeout(0); s.off('error', rej); res({ s, rest: st.stop() });

@@ -234,7 +234,8 @@
         if (!P.isOutUrl(url)) continue;
         const sid = P.sessionOf(url);
         let messageId = null;
-        for (const record of parse(capture.responseBody)) {
+        const records = Array.isArray(capture && capture._parsedEvents) ? capture._parsedEvents : parse(capture.responseBody);
+        for (const record of records) {
           const d = (record && record.data) || {};
           if (d.type === 'start' && d.messageId) messageId = String(d.messageId);
           if (d.type === 'tool-input-start' && d.toolCallId) {
@@ -335,7 +336,7 @@
     const vendorStrong = strong.filter((h) => h.vendors && h.vendors.length > 0);
     if (vendorStrong.length) {
       const fam = FAMILIES.find((f) => f.id === vendorStrong[0].family);
-      return summarize(vendorStrong, 'tool-call', calls.length, corroborate(fam, traits), traits);
+      return Object.assign(summarize(vendorStrong, 'tool-call', calls.length, corroborate(fam, traits), traits), { toolCalls: calls });
     }
 
     const weak = [];
@@ -345,12 +346,12 @@
     }
     if (weak.length) {
       const fam = FAMILIES.find((f) => f.id === weak[0].family);
-      return summarize(weak, 'stream-id', calls.length, corroborate(fam, traits), traits);
+      return Object.assign(summarize(weak, 'stream-id', calls.length, corroborate(fam, traits), traits), { toolCalls: calls });
     }
 
     if (strong.length) {
       const fam = FAMILIES.find((f) => f.id === strong[0].family);
-      return summarize(strong, 'tool-call', calls.length, corroborate(fam, traits), traits);
+      return Object.assign(summarize(strong, 'tool-call', calls.length, corroborate(fam, traits), traits), { toolCalls: calls });
     }
 
     const observed = calls.length > 0 || streamIds.length > 0;
@@ -362,6 +363,7 @@
       observed,
       evidenceKind: null,
       toolCallCount: calls.length,
+      toolCalls: calls,
       evidenceCount: 0,
       channels: [],
       channelLabels: [],

@@ -34,7 +34,7 @@ const Traffic = {
   size(b) {
     try {
       if (b == null) return 0;
-      if (typeof b === 'string') return b.length > 2e5 ? b.length : new TextEncoder().encode(b).length;
+      if (typeof b === 'string') return b.length > 4096 ? b.length : new TextEncoder().encode(b).length;
       if (typeof Blob !== 'undefined' && b instanceof Blob) return b.size;
       if (b.byteLength != null) return b.byteLength;
       if (typeof URLSearchParams !== 'undefined' && b instanceof URLSearchParams) return b.toString().length;
@@ -50,10 +50,20 @@ const Traffic = {
       const end = () => { this.pend.delete(id); };
       p.then(r => {
         try {
-          if ((o && o._selfTrackDown) || !r || !r.body || typeof r.clone !== 'function') return end();
-          const rd = r.clone().body.getReader();
-          const pump = () => rd.read().then(x => { if (x.done) return end(); const k = x.value && x.value.byteLength || 0; if (k) { this.down += k; this.lastDownAt = now(); this.add(kd, 0, k); } return pump(); });
-          pump().catch(end);
+          if (o && o._selfTrackDown) return end();
+          const cl = Number(r?.headers?.get?.('content-length') || 0);
+          if (cl > 0 && !/text\/event-stream/i.test(r?.headers?.get?.('content-type') || '')) {
+            this.down += cl; this.lastDownAt = now(); this.add(kd, 0, cl); return end();
+          }
+          const c = r && r.clone ? r.clone() : null, rd = c && c.body && c.body.getReader ? c.body.getReader() : null;
+          if (!rd) return end();
+          const pump = () => rd.read().then(x => {
+            if (x.done) return end();
+            const k = x.value && x.value.byteLength || 0;
+            if (k) { this.down += k; this.lastDownAt = now(); this.add(kd, 0, k); }
+            return pump();
+          }, end);
+          pump();
         } catch { end(); }
       }, () => { this.errs++; end(); });
     } catch {}
@@ -111,6 +121,7 @@ const _extFetch = (u, o) => {
   const tNow = now();
   let c = _costFetchCache.get(cacheKey) || _costFetchCache.get(sid);
   if (!c) { c = { pending: null, at: 0, backoffUntil: 0, snap: null }; }
+  if (_costFetchCache.size > 256) _costFetchCache.delete(_costFetchCache.keys().next().value);
   _costFetchCache.set(cacheKey, c);
   if (c.pending) return c.pending.then(s => new Response(s.body, { status: s.status, statusText: s.statusText, headers: s.headers }));
   if (c.snap && ((c.snap.status === 200 && tNow - c.at < 4000) || (tNow < c.backoffUntil))) {
@@ -357,36 +368,71 @@ const Host = (() => {
 })();
 
 // ---------- 本地存储（按账号分区天然隔离）----------
+const _storeRawCache = new Map();
+const _storeReadOnlyKeys = new Set(['prefs', 'proto:schema', 'gacha:settings']);
 const Store = {
-  get(k, d) { try { const v = localStorage.getItem('anc:' + k); return v == null ? d : JSON.parse(v); } catch { return d; } },
+  _writeSeq: 0,
+  get(k, d) {
+    try {
+      const v = localStorage.getItem('anc:' + k);
+      if (v == null) { _storeRawCache.delete(k); return d; }
+      const hit = _storeRawCache.get(k);
+      if (hit && hit.raw === v) {
+        if (hit.val == null || typeof hit.val !== 'object' || _storeReadOnlyKeys.has(k) || k.startsWith('lastnode:')) return hit.val;
+        return v.length < 4096 ? JSON.parse(v) : (typeof structuredClone === 'function' ? structuredClone(hit.val) : JSON.parse(v));
+      }
+      const val = JSON.parse(v);
+      if (_storeRawCache.size > 160) _storeRawCache.delete(_storeRawCache.keys().next().value);
+      _storeRawCache.set(k, { raw: v, val });
+      if (val == null || typeof val !== 'object' || _storeReadOnlyKeys.has(k) || k.startsWith('lastnode:')) return val;
+      return v.length < 4096 ? JSON.parse(v) : (typeof structuredClone === 'function' ? structuredClone(val) : JSON.parse(v));
+    } catch { return d; }
+  },
   freeQuotaBloat(keepKey) {
     try {
       const target = 'anc:' + keepKey;
-      if ('anc:cap' !== target) try { localStorage.removeItem('anc:cap'); } catch {}
+      if ('anc:cap' !== target) try { localStorage.removeItem('anc:cap'); _storeRawCache.delete('cap'); } catch {}
       if ('anc:pelican-shots' !== target) {
         try {
           const ps = localStorage.getItem('anc:pelican-shots');
-          if (ps && ps.length > 600000) localStorage.removeItem('anc:pelican-shots');
+          if (ps && ps.length > 600000) { localStorage.removeItem('anc:pelican-shots'); _storeRawCache.delete('pelican-shots'); }
         } catch {}
       }
       const keys = [];
       for (let i = 0; i < localStorage.length; i++) {
         const lk = localStorage.key(i);
-        if (lk && lk !== target && (lk.startsWith('anc:trace:') || lk === 'anc:str:samples' || lk === 'anc:billing:costDocCache')) keys.push(lk);
+        if (lk && lk !== target && (lk.startsWith('anc:trace:') || lk === 'anc:str:samples' || lk === 'anc:billing:costDocCache' || lk.startsWith('arena:evaluation-session-cache:v1:'))) keys.push(lk);
       }
       for (const lk of keys) {
-        try { localStorage.removeItem(lk); } catch {}
+        try {
+          localStorage.removeItem(lk);
+          if (lk.startsWith('anc:')) _storeRawCache.delete(lk.slice(4));
+        } catch {}
       }
     } catch {}
   },
   set(k, v) {
     const raw = JSON.stringify(v);
-    try { localStorage.setItem('anc:' + k, raw); return true; } catch {
+    this._writeSeq = (this._writeSeq || 0) + 1;
+    try {
+      localStorage.setItem('anc:' + k, raw);
+      if (_storeRawCache.size > 160) _storeRawCache.delete(_storeRawCache.keys().next().value);
+      _storeRawCache.set(k, { raw, val: v });
+      return true;
+    } catch {
       this.freeQuotaBloat(k);
-      try { localStorage.setItem('anc:' + k, raw); return true; } catch { return false; }
+      try {
+        localStorage.setItem('anc:' + k, raw);
+        _storeRawCache.set(k, { raw, val: v });
+        return true;
+      } catch { return false; }
     }
   },
-  del(k) { try { localStorage.removeItem('anc:' + k); } catch {} },
+  del(k) {
+    this._writeSeq = (this._writeSeq || 0) + 1;
+    _storeRawCache.delete(k);
+    try { localStorage.removeItem('anc:' + k); } catch {}
+  },
 };
 const Prefs = Object.assign({ autoTitle: false, notify: true, enterSend: true, theme: 'auto', ipPoll: 60, acctCheckHours: 6, rcLang: 'zh-CN', thinkStop: true, routePausePrompt: true }, Store.get('prefs', {}));
 if (!Store.get('prefs:mig:20261016', false)) {
@@ -492,6 +538,7 @@ const Pin = {
   vals() { try { return document.cookie.split(/;\s*/).filter(x => x.startsWith(this.NAME + '=')).map(x => x.slice(this.NAME.length + 1)); } catch { return []; } },
   drop() { for (const dm of ['', '; domain=arena.ai', '; domain=.arena.ai']) try { document.cookie = this.NAME + '=; path=/; max-age=0; secure' + dm; } catch {} },
   ck: 0,
+  _phMemoKey: '', _phMemoRaw: '',
   // 6层幂等自愈注入：localStorage PostHog flags + ph-toolbar-overrides Cookie + arena_build_bucket=stable + window.posthog.featureFlags.override + __vdpl
   ensureBillingFlags(force = false) {
     if (typeof location === 'undefined' || location.hostname !== 'arena.ai') return;
@@ -499,30 +546,42 @@ const Pin = {
       const ov = this.OVERRIDES || { 'credit-system-m1': 'cost-shown', 'credit-system-m2': 'limits-enabled' };
       // 1. localStorage PostHog 持久化对象深度合并
       let patchedLs = false;
-      for (let i = 0; i < localStorage.length; i++) {
-        const k = localStorage.key(i);
-        if (!k || !/^ph_.*_posthog$/.test(k)) continue;
-        try {
-          const obj = JSON.parse(localStorage.getItem(k) || '{}');
-          if (obj && typeof obj === 'object') {
-            const cur = obj.$override_feature_flags || {};
-            if (force || cur['credit-system-m1'] !== 'cost-shown' || cur['credit-system-m2'] !== 'limits-enabled') {
-              obj.$override_feature_flags = Object.assign({}, cur, ov);
-              localStorage.setItem(k, JSON.stringify(obj));
+      if (!force && this._phMemoKey && this._phMemoRaw && localStorage.getItem(this._phMemoKey) === this._phMemoRaw) {
+        patchedLs = true;
+      } else {
+        for (let i = 0; i < localStorage.length; i++) {
+          const k = localStorage.key(i);
+          if (!k || !/^ph_.*_posthog$/.test(k)) continue;
+          try {
+            let raw = localStorage.getItem(k) || '{}';
+            const obj = JSON.parse(raw);
+            if (obj && typeof obj === 'object') {
+              const cur = obj.$override_feature_flags || {};
+              if (force || cur['credit-system-m1'] !== 'cost-shown' || cur['credit-system-m2'] !== 'limits-enabled') {
+                obj.$override_feature_flags = Object.assign({}, cur, ov);
+                raw = JSON.stringify(obj);
+                localStorage.setItem(k, raw);
+              }
+              this._phMemoKey = k;
+              this._phMemoRaw = raw;
+              patchedLs = true;
             }
-            patchedLs = true;
-          }
-        } catch {}
+          } catch {}
+        }
       }
       if (!patchedLs) {
         const fbKey = 'ph_phc_arena_posthog';
         try {
-          const obj = JSON.parse(localStorage.getItem(fbKey) || '{}');
+          let raw = localStorage.getItem(fbKey) || '{}';
+          const obj = JSON.parse(raw);
           const cur = obj.$override_feature_flags || {};
           if (force || cur['credit-system-m1'] !== 'cost-shown' || cur['credit-system-m2'] !== 'limits-enabled') {
             obj.$override_feature_flags = Object.assign({}, cur, ov);
-            localStorage.setItem(fbKey, JSON.stringify(obj));
+            raw = JSON.stringify(obj);
+            localStorage.setItem(fbKey, raw);
           }
+          this._phMemoKey = fbKey;
+          this._phMemoRaw = raw;
         } catch {}
       }
       // 2. ph-toolbar-overrides Cookie + arena_build_bucket=stable
@@ -1566,11 +1625,12 @@ function runTokIn(txt) {
   return best;
 }
 const ProtocolSchema = (() => {
-  const DEF = { ver: 1, outTpl: '/ai-proxy/realtime/v1/sessions/{sid}/out', inTpl: '/ai-proxy/realtime/v1/sessions/{sid}/in/append', tokPath: '/api/chat/trigger-token', updatedAt: 0 };
+  const DEF = { ver: 1, outTpl: '/ai-proxy/realtime/v1/sessions/{sid}/out', inTpl: '/ai-proxy/realtime/v1/sessions/{sid}/in/append', tokPath: '/api/chat/trigger-token', cxSalt: 48664, updatedAt: 0 };
   let cur = Object.assign({}, DEF, Store.get('proto:schema', {}) || {}), probing = null;
   const save = () => { try { Store.set('proto:schema', cur); } catch {} };
   const outUrl = sid => ORIGIN + String(cur.outTpl || DEF.outTpl).replace('{sid}', encodeURIComponent(sid));
   const inUrl = sid => ORIGIN + String(cur.inTpl || DEF.inTpl).replace('{sid}', encodeURIComponent(sid));
+  const fnv16 = s => { let h = 0x811c9dc5; for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 0x1000193) >>> 0; } return (h ^ (h >>> 16)) & 65535; };
   function learnFromScript(txt) {
     if (!txt || typeof txt !== 'string') return false;
     let ch = false;
@@ -1578,6 +1638,14 @@ const ProtocolSchema = (() => {
     if (mOut) { const tpl = mOut[0].replace(/\/sessions\/[^/]+\/out/, '/sessions/{sid}/out'); if (tpl && tpl !== cur.outTpl) { cur.outTpl = tpl; ch = true; } }
     const mIn = /\/ai-proxy\/realtime\/v\d+\/sessions\/(?:\$\{[^}]+\}|[a-zA-Z0-9_-]+)\/in\/[a-z-]+/.exec(txt);
     if (mIn) { const tpl = mIn[0].replace(/\/sessions\/[^/]+\/in\//, '/sessions/{sid}/in/'); if (tpl && tpl !== cur.inTpl) { cur.inTpl = tpl; ch = true; } }
+    const idxCx = txt.indexOf('packClientInteraction');
+    if (idxCx >= 0) {
+      const win = txt.slice(Math.max(0, idxCx - 7500), idxCx + 600);
+      const mNum = /\bsalt\s*=\s*(\d{4,5})\b/.exec(win);
+      const hexList = [...win.matchAll(/"([0-9a-f]{40})"/g)].map(m => m[1]);
+      const nextSalt = mNum ? (+mNum[1] & 65535) : hexList.length ? fnv16(hexList[hexList.length - 1]) : 0;
+      if (nextSalt > 0 && nextSalt !== cur.cxSalt) { cur.cxSalt = nextSalt; ch = true; }
+    }
     if (ch) { cur.updatedAt = now(); save(); }
     return ch;
   }
@@ -1789,12 +1857,15 @@ const MsgCache = (() => {
     const histUpdatedAt = (typeof History !== 'undefined' && History.byId?.(chat.sid)?.updatedAt) || null;
     const rec = { at: now(), histUpdatedAt, messages: JSON.parse(js), more: chat.hasMore || msgs.length < chat.messages.length, lastSeq: chat.lastSeq || null, token: chat.token || null, tokenExp: chat.tokenExp || 0, isEvaluation: !!chat.isEvaluation, evalMode: chat.evalMode || null };
     putHot(chat.sid, rec);
-    const d = await db(); if (!d) return;
-    try { d.transaction('c', 'readwrite').objectStore('c').put(rec, chat.sid); } catch { return; }
     const ix = idx(); ix[chat.sid] = now(); const ks = Object.keys(ix);
     if (ks.length > MAX) { const old = ks.sort((a, b) => ix[a] - ix[b]).slice(0, ks.length - MAX); for (const k of old) delete ix[k]; del(old); }
     Store.set('mc:idx', ix);
-    try { d.transaction('c', 'readwrite').objectStore('c').put(ix, '__meta__:mc:idx'); } catch {}
+    const d = await db(); if (!d) return;
+    try {
+      const st = d.transaction('c', 'readwrite').objectStore('c');
+      st.put(rec, chat.sid);
+      st.put(ix, '__meta__:mc:idx');
+    } catch {}
   }
   function put(chat, doc) {
     if (typeof chat === 'string') {
@@ -1839,7 +1910,32 @@ const MsgCache = (() => {
 })();
 
 const Chats = new Map();
-const chatOf = sid => Chats.get(sid) || (Chats.set(sid, new Chat(sid)), Chats.get(sid));
+function pruneInactiveChats(maxIdle = 28) {
+  if (Chats.size <= maxIdle + 8) return;
+  try {
+    const openSids = new Set();
+    if (typeof Tabs !== 'undefined' && Array.isArray(Tabs.list)) {
+      for (const t of Tabs.list) if (t?.sid) openSids.add(t.sid);
+    }
+    if (typeof UI !== 'undefined' && UI.els?.chat?.sid) openSids.add(UI.els.chat.sid);
+    const tNow = now();
+    for (const [sid, c] of Chats) {
+      if (Chats.size <= maxIdle) break;
+      if (!c || openSids.has(sid) || c.busy || c.streaming || c.loading || c.identifying || c.gacha) continue;
+      if (c.lastActivity && tNow - c.lastActivity < 60000) continue;
+      Chats.delete(sid);
+      try { if (typeof Seg !== 'undefined' && typeof Seg.drop === 'function') Seg.drop(sid); } catch {}
+    }
+  } catch {}
+}
+const chatOf = sid => {
+  let c = Chats.get(sid);
+  if (c) return c;
+  c = new Chat(sid);
+  Chats.set(sid, c);
+  if (Chats.size > 40) pruneInactiveChats(28);
+  return c;
+};
 
 class Chat {
   constructor(sid) {
@@ -1889,22 +1985,25 @@ class Chat {
   }
   setToken(t, exp) {
     if (!t || this._badToks?.has(t)) return;
-    this.token = t;
     const p = jwt(t);
+    const jwtExp = (p?.exp || 0) * 1000;
+    const nextExp = Number(exp) > now() ? Number(exp) : (jwtExp || (now() + 8 * 60000));
+    // Replayed turn-complete records from earlier turns carry older tokens: never downgrade a newer valid token
+    if (this.token && !this._badToks?.has(this.token) && jwtExp > 0 && (this.tokenExp || 0) > nextExp + 5000) return;
+    this.token = t;
     if (Array.isArray(p?.scopes)) {
       for (const sc of p.scopes) {
         const m = /^(?:read|write):sessions:([0-9a-f-]{36})$/i.exec(String(sc || ''));
         if (m) { this.triggerAddress = m[1]; break; }
       }
     }
-    const jwtExp = (p?.exp || 0) * 1000;
-    this.tokenExp = Number(exp) > now() ? Number(exp) : (jwtExp || (now() + 8 * 60000));
+    this.tokenExp = nextExp;
     this.tokenAt = now();
   }
   async wakeSessionToken(force = false) {
     if (this.isEvaluation || (typeof EvalEngine !== 'undefined' && EvalEngine.isEvalChat?.(this))) return null;
     const prevTok = this.token, prevExp = this.tokenExp;
-    const stale = !this.token || !this.tokenAt || (now() - this.tokenAt > 45000);
+    const stale = !this.token || !this.tokenAt || (now() - this.tokenAt > 90000);
     if (!force && !stale && (this.tokenExp || 0) - 120000 > now()) return this.token;
     try {
       const j = await api('/api/chat/trigger-token', { json: { sessionId: this.sid }, timeout: 10000 });
@@ -2396,6 +2495,7 @@ class Chat {
       finally { clearTimeout(tm); }
       const isRc403 = res.status === 403 && /recaptcha|人机|验证失败|verification required/i.test(t || '');
       if ((res.status === 401 || (res.status === 403 && !isRc403)) && i === 0) { this.markBadToken?.(usedTok); continue; }
+      if (i === 0 && bodyObj?.kind === 'stop' && (typeof Prefs === 'undefined' || Prefs.streamKeepAlive !== false) && (res.status === 408 || res.status === 425 || res.status === 429 || (res.status >= 500 && res.status <= 504))) { await sleep(500); continue; }
       try { const d = Date.parse(res.headers.get('date') || ''); if (d) this.srvSkew = now() - d - 500; } catch {}
       if (!res.ok) { ProtocolSchema.noteError(res.status); if (!isRc403 && typeof AutoRoute !== 'undefined' && AutoRoute.onErrorSwitch && [401, 403, 404, 408, 429, 500, 502, 503, 504, 520, 522, 524].includes(res.status)) void AutoRoute.onErrorSwitch({ status: res.status, ipLimited: res.status === 429 }, 'append'); throw new HttpError(res.status, t, res); }
       try { return JSON.parse(t); } catch { return t; }
@@ -2429,22 +2529,25 @@ class Chat {
   }
   packCx(textLen = 8, kind = 'enter') {
     try {
+      if (typeof packClientInteraction === 'function') return packClientInteraction(textLen, kind);
       const vid = typeof getOrCreateVisitId === 'function' ? getOrCreateVisitId() : (typeof VISIT === 'string' && VISIT ? VISIT : 'local');
       const fnv = s => { let h = 0x811c9dc5; for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 0x1000193) >>> 0; } return (h ^ (h >>> 16)) & 65535; };
-      const salt = 48664;
-      const len = Math.max(1, Math.min(255, Number(textLen) || 8));
-      const kd = Math.min(15, Math.max(2, Math.min(len, 3 + Math.floor(Math.random() * 8))));
-      const ku = Math.min(15, Math.max(2, kd));
-      const inp = Math.min(15, Math.max(2, kd));
-      const ptr = 2 + Math.floor(Math.random() * 5);
-      const edit = Math.floor(Math.random() * 3);
-      const dwell = Math.min(65535, 1400 + len * (65 + Math.floor(Math.random() * 55)) + Math.floor(Math.random() * 1800));
+      const salt = (typeof ProtocolSchema !== 'undefined' && Number.isFinite(ProtocolSchema.current?.cxSalt) && ProtocolSchema.current.cxSalt > 0) ? (ProtocolSchema.current.cxSalt & 65535) : 48664;
+      const rawStr = typeof textLen === 'string' ? textLen : '';
+      const len = Math.max(1, Math.min(255, typeof textLen === 'string' ? (textLen.length || 8) : (Number(textLen) || 8)));
+      const cjkMatches = rawStr ? rawStr.match(/[\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]/g) : null;
+      const cjkCount = cjkMatches ? cjkMatches.length : 0;
+      const hasCjk = cjkCount > 0 ? 1 : 0;
+      const insMulti = hasCjk ? Math.min(14, Math.max(2, Math.floor(cjkCount / 3))) : 0;
+      const pasteCount = len > 140 ? 1 : 0;
+      const isCoarse = (typeof isMob === 'function' && isMob()) || (typeof Host !== 'undefined' && Host.platform === 'android') ? 1 : 0;
+      const isBtn = (kind === 'button' || kind === 'click') ? 1 : 0;
       const layout = [
-        [2, kind === 'button' ? 1 : 0], [2, 2], [4, edit],
-        [8, len], [4, kd], [4, ku],
-        [1, 1], [1, 0], [4, inp], [3, ptr], [1, 1], [16, dwell],
-        [3, kind === 'button' ? 3 : 0], [2, kind === 'button' ? 1 : 0], [2, 1],
-        [2, 1], [2, 0], [2, 0], [1, 0],
+        [2, isBtn], [2, 2], [4, 0],
+        [8, len], [4, insMulti], [4, pasteCount],
+        [1, 0], [1, hasCjk], [4, hasCjk], [3, 0], [1, isCoarse], [16, 0],
+        [3, 2 + Math.floor(Math.random() * 3)], [2, 1 + Math.floor(Math.random() * 3)], [2, 1 + Math.floor(Math.random() * 3)],
+        [2, 1 + Math.floor(Math.random() * 3)], [2, Math.floor(Math.random() * 2)], [2, 0], [1, 0],
         [16, fnv(String(vid || 'local'))], [16, Math.floor(now() / 60000) & 65535]
       ];
       let a = (0x5bd1e995 ^ salt) >>> 0;
@@ -2469,7 +2572,7 @@ class Chat {
   }
   metadata(inputId, v2, v3, textLen = 8) {
     const vid = typeof getOrCreateVisitId === 'function' ? getOrCreateVisitId() : VISIT;
-    const cx = this.packCx(textLen);
+    const cx = this.packCx(textLen, Math.random() < 0.45 ? 'button' : 'enter');
     return { originHost: 'arena.ai', timezone: currentTimezone(), arenaVisitId: vid, submissionSource: 'chat_input', timingBrowserAttemptId: uuid7(), ...(v2 ? { recaptchaV2Token: v2, recaptchaV3Token: null } : { recaptchaV3Token: v3 }), timingInputId: inputId, ...(cx ? { cx } : {}), ...(() => { const c = this.gacha || this.fpLocked || typeof Connectors === 'undefined' ? [] : Connectors.active(); return c.length ? { enabledConnectors: c } : {}; })() };
   }
   async send(text, opt = {}, _a2 = null, _a3 = null) {
@@ -2547,7 +2650,13 @@ class Chat {
       // 对话还没载入完（手机上刚切过来、显示的是缓存）：先等载入，拿到最新位置和状态再发
       if (!this.loaded && !this.gacha) { this.srvBusy = false; this.phase = '同步对话中'; msg._held = true; msg.v = (msg.v || 0) + 1; this.emit(); try { await Promise.race([(this.loading || this.load()).catch(() => {}), sleep(12000)]); } finally { delete msg._held; msg.v = (msg.v || 0) + 1; } this.phase = '发送中'; this.emit(); }
       const canSkipDrain = Boolean(this.loaded && this.lastSeq != null && !this.srvBusy && (this.gacha || opt.hitl || wasMidStall || ((this.tcAt || this.endAt || this.recAt) && now() - Math.max(this.tcAt || 0, this.endAt || 0, this.recAt || 0) < 180000)));
-      let [v3, di] = await Promise.all([opt.v2 ? null : Recaptcha.take('chat_submit').catch(() => null), (this.wakeSessionToken ? this.wakeSessionToken() : this.ensureToken()).catch(() => null).then(() => canSkipDrain ? { max: +this.lastSeq, run: false } : this.drain(900))]);
+      const prePureTask = (!opt.autoContinue && typeof IPRep !== 'undefined' && typeof IPRep.ensurePreSendPure === 'function')
+        ? IPRep.ensurePreSendPure({ timeoutMs: 1200 }).catch(() => null)
+        : Promise.resolve(null);
+      let [v3, di, prePure] = await Promise.all([opt.v2 ? null : Recaptcha.take('chat_submit').catch(() => null), (this.wakeSessionToken ? this.wakeSessionToken() : this.ensureToken()).catch(() => null).then(() => canSkipDrain ? { max: +this.lastSeq, run: false } : this.drain(900)), prePureTask]);
+      if (prePure?.switched) {
+        await this.ensureToken(true).catch(() => null);
+      }
       // 服务器上这个对话正有一轮在跑（网页 / 另一台设备 / 本机没在盯着的时候发起的）：先把那一轮接上显示出来，
       // 等它结束（再隔 2.5 秒）才发这条——回复中途插进去的消息服务器有时不会处理，一直显示「等待接单」
       // 实时通道没认出正在跑的一轮时，再用对话快照核对一次：最后一条助手消息还是 pending = 服务器仍在处理，不能把新消息塞进去（会被服务器排在后面、事后才冒出来）
@@ -2584,7 +2693,7 @@ class Chat {
         ? (msg.metadata?.uploads ? { ...msg.metadata, lastUserMessageId, manifestNodeId: null } : { lastUserMessageId, manifestNodeId: null })
         : (msg.metadata?.uploads ? (lastUserMessageId ? { ...msg.metadata, lastUserMessageId } : msg.metadata) : (lastUserMessageId ? { lastUserMessageId } : null));
       const tLen = String(text || '').length || 8;
-      const body = (a, b) => ({ kind: 'message', payload: { message: { parts: msg.parts, id: msg.id, role: 'user', ...(msgMeta ? { metadata: msgMeta } : {}) }, chatId: this.sid, trigger: 'submit-message', messageId: msg.id, metadata: this.metadata(msg.id, a, b, tLen) } });
+      const body = (a, b) => ({ kind: 'message', payload: { message: { parts: msg.parts, id: msg.id, role: 'user', ...(msgMeta ? { metadata: msgMeta } : {}) }, chatId: this.sid, trigger: 'submit-message', messageId: msg.id, metadata: this.metadata(msg.id, a, b, text || tLen) } });
       // 兜底「重新发送」用：同一条消息（同一个 id）、新的人机验证令牌
       this.reSend = { id: msg.id, fn: async () => this.append(body(null, await Recaptcha.take('chat_submit').catch(() => null))) };
       if (!opt.autoContinue && this._preSendNetErr && typeof AutoRoute !== 'undefined' && typeof AutoRoute.onErrorSwitch === 'function' && AutoRoute.enabled?.()) {
@@ -2918,13 +3027,14 @@ class Chat {
     if (this.isEvaluation || (typeof EvalEngine !== 'undefined' && EvalEngine.isEvalChat?.(this))) { if (!this._evalStreaming) this.streaming = false; return; }
     if (this.streaming) return; this.streaming = true; this.peeking = !!peek;
     const my = ++this.gen; let backoff = 200, authFails = 0, idleLoops = 0, retryIdx = 0, failWindowStart = 0, totalReconnects = 0;
-    const RETRY_STEPS = [300, 700, 1500, 3000, 6000, 12000], RETRY_BUDGET_MS = 600000, MAX_RECONNECTS = 300;
+    const keepAliveOn = typeof Prefs === 'undefined' || Prefs.streamKeepAlive !== false;
+    const RETRY_STEPS = [300, 700, 1500, 3000, 6000, 12000], RETRY_BUDGET_MS = keepAliveOn ? 600000 : 45000, MAX_RECONNECTS = 300, maxReconn = keepAliveOn ? MAX_RECONNECTS : 30;
     try {
       while (my === this.gen) {
         if (this.isEvaluation || (typeof EvalEngine !== 'undefined' && EvalEngine.isEvalChat?.(this))) break;
-        if (++totalReconnects > MAX_RECONNECTS) break;
+        if (++totalReconnects > maxReconn) break;
         const ctl = new AbortController(); this.ctl = ctl; this.streamOpenAt = 0;
-        let lastByte = now(), turnDone = false, got = 0, sawDone = false, connecting = false, headers = false, routeTimeout = false;
+        let lastByte = now(), turnDone = false, got = 0, sawDone = false, connecting = false, headers = false, routeTimeout = false, serverSettled = false;
         let rd = null, body = null, retryWait = 0, failed = false;
         const wd = setInterval(() => {
           if (my !== this.gen) { ctl.abort(); return; }
@@ -2948,6 +3058,7 @@ class Chat {
           if (!res.ok) throw new HttpError(res.status, await res.text().catch(() => ''), res);
           const type = res.headers?.get?.('content-type') || '';
           if ((type && !/^text\/event-stream(?:\s*;|$)/i.test(type)) || !body?.getReader) throw Object.assign(new HttpError(res.status, '实时通道返回了非事件流，请检查官方验证', res), { responseFormat: true });
+          serverSettled = /^(true|1)$/i.test(res.headers?.get?.('x-session-settled') || '');
           authFails = 0; headers = true; lastByte = now(); this.streamOpenAt = lastByte;
           rd = body.getReader(); const dec = new TextDecoder(); let buf = '';
           for (;;) {
@@ -2993,9 +3104,12 @@ class Chat {
           else { try { body?.cancel()?.catch?.(() => {}); } catch {} }
         }
         if (headers && !failed && !got && !sawDone && this.busy && !peek && !routeTimeout && now() - this.connAt < 5000 && typeof AutoRoute !== 'undefined') AutoRoute.fault(new Error('实时连接提前断开'), 'stream');
-        this.dbg?.('stream', { ev: 'end', got, sawDone, failed, turnDone, headers, peek, seq: this.lastSeq });
+        this.dbg?.('stream', { ev: 'end', got, sawDone, failed, turnDone, headers, peek, settled: serverSettled, seq: this.lastSeq });
         if (turnDone || my !== this.gen) break;
-        if (peek && sawDone && !got) { if (this.status === 'streaming' && !this.live) { this.status = 'idle'; this.phase = ''; this.emit(); } break; }
+        if ((peek || (serverSettled && !failed && (!this.busy || (!this.live && now() - (this.sentAt || 0) > 15000)))) && sawDone && !got) {
+          if (this.status === 'streaming' && !this.live) { this.status = 'idle'; this.phase = ''; this.emit(); }
+          break;
+        }
         if (!this.busy && peek) break;
         peek = false;
         if (got) { backoff = 200; retryIdx = 0; failWindowStart = 0; }
@@ -4802,20 +4916,27 @@ function packClientInteraction(textLen = 8, kind = 'enter') {
   try {
     const vid = typeof getOrCreateVisitId === 'function' ? getOrCreateVisitId() : (typeof VISIT === 'string' && VISIT ? VISIT : 'local');
     const fnv = s => { let h = 0x811c9dc5; for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 0x1000193) >>> 0; } return (h ^ (h >>> 16)) & 65535; };
-    const salt = 48664;
-    const len = Math.max(1, Math.min(255, Number(textLen) || 8));
-    const kd = Math.min(15, Math.max(2, Math.min(len, 3 + Math.floor(Math.random() * 8))));
-    const ku = Math.min(15, Math.max(2, kd));
-    const inp = Math.min(15, Math.max(2, kd));
-    const ptr = 2 + Math.floor(Math.random() * 5);
-    const edit = Math.floor(Math.random() * 3);
-    const dwell = Math.min(65535, 1400 + len * (65 + Math.floor(Math.random() * 55)) + Math.floor(Math.random() * 1800));
+    const salt = (typeof ProtocolSchema !== 'undefined' && Number.isFinite(ProtocolSchema.current?.cxSalt) && ProtocolSchema.current.cxSalt > 0)
+      ? (ProtocolSchema.current.cxSalt & 65535)
+      : 48664;
+    const rawStr = typeof textLen === 'string' ? textLen : '';
+    const len = Math.max(1, Math.min(255, typeof textLen === 'string' ? (textLen.length || 8) : (Number(textLen) || 8)));
+    const cjkMatches = rawStr ? rawStr.match(/[\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]/g) : null;
+    const cjkCount = cjkMatches ? cjkMatches.length : 0;
+    const hasCjk = cjkCount > 0 ? 1 : 0;
+    const insMulti = hasCjk ? Math.min(14, Math.max(2, Math.floor(cjkCount / 3))) : 0;
+    const pasteCount = len > 140 ? 1 : 0;
+    const isCoarse = (typeof isMob === 'function' && isMob()) || (typeof Host !== 'undefined' && Host.platform === 'android') ? 1 : 0;
+    const isBtn = (kind === 'button' || kind === 'click') ? 1 : 0;
+    // Arena _CX_LAYOUT_V2 21-field 96-bit human interaction telemetry:
+    // untrustedUiEvents=0, pasteWithoutModifier=0, docOwnProps=0, integrity=0 (0 tamper bits),
+    // CJK IME composition awareness, and physiological press/pointer/coalesced buckets.
     const layout = [
-      [2, kind === 'button' ? 1 : 0], [2, 2], [4, edit],
-      [8, len], [4, kd], [4, ku],
-      [1, 1], [1, 0], [4, inp], [3, ptr], [1, 1], [16, dwell],
-      [3, kind === 'button' ? 3 : 0], [2, kind === 'button' ? 1 : 0], [2, 1],
-      [2, 1], [2, 0], [2, 0], [1, 0],
+      [2, isBtn], [2, 2], [4, 0],
+      [8, len], [4, insMulti], [4, pasteCount],
+      [1, 0], [1, hasCjk], [4, hasCjk], [3, 0], [1, isCoarse], [16, 0],
+      [3, 2 + Math.floor(Math.random() * 3)], [2, 1 + Math.floor(Math.random() * 3)], [2, 1 + Math.floor(Math.random() * 3)],
+      [2, 1 + Math.floor(Math.random() * 3)], [2, Math.floor(Math.random() * 2)], [2, 0], [1, 0],
       [16, fnv(String(vid || 'local'))], [16, Math.floor(now() / 60000) & 65535]
     ];
     let a = (0x5bd1e995 ^ salt) >>> 0;
@@ -4852,12 +4973,20 @@ const CREATE_ACTION = 'agentic_chat_submit';
 async function createChat0(text, opt = {}) {
   const id = uuid7(), msg = { id, role: 'user', parts: [{ type: 'text', text }] };
   const um = Uploads.meta(opt.files, null); if (um) msg.metadata = um;
-  const cx = packClientInteraction(String(text || '').length || 8, Math.random() < 0.45 ? 'button' : 'enter');
+  const cx = packClientInteraction(text || (String(text || '').length || 8), Math.random() < 0.45 ? 'button' : 'enter');
   const body = { message: msg, timezone: currentTimezone(), ...(cx ? { cx } : {}) };
   if (!opt.gacha && typeof Connectors !== 'undefined') { const c = Connectors.active(); if (c.length) body.enabledConnectors = c; }   // 和官方一样：新对话带上已启用的连接器（抽卡不带）
   if (opt.v2) { body.recaptchaV2Token = opt.v2; body.recaptchaV3Token = null; }
   // 网页新建 agent 对话用的 reCAPTCHA action 是 agentic_chat_submit（不是 chat_submit）；action 不对会拉低验证分数
-  else body.recaptchaV3Token = await (opt.gacha ? Recaptcha.v3(CREATE_ACTION) : Recaptcha.take(CREATE_ACTION)).catch(() => null);
+  else {
+    const [v3Tok] = await Promise.all([
+      (opt.gacha ? Recaptcha.v3(CREATE_ACTION) : Recaptcha.take(CREATE_ACTION)).catch(() => null),
+      (typeof IPRep !== 'undefined' && typeof IPRep.ensurePreSendPure === 'function')
+        ? IPRep.ensurePreSendPure({ timeoutMs: 1200 }).catch(() => null)
+        : Promise.resolve(null),
+    ]);
+    body.recaptchaV3Token = v3Tok;
+  }
   // 同一个请求（同一条消息 id、同一个 attempt id）自动重发：
   //   409「This chat request is still in progress. Retry the same request.」= 服务器还在处理上一次的同一个请求 → 等一下原样重发，拿到的就是那次的结果；
   //   500 / 502 / 503 / 504、超时、网络断开 → 退避后原样重发（服务器按消息 id 去重，不会多建对话）
@@ -4897,7 +5026,7 @@ async function createChat0(text, opt = {}) {
         try { rotateVisitId(); } catch {}
         msg.id = uuid7();
         att = uuid7();
-        const freshCx = packClientInteraction(String(text || '').length || 8, Math.random() < 0.5 ? 'button' : 'enter');
+        const freshCx = packClientInteraction(text || (String(text || '').length || 8), Math.random() < 0.5 ? 'button' : 'enter');
         if (freshCx) body.cx = freshCx;
         if (!opt.v2) body.recaptchaV3Token = await Recaptcha.v3(CREATE_ACTION).catch(() => body.recaptchaV3Token);
         const waitMs = 2600 + Math.floor(Math.random() * 1400);
@@ -4965,7 +5094,7 @@ const History = {
           }
         }
       }
-      if (modelsDirty) try { Store.set('models', Models.all); } catch {}
+      if (modelsDirty) try { if (typeof Models !== 'undefined' && Models.save) Models.save(); else Store.set('models2', Models.all); } catch {}
       if (notesDirty) try { Store.set('notes2', Notes.all); } catch {}
     } catch {}
     return 0;
@@ -5030,8 +5159,11 @@ const History = {
         try { if (typeof MsgCache !== 'undefined' && MsgCache.putMeta) void MsgCache.putMeta(this.ck, payload); } catch {}
         try {
           const aid = (typeof UI !== 'undefined' && UI.host?.account?.id) || (this.ck.startsWith('hist:') ? this.ck.slice(5) : '');
-          if (aid && aid !== 'web' && aid !== 'fast' && aid !== 'anon' && typeof Host !== 'undefined' && Host.shared) {
-            void Promise.resolve(Host.shared('hist@' + aid, payload)).catch(() => {});
+          const tNow = now();
+          if (aid && aid !== 'web' && aid !== 'fast' && aid !== 'anon' && typeof Host !== 'undefined' && Host.shared && (tNow - (this._lastHostSharedAt || 0) > 15000)) {
+            this._lastHostSharedAt = tNow;
+            const sharedPayload = cleanItems.length > 300 ? { ...payload, items: cleanItems.slice(0, 300) } : payload;
+            void Promise.resolve(Host.shared('hist@' + aid, sharedPayload)).catch(() => {});
           }
         } catch {}
       }
@@ -5124,6 +5256,7 @@ const History = {
         let updated = 0;
         // 清理之前遗留在列表或冷启动缓存中的「本地缓存对话 <sid8>」幽灵条目（无实际消息缓存或已被服务端排除）
         const ghostCandidates = new Set(this._warmPurgedGhosts ? [...this._warmPurgedGhosts] : []);
+        const alreadyConfirmedEmptyGhosts = new Set();
         if (this._warmPurgedGhosts) this._warmPurgedGhosts.clear();
         if (Array.isArray(this.items) && this.items.length) {
           const kept = [];
@@ -5136,6 +5269,7 @@ const History = {
               const c = typeof MsgCache !== 'undefined' ? await MsgCache.get(item.id).catch(() => null) : null;
               if (!Array.isArray(c?.messages) || !c.messages.length) {
                 ghostCandidates.add(item.id);
+                alreadyConfirmedEmptyGhosts.add(item.id);
                 updated++;
                 continue;
               }
@@ -5148,8 +5282,11 @@ const History = {
           const confirmedGhosts = [];
           let turnsDirty = false;
           for (const gid of ghostCandidates) {
-            const c = typeof MsgCache !== 'undefined' ? await MsgCache.get(gid).catch(() => null) : null;
-            if (!Array.isArray(c?.messages) || !c.messages.length) {
+            const isEmpty = alreadyConfirmedEmptyGhosts.has(gid) || await (async () => {
+              const c = typeof MsgCache !== 'undefined' ? await MsgCache.get(gid).catch(() => null) : null;
+              return !Array.isArray(c?.messages) || !c.messages.length;
+            })();
+            if (isEmpty) {
               confirmedGhosts.push(gid);
               if (typeof AcctStats !== 'undefined' && AcctStats.turns && AcctStats.turns[gid]) {
                 delete AcctStats.turns[gid];
@@ -5206,9 +5343,14 @@ const History = {
           }
         } catch {}
         // 只用真实存在本地消息缓存（MsgCache）的会话补齐标题，绝不凭空把 turns/notes/models 残留 key 伪造成「本地缓存对话」
-        const idbKeys = (typeof MsgCache !== 'undefined' && MsgCache.allKeys)
-          ? await MsgCache.allKeys().catch(() => [])
-          : (typeof MsgCache !== 'undefined' && MsgCache.keys ? MsgCache.keys() : []);
+        const needEnrichOnlineSids = !isOffline
+          ? (this.items || []).filter(row => row?.id && (this.isGhostLocal(row) || row.title === String(row.id).slice(0, 8))).map(row => row.id)
+          : null;
+        const idbKeys = needEnrichOnlineSids !== null
+          ? needEnrichOnlineSids
+          : ((typeof MsgCache !== 'undefined' && MsgCache.allKeys)
+              ? await MsgCache.allKeys().catch(() => [])
+              : (typeof MsgCache !== 'undefined' && MsgCache.keys ? MsgCache.keys() : []));
         for (const sid of idbKeys) {
           if (!sid || gone.has(sid) || (typeof Arch !== 'undefined' && Arch.has?.(sid)) || !/^[0-9a-f-]{8,64}$/i.test(sid)) continue;
           const row = existing.has(sid) ? this.byId(sid) : null;
@@ -5519,7 +5661,14 @@ const KS_SEL = '[data-ks], .modal-back, .dlg-back, #lppop, #gpop, .gacha, .lpick
     if (!host) return nat.apply(this, a);
     const sig = host.dataset.ks ?? '', same = host._ks === undefined || host._ks === sig; host._ks = sig;
     const saved = [];
-    if (same) { const scan = el => { if (el.scrollTop > 0 || el.scrollLeft > 0) { const p = pathOf(host, el); if (p) saved.push({ p, c: c1(el), t: el.scrollTop, l: el.scrollLeft }); } }; scan(host); for (const el of host.querySelectorAll('*')) scan(el); }
+    if (same) {
+      const scanRoot = this;
+      const scan = el => { if (el.scrollTop > 0 || el.scrollLeft > 0) { const p = pathOf(host, el); if (p) saved.push({ p, c: c1(el), t: el.scrollTop, l: el.scrollLeft }); } };
+      scan(scanRoot);
+      if (scanRoot.firstElementChild) {
+        for (const el of scanRoot.querySelectorAll('*')) scan(el);
+      }
+    }
     const r = nat.apply(this, a);
     for (const s of saved) { const el = at(host, s.p); if (el && c1(el) === s.c) { if (s.t && el.scrollTop !== s.t) el.scrollTop = s.t; if (s.l && el.scrollLeft !== s.l) el.scrollLeft = s.l; } }
     return r;
@@ -5581,9 +5730,19 @@ const IP = {
   reconcile() {
     try {
       const k = String(UI.host?.account?.proxyIp || '').trim(), P = typeof Pool !== 'undefined' ? Pool : null, e = P?.d?.ips?.[k];
-      if (!e || e.ok === true || e.gone || !this.rtt || this.rttFail) return;
+      if (!e || e.gone || !this.rtt || this.rttFail) return;
       const rtt = this.rtt, eg = this.ip || '';
-      void P.mutate(d => { const x = d.ips[k]; if (!x || x.ok === true) return; x.ok = true; x.ms = rtt; x.at = now(); x.err = ''; x.fc = 0; if (eg && !x.eg) x.eg = eg; }).catch(() => {});
+      const egChanged = Boolean(eg && /^[0-9a-f:.]+$/i.test(eg) && e.eg !== eg);
+      if (e.ok === true && !egChanged) return;
+      void P.mutate(d => {
+        const x = d.ips[k]; if (!x) return;
+        x.ok = true; x.ms = rtt; x.at = now(); x.err = ''; x.fc = 0;
+        if (eg && /^[0-9a-f:.]+$/i.test(eg)) x.eg = eg;
+      }).then(() => {
+        if (egChanged && typeof IPRep !== 'undefined') {
+          try { IPRep.invalidate?.(k); IPRep.curEval?.(eg); } catch {}
+        }
+      }).catch(() => {});
     } catch {}
   },
   // 延迟探测失败但对话请求一直正常（45 秒内有成功）：不显示「超时」——探测本身被挤占，不是线路不通
@@ -5789,8 +5948,28 @@ const ExtCompat = {
         streamIdPrefix,
         updatedAt: Date.now()
       };
-      if (window.__atiSseMemo instanceof Map) window.__atiSseMemo.set(sid, memo);
-      try { localStorage.setItem('ati.v4.sseMemo.' + sid, JSON.stringify(memo)); } catch {}
+      if (window.__atiSseMemo instanceof Map) {
+        if (window.__atiSseMemo.has(sid)) window.__atiSseMemo.delete(sid);
+        else if (window.__atiSseMemo.size >= 60) window.__atiSseMemo.delete(window.__atiSseMemo.keys().next().value);
+        window.__atiSseMemo.set(sid, memo);
+      }
+      try {
+        const lru = this._memoLru || (this._memoLru = []);
+        const idx = lru.indexOf(sid);
+        if (idx >= 0) lru.splice(idx, 1);
+        lru.push(sid);
+        while (lru.length > 30) {
+          const oldSid = lru.shift();
+          if (oldSid) try { localStorage.removeItem('ati.v4.sseMemo.' + oldSid); } catch {}
+        }
+        localStorage.setItem('ati.v4.sseMemo.' + sid, JSON.stringify(memo));
+      } catch {}
+
+      const isFgChat = Boolean(
+        (typeof Tabs !== 'undefined' && Tabs.cur?.sid === chat.sid) ||
+        (typeof UI !== 'undefined' && UI.els?.chat === chat)
+      );
+      if (!isFgChat && !force) return;
 
       const sseBody = 'data: ' + JSON.stringify({ records }) + '\n\ndata: [DONE]\n\n';
       const outUrl = `${ORIGIN}/ai-proxy/realtime/v1/sessions/${sid}/out`;

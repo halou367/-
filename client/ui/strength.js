@@ -16,22 +16,29 @@ const Strength = (() => {
   // 强度代号在前 → 厂商在前
   /* 版本号写法统一：opus-5-5 / opus-5.5、gpt-5-1 / gpt-5.1 是同一个型号，统一写成点号形式；日期（20250219、06-17）、5-72b 这类不动 */
   const foldVer = n => String(n ?? '').replace(/(?<![\d.])(?<!\d-)([1-9]\d?)-(0|[1-9]\d?)(?=$|[^a-z\d])/gi, '$1.$2');
+  const MODEL_MAX_NAME_RE = /^(?:qwen[\d.]*|qwen-\d[\d.]*|glm-[\d.]+|kimi-k\d[\d.]*|gpt-[\d.]+-codex)-max(?:-0\d{3}|-\d{4,8})?$/i;
+  const TIERLESS_BASE_RE = /^(?:(?:qwen[\d.]*|qwen-\d[\d.]*|glm-[\d.]+)-max(?:-0\d{3}|-\d{4,8})?|kimi-k\d[\d.]*|deepseek-v[\d.]+-flash(?:-\d+)?|mimo-v[\d.]+-flash|qwen[\d.]*-flash(?:-next)?|glm-[\d.]+-flash|muse-wonder|muse-spark-open|beam-[\d.]+-\d+b-a\d+b)$/i;
   function canon(n) { const k = String(n ?? ''); return memo(canonMemo, k, () => canon0(k)); }
   function canon0(n) {
     const rawStr = String(n || '');
     const qm = /[?？]\s*$/.test(rawStr);
-    n = clean(noteBase(rawStr.replace(/[?？]+\s*$/, ''))); if (!n) return '';
+    n = clean(noteBase(rawStr.replace(/[?？]+\s*$/, '').replace(/\s*\((?:标准|standard)\)\s*$/i, ''))); if (!n) return '';
     const parenTier = /\s*\((none|minimal|low|medium|high|xhigh|max)(?:\/(?:none|minimal|low|medium|high|xhigh|max))?\)\s*$/i.exec(n);
     if (parenTier) {
       const tr = parenTier[1].toLowerCase();
-      const stem = n.slice(0, parenTier.index).trim().replace(/\s+/g, '-').toLowerCase();
-      n = stem.endsWith('-' + tr) ? stem : (stem + '-' + tr);
+      const rawStem = n.slice(0, parenTier.index).trim().replace(/\s+/g, '-').toLowerCase().replace(/^qwen-(\d)/i, 'qwen$1');
+      const isNoTier = MODEL_MAX_NAME_RE.test(rawStem) || TIERLESS_BASE_RE.test(rawStem);
+      const stem = isNoTier ? rawStem : rawStem.replace(/-(none|minimal|low|medium|high|xhigh|max)$/i, '');
+      n = isNoTier ? rawStem : (stem.endsWith('-' + tr) ? stem : (stem + '-' + tr));
     } else if (/\s/.test(n) && /^(?:claude|opus|sonnet|haiku|fable|gpt|chatgpt|o[134]|gemini|grok|kimi|qwen|deepseek|beam|glm|minimax|mimo|llama|muse|mistral|solar)\b/i.test(n)) {
       n = n.trim().replace(/\s+/g, '-').toLowerCase();
     }
     n = n.replace(/(\d)(none|minimal|low|medium|high|xhigh|max)\b/gi, '$1-$2');
     n = foldVer(n); n = n.replace(/^muse(?:-(low|medium|high|xhigh|max))?$/i, (_, t) => 'muse-spark-1.3-' + String(t || 'max').toLowerCase()).replace(/gpt-5\.6-luna/ig, 'gpt-6-luna').replace(/\bbarium-bb-v2-4xts(?:-(?:agent|public|vertex))?(?:-(low|medium|high|max))?\b/ig, (_, t) => 'gemini-4-argon-' + String(t || 'high').toLowerCase()); n = n.replace(/\s*[·•・#]\s*\d{1,4}\s*$/, '').replace(/[-_]0\d{2}$/, '').trim(); if (!n) return '';   // 旧版序号后缀：opus-5.5 · 001 / -002 → 同一个型号
+    n = n.replace(/^((?:qwen[\d.]*|qwen-\d[\d.]*|glm-[\d.]+)-max(?:-0\d{3}|-\d{4,8})?)-(?:none|minimal|low|medium|high|xhigh|max)$/i, '$1');
+    n = n.replace(/^(kimi-k\d[\d.]*|deepseek-v[\d.]+-flash(?:-\d+)?|mimo-v[\d.]+-flash|qwen[\d.]*-flash(?:-next)?|muse-wonder|muse-spark-open)-(?:none|minimal|low|medium|high|xhigh|max)$/i, '$1');
     n = n.replace(/-(none|minimal|low|medium|high|xhigh|max)(?:-\1)+$/i, '-$1');   // opus-5-high-high → opus-5-high（档位重复）
+    n = n.replace(/-(none|minimal|low|medium|high|xhigh|max)-(none|minimal|low|medium|high|xhigh|max)$/i, '-$1');
     n = n.replace(/-([a-z][a-z0-9]{0,14})(?:-\1)+$/i, '-$1');   // fable-5-v2-v2 → fable-5-v2（后缀重复；只处理字母开头的，5-5 这种版本号不动）
     const m = /^[\w.\/:@+-]{3,90}$/.test(n) && /^([a-z][a-z0-9]{2,15})[-_]+(.+)$/i.exec(n);   // 只处理像型号 ID 的名字（不含空格）
     if (m && !Brand.of(m[1]) && !TIER_RE.test(m[1]) && vendorFirst(m[2])) { addCode(m[1]); return m[2] + '-' + m[1].toLowerCase() + (qm ? '?' : ''); }
@@ -56,10 +63,16 @@ const Strength = (() => {
   function parts0(n) {
     const name = canon(n); let base = name.replace(/[?？]+$/, ''), tier = '';
     const pm = /\s*\((none|minimal|low|medium|high|xhigh|max)\)\s*$/i.exec(base);
-    if (pm) { tier = pm[1].toLowerCase(); base = base.slice(0, pm.index).trim(); }
+    if (pm && !MODEL_MAX_NAME_RE.test(base.slice(0, pm.index).trim()) && !TIERLESS_BASE_RE.test(base.slice(0, pm.index).trim())) {
+      tier = pm[1].toLowerCase();
+      base = base.slice(0, pm.index).trim();
+    }
     const toks = base.split('-');
     const last = (toks.at(-1) || '').toLowerCase();
-    if (!tier && toks.length > 1 && (TIER_RE.test(last) || codes.has(last))) { tier = last; toks.pop(); }
+    if (!tier && toks.length > 1 && !MODEL_MAX_NAME_RE.test(base) && !TIERLESS_BASE_RE.test(base) && (TIER_RE.test(last) || codes.has(last))) {
+      tier = last;
+      toks.pop();
+    }
     const family = toks.join('-').toLowerCase().replace(/\s+/g, '-').replace(/(\d)\.(\d)/g, '$1-$2');
     return { name, vid: Brand.of(name), family, tier };
   }
@@ -555,7 +568,7 @@ const Strength = (() => {
 // 手动点亮的型号 = 金色 + 侧栏置顶；存在共享设置里（所有账号 / 窗口一致）
 const Gold = {
   get manual() { return Prefs.goldMode === 'manual'; },
-  _set: null, _sig: '', _autoSet: null, _autoAt: 0,
+  _set: null, _sig: '', _autoSet: null, _autoAt: 0, _chatSet: null, _chatSetRef: null, _chatSetLen: -1,
   restoredChats: new Map(),
   unmarkAt: Store.get('gold:off', {}) || {},
   keysOf(n) {
@@ -617,7 +630,13 @@ const Gold = {
     return this.manual ? this.has(n) : this.autoHas(n);
   },
   chatSet() {
-    return new Set(Array.isArray(Prefs.goldChats) ? Prefs.goldChats : []);
+    const arr = Array.isArray(Prefs.goldChats) ? Prefs.goldChats : [];
+    if (!this._chatSet || this._chatSetRef !== arr || this._chatSetLen !== arr.length) {
+      this._chatSetRef = arr;
+      this._chatSetLen = arr.length;
+      this._chatSet = new Set(arr);
+    }
+    return this._chatSet;
   },
   hasChat(sid) {
     if (!sid) return false;
@@ -704,7 +723,7 @@ const Gold = {
     toast((on ? '已点亮金色 ' : '已关闭金色 ') + (cardName(c) || c) + '（全部账号已同步）');
   },
   changed(sids) {
-    this._set = null; this._autoSet = null;
+    this._set = null; this._autoSet = null; this._chatSet = null;
     Prefs.goldAt = Date.now();
     savePrefs();
     try {

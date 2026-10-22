@@ -92,6 +92,22 @@ const RegionIP = {
           if(typeof AutoRoute!=='undefined')AutoRoute.noteManualRoute?.(600000);
           try {await Pool.mutate(d=>{if(d.ips[k])d.ips[k].used=now();});}catch{}
           await sleep(800);if(IP.polling)await IP.polling;const at=now();await IP.poll();
+          if(!IP.err&&IP.ip&&typeof IPRep!=='undefined'&&this.norm(IP.ip)!==this.norm(x.ip)){
+            const liveEg=IPRep.normIp?.(IP.ip)||IP.ip;
+            if(liveEg&&typeof Host!=='undefined'&&typeof Host.ippureDirect==='function'&&!Pool.d?.rep?.[liveEg]?.pu?.real){
+              const dp=await Host.ippureDirect(liveEg).catch(()=>null);
+              if(dp&&Number.isFinite(+dp.fs)){
+                await Pool.mutate(d=>{IPRep.putPu?.(d,liveEg,{...dp,real:1});if(d.ips?.[k])d.ips[k].eg=liveEg;}).catch(()=>{});
+                IPRep.invalidate?.(k);
+              }
+            }
+            const liveSc=IPRep.score(k,{...(Pool.d?.ips?.[k]||{}),eg:liveEg});
+            if(liveSc?.known&&liveSc.s<(IPRep.PURE||75)){
+              await Pool.mutate(d=>{if(typeof Pool.banForever==='function')Pool.banForever(d,k,'切换后实测出口 '+liveEg+' 不纯净（'+liveSc.s+' 分）· 已自动拉黑');}).catch(()=>{});
+              progress('候选 '+k+' 实测落地出口不纯净（'+liveSc.s+' 分），已拉黑并继续切换下一个…');
+              continue;
+            }
+          }
           const verified=!IP.err&&IP.at>=at&&IP.loc===a.region&&this.norm(IP.ip)!==oldExit&&this.norm(IP.ip)===this.norm(x.ip);
           try{UI.renderAcct?.();Bar.render();}catch{}
           return {ok:true,verified,from:a.proxyIp||'',to:k,ip:IP.ip,region:a.region,message:verified?'已切换到 '+k+' · 出口 '+IP.ip:'新 IP 配置已应用，但实际出口尚未确认，请刷新检查'};
@@ -234,7 +250,7 @@ const RegionIP = {
       }
     }
     v.info.textContent='当前出口：'+(IP.ip||'未获取')+'\n当前 ProxyIP：'+(a.proxyIp||(isVless(a.proxy)?'未设置（节点本身代理）':'未设置（当前使用本地代理/直连）'))+(cc?'\n当前地区：'+cc:'\n未绑定地区，仅按已知出口地区查看列表');
-    const sig=JSON.stringify(rows.map(r=>[r.k,r.current,r.state,r.same,r.e.eg,r.e.ms,Math.max(0,Math.ceil(((r.e.cool||0)-now())/60000))]));
+    const sig=rows.map(r=>`${r.k}|${r.current?1:0}|${r.state}|${r.same?1:0}|${r.e.eg||''}|${r.e.ms||0}|${Math.max(0,Math.ceil(((r.e.cool||0)-now())/60000))}`).join('\n');
     if(v.sig!==sig){v.sig=sig;v.list.replaceChildren(...rows.map(r=>{
       const label=r.current?('当前'+(r.state==='cool'?' · 冷却 '+Math.max(1,Math.ceil((r.e.cool-now())/60000))+' 分钟':'')):r.state==='cool'?'冷却 '+Math.max(1,Math.ceil((r.e.cool-now())/60000))+' 分钟':r.state==='ok'?(r.same?'相同出口':'可用'):({used:'其他账号占用',wait:'待检测',risk:'高风险',bad:'不可用',ban:'已拉黑'}[r.state]||r.state);
       return h('div',{class:'rip-row'+(r.current?' current':''),role:'listitem'},h('div',{class:'rip-address'},h('b',{title:r.k},r.k),h('small',{},'出口 '+(r.e.eg||'未检测')+(r.e.ms?' · '+r.e.ms+'ms':r.e.nodeUnmeasured?' · 本节点未检测':''))),h('span',{class:'rip-state '+(r.current?'current':r.state)},label));

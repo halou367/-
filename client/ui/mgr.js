@@ -223,7 +223,7 @@ const LaunchPick = {
       pager.hidden = selection.pages <= 1;
       pager.replaceChildren(h('button', { class: 'btn ghost sm', disabled: page === 0, onclick: () => { list._wheelInit = false; page--; void render(); } }, '上一页'), h('span', {}, '第 ' + (page + 1) + ' / ' + selection.pages + ' 页'), h('button', { class: 'btn ghost sm', disabled: page === selection.pages - 1, onclick: () => { list._wheelInit = false; page++; void render(); } }, '下一页'));
       const next = [];
-      for (const a of selection.visible) { next.push(card(a)); if (next.length % 4 === 0) { await PanelWork.frame(); if (!alive() || run !== generation) return; } }
+      for (const a of selection.visible) { next.push(card(a)); if (next.length % 12 === 0 && next.length < selection.visible.length) { await PanelWork.frame(); if (!alive() || run !== generation) return; } }
       if (!alive() || run !== generation) return;
       wheelStop(); cards = next; list.style.paddingTop = ''; list.style.paddingBottom = ''; replaceCards(cards);
       if (savedScroll !== null) { list._keepScrollTop = savedScroll; list.scrollTop = savedScroll; }
@@ -231,7 +231,7 @@ const LaunchPick = {
       wheelStop = acctWheel(list);
       if (savedScroll !== null) { list._keepScrollTop = savedScroll; list.scrollTop = Math.min(savedScroll, Math.max(0, list.scrollHeight - list.clientHeight)); }
       building = false;
-      void PanelWork.each(back, [...gbs], async ([b,id]) => { if (run !== generation || !b.isConnected) return; await Gacha.loadAcct(id); if (alive() && run === generation && b.isConnected) GPop.paintAcct(b, GPop.acctState(id,false)); });
+      if (gbs.length) void Promise.all(gbs.map(async ([b, id]) => { if (run !== generation || !b.isConnected) return; await Gacha.loadAcct(id); if (alive() && run === generation && b.isConnected) GPop.paintAcct(b, GPop.acctState(id, false)); }));
     };
     const search = AccountPicker.search(value => { query = value; page = 0; void render(); }, query);
     back.replaceChildren(h('div', { class: 'lp-box' },
@@ -273,8 +273,9 @@ const LaunchPick = {
       const L=await this.preload();if(!live()||!Array.isArray(L)||building)return;
       if (now() - (list._touchAt || 0) < 1500 || list.querySelector('.sw-anim')) return;
       const fresh=AccountPicker.mergeRead(L).filter(a => !removedIds.has(a.id));
-      const statSig=a=>{const s=a?.status?.stats;return s?[s.total,Object.entries(s.vendors||{}).map(([k,v])=>k+':'+(v?.n||0)+':'+(v?.gold?.n||0)).join(',')]:null;};
-      const changed=JSON.stringify(fresh.map(a=>[a.id,a.remark,a.email,statSig(a)]))!==JSON.stringify(accts.map(a=>[a.id,a.remark,a.email,statSig(a)]));
+      const statSig=a=>{const s=a?.status?.stats;return s?`${s.total}:${Object.entries(s.vendors||{}).map(([k,v])=>k+':'+(v?.n||0)+':'+(v?.gold?.n||0)).join(',')}`:'';};
+      const lpDigest=arr=>arr.map(a=>`${a.id}|${a.remark||''}|${a.email||''}|${statSig(a)}`).join('\n');
+      const changed=lpDigest(fresh)!==lpDigest(accts);
       accts=fresh;
       if(changed){await render();return;}
       const byId=new Map(accts.map(a=>[a.id,a]));
@@ -471,13 +472,22 @@ const MgrWin = {
   },
   toggle(k) { this.open.has(k) ? this.open.delete(k) : this.open.add(k); this.keep(); this.render(true); },
   // 每张卡片单独比较，只换变了的那张；抽卡按钮跨渲染复用同一个元素 → 抽卡弹窗的锚点不会因为刷新被换掉而关闭
-  cardSig(a) {
+  cardSig(a, goldKey = '') {
     const st = a.status || {}, g = st.gacha || {}, q = st.quota || {};
-    return JSON.stringify([a.name, a.email, a.region, a.proxy, a.win, st.loggedIn, st.ip, st.loc, st.stats?.at, st.statsBusy, st.statsErr, !!g.busy, g.done, g.total, g.hits, g.err, q.pulse, q.usd, q.allowance, q.chatRemaining, q.blockedUntil > now(), this.sel.has(a.id), [...this.open].filter(k => k.startsWith(a.id + '|')).sort(), Gold.manual, Gold.manual ? [...Gold.set()].sort() : 0]);
+    const openK = this._openByAcct?.get(a.id) || '';
+    return `${a.name || ''}|${a.email || ''}|${a.region || ''}|${a.proxy || ''}|${a.win || ''}|${st.loggedIn}|${st.ip || ''}|${st.loc || ''}|${st.stats?.at || 0}|${st.statsBusy || ''}|${st.statsErr || ''}|${g.busy ? 1 : 0}|${g.done || 0}|${g.total || 0}|${g.hits || 0}|${g.err || ''}|${q.pulse ?? ''}|${q.usd ?? ''}|${q.allowance ?? ''}|${q.chatRemaining ?? ''}|${q.blockedUntil > now() ? 1 : 0}|${this.sel.has(a.id) ? 1 : 0}|${openK}|${goldKey}`;
   },
   cards: new Map(),
   render(force) {
-    const sig = JSON.stringify(this.accts.map(a => [a.id, this.cardSig(a)]));
+    const goldKey = Gold.manual ? '1:' + [...Gold.set()].sort().join(',') : '0';
+    const openByAcct = new Map();
+    for (const k of this.open) {
+      const i = k.indexOf('|');
+      if (i > 0) { const aid = k.slice(0, i); openByAcct.set(aid, (openByAcct.get(aid) ? openByAcct.get(aid) + ',' : '') + k); }
+    }
+    this._openByAcct = openByAcct;
+    const sigs = this.accts.map(a => [a, this.cardSig(a, goldKey)]);
+    const sig = sigs.map(([a, s]) => a.id + ':' + s).join('\n');
     if (!force && sig === this.sig) return; this.sig = sig;
     const sc = this.list.parentElement?.scrollTop || 0;
     const busyN = this.accts.filter(a => a.status?.gacha?.busy).length;
@@ -485,7 +495,7 @@ const MgrWin = {
     this.allBox.checked = this.accts.length > 0 && this.accts.every(a => this.sel.has(a.id));
     const ids = new Set(this.accts.map(a => a.id));
     for (const id of [...this.gbs.keys()]) if (!ids.has(id)) { this.gbs.delete(id); this.cards.delete(id); }
-    const els = this.accts.map(a => { const k = this.cardSig(a), c = this.cards.get(a.id); if (c && c.sig === k) return c.el; const el = this.card(a); this.cards.set(a.id, { sig: k, el }); return el; });
+    const els = sigs.map(([a, k]) => { const c = this.cards.get(a.id); if (c && c.sig === k) return c.el; const el = this.card(a); this.cards.set(a.id, { sig: k, el }); return el; });
     patchKids(this.list, els.length ? els : [h('div', { class: 'empty' }, '还没有账号')]);
     if (this.list.parentElement) this.list.parentElement.scrollTop = sc;
   },

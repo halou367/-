@@ -56,3 +56,22 @@ test('shutdown snapshot initializes canonical data even before its native notifi
  const f=await fixture(t),a={data:{}};await f.broker.attach('a',a,ext);a.data={pending:'saved'};await f.broker.close();
  const next=createSharedStorage(f.config),b={data:{legacy:'old'}};await next.attach('b',b,ext);assert.deepEqual(b.data,{pending:'saved'});await next.close();
 });
+
+test('ati_captures bloat is trimmed and persisted local.json stores compact boolean replica markers without 10x duplication',async t=>{
+ const f=await fixture(t);
+ const bigBody='x'.repeat(200000);
+ const captures=Array.from({length:95},(_,i)=>({id:'cap-'+i,url:'https://arena.ai/api/test',responseBody:bigBody}));
+ const a={data:{ati_captures:captures,ati_usage:{total:42},uiSettings:{theme:'dark'}}};
+ const b={data:{}},c={data:{}};
+ await f.broker.attach('a',a,ext);
+ await f.broker.attach('b',b,ext);
+ await f.broker.attach('c',c,ext);
+ assert.equal(a.data.ati_captures.length,80,'captures array capped at 80');
+ assert.equal(a.data.ati_captures[0].responseBody.length,160000,'oversized capture responseBody string is truncated safely');
+ assert.deepEqual(b.data.uiSettings,{theme:'dark'},'effective extension config preserved across accounts');
+ assert.deepEqual(c.data.ati_usage,{total:42},'effective usage ledger preserved across accounts');
+ const rawDisk=JSON.parse(await fs.readFile(f.file,'utf8'));
+ assert.deepEqual(rawDisk.replicas,{a:true,b:true,c:true},'on-disk replicas map stores compact true markers instead of full data deep-copies');
+ await f.broker.close();
+});
+

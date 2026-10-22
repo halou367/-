@@ -55,31 +55,58 @@ const Price = (() => {
 // ---------- 按实时通道内容（新计费 P50×2）估算本轮用量 ----------
 const LiveEst = (() => {
   const SYS = 6603;   // 新计费默认系统提示前缀缓存 token 基线（OpenAI 6603 / Anthropic 11748）
-  const tk = s => { s = String(s || ''); if (!s) return 0; const cjk = (s.match(/[\u3000-\u9fff\uac00-\ud7af\uff00-\uffef]/g) || []).length; return Math.round(cjk + (s.length - cjk) / 3.6); };
+  const _ofMemo = new WeakMap();
+  const tk = s => {
+    s = String(s || '');
+    const len = s.length;
+    if (!len) return 0;
+    let cjk = 0;
+    for (let i = 0; i < len; i++) {
+      const c = s.charCodeAt(i);
+      if ((c >= 0x3000 && c <= 0x9fff) || (c >= 0xac00 && c <= 0xd7af) || (c >= 0xff00 && c <= 0xffef)) cjk++;
+    }
+    return Math.round(cjk + (len - cjk) / 3.6);
+  };
   const js = v => v == null ? '' : typeof v === 'string' ? v : (() => { try { return JSON.stringify(v); } catch { return ''; } })();
   const inTok = p => p.type === 'text' || p.type === 'reasoning' ? tk(p.text) : p.toolCallId ? tk(p.inputText || js(p.input)) : 0;
   const resTok = p => p.toolCallId ? tk(js(p.output)) + tk(p.errorText) : p.type === 'file' ? 1500 : 0;
   function of(chat) {
     if (!chat) return null;
-    const msgs = chat.messages || [], live = [...msgs].reverse().find(m => m.role === 'assistant');
+    const msgs = chat.messages || [];
+    let idx = -1, live = null;
+    for (let i = msgs.length - 1; i >= 0; i--) {
+      if (msgs[i]?.role === 'assistant') { idx = i; live = msgs[i]; break; }
+    }
     if (!live) return null;
-    const idx = msgs.lastIndexOf(live);
     const sid = chat.sid, model = Models.get(sid)?.name || Trace.latest(sid)?.best || '';
+    const bpState = typeof BillingProbe !== 'undefined' && BillingProbe.state ? BillingProbe.state(sid) : null;
+    const trState = typeof Trace !== 'undefined' && Trace.latest ? Trace.latest(sid) : null;
+    const lastPart = live.parts?.at(-1);
+    const lastPartLen = typeof lastPart?.text === 'string' ? lastPart.text.length : (typeof lastPart?.inputText === 'string' ? lastPart.inputText.length : 0);
+    const memoKey = `${msgs.length}:${idx}:${live.id || ''}:${live.v || 0}:${live.parts?.length || 0}:${lastPartLen}:${model}:${bpState?.at || 0}:${bpState?.payments?.length || 0}:${trState?.at || 0}:${trState?.calls?.length || 0}:${chat.busy ? 1 : 0}`;
+    const hit = _ofMemo.get(chat);
+    if (hit && hit.key === memoKey) return hit.val;
     const isClaude = /claude|opus|sonnet|haiku|fable/i.test(model);
     const sysTok = isClaude ? 11748 : SYS;
     // 先计算历史消息与本轮用户新输入 token：系统提示前缀与历史轮次在新计费中走缓存读取（或首轮缓写）
     let priorHistoryTok = 0, userNewTok = 0, postCheckpointTok = 0, lastCheckpointIdx = -1;
-    const priorMsgs = msgs.slice(0, idx);
-    for (let i = 0; i < priorMsgs.length; i++) {
-      const m = priorMsgs[i];
-      if (m?.metadata?.checkpointApplied || m?.metadata?.compactionSummary) {
+    for (let i = 0; i < idx; i++) {
+      const m = msgs[i];
+      if (!m) continue;
+      if (m.metadata?.checkpointApplied || m.metadata?.compactionSummary) {
         lastCheckpointIdx = i;
         postCheckpointTok = tk(m.metadata?.compactionSummary || '');
       }
-      let mTok = 0;
-      for (const p of m.parts || []) mTok += inTok(p) + resTok(p);
-      if (mTok === 0 && m?.text) mTok += tk(m.text);
-      if (i === priorMsgs.length - 1 && m.role === 'user') userNewTok += mTok;
+      const pLen = Array.isArray(m.parts) ? m.parts.length : 0;
+      const mCacheKey = `${pLen}:${m.v || 0}:${typeof m.text === 'string' ? m.text.length : 0}`;
+      let mTok = (m._leTokKey === mCacheKey && typeof m._leTokVal === 'number') ? m._leTokVal : -1;
+      if (mTok < 0) {
+        mTok = 0;
+        for (const p of m.parts || []) mTok += inTok(p) + resTok(p);
+        if (mTok === 0 && m.text) mTok += tk(m.text);
+        try { m._leTokKey = mCacheKey; m._leTokVal = mTok; } catch {}
+      }
+      if (i === idx - 1 && m.role === 'user') userNewTok += mTok;
       else priorHistoryTok += mTok;
       if (i >= lastCheckpointIdx) postCheckpointTok += mTok;
     }
@@ -120,17 +147,21 @@ const LiveEst = (() => {
           : (Number.isFinite(payRow?.basePriceUsd) && payRow.basePriceUsd > 0 ? payRow.basePriceUsd * 2
           : (Number.isFinite(payRow?.upstreamUsd) && payRow.upstreamUsd > 0 ? payRow.upstreamUsd : null));
         if (effUsd != null) {
-          return { steps: steps.length, tools, input: Math.round(inTot), cached: Math.round(cached), output: Math.round(out), reasoning: Math.round(rs), ctx: Math.round(ctx), activeWindowTokens: Math.round(activeWindowTokens), usd: effUsd, exactUsd: Number.isFinite(payRow?.chargedUsd) && payRow.chargedUsd > 0, model, scale: 1, calN: steps.length, partialHistory: !!chat.hasMore, since: chat.runAt || live.metadata?.createdAt || null };
+          const exactOut = { steps: steps.length, tools, input: Math.round(inTot), cached: Math.round(cached), output: Math.round(out), reasoning: Math.round(rs), ctx: Math.round(ctx), activeWindowTokens: Math.round(activeWindowTokens), usd: effUsd, exactUsd: Number.isFinite(payRow?.chargedUsd) && payRow.chargedUsd > 0, model, scale: 1, calN: steps.length, partialHistory: !!chat.hasMore, since: chat.runAt || live.metadata?.createdAt || null };
+          _ofMemo.set(chat, { key: memoKey, val: exactOut });
+          return exactOut;
         }
       }
     } catch {}
     // 用本轮已读到的 Trace 校准（前 n 步的实际 token ÷ 估算）
-    let scale = 1, calN = 0; const t = Trace.latest(sid);
+    let scale = 1, calN = 0; const t = trState;
     if (t && !t.done && t.calls?.length && chat.runAt && (t.at || 0) >= chat.runAt - 120000) {
       const n = Math.min(t.calls.length, per.length), real = t.calls.slice(0, n).reduce((a, c) => a + (c.tok || 0), 0), est = per.slice(0, n).reduce((a, x) => a + x.input + x.output, 0);
       if (real > 0 && est > 0) { scale = Math.max(0.3, Math.min(5, real / est)); calN = n; }
     }
-    return { steps: steps.length, tools, input: Math.round(inTot * scale), cached: Math.round(cached * scale), output: Math.round(out * scale), reasoning: Math.round(rs * scale), ctx: Math.round(ctx * scale), activeWindowTokens: Math.round(activeWindowTokens * scale), usd: usd * scale, model, scale, calN, partialHistory: !!chat.hasMore, since: chat.runAt || live.metadata?.createdAt || null };
+    const finalOut = { steps: steps.length, tools, input: Math.round(inTot * scale), cached: Math.round(cached * scale), output: Math.round(out * scale), reasoning: Math.round(rs * scale), ctx: Math.round(ctx * scale), activeWindowTokens: Math.round(activeWindowTokens * scale), usd: usd * scale, model, scale, calN, partialHistory: !!chat.hasMore, since: chat.runAt || live.metadata?.createdAt || null };
+    _ofMemo.set(chat, { key: memoKey, val: finalOut });
+    return finalOut;
   }
   return { of, tk };
 })();
@@ -234,17 +265,176 @@ const Budget = (() => {
     return memo.value;
   }
   const sid = id => { const rows = account()?.rows.filter(r => r.sid === id) || []; return rows.length ? { usd: rows.reduce((n, r) => n + (valid(r.charged) ? r.charged : valid(r.estimate) ? r.estimate : 0), 0), turns: rows.length } : null; };
+  function nearestTier(total, pool = TIERS) {
+    if (!Number.isFinite(total) || total <= 0 || !pool.length) return null;
+    let best = pool[0], bd = Infinity;
+    for (const t of pool) { const d = Math.abs(Math.log(total / t)); if (d < bd) { bd = d; best = t; } }
+    return best;
+  }
+  function hjbSweetSpot(pulsePct, botScore = 90) {
+    if (!valid(pulsePct) || pulsePct > 100) return null;
+    const usedPct = Math.max(0, 100 - pulsePct);
+    const sig = 1 / (1 + Math.exp(-0.24 * ((Number.isFinite(botScore) ? botScore : 90) - 84)));
+    const brakeUsedPct = Math.round((75.0 + 3.5 * sig) * 10) / 10;
+    const brakeRemPct = Math.round((100 - brakeUsedPct) * 10) / 10;
+    const inSweet = pulsePct >= 72 && pulsePct <= 95;
+    const shouldBrake = usedPct >= brakeUsedPct;
+    return {
+      usedPct,
+      remainingPct: pulsePct,
+      brakeUsedPct,
+      brakeRemPct,
+      inSweetSpot: inSweet,
+      shouldBrake,
+      advice: shouldBrake
+        ? `已用 ${usedPct}% ≥ HJB 刹车线 ${brakeUsedPct}%（剩余 ≤${brakeRemPct}%），皇冠会话建议护航保鲜`
+        : inSweet
+          ? `剩余 ${pulsePct}% 处于 72%–95% 高优甜区（HJB 刹车线剩余 ${brakeRemPct}%）`
+          : `剩余 ${pulsePct}%（HJB 甜区刹车线：已用 ${brakeUsedPct}% / 剩余 ${brakeRemPct}%）`,
+    };
+  }
+  function smartEst(rawBud = est(), acct = null) {
+    const p = typeof Pulse !== 'undefined' ? Pulse.v : null;
+    const pulse = valid(rawBud?.pulse) ? rawBud.pulse : (valid(p?.pulse) ? p.pulse : (valid(+acct?.status?.pulse) ? +acct.status.pulse : null));
+    const bs = (typeof BotService !== 'undefined' && BotService.state) ? (BotService.state()?.botScore ?? 90) : 90;
+    const hjb = hjbSweetSpot(pulse, bs);
+    if (rawBud && rawBud.total != null) return { ...rawBud, hjb };
+    const a = account();
+    const rows = a?.rows || [];
+    const samples = a?.samples || [];
+    const rowCost = r => valid(r?.charged) ? r.charged : (valid(r?.estimate) ? r.estimate : 0);
+    const totalRowSpend = rows.reduce((s, r) => s + rowCost(r), 0);
+    let traceSpend = 0;
+    try {
+      if (typeof Trace !== 'undefined' && Trace.index) {
+        for (const v of Object.values(Trace.index() || {})) if (valid(v?.usd)) traceSpend += v.usd;
+      }
+    } catch {}
+    const floorUsd = (pulse === null || pulse > 0) ? Math.max(totalRowSpend, traceSpend * 0.5) : 0;
+    const survivingByFloor = TIERS.filter(t => t > floorUsd);
+    const pool = survivingByFloor.length ? survivingByFloor : TIERS;
+
+    // Strategy 1: v1_enhanced highest-precision pair (max usedPts minimizes relative error delta/usedPts) + tailSpend lag compensation
+    const pairs = [];
+    for (let i = 0; i < samples.length - 1; i++) {
+      for (let j = i + 1; j < samples.length; j++) {
+        const usedPts = samples[i].p - samples[j].p;
+        if (!(usedPts >= 1)) continue;
+        let spend = 0, tailSpend = 0, hasCharged = false;
+        for (const r of rows) {
+          const c = rowCost(r);
+          if (!(c > 0)) continue;
+          if (r.at > samples[i].at && r.at <= samples[j].at) { spend += c; if (valid(r.charged)) hasCharged = true; }
+          else if (r.at > samples[j].at && r.at <= samples[j].at + 180000) tailSpend += c;
+        }
+        const effSpend = spend > 0 ? spend : tailSpend;
+        if (!(effSpend > 0)) continue;
+        const lo = effSpend / ((usedPts + 1) / 100);
+        const hi = usedPts > 1 ? (effSpend + tailSpend) / ((usedPts - 1) / 100) : Infinity;
+        const totalEst = effSpend / (usedPts / 100);
+        const tiers = pool.filter(t => t >= lo - 1e-9 && t <= hi + 1e-9);
+        pairs.push({ usedPts, spend: effSpend, tailSpend, lo, hi, totalEst, tiers, hasCharged });
+      }
+    }
+    if (pairs.length) {
+      const best = pairs.reduce((x, y) => (y.usedPts > x.usedPts ? y : x), pairs[0]);
+      const calTier = best.tiers.length
+        ? nearestTier(best.totalEst, best.tiers)
+        : (best.usedPts >= 2 ? nearestTier(best.totalEst, pool) : null);
+      if (calTier != null && pulse != null) {
+        return {
+          ...(rawBud || { pulse, cands: best.tiers.length ? best.tiers : [calTier], transitions: pairs.length }),
+          pulse,
+          dp: best.usedPts,
+          ds: best.spend,
+          lo: best.lo,
+          hi: best.hi,
+          cands: best.tiers.length ? best.tiers : [calTier],
+          total: calTier,
+          remaining: calTier * pulse / 100,
+          loose: best.usedPts < 3 || best.tiers.length !== 1,
+          source: best.hasCharged ? 'charged' : 'mixed',
+          status: 'inferred',
+          hjb,
+        };
+      }
+    }
+
+    // Strategy 2: Single-Pulse baseline (100% -> current pulse) with cumulative account spend
+    const cumSpend = Math.max(totalRowSpend, traceSpend);
+    if (pulse != null && pulse < 100 && cumSpend > 0.004) {
+      const usedPts = 100 - pulse;
+      const totalEst = cumSpend / (usedPts / 100);
+      const lo = cumSpend / ((usedPts + 1) / 100);
+      const hi = usedPts > 1 ? (cumSpend * 1.35) / ((usedPts - 1) / 100) : Infinity;
+      const fits = pool.filter(t => t >= lo - 1e-9 && t <= hi + 1e-9);
+      const tier = nearestTier(totalEst, fits.length ? fits : pool);
+      if (tier != null) {
+        return {
+          ...(rawBud || { transitions: 1 }),
+          pulse,
+          dp: usedPts,
+          ds: cumSpend,
+          lo,
+          hi,
+          cands: fits.length ? fits : [tier],
+          total: tier,
+          remaining: tier * pulse / 100,
+          loose: true,
+          source: rows.some(r => valid(r?.charged)) ? 'charged' : 'mixed',
+          status: 'inferred',
+          hjb,
+        };
+      }
+    }
+    return rawBud ? { ...rawBud, hjb } : (pulse != null ? { pulse, dp: 0, ds: 0, total: null, remaining: null, cands: pool, lo: floorUsd, hi: Infinity, source: 'charged', transitions: 0, status: 'collecting', hjb } : null);
+  }
+  function sessionContextLife(sidOrChat) {
+    try {
+      const chat = typeof sidOrChat === 'object' && sidOrChat ? sidOrChat : (typeof Chats !== 'undefined' && sidOrChat ? Chats.get(sidOrChat) : null);
+      const msgs = chat?.messages || [];
+      let chars = 0, userTurns = 0;
+      for (const m of msgs) {
+        if (m?.role === 'user') userTurns++;
+        for (const p of m?.parts || []) if (typeof p?.text === 'string') chars += p.text.length;
+        if (typeof m?.text === 'string') chars += m.text.length;
+      }
+      if (!userTurns && typeof sidOrChat === 'string' && typeof Trace !== 'undefined') {
+        const ts = Trace.turns(sidOrChat) || [];
+        userTurns = ts.length;
+        const tot = Trace.totals(sidOrChat);
+        if (tot?.tok > 0) chars = Math.round(tot.tok * 2.8);
+      }
+      if (!userTurns && !chars) return null;
+      const maxChars = 420000, maxTurns = 95;
+      const n = Math.max(1, userTurns);
+      const kvCacheRatio = Math.round(((1 + 0.18 * (n - 1)) / n) * 1000) / 1000;
+      const charRatio = Math.min(1, chars / maxChars);
+      const turnRatio = Math.min(1, userTurns / maxTurns);
+      const usedRatio = Math.max(charRatio, turnRatio);
+      const remainingPct = Math.round(Math.max(0, (1 - usedRatio) * 100) * 10) / 10;
+      return {
+        turns: userTurns,
+        chars,
+        maxTurns,
+        maxChars,
+        kvCacheRatio,
+        remainingPct,
+        handoverAlert: remainingPct <= 15,
+      };
+    } catch { return null; }
+  }
   function drop(sids) { let n = 0; for (const a of Object.values(D)) for (const r of a?.rows || []) if (sids.includes(r.sid)) { delete r.sid; delete r.id; n++; } if (n) save(); return n; }
   function text(e = est()) {
     if (!e) return { head: '', summary: '等待本账号额度观测', why: '等待本账号的有效 Pulse 与扣费记录' };
     const money = n => '$' + (n >= 100 ? Math.round(n) : n.toFixed(2));
     const range = e.lo > 0 ? (Number.isFinite(e.hi) ? money(e.lo) + '–' + money(e.hi) : '≥' + money(e.lo)) : '';
     const status = { collecting: '继续观测有效扣费与额度变化', settling: '等待本轮结束及扣费结算', incomplete: '部分轮次账单缺失或跨观测窗口', inconsistent: '扣费与额度变化不一致，暂不推断', unmapped: '范围未对应常见档位', ambiguous: '仍有多个可能档位' };
-    const summary = e.total != null ? '≈ ' + money(e.total) : status[e.status] || status.collecting;
+    const summary = e.total != null ? '≈ ' + money(e.total) + (e.loose ? '（初估）' : '') : status[e.status] || status.collecting;
     const basis = '已观测 Pulse 下降 ' + e.dp + ' 个百分点；' + (e.source === 'charged' ? '已读取实际扣费' : '含内容估价（按±30%范围）') + ' ' + money(e.ds);
     return { head: e.total != null ? '≈ ' + money(e.remaining) + ' / ' + money(e.total) : '', summary,
-      why: summary + '。' + basis + (range && !['inconsistent','incomplete','settling'].includes(e.status) ? '；总额度范围 ' + range : '') + (e.cands.length > 1 ? '；候选 ' + e.cands.map(money).join(' / ') : '') + '。属于本机观测推断，非服务端余额；其他设备消费、结算延迟或额度口径不同仍会影响结果。' };
+      why: summary + '。' + basis + (range && !['inconsistent','incomplete','settling'].includes(e.status) ? '；总额度范围 ' + range : '') + (e.cands?.length > 1 ? '；候选 ' + e.cands.map(money).join(' / ') : '') + (e.hjb?.advice ? '；' + e.hjb.advice : '') + '。属于本机观测推断，非服务端余额；其他设备消费、结算延迟或额度口径不同仍会影响结果。' };
   }
-  return { owner, turn, payments, sample, est, sid, text, TIERS, drop };
+  return { owner, turn, payments, sample, est, smartEst, sessionContextLife, hjbSweetSpot, sid, text, TIERS, drop };
 })();
 try { Bus.on('pulse', () => Budget.sample()); if (Pulse.v) setTimeout(() => Budget.sample(), 0); } catch {}

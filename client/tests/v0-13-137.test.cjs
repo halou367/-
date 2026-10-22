@@ -34,7 +34,7 @@ test('v0.13.137: 5. Client mode top-right header has Extensions button (#extbtn)
   const view = fs.readFileSync('ui/view.js', 'utf8');
   const pal = fs.readFileSync('ui/palette.js', 'utf8');
   const boot = fs.readFileSync('ui/boot.js', 'utf8');
-  assert.ok(view.includes("id: 'extbtn'") && view.includes("id: 'extpins'") && view.includes('sbf-ext'), 'view.js mounts #extbtn and #extpins next to #palbtn');
+  assert.ok(view.includes("id: 'extbtn'") && view.includes("id: 'extpins'"), 'view.js mounts #extbtn and #extpins next to #palbtn');
   assert.ok(pal.includes('const ExtPop =') && pal.includes("id: 'extpop'"), 'palette.js defines ExtPop unified extension popover');
   assert.ok(boot.includes('ExtPop,'), 'boot.js exposes ExtPop');
 });

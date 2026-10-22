@@ -544,17 +544,17 @@ const ChatHabitFingerprint = (() => {
     },
     {
       id: 'meta/muse-wonder',
-      label: 'Muse Wonder (Max)',
+      label: 'Muse Wonder',
       vendor: 'Meta',
       isOpen: false,
       baseScore: 82.0,
       vec: [1.0, 0.0, 0.78, 0.04, 0.48, 0.14, 0.06, 0.02, 0.04, 0.02, 0.52, 0.72, 0.76, 0.56, 0.58, 0.05, 0.54, 0.96, 0.34, 0.42],
-      tags: ['Meta Muse Wonder闭源高强推理', '工具前报备与高密度流块输出'],
+      tags: ['Meta Muse Wonder闭源推理', '工具前报备与高密度流块输出'],
     },
     // ── Open-Source Models (isOpen: true, visR > 0 or open-source Apache/MIT contenders, NEVER calls /cost) ──
     {
-      id: 'moonshot/kimi-k3-max',
-      label: 'Kimi K3 (Max)',
+      id: 'moonshot/kimi-k3',
+      label: 'Kimi K3',
       vendor: 'Moonshot',
       isOpen: true,
       baseScore: 62.0,
@@ -562,8 +562,8 @@ const ChatHabitFingerprint = (() => {
       tags: ['开源可见思考过程', 'Kimi中文结构化分点与工具习惯'],
     },
     {
-      id: 'deepseek/deepseek-v4.1-flash-max',
-      label: 'DeepSeek V4.1 Flash (Max)',
+      id: 'deepseek/deepseek-v4.1-flash',
+      label: 'DeepSeek V4.1 Flash',
       vendor: 'DeepSeek',
       isOpen: true,
       baseScore: 89.0,
@@ -571,17 +571,17 @@ const ChatHabitFingerprint = (() => {
       tags: ['开源深度可见思考链', 'DeepSeek密集推导与破折号/加粗冒号习惯'],
     },
     {
-      id: 'deepseek/deepseek-v4.1-flash-20260910-max',
-      label: 'DeepSeek V4.1 Flash 20260910 (Max)',
+      id: 'deepseek/deepseek-v4.1-flash-20260910',
+      label: 'DeepSeek V4.1 Flash 20260910',
       vendor: 'DeepSeek',
       isOpen: true,
       baseScore: 88.0,
       vec: [0.0, 0.0, 0.16, 0.14, 0.20, 0.06, 0.44, 0.16, 0.20, 0.14, 0.76, 0.72, 0.74, 0.42, 0.44, 0.76, 0.52, 0.70, 0.74, 0.70],
-      tags: ['开源深度可见思考链', 'DeepSeek V4.1 Flash 0910高档推理'],
+      tags: ['开源深度可见思考链', 'DeepSeek V4.1 Flash 0910推理'],
     },
     {
       id: 'zhipu/glm-5.2-max',
-      label: 'GLM 5.2 (Max)',
+      label: 'GLM 5.2 Max',
       vendor: 'Zhipu',
       isOpen: true,
       baseScore: 88.0,
@@ -589,8 +589,17 @@ const ChatHabitFingerprint = (() => {
       tags: ['开源可见思考过程', 'GLM工整中文总分结构与长思考链'],
     },
     {
-      id: 'alibaba/qwen-3.7-max-high',
-      label: 'Qwen 3.7 Max (High)',
+      id: 'zhipu/glm-5.3-max',
+      label: 'GLM 5.3 Max',
+      vendor: 'Zhipu',
+      isOpen: true,
+      baseScore: 89.0,
+      vec: [0.0, 0.0, 0.24, 0.20, 0.22, 0.08, 0.44, 0.16, 0.20, 0.14, 0.80, 0.76, 0.78, 0.38, 0.32, 0.82, 0.58, 0.74, 0.76, 0.70],
+      tags: ['开源可见思考过程', 'GLM 5.3 Max工整中文结构与深度推导'],
+    },
+    {
+      id: 'alibaba/qwen-3.7-max',
+      label: 'Qwen 3.7 Max',
       vendor: 'Alibaba',
       isOpen: true,
       baseScore: 76.0,
@@ -598,49 +607,49 @@ const ChatHabitFingerprint = (() => {
       tags: ['开源可见思考过程', 'Qwen条理化列表与稳健工具调用'],
     },
     {
-      id: 'alibaba/qwen3.8-max-low',
-      label: 'Qwen3.8 Max (Low)',
+      id: 'alibaba/qwen3.8-max',
+      label: 'Qwen 3.8 Max',
       vendor: 'Alibaba',
       isOpen: true,
-      baseScore: 58.0,
+      baseScore: 78.0,
       vec: [0.0, 0.0, 0.20, 0.12, 0.16, 0.04, 0.28, 0.10, 0.12, 0.08, 0.64, 0.58, 0.62, 0.28, 0.20, 0.68, 0.52, 0.50, 0.46, 0.42],
-      tags: ['开源可见思考过程', 'Qwen3.8 Max低档快速思考'],
+      tags: ['开源可见思考过程', 'Qwen 3.8 Max结构化思考'],
     },
     {
-      id: 'alibaba/qwen3.8-flash-next-low',
-      label: 'Qwen3.8 Flash Next (Low)',
+      id: 'alibaba/qwen3.8-flash-next',
+      label: 'Qwen 3.8 Flash Next',
       vendor: 'Alibaba',
       isOpen: true,
       baseScore: 48.0,
       vec: [0.0, 0.0, 0.18, 0.10, 0.14, 0.02, 0.24, 0.08, 0.10, 0.06, 0.58, 0.52, 0.56, 0.24, 0.18, 0.64, 0.50, 0.42, 0.38, 0.34],
-      tags: ['开源可见思考过程', 'Qwen3.8 Flash Next极速轻量响应'],
+      tags: ['开源可见思考过程', 'Qwen 3.8 Flash Next极速轻量响应'],
     },
     {
-      id: 'xiaomi/mimo-v2.6-flash-medium',
-      label: 'MiMo V2.6 Flash (Medium)',
+      id: 'xiaomi/mimo-v2.6-flash',
+      label: 'MiMo V2.6 Flash',
       vendor: 'Xiaomi',
       isOpen: true,
       baseScore: 54.0,
       vec: [0.0, 0.0, 0.20, 0.12, 0.16, 0.04, 0.26, 0.10, 0.12, 0.08, 0.60, 0.54, 0.58, 0.26, 0.20, 0.66, 0.52, 0.46, 0.42, 0.38],
-      tags: ['开源可见思考过程', 'MiMo V2.6中档轻量推理'],
+      tags: ['开源可见思考过程', 'MiMo V2.6轻量推理'],
     },
     {
       id: 'deepseek/deepseek-v4.1-flash-1017',
-      label: 'DeepSeek V4.1 Flash 1017 (Max)',
+      label: 'DeepSeek V4.1 Flash 1017',
       vendor: 'DeepSeek',
       isOpen: true,
       baseScore: 88.5,
       vec: [0.0, 0.0, 0.17, 0.15, 0.21, 0.07, 0.46, 0.17, 0.21, 0.15, 0.78, 0.74, 0.76, 0.44, 0.46, 0.77, 0.52, 0.72, 0.76, 0.71],
-      tags: ['开源深度可见思考链(7字流块)', 'DeepSeek V4.1 Flash 1017高档推理'],
+      tags: ['开源深度可见思考链(7字流块)', 'DeepSeek V4.1 Flash 1017推理'],
     },
     {
       id: 'meta/muse-spark-open',
-      label: 'Muse Spark Open (Max)',
+      label: 'Muse Spark Open',
       vendor: 'Meta',
       isOpen: true,
       baseScore: 79.0,
       vec: [0.0, 0.0, 0.72, 0.04, 0.44, 0.10, 0.08, 0.04, 0.04, 0.02, 0.54, 0.68, 0.72, 0.50, 0.52, 0.15, 0.52, 0.88, 0.32, 0.40],
-      tags: ['开源可见思考过程', 'Meta Muse Spark Open开源高强推理'],
+      tags: ['开源可见思考过程', 'Meta Muse Spark Open开源推理'],
     },
     {
       id: 'contenders/caveman-agent',
@@ -694,9 +703,35 @@ const ChatHabitFingerprint = (() => {
     '01a151e0-c58e-7766-9c65-f7287592c61b',
   ]);
 
+  const MODEL_NAME_MAX_RE = /^(?:qwen[\d.]*|qwen-\d[\d.]*|glm-[\d.]+|minimax[\w.-]*|step-[\d.]+|yi-[\w.-]+|gpt-[\d.]+-codex)-max(?:-0\d{3}|-\d{4,8})?$/i;
+  const OPEN_NO_TIER_BASE_RE = /^(?:(?:qwen[\d.]*|qwen-\d[\d.]*|glm-[\d.]+)-max(?:-0\d{3}|-\d{4,8})?|kimi-k\d[\d.]*|deepseek-v[\d.]+-flash(?:-\d+)?|mimo-v[\d.]+-(?:flash|pro)|qwen[\d.]*-flash(?:-next)?|glm-[\d.]+-flash|minimax-m\d[\w.-]*|muse-wonder|muse-spark-open|beam-[\d.]+-\d+b-a\d+b|horizon-[\d.]+|step-\d[\w.-]*|hy\d[\w.-]*|kibitz|kalmia)$/i;
+
+  function sanitizeCorruptedTierSlug(str, rawHint = '') {
+    if (!str) return '';
+    let out = String(str).trim().replace(/\s*\((?:标准|standard)\)\s*$/i, '');
+    if (/qwen3\.8-max-0902/i.test(String(rawHint || '')) && /^qwen3\.8-max(?:-(?:none|minimal|low|medium|high|xhigh|max))?$/i.test(out)) {
+      return 'qwen3.8-max-0902';
+    }
+    if (/^kimi-k3-max$/i.test(out)) return 'kimi-k3';
+    if (/^muse-wonder-(?:none|minimal|low|medium|high|xhigh|max)$/i.test(out)) return 'muse-wonder';
+    if (/^muse-spark-open-(?:none|minimal|low|medium|high|xhigh|max)$/i.test(out)) return 'muse-spark-open';
+    // 清理无档位型号被误挂上的档位后缀（如 qwen3.8-max-low -> qwen3.8-max, deepseek-v4.1-flash-20260910-max -> deepseek-v4.1-flash-20260910）
+    const mOpen = /^(.+?)-(none|minimal|low|medium|high|xhigh|max)$/i.exec(out);
+    if (mOpen && (OPEN_NO_TIER_BASE_RE.test(mOpen[1]) || MODEL_NAME_MAX_RE.test(mOpen[1]))) {
+      out = mOpen[1];
+    }
+    // 清理双重档位后缀（如 claude-opus-5.5-high-low -> claude-opus-5.5-high）
+    const mDouble = /^(.+?)-(none|minimal|low|medium|high|xhigh|max)-(none|minimal|low|medium|high|xhigh|max)$/i.exec(out);
+    if (mDouble) {
+      out = `${mDouble[1]}-${mDouble[2]}`;
+    }
+    if (/^kimi-k3-max$/i.test(out)) return 'kimi-k3';
+    return out;
+  }
+
   function canonHabitModelName(raw) {
     if (!raw) return '';
-    let s = String(raw).replace(/[?？]+$/, '').replace(/\s+/g, ' ').trim();
+    let s = String(raw).replace(/[?？]+$/, '').replace(/\s*\((?:标准|standard)\)\s*$/i, '').replace(/\s+/g, ' ').trim();
     if (!s || s === '开源模型') return s;
     if (/^(?:meta\/)?muse(?:\s*\((low|medium|high|xhigh|max)\)|-(low|medium|high|xhigh|max))?$/i.test(s)) {
       const m = /^(?:meta\/)?muse(?:\s*\((low|medium|high|xhigh|max)\)|-(low|medium|high|xhigh|max))?$/i.exec(s);
@@ -707,7 +742,10 @@ const ChatHabitFingerprint = (() => {
     if (typeof Strength !== 'undefined' && typeof Strength.canon === 'function') {
       try {
         const c = Strength.canon(s);
-        if (c) return String(c).replace(/^muse(?:-(low|medium|high|xhigh|max))?$/i, (_, t) => 'muse-spark-1.3-' + String(t || 'max').toLowerCase()).replace(/gpt-5\.6-luna/ig, 'gpt-6-luna').replace(/\bbarium-bb-v2-4xts(?:-(?:agent|public|vertex))?(?:-(low|medium|high|max))?\b/ig, (_, t) => 'gemini-4-argon-' + String(t || 'high').toLowerCase());
+        if (c) {
+          const normC = String(c).replace(/^muse(?:-(low|medium|high|xhigh|max))?$/i, (_, t) => 'muse-spark-1.3-' + String(t || 'max').toLowerCase()).replace(/gpt-5\.6-luna/ig, 'gpt-6-luna').replace(/\bbarium-bb-v2-4xts(?:-(?:agent|public|vertex))?(?:-(low|medium|high|max))?\b/ig, (_, t) => 'gemini-4-argon-' + String(t || 'high').toLowerCase());
+          return sanitizeCorruptedTierSlug(normC, s);
+        }
       } catch {}
     }
     const bare = s.replace(/^[a-z0-9_.-]+\//i, '').replace(/\[[^\]]*\]\s*/g, '').trim();
@@ -720,8 +758,203 @@ const ChatHabitFingerprint = (() => {
       const tm = /^muse(?:-(low|medium|high|xhigh|max))?$/i.exec(slug);
       return 'muse-spark-1.3-' + String(eff || tm?.[1] || 'max').toLowerCase();
     }
-    if (eff && !slug.endsWith('-' + eff)) return `${slug}-${eff}`;
-    return slug;
+    if (eff && !slug.endsWith('-' + eff) && !OPEN_NO_TIER_BASE_RE.test(slug) && !MODEL_NAME_MAX_RE.test(slug)) {
+      return sanitizeCorruptedTierSlug(`${slug}-${eff}`, s);
+    }
+    return sanitizeCorruptedTierSlug(slug, s);
+  }
+
+  // 严格三元组解构器（厂商 vendor / 型号 family / 强度 effort）：
+  // 铁律：有明确强度信息即提取对应档位（low/medium/high/xhigh/max），无强度信息或无档位型号一律归为「标准」（standard），绝不混入型号名或捏造伪档位
+  function decomposeModelIdentity(raw, hints = {}) {
+    const rawStr = String(raw || hints.rawLabel || hints.family || '').replace(/[?？]+$/, '').trim();
+    const rawLabelHint = String(hints.rawLabel || '').replace(/[?？]+$/, '').trim();
+    if (!rawStr || rawStr === '开源模型') {
+      return {
+        vendor: 'compat',
+        vendorLabel: '开源',
+        family: '开源模型',
+        familyLabel: '开源模型',
+        effort: 'standard',
+        effortLabel: '标准',
+        hasExplicitTier: false,
+        canon: '开源模型',
+        displayLabel: '开源模型',
+      };
+    }
+    const VENDOR_LABELS = {
+      openai: 'OpenAI',
+      anthropic: 'Anthropic',
+      google: 'Google',
+      xai: 'xAI',
+      deepseek: 'DeepSeek',
+      qwen: 'Qwen',
+      zhipu: 'GLM',
+      moonshot: 'Kimi',
+      xiaomi: 'MiMo',
+      meta: 'Meta',
+      minimax: 'MiniMax',
+      mistral: 'Mistral',
+      bytedance: 'Doubao',
+      compat: '开源',
+    };
+    const FAMILY_DISPLAY_MAP = {
+      'gpt-6.1-sol': 'GPT 6.1 Sol',
+      'gpt-6.1-luna': 'GPT 6.1 Luna',
+      'gpt-6-astra': 'GPT 6 Astra',
+      'gpt-6-sol': 'GPT 6 Sol',
+      'gpt-6-luna': 'GPT 6 Luna',
+      'gpt-5.6-sol': 'GPT 5.6 Sol',
+      'gpt-5.6-terra': 'GPT 5.6 Terra',
+      'gpt-5.6-luna': 'GPT 6 Luna',
+      'claude-opus-5.6': 'Claude Opus 5.6',
+      'claude-opus-5.5': 'Claude Opus 5.5',
+      'claude-opus-5': 'Claude Opus 5',
+      'claude-sonnet-5.5': 'Claude Sonnet 5.5',
+      'claude-sonnet-5': 'Claude Sonnet 5',
+      'claude-fable-5.1': 'Claude Fable 5.1',
+      'claude-fable-5': 'Claude Fable 5',
+      'claude-haiku-5.5': 'Claude Haiku 5.5',
+      'gemini-4-argon': 'Gemini 4 Argon',
+      'gemini-3.8-flash': 'Gemini 3.8 Flash',
+      'gemini-3.7-flash': 'Gemini 3.7 Flash',
+      'gemini-3.1-pro-preview': 'Gemini 3.1 Pro Preview',
+      'grok-4.7': 'Grok 4.7',
+      'grok-4.6': 'Grok 4.6',
+      'grok-4.5': 'Grok 4.5',
+      'grok-4.20': 'Grok 4.20',
+      'muse-spark-1.3': 'Muse Spark 1.3',
+      'muse-spark-1.2': 'Muse Spark 1.2',
+      'muse-wonder': 'Muse Wonder',
+      'muse-spark-open': 'Muse Spark Open',
+      'kimi-k3': 'Kimi K3',
+      'deepseek-v4.1-flash': 'DeepSeek V4.1 Flash',
+      'deepseek-v4.1-flash-1017': 'DeepSeek V4.1 Flash 1017',
+      'deepseek-v4.1-flash-20260910': 'DeepSeek V4.1 Flash 20260910',
+      'glm-5.3-max': 'GLM 5.3 Max',
+      'glm-5.3': 'GLM 5.3',
+      'glm-5.3-flash': 'GLM 5.3 Flash',
+      'glm-5.2-max': 'GLM 5.2 Max',
+      'glm-5.2': 'GLM 5.2',
+      'qwen3.8-max': 'Qwen 3.8 Max',
+      'qwen3.8-max-0902': 'Qwen 3.8 Max 0902',
+      'qwen-3.7-max': 'Qwen 3.7 Max',
+      'qwen3.8-flash-next': 'Qwen 3.8 Flash Next',
+      'mimo-v2.6-pro': 'MiMo V2.6 Pro',
+      'mimo-v2.6-flash': 'MiMo V2.6 Flash',
+      'beam-1.0-501b-a23b': 'Beam 1.0 501B A23B',
+    };
+    const EFFORT_LABELS = {
+      low: 'Low',
+      medium: 'Medium',
+      high: 'High',
+      xhigh: 'xHigh',
+      max: 'Max',
+      standard: '标准',
+    };
+
+    const slugifyBase = s => {
+      let b = String(s || '').trim()
+        .replace(/^[a-z0-9_.-]+\//i, '')
+        .replace(/\s*\((?:none|minimal|low|medium|high|xhigh|max|标准|standard)\)\s*$/i, '')
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z0-9.]+/g, '-')
+        .replace(/^-+|-+$/g, '');
+      b = b.replace(/^qwen-3\.8-max/i, 'qwen3.8-max')
+           .replace(/^qwen-3\.8-flash/i, 'qwen3.8-flash')
+           .replace(/^qwen3\.7-max/i, 'qwen-3.7-max')
+           .replace(/^gpt-5\.6-luna/i, 'gpt-6-luna')
+           .replace(/^(?:opus|sonnet|haiku|fable)-[\d.]+$/i, m => 'claude-' + m)
+           .replace(/^(?:4-argon|3\.[178]-(?:flash|pro(?:-preview)?))$/i, m => 'gemini-' + m);
+      return sanitizeCorruptedTierSlug(b, rawLabelHint || rawStr);
+    };
+
+    const rawCanonOut = sanitizeCorruptedTierSlug(canonHabitModelName(rawStr), rawLabelHint || rawStr);
+    const parenInCanon = /\s*\((none|minimal|low|medium|high|xhigh|max)\)\s*$/i.exec(rawCanonOut);
+    let cleanSlug = parenInCanon
+      ? (slugifyBase(rawCanonOut.slice(0, parenInCanon.index)) + '-' + parenInCanon[1].toLowerCase())
+      : slugifyBase(rawCanonOut);
+
+    let family = '';
+    let effort = 'standard';
+
+    // 优先检查是否为无档位型号或自带 -max 型号
+    if (OPEN_NO_TIER_BASE_RE.test(cleanSlug) || MODEL_NAME_MAX_RE.test(cleanSlug)) {
+      family = cleanSlug;
+      effort = 'standard';
+    } else {
+      const mDash = /^(.+?)-(none|minimal|low|medium|high|xhigh|max)$/i.exec(cleanSlug);
+      if (mDash && !OPEN_NO_TIER_BASE_RE.test(mDash[1]) && !MODEL_NAME_MAX_RE.test(mDash[1])) {
+        family = slugifyBase(mDash[1]);
+        const rawT = mDash[2].toLowerCase();
+        effort = (rawT === 'none' || rawT === 'minimal') ? 'low' : rawT;
+      } else {
+        family = cleanSlug;
+        const mParen = /\((none|minimal|low|medium|high|xhigh|max)\)\s*$/i.exec(rawStr) || /\((none|minimal|low|medium|high|xhigh|max)\)\s*$/i.exec(rawLabelHint);
+        if (mParen && !OPEN_NO_TIER_BASE_RE.test(family) && !MODEL_NAME_MAX_RE.test(family)) {
+          const rawT = mParen[1].toLowerCase();
+          effort = (rawT === 'none' || rawT === 'minimal') ? 'low' : rawT;
+        }
+      }
+    }
+
+    if (hints.family) {
+      const hFam = slugifyBase(hints.family);
+      if (hFam) family = hFam;
+    }
+
+    // 显式 effort 提示覆盖（如手动纠偏选「标准」或显式档位）
+    if (hints.effort !== undefined && hints.effort !== null && String(hints.effort).trim() !== '') {
+      const he = String(hints.effort).trim().toLowerCase();
+      if (he === 'standard' || he === '标准' || he === 'none_tier' || OPEN_NO_TIER_BASE_RE.test(family) || MODEL_NAME_MAX_RE.test(family)) {
+        effort = 'standard';
+      } else if (/^(none|minimal|low|medium|high|xhigh|max)$/i.test(he)) {
+        effort = (he === 'none' || he === 'minimal') ? 'low' : he;
+      }
+    }
+    if (OPEN_NO_TIER_BASE_RE.test(family) || MODEL_NAME_MAX_RE.test(family)) {
+      effort = 'standard';
+    }
+
+    const detectVendor = s => {
+      const vHint = String(hints.vendor || '').trim().toLowerCase();
+      if (vHint && VENDOR_LABELS[vHint]) return vHint;
+      if (/gpt|openai|sol|luna|astra|terra|\bo[134]\b/i.test(s)) return 'openai';
+      if (/claude|anthropic|opus|sonnet|haiku|fable/i.test(s)) return 'anthropic';
+      if (/gemini|google|argon|barium/i.test(s)) return 'google';
+      if (/grok|xai/i.test(s)) return 'xai';
+      if (/deepseek|beam/i.test(s)) return 'deepseek';
+      if (/qwen|qwq|alibaba/i.test(s)) return 'qwen';
+      if (/glm|zhipu/i.test(s)) return 'zhipu';
+      if (/kimi|moonshot/i.test(s)) return 'moonshot';
+      if (/mimo|xiaomi/i.test(s)) return 'xiaomi';
+      if (/muse|llama|meta/i.test(s)) return 'meta';
+      if (/minimax/i.test(s)) return 'minimax';
+      if (/mistral|devstral/i.test(s)) return 'mistral';
+      return 'compat';
+    };
+    const vendor = detectVendor(family || rawStr);
+    const vendorLabel = VENDOR_LABELS[vendor] || vendor;
+    const familyLabel = FAMILY_DISPLAY_MAP[family] ||
+      family.split('-').map(w => /^(gpt|glm|mimo|hy\d*|ai)$/i.test(w) ? w.toUpperCase() : (w.charAt(0).toUpperCase() + w.slice(1))).join(' ');
+    const hasExplicitTier = effort !== 'standard';
+    const effortLabel = EFFORT_LABELS[effort] || '标准';
+    const displayLabel = hasExplicitTier ? `${familyLabel} (${effortLabel})` : familyLabel;
+    const slugCanon = hasExplicitTier ? `${family}-${effort}` : family;
+    const canon = canonHabitModelName(slugCanon) || slugCanon;
+    return {
+      vendor,
+      vendorLabel,
+      family,
+      familyLabel,
+      effort,
+      effortLabel,
+      hasExplicitTier,
+      slugCanon,
+      canon,
+      displayLabel,
+    };
   }
 
   const SECONDARY_CORRECTION_SIDS = {
@@ -783,7 +1016,21 @@ const ChatHabitFingerprint = (() => {
     if (/gpt-5\.6-luna/i.test(mStr)) {
       mStr = mStr.replace(/gpt-5\.6-luna/ig, 'gpt-6-luna');
     }
-    const canonM = canonHabitModelName(mStr) || mStr;
+    // 修复历史 Battle/Direct 入库样本：若原始揭晓名称 rawLabel 无强度档位（如 claude-opus-5、gemini-4-argon、kimi-k3、qwen3.8-max-0902），还原为纯型号 + 标准强度
+    const rawLblClean = String(out.rawLabel || '').trim();
+    if ((out.battleRevealed || out.directMode) && rawLblClean && !/\((?:none|minimal|low|medium|high|xhigh|max)\)/i.test(rawLblClean)) {
+      const rlSlug = rawLblClean.toLowerCase().replace(/\s+/g, '-');
+      const rlHasTier = /-(?:none|minimal|low|medium|high|xhigh|max)$/i.test(rlSlug) && !MODEL_NAME_MAX_RE.test(rlSlug) && !OPEN_NO_TIER_BASE_RE.test(rlSlug);
+      if (!rlHasTier) {
+        mStr = rawLblClean;
+        out.effort = 'standard';
+      }
+    }
+    if (sidStr === '01a155ea-d645-7385-9d00-0a95851f21d9' && /gemini-4-argon/i.test(mStr) && /high/i.test(rawLblClean)) {
+      mStr = 'gemini-4-argon-high';
+      out.effort = 'high';
+    }
+    const canonM = sanitizeCorruptedTierSlug(canonHabitModelName(mStr) || mStr, rawLblClean);
     if (!out.rawLabel && mStr !== canonM) out.rawLabel = mStr;
     out.model = canonM;
     mStr = canonM;
@@ -812,6 +1059,9 @@ const ChatHabitFingerprint = (() => {
     if (/gemini[-\s]*4|argon|barium-bb-v2-4xts/i.test(mStr) && CONFIRMED_GEMINI_FLASH_SIDS.has(String(out.sid || ''))) {
       return {
         ...out,
+        vendor: 'google',
+        family: 'gemini-3.8-flash',
+        effort: 'high',
         model: canonHabitModelName('Gemini 3.8 Flash (High)'),
         userConfirmed: false,
         weight: 1.0,
@@ -821,6 +1071,9 @@ const ChatHabitFingerprint = (() => {
     if (String(out.sid || '') === '01a151de-5840-75e5-b5e0-9bf662f543dd' && /6\.1-sol|gpt/i.test(mStr)) {
       return {
         ...out,
+        vendor: 'google',
+        family: 'gemini-3.8-flash',
+        effort: 'high',
         model: canonHabitModelName('Gemini 3.8 Flash (High)'),
         userConfirmed: false,
         weight: 1.0,
@@ -966,6 +1219,19 @@ const ChatHabitFingerprint = (() => {
       }
       if (metaPatch) out.meta = { ...out.meta, ...metaPatch };
     }
+    const decomp = decomposeModelIdentity(out.model, {
+      vendor: out.vendor,
+      family: out.family,
+      effort: out.effort,
+      rawLabel: out.rawLabel,
+    });
+    out.vendor = decomp.vendor;
+    out.vendorLabel = decomp.vendorLabel;
+    out.family = decomp.family;
+    out.familyLabel = decomp.familyLabel;
+    out.effort = decomp.effort;
+    out.effortLabel = decomp.effortLabel;
+    if (!out.rawLabel) out.rawLabel = decomp.displayLabel;
     return out;
   }
 
@@ -983,6 +1249,7 @@ const ChatHabitFingerprint = (() => {
     return { vec, meta };
   }
 
+  const _harvestedSigBySid = new Map();
   function harvestLocalAccountModelsIntoBank() {
     let harvested = 0;
     try {
@@ -998,6 +1265,8 @@ const ChatHabitFingerprint = (() => {
         const isUserConf = Boolean(m.userCorrected || m.userConfirmed);
         const isRevConf = Boolean(!isUserConf && m.reverseName && Number(m.reverseConfidence) >= 0.88 && !m.habitInferred);
         if (!isUserConf && !isRevConf) continue;
+        const hSig = `${m.name || ''}|${m.reverseName || ''}|${m.userCorrected ? 1 : 0}|${m.at || m.updatedAt || 0}`;
+        if (_harvestedSigBySid.get(sid) === hSig && bySid.has(String(sid))) continue;
         const chat = (typeof Chats !== 'undefined' && Chats && typeof Chats.get === 'function') ? Chats.get(sid) : null;
         const hasLoadedAsst = Array.isArray(chat?.messages) && chat.messages.some(x => x && x.role === 'assistant');
         const hasSavedVec = Array.isArray(m.habitFeatures?.vec) && m.habitFeatures.vec.length === 20 && !isSyntheticStubVecSample(m.habitFeatures.vec);
@@ -1008,6 +1277,7 @@ const ChatHabitFingerprint = (() => {
         if (!canonM || canonM === '开源模型') continue;
         const existing = bySid.get(String(sid));
         if (existing && ((existing.userConfirmed && !existing.autoTeacher) || (!isUserConf && existing.userConfirmed)) && String(existing.model || '').toLowerCase() === String(canonM).toLowerCase()) {
+          _harvestedSigBySid.set(sid, hSig);
           continue;
         }
         const feat = extractFeatures(chat || { sid, messages: [] }, m);
@@ -1029,6 +1299,7 @@ const ChatHabitFingerprint = (() => {
         if (cleanSample) {
           samples.push(cleanSample);
           bySid.set(String(sid), cleanSample);
+          _harvestedSigBySid.set(sid, hSig);
           harvested++;
         }
       }
@@ -1119,8 +1390,9 @@ const ChatHabitFingerprint = (() => {
       const raw = typeof Store !== 'undefined' && Store.get ? Store.get(BANK_KEY, null) : null;
       const builtin = (typeof globalThis !== 'undefined' && globalThis.BUILTIN_HABIT_BANK) ? globalThis.BUILTIN_HABIT_BANK : null;
       const nowCap = Date.now() - 60000;
-      const builtinSamples = (raw?.replace) ? [] : (Array.isArray(builtin?.samples) ? builtin.samples.map(s => (s && s.at > nowCap) ? { ...s, at: nowCap } : s) : []);
-      const rawSamples = Array.isArray(raw?.samples) ? raw.samples : [];
+      const isExplicitEmptyReset = Boolean(raw?.replace && Array.isArray(raw?.samples) && raw.samples.length === 0);
+      const builtinSamples = isExplicitEmptyReset ? [] : (Array.isArray(builtin?.samples) ? builtin.samples.map(s => (s && s.at > nowCap) ? { ...s, at: nowCap } : s) : []);
+      const rawSamples = Array.isArray(raw) ? raw : (Array.isArray(raw?.samples) ? raw.samples : []);
       let changed = Boolean(builtin?.builtinRev && raw?.builtinRev !== builtin.builtinRev);
       const bySid = new Map();
       for (const s of [...builtinSamples, ...rawSamples]) {
@@ -1199,6 +1471,18 @@ const ChatHabitFingerprint = (() => {
         if (!raw.intraFamilyHyperplanes) raw.intraFamilyHyperplanes = {};
         if (!raw.vendorTierDeltas) raw.vendorTierDeltas = {};
         if (!raw.modalityProfiles) raw.modalityProfiles = {};
+        // 自动清理因历史双档位拼接（如 claude-opus-5.5-high-low）或合成伪质心（syntheticMargin）残留的污染键
+        for (const mapObj of [raw.protoCentroids, raw.scoreOffsets, raw.tierCentroids, raw.dimWeights, raw.repelledModels]) {
+          if (!mapObj || typeof mapObj !== 'object') continue;
+          for (const k of Object.keys(mapObj)) {
+            const v = mapObj[k];
+            const cleanK = sanitizeCorruptedTierSlug(k);
+            if (v?.syntheticMargin || cleanK !== k || /-(none|minimal|low|medium|high|xhigh|max)-(none|minimal|low|medium|high|xhigh|max)$/i.test(k)) {
+              delete mapObj[k];
+              healed = true;
+            }
+          }
+        }
         if (healed && typeof Store !== 'undefined' && Store.set) {
           try { Store.set(CALIB_KEY, raw); } catch {}
         }
@@ -1274,35 +1558,150 @@ const ChatHabitFingerprint = (() => {
   const EFFORT_TIER_ORDER = ['low', 'medium', 'high', 'xhigh', 'max'];
 
   function parseModelFamilyAndTier(rawModel) {
-    const rawClean = String(rawModel || '').replace(/[?？]+$/, '').trim();
-    const canon = rawClean === '开源模型' ? '开源模型' : (typeof Strength !== 'undefined' && Strength.canon ? Strength.canon(rawClean) : rawClean);
-    const clean = String(canon || '').replace(/[?？]+$/, '').trim();
-    const mParen = /^(.*?)\s*\((none|minimal|low|medium|high|xhigh|max)\)\s*$/i.exec(clean) ||
-                   /^(.*?)\s*\((none|minimal|low|medium|high|xhigh|max)\)\s*$/i.exec(rawClean);
-    if (mParen && !clean.toLowerCase().endsWith('-' + mParen[2].toLowerCase())) {
-      const baseLabel = mParen[1].trim();
+    const rawClean = sanitizeCorruptedTierSlug(String(rawModel || '').replace(/[?？]+$/, '').trim(), rawModel);
+    const canonRaw = rawClean === '开源模型' ? '开源模型' : (typeof Strength !== 'undefined' && Strength.canon ? Strength.canon(rawClean) : rawClean);
+    const clean = sanitizeCorruptedTierSlug(String(canonRaw || '').replace(/[?？]+$/, '').trim(), rawModel);
+    const decomp = decomposeModelIdentity(clean, { rawLabel: rawClean });
+    // 开源型号自带 -max 后缀（如 qwen3.8-max、glm-5.3-max）或无档位型号属于型号名本身，绝非思考强度档位
+    if (MODEL_NAME_MAX_RE.test(clean) || OPEN_NO_TIER_BASE_RE.test(clean) || !decomp.hasExplicitTier) {
+      const fk = decomp.family || clean.toLowerCase().replace(/[^a-z0-9.]+/g, '-').replace(/^-|-$/g, '');
+      return {
+        canon: clean,
+        baseLabel: decomp.familyLabel || rawClean,
+        famKey: fk,
+        vendor: decomp.vendor,
+        tier: '',
+        effort: 'standard',
+        hasExplicitTier: false,
+      };
+    }
+    const mParen = /^(.*?)\s*\((none|minimal|low|medium|high|xhigh|max)\)\s*$/i.exec(rawClean) ||
+                   /^(.*?)\s*\((none|minimal|low|medium|high|xhigh|max)\)\s*$/i.exec(clean);
+    if (mParen) {
+      const baseLabel = mParen[1].trim().replace(/-(none|minimal|low|medium|high|xhigh|max)$/i, '');
       const rawTier = mParen[2].toLowerCase();
       const tier = (rawTier === 'none' || rawTier === 'minimal') ? 'low' : rawTier;
-      return { canon: clean, baseLabel, famKey: baseLabel.toLowerCase().replace(/[^a-z0-9.]+/g, '-').replace(/^-|-$/g, ''), tier, hasExplicitTier: true };
+      return {
+        canon: clean,
+        baseLabel,
+        famKey: decomp.family || baseLabel.toLowerCase().replace(/[^a-z0-9.]+/g, '-').replace(/^-|-$/g, ''),
+        vendor: decomp.vendor,
+        tier,
+        effort: tier,
+        hasExplicitTier: true,
+      };
     }
     const mDash = /^(.*?)-(none|minimal|low|medium|high|xhigh|max)$/i.exec(clean);
-    if (mDash) {
-      const baseLabel = mDash[1].trim();
+    if (mDash && !OPEN_NO_TIER_BASE_RE.test(mDash[1]) && !MODEL_NAME_MAX_RE.test(mDash[1])) {
+      const baseLabel = mDash[1].trim().replace(/-(none|minimal|low|medium|high|xhigh|max)$/i, '');
       const rawTier = mDash[2].toLowerCase();
       const tier = (rawTier === 'none' || rawTier === 'minimal') ? 'low' : rawTier;
-      return { canon: clean, baseLabel, famKey: baseLabel.toLowerCase().replace(/[^a-z0-9.]+/g, '-').replace(/^-|-$/g, ''), tier, hasExplicitTier: true };
+      return {
+        canon: clean,
+        baseLabel,
+        famKey: decomp.family || baseLabel.toLowerCase().replace(/[^a-z0-9.]+/g, '-').replace(/^-|-$/g, ''),
+        vendor: decomp.vendor,
+        tier,
+        effort: tier,
+        hasExplicitTier: true,
+      };
     }
-    return { canon: clean, baseLabel: clean, famKey: clean.toLowerCase().replace(/[^a-z0-9.]+/g, '-').replace(/^-|-$/g, ''), tier: 'high', hasExplicitTier: false };
+    return {
+      canon: clean,
+      baseLabel: clean,
+      famKey: decomp.family || clean.toLowerCase().replace(/[^a-z0-9.]+/g, '-').replace(/^-|-$/g, ''),
+      vendor: decomp.vendor,
+      tier: '',
+      effort: 'standard',
+      hasExplicitTier: false,
+    };
   }
 
   function formatFamilyTierCanon(baseLabel, tier) {
-    if (!baseLabel || !tier) return baseLabel || '';
+    if (!baseLabel || !tier || tier === 'standard' || tier === '标准') return baseLabel || '';
+    const rawNoParen = String(baseLabel)
+      .replace(/[?？]+$/, '')
+      .replace(/\s*\((?:none|minimal|low|medium|high|xhigh|max|标准|standard)\)\s*$/i, '')
+      .trim();
+    if (!rawNoParen || MODEL_NAME_MAX_RE.test(rawNoParen) || OPEN_NO_TIER_BASE_RE.test(rawNoParen)) {
+      return (typeof Strength !== 'undefined' && Strength.canon) ? Strength.canon(rawNoParen) : rawNoParen;
+    }
+    const cleanBase = rawNoParen.replace(/-(?:none|minimal|low|medium|high|xhigh|max)$/i, '').trim();
+    if (!cleanBase || MODEL_NAME_MAX_RE.test(cleanBase) || OPEN_NO_TIER_BASE_RE.test(cleanBase)) {
+      return (typeof Strength !== 'undefined' && Strength.canon) ? Strength.canon(cleanBase) : cleanBase;
+    }
     const tDisp = tier === 'xhigh' ? 'xHigh' : (tier.charAt(0).toUpperCase() + tier.slice(1).toLowerCase());
-    const candidate = baseLabel.includes(' ') ? (baseLabel + ' (' + tDisp + ')') : (baseLabel + '-' + tier.toLowerCase());
-    return (typeof Strength !== 'undefined' && Strength.canon) ? Strength.canon(candidate) : candidate;
+    const candidate = cleanBase.includes(' ') ? (cleanBase + ' (' + tDisp + ')') : (cleanBase + '-' + tier.toLowerCase());
+    return sanitizeCorruptedTierSlug((typeof Strength !== 'undefined' && Strength.canon) ? Strength.canon(candidate) : candidate, baseLabel);
   }
 
-  // 弹性方向纠偏（Elastic Directional Pull）：将用户的单点纠偏转化为「主目标 + 邻近思考档位 + 同价位折射 + 旧模型排斥」的软标签场，同时拟合双引擎
+  // 将内部规范化型号名（如 claude-opus-5.5-high）转换为人类可读展示名（如 Claude Opus 5.5 (High)），杜绝出现 claude-opus-5.5-high-low 等原始 slug
+  function formatDisplayModelLabel(rawOrCanon, fallbackLabel = '') {
+    const cleanRaw = sanitizeCorruptedTierSlug(String(rawOrCanon || fallbackLabel || '').replace(/[?？]+$/, '').trim(), fallbackLabel || rawOrCanon);
+    if (!cleanRaw || cleanRaw === '开源模型') return cleanRaw;
+    const cKey = String((typeof Strength !== 'undefined' && Strength.canon ? Strength.canon(cleanRaw) : cleanRaw) || cleanRaw).toLowerCase();
+    const exactProto = PROTOTYPES.find(p => String(Strength?.canon ? Strength.canon(p.label) : p.label).toLowerCase() === cKey);
+    if (exactProto) return exactProto.label;
+    const decomp = decomposeModelIdentity(cleanRaw, { rawLabel: fallbackLabel });
+    if (decomp && decomp.displayLabel) return decomp.displayLabel;
+    return cleanRaw;
+  }
+
+  // 独立强度识别器（Standalone Effort / Intensity Classifier）：
+  // 将思考强度（Low / Medium / High / xHigh / Max）从型号本体习惯中彻底解耦出来单独识别，避免与型号家族习惯互相冲突
+  function identifyEffortTier(feat, famKey = '', calib = null) {
+    if (famKey && (OPEN_NO_TIER_BASE_RE.test(famKey) || MODEL_NAME_MAX_RE.test(famKey))) {
+      return { tier: 'standard', scores: {} };
+    }
+    if (!feat || !Array.isArray(feat.tierVec) || feat.tierVec.length !== 12) return null;
+    const cal = calib || loadCalibration();
+    const tv = feat.tierVec;
+    const mod = String(feat.evalModality || (feat.totalTools > 0 ? 'agent' : 'chat')).toLowerCase();
+    const TIER_IDEAL_EFFORT = { low: 0.25, medium: 0.48, high: 0.68, xhigh: 0.81, max: 0.92 };
+    const scores = {};
+    for (const t of EFFORT_TIER_ORDER) {
+      const ideal = TIER_IDEAL_EFFORT[t] ?? 0.68;
+      const actual = (Number(tv[11]) || 0.65) * 0.50 + (Number(tv[0]) || 0.50) * 0.25 + (Number(tv[4]) || 0.50) * 0.15 + (Number(tv[10]) || 0.60) * 0.10;
+      scores[t] = (0.22 - Math.abs(actual - ideal)) * 1.15;
+    }
+    if (famKey && cal?.tierCentroids) {
+      for (const [ck, cent] of Object.entries(cal.tierCentroids)) {
+        if (!cent || cent.syntheticMargin || !Array.isArray(cent.tierVec) || cent.tierVec.length !== 12) continue;
+        const p = parseModelFamilyAndTier(ck);
+        if (p.famKey === famKey && p.tier && scores[p.tier] !== undefined) {
+          const sim = tierVecSimilarity(tv, cent.tierVec, mod, cent.stdVec);
+          if (sim != null) scores[p.tier] += (sim - 0.75) * 2.4;
+        }
+      }
+    }
+    if (famKey && cal?.intraFamilyHyperplanes?.[famKey]) {
+      for (const [pk, hObj] of Object.entries(cal.intraFamilyHyperplanes[famKey])) {
+        if (!hObj || !Array.isArray(hObj.wVec) || hObj.wVec.length !== 12) continue;
+        const [hiT, loT] = pk.split('>');
+        const proj = tv.reduce((acc, val, idx) => acc + (Number(hObj.wVec[idx]) || 0) * (Number(val) || 0), 0);
+        const margin = proj - (Number(hObj.threshold) || 0);
+        const step = Math.max(-0.18, Math.min(0.18, margin * 1.35));
+        if (scores[hiT] !== undefined) scores[hiT] += step;
+        if (scores[loT] !== undefined) scores[loT] -= step;
+      }
+    }
+    let bestTier = 'high', bestScore = -999;
+    for (const t of EFFORT_TIER_ORDER) {
+      if (scores[t] > bestScore) {
+        bestScore = scores[t];
+        bestTier = t;
+      }
+    }
+    return { tier: bestTier, scores };
+  }
+
+  // Battle 揭晓型号规范化：严格保持揭晓型号原始归属，清理任何双重档位后缀，绝不给无档位型号强行捏造冲突档位后缀
+  function resolveBattleModelWithTier(rawName) {
+    return sanitizeCorruptedTierSlug(canonHabitModelName(rawName), rawName);
+  }
+
+  // 弹性方向纠偏（Elastic Directional Pull）：将用户的单点纠偏转化为「主目标 + 邻近思考档位 + 同价位折射 + 旧模型排斥」的软标签场，同时拟合双引擎；
+  // 当 weight >= 8.0（Battle 100% 盲测真值校准）时，切换为高比重精准单档锚定 + 强排他对比排斥模式，绝不模糊相邻强度档位
   function recordElasticCorrection(chat, feat, oldModelRaw, targetModelRaw, targetScore, weight = 3.5) {
     try {
       const cal = loadCalibration();
@@ -1314,40 +1713,45 @@ const ChatHabitFingerprint = (() => {
       if (!rc.tierLogPriors) rc.tierLogPriors = {};
       if (!rc.modelResidualBias) rc.modelResidualBias = {};
 
+      const isBattleTruth = (Number(weight) || 0) >= 8.0;
       const tgt = parseModelFamilyAndTier(targetModelRaw);
       const old = oldModelRaw ? parseModelFamilyAndTier(oldModelRaw) : null;
       const tgtKey = String(tgt.canon || '').toLowerCase();
       const oldKey = old ? String(old.canon || '').toLowerCase() : '';
       const isDiffModel = Boolean(oldKey && oldKey !== tgtKey && oldKey !== '开源模型');
 
-      // 1. 构建软邻域分布 Q(m)：主目标 (0.58) + 邻近 Effort 档位 (0.26 / 0.12) + 旧家族档位折射 (0.18)
+      // 1. 构建软邻域分布 Q(m)：Battle 真值采用 1.0 独享锚定以拉开档位差距；普通手动纠偏采用软邻域过渡
       const softTargets = {};
       if (tgt.canon && tgt.canon !== '开源模型') {
-        softTargets[tgt.canon] = 0.58;
-        const tIdx = EFFORT_TIER_ORDER.indexOf(tgt.tier);
-        if (tIdx >= 0) {
-          // 如果是从更高档位往低档位拉（如 6.1sol-medium -> astra-low），中间过渡档位（如 astra-medium）获得更强软牵引 (0.28)
-          const oldTIdx = old ? EFFORT_TIER_ORDER.indexOf(old.tier) : -1;
-          const pullDir = (oldTIdx >= 0 && oldTIdx !== tIdx) ? Math.sign(oldTIdx - tIdx) : 0;
-          for (const delta of [-1, 1]) {
-            const adjIdx = tIdx + delta;
-            if (adjIdx >= 0 && adjIdx < EFFORT_TIER_ORDER.length) {
-              const adjTier = EFFORT_TIER_ORDER[adjIdx];
-              const adjCanon = formatFamilyTierCanon(tgt.baseLabel, adjTier);
-              const protoExists = PROTOTYPES.some(p => String(Strength?.canon ? Strength.canon(p.label) : p.label).toLowerCase() === adjCanon.toLowerCase());
-              if (protoExists && adjCanon.toLowerCase() !== tgtKey) {
-                const isBridgeTier = (pullDir !== 0 && delta === pullDir) || (tIdx === 0 && delta === 1) || (tIdx === EFFORT_TIER_ORDER.length - 1 && delta === -1);
-                softTargets[adjCanon] = isBridgeTier ? 0.28 : 0.16;
+        if (isBattleTruth) {
+          softTargets[tgt.canon] = 1.0;
+        } else {
+          softTargets[tgt.canon] = 0.58;
+          const tIdx = EFFORT_TIER_ORDER.indexOf(tgt.tier);
+          if (tIdx >= 0) {
+            // 如果是从更高档位往低档位拉（如 6.1sol-medium -> astra-low），中间过渡档位（如 astra-medium）获得更强软牵引 (0.28)
+            const oldTIdx = old ? EFFORT_TIER_ORDER.indexOf(old.tier) : -1;
+            const pullDir = (oldTIdx >= 0 && oldTIdx !== tIdx) ? Math.sign(oldTIdx - tIdx) : 0;
+            for (const delta of [-1, 1]) {
+              const adjIdx = tIdx + delta;
+              if (adjIdx >= 0 && adjIdx < EFFORT_TIER_ORDER.length) {
+                const adjTier = EFFORT_TIER_ORDER[adjIdx];
+                const adjCanon = formatFamilyTierCanon(tgt.baseLabel, adjTier);
+                const protoExists = PROTOTYPES.some(p => String(Strength?.canon ? Strength.canon(p.label) : p.label).toLowerCase() === adjCanon.toLowerCase());
+                if (protoExists && adjCanon.toLowerCase() !== tgtKey) {
+                  const isBridgeTier = (pullDir !== 0 && delta === pullDir) || (tIdx === 0 && delta === 1) || (tIdx === EFFORT_TIER_ORDER.length - 1 && delta === -1);
+                  softTargets[adjCanon] = isBridgeTier ? 0.28 : 0.16;
+                }
               }
             }
           }
-        }
-        // 同家族/跨家族档位折射：若原识别家族与目标家族不同且档位不同，对原识别家族在目标档位上施加 0.18 的软折射
-        if (old && old.baseLabel && old.famKey !== tgt.famKey && old.tier !== tgt.tier) {
-          const refractedOld = formatFamilyTierCanon(old.baseLabel, tgt.tier);
-          const protoExists = PROTOTYPES.some(p => String(Strength?.canon ? Strength.canon(p.label) : p.label).toLowerCase() === refractedOld.toLowerCase());
-          if (protoExists && refractedOld.toLowerCase() !== oldKey) {
-            softTargets[refractedOld] = 0.18;
+          // 同家族/跨家族档位折射：若原识别家族与目标家族不同且档位不同，对原识别家族在目标档位上施加 0.18 的软折射
+          if (old && old.baseLabel && old.famKey !== tgt.famKey && old.tier !== tgt.tier) {
+            const refractedOld = formatFamilyTierCanon(old.baseLabel, tgt.tier);
+            const protoExists = PROTOTYPES.some(p => String(Strength?.canon ? Strength.canon(p.label) : p.label).toLowerCase() === refractedOld.toLowerCase());
+            if (protoExists && refractedOld.toLowerCase() !== oldKey) {
+              softTargets[refractedOld] = 0.18;
+            }
           }
         }
       }
@@ -1365,11 +1769,11 @@ const ChatHabitFingerprint = (() => {
         recordTeacherCalibration(mCanon, feat, adjScore, effW, sid ? (sid + ':' + mCanon) : '');
       }
 
-      // 3. 对被纠偏前的旧模型施加对比排斥（Contrastive Repulsion）与特征维度自适应加权（Metric Diagonal Adaptation）
+      // 3. 对被排除的旧模型/对手模型施加对比排斥（Contrastive Repulsion）与特征维度自适应加权（Metric Diagonal Adaptation）
       if (isDiffModel && feat && Array.isArray(feat.vec) && feat.vec.length === 20) {
         const oldProto = cal.protoCentroids[oldKey] || PROTOTYPES.find(p => String(Strength?.canon ? Strength.canon(p.label) : p.label).toLowerCase() === oldKey);
         if (oldProto && Array.isArray(oldProto.vec) && oldProto.vec.length === 20) {
-          const repelAlpha = 0.11;
+          const repelAlpha = isBattleTruth ? 0.19 : 0.11;
           const repelledVec = oldProto.vec.map((v, i) => {
             const fv = Number(feat.vec[i]) || 0;
             const pv = Number(v) || 0;
@@ -1382,17 +1786,19 @@ const ChatHabitFingerprint = (() => {
             count: Math.max(1, (cal.protoCentroids[oldKey]?.count || 1)),
             updatedAt: Date.now(),
           };
-          // 自适应调整目标模型在 20 维特征上的敏感度权重
-          const tgtProto = PROTOTYPES.find(p => String(Strength?.canon ? Strength.canon(p.label) : p.label).toLowerCase() === tgtKey);
+          // 自适应调整目标模型在 20 维特征上的敏感度权重（Battle 真值赋予更高区分度增益）
+          const tgtProto = cal.protoCentroids[tgtKey] || PROTOTYPES.find(p => String(Strength?.canon ? Strength.canon(p.label) : p.label).toLowerCase() === tgtKey);
           if (tgtProto && Array.isArray(tgtProto.vec) && tgtProto.vec.length === 20) {
             const curWeights = Array.isArray(cal.dimWeights[tgtKey]) && cal.dimWeights[tgtKey].length === 20
               ? [...cal.dimWeights[tgtKey]]
               : new Array(20).fill(1.0);
+            const gainMult = isBattleTruth ? 0.46 : 0.28;
+            const maxDimW = isBattleTruth ? 1.78 : 1.55;
             for (let i = 2; i < 20; i++) {
               const dOld = Math.abs((Number(feat.vec[i]) || 0) - (Number(oldProto.vec[i]) || 0));
               const dTgt = Math.abs((Number(feat.vec[i]) || 0) - (Number(tgtProto.vec[i]) || 0));
-              const gain = (dOld - dTgt) * 0.28;
-              curWeights[i] = Math.round(Math.max(0.68, Math.min(1.55, curWeights[i] + gain)) * 1000) / 1000;
+              const gain = (dOld - dTgt) * gainMult;
+              curWeights[i] = Math.round(Math.max(0.62, Math.min(maxDimW, curWeights[i] + gain)) * 1000) / 1000;
             }
             cal.dimWeights[tgtKey] = curWeights;
           }
@@ -1407,12 +1813,14 @@ const ChatHabitFingerprint = (() => {
         }
         for (const rk of repelKeys) {
           const prevRepel = Array.isArray(cal.repelledModels[rk]) ? cal.repelledModels[rk] : [];
-          const filteredRepel = prevRepel.filter(r => r && r.sid !== sid).slice(0, 11);
+          const filteredRepel = prevRepel.filter(r => r && r.sid !== sid).slice(0, 15);
           filteredRepel.unshift({
             sid,
             vec: feat.vec.map(v => Math.round((Number(v) || 0) * 1000) / 1000),
             meta: extractCompactMeta(feat),
             target: tgt.canon,
+            battleRepel: isBattleTruth,
+            weight: Math.round((Number(weight) || 3.5) * 10) / 10,
             at: Date.now(),
           });
           cal.repelledModels[rk] = filteredRepel;
@@ -1497,10 +1905,12 @@ const ChatHabitFingerprint = (() => {
       if (!cal.vendorTierDeltas) cal.vendorTierDeltas = {};
       if (!cal.modalityProfiles) cal.modalityProfiles = {};
       const effW = Math.max(0.25, Number(weight) || 1.0);
+      const isHeavyBattleTruth = effW >= 8.0;
       if (Array.isArray(feat.vec) && feat.vec.length === 20) {
         const prev = cal.protoCentroids[k];
         const n = Math.min(48, (prev?.count || 0) + 1);
-        const alpha = Math.max(0.06, Math.min(0.48, effW / (n * 1.4 + 3.5)));
+        const maxAlpha = isHeavyBattleTruth ? 0.66 : 0.48;
+        const alpha = Math.max(0.06, Math.min(maxAlpha, (isHeavyBattleTruth ? effW * 1.35 : effW) / (n * 1.3 + 3.0)));
         const nextVec = prev && Array.isArray(prev.vec) && prev.vec.length === 20
           ? prev.vec.map((v, i) => Math.round(((1 - alpha) * (Number(v) || 0) + alpha * (Number(feat.vec[i]) || 0)) * 1000) / 1000)
           : feat.vec.map(v => Math.round((Number(v) || 0) * 1000) / 1000);
@@ -1521,13 +1931,38 @@ const ChatHabitFingerprint = (() => {
       const tv = Array.isArray(feat.tierVec) && feat.tierVec.length === 12
         ? feat.tierVec
         : (Array.isArray(feat.meta?.tierVec) && feat.meta.tierVec.length === 12 ? feat.meta.tierVec : null);
-      if (tv && !feat.anomalous) {
+      const parsed = parseModelFamilyAndTier(canon);
+      if (parsed.famKey && Array.isArray(feat.vec) && feat.vec.length === 20) {
+        const famProtos = PROTOTYPES.filter(p => parseModelFamilyAndTier(p.label).famKey === parsed.famKey);
+        if (famProtos.length === 1 || (!parsed.hasExplicitTier && famProtos.length > 0)) {
+          for (const fp of famProtos) {
+            const mainCanon = typeof Strength !== 'undefined' && Strength.canon ? Strength.canon(fp.label) : fp.label;
+            const mainKey = String(mainCanon || '').toLowerCase();
+            if (mainKey && mainKey !== k) {
+              const prevMain = cal.protoCentroids[mainKey];
+              const mCount = Math.min(48, (prevMain?.count || 0) + 1);
+              const mAlpha = Math.max(0.04, Math.min(0.28, (effW * 0.55) / (mCount * 1.5 + 4.0)));
+              const mVec = prevMain && Array.isArray(prevMain.vec) && prevMain.vec.length === 20
+                ? prevMain.vec.map((v, i) => Math.round(((1 - mAlpha) * (Number(v) || 0) + mAlpha * (Number(feat.vec[i]) || 0)) * 1000) / 1000)
+                : feat.vec.map(v => Math.round((Number(v) || 0) * 1000) / 1000);
+              cal.protoCentroids[mainKey] = {
+                vec: mVec,
+                meta: prevMain?.meta || extractCompactMeta(feat) || null,
+                count: mCount,
+                updatedAt: Date.now(),
+              };
+            }
+          }
+        }
+      }
+      if (tv && !feat.anomalous && parsed.hasExplicitTier) {
         const prevT = cal.tierCentroids[k];
         const prevW = Number(prevT?.truthWeightSum) || 0;
         // 若已有高权重 Battle 真值质心，低权重手动猜测纠偏 (effW < 2.5) 仅施加微弱软牵引，绝不覆盖真值边界
-        const effectivePullW = (prevW >= 8.0 && effW < 2.5) ? (effW * 0.28) : effW;
+        const effectivePullW = (prevW >= 8.0 && effW < 2.5) ? (effW * 0.28) : (isHeavyBattleTruth ? effW * 1.45 : effW);
         const nextW = Math.min(240, prevW + effectivePullW);
-        const tAlpha = Math.max(0.05, Math.min(0.55, effectivePullW / Math.max(2.0, nextW)));
+        const maxTAlpha = isHeavyBattleTruth ? 0.68 : 0.55;
+        const tAlpha = Math.max(0.05, Math.min(maxTAlpha, effectivePullW / Math.max(2.0, nextW)));
         const nextTierVec = (prevT && Array.isArray(prevT.tierVec) && prevT.tierVec.length === 12)
           ? prevT.tierVec.map((v, i) => Math.round(((1 - tAlpha) * (Number(v) || 0) + tAlpha * (Number(tv[i]) || 0)) * 1000) / 1000)
           : tv.map(v => Math.round((Number(v) || 0) * 1000) / 1000);
@@ -1544,14 +1979,42 @@ const ChatHabitFingerprint = (() => {
           truthWeightSum: Math.round(nextW * 100) / 100,
           updatedAt: Date.now(),
         };
+        // 同家族不同强度档位排他与误差梯度拉开（Intra-Family Effort Margin Enforcement）：
+        // 在高比重校准时，强制拉开同家族 Low / Medium / High / xHigh / Max 在强度敏感轴 [0, 1, 4, 10, 11] 上的间隔
+        const curTierIdx = EFFORT_TIER_ORDER.indexOf(parsed.tier);
+        if (isHeavyBattleTruth && parsed.famKey && curTierIdx >= 0) {
+          const effortAxes = [0, 1, 4, 10, 11];
+          for (let oi = 0; oi < EFFORT_TIER_ORDER.length; oi++) {
+            if (oi === curTierIdx) continue;
+            const otherTier = EFFORT_TIER_ORDER[oi];
+            const otherCanon = formatFamilyTierCanon(parsed.baseLabel, otherTier);
+            const otherKey = String(otherCanon || '').toLowerCase();
+            if (!otherKey || otherKey === k) continue;
+            const stepDiff = oi - curTierIdx;
+            const minMargin = 0.14 * Math.abs(stepDiff);
+            const existingOther = cal.tierCentroids[otherKey];
+            if (existingOther && !existingOther.syntheticMargin && Array.isArray(existingOther.tierVec) && existingOther.tierVec.length === 12) {
+              const pushedVec = [...existingOther.tierVec];
+              for (const ax of effortAxes) {
+                const curVal = Number(nextTierVec[ax]) || 0.5;
+                const othVal = Number(pushedVec[ax]) || 0.5;
+                const signedGap = (othVal - curVal) * Math.sign(stepDiff);
+                if (signedGap < minMargin) {
+                  const targetVal = Math.max(0.04, Math.min(0.98, curVal + Math.sign(stepDiff) * minMargin));
+                  pushedVec[ax] = Math.round(((othVal * 0.45) + (targetVal * 0.55)) * 1000) / 1000;
+                }
+              }
+              existingOther.tierVec = pushedVec;
+            }
+          }
+        }
         // 厂商级跨家族相对档位迁移向量（Factorized Vendor Tier Prior）
-        const parsed = parseModelFamilyAndTier(canon);
         const vid = detectModelVendorId(canon);
         if (parsed.tier && vid) {
           cal.vendorTierDeltas[vid] = cal.vendorTierDeltas[vid] || {};
           const pvT = cal.vendorTierDeltas[vid][parsed.tier];
           const vn = Math.min(100, (pvT?.count || 0) + 1);
-          const vAlpha = Math.max(0.04, Math.min(0.35, effectivePullW / (vn * 2.2 + 4)));
+          const vAlpha = Math.max(0.04, Math.min(0.42, effectivePullW / (vn * 2.0 + 3.5)));
           cal.vendorTierDeltas[vid][parsed.tier] = {
             tierVec: (pvT && Array.isArray(pvT.tierVec) && pvT.tierVec.length === 12)
               ? pvT.tierVec.map((v, i) => Math.round(((1 - vAlpha) * (Number(v) || 0) + vAlpha * (Number(tv[i]) || 0)) * 1000) / 1000)
@@ -1566,7 +2029,8 @@ const ChatHabitFingerprint = (() => {
           cal.modalityProfiles[mod] = cal.modalityProfiles[mod] || {};
           const pm = cal.modalityProfiles[mod][k];
           const mn = Math.min(50, (pm?.count || 0) + 1);
-          const mAlpha = Math.max(0.08, Math.min(0.45, effectivePullW / (mn * 1.5 + 3)));
+          const maxMAlpha = isHeavyBattleTruth ? 0.58 : 0.45;
+          const mAlpha = Math.max(0.08, Math.min(maxMAlpha, effectivePullW / (mn * 1.4 + 2.8)));
           cal.modalityProfiles[mod][k] = {
             tierVec: (pm && Array.isArray(pm.tierVec) && pm.tierVec.length === 12)
               ? pm.tierVec.map((v, i) => Math.round(((1 - mAlpha) * (Number(v) || 0) + mAlpha * (Number(tv[i]) || 0)) * 1000) / 1000)
@@ -1585,7 +2049,7 @@ const ChatHabitFingerprint = (() => {
         const rawDelta = Math.max(-24, Math.min(24, (+teacherScore) - (+feat.habitReasoningScore)));
         const prevS = cal.scoreOffsets[k];
         const sn = Math.min(40, (prevS?.count || 0) + 1);
-        const beta = Math.max(0.10, Math.min(0.48, effW / (sn * 1.5 + 3)));
+        const beta = Math.max(0.10, Math.min(isHeavyBattleTruth ? 0.62 : 0.48, effW / (sn * 1.4 + 2.6)));
         const nextOff = prevS ? ((1 - beta) * (Number(prevS.offset) || 0) + beta * rawDelta) : rawDelta;
         const nextMean = prevS ? ((1 - beta) * (Number(prevS.meanScore) || +teacherScore) + beta * (+teacherScore)) : (+teacherScore);
         cal.scoreOffsets[k] = {
@@ -1601,13 +2065,24 @@ const ChatHabitFingerprint = (() => {
   }
 
   // Battle 双子星同题差分对比学习引擎（Pairwise Gemini Contrastive Engine）：
-  // 利用同一 Prompt、同一模态下 A/B 双模型的响应微差，直接训练同家族相邻档位分界超平面与跨家族去偏置锚点
+  // 利用同一 Prompt、同一模态下 A/B 双模型的响应微差，直接训练同家族相邻档位分界超平面、跨模型双向排他与跨家族去偏置锚点
   function recordBattlePairwiseContrast(chat, canonA, featA, canonB, featB, voteValue = 'tie', evalModality = 'chat') {
     try {
       if (!canonA || !canonB || !featA || !featB) return null;
       const tvA = Array.isArray(featA.tierVec) && featA.tierVec.length === 12 ? featA.tierVec : null;
       const tvB = Array.isArray(featB.tierVec) && featB.tierVec.length === 12 ? featB.tierVec : null;
       if (!tvA || !tvB) return null;
+
+      // 0. 同题对偶双向排他（Mutual Exclusive Repulsion）：
+      // A 侧响应特征绝不属于 B 模型，B 侧响应特征绝不属于 A 模型；直接施加高权重排他排斥与区分度维度放大
+      if (String(canonA).toLowerCase() !== String(canonB).toLowerCase()) {
+        try {
+          const sidBase = String(chat?.sid || 'battle');
+          recordElasticCorrection({ sid: sidBase + '#pair-a' }, featA, canonB, canonA, featA.habitReasoningScore, 9.5);
+          recordElasticCorrection({ sid: sidBase + '#pair-b' }, featB, canonA, canonB, featB.habitReasoningScore, 9.5);
+        } catch {}
+      }
+
       const cal = loadCalibration();
       if (!cal.intraFamilyHyperplanes) cal.intraFamilyHyperplanes = {};
       if (!cal.reverseCalib) cal.reverseCalib = { effortScales: {}, tierLogPriors: {}, modelResidualBias: {}, updatedAt: 0 };
@@ -1620,7 +2095,7 @@ const ChatHabitFingerprint = (() => {
       const idxA = EFFORT_TIER_ORDER.indexOf(pA.tier);
       const idxB = EFFORT_TIER_ORDER.indexOf(pB.tier);
 
-      // 1. 同家族不同档位同题直接交锋（如 opus-5.5-high vs opus-5.5-medium）：直接更新线性判别超平面 w_{high>low}
+      // 1. 同家族不同档位同题直接交锋（如 opus-5.5-high vs opus-5.5-medium）：直接更新线性判别超平面 w_{high>low} 并拉开强度梯度
       if (pA.famKey && pA.famKey === pB.famKey && idxA >= 0 && idxB >= 0 && idxA !== idxB) {
         const hiIsA = idxA > idxB;
         const hiTier = hiIsA ? pA.tier : pB.tier;
@@ -1631,8 +2106,11 @@ const ChatHabitFingerprint = (() => {
         cal.intraFamilyHyperplanes[pA.famKey] = cal.intraFamilyHyperplanes[pA.famKey] || {};
         const prevH = cal.intraFamilyHyperplanes[pA.famKey][pairKey];
         const hn = Math.min(50, (prevH?.count || 0) + 1);
-        const hAlpha = Math.max(0.15, Math.min(0.60, 2.4 / (hn + 2)));
-        const rawDelta = tvHi.map((v, i) => (Number(v) || 0) - (Number(tvLo[i]) || 0));
+        const hAlpha = Math.max(0.22, Math.min(0.68, 2.8 / (hn + 1.8)));
+        const rawDelta = tvHi.map((v, i) => {
+          const d = (Number(v) || 0) - (Number(tvLo[i]) || 0);
+          return ([0, 1, 4, 10, 11].includes(i) && d < 0.08) ? Math.max(d, 0.12) : d;
+        });
         const nextW = (prevH && Array.isArray(prevH.wVec) && prevH.wVec.length === 12)
           ? prevH.wVec.map((w, i) => Math.round(((1 - hAlpha) * (Number(w) || 0) + hAlpha * rawDelta[i]) * 1000) / 1000)
           : rawDelta.map(d => Math.round(d * 1000) / 1000);
@@ -1757,7 +2235,8 @@ const ChatHabitFingerprint = (() => {
     const cal = loadCalibration();
     const builtin = (typeof globalThis !== 'undefined' && globalThis.BUILTIN_HABIT_BANK) ? globalThis.BUILTIN_HABIT_BANK : null;
     const prevRaw = (typeof Store !== 'undefined' && Store.get) ? Store.get(BANK_KEY, null) : null;
-    const payload = { v: 3, builtinRev: builtin?.builtinRev || 0, updatedAt: Date.now(), replace: Boolean(replace || prevRaw?.replace), samples: clean, calibration: cal };
+    const isEmptyReset = Boolean((replace || prevRaw?.replace) && clean.length === 0);
+    const payload = { v: 3, builtinRev: builtin?.builtinRev || 0, updatedAt: Date.now(), replace: Boolean(replace || isEmptyReset), samples: clean, calibration: cal };
     try { if (typeof Store !== 'undefined' && Store.set) Store.set(BANK_KEY, payload); } catch {}
     if (persistToHost) {
       try {
@@ -1968,6 +2447,659 @@ const ChatHabitFingerprint = (() => {
       const modelSet = new Set(cur.map(x => String(x?.model || '').trim().toLowerCase()).filter(Boolean));
       return { added, updated, skipped, total: cur.length, modelCount: modelSet.size };
     }
+  }
+
+
+  // ── 50 维 HTML/SVG 静态代码结构、运动学与特征词指纹子引擎（融合自千面 v9.2 281 原型库 v5.2 + 17 维结构签名 + 5 维 SVG32 裁判 + 四大数学皇冠非饱和谱图算子）──
+  const HTML_SVG_CLASSIFIER_BANK = {"v":"5.2.0","w":[1.8,1.6,1.5,1.2,1.6,1.6,2.2,2,2.2,2.2,2.2,2.2,2.2,3.2,2.5,2.8,2.8,2.5,2.8,2.4,2.4,2.2,2.2,1.8,1.8,1.8,1.8,1.5,1.5,1.5,1.2,1.4,1.2,1.2,1.2,1.2,1.2,1.6,1.6,1.6,1.4,2.6,2.6,2.6,2.6,2.4,2,3,2.6,1.6],"c":{"google/gemini-4-argon":{"label":"👑 Gemini 4 Argon","vendor":"google","default_effort":"high","is_crown":true},"openai/gpt-6.1-sol":{"label":"👑 GPT 6.1 Sol","vendor":"openai","default_effort":"max","is_crown":true},"openai/gpt-6-astra":{"label":"👑 GPT 6 Astra","vendor":"openai","default_effort":"max","is_crown":true},"anthropic/claude-opus-5.5":{"label":"👑 Claude Opus 5.5","vendor":"anthropic","default_effort":"max","is_crown":true},"openai/gpt-6-luna":{"label":"GPT 6 Luna","vendor":"openai","default_effort":"medium","is_crown":false},"openai/gpt-6-sol":{"label":"GPT 6 Sol","vendor":"openai","default_effort":"max","is_crown":false},"openai/gpt-5.6-sol":{"label":"GPT 5.6 Sol","vendor":"openai","default_effort":"max","is_crown":false},"openai/gpt-5.6-terra":{"label":"GPT 5.6 Terra","vendor":"openai","default_effort":"max","is_crown":false},"openai/gpt-5.6-luna":{"label":"GPT 5.6 Luna","vendor":"openai","default_effort":"medium","is_crown":false},"openai/gpt-5.5":{"label":"GPT 5.5","vendor":"openai","default_effort":"medium","is_crown":false},"anthropic/claude-opus-5":{"label":"Claude Opus 5","vendor":"anthropic","default_effort":"max","is_crown":false},"anthropic/claude-sonnet-5.5":{"label":"Claude Sonnet 5.5","vendor":"anthropic","default_effort":"high","is_crown":false},"anthropic/claude-sonnet-5":{"label":"Claude Sonnet 5","vendor":"anthropic","default_effort":"high","is_crown":false},"anthropic/claude-haiku-5.5":{"label":"Claude Haiku 5.5","vendor":"anthropic","default_effort":"high","is_crown":false},"anthropic/claude-fable-5.1":{"label":"Claude Fable 5.1","vendor":"anthropic","default_effort":"medium","is_crown":false},"google/gemini-3.8-flash":{"label":"Gemini 3.8 Flash","vendor":"google","default_effort":"high","is_crown":false},"google/gemini-3.7-flash":{"label":"Gemini 3.7 Flash","vendor":"google","default_effort":"high","is_crown":false},"google/gemma-4-31b":{"label":"Gemma 4 31B","vendor":"google","default_effort":"high","is_crown":false},"z-ai/glm-5.3":{"label":"GLM 5.3","vendor":"z-ai","default_effort":"high","is_crown":false},"z-ai/glm-5.2":{"label":"GLM 5.2","vendor":"z-ai","default_effort":"low","is_crown":false},"moonshotai/kimi-k3":{"label":"Kimi K3","vendor":"moonshotai","default_effort":"max","is_crown":false},"deepseek/deepseek-v4.1-flash":{"label":"DeepSeek V4.1 Flash","vendor":"deepseek","default_effort":"max","is_crown":false},"qwen/qwen3.7-max":{"label":"Qwen 3.7 Max","vendor":"qwen","default_effort":"high","is_crown":false},"xiaomi/mimo-v2.6-pro":{"label":"MiMo V2.6 Pro","vendor":"xiaomi","default_effort":"medium","is_crown":false},"xiaomi/mimo-v2.6-flash":{"label":"MiMo V2.6 Flash","vendor":"xiaomi","default_effort":"max","is_crown":false},"meta/muse-spark-1.3":{"label":"Muse Spark 1.3","vendor":"meta","default_effort":"max","is_crown":false},"x-ai/grok-4.7":{"label":"Grok 4.7","vendor":"x-ai","default_effort":"max","is_crown":false},"nvidia/nemotron-3-ultra":{"label":"Nemotron 3 Ultra","vendor":"nvidia","default_effort":"high","is_crown":false},"minimax/minimax-m3":{"label":"MiniMax M3","vendor":"minimax","default_effort":"medium","is_crown":false},"upstage/solar-pro4":{"label":"Solar Pro 4","vendor":"upstage","default_effort":"max","is_crown":false},"x-ai/grok-4.6":{"label":"Grok 4.6","vendor":"x-ai","default_effort":"medium","is_crown":false}},"p":[["meta/muse-spark-1.3","max",1,0,[10.019,5.961,4.078,0,6.803,6.217,1.8,0,0,0,0,0,0,0,0,1,1,0,0,0,0,2.773,0.693,0,0.392,0.824,0,0,0,0,1.099,3.555,3.664,3.296,2.708,3.738,1.386,3.912,1.792,0,1.609,0,0,0,0,1,0,0,0,3.871],{"treeBlock":4,"scrollMid":4,"scrollFast":4,"scroll-mid":4,"scroll-fast":4,"scarf-tip":4,"sailor":4,"obtained":4,"grassBlock":4,"frond":4,"fgBlock":4,"fffde7":4,"ffab00":4,"fdfefe":4,"fdebd0":4,"fd3f4":4,"f9be8":4,"f8ad9d":4,"f7e0a3":4,"f7bd45":4}],["meta/muse-spark-1.3","max",1,0,[9.686,5.694,4.013,0,6.686,6.112,1.778,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0.693,0.842,0,0,0,0,0,0,1.872,3.401,3.367,3.219,2.398,3.497,0,3.784,1.099,0,2.708,0,0,0,0,0,0,0,0,3.829],{"treeBlock":4,"scrollMid":4,"scrollFast":4,"scroll-mid":4,"scroll-fast":4,"scarf-tip":4,"sailor":4,"obtained":4,"grassBlock":4,"frond":4,"fgBlock":4,"fffde7":4,"ffab00":4,"fdfefe":4,"fdebd0":4,"fd3f4":4,"f9be8":4,"f8ad9d":4,"f7e0a3":4,"f7bd45":4}],["google/gemini-3.7-flash","high",1,0,[10.799,6.773,4.045,0,7.091,6.479,1.846,0,0,0,0,0,0,0,0,1,1,0,0,0,0,4.595,0.693,0,0,0.701,0,0,0,0,1.099,4.344,3.784,1.946,2.708,4.331,2.303,4.159,2.565,0,3.258,0,0,0,0,0,0,0,0,4.043],{"wrinkle":4,"wickerPattern":4,"wheelSymbol":4,"wheel-front-spokes":4,"wheel-back-spokes":4,"webkitAudioContext":4,"webkit-text-fill-color":4,"webkit-background-clip":4,"waveMotion":4,"walkGrad":4,"triggerBell":4,"trees-layer":4,"treeScroll":4,"translation":4,"toes":4,"toast":4,"timeBtn":4,"tailWiggle":4,"tailFlutter":4,"synthesizing":4}],["google/gemini-3.7-flash","low",1,0,[10.737,7.069,3.694,0,6.868,6.293,1.778,0,0,0,0,0,0,0,0,1,0,0,0,1,0,4.644,2.485,0,0,0.716,0,0,0,0,1.609,4.077,3.045,2.89,2.996,3.466,1.946,3.829,2.639,1.099,0,0,0,0,0,0,1,0,1,4.174],{"wrinkle":4,"wickerPattern":4,"wheelSymbol":4,"wheel-front-spokes":4,"wheel-back-spokes":4,"webkitAudioContext":4,"webkit-text-fill-color":4,"webkit-background-clip":4,"waveMotion":4,"walkGrad":4,"triggerBell":4,"trees-layer":4,"treeScroll":4,"translation":4,"toes":4,"toast":4,"timeBtn":4,"tailWiggle":4,"tailFlutter":4,"synthesizing":4}],["x-ai/grok-4.7","max",1,0,[9.052,4.92,4.155,0,7.091,6.581,1.667,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0.693,0,0.398,0,0,0,0,0,0,3.583,2.303,1.099,0.693,0,0,3.045,1.386,0.693,0,0,0,0,1,1,1,0,0,3.583],{"roll":4,"roadmarks":4,"leg-b":4,"leg-a":4,"headBob":4,"ffe68b":4,"ffe398":4,"f8e37b":4,"f7f5e7":4,"f7b856":4,"f6f3e4":4,"f4a949":4,"f4a674":4,"f49":4,"eff4eb":4,"ef9a67":4,"edf3d8":4,"e8e7d8":4,"e7a5d":4,"e75e58":4}],["deepseek/deepseek-v4.1-flash","max",1,0,[8.87,5.017,3.881,0,6.686,6.112,1.778,0,0,0,0,0,0,0,0,0,1,0,0,0,0,2.833,0.693,0,0,0.209,0,0,0,0,1.099,3.091,2.565,1.609,2.833,0,0,2.708,0.693,0,2.197,0,0,0,0,0,0,0,0,3.332],{"streak":4,"sceneryRow":4,"roadmove":4,"hills2":4,"ffd975":4,"ffc94d":4,"fdfdfb":4,"fd0f5":4,"fca86":4,"fca75":4,"fbc68":4,"f9c46b":4,"f8f4c":4,"f6f2dc":4,"f4fbff":4,"f4a261":4,"f4550":4,"f3e9b5":4,"f3e46":4,"f2a33a":4}],["deepseek/deepseek-v4.1-flash","max",1,0,[9.858,6.014,3.868,0,6.803,6.399,1.5,0,0,0,0,0,0,0,0,1,1,0,0,0,1,3.526,0.693,0,0.024,0,0,0,0,0,1.386,3.045,3.296,2.833,1.946,3.367,0,3.219,1.386,0,2.197,1,0,1,0,0,0,0,0,4.094],{"streak":4,"sceneryRow":4,"roadmove":4,"hills2":4,"ffd975":4,"ffc94d":4,"fdfdfb":4,"fd0f5":4,"fca86":4,"fca75":4,"fbc68":4,"f9c46b":4,"f8f4c":4,"f6f2dc":4,"f4fbff":4,"f4a261":4,"f4550":4,"f3e9b5":4,"f3e46":4,"f2a33a":4}],["nvidia/nemotron-3-ultra","high",1,0,[9.962,6.078,3.907,0,6.868,6.399,1.6,0,0,0,0,1,0,0,0,0,1,0,0,0,0,3.85,0,0,0,0.723,0,0,0,0,2.398,3.97,3.611,2.485,3.296,2.079,0,4.094,1.609,0,2.639,0,0,0,0,1,0,0,0,4.304],{"tuft":4,"streaks":4,"spin-fast":4,"reusable":4,"puffs":4,"fff8cf":4,"ffe98a":4,"ffb45e":4,"fb3d9":4,"f9e4f":4,"f8fb4":4,"f7f9fa":4,"f7d9a0":4,"f7a34":4,"f6c04a":4,"f6a44a":4,"f4f0e6":4,"f3f7f9":4,"f3a45":4,"f2f4f6":4}],["anthropic/claude-opus-5","max",1,0,[9.909,5.987,3.944,0,6.909,6.399,1.667,0,0,0,0,0,0,1,0,1,0,1,1,0,0,3.401,1.792,0,0,0,0,0,0,0,1.792,3.497,3.555,3.638,2.485,3.434,0,3.664,1.792,0,0,1,0,0,0,1,0,0,1,4.025],{"transformable":4,"synced":4,"sunSpin":4,"spokesRear":4,"spokesFront":4,"speedLine":4,"solveLeg":4,"setLegPolyline":4,"seatstay":4,"removeChild":4,"polyEl":4,"pin":4,"parentNode":4,"main-wing":4,"legBackG":4,"legBackFootG":4,"legBackFoot":4,"hillGrad":4,"gid":4,"footFrontG":4}],["anthropic/claude-opus-5","max",1,0,[9.438,5.811,3.656,0,6.686,6.217,1.6,0,0,1,0,0,0,1,0,0,0,1,1,0,0,3.434,2.996,0,0,0,0,0,0,0,1.099,2.708,2.485,1.792,2.773,2.079,1.099,2.944,1.386,0,1.386,0,0,1,0,0,0,0,1,3.583],{"transformable":4,"synced":4,"sunSpin":4,"spokesRear":4,"spokesFront":4,"speedLine":4,"solveLeg":4,"setLegPolyline":4,"seatstay":4,"removeChild":4,"polyEl":4,"pin":4,"parentNode":4,"main-wing":4,"legBackG":4,"legBackFootG":4,"legBackFoot":4,"hillGrad":4,"gid":4,"footFrontG":4}],["openai/gpt-6.1-sol","max",1,0,[10.045,6.2,3.868,0,6.868,6.293,1.778,0,0,0,0,0,0,1,0,0,0,1,1,0,0,3.219,3.045,0,0.11,0,0,0,0,0,1.609,3.97,3.583,3.401,3.091,2.833,0,3.989,1.792,0,0,0,0,0,0,0,0,0,1,4.19],{"webkit-tap-highlight-color":4,"visibilitychange":4,"strict":4,"speed-label":4,"play-label":4,"play-button":4,"pedalY":4,"pedalX":4,"near-leg-outline":4,"masthead":4,"far-leg-outline":4,"currentColor":4,"cancelAnimationFrame":4,"Number":4,"ID_play-label":4,"ID_near-leg-outline":4,"ID_far-leg-outline":4,"CLS_play-button":4,"CLS_masthead":4,"ARCH_VISIBILITY_CHANGE":4}],["openai/gpt-6.1-sol","max",1,0,[8.989,4.466,4.545,0,7.004,6.581,1.528,0,0,0,0,0,0,0,0,1,1,0,0,0,0,2.197,0.693,0,0.238,0,0,0,0,0,0,3.714,2.197,1.946,0.693,0,0,2.89,1.609,0.693,1.099,1,0,0,1,1,1,0,0,3.664],{"webkit-tap-highlight-color":4,"visibilitychange":4,"strict":4,"speed-label":4,"play-label":4,"play-button":4,"pedalY":4,"pedalX":4,"near-leg-outline":4,"masthead":4,"far-leg-outline":4,"currentColor":4,"cancelAnimationFrame":4,"Number":4,"ID_play-label":4,"ID_near-leg-outline":4,"ID_far-leg-outline":4,"CLS_play-button":4,"CLS_masthead":4,"ARCH_VISIBILITY_CHANGE":4}],["openai/gpt-6.1-sol","high",1,0,[8.908,4.443,4.488,0,6.909,6.479,1.538,0,0,0,0,0,0,0,0,1,0,0,0,0,0,2.303,0.693,0,0.39,0,0,0,0,0,1.386,3.434,2.485,2.197,2.398,0,0,2.639,1.386,0,1.099,0,0,0,1,1,0,0,0,3.892],{"webkit-tap-highlight-color":4,"visibilitychange":4,"strict":4,"speed-label":4,"play-label":4,"play-button":4,"pedalY":4,"pedalX":4,"near-leg-outline":4,"masthead":4,"far-leg-outline":4,"currentColor":4,"cancelAnimationFrame":4,"Number":4,"ID_play-label":4,"ID_near-leg-outline":4,"ID_far-leg-outline":4,"CLS_play-button":4,"CLS_masthead":4,"ARCH_VISIBILITY_CHANGE":4}],["openai/gpt-6.1-sol","max",1,0,[10.024,5.886,4.156,0,7.273,6.803,1.6,0,0,0,1,0,0,1,0,1,1,1,0,0,0,0,0.693,0,0.064,0,0,0,0,0,1.099,4.625,3.045,1.609,1.609,1.386,0,3.611,1.792,1.609,2.398,0,0,0,0,0,1,0,1,4.718],{"webkit-tap-highlight-color":4,"visibilitychange":4,"strict":4,"speed-label":4,"play-label":4,"play-button":4,"pedalY":4,"pedalX":4,"near-leg-outline":4,"masthead":4,"far-leg-outline":4,"currentColor":4,"cancelAnimationFrame":4,"Number":4,"ID_play-label":4,"ID_near-leg-outline":4,"ID_far-leg-outline":4,"CLS_play-button":4,"CLS_masthead":4,"ARCH_VISIBILITY_CHANGE":4}],["openai/gpt-6.1-sol","high",1,0,[10.382,6.244,4.155,0,7.091,6.431,1.935,1,0,0,0,0,0,1,0,0,0,1,0,1,1,2.303,1.792,0.013,0.213,0,0,0,0,0,1.099,4.317,3.367,0.693,2.485,0,0,3.497,1.386,0,2.708,1,1,1,1,0,0,1,1,4.898],{"webkit-tap-highlight-color":4,"visibilitychange":4,"strict":4,"speed-label":4,"play-label":4,"play-button":4,"pedalY":4,"pedalX":4,"near-leg-outline":4,"masthead":4,"far-leg-outline":4,"currentColor":4,"cancelAnimationFrame":4,"Number":4,"ID_play-label":4,"ID_near-leg-outline":4,"ID_far-leg-outline":4,"CLS_play-button":4,"CLS_masthead":4,"ARCH_VISIBILITY_CHANGE":4}],["openai/gpt-6.1-sol","max",1,0,[10.404,6.219,4.202,0,7.091,6.553,1.714,1,0,0,0,0,0,1,1,0,0,1,0,1,1,2.197,1.386,0.006,0.087,0,0,0,1,0,1.386,4.489,3.526,2.639,1.792,0,0,3.807,1.609,0,3.367,1,1,1,1,0,0,1,1,4.836],{"webkit-tap-highlight-color":4,"visibilitychange":4,"strict":4,"speed-label":4,"play-label":4,"play-button":4,"pedalY":4,"pedalX":4,"near-leg-outline":4,"masthead":4,"far-leg-outline":4,"currentColor":4,"cancelAnimationFrame":4,"Number":4,"ID_play-label":4,"ID_near-leg-outline":4,"ID_far-leg-outline":4,"CLS_play-button":4,"CLS_masthead":4,"ARCH_VISIBILITY_CHANGE":4}],["openai/gpt-6.1-sol","max",1,0,[10.078,5.768,4.326,0,7.091,6.463,1.875,1,0,0,0,0,0,1,1,0,0,1,0,1,1,2.565,1.099,0,0.505,0,0,0,0,0,0,4.29,2.639,1.792,1.386,0,0,3.296,1.609,0,1.792,1,1,1,0,0,0,1,1,4.522],{"webkit-tap-highlight-color":4,"visibilitychange":4,"strict":4,"speed-label":4,"play-label":4,"play-button":4,"pedalY":4,"pedalX":4,"near-leg-outline":4,"masthead":4,"far-leg-outline":4,"currentColor":4,"cancelAnimationFrame":4,"Number":4,"ID_play-label":4,"ID_near-leg-outline":4,"ID_far-leg-outline":4,"CLS_play-button":4,"CLS_masthead":4,"ARCH_VISIBILITY_CHANGE":4}],["openai/gpt-6.1-sol","low",1,0,[9.131,4.248,4.904,0,6.909,6.431,1.613,0,0,0,0,0,1,0,0,1,0,0,0,0,1,1.609,0.693,0,0.195,0,0,0,0,0,0,3.611,2.565,0.693,0,0,0,2.89,0.693,0,2.708,1,1,1,1,1,0,0,1,3.892],{"webkit-tap-highlight-color":4,"visibilitychange":4,"strict":4,"speed-label":4,"play-label":4,"play-button":4,"pedalY":4,"pedalX":4,"near-leg-outline":4,"masthead":4,"far-leg-outline":4,"currentColor":4,"cancelAnimationFrame":4,"Number":4,"ID_play-label":4,"ID_near-leg-outline":4,"ID_far-leg-outline":4,"CLS_play-button":4,"CLS_masthead":4,"ARCH_VISIBILITY_CHANGE":4}],["openai/gpt-6.1-sol","max",1,0,[10.33,6.242,4.106,0,7.155,6.524,1.882,1,0,0,0,0,0,1,1,1,0,1,0,1,1,2.197,1.386,0,0.603,0,0,0,0,0,1.099,4.691,2.996,2.079,1.792,0,0,3.664,1.609,0,2.398,1,1,1,0,1,0,1,1,4.977],{"webkit-tap-highlight-color":4,"visibilitychange":4,"strict":4,"speed-label":4,"play-label":4,"play-button":4,"pedalY":4,"pedalX":4,"near-leg-outline":4,"masthead":4,"far-leg-outline":4,"currentColor":4,"cancelAnimationFrame":4,"Number":4,"ID_play-label":4,"ID_near-leg-outline":4,"ID_far-leg-outline":4,"CLS_play-button":4,"CLS_masthead":4,"ARCH_VISIBILITY_CHANGE":4}],["openai/gpt-6.1-sol","high",1,0,[10.331,6.105,4.243,0,7.091,6.494,1.818,1,0,0,0,0,0,1,1,0,0,1,1,1,1,1.792,1.099,0,0.337,0,0,0,0,0,2.708,4.489,2.773,1.946,1.792,0,0,3.401,1.386,0,2.89,1,1,1,0,0,0,1,1,4.86],{"webkit-tap-highlight-color":4,"visibilitychange":4,"strict":4,"speed-label":4,"play-label":4,"play-button":4,"pedalY":4,"pedalX":4,"near-leg-outline":4,"masthead":4,"far-leg-outline":4,"currentColor":4,"cancelAnimationFrame":4,"Number":4,"ID_play-label":4,"ID_near-leg-outline":4,"ID_far-leg-outline":4,"CLS_play-button":4,"CLS_masthead":4,"ARCH_VISIBILITY_CHANGE":4}],["openai/gpt-6.1-sol","high",1,0,[10.204,6.118,4.104,0,7.091,6.524,1.765,1,0,0,0,0,0,1,0,1,0,1,1,1,1,1.609,1.099,0,0.601,0,1,0,0,0,2.639,4.29,3.807,1.609,2.079,0,0,3.611,1.609,0,1.946,1,1,1,0,0,0,1,1,4.779],{"webkit-tap-highlight-color":4,"visibilitychange":4,"strict":4,"speed-label":4,"play-label":4,"play-button":4,"pedalY":4,"pedalX":4,"near-leg-outline":4,"masthead":4,"far-leg-outline":4,"currentColor":4,"cancelAnimationFrame":4,"Number":4,"ID_play-label":4,"ID_near-leg-outline":4,"ID_far-leg-outline":4,"CLS_play-button":4,"CLS_masthead":4,"ARCH_VISIBILITY_CHANGE":4}],["openai/gpt-6.1-sol","max",1,0,[10.466,6.223,4.26,0,7.091,6.553,1.714,1,0,0,0,0,0,1,1,0,0,1,0,1,1,2.079,1.099,0,0.356,0,1,0,0,0,1.253,4.7,3.497,2.833,1.946,0,0,3.829,1.609,0,3.332,1,1,1,0,0,0,1,1,5.1],{"webkit-tap-highlight-color":4,"visibilitychange":4,"strict":4,"speed-label":4,"play-label":4,"play-button":4,"pedalY":4,"pedalX":4,"near-leg-outline":4,"masthead":4,"far-leg-outline":4,"currentColor":4,"cancelAnimationFrame":4,"Number":4,"ID_play-label":4,"ID_near-leg-outline":4,"ID_far-leg-outline":4,"CLS_play-button":4,"CLS_masthead":4,"ARCH_VISIBILITY_CHANGE":4}],["openai/gpt-6.1-sol","high",1,0,[10.252,6.016,4.252,0,7.004,6.479,1.692,1,0,0,0,0,0,1,0,1,0,1,0,1,1,1.386,1.099,0,0.205,0,0,0,0,0,1.504,4.317,2.944,1.792,2.197,0,0,3.401,1.792,0,2.996,1,1,1,1,0,0,1,1,4.745],{"webkit-tap-highlight-color":4,"visibilitychange":4,"strict":4,"speed-label":4,"play-label":4,"play-button":4,"pedalY":4,"pedalX":4,"near-leg-outline":4,"masthead":4,"far-leg-outline":4,"currentColor":4,"cancelAnimationFrame":4,"Number":4,"ID_play-label":4,"ID_near-leg-outline":4,"ID_far-leg-outline":4,"CLS_play-button":4,"CLS_masthead":4,"ARCH_VISIBILITY_CHANGE":4}],["openai/gpt-6.1-sol","high",1,0,[10.397,6.263,4.151,0,7.091,6.608,1.622,1,0,0,0,0,0,1,1,1,0,1,0,1,1,2.398,1.386,0,0.611,0,1,0,0,0,1.099,4.511,3.583,2.079,2.398,0,0,3.689,1.609,1.099,3.045,1,1,1,0,1,1,1,1,4.836],{"webkit-tap-highlight-color":4,"visibilitychange":4,"strict":4,"speed-label":4,"play-label":4,"play-button":4,"pedalY":4,"pedalX":4,"near-leg-outline":4,"masthead":4,"far-leg-outline":4,"currentColor":4,"cancelAnimationFrame":4,"Number":4,"ID_play-label":4,"ID_near-leg-outline":4,"ID_far-leg-outline":4,"CLS_play-button":4,"CLS_masthead":4,"ARCH_VISIBILITY_CHANGE":4}],["openai/gpt-6.1-sol","high",1,0,[10.385,6.225,4.178,0,7.091,6.581,1.667,1,0,0,0,0,0,1,1,0,0,1,0,1,1,2.996,1.386,0,0.186,0,0,1,0,0,1.386,4.5,3.135,2.079,2.398,0,0,3.738,1.386,1.099,2.773,1,1,1,0,0,0,1,1,5.043],{"webkit-tap-highlight-color":4,"visibilitychange":4,"strict":4,"speed-label":4,"play-label":4,"play-button":4,"pedalY":4,"pedalX":4,"near-leg-outline":4,"masthead":4,"far-leg-outline":4,"currentColor":4,"cancelAnimationFrame":4,"Number":4,"ID_play-label":4,"ID_near-leg-outline":4,"ID_far-leg-outline":4,"CLS_play-button":4,"CLS_masthead":4,"ARCH_VISIBILITY_CHANGE":4}],["openai/gpt-6-luna","medium",1,0,[9.547,5.318,4.248,0,6.909,6.431,1.613,0,0,0,0,0,1,0,0,1,1,0,0,0,1,2.773,0.693,0,0.143,0,0,0,0,0,0,3.97,3.526,1.792,0.693,0,0,2.708,2.079,0.693,0,0,0,0,1,1,1,0,0,4.263],{"Rounded":4,"Pro":4,"svg-desc":3.66,"KF_rider-bob":3.66,"ID_svg-desc":3.66,"topbar":3.37,"lane":3.37,"hill-front":3.37,"hill-back":3.37,"follow":3.37,"countryside":3.37,"cheek":3.37,"L500":3.37,"CLS_topbar":3.37,"CLS_artwork":3.37,"animation-iteration-count":3.12,"wheel-turn":2.97,"typeof":2.97,"scene-wrap":2.97,"ride-bob":2.97}],["openai/gpt-6-luna","max",1,0,[9.591,5.447,4.164,0,7.091,6.553,1.714,0,0,0,0,0,0,0,0,1,1,0,0,0,0,2.89,0.693,0,0.242,0,0,0,0,0,0,4.007,3.178,1.386,0.693,0,0,3.178,1.792,1.099,0,0,0,0,1,1,1,0,0,3.951],{"Rounded":4,"Pro":4,"svg-desc":3.66,"KF_rider-bob":3.66,"ID_svg-desc":3.66,"topbar":3.37,"lane":3.37,"hill-front":3.37,"hill-back":3.37,"follow":3.37,"countryside":3.37,"cheek":3.37,"L500":3.37,"CLS_topbar":3.37,"CLS_artwork":3.37,"animation-iteration-count":3.12,"wheel-turn":2.97,"typeof":2.97,"scene-wrap":2.97,"ride-bob":2.97}],["openai/gpt-6-luna","max",1,0,[8.916,4.407,4.532,0,6.909,6.431,1.613,0,0,0,0,0,1,0,0,1,0,0,0,0,0,2.944,0.693,0,0.277,0,0,0,0,0,0,3.555,3.178,1.792,1.099,0,0,2.639,1.099,0.693,0,1,0,0,1,1,1,0,0,3.611],{"Rounded":4,"Pro":4,"svg-desc":3.66,"KF_rider-bob":3.66,"ID_svg-desc":3.66,"topbar":3.37,"lane":3.37,"hill-front":3.37,"hill-back":3.37,"follow":3.37,"countryside":3.37,"cheek":3.37,"L500":3.37,"CLS_topbar":3.37,"CLS_artwork":3.37,"animation-iteration-count":3.12,"wheel-turn":2.97,"typeof":2.97,"scene-wrap":2.97,"ride-bob":2.97}],["openai/gpt-6-luna","max",1,0,[9.703,5.869,3.858,0,6.686,6.217,1.6,0,0,1,0,0,0,1,0,0,0,1,1,0,0,3.583,2.833,0,0,0.751,0,0,0,0,1.099,3.664,3.135,1.946,2.565,1.386,0,3.178,1.792,0,1.609,0,0,0,0,0,0,0,1,3.951],{"Rounded":4,"Pro":4,"svg-desc":3.66,"KF_rider-bob":3.66,"ID_svg-desc":3.66,"topbar":3.37,"lane":3.37,"hill-front":3.37,"hill-back":3.37,"follow":3.37,"countryside":3.37,"cheek":3.37,"L500":3.37,"CLS_topbar":3.37,"CLS_artwork":3.37,"animation-iteration-count":3.12,"wheel-turn":2.97,"typeof":2.97,"scene-wrap":2.97,"ride-bob":2.97}],["openai/gpt-6-luna","medium",1,0,[10.354,6.583,3.795,0,6.909,6.431,1.613,1,0,0,0,0,1,0,0,1,1,0,0,1,1,2.996,0.693,0,0.406,0,0,0,0,0,1.609,4.22,3.497,1.609,2.079,0,0,3.091,1.946,0.693,0,1,1,1,1,1,1,0,1,4.394],{"Rounded":4,"Pro":4,"svg-desc":3.66,"KF_rider-bob":3.66,"ID_svg-desc":3.66,"topbar":3.37,"lane":3.37,"hill-front":3.37,"hill-back":3.37,"follow":3.37,"countryside":3.37,"cheek":3.37,"L500":3.37,"CLS_topbar":3.37,"CLS_artwork":3.37,"animation-iteration-count":3.12,"wheel-turn":2.97,"typeof":2.97,"scene-wrap":2.97,"ride-bob":2.97}],["openai/gpt-6-luna","medium",1,0,[9.775,5.781,4.016,0,6.868,6.33,1.714,0,0,0,0,0,0,0,0,0,1,0,0,1,1,2.079,0.693,0,0.585,0,0,0,0,0,2.89,3.689,2.833,0.693,0.693,2.944,0,3.091,1.386,0.693,0,1,1,1,1,0,1,0,1,4.143],{"Rounded":4,"Pro":4,"svg-desc":3.66,"KF_rider-bob":3.66,"ID_svg-desc":3.66,"topbar":3.37,"lane":3.37,"hill-front":3.37,"hill-back":3.37,"follow":3.37,"countryside":3.37,"cheek":3.37,"L500":3.37,"CLS_topbar":3.37,"CLS_artwork":3.37,"animation-iteration-count":3.12,"wheel-turn":2.97,"typeof":2.97,"scene-wrap":2.97,"ride-bob":2.97}],["openai/gpt-6-luna","medium",1,0,[9.794,5.846,3.969,0,6.909,6.431,1.613,0,0,0,0,0,1,0,0,1,1,0,0,1,1,3.091,0.693,0,0.344,0,0,0,0,0,0,4.077,3.135,1.386,0.693,0,0,3.135,1.609,0,0,1,1,1,1,1,0,0,0,3.892],{"Rounded":4,"Pro":4,"svg-desc":3.66,"KF_rider-bob":3.66,"ID_svg-desc":3.66,"topbar":3.37,"lane":3.37,"hill-front":3.37,"hill-back":3.37,"follow":3.37,"countryside":3.37,"cheek":3.37,"L500":3.37,"CLS_topbar":3.37,"CLS_artwork":3.37,"animation-iteration-count":3.12,"wheel-turn":2.97,"typeof":2.97,"scene-wrap":2.97,"ride-bob":2.97}],["openai/gpt-6-luna","low",1,0,[9.637,5.591,4.067,0,6.868,6.399,1.6,0,0,0,0,1,0,0,0,1,1,0,0,0,1,2.398,0.693,0,0.346,0,0,0,0,0,0,3.784,3.497,0.693,0.693,0,0,3.332,2.197,0.693,0,1,1,1,1,1,1,0,0,4.174],{"Rounded":4,"Pro":4,"svg-desc":3.66,"KF_rider-bob":3.66,"ID_svg-desc":3.66,"topbar":3.37,"lane":3.37,"hill-front":3.37,"hill-back":3.37,"follow":3.37,"countryside":3.37,"cheek":3.37,"L500":3.37,"CLS_topbar":3.37,"CLS_artwork":3.37,"animation-iteration-count":3.12,"wheel-turn":2.97,"typeof":2.97,"scene-wrap":2.97,"ride-bob":2.97}],["openai/gpt-6-luna","low",1,0,[9.574,5.447,4.148,0,6.868,6.399,1.6,0,0,0,0,1,0,0,0,1,1,0,0,0,1,2.996,0.693,0,0.147,0,0,0,0,0,1.705,3.829,3.466,2.485,1.386,0,0,3.296,1.386,0.693,0,1,1,1,1,0,1,0,0,4.174],{"Rounded":4,"Pro":4,"svg-desc":3.66,"KF_rider-bob":3.66,"ID_svg-desc":3.66,"topbar":3.37,"lane":3.37,"hill-front":3.37,"hill-back":3.37,"follow":3.37,"countryside":3.37,"cheek":3.37,"L500":3.37,"CLS_topbar":3.37,"CLS_artwork":3.37,"animation-iteration-count":3.12,"wheel-turn":2.97,"typeof":2.97,"scene-wrap":2.97,"ride-bob":2.97}],["openai/gpt-6-luna","low",1,0,[9.675,5.7,3.997,0,6.868,6.33,1.714,0,0,0,0,0,0,0,0,1,1,0,0,1,1,2.773,0.693,0,0.5,0,0,0,0,0,1.705,3.871,3.045,1.099,1.386,0,0,2.639,1.386,0.693,0,1,1,1,1,1,1,0,0,4.159],{"Rounded":4,"Pro":4,"svg-desc":3.66,"KF_rider-bob":3.66,"ID_svg-desc":3.66,"topbar":3.37,"lane":3.37,"hill-front":3.37,"hill-back":3.37,"follow":3.37,"countryside":3.37,"cheek":3.37,"L500":3.37,"CLS_topbar":3.37,"CLS_artwork":3.37,"animation-iteration-count":3.12,"wheel-turn":2.97,"typeof":2.97,"scene-wrap":2.97,"ride-bob":2.97}],["openai/gpt-6-luna","low",1,0,[9.782,5.805,3.999,0,6.868,6.33,1.714,0,0,0,0,0,0,0,0,1,1,0,0,1,1,2.944,0.693,0,0.325,0,0,0,0,0,1.705,4.127,3.434,1.099,1.386,0,0,2.996,1.386,0,0,1,1,1,1,1,0,0,1,4.248],{"Rounded":4,"Pro":4,"svg-desc":3.66,"KF_rider-bob":3.66,"ID_svg-desc":3.66,"topbar":3.37,"lane":3.37,"hill-front":3.37,"hill-back":3.37,"follow":3.37,"countryside":3.37,"cheek":3.37,"L500":3.37,"CLS_topbar":3.37,"CLS_artwork":3.37,"animation-iteration-count":3.12,"wheel-turn":2.97,"typeof":2.97,"scene-wrap":2.97,"ride-bob":2.97}],["openai/gpt-6-luna","medium",1,0,[9.844,5.835,4.03,0,6.868,6.399,1.6,0,0,0,0,1,0,0,0,0,1,0,0,1,1,3.091,0.693,0,0.061,0,0,0,0,0,0,3.85,3.135,1.946,0.693,3.219,0,2.773,1.792,0,0,1,1,1,1,0,0,0,1,4.443],{"Rounded":4,"Pro":4,"svg-desc":3.66,"KF_rider-bob":3.66,"ID_svg-desc":3.66,"topbar":3.37,"lane":3.37,"hill-front":3.37,"hill-back":3.37,"follow":3.37,"countryside":3.37,"cheek":3.37,"L500":3.37,"CLS_topbar":3.37,"CLS_artwork":3.37,"animation-iteration-count":3.12,"wheel-turn":2.97,"typeof":2.97,"scene-wrap":2.97,"ride-bob":2.97}],["openai/gpt-6-luna","medium",1,0,[9.842,5.905,3.958,0,6.909,6.415,1.639,0,0,0,0,0,0,0,0,1,1,0,0,1,1,2.565,0.693,0,0.481,0,0,0,0,0,0,3.761,3.091,1.386,0.693,0,0,2.996,1.792,0,0,1,1,1,1,1,0,0,0,4.29],{"Rounded":4,"Pro":4,"svg-desc":3.66,"KF_rider-bob":3.66,"ID_svg-desc":3.66,"topbar":3.37,"lane":3.37,"hill-front":3.37,"hill-back":3.37,"follow":3.37,"countryside":3.37,"cheek":3.37,"L500":3.37,"CLS_topbar":3.37,"CLS_artwork":3.37,"animation-iteration-count":3.12,"wheel-turn":2.97,"typeof":2.97,"scene-wrap":2.97,"ride-bob":2.97}],["openai/gpt-6-luna","medium",1,0,[9.69,5.9,3.816,0,6.868,6.33,1.714,0,0,0,0,0,0,0,0,1,1,0,0,1,1,2.996,0.693,0,0.344,0,0,0,0,0,0,3.664,3.871,1.386,0.693,0,0,3.178,1.386,1.099,0,1,1,1,1,1,1,0,0,4.06],{"Rounded":4,"Pro":4,"svg-desc":3.66,"KF_rider-bob":3.66,"ID_svg-desc":3.66,"topbar":3.37,"lane":3.37,"hill-front":3.37,"hill-back":3.37,"follow":3.37,"countryside":3.37,"cheek":3.37,"L500":3.37,"CLS_topbar":3.37,"CLS_artwork":3.37,"animation-iteration-count":3.12,"wheel-turn":2.97,"typeof":2.97,"scene-wrap":2.97,"ride-bob":2.97}],["openai/gpt-6-luna","medium",1,0,[9.419,5.347,4.094,0,6.868,6.399,1.6,0,0,0,0,1,0,0,0,1,0,0,0,0,1,2.833,0.693,0,0.056,0,0,0,0,0,0,3.555,3.638,2.079,0.693,0,0,2.773,1.099,0.693,0,1,1,1,1,1,1,0,0,3.714],{"Rounded":4,"Pro":4,"svg-desc":3.66,"KF_rider-bob":3.66,"ID_svg-desc":3.66,"topbar":3.37,"lane":3.37,"hill-front":3.37,"hill-back":3.37,"follow":3.37,"countryside":3.37,"cheek":3.37,"L500":3.37,"CLS_topbar":3.37,"CLS_artwork":3.37,"animation-iteration-count":3.12,"wheel-turn":2.97,"typeof":2.97,"scene-wrap":2.97,"ride-bob":2.97}],["openai/gpt-6-sol","max",1,0,[9.57,5.361,4.228,0,7.091,6.635,1.579,0,0,0,0,0,0,1,0,1,0,1,0,0,1,2.833,1.099,0,0.282,0,0,0,0,0,2.197,4.06,2.773,1.609,1.386,0,0,2.944,1.386,0,0,1,0,0,0,0,0,0,1,4.111],{"warm-colored":4,"turning":4,"tires":4,"synchronized":4,"sunspin":4,"speckle":4,"softly":4,"slow-moving":4,"slight":4,"shaded":4,"road-mark":4,"rims":4,"rests":4,"requested":4,"remains":4,"rack":4,"parcel":4,"horizon":4,"grass-c":4,"grass-b":4}],["google/gemini-4-argon","high",1,0,[10.888,7.057,3.853,0,7.091,6.686,1.5,0,1,0,0,0,0,1,0,0,0,1,0,0,0,4.82,3.892,0,0,0.699,0,0,0,0,1.099,4.159,3.258,1.609,3.091,3.497,0,3.85,2.773,0,1.099,0,0,0,0,0,0,0,1,4.382],{"windLines":4,"wheelTemplate":4,"wavesLayer":4,"thighLen":4,"tailFeathers":4,"stage-wrapper":4,"speedMultiplier":4,"solveLegIK":4,"shoulderY":4,"shinLen":4,"seagulls":4,"scarfGroup":4,"rightLegGroup":4,"pouchFold2":4,"pouchFold1":4,"postSpacing":4,"pelicanNeck":4,"pelicanBodyGroup":4,"maxReach":4,"leftLegGroup":4}],["google/gemini-4-argon","high",1,0,[10.827,6.927,3.921,0,7.091,6.686,1.5,0,1,0,0,0,0,1,0,0,0,1,1,0,0,4.682,3.951,0,0,0,0,0,0,0,1.099,4.077,3.135,1.609,3.045,3.555,1.609,3.583,2.708,0,1.946,0,0,0,0,0,0,0,1,4.654],{"windLines":4,"wheelTemplate":4,"wavesLayer":4,"thighLen":4,"tailFeathers":4,"stage-wrapper":4,"speedMultiplier":4,"solveLegIK":4,"shoulderY":4,"shinLen":4,"seagulls":4,"scarfGroup":4,"rightLegGroup":4,"pouchFold2":4,"pouchFold1":4,"postSpacing":4,"pelicanNeck":4,"pelicanBodyGroup":4,"maxReach":4,"leftLegGroup":4}],["google/gemini-4-argon","high",1,0,[10.836,6.908,3.949,0,7.091,6.686,1.5,0,1,0,0,0,0,1,0,0,0,1,1,0,0,4.718,3.401,0,0,0,0,0,0,0,1.099,4.369,3.135,1.946,3.178,3.738,1.609,3.829,2.708,0,2.079,0,0,0,0,0,0,0,1,4.736],{"windLines":4,"wheelTemplate":4,"wavesLayer":4,"thighLen":4,"tailFeathers":4,"stage-wrapper":4,"speedMultiplier":4,"solveLegIK":4,"shoulderY":4,"shinLen":4,"seagulls":4,"scarfGroup":4,"rightLegGroup":4,"pouchFold2":4,"pouchFold1":4,"postSpacing":4,"pelicanNeck":4,"pelicanBodyGroup":4,"maxReach":4,"leftLegGroup":4}],["google/gemini-4-argon","high",1,0,[10.434,6.568,3.888,0,6.803,6.365,1.552,0,0,0,0,0,0,1,0,0,0,1,1,0,0,4.477,3.091,0,0,0.718,0,0,0,0,1.504,3.951,2.89,1.946,2.89,3.97,1.609,3.689,2.303,0,1.609,0,0,0,0,0,0,0,1,4.407],{"windLines":4,"wheelTemplate":4,"wavesLayer":4,"thighLen":4,"tailFeathers":4,"stage-wrapper":4,"speedMultiplier":4,"solveLegIK":4,"shoulderY":4,"shinLen":4,"seagulls":4,"scarfGroup":4,"rightLegGroup":4,"pouchFold2":4,"pouchFold1":4,"postSpacing":4,"pelicanNeck":4,"pelicanBodyGroup":4,"maxReach":4,"leftLegGroup":4}],["google/gemini-4-argon","high",1,0,[10.517,6.696,3.844,0,6.868,6.33,1.714,0,0,0,0,0,0,1,0,1,0,1,0,0,0,4.543,3.296,0,0,0.718,0,0,0,0,1.099,3.689,2.996,1.609,2.773,3.367,2.197,3.526,2.197,0,2.565,0,0,0,0,0,0,0,1,3.784],{"windLines":4,"wheelTemplate":4,"wavesLayer":4,"thighLen":4,"tailFeathers":4,"stage-wrapper":4,"speedMultiplier":4,"solveLegIK":4,"shoulderY":4,"shinLen":4,"seagulls":4,"scarfGroup":4,"rightLegGroup":4,"pouchFold2":4,"pouchFold1":4,"postSpacing":4,"pelicanNeck":4,"pelicanBodyGroup":4,"maxReach":4,"leftLegGroup":4}],["google/gemini-4-argon","max",1,0,[10.643,6.848,3.818,0,6.868,6.399,1.6,0,0,0,0,1,0,1,0,1,0,1,1,1,0,4.615,3.434,0,0,0,0,0,0,0,1.386,3.689,3.296,1.386,2.708,3.583,1.946,3.526,2.398,0,1.792,0,0,0,0,0,0,0,1,3.85],{"windLines":4,"wheelTemplate":4,"wavesLayer":4,"thighLen":4,"tailFeathers":4,"stage-wrapper":4,"speedMultiplier":4,"solveLegIK":4,"shoulderY":4,"shinLen":4,"seagulls":4,"scarfGroup":4,"rightLegGroup":4,"pouchFold2":4,"pouchFold1":4,"postSpacing":4,"pelicanNeck":4,"pelicanBodyGroup":4,"maxReach":4,"leftLegGroup":4}],["google/gemini-4-argon","high",1,0,[10.279,6.531,3.773,0,6.803,6.293,1.667,0,0,0,0,0,0,1,0,0,0,1,0,0,0,4.331,2.833,0,0,0,0,0,0,0,1.253,3.497,3.045,1.099,3.091,3.611,0.693,3.332,1.946,0,1.792,0,0,0,0,0,0,0,1,3.664],{"windLines":4,"wheelTemplate":4,"wavesLayer":4,"thighLen":4,"tailFeathers":4,"stage-wrapper":4,"speedMultiplier":4,"solveLegIK":4,"shoulderY":4,"shinLen":4,"seagulls":4,"scarfGroup":4,"rightLegGroup":4,"pouchFold2":4,"pouchFold1":4,"postSpacing":4,"pelicanNeck":4,"pelicanBodyGroup":4,"maxReach":4,"leftLegGroup":4}],["google/gemini-4-argon","high",1,0,[10.643,6.844,3.822,0,7.091,6.553,1.714,0,0,0,0,0,0,1,0,0,0,1,0,1,0,4.533,3.401,0,0,0.536,0,0,0,0,1.792,3.784,3.219,1.386,2.944,3.583,1.792,3.555,2.485,0.693,2.303,0,0,0,0,0,1,0,1,4.736],{"windLines":4,"wheelTemplate":4,"wavesLayer":4,"thighLen":4,"tailFeathers":4,"stage-wrapper":4,"speedMultiplier":4,"solveLegIK":4,"shoulderY":4,"shinLen":4,"seagulls":4,"scarfGroup":4,"rightLegGroup":4,"pouchFold2":4,"pouchFold1":4,"postSpacing":4,"pelicanNeck":4,"pelicanBodyGroup":4,"maxReach":4,"leftLegGroup":4}],["google/gemini-4-argon","medium",1,0,[10.395,6.612,3.807,0,6.868,6.399,1.6,0,0,0,0,1,0,1,0,1,0,1,1,0,0,4.431,3.296,0,0,0.727,0,0,0,0,1.609,3.932,2.944,1.099,2.485,3.401,1.609,3.296,2.303,0,1.099,0,0,0,0,0,0,0,1,4.007],{"windLines":4,"wheelTemplate":4,"wavesLayer":4,"thighLen":4,"tailFeathers":4,"stage-wrapper":4,"speedMultiplier":4,"solveLegIK":4,"shoulderY":4,"shinLen":4,"seagulls":4,"scarfGroup":4,"rightLegGroup":4,"pouchFold2":4,"pouchFold1":4,"postSpacing":4,"pelicanNeck":4,"pelicanBodyGroup":4,"maxReach":4,"leftLegGroup":4}],["google/gemini-4-argon","high",1,0,[10.614,6.864,3.775,0,6.868,6.399,1.6,0,0,0,0,1,0,1,0,1,0,1,1,1,0,4.489,3.434,0,0,0.719,0,0,0,0,1.386,3.892,3.258,1.792,2.773,3.296,1.946,3.638,2.303,0.693,1.099,0,0,0,0,0,1,0,1,4.331],{"windLines":4,"wheelTemplate":4,"wavesLayer":4,"thighLen":4,"tailFeathers":4,"stage-wrapper":4,"speedMultiplier":4,"solveLegIK":4,"shoulderY":4,"shinLen":4,"seagulls":4,"scarfGroup":4,"rightLegGroup":4,"pouchFold2":4,"pouchFold1":4,"postSpacing":4,"pelicanNeck":4,"pelicanBodyGroup":4,"maxReach":4,"leftLegGroup":4}],["google/gemini-4-argon","max",1,0,[10.711,6.886,3.849,0,6.803,6.33,1.607,0,0,0,0,0,0,1,0,0,0,1,1,1,0,4.654,3.555,0,0,0.751,0,0,0,0,1.386,3.932,3.178,1.792,2.833,3.638,1.792,3.714,2.303,0,1.099,0,0,0,0,0,0,0,1,3.807],{"windLines":4,"wheelTemplate":4,"wavesLayer":4,"thighLen":4,"tailFeathers":4,"stage-wrapper":4,"speedMultiplier":4,"solveLegIK":4,"shoulderY":4,"shinLen":4,"seagulls":4,"scarfGroup":4,"rightLegGroup":4,"pouchFold2":4,"pouchFold1":4,"postSpacing":4,"pelicanNeck":4,"pelicanBodyGroup":4,"maxReach":4,"leftLegGroup":4}],["google/gemini-4-argon","max",1,0,[10.515,6.727,3.811,0,6.686,6.217,1.6,0,0,1,0,0,0,1,0,0,0,1,0,0,0,4.443,2.996,0,0,0.72,0,0,0,0,1.253,3.583,3.091,1.609,2.708,3.497,1.386,3.401,2.197,0,1.946,0,0,0,0,0,0,0,1,3.807],{"windLines":4,"wheelTemplate":4,"wavesLayer":4,"thighLen":4,"tailFeathers":4,"stage-wrapper":4,"speedMultiplier":4,"solveLegIK":4,"shoulderY":4,"shinLen":4,"seagulls":4,"scarfGroup":4,"rightLegGroup":4,"pouchFold2":4,"pouchFold1":4,"postSpacing":4,"pelicanNeck":4,"pelicanBodyGroup":4,"maxReach":4,"leftLegGroup":4}],["anthropic/claude-opus-5.5","max",1,0,[10.516,5.9,4.629,0,6.686,6.217,1.6,1,0,1,0,0,0,0,0,0,1,0,0,1,1,3.219,1.099,0,0.017,0.79,0,0,1,0,1.099,4.654,4.317,3.761,2.944,3.332,0,4.277,0,0,0.693,1,1,1,0,0,0,0,1,4.369],{"wobbles":4,"whlR":4,"whlF":4,"whl":4,"text-shadow":4,"sunrays":4,"spoked":4,"press":4,"pouchg":4,"phases":4,"middot":4,"mdash":4,"libraries":4,"leg-near":4,"leg-far":4,"kicked":4,"images":4,"huge":4,"gWing":4,"gVig":4}],["anthropic/claude-opus-5.5","max",1,0,[9.565,5.375,4.209,0,7.091,6.553,1.714,0,0,0,0,0,0,0,0,1,0,0,0,0,0,2.197,0.693,0,0.181,0,0,0,0,0,1.792,3.738,3.367,3.178,3.178,1.609,0,3.466,1.386,0,0,0,0,0,0,1,0,0,0,4.143],{"wobbles":4,"whlR":4,"whlF":4,"whl":4,"text-shadow":4,"sunrays":4,"spoked":4,"press":4,"pouchg":4,"phases":4,"middot":4,"mdash":4,"libraries":4,"leg-near":4,"leg-far":4,"kicked":4,"images":4,"huge":4,"gWing":4,"gVig":4}],["google/gemini-3.8-flash","high",1,0,[10.228,6.474,3.779,0,6.909,6.479,1.538,0,0,0,0,0,0,0,0,1,0,0,0,0,0,4.382,0.693,0,0,0.707,0,0,0,0,1.386,3.689,3.045,1.946,2.944,3.526,2.079,3.555,2.398,0,2.708,0,0,0,0,0,0,0,0,4.466],{"wingbeat":4,"wheel-rotate-front":4,"wheel-rotate-back":4,"trees-set":4,"thigh-r":4,"thigh-l":4,"sun-core":4,"shin-r":4,"shin-l":4,"scroll-trees":4,"scroll-road":4,"scroll-mountains":4,"scroll-clouds-fast":4,"scene-container":4,"scarf-flow":4,"roadFill":4,"right-thigh":4,"right-shin":4,"right-foot":4,"pouch-bounce":4}],["google/gemini-3.8-flash","high",1,0,[9.304,5.05,4.274,0,7.091,6.635,1.579,0,0,0,0,0,0,0,0,1,1,0,0,0,0,2.398,0.693,0,0.379,0,0,0,0,0,0,3.932,2.303,1.609,0,0,0,2.639,1.792,0,0,0,0,0,0,1,0,0,0,4.111],{"wingbeat":4,"wheel-rotate-front":4,"wheel-rotate-back":4,"trees-set":4,"thigh-r":4,"thigh-l":4,"sun-core":4,"shin-r":4,"shin-l":4,"scroll-trees":4,"scroll-road":4,"scroll-mountains":4,"scroll-clouds-fast":4,"scene-container":4,"scarf-flow":4,"roadFill":4,"right-thigh":4,"right-shin":4,"right-foot":4,"pouch-bounce":4}],["anthropic/claude-haiku-5.5","high",1,0,[8.633,4.443,4.217,0,6.686,6.217,1.6,0,0,1,0,0,0,0,0,1,0,0,0,0,0,2.197,0.693,0,0.22,0,0,0,0,0,0,3.178,2.197,2.197,0.693,0,0,2.197,1.099,0.693,0,0,0,0,1,1,1,0,0,3.401],{"ff9a2e":4,"d1d1d":4,"crankB":4,"crankA":4,"ID_crankb":4,"ID_cranka":4,"HEX_#ff9a2e":4,"HEX_#1d1d1d":4,"together":3.74,"spin-rear":3.74,"spin-front":3.74,"rolled":3.74,"roadClip":3.74,"road-line":3.74,"rSpin":3.74,"pedB":3.74,"pedA":3.74,"outward":3.74,"maxd":3.74,"markings":3.74}],["anthropic/claude-haiku-5.5","high",1,0,[9.18,5.497,3.711,0,6.686,6.217,1.6,0,0,1,0,0,0,1,0,0,0,1,0,0,0,2.996,2.773,0,0,0,0,0,0,0,0,2.944,2.197,2.079,1.609,1.946,0,2.833,1.099,0,2.079,0,0,0,0,0,0,0,1,3.401],{"ff9a2e":4,"d1d1d":4,"crankB":4,"crankA":4,"ID_crankb":4,"ID_cranka":4,"HEX_#ff9a2e":4,"HEX_#1d1d1d":4,"together":3.74,"spin-rear":3.74,"spin-front":3.74,"rolled":3.74,"roadClip":3.74,"road-line":3.74,"rSpin":3.74,"pedB":3.74,"pedA":3.74,"outward":3.74,"maxd":3.74,"markings":3.74}],["anthropic/claude-haiku-5.5","high",1,0,[9.286,5.572,3.742,0,6.686,6.217,1.6,0,0,1,0,0,0,1,0,0,0,1,1,0,0,2.833,2.89,0,0,0,0,0,0,0,1.705,2.833,2.565,1.946,1.609,1.792,0,2.485,1.792,0,1.609,0,0,0,0,0,0,0,1,3.689],{"ff9a2e":4,"d1d1d":4,"crankB":4,"crankA":4,"ID_crankb":4,"ID_cranka":4,"HEX_#ff9a2e":4,"HEX_#1d1d1d":4,"together":3.74,"spin-rear":3.74,"spin-front":3.74,"rolled":3.74,"roadClip":3.74,"road-line":3.74,"rSpin":3.74,"pedB":3.74,"pedA":3.74,"outward":3.74,"maxd":3.74,"markings":3.74}],["anthropic/claude-haiku-5.5","high",1,0,[9,5.489,3.544,0,6.686,6.217,1.6,0,0,1,0,0,0,0,0,1,0,0,0,0,0,3.258,0.693,0,0,0,0,0,0,0,1.386,2.639,2.197,2.303,2.639,2.996,0,2.996,1.386,0.693,0,1,0,0,0,0,0,0,0,3.091],{"ff9a2e":4,"d1d1d":4,"crankB":4,"crankA":4,"ID_crankb":4,"ID_cranka":4,"HEX_#ff9a2e":4,"HEX_#1d1d1d":4,"together":3.74,"spin-rear":3.74,"spin-front":3.74,"rolled":3.74,"roadClip":3.74,"road-line":3.74,"rSpin":3.74,"pedB":3.74,"pedA":3.74,"outward":3.74,"maxd":3.74,"markings":3.74}],["xiaomi/mimo-v2.6-flash","max",1,0,[9.52,5.403,4.138,0,6.868,6.399,1.6,0,0,0,0,1,0,0,0,1,1,0,0,0,0,3.219,0.693,0,0.568,0,0,0,0,0,0,4.007,3.555,1.609,0.693,0,0,3.045,1.609,0.693,1.609,0,0,0,0,1,1,0,0,4.025],{"wingRide":4,"windFlick":4,"thighFront":4,"thighBack":4,"thigh-front":4,"thigh-back":4,"sunny":4,"softGlow":4,"road-stripes":4,"riderBob":4,"pouchPaint":4,"meadow":4,"grassSway":4,"flowering":4,"fff8e8":4,"fff2b5":4,"ffe99d":4,"ffe59a":4,"ffe0a6":4,"ffd475":4}],["xiaomi/mimo-v2.6-flash","max",1,0,[9.597,5.602,4.017,0,6.909,6.431,1.613,0,0,0,0,0,1,0,0,1,0,0,0,0,0,0,0.693,0,0.151,0,0,0,0,0,1.504,4.043,3.219,0.693,2.197,0,0,3.401,2.197,1.099,0,1,0,0,0,1,1,0,0,4.29],{"wingRide":4,"windFlick":4,"thighFront":4,"thighBack":4,"thigh-front":4,"thigh-back":4,"sunny":4,"softGlow":4,"road-stripes":4,"riderBob":4,"pouchPaint":4,"meadow":4,"grassSway":4,"flowering":4,"fff8e8":4,"fff2b5":4,"ffe99d":4,"ffe59a":4,"ffe0a6":4,"ffd475":4}],["openai/gpt-5.6-sol","max",1,0,[9.503,5.46,4.065,0,7.091,6.553,1.714,0,0,0,0,0,0,0,0,0,1,0,0,0,0,2.565,0.693,0,0.469,0,0,0,0,0,0,3.611,3.784,1.386,1.386,0,0,3.091,1.946,1.099,0,0,0,0,0,0,1,0,0,3.951],{"tinyShadow":4,"framePaint":4,"fffbd0":4,"fff0c8":4,"ffe47c":4,"ffe477":4,"ffd16a":4,"ffcb58":4,"ffb84a":4,"f9e86":4,"f8fbf5":4,"f8f7ed":4,"f8c":4,"f8b72":4,"f6e8a8":4,"f5f4ea":4,"f4d26b":4,"f3d":4,"f2773f":4,"f0a65e":4}],["upstage/solar-pro4","max",1,0,[9.424,5.352,4.093,0,6.909,6.399,1.667,0,0,0,0,0,0,0,0,1,1,0,0,0,0,2.996,0.693,0,0.56,0,0,0,0,0,0,3.829,2.996,0.693,0.693,0,0,3.219,1.609,1.099,0,1,0,0,0,1,1,0,0,4.025],{"zh-Hans":4,"winding":4,"water-glint":4,"viewport-fit":4,"sunlight":4,"sun-blur":4,"softly":4,"ripple":4,"headlands":4,"fff9d8":4,"fff8eb":4,"fff6ce":4,"fff3d0":4,"fff1b9":4,"fff0c5":4,"fff0b5":4,"ffe5a0":4,"fbf4dc":4,"f91":4,"f8c574":4}],["minimax/minimax-m3","medium",1,0,[8.902,5.375,3.56,0,6.686,5.994,2,0,0,0,0,0,0,1,0,0,1,0,0,0,0,3.583,1.386,0,0,0.756,0,0,0,0,0,2.197,2.639,2.197,2.197,2.944,0,2.833,1.099,0,0,0,0,0,0,0,0,0,1,3.219],{"that":4,"simulate":4,"rolls":4,"right-to-left":4,"pixels":4,"leftward":4,"gradient":4,"fff6c2":4,"fff2a8":4,"ffd24d":4,"fb583":4,"fafafa":4,"f8a4f":4,"f8a3f":4,"f0a020":4,"ec9a3":4,"eaf6ff":4,"e0e0e0":4,"diagonal":4,"cfe9ff":4}],["openai/gpt-6-astra","max",1,0,[10.161,5.999,4.18,0,7.273,6.803,1.6,0,0,0,1,0,0,1,0,1,1,1,0,0,0,0,0.693,0,0.145,0,0,0,0,0,1.504,4.344,3.091,2.833,2.303,1.099,0,3.871,1.946,1.386,3.738,1,0,0,0,1,1,0,1,4.745],{"wheel-rim":4,"webbed-foot":4,"water-lines":4,"water-clip":4,"viewport-fit":4,"verge-bank":4,"undefined":4,"three":4,"shore-bank":4,"shore":4,"sea-light":4,"scarf-tails":4,"saturate":4,"road-grain":4,"road-clip":4,"resize":4,"reach":4,"ratio":4,"passive":4,"paper-noise":4}],["moonshotai/kimi-k3","max",1,0,[9.857,5.638,4.237,0,6.686,6.217,1.6,1,0,1,0,0,0,0,0,0,1,0,0,0,0,1.386,0.693,0.735,0,0,0,0,0,0,1.609,0,0.693,0,1.609,1.099,0,2.89,0.693,0,0,0,0,0,0,0,0,0,0,3.367],{"css":4,"wrote":3.74,"write":3.74,"workspace":3.74,"won":3.74,"within":3.74,"will":3.74,"widely-cited":3.74,"which":3.74,"wheelie-fuzz":3.74,"wheelSpin":3.74,"was":3.74,"wants":3.74,"wait":3.74,"visually":3.74,"visual":3.74,"vig":3.74,"variety":3.74,"uses":3.74,"user":3.74}],["moonshotai/kimi-k3","max",1,0,[9.415,5.545,3.894,0,6.33,5.771,1.75,0,0,0,0,0,0,0,0,1,0,0,0,0,0,3.466,0.693,0,0.409,0,0,0,0,0,0.693,3.583,2.773,2.079,2.398,2.485,0,3.258,1.386,0,2.398,1,0,0,0,1,0,0,0,3.526],{"css":4,"wrote":3.74,"write":3.74,"workspace":3.74,"won":3.74,"within":3.74,"will":3.74,"widely-cited":3.74,"which":3.74,"wheelie-fuzz":3.74,"wheelSpin":3.74,"was":3.74,"wants":3.74,"wait":3.74,"visually":3.74,"visual":3.74,"vig":3.74,"variety":3.74,"uses":3.74,"user":3.74}],["moonshotai/kimi-k3","max",1,0,[10.064,6.125,3.961,0,6.803,6.293,1.667,1,0,0,0,0,0,0,0,1,1,0,0,1,1,3.714,1.386,0,0.236,0,0,0,0,0,1.386,4.094,3.296,3.178,2.197,0,1.099,3.951,2.197,0.693,0,1,1,1,1,1,1,0,0,4.094],{"css":4,"wrote":3.74,"write":3.74,"workspace":3.74,"won":3.74,"within":3.74,"will":3.74,"widely-cited":3.74,"which":3.74,"wheelie-fuzz":3.74,"wheelSpin":3.74,"was":3.74,"wants":3.74,"wait":3.74,"visually":3.74,"visual":3.74,"vig":3.74,"variety":3.74,"uses":3.74,"user":3.74}],["moonshotai/kimi-k3","max",1,0,[10.364,3.466,6.931,0,6.909,6.553,1.429,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0.693,0,0.415,0.017,0,0,1,0,1.705,4.127,3.989,3.989,3.664,3.951,0,3.85,1.946,0,0,1,0,0,0,0,0,0,0,4.304],{"css":4,"wrote":3.74,"write":3.74,"workspace":3.74,"won":3.74,"within":3.74,"will":3.74,"widely-cited":3.74,"which":3.74,"wheelie-fuzz":3.74,"wheelSpin":3.74,"was":3.74,"wants":3.74,"wait":3.74,"visually":3.74,"visual":3.74,"vig":3.74,"variety":3.74,"uses":3.74,"user":3.74}],["z-ai/glm-5.3","high",1,0,[9.836,5.979,3.88,0,6.803,6.256,1.731,0,0,0,0,0,0,1,0,1,1,1,0,0,0,3.526,2.079,0,0.139,0,0,0,0,0,1.386,2.944,3.045,2.833,1.792,3.714,0,2.833,1.946,0,0,1,0,0,1,1,0,0,1,3.932],{"thighEl":4,"sunRays":4,"spokesR":4,"spokesF":4,"solve":4,"sol":4,"skyG":4,"shinEl":4,"ringHoles":4,"ringEl":4,"plumeG":4,"pedalNear":4,"pedalFar":4,"pedalEl":4,"legEl":4,"grass2":4,"grass1":4,"gradientUnits":4,"footEl":4,"fffbd8":4}],["z-ai/glm-5.3","high",1,0,[9.776,5.981,3.82,0,6.803,6.256,1.731,0,0,0,0,0,0,1,0,1,0,1,1,0,0,3.689,2.079,0,0,0,0,0,0,0,2.639,3.091,2.996,1.386,2.079,3.738,0,3.296,1.609,0,1.792,1,0,0,0,1,0,0,1,4.025],{"thighEl":4,"sunRays":4,"spokesR":4,"spokesF":4,"solve":4,"sol":4,"skyG":4,"shinEl":4,"ringHoles":4,"ringEl":4,"plumeG":4,"pedalNear":4,"pedalFar":4,"pedalEl":4,"legEl":4,"grass2":4,"grass1":4,"gradientUnits":4,"footEl":4,"fffbd8":4}],["anthropic/claude-sonnet-5.5","low",1,0,[9.252,5.476,3.803,0,6.686,6.217,1.6,1,0,1,0,0,0,0,0,1,0,0,0,0,0,3.689,0,0,0,0,0,0,0,0,0,3.401,2.833,1.792,2.079,2.398,0,3.178,1.099,0,2.708,0,0,0,0,1,0,0,0,3.689],{"HEX_#999":4,"setLeg":3.69,"fff7b0":3.69,"e3f6ff":3.69,"ddd":3.69,"cfd6dc":3.69,"ccc":3.69,"c9701a":3.69,"buildWheel":3.69,"attrs":3.69,"a86ff":3.69,"a5560":3.69,"HEX_#fff7b0":3.69,"HEX_#f5a623":3.69,"HEX_#e3f6ff":3.69,"HEX_#cfd6dc":3.69,"HEX_#ccc":3.69,"HEX_#c9701a":3.69,"HEX_#4a5560":3.69,"HEX_#3a86ff":3.69}],["anthropic/claude-sonnet-5.5","low",1,0,[8.82,4.92,3.927,0,6.909,6.399,1.667,0,0,0,0,0,0,0,0,1,0,0,0,0,0,3.045,0.693,0,0,0,0,0,0,0,0,2.944,2.303,1.946,2.996,2.398,0,2.773,0.693,0,0,0,0,0,0,1,0,0,0,3.178],{"HEX_#999":4,"setLeg":3.69,"fff7b0":3.69,"e3f6ff":3.69,"ddd":3.69,"cfd6dc":3.69,"ccc":3.69,"c9701a":3.69,"buildWheel":3.69,"attrs":3.69,"a86ff":3.69,"a5560":3.69,"HEX_#fff7b0":3.69,"HEX_#f5a623":3.69,"HEX_#e3f6ff":3.69,"HEX_#cfd6dc":3.69,"HEX_#ccc":3.69,"HEX_#c9701a":3.69,"HEX_#4a5560":3.69,"HEX_#3a86ff":3.69}],["anthropic/claude-sonnet-5.5","high",1,0,[9.477,5.765,3.74,0,6.686,6.217,1.6,0,0,1,0,0,0,1,0,0,0,1,0,0,0,3.258,3.045,0,0,0,0,0,0,0,1.099,3.135,2.303,2.708,2.079,1.946,0,3.091,1.099,0.693,0,0,0,0,0,0,0,0,1,3.689],{"HEX_#999":4,"setLeg":3.69,"fff7b0":3.69,"e3f6ff":3.69,"ddd":3.69,"cfd6dc":3.69,"ccc":3.69,"c9701a":3.69,"buildWheel":3.69,"attrs":3.69,"a86ff":3.69,"a5560":3.69,"HEX_#fff7b0":3.69,"HEX_#f5a623":3.69,"HEX_#e3f6ff":3.69,"HEX_#cfd6dc":3.69,"HEX_#ccc":3.69,"HEX_#c9701a":3.69,"HEX_#4a5560":3.69,"HEX_#3a86ff":3.69}],["anthropic/claude-sonnet-5.5","high",1,0,[9.476,5.768,3.735,0,6.686,6.217,1.6,0,0,1,0,0,0,1,0,0,0,1,0,0,0,3.332,2.833,0,0,0,0,0,0,0,1.609,3.091,2.303,1.099,2.079,0.693,1.099,2.773,1.099,0.693,0,0,0,0,0,0,0,0,1,3.871],{"HEX_#999":4,"setLeg":3.69,"fff7b0":3.69,"e3f6ff":3.69,"ddd":3.69,"cfd6dc":3.69,"ccc":3.69,"c9701a":3.69,"buildWheel":3.69,"attrs":3.69,"a86ff":3.69,"a5560":3.69,"HEX_#fff7b0":3.69,"HEX_#f5a623":3.69,"HEX_#e3f6ff":3.69,"HEX_#cfd6dc":3.69,"HEX_#ccc":3.69,"HEX_#c9701a":3.69,"HEX_#4a5560":3.69,"HEX_#3a86ff":3.69}],["anthropic/claude-sonnet-5.5","high",1,0,[10.184,6.323,3.884,0,6.909,6.33,1.786,0,0,0,0,0,0,1,0,1,0,1,0,1,1,3.091,0,0,0.557,0,0,0,0,0,1.705,4.234,3.611,0.693,1.386,0,0,3.178,1.946,0,0,1,1,1,1,1,0,0,1,4.564],{"HEX_#999":4,"setLeg":3.69,"fff7b0":3.69,"e3f6ff":3.69,"ddd":3.69,"cfd6dc":3.69,"ccc":3.69,"c9701a":3.69,"buildWheel":3.69,"attrs":3.69,"a86ff":3.69,"a5560":3.69,"HEX_#fff7b0":3.69,"HEX_#f5a623":3.69,"HEX_#e3f6ff":3.69,"HEX_#cfd6dc":3.69,"HEX_#ccc":3.69,"HEX_#c9701a":3.69,"HEX_#4a5560":3.69,"HEX_#3a86ff":3.69}],["anthropic/claude-sonnet-5.5","low",1,0,[9.243,5.425,3.844,0,6.686,6.217,1.6,0,0,1,0,0,0,0,0,1,1,0,0,0,0,3.332,0,0,0,0,0,0,0,0,1.386,3.091,2.303,1.946,2.639,2.773,1.099,3.258,1.099,0,2.708,0,0,0,0,1,0,0,0,3.583],{"HEX_#999":4,"setLeg":3.69,"fff7b0":3.69,"e3f6ff":3.69,"ddd":3.69,"cfd6dc":3.69,"ccc":3.69,"c9701a":3.69,"buildWheel":3.69,"attrs":3.69,"a86ff":3.69,"a5560":3.69,"HEX_#fff7b0":3.69,"HEX_#f5a623":3.69,"HEX_#e3f6ff":3.69,"HEX_#cfd6dc":3.69,"HEX_#ccc":3.69,"HEX_#c9701a":3.69,"HEX_#4a5560":3.69,"HEX_#3a86ff":3.69}],["anthropic/claude-sonnet-5.5","low",1,0,[8.364,4.205,4.189,0,6.686,6.112,1.778,0,0,0,0,0,0,0,0,1,1,0,0,0,0,1.609,0,0,0.25,0,0,0,0,0,0,2.708,1.946,1.609,2.773,0,0,2.303,0,0,0,0,0,0,0,1,0,0,0,2.944],{"HEX_#999":4,"setLeg":3.69,"fff7b0":3.69,"e3f6ff":3.69,"ddd":3.69,"cfd6dc":3.69,"ccc":3.69,"c9701a":3.69,"buildWheel":3.69,"attrs":3.69,"a86ff":3.69,"a5560":3.69,"HEX_#fff7b0":3.69,"HEX_#f5a623":3.69,"HEX_#e3f6ff":3.69,"HEX_#cfd6dc":3.69,"HEX_#ccc":3.69,"HEX_#c9701a":3.69,"HEX_#4a5560":3.69,"HEX_#3a86ff":3.69}],["anthropic/claude-sonnet-5.5","high",1,0,[9.612,5.704,3.931,0,6.686,6.217,1.6,0,0,1,0,0,0,0,0,0,1,0,0,0,0,3.045,0,0.988,0.043,0,0,0,0,0,2.303,3.296,2.708,2.565,2.833,3.526,0,3.258,1.946,0.693,0,1,0,0,0,0,0,0,0,3.829],{"HEX_#999":4,"setLeg":3.69,"fff7b0":3.69,"e3f6ff":3.69,"ddd":3.69,"cfd6dc":3.69,"ccc":3.69,"c9701a":3.69,"buildWheel":3.69,"attrs":3.69,"a86ff":3.69,"a5560":3.69,"HEX_#fff7b0":3.69,"HEX_#f5a623":3.69,"HEX_#e3f6ff":3.69,"HEX_#cfd6dc":3.69,"HEX_#ccc":3.69,"HEX_#c9701a":3.69,"HEX_#4a5560":3.69,"HEX_#3a86ff":3.69}],["z-ai/glm-5.2","low",1,0,[9.606,5.66,3.969,0,6.686,6.217,1.6,0,0,1,0,0,0,0,0,0,1,0,0,0,0,3.367,0.693,0,0.038,0,0,0,0,0,2.398,3.526,3.219,1.386,1.946,3.091,0,3.258,1.386,0,1.099,1,1,0,1,0,0,0,0,3.85],{"ttl":4,"ffe9a8":4,"ffd76b":4,"fdf2dd":4,"f97ab":4,"f8f4ea":4,"f8c76a":4,"f4d877":4,"f4654":4,"f0a13c":4,"efe8d8":4,"e9e2d2":4,"e7dec9":4,"e79a3c":4,"e2ae52":4,"e2604f":4,"e2493b":4,"ddeff8":4,"dc9ac":4,"d9a343":4}],["anthropic/claude-fable-5.1","medium",1,0,[8.687,4.812,3.903,0,6.686,6.217,1.6,0,0,1,0,0,0,0,0,1,0,0,0,0,0,3.091,0.693,0,0.333,0,0,0,0,0,0,2.485,2.303,2.079,1.792,2.639,1.099,2.639,0.693,0,0,0,0,0,0,1,0,0,0,3.258],{"pedalU":4,"pedalD":4,"legU":4,"legD":4,"ffd54a":4,"ff9a3c":4,"fb7e8":4,"f8fd1":4,"f7f7f7":4,"f0a030":4,"eee":4,"e8c98a":4,"e4e4e4":4,"e0e0e0":4,"d98a20":4,"d6336c":4,"c9e8f8":4,"c9a86a":4,"KF_pedalu":4,"KF_pedald":4}],["qwen/qwen3.7-max","high",1,0,[10.092,6.172,3.942,0,6.686,6.217,1.6,0,0,1,0,0,0,0,0,0,1,0,0,0,0,3.892,0.693,0.01,0,0,0,0,0,0,1.609,3.583,3.497,3.401,1.946,3.689,0,3.951,1.946,0,2.303,1,0,1,0,0,0,0,0,4.007],{"fff3c0":4,"ffd868":4,"ffd45e":4,"ffc93c":4,"ffc45e":4,"ffb03a":4,"fdfaf3":4,"fd8ea":4,"fbb7e":4,"fb0c9":4,"fa94f":4,"f8f43":4,"f7d774":4,"f7881d":4,"f6f1e5":4,"e9f6fb":4,"e8e0d0":4,"e0761a":4,"e0503f":4,"dcd2be":4}],["xiaomi/mimo-v2.6-pro","medium",1,0,[9.464,5.855,3.638,0,6.686,6.217,1.6,0,0,1,0,0,0,0,0,1,0,0,0,0,0,3.951,0.693,0.696,0,0.605,0,0,0,0,1.099,2.944,3.219,2.773,2.708,3.526,0,3.258,0,0,0,0,0,0,0,1,0,0,0,3.526],{"wheel-front":4,"wheel-back":4,"sun-pulse":4,"scroll-ground":4,"pelican-rider":4,"pedal-group":4,"middle":4,"leg-right":4,"leg-r":4,"leg-left":4,"leg-l":4,"ground-dashes":4,"cloud-move":4,"KF_sun-pulse":4,"KF_scroll-ground":4,"KF_pedal":4,"KF_leg-right":4,"KF_leg-left":4,"KF_cloud-move":4,"KF_bounce":4}],["openai/gpt-5.5","medium",1,0,[9.627,5.631,4.018,0,6.868,6.399,1.6,0,0,0,0,1,0,0,0,1,0,0,0,0,1,2.708,0.693,0,0.253,0,0,0,0,0,1.386,4.025,2.996,1.099,1.792,0,0,3.219,1.609,0.693,0,1,1,1,1,1,0,0,0,4.143],{"wheel-spin--front":4,"wheel-spin--back":4,"walk-clip":4,"sun-halo":4,"sign-off":4,"pouch-sway":4,"pedal-leg":4,"motion-line":4,"leg-swing--two":4,"leg-swing":4,"figcaption":4,"fff2d5":4,"fff0bd":4,"ffe39c":4,"ffd276":4,"ffb07b":4,"fbf7eb":4,"f8f5eb":4,"f8d9a8":4,"f7f2e5":4}],["openai/gpt-5.6-luna","medium",1,0,[10.002,6.105,3.919,0,6.686,6.112,1.778,0,0,0,0,0,0,1,0,1,0,1,1,0,0,3.466,1.386,0,0,0.767,0,0,0,0,2.833,3.296,3.332,2.944,2.485,3.611,0,3.714,1.792,0.693,0,1,0,0,0,1,1,0,1,3.714],{"wob":4,"wing-back":4,"tree-move":4,"spinSlow":4,"speedFlash":4,"speed-line":4,"rock":4,"onclick":4,"nearShoe":4,"nearPath":4,"nearLegPath":4,"moveLeft":4,"mountains":4,"hipNear":4,"hipFar":4,"grassG":4,"grass-dot":4,"ghost":4,"fingers":4,"fda4af":4}],["anthropic/claude-opus-5.5","max",0,0,[6.702,0.693,6.702,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0,0,0,0,1,0,0,0,1.946,1.386,0.693,0.693,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1.792],{"f7f7f2":4,"f4a259":4,"f2a44":4,"b8e9c":4,"V13":4,"L25":4,"HEX_#f7f7f2":4,"HEX_#f4a259":4,"HEX_#5b8e9c":4,"HEX_#3fa7d6":4,"HEX_#1f2a44":4,"H32M1":4,"H30":4,"H18":4,"FA7D6":4,"F5B82E":4,"F3A5F":4,"F28C28":4,"HEX_#1f3a5f":3.72,"fdf1dc":3.47}],["anthropic/claude-opus-5.5","max",0,0,[7.033,0.693,7.033,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,1,0.278,0.615,0,1,1,1,0,2.079,1.386,0.693,0.693,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1.792],{"f7f7f2":4,"f4a259":4,"f2a44":4,"b8e9c":4,"V13":4,"L25":4,"HEX_#f7f7f2":4,"HEX_#f4a259":4,"HEX_#5b8e9c":4,"HEX_#3fa7d6":4,"HEX_#1f2a44":4,"H32M1":4,"H30":4,"H18":4,"FA7D6":4,"F5B82E":4,"F3A5F":4,"F28C28":4,"HEX_#1f3a5f":3.72,"fdf1dc":3.47}],["openai/gpt-5.6-terra","max",0,0,[7.449,0.693,7.449,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0,0.556,0,1,0,0,0,1.504,2.398,1.386,0,0.693,0,0,1.386,0,0,0,1,0,0,0,0,0,0,0,2.079],{"h-4":4,"fff7e6":4,"fb5bd":4,"f8e6b8":4,"f3b54b":4,"ed9c49":4,"c6cc":4,"a58":4,"HEX_#f8e6b8":4,"HEX_#f3b54b":4,"HEX_#ed9c49":4,"HEX_#83c6cc":4,"HEX_#82c5ce":4,"HEX_#6fb5bd":4,"HEX_#4c9dac":4,"HEX_#174a58":4,"HEX_#164d5b":4,"D5B":4,"C9DAC":4,"C5CE":4}],["openai/gpt-5.6-terra","max",0,0,[7.011,0.693,7.011,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,1,0.622,0,1,1,0,0,0,1.946,1.099,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1.609],{"h-4":4,"fff7e6":4,"fb5bd":4,"f8e6b8":4,"f3b54b":4,"ed9c49":4,"c6cc":4,"a58":4,"HEX_#f8e6b8":4,"HEX_#f3b54b":4,"HEX_#ed9c49":4,"HEX_#83c6cc":4,"HEX_#82c5ce":4,"HEX_#6fb5bd":4,"HEX_#4c9dac":4,"HEX_#174a58":4,"HEX_#164d5b":4,"D5B":4,"C9DAC":4,"C5CE":4}],["openai/gpt-5.6-terra","high",0,0,[6.601,0.693,6.601,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,1,0.545,0,1,0,0,0,0,1.386,0.693,0,0,0,0,0.693,0,0,0,0,0,0,0,0,0,0,0,1.099],{"h-4":4,"fff7e6":4,"fb5bd":4,"f8e6b8":4,"f3b54b":4,"ed9c49":4,"c6cc":4,"a58":4,"HEX_#f8e6b8":4,"HEX_#f3b54b":4,"HEX_#ed9c49":4,"HEX_#83c6cc":4,"HEX_#82c5ce":4,"HEX_#6fb5bd":4,"HEX_#4c9dac":4,"HEX_#174a58":4,"HEX_#164d5b":4,"D5B":4,"C9DAC":4,"C5CE":4}],["openai/gpt-5.6-terra","high",0,0,[6.852,0.693,6.852,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0,0.583,0,1,0,0,0,1.386,1.792,1.099,0,0.693,0,0,0.693,0,0,0,0,0,0,0,0,0,0,0,1.792],{"h-4":4,"fff7e6":4,"fb5bd":4,"f8e6b8":4,"f3b54b":4,"ed9c49":4,"c6cc":4,"a58":4,"HEX_#f8e6b8":4,"HEX_#f3b54b":4,"HEX_#ed9c49":4,"HEX_#83c6cc":4,"HEX_#82c5ce":4,"HEX_#6fb5bd":4,"HEX_#4c9dac":4,"HEX_#174a58":4,"HEX_#164d5b":4,"D5B":4,"C9DAC":4,"C5CE":4}],["openai/gpt-5.6-terra","high",0,0,[6.94,0.693,6.94,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,1,0.455,0,1,0,1,1,0,1.946,1.099,0,0,0,0,0.693,0,0,0,0,0,0,0,0,0,0,0,2.079],{"h-4":4,"fff7e6":4,"fb5bd":4,"f8e6b8":4,"f3b54b":4,"ed9c49":4,"c6cc":4,"a58":4,"HEX_#f8e6b8":4,"HEX_#f3b54b":4,"HEX_#ed9c49":4,"HEX_#83c6cc":4,"HEX_#82c5ce":4,"HEX_#6fb5bd":4,"HEX_#4c9dac":4,"HEX_#174a58":4,"HEX_#164d5b":4,"D5B":4,"C9DAC":4,"C5CE":4}],["openai/gpt-5.6-terra","high",0,0,[6.702,0.693,6.702,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0,0.567,0,1,1,0,0,0,1.609,0.693,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1.099],{"h-4":4,"fff7e6":4,"fb5bd":4,"f8e6b8":4,"f3b54b":4,"ed9c49":4,"c6cc":4,"a58":4,"HEX_#f8e6b8":4,"HEX_#f3b54b":4,"HEX_#ed9c49":4,"HEX_#83c6cc":4,"HEX_#82c5ce":4,"HEX_#6fb5bd":4,"HEX_#4c9dac":4,"HEX_#174a58":4,"HEX_#164d5b":4,"D5B":4,"C9DAC":4,"C5CE":4}],["openai/gpt-5.6-terra","max",0,0,[7.449,0.693,7.449,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0,0.556,0,1,0,0,0,1.504,2.398,1.386,0,0.693,0,0,1.386,0,0,0,1,0,0,0,0,0,0,0,2.079],{"h-4":4,"fff7e6":4,"fb5bd":4,"f8e6b8":4,"f3b54b":4,"ed9c49":4,"c6cc":4,"a58":4,"HEX_#f8e6b8":4,"HEX_#f3b54b":4,"HEX_#ed9c49":4,"HEX_#83c6cc":4,"HEX_#82c5ce":4,"HEX_#6fb5bd":4,"HEX_#4c9dac":4,"HEX_#174a58":4,"HEX_#164d5b":4,"D5B":4,"C9DAC":4,"C5CE":4}],["anthropic/claude-opus-5","max",0,0,[7,0.693,7,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0,0.563,0,1,0,1,0,0,2.197,1.099,0,0.693,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1.792],{"with":4,"wing":4,"wave":4,"waterline":4,"washing":4,"warm":4,"upper":4,"tuft":4,"tip":4,"texture":4,"tail":4,"shadow":4,"shading":4,"sea":4,"ripples":4,"ripple":4,"ridge":4,"reflection":4,"profile":4,"overlapping":4}],["anthropic/claude-opus-5","max",0,0,[6.923,0.693,6.923,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0,0.609,0,1,0,1,0,0,1.946,1.099,0,1.099,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1.946],{"with":4,"wing":4,"wave":4,"waterline":4,"washing":4,"warm":4,"upper":4,"tuft":4,"tip":4,"texture":4,"tail":4,"shadow":4,"shading":4,"sea":4,"ripples":4,"ripple":4,"ridge":4,"reflection":4,"profile":4,"overlapping":4}],["anthropic/claude-opus-5","max",0,0,[7.316,0.693,7.316,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,1,0,0,0,0,1,0,0,2.197,1.609,0.693,1.099,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2.398],{"with":4,"wing":4,"wave":4,"waterline":4,"washing":4,"warm":4,"upper":4,"tuft":4,"tip":4,"texture":4,"tail":4,"shadow":4,"shading":4,"sea":4,"ripples":4,"ripple":4,"ridge":4,"reflection":4,"profile":4,"overlapping":4}],["anthropic/claude-opus-5","max",0,0,[8.344,4.248,4.125,0,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,3.045,0.693,0.935,0,0,0,0,1,0,0,3.219,1.792,0.693,0.693,0,0,0,0,0,0,0,0,0,0,0,0,0,0,3.178],{"with":4,"wing":4,"wave":4,"waterline":4,"washing":4,"warm":4,"upper":4,"tuft":4,"tip":4,"texture":4,"tail":4,"shadow":4,"shading":4,"sea":4,"ripples":4,"ripple":4,"ridge":4,"reflection":4,"profile":4,"overlapping":4}],["anthropic/claude-opus-5","max",0,0,[7.891,3.761,4.168,0,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0,0,0.691,0,0,0,0,0,2.996,1.792,0,1.099,0,0,1.099,0,0,0,0,0,0,0,0,0,0,0,2.944],{"with":4,"wing":4,"wave":4,"waterline":4,"washing":4,"warm":4,"upper":4,"tuft":4,"tip":4,"texture":4,"tail":4,"shadow":4,"shading":4,"sea":4,"ripples":4,"ripple":4,"ridge":4,"reflection":4,"profile":4,"overlapping":4}],["anthropic/claude-opus-5","max",0,0,[7.884,3.555,4.37,0,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1.946,0.693,1,0.482,0,1,0,1,1,0,2.833,1.609,0.693,0.693,0,0,1.099,0,0,0,0,0,0,0,0,0,0,0,2.833],{"with":4,"wing":4,"wave":4,"waterline":4,"washing":4,"warm":4,"upper":4,"tuft":4,"tip":4,"texture":4,"tail":4,"shadow":4,"shading":4,"sea":4,"ripples":4,"ripple":4,"ridge":4,"reflection":4,"profile":4,"overlapping":4}],["anthropic/claude-opus-5","max",0,0,[8.114,4.22,3.929,0,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2.708,0.693,1,0.136,0,1,0,1,1,0,2.773,2.079,0,1.386,0,0,1.609,1.099,0,0,0,0,0,0,0,0,0,0,2.833],{"with":4,"wing":4,"wave":4,"waterline":4,"washing":4,"warm":4,"upper":4,"tuft":4,"tip":4,"texture":4,"tail":4,"shadow":4,"shading":4,"sea":4,"ripples":4,"ripple":4,"ridge":4,"reflection":4,"profile":4,"overlapping":4}],["anthropic/claude-opus-5","high",0,0,[6.783,0.693,6.783,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0,0.607,0,0,0,1,0,0,1.946,1.099,0,0.693,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1.792],{"with":4,"wing":4,"wave":4,"waterline":4,"washing":4,"warm":4,"upper":4,"tuft":4,"tip":4,"texture":4,"tail":4,"shadow":4,"shading":4,"sea":4,"ripples":4,"ripple":4,"ridge":4,"reflection":4,"profile":4,"overlapping":4}],["anthropic/claude-opus-5","high",0,0,[6.757,0.693,6.757,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0,0.65,0,0,0,1,0,0,1.946,1.386,0,0.693,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1.792],{"with":4,"wing":4,"wave":4,"waterline":4,"washing":4,"warm":4,"upper":4,"tuft":4,"tip":4,"texture":4,"tail":4,"shadow":4,"shading":4,"sea":4,"ripples":4,"ripple":4,"ridge":4,"reflection":4,"profile":4,"overlapping":4}],["anthropic/claude-opus-5","high",0,0,[6.921,0.693,6.921,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0,0.64,0,0,0,1,0,0,2.079,1.099,0,0.693,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1.792],{"with":4,"wing":4,"wave":4,"waterline":4,"washing":4,"warm":4,"upper":4,"tuft":4,"tip":4,"texture":4,"tail":4,"shadow":4,"shading":4,"sea":4,"ripples":4,"ripple":4,"ridge":4,"reflection":4,"profile":4,"overlapping":4}],["anthropic/claude-opus-5","high",0,0,[7.091,0.693,7.091,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0,0,0,0,0,1,0,0,1.946,1.386,0.693,1.099,0,0.693,0,0,0,0,0,0,0,0,0,0,0,0,2.197],{"with":4,"wing":4,"wave":4,"waterline":4,"washing":4,"warm":4,"upper":4,"tuft":4,"tip":4,"texture":4,"tail":4,"shadow":4,"shading":4,"sea":4,"ripples":4,"ripple":4,"ridge":4,"reflection":4,"profile":4,"overlapping":4}],["anthropic/claude-opus-5","max",0,0,[7,0.693,7,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0,0.563,0,1,0,1,0,0,2.197,1.099,0,0.693,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1.792],{"with":4,"wing":4,"wave":4,"waterline":4,"washing":4,"warm":4,"upper":4,"tuft":4,"tip":4,"texture":4,"tail":4,"shadow":4,"shading":4,"sea":4,"ripples":4,"ripple":4,"ridge":4,"reflection":4,"profile":4,"overlapping":4}],["anthropic/claude-sonnet-5.5","high",0,0,[7.061,0.693,7.061,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0.588,0,0,0,0,1,0,0,1.946,1.386,0.693,1.099,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2.197],{"V14":4,"HEX_#f7c443":4,"HEX_#f5b400":4,"HEX_#f2962e":4,"HEX_#f08c00":4,"HEX_#ededed":4,"HEX_#dce9f0":4,"HEX_#d6d6d6":4,"HEX_#cfeafb":4,"HEX_#6cc5e8":4,"HEX_#222":4,"HEX_#1f3b4d":4,"H14":4,"F7C443":4,"F5B400":4,"F3B4D":4,"F2962E":4,"F08C00":4,"EDEDED":4,"DCE9F0":4}],["anthropic/claude-sonnet-5.5","high",0,0,[7.233,0.693,7.233,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,1,0,0,0,1,0,0,0,2.398,1.386,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1.946],{"V14":4,"HEX_#f7c443":4,"HEX_#f5b400":4,"HEX_#f2962e":4,"HEX_#f08c00":4,"HEX_#ededed":4,"HEX_#dce9f0":4,"HEX_#d6d6d6":4,"HEX_#cfeafb":4,"HEX_#6cc5e8":4,"HEX_#222":4,"HEX_#1f3b4d":4,"H14":4,"F7C443":4,"F5B400":4,"F3B4D":4,"F2962E":4,"F08C00":4,"EDEDED":4,"DCE9F0":4}],["anthropic/claude-sonnet-5.5","high",0,0,[6.681,0.693,6.681,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0,0.579,0,0,0,1,0,0,1.946,1.386,0.693,1.099,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2.398],{"V14":4,"HEX_#f7c443":4,"HEX_#f5b400":4,"HEX_#f2962e":4,"HEX_#f08c00":4,"HEX_#ededed":4,"HEX_#dce9f0":4,"HEX_#d6d6d6":4,"HEX_#cfeafb":4,"HEX_#6cc5e8":4,"HEX_#222":4,"HEX_#1f3b4d":4,"H14":4,"F7C443":4,"F5B400":4,"F3B4D":4,"F2962E":4,"F08C00":4,"EDEDED":4,"DCE9F0":4}],["anthropic/claude-sonnet-5.5","high",0,0,[6.892,0.693,6.892,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0,0.618,0,1,0,1,0,0,2.197,1.386,0,1.386,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2.485],{"V14":4,"HEX_#f7c443":4,"HEX_#f5b400":4,"HEX_#f2962e":4,"HEX_#f08c00":4,"HEX_#ededed":4,"HEX_#dce9f0":4,"HEX_#d6d6d6":4,"HEX_#cfeafb":4,"HEX_#6cc5e8":4,"HEX_#222":4,"HEX_#1f3b4d":4,"H14":4,"F7C443":4,"F5B400":4,"F3B4D":4,"F2962E":4,"F08C00":4,"EDEDED":4,"DCE9F0":4}],["anthropic/claude-sonnet-5.5","high",0,0,[6.99,0.693,6.99,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0,0.522,0,0.667,0,1,0,0,2.303,1.386,0,1.099,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2.398],{"V14":4,"HEX_#f7c443":4,"HEX_#f5b400":4,"HEX_#f2962e":4,"HEX_#f08c00":4,"HEX_#ededed":4,"HEX_#dce9f0":4,"HEX_#d6d6d6":4,"HEX_#cfeafb":4,"HEX_#6cc5e8":4,"HEX_#222":4,"HEX_#1f3b4d":4,"H14":4,"F7C443":4,"F5B400":4,"F3B4D":4,"F2962E":4,"F08C00":4,"EDEDED":4,"DCE9F0":4}],["anthropic/claude-sonnet-5.5","high",0,0,[6.874,0.693,6.874,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0,0.5,0,1,0,1,0,0,2.197,1.386,0,1.099,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2.303],{"V14":4,"HEX_#f7c443":4,"HEX_#f5b400":4,"HEX_#f2962e":4,"HEX_#f08c00":4,"HEX_#ededed":4,"HEX_#dce9f0":4,"HEX_#d6d6d6":4,"HEX_#cfeafb":4,"HEX_#6cc5e8":4,"HEX_#222":4,"HEX_#1f3b4d":4,"H14":4,"F7C443":4,"F5B400":4,"F3B4D":4,"F2962E":4,"F08C00":4,"EDEDED":4,"DCE9F0":4}],["anthropic/claude-sonnet-5.5","high",0,0,[6.814,0.693,6.814,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0,0.567,0,1,0,1,0,0,2.197,1.386,0,1.099,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2.398],{"V14":4,"HEX_#f7c443":4,"HEX_#f5b400":4,"HEX_#f2962e":4,"HEX_#f08c00":4,"HEX_#ededed":4,"HEX_#dce9f0":4,"HEX_#d6d6d6":4,"HEX_#cfeafb":4,"HEX_#6cc5e8":4,"HEX_#222":4,"HEX_#1f3b4d":4,"H14":4,"F7C443":4,"F5B400":4,"F3B4D":4,"F2962E":4,"F08C00":4,"EDEDED":4,"DCE9F0":4}],["google/gemini-3.8-flash","high",0,0,[6.661,0.693,6.661,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0,0.647,0,0,1,0,0,0,1.609,1.099,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1.609],{"s-3":4,"l8-1":4,"f39c12":4,"ecf0f1":4,"e293b":4,"c3e50":4,"HEX_#f39c12":4,"HEX_#ecf0f1":4,"HEX_#2c3e50":4,"HEX_#2980b9":4,"zM13":3.9,"l11":3.9,"fba742":3.9,"HEX_#fba742":3.9,"f1c40f":3.76,"d35400":3.76,"HEX_#f1c40f":3.76,"HEX_#d35400":3.76,"f8fafc":3.43,"bdc3c7":3.35}],["google/gemini-3.8-flash","high",0,0,[6.548,0.693,6.548,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0,0.581,0,1,1,0,0,0,1.386,1.099,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693],{"s-3":4,"l8-1":4,"f39c12":4,"ecf0f1":4,"e293b":4,"c3e50":4,"HEX_#f39c12":4,"HEX_#ecf0f1":4,"HEX_#2c3e50":4,"HEX_#2980b9":4,"zM13":3.9,"l11":3.9,"fba742":3.9,"HEX_#fba742":3.9,"f1c40f":3.76,"d35400":3.76,"HEX_#f1c40f":3.76,"HEX_#d35400":3.76,"f8fafc":3.43,"bdc3c7":3.35}],["google/gemini-3.8-flash","high",0,0,[6.434,0.693,6.434,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0,0.524,0,1,1,1,0,0,1.609,1.099,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693],{"s-3":4,"l8-1":4,"f39c12":4,"ecf0f1":4,"e293b":4,"c3e50":4,"HEX_#f39c12":4,"HEX_#ecf0f1":4,"HEX_#2c3e50":4,"HEX_#2980b9":4,"zM13":3.9,"l11":3.9,"fba742":3.9,"HEX_#fba742":3.9,"f1c40f":3.76,"d35400":3.76,"HEX_#f1c40f":3.76,"HEX_#d35400":3.76,"f8fafc":3.43,"bdc3c7":3.35}],["google/gemini-3.8-flash","high",0,0,[6.513,0.693,6.513,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0,0.682,0,1,1,0,0,0,1.609,1.099,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1.386],{"s-3":4,"l8-1":4,"f39c12":4,"ecf0f1":4,"e293b":4,"c3e50":4,"HEX_#f39c12":4,"HEX_#ecf0f1":4,"HEX_#2c3e50":4,"HEX_#2980b9":4,"zM13":3.9,"l11":3.9,"fba742":3.9,"HEX_#fba742":3.9,"f1c40f":3.76,"d35400":3.76,"HEX_#f1c40f":3.76,"HEX_#d35400":3.76,"f8fafc":3.43,"bdc3c7":3.35}],["google/gemini-3.8-flash","high",0,0,[6.474,0.693,6.474,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0,0,0,0,0,0,0,0,1.609,1.099,0,0,0,0,0.693,0,0,0,0,0,0,0,0,0,0,0,0.693],{"s-3":4,"l8-1":4,"f39c12":4,"ecf0f1":4,"e293b":4,"c3e50":4,"HEX_#f39c12":4,"HEX_#ecf0f1":4,"HEX_#2c3e50":4,"HEX_#2980b9":4,"zM13":3.9,"l11":3.9,"fba742":3.9,"HEX_#fba742":3.9,"f1c40f":3.76,"d35400":3.76,"HEX_#f1c40f":3.76,"HEX_#d35400":3.76,"f8fafc":3.43,"bdc3c7":3.35}],["google/gemini-3.8-flash","high",0,0,[7.28,0.693,7.28,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0.941,0,0,0,0,1,0,0,1.946,1.099,1.099,0,1.609,0,0.693,0,0,0,0,0,0,0,0,0,0,0,2.398],{"s-3":4,"l8-1":4,"f39c12":4,"ecf0f1":4,"e293b":4,"c3e50":4,"HEX_#f39c12":4,"HEX_#ecf0f1":4,"HEX_#2c3e50":4,"HEX_#2980b9":4,"zM13":3.9,"l11":3.9,"fba742":3.9,"HEX_#fba742":3.9,"f1c40f":3.76,"d35400":3.76,"HEX_#f1c40f":3.76,"HEX_#d35400":3.76,"f8fafc":3.43,"bdc3c7":3.35}],["google/gemini-3.8-flash","high",0,0,[6.525,0.693,6.525,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0,0.632,0,1,1,0,0,0,1.609,0.693,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2.079],{"s-3":4,"l8-1":4,"f39c12":4,"ecf0f1":4,"e293b":4,"c3e50":4,"HEX_#f39c12":4,"HEX_#ecf0f1":4,"HEX_#2c3e50":4,"HEX_#2980b9":4,"zM13":3.9,"l11":3.9,"fba742":3.9,"HEX_#fba742":3.9,"f1c40f":3.76,"d35400":3.76,"HEX_#f1c40f":3.76,"HEX_#d35400":3.76,"f8fafc":3.43,"bdc3c7":3.35}],["google/gemini-3.8-flash","high",0,0,[6.248,0.693,6.248,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0,0.667,0,0,1,0,0,0,1.792,0.693,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693],{"s-3":4,"l8-1":4,"f39c12":4,"ecf0f1":4,"e293b":4,"c3e50":4,"HEX_#f39c12":4,"HEX_#ecf0f1":4,"HEX_#2c3e50":4,"HEX_#2980b9":4,"zM13":3.9,"l11":3.9,"fba742":3.9,"HEX_#fba742":3.9,"f1c40f":3.76,"d35400":3.76,"HEX_#f1c40f":3.76,"HEX_#d35400":3.76,"f8fafc":3.43,"bdc3c7":3.35}],["openai/gpt-6-astra","low",0,0,[6.934,0.693,6.934,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0,0.587,0,1,0,1,1,1.609,2.079,1.099,0,0.693,0,0,0.693,0,0,0,0,0,0,0,0,0,0,0,1.609],{"m5-":4,"fff5df":4,"f3b85b":4,"c2ca":4,"b52":4,"HEX_#fff5df":4,"HEX_#f3b85b":4,"HEX_#78c2ca":4,"HEX_#244b52":4,"q-3":3.8,"m19":3.66,"q2-1":2.81,"M29":2.22,"M28":1.86,"M25":1.59,"l-1":1.36,"M20":1.31,"WH_BEFORE_VB":1.3,"M21":1.27}],["openai/gpt-6-luna","max",0,0,[7.832,3.638,4.235,0,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2.079,0.693,0,0.491,0,1,0,1,1,0,2.708,1.099,0,0.693,0,0,1.099,0,0,0,0,0,0,0,0,0,0,0,2.773],{"m-9":4,"m-1":3.79,"m17":3.73,"m13":3.73,"m10":3.51,"m-4":3.42,"m11":3.41,"DCEFEA":3.41,"m-6":3.36,"HEX_#fff7e8":3.21,"HEX_#174a50":3.21,"m0-7":3.1,"m-5":3.08,"m6-1":2.96,"hanging":2.96,"h5m7":2.96,"fff7e8":2.96,"ffd36f":2.96,"f4b34f":2.96,"f48":2.96}],["openai/gpt-6-luna","max",0,0,[7.508,0.693,7.508,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,1,0.612,0,1,0,1,1,0,2.398,1.099,0,0,0,0,1.099,0,0,0,0,0,0,0,0,0,0,0,1.792],{"m-9":4,"m-1":3.79,"m17":3.73,"m13":3.73,"m10":3.51,"m-4":3.42,"m11":3.41,"DCEFEA":3.41,"m-6":3.36,"HEX_#fff7e8":3.21,"HEX_#174a50":3.21,"m0-7":3.1,"m-5":3.08,"m6-1":2.96,"hanging":2.96,"h5m7":2.96,"fff7e8":2.96,"ffd36f":2.96,"f4b34f":2.96,"f48":2.96}],["openai/gpt-6-luna","medium",0,0,[7.536,0.693,7.536,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,1,0.623,0,1,0,1,1,0,2.485,1.386,0,0,0,0,1.099,0,0,0,0,0,0,0,0,0,0,0,2.079],{"m-9":4,"m-1":3.79,"m17":3.73,"m13":3.73,"m10":3.51,"m-4":3.42,"m11":3.41,"DCEFEA":3.41,"m-6":3.36,"HEX_#fff7e8":3.21,"HEX_#174a50":3.21,"m0-7":3.1,"m-5":3.08,"m6-1":2.96,"hanging":2.96,"h5m7":2.96,"fff7e8":2.96,"ffd36f":2.96,"f4b34f":2.96,"f48":2.96}],["openai/gpt-6-luna","high",0,0,[7.181,0.693,7.181,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,1,0.651,0,1,1,1,1,1.946,2.197,1.386,0,0.693,0,0,1.099,0,0,0,0,0,0,0,0,0,0,0,2.079],{"m-9":4,"m-1":3.79,"m17":3.73,"m13":3.73,"m10":3.51,"m-4":3.42,"m11":3.41,"DCEFEA":3.41,"m-6":3.36,"HEX_#fff7e8":3.21,"HEX_#174a50":3.21,"m0-7":3.1,"m-5":3.08,"m6-1":2.96,"hanging":2.96,"h5m7":2.96,"fff7e8":2.96,"ffd36f":2.96,"f4b34f":2.96,"f48":2.96}],["openai/gpt-6-luna","high",0,0,[7.462,0.693,7.462,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0,0.717,0,1,0,1,1,0,2.303,1.386,0,0,0,0,0.693,0,0,0,0,0,0,0,0,0,0,0,1.609],{"m-9":4,"m-1":3.79,"m17":3.73,"m13":3.73,"m10":3.51,"m-4":3.42,"m11":3.41,"DCEFEA":3.41,"m-6":3.36,"HEX_#fff7e8":3.21,"HEX_#174a50":3.21,"m0-7":3.1,"m-5":3.08,"m6-1":2.96,"hanging":2.96,"h5m7":2.96,"fff7e8":2.96,"ffd36f":2.96,"f4b34f":2.96,"f48":2.96}],["openai/gpt-6-luna","high",0,0,[7.36,0.693,7.36,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,1,0.703,0,1,0,0,0,0,2.197,1.386,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1.609],{"m-9":4,"m-1":3.79,"m17":3.73,"m13":3.73,"m10":3.51,"m-4":3.42,"m11":3.41,"DCEFEA":3.41,"m-6":3.36,"HEX_#fff7e8":3.21,"HEX_#174a50":3.21,"m0-7":3.1,"m-5":3.08,"m6-1":2.96,"hanging":2.96,"h5m7":2.96,"fff7e8":2.96,"ffd36f":2.96,"f4b34f":2.96,"f48":2.96}],["openai/gpt-6-luna","high",0,0,[7.484,0.693,7.484,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,1,0.767,0,1,0,1,0,0,2.197,1.386,0,0,0,0,0.693,0,0,0,0,0,0,0,0,0,0,0,1.609],{"m-9":4,"m-1":3.79,"m17":3.73,"m13":3.73,"m10":3.51,"m-4":3.42,"m11":3.41,"DCEFEA":3.41,"m-6":3.36,"HEX_#fff7e8":3.21,"HEX_#174a50":3.21,"m0-7":3.1,"m-5":3.08,"m6-1":2.96,"hanging":2.96,"h5m7":2.96,"fff7e8":2.96,"ffd36f":2.96,"f4b34f":2.96,"f48":2.96}],["openai/gpt-6-luna","high",0,0,[6.881,0.693,6.881,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,1,0.714,0,1,1,1,1,0,1.946,1.099,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1.386],{"m-9":4,"m-1":3.79,"m17":3.73,"m13":3.73,"m10":3.51,"m-4":3.42,"m11":3.41,"DCEFEA":3.41,"m-6":3.36,"HEX_#fff7e8":3.21,"HEX_#174a50":3.21,"m0-7":3.1,"m-5":3.08,"m6-1":2.96,"hanging":2.96,"h5m7":2.96,"fff7e8":2.96,"ffd36f":2.96,"f4b34f":2.96,"f48":2.96}],["deepseek/deepseek-v4.1-flash","max",0,0,[4.97,0.693,4.97,1,6.686,6.217,1.6,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],{"xlink":4,"xMidYMid":4,"wrap":4,"streaks":4,"stop-opacity":4,"stage":4,"speed":4,"slow":4,"seamless":4,"scroll":4,"road_tile":4,"road":4,"rig":4,"repeated":4,"radialGradient":4,"preserveAspectRatio":4,"parallax":4,"near":4,"meet":4,"leg":4}],["deepseek/deepseek-v4.1-flash","max",0,0,[8.209,3.989,4.253,0,6.686,6.217,1.6,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0,0.5,0,0,0,0,0,0,0.693,1.099,0.693,1.609,0,0,2.398,1.386,0,0,0,0,0,0,0,0,0,0,2.485],{"xlink":4,"xMidYMid":4,"wrap":4,"streaks":4,"stop-opacity":4,"stage":4,"speed":4,"slow":4,"seamless":4,"scroll":4,"road_tile":4,"road":4,"rig":4,"repeated":4,"radialGradient":4,"preserveAspectRatio":4,"parallax":4,"near":4,"meet":4,"leg":4}],["deepseek/deepseek-v4.1-flash","max",0,0,[7.356,0.693,7.356,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,1,0.597,0,1,0,1,0,0,2.485,1.099,0,0.693,0,0,1.099,0,0,0,0,0,0,0,0,0,0,0,2.079],{"xlink":4,"xMidYMid":4,"wrap":4,"streaks":4,"stop-opacity":4,"stage":4,"speed":4,"slow":4,"seamless":4,"scroll":4,"road_tile":4,"road":4,"rig":4,"repeated":4,"radialGradient":4,"preserveAspectRatio":4,"parallax":4,"near":4,"meet":4,"leg":4}],["deepseek/deepseek-v4.1-flash","max",0,0,[4.97,0.693,4.97,1,6.686,6.217,1.6,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],{"xlink":4,"xMidYMid":4,"wrap":4,"streaks":4,"stop-opacity":4,"stage":4,"speed":4,"slow":4,"seamless":4,"scroll":4,"road_tile":4,"road":4,"rig":4,"repeated":4,"radialGradient":4,"preserveAspectRatio":4,"parallax":4,"near":4,"meet":4,"leg":4}],["deepseek/deepseek-v4.1-flash","max",0,0,[8.209,3.989,4.253,0,6.686,6.217,1.6,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0,0.5,0,0,0,0,0,0,0.693,1.099,0.693,1.609,0,0,2.398,1.386,0,0,0,0,0,0,0,0,0,0,2.485],{"xlink":4,"xMidYMid":4,"wrap":4,"streaks":4,"stop-opacity":4,"stage":4,"speed":4,"slow":4,"seamless":4,"scroll":4,"road_tile":4,"road":4,"rig":4,"repeated":4,"radialGradient":4,"preserveAspectRatio":4,"parallax":4,"near":4,"meet":4,"leg":4}],["deepseek/deepseek-v4.1-flash","max",0,0,[7.356,0.693,7.356,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,1,0.597,0,1,0,1,0,0,2.485,1.099,0,0.693,0,0,1.099,0,0,0,0,0,0,0,0,0,0,0,2.079],{"xlink":4,"xMidYMid":4,"wrap":4,"streaks":4,"stop-opacity":4,"stage":4,"speed":4,"slow":4,"seamless":4,"scroll":4,"road_tile":4,"road":4,"rig":4,"repeated":4,"radialGradient":4,"preserveAspectRatio":4,"parallax":4,"near":4,"meet":4,"leg":4}],["meta/muse-spark-1.3","max",0,0,[7.215,0.693,7.215,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0,0.588,0,0,0,0,0,0,2.197,1.609,0.693,1.099,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2.485],{"v2M30":4,"q2-2":4,"l-3-2":4,"h32":4,"h-2M30":4,"fde047":4,"fdba74":4,"f172a":4,"e2e8f0":4,"dd3fc":4,"M31":4,"HEX_#ffd54f":4,"HEX_#ffcc80":4,"HEX_#ff9e57":4,"HEX_#e0f7fa":4,"HEX_#4fc3f7":4,"H29M28":4,"FFD54F":4,"FFCC80":4,"FF9E57":4}],["meta/muse-spark-1.3","max",0,0,[7.189,0.693,7.189,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0.474,0.577,0,1,0,1,0,0,2.079,1.386,0.693,1.099,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2.079],{"v2M30":4,"q2-2":4,"l-3-2":4,"h32":4,"h-2M30":4,"fde047":4,"fdba74":4,"f172a":4,"e2e8f0":4,"dd3fc":4,"M31":4,"HEX_#ffd54f":4,"HEX_#ffcc80":4,"HEX_#ff9e57":4,"HEX_#e0f7fa":4,"HEX_#4fc3f7":4,"H29M28":4,"FFD54F":4,"FFCC80":4,"FF9E57":4}],["meta/muse-spark-1.3","max",0,0,[7.215,0.693,7.215,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0,0.588,0,0,0,0,0,0,2.197,1.609,0.693,1.099,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2.485],{"v2M30":4,"q2-2":4,"l-3-2":4,"h32":4,"h-2M30":4,"fde047":4,"fdba74":4,"f172a":4,"e2e8f0":4,"dd3fc":4,"M31":4,"HEX_#ffd54f":4,"HEX_#ffcc80":4,"HEX_#ff9e57":4,"HEX_#e0f7fa":4,"HEX_#4fc3f7":4,"H29M28":4,"FFD54F":4,"FFCC80":4,"FF9E57":4}],["meta/muse-spark-1.3","max",0,0,[7.189,0.693,7.189,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0.474,0.577,0,1,0,1,0,0,2.079,1.386,0.693,1.099,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2.079],{"v2M30":4,"q2-2":4,"l-3-2":4,"h32":4,"h-2M30":4,"fde047":4,"fdba74":4,"f172a":4,"e2e8f0":4,"dd3fc":4,"M31":4,"HEX_#ffd54f":4,"HEX_#ffcc80":4,"HEX_#ff9e57":4,"HEX_#e0f7fa":4,"HEX_#4fc3f7":4,"H29M28":4,"FFD54F":4,"FFCC80":4,"FF9E57":4}],["anthropic/claude-fable-5.1","max",0,0,[7.067,0.693,7.067,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0,0,0,0,0,1,0,0,1.946,1.386,0.693,0.693,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2.303],{"m3-2q3":4,"fffef5":4,"ffc761":4,"fd3ec":4,"f8dc90":4,"f6b23f":4,"eaa345":4,"e9e96":4,"e8f2ed":4,"e7dfcc":4,"e54":4,"e1e5d9":4,"db6dd":4,"c3b59":4,"bfe6f5":4,"aecdb8":4,"a43":4,"V18Q10":4,"V12Q20":4,"HEX_#fffef5":4}],["anthropic/claude-fable-5.1","max",0,0,[6.692,0.693,6.692,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0,0.194,0,0,0,1,0,1.609,2.079,1.099,0,0.693,0,0,0.693,0,0,0,0,0,0,0,0,0,0,0,2.398],{"m3-2q3":4,"fffef5":4,"ffc761":4,"fd3ec":4,"f8dc90":4,"f6b23f":4,"eaa345":4,"e9e96":4,"e8f2ed":4,"e7dfcc":4,"e54":4,"e1e5d9":4,"db6dd":4,"c3b59":4,"bfe6f5":4,"aecdb8":4,"a43":4,"V18Q10":4,"V12Q20":4,"HEX_#fffef5":4}],["anthropic/claude-fable-5.1","high",0,0,[6.861,0.693,6.861,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0,0.6,0,0,1,1,0,0,2.197,1.386,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1.609],{"m3-2q3":4,"fffef5":4,"ffc761":4,"fd3ec":4,"f8dc90":4,"f6b23f":4,"eaa345":4,"e9e96":4,"e8f2ed":4,"e7dfcc":4,"e54":4,"e1e5d9":4,"db6dd":4,"c3b59":4,"bfe6f5":4,"aecdb8":4,"a43":4,"V18Q10":4,"V12Q20":4,"HEX_#fffef5":4}],["anthropic/claude-fable-5.1","low",0,0,[7.224,0.693,7.224,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0.65,0.344,0,0,0,1,0,0,2.197,1.386,0.693,1.099,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2.398],{"m3-2q3":4,"fffef5":4,"ffc761":4,"fd3ec":4,"f8dc90":4,"f6b23f":4,"eaa345":4,"e9e96":4,"e8f2ed":4,"e7dfcc":4,"e54":4,"e1e5d9":4,"db6dd":4,"c3b59":4,"bfe6f5":4,"aecdb8":4,"a43":4,"V18Q10":4,"V12Q20":4,"HEX_#fffef5":4}],["anthropic/claude-fable-5.1","high",0,0,[6.604,0.693,6.604,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0,0.563,0,0,1,1,0,0,1.609,1.386,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1.386],{"m3-2q3":4,"fffef5":4,"ffc761":4,"fd3ec":4,"f8dc90":4,"f6b23f":4,"eaa345":4,"e9e96":4,"e8f2ed":4,"e7dfcc":4,"e54":4,"e1e5d9":4,"db6dd":4,"c3b59":4,"bfe6f5":4,"aecdb8":4,"a43":4,"V18Q10":4,"V12Q20":4,"HEX_#fffef5":4}],["anthropic/claude-fable-5.1","high",0,0,[6.64,0.693,6.64,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0,0.579,0,0,1,1,0,0,1.946,1.099,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1.609],{"m3-2q3":4,"fffef5":4,"ffc761":4,"fd3ec":4,"f8dc90":4,"f6b23f":4,"eaa345":4,"e9e96":4,"e8f2ed":4,"e7dfcc":4,"e54":4,"e1e5d9":4,"db6dd":4,"c3b59":4,"bfe6f5":4,"aecdb8":4,"a43":4,"V18Q10":4,"V12Q20":4,"HEX_#fffef5":4}],["anthropic/claude-fable-5.1","high",0,0,[7.152,0.693,7.152,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0,0.809,0,0,0,0,0,0,1.609,1.386,0.693,1.099,2.079,0,1.099,0,0,0,0,0,0,0,0,0,0,0,2.079],{"m3-2q3":4,"fffef5":4,"ffc761":4,"fd3ec":4,"f8dc90":4,"f6b23f":4,"eaa345":4,"e9e96":4,"e8f2ed":4,"e7dfcc":4,"e54":4,"e1e5d9":4,"db6dd":4,"c3b59":4,"bfe6f5":4,"aecdb8":4,"a43":4,"V18Q10":4,"V12Q20":4,"HEX_#fffef5":4}],["anthropic/claude-haiku-5.5","medium",0,0,[7.091,0.693,7.091,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0,0,0.823,0,0,1,0,0,2.303,1.386,0.693,0.693,0,0,1.099,0,0,0,0,0,0,0,0,0,0,0,2.398],{"ffc83d":4,"ffb703":4,"fd3f0":4,"f7c27a":4,"f29b2e":4,"e8f6ff":4,"e8f4fb":4,"d9dee5":4,"aa6d8":4,"V12":4,"HEX_#ffc83d":4,"HEX_#f7c27a":4,"HEX_#f29b2e":4,"HEX_#d9dee5":4,"HEX_#8fd3f0":4,"HEX_#3aa6d8":4,"HEX_#222222":4,"q3-4":3.99,"fb8500":3.99,"fb7d9":3.99}],["anthropic/claude-haiku-5.5","high",0,0,[6.945,0.693,6.945,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0,0,0,0,0,1,0,0,2.079,1.099,0,0.693,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2.079],{"ffc83d":4,"ffb703":4,"fd3f0":4,"f7c27a":4,"f29b2e":4,"e8f6ff":4,"e8f4fb":4,"d9dee5":4,"aa6d8":4,"V12":4,"HEX_#ffc83d":4,"HEX_#f7c27a":4,"HEX_#f29b2e":4,"HEX_#d9dee5":4,"HEX_#8fd3f0":4,"HEX_#3aa6d8":4,"HEX_#222222":4,"q3-4":3.99,"fb8500":3.99,"fb7d9":3.99}],["anthropic/claude-haiku-5.5","high",0,0,[6.941,0.693,6.941,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0,0,0,0,0,1,0,0,1.946,1.386,0.693,0.693,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1.946],{"ffc83d":4,"ffb703":4,"fd3f0":4,"f7c27a":4,"f29b2e":4,"e8f6ff":4,"e8f4fb":4,"d9dee5":4,"aa6d8":4,"V12":4,"HEX_#ffc83d":4,"HEX_#f7c27a":4,"HEX_#f29b2e":4,"HEX_#d9dee5":4,"HEX_#8fd3f0":4,"HEX_#3aa6d8":4,"HEX_#222222":4,"q3-4":3.99,"fb8500":3.99,"fb7d9":3.99}],["anthropic/claude-haiku-5.5","high",0,0,[7.048,0.693,7.048,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0,0,0,0,0,1,0,0,2.079,1.386,0,0.693,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1.946],{"ffc83d":4,"ffb703":4,"fd3f0":4,"f7c27a":4,"f29b2e":4,"e8f6ff":4,"e8f4fb":4,"d9dee5":4,"aa6d8":4,"V12":4,"HEX_#ffc83d":4,"HEX_#f7c27a":4,"HEX_#f29b2e":4,"HEX_#d9dee5":4,"HEX_#8fd3f0":4,"HEX_#3aa6d8":4,"HEX_#222222":4,"q3-4":3.99,"fb8500":3.99,"fb7d9":3.99}],["anthropic/claude-haiku-5.5","high",0,0,[7.333,0.693,7.333,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0,0.622,0,1,0,1,0,0,2.303,1.386,0,1.099,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1.946],{"ffc83d":4,"ffb703":4,"fd3f0":4,"f7c27a":4,"f29b2e":4,"e8f6ff":4,"e8f4fb":4,"d9dee5":4,"aa6d8":4,"V12":4,"HEX_#ffc83d":4,"HEX_#f7c27a":4,"HEX_#f29b2e":4,"HEX_#d9dee5":4,"HEX_#8fd3f0":4,"HEX_#3aa6d8":4,"HEX_#222222":4,"q3-4":3.99,"fb8500":3.99,"fb7d9":3.99}],["anthropic/claude-haiku-5.5","high",0,0,[7.072,0.693,7.072,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0,0,0,0,1,1,1,0,2.398,1.386,0.693,0,0,0,0.693,0,0,0,0,0,0,0,0,0,0,0,1.609],{"ffc83d":4,"ffb703":4,"fd3f0":4,"f7c27a":4,"f29b2e":4,"e8f6ff":4,"e8f4fb":4,"d9dee5":4,"aa6d8":4,"V12":4,"HEX_#ffc83d":4,"HEX_#f7c27a":4,"HEX_#f29b2e":4,"HEX_#d9dee5":4,"HEX_#8fd3f0":4,"HEX_#3aa6d8":4,"HEX_#222222":4,"q3-4":3.99,"fb8500":3.99,"fb7d9":3.99}],["anthropic/claude-sonnet-5","max",0,0,[7.293,2.773,4.594,0,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0.6,0.35,0,1,0,0,0,0,2.079,1.386,0.693,1.099,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2.303],{"fff5e6":4,"f0c040":4,"b94a48":4,"b2a38":4,"HEX_#fff8f0":4,"HEX_#fff5e6":4,"HEX_#f6c945":4,"HEX_#f4e4cc":4,"HEX_#f0c040":4,"HEX_#e39b2b":4,"HEX_#e36b4c":4,"HEX_#b94a48":4,"HEX_#b7dff0":4,"HEX_#7eb6d9":4,"HEX_#243044":4,"HEX_#1f7aae":4,"HEX_#1b2a38":4,"FFF8F0":4,"F7AAE":4,"F6C945":4}],["anthropic/claude-sonnet-5","high",0,0,[7.328,0.693,7.328,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0,0,0,0,0,0,0,0,1.792,1.099,0,0.693,2.303,0,0,0,0,0,0,0,0,0,0,0,0,0,1.099],{"fff5e6":4,"f0c040":4,"b94a48":4,"b2a38":4,"HEX_#fff8f0":4,"HEX_#fff5e6":4,"HEX_#f6c945":4,"HEX_#f4e4cc":4,"HEX_#f0c040":4,"HEX_#e39b2b":4,"HEX_#e36b4c":4,"HEX_#b94a48":4,"HEX_#b7dff0":4,"HEX_#7eb6d9":4,"HEX_#243044":4,"HEX_#1f7aae":4,"HEX_#1b2a38":4,"FFF8F0":4,"F7AAE":4,"F6C945":4}],["anthropic/claude-sonnet-5","high",0,0,[7.26,0.693,7.26,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0,0.125,0,0,0,1,0,0,2.303,1.386,0,0.693,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2.079],{"fff5e6":4,"f0c040":4,"b94a48":4,"b2a38":4,"HEX_#fff8f0":4,"HEX_#fff5e6":4,"HEX_#f6c945":4,"HEX_#f4e4cc":4,"HEX_#f0c040":4,"HEX_#e39b2b":4,"HEX_#e36b4c":4,"HEX_#b94a48":4,"HEX_#b7dff0":4,"HEX_#7eb6d9":4,"HEX_#243044":4,"HEX_#1f7aae":4,"HEX_#1b2a38":4,"FFF8F0":4,"F7AAE":4,"F6C945":4}],["anthropic/claude-sonnet-5","max",0,0,[7.293,2.773,4.594,0,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0.6,0.35,0,1,0,0,0,0,2.079,1.386,0.693,1.099,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2.303],{"fff5e6":4,"f0c040":4,"b94a48":4,"b2a38":4,"HEX_#fff8f0":4,"HEX_#fff5e6":4,"HEX_#f6c945":4,"HEX_#f4e4cc":4,"HEX_#f0c040":4,"HEX_#e39b2b":4,"HEX_#e36b4c":4,"HEX_#b94a48":4,"HEX_#b7dff0":4,"HEX_#7eb6d9":4,"HEX_#243044":4,"HEX_#1f7aae":4,"HEX_#1b2a38":4,"FFF8F0":4,"F7AAE":4,"F6C945":4}],["openai/gpt-6-sol","max",0,0,[9.322,4.635,4.706,0,6.803,7.091,0.75,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2.565,0.693,0,0.311,0,0,0,1,0,0,4.143,2.773,0,1.099,0,0,1.609,0,0.693,0,1,0,0,0,0,0,0,0,4.174],{"wrong":4,"wonky":4,"window":4,"v32":4,"userSpaceOnUse":4,"uneven":4,"too":4,"text-anchor":4,"text":4,"tag":4,"t31":4,"t214-9":4,"t151-31M674":4,"suspiciously":4,"stroke-dasharray":4,"stripes":4,"something":4,"signature":4,"serif":4,"sans-serif":4}],["openai/gpt-6-sol","high",0,0,[6.182,0.693,6.182,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0,0.733,0,0,0,0,0,0,0.693,1.099,0,0,0,0,0.693,0,0,0,0,0,0,0,0,0,0,0,0.693],{"wrong":4,"wonky":4,"window":4,"v32":4,"userSpaceOnUse":4,"uneven":4,"too":4,"text-anchor":4,"text":4,"tag":4,"t31":4,"t214-9":4,"t151-31M674":4,"suspiciously":4,"stroke-dasharray":4,"stripes":4,"something":4,"signature":4,"serif":4,"sans-serif":4}],["openai/gpt-6-sol","high",0,0,[6.95,0.693,6.95,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0,0.796,0,1,0,0,0,0,2.079,1.386,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1.609],{"wrong":4,"wonky":4,"window":4,"v32":4,"userSpaceOnUse":4,"uneven":4,"too":4,"text-anchor":4,"text":4,"tag":4,"t31":4,"t214-9":4,"t151-31M674":4,"suspiciously":4,"stroke-dasharray":4,"stripes":4,"something":4,"signature":4,"serif":4,"sans-serif":4}],["openai/gpt-6-sol","high",0,0,[6.186,0.693,6.186,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0,0.7,0,1,0,0,0,0,1.099,0.693,0,0,0,0,0.693,0,0,0,0,0,0,0,0,0,0,0,0.693],{"wrong":4,"wonky":4,"window":4,"v32":4,"userSpaceOnUse":4,"uneven":4,"too":4,"text-anchor":4,"text":4,"tag":4,"t31":4,"t214-9":4,"t151-31M674":4,"suspiciously":4,"stroke-dasharray":4,"stripes":4,"something":4,"signature":4,"serif":4,"sans-serif":4}],["openai/gpt-6-sol","high",0,0,[6.818,0.693,6.818,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,1,0,0,0,0,1,0,0,1.792,1.099,0,0.693,0,0,0.693,0,0,0,0,0,0,0,0,0,0,0,1.946],{"wrong":4,"wonky":4,"window":4,"v32":4,"userSpaceOnUse":4,"uneven":4,"too":4,"text-anchor":4,"text":4,"tag":4,"t31":4,"t214-9":4,"t151-31M674":4,"suspiciously":4,"stroke-dasharray":4,"stripes":4,"something":4,"signature":4,"serif":4,"sans-serif":4}],["openai/gpt-6-sol","high",0,0,[6.165,0.693,6.165,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0,0.632,0,1,0,0,0,0,1.386,0.693,0,0,0,0,0.693,0,0,0,0,0,0,0,0,0,0,0,1.099],{"wrong":4,"wonky":4,"window":4,"v32":4,"userSpaceOnUse":4,"uneven":4,"too":4,"text-anchor":4,"text":4,"tag":4,"t31":4,"t214-9":4,"t151-31M674":4,"suspiciously":4,"stroke-dasharray":4,"stripes":4,"something":4,"signature":4,"serif":4,"sans-serif":4}],["z-ai/glm-5.3","high",0,0,[6.719,0.693,6.719,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0,0.658,0,1,0,1,0,1.792,1.946,1.099,0,0.693,0,0,0.693,0,0,0,0,0,0,0,0,0,0,0,1.386],{"v9c0":4,"v1m0":4,"v1M18":4,"s3-1":4,"m20":4,"m0-8":4,"h7c-1":4,"h-1m14":4,"h-1M19":4,"fff4dc":4,"efb45b":4,"c59":4,"V9a3":4,"HEX_#fff4dc":4,"HEX_#efb45b":4,"HEX_#294c59":4,"c2-1":1.65,"M24":1.36,"M21":1.28}],["z-ai/glm-5.3","high",0,0,[6.719,0.693,6.719,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0,0.658,0,1,0,1,0,1.792,1.946,1.099,0,0.693,0,0,0.693,0,0,0,0,0,0,0,0,0,0,0,1.386],{"v9c0":4,"v1m0":4,"v1M18":4,"s3-1":4,"m20":4,"m0-8":4,"h7c-1":4,"h-1m14":4,"h-1M19":4,"fff4dc":4,"efb45b":4,"c59":4,"V9a3":4,"HEX_#fff4dc":4,"HEX_#efb45b":4,"HEX_#294c59":4,"c2-1":1.65,"M24":1.36,"M21":1.28}],["openai/gpt-6.1-sol","max",0,0,[6.813,0.693,6.813,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0,0.577,0,1,0,1,1,1.792,2.079,1.099,0,0.693,0,0,0.693,0,0,0,0,0,0,0,0,0,0,0,1.946],{"v7H0Z":4,"v1M7":4,"v1M2":4,"m21":4,"h5m4-1h5m5":4,"h1M3":4,"h1M11":4,"h10q-4":4,"fffdf4":4,"fff6e5":4,"f52":4,"f3bc58":4,"e9e5d6":4,"c-2-4":4,"a9d8d1":4,"V10c0-3":4,"HEX_#fffdf4":4,"HEX_#fff6e5":4,"HEX_#f3bc58":4,"HEX_#e9e5d6":4}],["openai/gpt-6.1-sol","max",0,0,[6.791,0.693,6.791,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0,0.277,0,0,0,1,1,0,2.079,1.099,0,0.693,0,0,0.693,0,0,0,0,0,0,0,0,0,0,0,2.303],{"v1m0":4,"v1M2":4,"m-12":4,"h1m9":4,"fffdf6":4,"fff3df":4,"f4bd54":4,"f4b64f":4,"ed9772":4,"e86":4,"d4bafccde":4,"bad3bd":4,"b47":4,"a8d5cd":4,"Q26":4,"Q11":4,"HEX_#fffdf6":4,"HEX_#fff3df":4,"HEX_#f4bd54":4,"HEX_#f4b64f":4}],["openai/gpt-5.6-luna","high",0,0,[6.842,0.693,6.842,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,1,0.6,0,1,0,1,0,0,1.609,1.099,0,0,0,0,0.693,0,0,0,0,0,0,0,0,0,0,0,1.792],{"v2M19":3.89,"m5-3v3":3.89,"ZM13":3.89,"H3M11":3.89,"s7-2":3.49,"h2M27":3.49,"h2M20":3.49,"v9H0Z":3.2,"v7H2z":3.2,"v3H1Z":3.2,"v2M7":3.2,"v2M25":3.2,"v2M15":3.2,"s10":3.2,"s1-3":3.2,"m-9-4":3.2,"h3M16":3.2,"h2M21":3.2,"h2M18":3.2,"h2M10":3.2}],["openai/gpt-5.6-luna","high",0,0,[6.809,0.693,6.809,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0,0.59,0,1,0,1,0,0,1.792,1.099,0,0,0,0,0.693,0,0,0,0,0,0,0,0,0,0,0,1.099],{"v2M19":3.89,"m5-3v3":3.89,"ZM13":3.89,"H3M11":3.89,"s7-2":3.49,"h2M27":3.49,"h2M20":3.49,"v9H0Z":3.2,"v7H2z":3.2,"v3H1Z":3.2,"v2M7":3.2,"v2M25":3.2,"v2M15":3.2,"s10":3.2,"s1-3":3.2,"m-9-4":3.2,"h3M16":3.2,"h2M21":3.2,"h2M18":3.2,"h2M10":3.2}],["openai/gpt-5.6-luna","high",0,0,[6.861,0.693,6.861,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,1,0.524,0,1,0,1,1,0,1.792,1.386,0.693,0,0,0,0.693,0,0,0,0,0,0,0,0,0,0,0,1.609],{"v2M19":3.89,"m5-3v3":3.89,"ZM13":3.89,"H3M11":3.89,"s7-2":3.49,"h2M27":3.49,"h2M20":3.49,"v9H0Z":3.2,"v7H2z":3.2,"v3H1Z":3.2,"v2M7":3.2,"v2M25":3.2,"v2M15":3.2,"s10":3.2,"s1-3":3.2,"m-9-4":3.2,"h3M16":3.2,"h2M21":3.2,"h2M18":3.2,"h2M10":3.2}],["openai/gpt-5.6-luna","high",0,0,[7.049,0.693,7.049,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,1,0.5,0,1,0,0,0,0,2.079,1.386,0,0,0,0,0.693,0,0,0,0,0,0,0,0,0,0,0,1.792],{"v2M19":3.89,"m5-3v3":3.89,"ZM13":3.89,"H3M11":3.89,"s7-2":3.49,"h2M27":3.49,"h2M20":3.49,"v9H0Z":3.2,"v7H2z":3.2,"v3H1Z":3.2,"v2M7":3.2,"v2M25":3.2,"v2M15":3.2,"s10":3.2,"s1-3":3.2,"m-9-4":3.2,"h3M16":3.2,"h2M21":3.2,"h2M18":3.2,"h2M10":3.2}],["openai/gpt-5.6-luna","high",0,0,[6.934,0.693,6.934,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0,0.568,0,1,0,1,1,0,2.079,1.099,0,0,0,0,0.693,0,0,0,0,0,0,0,0,0,0,0,1.609],{"v2M19":3.89,"m5-3v3":3.89,"ZM13":3.89,"H3M11":3.89,"s7-2":3.49,"h2M27":3.49,"h2M20":3.49,"v9H0Z":3.2,"v7H2z":3.2,"v3H1Z":3.2,"v2M7":3.2,"v2M25":3.2,"v2M15":3.2,"s10":3.2,"s1-3":3.2,"m-9-4":3.2,"h3M16":3.2,"h2M21":3.2,"h2M18":3.2,"h2M10":3.2}],["openai/gpt-5.6-sol","high",0,0,[6.174,0.693,6.174,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0,0.667,0,1,0,0,0,0,1.386,0.693,0,0,0,0,0.693,0,0,0,0,0,0,0,0,0,0,0,0.693],{"v-1M20":3.48,"v-1M1":3.48,"m22":3.48,"h-1m12":3.48,"h-1M2":3.48,"HEX_#28536b":3.48,"F6B73C":3.48,"v7c-3":2.79,"v6c-2-1-4-3-4-6Z":2.79,"v5H9z":2.79,"v4c-3":2.79,"v4H2z":2.79,"v3m7-3v3":2.79,"v3m5-3v3M2":2.79,"v3m4-3":2.79,"v3c-2":2.79,"v2m6":2.79,"v2m3-2v2":2.79,"v2m0":2.79,"v2m-6-6h2m8":2.79}],["openai/gpt-5.6-sol","high",0,0,[6.785,0.693,6.785,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0.571,0,0,0,0,1,0,0,1.609,1.386,0.693,1.099,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1.946],{"v-1M20":3.48,"v-1M1":3.48,"m22":3.48,"h-1m12":3.48,"h-1M2":3.48,"HEX_#28536b":3.48,"F6B73C":3.48,"v7c-3":2.79,"v6c-2-1-4-3-4-6Z":2.79,"v5H9z":2.79,"v4c-3":2.79,"v4H2z":2.79,"v3m7-3v3":2.79,"v3m5-3v3M2":2.79,"v3m4-3":2.79,"v3c-2":2.79,"v2m6":2.79,"v2m3-2v2":2.79,"v2m0":2.79,"v2m-6-6h2m8":2.79}],["openai/gpt-5.6-sol","high",0,0,[6.023,0.693,6.023,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0,0.667,0,1,0,0,0,0,0.693,0.693,0,0,0,0,0.693,0,0,0,0,0,0,0,0,0,0,0,0.693],{"v-1M20":3.48,"v-1M1":3.48,"m22":3.48,"h-1m12":3.48,"h-1M2":3.48,"HEX_#28536b":3.48,"F6B73C":3.48,"v7c-3":2.79,"v6c-2-1-4-3-4-6Z":2.79,"v5H9z":2.79,"v4c-3":2.79,"v4H2z":2.79,"v3m7-3v3":2.79,"v3m5-3v3M2":2.79,"v3m4-3":2.79,"v3c-2":2.79,"v2m6":2.79,"v2m3-2v2":2.79,"v2m0":2.79,"v2m-6-6h2m8":2.79}],["openai/gpt-5.6-sol","high",0,0,[6.436,0.693,6.436,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0,0.6,0,1,0,0,0,0,1.609,1.099,0,0,0,0,0.693,0,0,0,0,0,0,0,0,0,0,0,1.609],{"v-1M20":3.48,"v-1M1":3.48,"m22":3.48,"h-1m12":3.48,"h-1M2":3.48,"HEX_#28536b":3.48,"F6B73C":3.48,"v7c-3":2.79,"v6c-2-1-4-3-4-6Z":2.79,"v5H9z":2.79,"v4c-3":2.79,"v4H2z":2.79,"v3m7-3v3":2.79,"v3m5-3v3M2":2.79,"v3m4-3":2.79,"v3c-2":2.79,"v2m6":2.79,"v2m3-2v2":2.79,"v2m0":2.79,"v2m-6-6h2m8":2.79}],["openai/gpt-5.6-sol","high",0,0,[6.629,0.693,6.629,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0,0,0,0,0,1,0,0,1.386,1.386,0.693,1.099,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2.303],{"v-1M20":3.48,"v-1M1":3.48,"m22":3.48,"h-1m12":3.48,"h-1M2":3.48,"HEX_#28536b":3.48,"F6B73C":3.48,"v7c-3":2.79,"v6c-2-1-4-3-4-6Z":2.79,"v5H9z":2.79,"v4c-3":2.79,"v4H2z":2.79,"v3m7-3v3":2.79,"v3m5-3v3M2":2.79,"v3m4-3":2.79,"v3c-2":2.79,"v2m6":2.79,"v2m3-2v2":2.79,"v2m0":2.79,"v2m-6-6h2m8":2.79}],["openai/gpt-5.5","high",0,0,[6.658,0.693,6.658,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0,0.72,0,0,0,0,0,0,1.946,1.099,0.693,0,0,0,0.693,0,0,0,0,0,0,0,0,0,0,0,1.609],{"m3-":4,"fff7df":4,"fff3cf":4,"fff1d8":4,"fff0d1":4,"ffd45a":4,"f73":4,"f6f1df":4,"f6c75b":4,"f3ad58":4,"f2c65e":4,"f2a44a":4,"eaf7ff":4,"eaf6f5":4,"e9826c":4,"e88c60":4,"e5a":4,"c9e8":4,"c8bf":4,"c58":4}],["openai/gpt-5.5","high",0,0,[6.969,0.693,6.969,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,1,0.721,0,1,0,0,0,0,1.792,1.386,0,0,0,0,0.693,0,0,0,0,0,0,0,0,0,0,0,1.386],{"m3-":4,"fff7df":4,"fff3cf":4,"fff1d8":4,"fff0d1":4,"ffd45a":4,"f73":4,"f6f1df":4,"f6c75b":4,"f3ad58":4,"f2c65e":4,"f2a44a":4,"eaf7ff":4,"eaf6f5":4,"e9826c":4,"e88c60":4,"e5a":4,"c9e8":4,"c8bf":4,"c58":4}],["openai/gpt-5.5","high",0,0,[6.781,0.693,6.781,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0,0.667,0,1,0,0,0,0,1.946,1.099,0,0,0,0,0.693,0,0,0,0,0,0,0,0,0,0,0,1.386],{"m3-":4,"fff7df":4,"fff3cf":4,"fff1d8":4,"fff0d1":4,"ffd45a":4,"f73":4,"f6f1df":4,"f6c75b":4,"f3ad58":4,"f2c65e":4,"f2a44a":4,"eaf7ff":4,"eaf6f5":4,"e9826c":4,"e88c60":4,"e5a":4,"c9e8":4,"c8bf":4,"c58":4}],["openai/gpt-5.5","high",0,0,[6.914,0.693,6.914,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,1,0.564,0,1,1,1,1,0,2.303,1.099,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693],{"m3-":4,"fff7df":4,"fff3cf":4,"fff1d8":4,"fff0d1":4,"ffd45a":4,"f73":4,"f6f1df":4,"f6c75b":4,"f3ad58":4,"f2c65e":4,"f2a44a":4,"eaf7ff":4,"eaf6f5":4,"e9826c":4,"e88c60":4,"e5a":4,"c9e8":4,"c8bf":4,"c58":4}],["openai/gpt-5.5","high",0,0,[7.142,0.693,7.142,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,1,0,0,0,0,1,0,0,1.609,1.386,0.693,0.693,1.609,0,0.693,0,0,0,0,0,0,0,0,0,0,0,2.079],{"m3-":4,"fff7df":4,"fff3cf":4,"fff1d8":4,"fff0d1":4,"ffd45a":4,"f73":4,"f6f1df":4,"f6c75b":4,"f3ad58":4,"f2c65e":4,"f2a44a":4,"eaf7ff":4,"eaf6f5":4,"e9826c":4,"e88c60":4,"e5a":4,"c9e8":4,"c8bf":4,"c58":4}],["openai/gpt-5.4","high",0,0,[7.155,0.693,7.155,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0,0.581,0,1,0,0,0,0,2.197,1.099,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1.792],{"f7e3b2":4,"f4e3c1":4,"ed1e8":4,"e8c98d":4,"b4e2e":4,"HEX_#f7e3b2":4,"HEX_#f4e3c1":4,"HEX_#e8c98d":4,"HEX_#8ed1e8":4,"HEX_#6b4e2e":4,"HEX_#245b78":4,"HEX_#16697a":4,"H22M28":4,"f766e":3.87,"HEX_#0f766e":3.87,"H11":3.87,"v-1m5-5h1M19":3.36,"m18":3.36,"h1m8":3.36,"f4c95d":3.36}],["openai/gpt-5.4","high",0,0,[6.749,0.693,6.749,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0,0.568,0,1,0,0,0,0,1.946,1.099,0,0,0,0,0.693,0,0,0,0,0,0,0,0,0,0,0,0.693],{"f7e3b2":4,"f4e3c1":4,"ed1e8":4,"e8c98d":4,"b4e2e":4,"HEX_#f7e3b2":4,"HEX_#f4e3c1":4,"HEX_#e8c98d":4,"HEX_#8ed1e8":4,"HEX_#6b4e2e":4,"HEX_#245b78":4,"HEX_#16697a":4,"H22M28":4,"f766e":3.87,"HEX_#0f766e":3.87,"H11":3.87,"v-1m5-5h1M19":3.36,"m18":3.36,"h1m8":3.36,"f4c95d":3.36}],["openai/gpt-5.4","high",0,0,[6.628,0.693,6.628,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0,0.731,0,1,0,0,0,0,1.609,1.099,0,0,0,0,0.693,0,0,0,0,0,0,0,0,0,0,0,1.386],{"f7e3b2":4,"f4e3c1":4,"ed1e8":4,"e8c98d":4,"b4e2e":4,"HEX_#f7e3b2":4,"HEX_#f4e3c1":4,"HEX_#e8c98d":4,"HEX_#8ed1e8":4,"HEX_#6b4e2e":4,"HEX_#245b78":4,"HEX_#16697a":4,"H22M28":4,"f766e":3.87,"HEX_#0f766e":3.87,"H11":3.87,"v-1m5-5h1M19":3.36,"m18":3.36,"h1m8":3.36,"f4c95d":3.36}],["openai/gpt-5.4","high",0,0,[6.745,0.693,6.745,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0,0.571,0,1,1,1,1,0,1.792,1.099,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693],{"f7e3b2":4,"f4e3c1":4,"ed1e8":4,"e8c98d":4,"b4e2e":4,"HEX_#f7e3b2":4,"HEX_#f4e3c1":4,"HEX_#e8c98d":4,"HEX_#8ed1e8":4,"HEX_#6b4e2e":4,"HEX_#245b78":4,"HEX_#16697a":4,"H22M28":4,"f766e":3.87,"HEX_#0f766e":3.87,"H11":3.87,"v-1m5-5h1M19":3.36,"m18":3.36,"h1m8":3.36,"f4c95d":3.36}],["google/gemini-3.1-pro-preview","high",0,0,[7.312,0.693,7.312,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0,0,0,0,0,0,0,0,1.609,1.099,0,0.693,2.485,0,0,0,0,0,0,0,0,0,0,0,0,0,1.099],{"fdf6e3":4,"c97b3a":4,"L13":4,"HEX_#fdf6e3":4,"HEX_#c97b3a":4,"L18":3.66,"L15":3.53,"L14":3.53,"Q15":3.42,"L20":3.23,"Q20":3.07,"L19":3.07,"line":2.93,"Q19":2.87,"M16":1.73,"M13":1.73}],["anthropic/claude-sonnet-4.6","high",0,0,[7.093,0.693,7.093,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0,0,0,0,0,0,0,0,1.792,1.386,0.693,1.099,1.792,0,1.386,0,0,0,0,0,0,0,0,0,0,0,1.946],{"s8-1":4,"s7-":4,"l1-":4,"fd8e8":4,"d8fae":4,"b6e8a":4,"a6ea5":4,"T29":4,"T21":4,"T17":4,"HEX_#9fd8e8":4,"HEX_#3d8fae":4,"HEX_#3a6ea5":4,"HEX_#2b6e8a":4,"s7-1":3.72,"b2b2b":3.47,"Q26":3.47,"class":3.27,"HEX_#2b2b2b":3.27,"style":3.1}],["anthropic/claude-sonnet-4.6","high",0,0,[6.955,0.693,6.955,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0,0.571,0,1,0,0,0,0,2.303,1.099,0,0,0,0,0.693,0,0,0,0,0,0,0,0,0,0,0,0.693],{"s8-1":4,"s7-":4,"l1-":4,"fd8e8":4,"d8fae":4,"b6e8a":4,"a6ea5":4,"T29":4,"T21":4,"T17":4,"HEX_#9fd8e8":4,"HEX_#3d8fae":4,"HEX_#3a6ea5":4,"HEX_#2b6e8a":4,"s7-1":3.72,"b2b2b":3.47,"Q26":3.47,"class":3.27,"HEX_#2b2b2b":3.27,"style":3.1}],["meta/muse-spark-1.3","high",0,0,[7.589,0.693,7.589,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0.636,0,0,0,0,0,0,1.099,2.89,1.386,0.693,0.693,0,0,1.099,0,0,0,0,0,0,0,0,0,0,0,2.303],{"EAF6FF":4,"FFD60A":4,"F4A261":4,"FFB703":4,"V11":4,"H31":4,"ECAE6":4,"FB8500":4,"H14L14":4,"HEX_#eaf6ff":4}],["google/gemini-4-argon","high",0,0,[6.394,1.099,5.702,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0,0.7,0,1,0,1,0,1.946,1.099,0.693,0,1.099,0,0,0.693,0,0.693,0,0,0,0,0,0,0,0,0,1.386],{"e8f4f8":4,"fbc531":4,"L10":4,"HEX_#e8f4f8":4,"HEX_#fbc531":4}],["openai/gpt-6.1-sol","high",0,0,[5.288,1.099,4.6,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0,0,0,0,0,0,0,0,0.693,0.693,0,0,0,0,0.693,0,0,0,0,0,0,0,0,0,0,0,1.099],{"f5bd62":4,"HEX_#f5bd62":4,"HEX_#397d83":4}],["deepseek/deepseek-v4.1-flash","max",0,0,[7.103,0.693,7.103,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,1,0.4,0,1,1,1,1,0,2.485,1.386,0.693,0.693,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2.079],{"EAF4FA":4,"F5B942":4,"H4M9":4,"A6D3":4,"CCBE6":4,"F0984A":4,"HEX_#33424d":4,"HEX_#eaf4fa":4,"HEX_#f5b942":4,"HEX_#57a6d3":4,"HEX_#9ccbe6":4,"HEX_#f0984a":4}],["openai/gpt-6-luna","medium",1,0,[8.242,0.693,8.242,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0.971,0,0,0,0,0,0,1.281,2.833,1.609,1.609,1.386,1.946,0,1.386,0,0,0,1,0,0,0,0,0,0,0,2.398],{"eef6fb":4,"E6F2FA":4,"B3A4A":4,"FFCF3D":4,"FFAD33":4,"FFFFFF":4,"EEF2F5":4,"FF7A3D":4,"FB3E8":4,"FFEC9A":4,"HEX_#eef6fb":4,"HEX_#e6f2fa":4,"HEX_#2b3a4a":4,"HEX_#ffcf3d":4,"HEX_#ffad33":4,"HEX_#ffffff":4,"HEX_#eef2f5":4,"HEX_#ff7a3d":4,"HEX_#4fb3e8":4,"HEX_#ffec9a":4}],["openai/gpt-6-luna","medium",0,0,[7.402,0.693,7.402,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0,0,0,0,0,0,0,0,2.197,1.099,0.693,0.693,2.197,0,0.693,0,0,0,0,0,0,0,0,0,0,0,1.946],{"fef3c7":4,"f59e0b":4,"b82f6":4,"e3a8a":4,"fef9c3":4,"HEX_#fef3c7":4,"HEX_#f59e0b":4,"HEX_#92400e":4,"HEX_#3b82f6":4,"HEX_#1e3a8a":4,"HEX_#fef9c3":4}],["google/gemini-4-argon","high",0,0,[6.708,0.693,6.708,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0,0,0,0,0,1,1,0,2.079,1.099,0,0.693,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2.303],{"ffe0b2":4,"ff5252":4,"b0bec5":4,"C14":4,"C25":4,"e65100":4,"a237e":4,"HEX_#ffe0b2":4,"HEX_#ff5252":4,"HEX_#b0bec5":4,"HEX_#1a237e":4,"ffb74d":2.8,"L17":2.8,"ff8a65":2.8,"HEX_#e65100":2.8,"HEX_#ff8a65":2.8}],["google/gemini-4-argon","high",0,0,[6.727,0.693,6.727,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0,0,0,0,0,1,1,0,2.079,1.099,0,0.693,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2.303],{"fce4ec":4,"ffca28":4,"C27":4,"ffb300":4,"e65100":4,"T19":4,"T27":4,"HEX_#fce4ec":4,"HEX_#ffca28":4,"HEX_#90a4ae":4,"HEX_#00838f":4,"HEX_#80deea":4,"HEX_#ffb300":2.8,"HEX_#e65100":2.8,"HEX_#212121":2.8}],["google/gemini-4-argon","high",0,0,[6.744,0.693,6.744,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0,0,0,0,0,1,1,0,2.079,1.099,0,0.693,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2.303],{"e0f7fa":4,"C27":4,"b0bec5":4,"ff8f00":4,"ffa000":4,"b2ebf2":4,"HEX_#b0bec5":4,"HEX_#ff8f00":4,"HEX_#0097a7":4,"HEX_#b2ebf2":4,"ffd54f":2.8,"HEX_#ffa000":2.8,"HEX_#212121":2.8}],["google/gemini-4-argon","high",0,0,[7.006,0.693,7.006,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0,0,0,0,0,1,0,0,2.079,1.386,0,0.693,0,0.693,0,0,0,0,0,0,0,0,0,0,0,0,2.565],{"fce4ec":4,"ffb300":4,"ffe082":4,"cfd8dc":4,"ff8f00":4,"e65100":4,"ffa000":4,"a237e":4,"HEX_#fce4ec":4,"HEX_#ffe082":4,"HEX_#cfd8dc":4,"HEX_#ff8f00":4,"HEX_#283593":4,"HEX_#1a237e":4,"L32":2.8,"HEX_#ffb300":2.8,"HEX_#37474f":2.8,"HEX_#e65100":2.8,"HEX_#ffa000":2.8}],["google/gemini-4-argon","high",0,0,[7.109,0.693,7.109,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0,0,0,0,0,1,0,0.405,2.197,1.099,0,1.099,0,0.693,0,0,0,0,0,0,0,0,0,0,0,0,2.773],{"e0f7fa":4,"ffca28":4,"ffb300":4,"d4c41":4,"ff7043":4,"C14":4,"ffab40":4,"e65100":4,"ffd740":4,"HEX_#ffca28":4,"HEX_#00acc1":4,"HEX_#6d4c41":4,"HEX_#ff7043":4,"HEX_#90a4ae":4,"HEX_#ffab40":4,"HEX_#ffd740":4,"HEX_#00838f":4,"HEX_#80deea":4,"L32":2.8,"HEX_#ffb300":2.8}],["google/gemini-4-argon","high",0,0,[6.915,0.693,6.915,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0,0,0,0,0,1,0,0,2.079,1.099,0,0.693,0,0.693,0,0,0,0,0,0,0,0,0,0,0,0,2.565],{"ffecb3":4,"ff5722":4,"b0bec5":4,"ffb300":4,"e65100":4,"fb8c00":4,"HEX_#ffecb3":4,"HEX_#ff5722":4,"HEX_#b0bec5":4,"HEX_#fb8c00":4,"HEX_#00695c":4,"HEX_#004d40":4,"C19":2.8,"Q14":2.8,"L32":2.8,"ff8a65":2.8,"HEX_#ffb300":2.8,"HEX_#e65100":2.8,"HEX_#212121":2.8,"HEX_#ff8a65":2.8}],["google/gemini-4-argon","high",0,0,[6.815,0.693,6.815,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0,0,0,0,0,1,1,0,1.946,1.386,0.693,0.693,0,0.693,0,0,0,0,0,0,0,0,0,0,0,0,2.398],{"e8eaf6":4,"ffca28":4,"cfd8dc":4,"ffa726":4,"ef6c00":4,"a237e":4,"HEX_#e8eaf6":4,"HEX_#ffca28":4,"HEX_#cfd8dc":4,"HEX_#90a4ae":4,"HEX_#1a237e":4,"HEX_#00838f":4,"HEX_#80deea":4,"C19":2.8}],["google/gemini-4-argon","high",0,0,[6.77,0.693,6.77,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0,0,0,0,0,1,1,0,1.946,1.386,0.693,0.693,0,0.693,0,0,0,0,0,0,0,0,0,0,0,0,2.398],{"ff5722":4,"d7ccc8":4,"a1887f":4,"ff9800":4,"e65100":4,"e2723":4,"HEX_#ff5722":4,"HEX_#d7ccc8":4,"HEX_#a1887f":4,"HEX_#ff9800":4,"HEX_#3e2723":4,"HEX_#0277bd":4,"Q14":2.8,"HEX_#e65100":2.8}],["google/gemini-4-argon","high",0,0,[6.804,0.693,6.804,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0,0,0,0,0,1,1,0,1.946,1.386,0.693,0.693,0,0.693,0,0,0,0,0,0,0,0,0,0,0,0,2.398],{"f3e5f5":4,"ffa000":4,"cfd8dc":4,"f57c00":4,"T19":4,"T27":4,"fa8da":4,"HEX_#f3e5f5":4,"HEX_#cfd8dc":4,"HEX_#90a4ae":4,"HEX_#f57c00":4,"HEX_#283593":4,"HEX_#9fa8da":4,"C19":2.8,"ffb74d":2.8,"HEX_#ffa000":2.8}],["google/gemini-4-argon","high",0,0,[6.757,0.693,6.757,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0,0,0,0,0,1,1,0,2.079,1.386,0,0.693,0,0.693,0,0,0,0,0,0,0,0,0,0,0,0,2.398],{"fce4ec":4,"ffb300":4,"fb8c00":4,"T19":4,"T27":4,"HEX_#fce4ec":4,"HEX_#90a4ae":4,"HEX_#fb8c00":4,"HEX_#1565c0":4,"HEX_#64b5f6":4,"ffd54f":2.8,"L17":2.8,"HEX_#ffb300":2.8,"HEX_#212121":2.8}],["anthropic/claude-opus-5.5","max",0,0,[7.199,0.693,7.199,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0,0.718,0,0,0,1,0,0,2.303,1.099,0,1.099,0,0,1.099,1.099,0,0,0,0,0,0,0,0,0,0,2.197],{"a1b5c":4,"c2477a":4,"ff9e5e":4,"a2f7a":4,"c6fd6":4,"a1033":4,"HEX_#2a1b5c":4,"HEX_#c2477a":4,"HEX_#ff9e5e":4,"HEX_#3a2f7a":4,"HEX_#14123a":4,"HEX_#7c6fd6":4,"HEX_#1a1033":4,"ffd166":2.8,"M11":2.8,"HEX_#ffd166":2.8}],["anthropic/claude-opus-5.5","max",0,0,[7.359,0.693,7.359,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0,0.658,0,0,0,1,0,0,2.485,1.099,0,1.099,0,0,0.693,0.693,0,0,0,0,0,0,0,0,0,0,2.565],{"ffcf70":4,"ff7e5f":4,"fff3b0":4,"fefefe":4,"d3142":4,"aa0b0":4,"d405b":4,"a3b12":4,"e76f51":4,"HEX_#ffcf70":4,"HEX_#ff7e5f":4,"HEX_#fff3b0":4,"HEX_#264e70":4,"HEX_#7fb7d9":4,"HEX_#fefefe":4,"HEX_#2d3142":4,"HEX_#9aa0b0":4,"HEX_#3d405b":4,"HEX_#8a3b12":4,"HEX_#e76f51":4}],["anthropic/claude-opus-5.5","max",0,0,[7.3,0.693,7.3,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0,0.593,0,0,0,1,0,0,2.303,1.386,0,1.099,0,0,0,0.693,0,0,0,0,0,0,0,0,0,0,2.565],{"ff9a76":4,"ffd6a5":4,"ffef7a":4,"d6fa3":4,"ecae6":4,"f1f5f9":4,"a3412":4,"HEX_#ff9a76":4,"HEX_#ffd6a5":4,"HEX_#ffef7a":4,"HEX_#1d6fa3":4,"HEX_#f1f5f9":4,"HEX_#475569":4,"HEX_#94a3b8":4,"HEX_#9a3412":4,"HEX_#ffb703":2.8,"HEX_#8ecae6":2.8}],["anthropic/claude-opus-5.5","max",0,0,[7.457,0.693,7.457,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0,0.545,0,0,0,1,0,0,2.639,1.386,0,0.693,0,0,0.693,0,0,0,0,0,0,0,0,0,0,0,2.485],{"eaf6e9":4,"ffd23f":4,"V32H0z":4,"a86ff":4,"cfe3ff":4,"a8b6c8":4,"ff9f1c":4,"a4b00":4,"ffbf69":4,"HEX_#eaf6e9":4,"HEX_#ffd23f":4,"HEX_#3a86ff":4,"HEX_#265cb5":4,"HEX_#cfe3ff":4,"HEX_#a8b6c8":4,"HEX_#8a4b00":4,"HEX_#ffbf69":4,"M11":2.8,"d3557":2.8,"HEX_#1d3557":2.8}],["anthropic/claude-opus-5.5","max",0,0,[7.513,0.693,7.513,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0,0.547,0,0,0,1,0,0,2.565,1.386,0,0.693,0,0,0.693,0.693,0,0,0,0,0,0,0,0,0,0,2.639],{"be7ff":4,"e8fbff":4,"ffe14d":4,"V32H0z":4,"f8b8d":4,"b6e70":4,"a7f3f0":4,"b2d42":4,"d99ae":4,"ff7b00":4,"a3b00":4,"ffb000":4,"HEX_#9be7ff":4,"HEX_#e8fbff":4,"HEX_#ffe14d":4,"HEX_#0f8b8d":4,"HEX_#0b6e70":4,"HEX_#a7f3f0":4,"HEX_#2b2d42":4,"HEX_#8d99ae":4}],["anthropic/claude-opus-5.5","max",0,0,[7.436,0.693,7.436,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0,0.564,0,0,0,1,0,0,2.565,1.609,0,0.693,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2.485],{"e0f4f1":4,"ff6b6b":4,"V32H0z":4,"ec4b6":4,"a8f84":4,"cbf3f0":4,"fff8e7":4,"e9c46a":4,"c4a1a":4,"e76f51":4,"HEX_#e0f4f1":4,"HEX_#ff6b6b":4,"HEX_#2ec4b6":4,"HEX_#1a8f84":4,"HEX_#cbf3f0":4,"HEX_#fff8e7":4,"HEX_#e9c46a":4,"HEX_#9c4a1a":4,"HEX_#e76f51":4,"M11":2.8}],["anthropic/claude-opus-5.5","max",0,0,[7.495,0.693,7.495,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0,0.583,0,0,0,1,0,0,2.565,1.609,0,1.099,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2.485],{"f3e9ff":4,"ff8fab":4,"e60ce":4,"c7d2fe":4,"a5b4fc":4,"fffdf7":4,"b8b8d1":4,"a4a00":4,"HEX_#f3e9ff":4,"HEX_#ff8fab":4,"HEX_#5e60ce":4,"HEX_#c7d2fe":4,"HEX_#a5b4fc":4,"HEX_#fffdf7":4,"HEX_#22223b":4,"HEX_#b8b8d1":4,"HEX_#7a4a00":4,"HEX_#ffb703":2.8}],["anthropic/claude-opus-5.5","max",0,0,[7.303,0.693,7.303,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0,0.568,0,0,0,1,0,0,2.485,1.609,0.693,0.693,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2.708],{"fff4d6":4,"ffd56b":4,"a7fb5":4,"bfe0ff":4,"cc6ef":4,"d405b":4,"c9ccd5":4,"b1b2f":4,"f28c28":4,"a3b12":4,"f6b042":4,"f5d8a":4,"HEX_#fff4d6":4,"HEX_#ffd56b":4,"HEX_#4a7fb5":4,"HEX_#bfe0ff":4,"HEX_#9cc6ef":4,"HEX_#3d405b":4,"HEX_#c9ccd5":4,"HEX_#1b1b2f":4}],["anthropic/claude-opus-5.5","max",0,0,[6.861,0.693,6.861,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0,0.586,0,1,0,0,0,0,2.079,1.386,0,0.693,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2.303],{"eaf4f4":4,"f6bd60":4,"V32H0z":4,"fa8d3":4,"b4965":4,"f28482":4,"bee9e8":4,"HEX_#eaf4f4":4,"HEX_#f6bd60":4,"HEX_#5fa8d3":4,"HEX_#1b4965":4,"HEX_#62b6cb":4,"HEX_#f28482":4,"HEX_#bee9e8":4,"M11":2.8}],["anthropic/claude-opus-5.5","max",0,0,[6.998,0.693,6.998,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0,0.6,0,1,0,0,0,0,2.197,1.609,0,0.693,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2.079],{"e0fbfc":4,"ee6c4d":4,"V32H0z":4,"d5a80":4,"f4a28c":4,"HEX_#e0fbfc":4,"HEX_#ee6c4d":4,"HEX_#3d5a80":4,"HEX_#98c1d9":4,"HEX_#293241":4,"HEX_#f4a28c":4,"M11":2.8}],["anthropic/claude-opus-5.5","max",0,0,[6.904,0.693,6.904,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0,0.63,0,1,0,0,0,0,2.079,1.609,0,0.693,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2.303],{"d8f3dc":4,"ffd60a":4,"V32H0z":4,"adb5bd":4,"HEX_#d8f3dc":4,"HEX_#0077b6":4,"HEX_#90e0ef":4,"HEX_#03045e":4,"HEX_#adb5bd":4,"HEX_#ffd60a":2.8,"HEX_#ffb703":2.8}],["anthropic/claude-opus-5.5","max",0,0,[6.969,0.693,6.969,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0,0.577,0,1,0,0,0,0,1.946,1.386,0,1.099,0,0,0,0.693,0,0,0,0,0,0,0,0,0,0,2.398],{"ffe5b4":4,"ff5e5b":4,"d8f3f3":4,"f2f2f":4,"ffd23f":4,"HEX_#ffe5b4":4,"HEX_#ff5e5b":4,"HEX_#00a6a6":4,"HEX_#d8f3f3":4,"HEX_#2f2f2f":4,"HEX_#111":4,"HEX_#ffd23f":4,"ffb347":2.8,"f4a261":2.8,"HEX_#ffb347":2.8}],["anthropic/claude-opus-5.5","max",0,0,[6.913,0.693,6.913,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0,0.625,0,1,0,0,0,0,2.079,1.609,0,0.693,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1.946],{"fefae0":4,"dda15e":4,"V32H0z":4,"V24q-4-2-8":4,"faedcd":4,"bc6c25":4,"HEX_#fefae0":4,"HEX_#dda15e":4,"HEX_#283618":4,"HEX_#606c38":4,"HEX_#faedcd":4,"HEX_#bc6c25":4}],["anthropic/claude-opus-5.5","max",0,0,[6.884,0.693,6.884,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0,0.583,0,1,0,0,0,0,1.792,1.386,0,1.099,0,0,0,0.693,0,0,0,0,0,0,0,0,0,0,2.303],{"ffcdb2":4,"e5989b":4,"fff1a8":4,"d6875":4,"b5838d":4,"a3a46":4,"HEX_#ffcdb2":4,"HEX_#e5989b":4,"HEX_#fff1a8":4,"HEX_#6d6875":4,"HEX_#b5838d":4,"HEX_#3a3a46":4,"HEX_#111":4,"f4a261":2.8}],["anthropic/claude-opus-5.5","max",0,0,[7.043,0.693,7.043,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0,0.576,0,1,0,0,0,0,2.303,1.609,0,0.693,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2.079],{"edf6f9":4,"ffddd2":4,"e29578":4,"V32H0z":4,"HEX_#edf6f9":4,"HEX_#ffddd2":4,"HEX_#e29578":4,"HEX_#83c5be":4,"HEX_#006d77":4,"HEX_#264653":2.8}],["anthropic/claude-opus-5.5","max",0,0,[6.836,0.693,6.836,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0,0.64,0,0.333,0,1,0,0,2.079,1.099,0.693,1.099,0,0,0.693,0.693,0,0,0,0,0,0,0,0,0,0,2.079],{"ff5e62":4,"ffc371":4,"fff3b0":4,"d2c5e":4,"f7bbf":4,"a1f3d":4,"HEX_#ff5e62":4,"HEX_#ffc371":4,"HEX_#fff3b0":4,"HEX_#3d2c5e":4,"HEX_#8f7bbf":4,"HEX_#2a1f3d":4,"HEX_#241a36":4,"M11":2.8}],["anthropic/claude-opus-5.5","max",0,0,[6.827,0.693,6.827,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0,0.647,0,0,0,1,0,0,1.792,1.386,0.693,1.099,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2.485],{"ffd9a8":4,"ff8c1a":4,"a7fbf":4,"bfe4ff":4,"f4f4f4":4,"d8d8d8":4,"f2a71b":4,"a5650a":4,"f7c35a":4,"HEX_#ffd9a8":4,"HEX_#ff8c1a":4,"HEX_#2a7fbf":4,"HEX_#bfe4ff":4,"HEX_#f4f4f4":4,"HEX_#555":4,"HEX_#d8d8d8":4,"HEX_#f2a71b":4,"HEX_#a5650a":4,"HEX_#f7c35a":4}],["anthropic/claude-opus-5.5","max",0,0,[7.066,0.693,7.066,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0,0.621,0,0,0,1,0,0,2.197,1.386,0,1.099,0,0,0,0.693,0,0,0,0,0,0,0,0,0,0,2.565],{"b3a8c":4,"ff9a6b":4,"ffd23f":4,"d4e7a":4,"fb8e6":4,"e9e4dc":4,"a3a3a":4,"c9c2b6":4,"e88a1a":4,"f5b445":4,"a5a0a":4,"HEX_#5b3a8c":4,"HEX_#ff9a6b":4,"HEX_#ffd23f":4,"HEX_#1d4e7a":4,"HEX_#7fb8e6":4,"HEX_#e9e4dc":4,"HEX_#3a3a3a":4,"HEX_#c9c2b6":4,"HEX_#111":4}],["anthropic/claude-opus-5.5","max",0,0,[6.983,0.693,6.983,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0,0.561,0,0.571,0,1,0,0,2.197,1.386,0.693,0.693,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2.773],{"bfe8f2":4,"ffe14d":4,"ffb400":4,"V32H0z":4,"c8fa8":4,"e6f7fb":4,"f2efe9":4,"ff9f1c":4,"b5650a":4,"ffc15e":4,"d6a7e":4,"HEX_#bfe8f2":4,"HEX_#ffe14d":4,"HEX_#ffb400":4,"HEX_#2c8fa8":4,"HEX_#e6f7fb":4,"HEX_#f2efe9":4,"HEX_#444":4,"HEX_#111":4,"HEX_#b5650a":4}],["anthropic/claude-opus-5.5","max",0,0,[7.073,0.693,7.073,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0,0.522,0,1,0,1,0,0,2.303,1.386,0.693,0.693,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2.565],{"fff1e0":4,"ff7b00":4,"V13M10":4,"H22M11":4,"V32H0z":4,"bde6f5":4,"d2d2d":4,"e4e4e4":4,"ef8a17":4,"a5208":4,"d6d8c":4,"HEX_#fff1e0":4,"HEX_#ff7b00":4,"HEX_#118ab2":4,"HEX_#bde6f5":4,"HEX_#2d2d2d":4,"HEX_#e4e4e4":4,"HEX_#111":4,"HEX_#ef8a17":4,"HEX_#9a5208":4}],["anthropic/claude-opus-5.5","max",0,0,[6.934,0.693,6.934,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0,0.593,0,0,0,1,0,0,2.079,1.386,0.693,0.693,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2.708],{"e3f4ea":4,"ffcf33":4,"V32H0z":4,"a86c8":4,"d6ecff":4,"b3b3b":4,"e6e6e6":4,"ff8c42":4,"a5520f":4,"ffb877":4,"a6aa3":4,"HEX_#e3f4ea":4,"HEX_#ffcf33":4,"HEX_#3a86c8":4,"HEX_#d6ecff":4,"HEX_#3b3b3b":4,"HEX_#e6e6e6":4,"HEX_#111":4,"HEX_#ff8c42":4,"HEX_#a5520f":4}],["anthropic/claude-opus-5.5","max",0,0,[7.008,0.693,7.008,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0,0.643,0,0.333,0,1,0,0,2.197,1.386,0.693,1.099,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2.565],{"ff6b3d":4,"ab6c4":4,"e9c46a":4,"a0621a":4,"b323b":4,"HEX_#ff6b3d":4,"HEX_#8ab6c4":4,"HEX_#ddd":4,"HEX_#111":4,"HEX_#e9c46a":4,"HEX_#a0621a":4,"HEX_#1b323b":4,"f4a261":2.8,"HEX_#264653":2.8}],["anthropic/claude-opus-5.5","max",0,0,[6.965,0.693,6.965,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0,0.55,0,0,0,1,0,0,1.946,2.079,0.693,1.099,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2.197],{"fca311":4,"a1128":4,"a506b":4,"e5e5e5":4,"f6bd60":4,"HEX_#14213d":4,"HEX_#fca311":4,"HEX_#0a1128":4,"HEX_#3a506b":4,"HEX_#e5e5e5":4,"HEX_#f6bd60":4,"f4a261":2.8}],["anthropic/claude-opus-5.5","max",0,0,[7.165,0.693,7.165,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0,0.571,0,1,0,1,0,0,2.197,1.386,0.693,1.099,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2.565],{"e8f1d4":4,"ecae6":4,"b2d42":4,"dde5ed":4,"b35c00":4,"e9eef3":4,"HEX_#e8f1d4":4,"HEX_#2b2d42":4,"HEX_#dde5ed":4,"HEX_#111":4,"HEX_#b35c00":4,"HEX_#e9eef3":4,"HEX_#ffb703":2.8,"HEX_#8ecae6":2.8}],["anthropic/claude-opus-5.5","max",0,0,[7.171,0.693,7.171,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0,0.517,0,1,0,1,0,0,2.197,1.386,0.693,1.099,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2.708],{"cdeffd":4,"ffcb47":4,"f29e00":4,"H7M25":4,"a7ca5":4,"b1b1b":4,"ff9f43":4,"c46a00":4,"ffc078":4,"e6ecf1":4,"HEX_#cdeffd":4,"HEX_#ffcb47":4,"HEX_#f29e00":4,"HEX_#3a7ca5":4,"HEX_#81c3d7":4,"HEX_#46494c":4,"HEX_#d9e2ea":4,"HEX_#1b1b1b":4,"HEX_#ff9f43":4,"HEX_#c46a00":4}],["anthropic/claude-opus-5.5","max",0,0,[6.784,0.693,6.784,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0,0.595,0,1,0,0,0,0,2.079,1.386,0,0.693,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2.079],{"edf6f9":4,"ffb4a2":4,"e29578":4,"HEX_#edf6f9":4,"HEX_#ffb4a2":4,"HEX_#e29578":4,"HEX_#006d77":4,"HEX_#83c5be":4,"HEX_#003d42":4}],["anthropic/claude-opus-5.5","max",0,0,[6.793,0.693,6.793,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0,0.64,0,1,0,0,0,0,1.946,1.609,0,0.693,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2.197],{"fff1e6":4,"f28482":4,"f6bd60":4,"HEX_#fff1e6":4,"HEX_#f28482":4,"HEX_#f6bd60":4,"d3557":2.8,"a8dadc":2.8,"HEX_#457b9d":2.8,"HEX_#1d3557":2.8,"HEX_#a8dadc":2.8}],["anthropic/claude-opus-5.5","max",0,0,[6.771,0.693,6.771,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0,0.619,0,1,0,0,0,0,1.946,1.386,0,1.099,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2.197],{"ffe5ec":4,"ff8fab":4,"e548e":4,"f86c0":4,"e0b1cb":4,"HEX_#ffe5ec":4,"HEX_#ff8fab":4,"HEX_#5e548e":4,"HEX_#231942":4,"HEX_#9f86c0":4,"HEX_#e0b1cb":4,"HEX_#ffb703":2.8}],["anthropic/claude-opus-5.5","max",0,0,[6.83,0.693,6.83,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0,0.632,0,1,0,0,0,0,1.792,1.946,0,1.099,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2.197],{"ee9b00":4,"a1128":4,"eae0d5":4,"ca6702":4,"HEX_#22333b":4,"HEX_#ee9b00":4,"HEX_#0a1128":4,"HEX_#eae0d5":4,"HEX_#000":4,"HEX_#ca6702":4,"HEX_#94a3b8":4}],["anthropic/claude-opus-5.5","max",0,0,[6.77,0.693,6.77,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0,0.606,0,1,0,0,0,0,2.079,1.386,0,0.693,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2.079],{"dee2ff":4,"a0ca3":4,"f72585":4,"HEX_#dee2ff":4,"HEX_#4361ee":4,"HEX_#3a0ca3":4,"HEX_#f72585":4,"HEX_#7209b7":4,"ffd166":2.8,"HEX_#ffd166":2.8}],["anthropic/claude-opus-5.5","max",0,0,[7.079,0.693,7.079,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0,0.56,0,1,0,0,0,0,2.197,1.609,0,1.099,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2.303],{"d1a39":4,"f9c74f":4,"d348b":4,"f1f1f1":4,"b0a1a":4,"e9e9e":4,"f8961e":4,"f3722c":4,"HEX_#1d1a39":4,"HEX_#f9c74f":4,"HEX_#3d348b":4,"HEX_#7678ed":4,"HEX_#f1f1f1":4,"HEX_#0b0a1a":4,"HEX_#9e9e9e":4,"HEX_#f8961e":4,"HEX_#f3722c":4}],["anthropic/claude-opus-5.5","max",0,0,[6.891,0.693,6.891,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0,0.6,0,0,0,0,0,0,1.946,1.386,0.693,1.099,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2.398],{"ffcf9e":4,"ff7b54":4,"a86ff":4,"bde0fe":4,"b2d42":4,"d9d9d9":4,"d5fc7":4,"HEX_#ffcf9e":4,"HEX_#ff7b54":4,"HEX_#3a86ff":4,"HEX_#bde0fe":4,"HEX_#2b2d42":4,"HEX_#d9d9d9":4,"HEX_#1d5fc7":4,"ffd166":2.8,"HEX_#ffb703":2.8,"HEX_#ffd166":2.8}],["anthropic/claude-opus-5.5","max",0,0,[7.096,0.693,7.096,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0,0.5,0,1,0,0,0,0,2.398,1.386,0,1.099,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2.303],{"fff4e0":4,"ffb4a2":4,"V13M1":4,"H13":4,"e76f51":4,"HEX_#fff4e0":4,"HEX_#ffb4a2":4,"HEX_#e76f51":4,"M11":2.8,"a8dadc":2.8,"d3557":2.8,"f4a261":2.8,"HEX_#a8dadc":2.8,"HEX_#457b9d":2.8,"HEX_#1d3557":2.8}],["anthropic/claude-opus-5.5","max",0,0,[7.128,0.693,7.128,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0,0.556,0,1,0,0,0,0,2.197,1.386,0,1.099,0,0,0,0.693,0,0,0,0,0,0,0,0,0,0,2.485],{"b4b8a":4,"ff9a76":4,"f86b8":4,"b1b2f":4,"c9c3b6":4,"ff8c42":4,"ffb26b":4,"b2238":4,"HEX_#5b4b8a":4,"HEX_#ff9a76":4,"HEX_#14385c":4,"HEX_#4f86b8":4,"HEX_#1b1b2f":4,"HEX_#c9c3b6":4,"HEX_#ff8c42":4,"HEX_#ffb26b":4,"HEX_#0b2238":4,"ffd166":2.8,"HEX_#ffd166":2.8}],["anthropic/claude-opus-5.5","max",0,0,[7.015,0.693,7.015,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0,0.593,0,1,0,0,0,0,2.303,1.386,0,1.099,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2.303],{"e8f4f0":4,"f25c54":4,"a9d8f":4,"e9f5db":4,"f7a399":4,"fefae0":4,"e9c46a":4,"HEX_#e8f4f0":4,"HEX_#f25c54":4,"HEX_#2a9d8f":4,"HEX_#e9f5db":4,"HEX_#f7a399":4,"HEX_#fefae0":4,"HEX_#e9c46a":4,"M11":2.8,"f4a261":2.8,"HEX_#264653":2.8}],["anthropic/claude-opus-5.5","max",0,0,[7.101,0.693,7.101,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0,0.592,0,1,0,0,0,0,2.303,1.386,0,0.693,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2.639],{"ffd23f":4,"d6fa3":4,"fd8f5":4,"fafaf7":4,"a4a4a":4,"c8c8c":4,"a1a1a":4,"f4a72a":4,"b9771a":4,"f7c35a":4,"HEX_#ffd23f":4,"HEX_#1d6fa3":4,"HEX_#9fd8f5":4,"HEX_#fafaf7":4,"HEX_#4a4a4a":4,"HEX_#8c8c8c":4,"HEX_#1a1a1a":4,"HEX_#f4a72a":4,"HEX_#b9771a":4,"HEX_#f7c35a":4}],["anthropic/claude-opus-5.5","max",0,0,[6.937,0.693,6.937,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0,0.591,0,0,0,0,0,0,1.946,1.386,0.693,1.099,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2.485],{"ffe3b8":4,"bfe6ff":4,"f4f4f0":4,"a5a5a":4,"a9a9a":4,"f2b233":4,"c98a1a":4,"f7c95c":4,"HEX_#ffe3b8":4,"HEX_#2b7bb9":4,"HEX_#bfe6ff":4,"HEX_#f4f4f0":4,"HEX_#5a5a5a":4,"HEX_#9a9a9a":4,"HEX_#f2b233":4,"HEX_#c98a1a":4,"HEX_#f7c95c":4,"ff8a3d":2.8,"HEX_#ff8a3d":2.8}],["anthropic/claude-opus-5.5","max",0,0,[7.037,0.693,7.037,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0,0.588,0,0.667,0,0,0,0,2.303,1.386,0,0.693,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2.565],{"e8f4ea":4,"f9c74f":4,"f3722c":4,"V32H0z":4,"d405b":4,"a8a8b3":4,"d1d1d":4,"f8961e":4,"c0661a":4,"d5f7a":4,"HEX_#e8f4ea":4,"HEX_#f9c74f":4,"HEX_#f3722c":4,"HEX_#277da1":4,"HEX_#90e0ef":4,"HEX_#3d405b":4,"HEX_#a8a8b3":4,"HEX_#1d1d1d":4,"HEX_#f8961e":4,"HEX_#c0661a":4}],["anthropic/claude-opus-5.5","max",0,0,[7.123,0.693,7.123,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0,0.613,0,1,0,0,0,0,2.197,1.609,0,1.099,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2.565],{"b2a49":4,"ffe8a3":4,"e4c63":4,"fb3c9":4,"e9e4d8":4,"a8170":4,"a89f8c":4,"e8a93b":4,"b07a22":4,"f0c066":4,"a3a4c":4,"HEX_#1b2a49":4,"HEX_#ffe8a3":4,"HEX_#0e4c63":4,"HEX_#5fb3c9":4,"HEX_#e9e4d8":4,"HEX_#8a8170":4,"HEX_#a89f8c":4,"HEX_#111":4,"HEX_#e8a93b":4}],["anthropic/claude-opus-5.5","max",0,0,[6.862,0.693,6.862,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0,0.688,0,1,0,0,0,0,1.946,1.099,0,1.099,0,0,0,0.693,0,0,0,0,0,0,0,0,0,0,2.303],{"ff9a8b":4,"ffd3a5":4,"ff5e3a":4,"a3f8f":4,"ff8f6b":4,"f95e0":4,"b2140":4,"e0a030":4,"c9861f":4,"HEX_#ff9a8b":4,"HEX_#ffd3a5":4,"HEX_#ff5e3a":4,"HEX_#3a3f8f":4,"HEX_#ff8f6b":4,"HEX_#8f95e0":4,"HEX_#2b2140":4,"HEX_#e0a030":4,"HEX_#c9861f":4}],["anthropic/claude-opus-5.5","max",0,0,[7.054,0.693,7.054,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0,0,0,0,0,1,0,0,2.079,1.386,0.693,1.099,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2.565],{"ffe8c2":4,"ffb627":4,"ff8c00":4,"a86c8":4,"bfe3ff":4,"f4f4f4":4,"d9d9d9":4,"Q18":4,"f2a33a":4,"b8651a":4,"f7c66b":4,"HEX_#ffe8c2":4,"HEX_#ffb627":4,"HEX_#ff8c00":4,"HEX_#3a86c8":4,"HEX_#bfe3ff":4,"HEX_#f4f4f4":4,"HEX_#555":4,"HEX_#d9d9d9":4,"HEX_#f2a33a":4}],["anthropic/claude-opus-5.5","max",0,0,[6.96,0.693,6.96,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0,0.5,0,0,0,1,0,0,2.485,1.099,1.099,1.099,0,0,1.099,0,0,0,0,0,0,0,0,0,0,0,1.946],{"fdf0d5":4,"f77f00":4,"fcbf49":4,"d1d1d":4,"HEX_#fdf0d5":4,"HEX_#f77f00":4,"HEX_#003049":4,"HEX_#fcbf49":4,"HEX_#669bbc":4,"HEX_#1d1d1d":4,"M11":2.8}],["anthropic/claude-opus-5.5","max",0,0,[7.229,0.693,7.229,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0,0.5,0,0,0,1,0,0,2.303,1.386,0.693,0.693,0,0,0,0.693,0,0,0,0,0,0,0,0,0,0,2.773],{"ecae6":4,"e0f4ff":4,"ffd60a":4,"ffc300":4,"d405b":4,"b8c0cc":4,"f2cc8f":4,"c2703d":4,"f6bd60":4,"HEX_#e0f4ff":4,"HEX_#ffc300":4,"HEX_#0077b6":4,"HEX_#023e8a":4,"HEX_#005f99":4,"HEX_#3d405b":4,"HEX_#b8c0cc":4,"HEX_#f2cc8f":4,"HEX_#111":4,"HEX_#c2703d":4,"HEX_#f6bd60":4}],["anthropic/claude-opus-5.5","max",0,0,[7.154,0.693,7.154,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0,0.457,0,0,0,1,0,0,2.303,1.386,0.693,0.693,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2.565],{"d8f1f0":4,"ffcf3f":4,"f2a900":4,"b9aaa":4,"a6e3e9":4,"c9d3da":4,"c45a14":4,"ffb26b":4,"HEX_#d8f1f0":4,"HEX_#ffcf3f":4,"HEX_#f2a900":4,"HEX_#1b9aaa":4,"HEX_#a6e3e9":4,"HEX_#36454f":4,"HEX_#c9d3da":4,"HEX_#111":4,"HEX_#c45a14":4,"HEX_#ffb26b":4,"M11":2.8,"ff8a3d":2.8}],["anthropic/claude-opus-5.5","max",0,0,[6.903,0.693,6.903,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0,0.519,0,0,0,1,0,0,2.079,1.099,0.693,1.099,0,0,0,0.693,0,0,0,0,0,0,0,0,0,0,2.079],{"b1b4f":4,"e2557a":4,"ffb36b":4,"ffd36e":4,"f3c6b":4,"fa3d9":4,"a2233":4,"HEX_#2b1b4f":4,"HEX_#e2557a":4,"HEX_#ffb36b":4,"HEX_#ffd36e":4,"HEX_#1f3c6b":4,"HEX_#6fa3d9":4,"HEX_#2a2233":4}],["anthropic/claude-opus-5.5","max",0,0,[7.015,0.693,7.015,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0,0.526,0,1,0,0,0,0,2.197,1.386,0.693,0.693,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2.398],{"eaf4f4":4,"f6bd60":4,"f28482":4,"V32H0z":4,"f7ede2":4,"f5cac3":4,"HEX_#eaf4f4":4,"HEX_#f6bd60":4,"HEX_#f28482":4,"HEX_#84a59d":4,"HEX_#52796f":4,"HEX_#f7ede2":4,"HEX_#354f52":4,"HEX_#f5cac3":4,"M11":2.8,"e0e0e0":2.8,"HEX_#e0e0e0":2.8}],["anthropic/claude-opus-5.5","max",0,0,[6.929,0.693,6.929,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0,0.545,0,1,0,0,0,0,2.079,1.609,0.693,0.693,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2.398],{"f8edeb":4,"ffb4a2":4,"ffd6a5":4,"V32H0z":4,"d6875":4,"b5838d":4,"e5989b":4,"d2a32":4,"HEX_#f8edeb":4,"HEX_#ffb4a2":4,"HEX_#ffd6a5":4,"HEX_#6d6875":4,"HEX_#b5838d":4,"HEX_#e5989b":4,"HEX_#2d2a32":4,"e0e0e0":2.8,"f4a261":2.8,"HEX_#e0e0e0":2.8}],["anthropic/claude-opus-5.5","max",0,0,[6.948,0.693,6.948,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0,0.542,0,1,0,0,0,0,2.079,1.609,0.693,0.693,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2.485],{"fcefb4":4,"f79d65":4,"f4845f":4,"V32H0z":4,"fdfcdc":4,"f07167":4,"fed9b7":4,"HEX_#fcefb4":4,"HEX_#f79d65":4,"HEX_#f4845f":4,"HEX_#0081a7":4,"HEX_#00afb9":4,"HEX_#fdfcdc":4,"HEX_#283618":4,"HEX_#f07167":4,"HEX_#fed9b7":4,"M26":2.8,"e0e0e0":2.8,"HEX_#e0e0e0":2.8}],["anthropic/claude-opus-5.5","max",0,0,[7.004,0.693,7.004,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0,0.542,0,1,0,0,0,0,2.079,1.609,0.693,0.693,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2.303],{"e9f5db":4,"ffbe0b":4,"V32H0z":4,"d8f3dc":4,"fb5607":4,"HEX_#e9f5db":4,"HEX_#ffbe0b":4,"HEX_#61a5c2":4,"HEX_#d8f3dc":4,"HEX_#013a63":4,"HEX_#fb5607":4,"M26":2.8,"e0e0e0":2.8,"HEX_#e0e0e0":2.8}],["anthropic/claude-opus-5.5","max",0,0,[6.725,0.693,6.725,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0,0.647,0,1,0,0,0,0,1.792,1.386,0.693,1.099,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2.485],{"ffe8c2":4,"ff9a2e":4,"a8fc4":4,"bfe6ff":4,"f5f5f0":4,"d8d8d0":4,"f2b233":4,"f7c95a":4,"HEX_#ffe8c2":4,"HEX_#ff9a2e":4,"HEX_#3a8fc4":4,"HEX_#bfe6ff":4,"HEX_#f5f5f0":4,"HEX_#555":4,"HEX_#d8d8d0":4,"HEX_#f2b233":4,"HEX_#a66":4,"HEX_#f7c95a":4}],["anthropic/claude-opus-5.5","max",0,0,[7.083,0.693,7.083,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0,0.591,0,1,0,0,0,0,2.303,1.386,0.693,0.693,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2.639],{"cfeefa":4,"ffcf33":4,"f29a00":4,"a8dcf5":4,"a4a4a":4,"e2e2e2":4,"ff9f43":4,"b5651d":4,"ffc078":4,"HEX_#cfeefa":4,"HEX_#ffcf33":4,"HEX_#f29a00":4,"HEX_#2b7bb9":4,"HEX_#a8dcf5":4,"HEX_#4a4a4a":4,"HEX_#e2e2e2":4,"HEX_#111":4,"HEX_#ff9f43":4,"HEX_#b5651d":4,"HEX_#ffc078":4}],["anthropic/claude-opus-5.5","max",0,0,[7.028,0.693,7.028,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0,0.621,0,0,0,0,0,0,2.303,1.609,0,1.099,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2.398],{"d2a4a":4,"ffe08a":4,"f3d5c":4,"aa9d6":4,"e8e4d8":4,"a968a":4,"f4a340":4,"a4a1a":4,"HEX_#1d2a4a":4,"HEX_#ffe08a":4,"HEX_#0f3d5c":4,"HEX_#5aa9d6":4,"HEX_#e8e4d8":4,"HEX_#111":4,"HEX_#9a968a":4,"HEX_#f4a340":4,"HEX_#7a4a1a":4}],["anthropic/claude-opus-5.5","max",0,0,[6.921,0.693,6.921,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0,0.667,0,1,0,0,0,0,2.197,1.386,0,1.099,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2.565],{"fff4d6":4,"ff6b3d":4,"fb8de":4,"f2f0ea":4,"a3a3a":4,"d9d6cc":4,"a0522d":4,"ffd08a":4,"HEX_#fff4d6":4,"HEX_#ff6b3d":4,"HEX_#264d73":4,"HEX_#8fb8de":4,"HEX_#f2f0ea":4,"HEX_#3a3a3a":4,"HEX_#d9d6cc":4,"HEX_#111":4,"HEX_#a0522d":4,"HEX_#ffd08a":4,"HEX_#555":4,"ffb347":2.8}],["anthropic/claude-opus-5.5","max",0,0,[6.973,0.693,6.973,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0,0.64,0,0,0,0,0,0,2.079,1.386,0,1.099,0,0,0,0.693,0,0,0,0,0,0,0,0,0,0,2.565],{"b4fa0":4,"e5a7a":4,"fc8e8":4,"b5651d":4,"ffcc80":4,"HEX_#6b4fa0":4,"HEX_#1e5a7a":4,"HEX_#7fc8e8":4,"HEX_#999":4,"HEX_#111":4,"HEX_#b5651d":4}],["anthropic/claude-sonnet-5.5","high",0,0,[6.657,0.693,6.657,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0,0.579,0,0,0,1,0,0,1.946,1.386,0.693,1.099,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2.398],{"ffe3b3":4,"b8fb5":4,"b9e3f2":4,"e8e8e8":4,"f2a516":4,"d9822b":4,"c9c9c9":4,"HEX_#ffe3b3":4,"HEX_#3b8fb5":4,"HEX_#b9e3f2":4,"HEX_#e8e8e8":4,"HEX_#f2a516":4,"HEX_#d9822b":4,"HEX_#c9c9c9":4}],["anthropic/claude-sonnet-5.5","high",0,0,[6.865,0.693,6.865,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0,0.618,0,1,0,1,0,0,2.197,1.386,0,1.386,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2.485],{"f7d6e0":4,"ff6f4a":4,"ff9d73":4,"fa6d6":4,"d6dbe3":4,"f2a21b":4,"d9792b":4,"HEX_#f7d6e0":4,"HEX_#ff6f4a":4,"HEX_#355c9a":4,"HEX_#ff9d73":4,"HEX_#7fa6d6":4,"HEX_#d6dbe3":4,"HEX_#f2a21b":4,"HEX_#d9792b":4}],["anthropic/claude-sonnet-5.5","high",0,0,[6.966,0.693,6.966,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0,0.522,0,0.667,0,1,0,0,2.303,1.386,0,1.099,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2.398],{"d9ecf5":4,"H20M30":4,"c7da0":4,"a5d8ea":4,"H8q-4":4,"d3d9de":4,"f2a21b":4,"d9792b":4,"d5f7d":4,"HEX_#d9ecf5":4,"HEX_#2c7da0":4,"HEX_#a5d8ea":4,"HEX_#d3d9de":4,"HEX_#f2a21b":4,"HEX_#d9792b":4,"HEX_#1d5f7d":4}],["anthropic/claude-sonnet-5.5","high",0,0,[6.847,0.693,6.847,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0,0.5,0,1,0,1,0,0,2.197,1.386,0,1.099,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2.303],{"f78a8":4,"fd3ea":4,"H9q-4":4,"d8dde2":4,"f4a21c":4,"e07b2a":4,"HEX_#2f78a8":4,"HEX_#9fd3ea":4,"HEX_#d8dde2":4,"HEX_#f4a21c":4,"HEX_#e07b2a":4}],["anthropic/claude-sonnet-5.5","high",0,0,[6.786,0.693,6.786,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0,0.567,0,1,0,1,0,0,2.197,1.386,0,1.099,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2.398],{"fbd7a8":4,"ff7a3c":4,"ffb27a":4,"fc7df":4,"H9q-2":4,"d9dde2":4,"f4a21c":4,"d9792b":4,"HEX_#fbd7a8":4,"HEX_#ff7a3c":4,"HEX_#ffb27a":4,"HEX_#8fc7df":4,"HEX_#d9dde2":4,"HEX_#f4a21c":4,"HEX_#d9792b":4}],["openai/gpt-6.1-sol","max",0,0,[6.762,0.693,6.762,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0,0.277,0,0,0,1,1,0,2.079,1.099,0,0.693,0,0,0.693,0,0,0,0,0,0,0,0,0,0,0,2.303],{"fff3df":4,"f4b64f":4,"a8d5cd":4,"fffdf6":4,"ed9772":4,"f4bd54":4,"bad3bd":4,"HEX_#fff3df":4,"HEX_#f4b64f":4,"HEX_#a8d5cd":4,"HEX_#294b47":4,"HEX_#fffdf6":4,"HEX_#ed9772":4,"HEX_#f4bd54":4,"HEX_#bad3bd":4,"HEX_#568e86":4}],["openai/gpt-6-astra","max",0,0,[6.562,0.693,6.562,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0,0,0,0,0,1,0,0,1.946,1.099,0.693,0.693,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2.398],{"e5f6ff":4,"ffc857":4,"fffdf5":4,"f2a142":4,"ffd16a":4,"aaeb9":4,"H9M14":4,"H20M24":4,"d8f7ff":4,"HEX_#e5f6ff":4,"HEX_#ffc857":4,"HEX_#48b6cd":4,"HEX_#fffdf5":4,"HEX_#637787":4,"HEX_#f2a142":4,"HEX_#ffd16a":4,"HEX_#263b4d":4,"HEX_#9aaeb9":4,"HEX_#d8f7ff":4,"H21":2.8}],["openai/gpt-6-astra","max",0,0,[6.447,0.693,6.447,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0,0,0,0,0,1,0,0,1.792,1.099,0.693,0.693,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2.303],{"dff5ff":4,"ffca45":4,"fffdf1":4,"ffa745":4,"H20":4,"H10M20":4,"H28":4,"HEX_#dff5ff":4,"HEX_#ffca45":4,"HEX_#42b8d0":4,"HEX_#fffdf1":4,"HEX_#607581":4,"HEX_#ffa745":4,"HEX_#233b4b":4,"HEX_#247e99":4}],["openai/gpt-6-astra","max",0,0,[6.565,0.693,6.565,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0,0,0,0,0,1,0,0,1.946,1.099,0.693,0.693,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2.398],{"e5f5fa":4,"ffcb58":4,"fffdf3":4,"f2a64a":4,"ffd377":4,"caeb7":4,"H9M14":4,"H20M24":4,"d3f4fc":4,"HEX_#e5f5fa":4,"HEX_#ffcb58":4,"HEX_#45afc8":4,"HEX_#fffdf3":4,"HEX_#71828c":4,"HEX_#f2a64a":4,"HEX_#ffd377":4,"HEX_#263c49":4,"HEX_#9caeb7":4,"HEX_#d3f4fc":4,"H21":2.8}],["openai/gpt-6-astra","max",0,0,[6.681,0.693,6.681,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0,0,0,0,0,0,0,1.609,1.946,1.099,0,0.693,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2.398],{"e8f5fa":4,"ffc857":4,"V10Q19":4,"fffdf3":4,"ffb656":4,"d68039":4,"b5c9d5":4,"H9M13":4,"H19M24":4,"H29":4,"c7f4ff":4,"HEX_#e8f5fa":4,"HEX_#ffc857":4,"HEX_#439fb9":4,"HEX_#fffdf3":4,"HEX_#304e60":4,"HEX_#ffb656":4,"HEX_#d68039":4,"HEX_#263c4d":4,"HEX_#b5c9d5":4}],["openai/gpt-6-astra","max",0,0,[6.681,0.693,6.681,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0,0,0,0,0,0,0,1.609,1.946,1.099,0,0.693,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2.398],{"e6f5ff":4,"ffca55":4,"V10Q19":4,"fffdf3":4,"ffb656":4,"d68039":4,"b5c9d5":4,"H9M13":4,"H19M24":4,"H29":4,"c7f4ff":4,"HEX_#e6f5ff":4,"HEX_#ffca55":4,"HEX_#46a8c2":4,"HEX_#fffdf3":4,"HEX_#304e60":4,"HEX_#ffb656":4,"HEX_#d68039":4,"HEX_#263c4d":4,"HEX_#b5c9d5":4}],["openai/gpt-6-astra","max",0,0,[6.681,0.693,6.681,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0,0,0,0,0,0,0,1.609,1.946,1.099,0,0.693,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2.398],{"e5f4f8":4,"ffc65a":4,"V10Q19":4,"fffdf3":4,"ffb656":4,"d68039":4,"b5c9d5":4,"H9M13":4,"H19M24":4,"H29":4,"c7f4ff":4,"HEX_#e5f4f8":4,"HEX_#ffc65a":4,"HEX_#409fb8":4,"HEX_#fffdf3":4,"HEX_#304e60":4,"HEX_#ffb656":4,"HEX_#d68039":4,"HEX_#263c4d":4,"HEX_#b5c9d5":4}],["openai/gpt-6-astra","max",0,0,[6.709,0.693,6.709,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0,0,0,0,0,1,1,1.609,1.946,1.099,0,0.693,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2.398],{"e8f5fa":4,"ffc857":4,"V10Q19":4,"fffdf3":4,"ffb656":4,"d68039":4,"b5c9d5":4,"H9M13":4,"H19M24":4,"H29":4,"c7f4ff":4,"HEX_#e8f5fa":4,"HEX_#ffc857":4,"HEX_#439fb9":4,"HEX_#fffdf3":4,"HEX_#304e60":4,"HEX_#ffb656":4,"HEX_#d68039":4,"HEX_#263c4d":4,"HEX_#b5c9d5":4}],["google/gemini-4-argon","high",0,0,[6.555,0.693,6.555,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,1,0.556,0,1,1,1,0,0,1.792,1.099,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1.099],{"F4C96B":4,"HEX_#147d83":4,"HEX_#f4c96b":4}],["meta/muse-spark-1.3","xhigh",0,0,[6.886,0.693,6.886,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0.444,0.576,0,1,0,0,0,1.946,2.079,1.386,0.693,0.693,0,0,1.099,0,0,0,0,0,0,0,0,0,0,0,1.946],{"DFF3FF":4,"FFD93D":4,"FF9F1C":4,"D9CDB":4,"HEX_#dff3ff":4,"HEX_#334155":4,"HEX_#ffd93d":4,"HEX_#2d9cdb":4}],["deepseek/deepseek-v4.1-flash","max",0,0,[7.482,0.693,7.482,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,1,0.131,0,0,0,1,1,0,2.485,1.386,0.693,0.693,0,0,1.386,0,0,0,0,0,0,0,0,0,0,0,1.946],{"F7F2E5":4,"F4B860":4,"FBF6E8":4,"C6BF":4,"E8392":4,"H25":4,"HEX_#f7f2e5":4,"HEX_#f4b860":4,"HEX_#22384a":4,"HEX_#fbf6e8":4,"HEX_#76c6bf":4,"HEX_#3e8392":4}],["anthropic/claude-sonnet-5.5","high",0,0,[6.964,0.693,6.964,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0,0,0,0,1,1,0,0,2.197,1.386,0.693,1.099,0,0,0.693,0,0,0,0,0,0,0,0,0,0,0,1.946],{"H29M18":4,"H19M28":4,"T23":4,"H29M26":4}],["x-ai/grok-4.6","medium",0,0,[6.55,0.693,6.55,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,1,0,0,0,0,0,0,0,1.099,1.386,0.693,0,1.609,0,0,0,0,0,0,0,0,0,0,0,0,0,1.792],{"S20":4,"S28":4,"F1C40F":4,"ECF0F1":4,"L23":4,"E67E22":4,"C3E50":4,"HEX_#3498db":4,"HEX_#e67e22":4}],["meta/muse-spark-1.3","max",0,0,[6.739,0.693,6.739,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0.923,0,0,0,0,0,0,0,1.099,1.386,0.693,1.099,0,0,0,0.693,0,0,0,0,0,0,0,0,0,0,2.565],{"E0F7FA":4,"FFD54F":4,"FFA000":4,"T31":4,"F5F5F5":4,"A64":4,"FFB300":4,"E65100":4,"HEX_#0288d1":4,"HEX_#f5f5f5":4}],["anthropic/claude-sonnet-5","high",0,0,[6.512,0.693,6.512,1,3.497,3.497,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.693,0.909,0,0,0,0,0,0,0,1.386,1.386,0,0.693,0,0.693,0,0,0,0,0,0,0,0,0,0,0,0,2.303],{"E3F2FD":4,"FFB74D":4,"H32":4,"BBDEFB":4,"FAFAFA":4,"FFA726":4,"EF6C00":4,"HEX_#e3f2fd":4,"HEX_#1976d2":4,"HEX_#bbdefb":4}]]};
+
+  const TIERED_HTML_SVG_FAMILIES = new Set([
+    "claude-opus-5.6", "claude-opus-5.5", "claude-opus-5",
+    "claude-sonnet-5.5", "claude-sonnet-5", "claude-sonnet-4.6",
+    "claude-fable-5.1", "claude-fable-5", "claude-haiku-5.5",
+    "gpt-6.1-sol", "gpt-6-sol", "gpt-5.6-sol",
+    "gpt-6.1-luna", "gpt-6-luna", "gpt-5.6-luna",
+    "gpt-6-astra", "gpt-5.6-terra", "gpt-5.5", "gpt-5.4",
+    "gemini-4-argon", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.1-pro-preview",
+    "muse-spark-1.3", "grok-4.7", "grok-4.6"
+  ]);
+
+  function healTruncatedSvg(rawSvg) {
+    if (!rawSvg || typeof rawSvg !== "string") return "";
+    let s = rawSvg.trim();
+    if (!/<svg\b/i.test(s)) return s;
+    if (/<\/svg\s*>$/i.test(s)) return s;
+    s = s.replace(/\s+[a-zA-Z0-9_:-]+=["'][^"']*$/, "");
+    const lastLt = s.lastIndexOf("<");
+    const lastGt = s.lastIndexOf(">");
+    if (lastLt > lastGt) {
+      const tailTag = s.slice(lastLt);
+      if (/^<(?:path|circle|rect|ellipse|line|polyline|polygon|stop|use|animate|animateTransform|animateMotion)\b/i.test(tailTag)) {
+        const qCount = (tailTag.match(/"/g) || []).length;
+        if (qCount % 2 === 1) s += '"';
+        s += "/>";
+      } else {
+        s = s.slice(0, lastLt).trim();
+      }
+    }
+    const openStyle = (s.match(/<style\b[^>]*>/ig) || []).length;
+    const closeStyle = (s.match(/<\/style\s*>/ig) || []).length;
+    if (openStyle > closeStyle) s += "</style>";
+    const openScript = (s.match(/<script\b[^>]*>/ig) || []).length;
+    const closeScript = (s.match(/<\/script\s*>/ig) || []).length;
+    if (openScript > closeScript) s += "</script>";
+    for (const tag of ["linearGradient", "radialGradient", "clipPath", "mask", "filter", "defs", "g"]) {
+      const openRe = new RegExp("<" + tag + "\\b(?![^>]*\\/>)[^>]*>", "ig");
+      const closeRe = new RegExp("<\\/" + tag + "\\s*>", "ig");
+      const openCnt = (s.match(openRe) || []).length;
+      const closeCnt = (s.match(closeRe) || []).length;
+      for (let i = 0; i < Math.max(0, openCnt - closeCnt); i++) s += "</" + tag + ">";
+    }
+    if (!/<\/svg\s*>/i.test(s)) s += "\n</svg>";
+    return s;
+  }
+
+  function extractSvgStyleV2(svgText) {
+    const raw = String(svgText || "").trim();
+    const lower = raw.toLowerCase();
+    const charLen = raw.length;
+    const lineCount = raw ? raw.split(/\r?\n/).length : 0;
+    const vbMatch = raw.match(/viewBox\s*=\s*["']([^"']+)["']/i);
+    const viewBox = vbMatch ? vbMatch[1].trim() : "";
+    const tagSeq = Array.from(raw.matchAll(/<\s*([a-zA-Z][a-zA-Z0-9:_-]*)\b/g), m => m[1].toLowerCase());
+    const tagCounts = {};
+    for (const t of tagSeq) tagCounts[t] = (tagCounts[t] || 0) + 1;
+    const dBlobs = Array.from(raw.matchAll(/\bd\s*=\s*["']([^"']+)["']/ig), m => m[1]);
+    const allD = dBlobs.join(" ");
+    const pathOps = {};
+    for (const op of ["M", "m", "L", "l", "H", "h", "V", "v", "C", "c", "S", "s", "Q", "q", "T", "t", "A", "a", "Z", "z"]) {
+      const cnt = (allD.match(new RegExp(op, "g")) || []).length;
+      if (cnt) pathOps[op] = cnt;
+    }
+    const hexColors = Array.from(new Set(Array.from(lower.matchAll(/#[0-9a-f]{3,8}\b/g), m => m[0]))).slice(0, 16);
+    const hasDefs = Boolean(tagCounts.defs);
+    const hasGradient = Boolean(tagCounts.lineargradient || tagCounts.radialgradient);
+    const hasFilter = Boolean(tagCounts.filter || tagCounts.fegaussianblur || tagCounts.fedropshadow);
+    const hasClip = Boolean(tagCounts.clippath || tagCounts.mask);
+    const hasStyleOrScript = Boolean(tagCounts.style || tagCounts.script || tagCounts.animate || tagCounts.animatetransform);
+    const totalShapes = Math.max(1, (tagCounts.path || 0) + (tagCounts.circle || 0) + (tagCounts.rect || 0) + (tagCounts.ellipse || 0) + (tagCounts.polygon || 0) + (tagCounts.polyline || 0) + (tagCounts.line || 0));
+    const totalCmds = Math.max(1, Object.values(pathOps).reduce((a, b) => a + b, 0));
+    const vector17 = [
+      Math.round(Math.log1p(charLen) * 10000) / 10000,
+      Math.round(Math.log1p(lineCount) * 10000) / 10000,
+      Math.round(Math.log1p(totalShapes) * 10000) / 10000,
+      Math.round(((tagCounts.path || 0) / totalShapes) * 10000) / 10000,
+      Math.round(((tagCounts.circle || 0) / totalShapes) * 10000) / 10000,
+      Math.round(((tagCounts.rect || 0) / totalShapes) * 10000) / 10000,
+      Math.round((((tagCounts.polygon || 0) + (tagCounts.polyline || 0)) / totalShapes) * 10000) / 10000,
+      Math.round(((tagCounts.g || 0) / totalShapes) * 10000) / 10000,
+      hasDefs ? 1 : 0,
+      hasGradient ? 1 : 0,
+      hasFilter ? 1 : 0,
+      hasClip ? 1 : 0,
+      hasStyleOrScript ? 1 : 0,
+      Math.round((hexColors.length / 16) * 10000) / 10000,
+      Math.round((((pathOps.C || 0) + (pathOps.c || 0) + (pathOps.S || 0) + (pathOps.s || 0)) / totalCmds) * 10000) / 10000,
+      Math.round((((pathOps.A || 0) + (pathOps.a || 0)) / totalCmds) * 10000) / 10000,
+      Math.round((((pathOps.Z || 0) + (pathOps.z || 0)) / totalCmds) * 10000) / 10000,
+    ];
+    const sigStr = viewBox + "|" + tagSeq.slice(0, 48).join(",") + "|" + Object.entries(pathOps).sort((a, b) => a[0].localeCompare(b[0])).map(([k, v]) => k + ":" + v).join(",");
+    let h1 = 0x811c9dc5;
+    for (let i = 0; i < sigStr.length; i++) {
+      h1 ^= sigStr.charCodeAt(i);
+      h1 = Math.imul(h1, 0x01000193);
+    }
+    const structuralSignature = (h1 >>> 0).toString(16).padStart(8, "0");
+    return {
+      schema: "svg-style-v2",
+      charLen,
+      lineCount,
+      viewBox,
+      tagCounts,
+      pathOps,
+      hexPalette: hexColors,
+      hasDefs,
+      hasGradient,
+      hasFilter,
+      hasClip,
+      hasStyleOrScript,
+      structuralSignature,
+      vector17,
+    };
+  }
+
+  function scoreMiniSvg32Pelican(svgText) {
+    if (!svgText || typeof svgText !== "string") return { score: 0, maxScore: 25, details: {} };
+    const s = svgText.trim();
+    const sl = s.toLowerCase();
+    const has32ViewBox = /viewBox\s*=\s*["']0\s+0\s+32\s+32["']/i.test(s) || (/width\s*=\s*["']32["']/i.test(s) && /height\s*=\s*["']32["']/i.test(s));
+    const hasSun = /<circle\b/i.test(s) || /#(?:fbbf24|f59e0b|fde047|fef08a|ffd[0-9a-f]{3}|ff9[0-9a-f]{3}|f4a[0-9a-f]{3}|f3b[0-9a-f]{3}|f6c[0-9a-f]{3})/i.test(sl) || /sun|lineargradient|radialgradient/i.test(sl);
+    const hasWater = /#(?:0ea5e9|0284c7|0369a1|38bdf8|1e3a8a|1f2a44|244b52|294f52|78c2ca|5b8e9c|3fa7d6|a8d5cd|28536b)/i.test(sl) || /\bd=["'][^"']*[qcsQCS][^"']*["']/.test(s);
+    const shapeCount = (s.match(/<(?:path|polygon|polyline|ellipse|circle|rect)\b/ig) || []).length;
+    const dLen = Array.from(s.matchAll(/\bd=["']([^"']+)["']/ig), m => m[1]).join("").length;
+    const hasPelican = shapeCount >= 3 && (dLen >= 16 || shapeCount >= 5);
+    const isComplete = /<\/svg\s*>/i.test(s);
+    const d1 = has32ViewBox ? 5 : 0;
+    const d2 = hasSun ? 5 : 0;
+    const d3 = hasWater ? 5 : 0;
+    const d4 = hasPelican ? 5 : 0;
+    const d5 = isComplete ? 5 : 0;
+    return {
+      score: d1 + d2 + d3 + d4 + d5,
+      maxScore: 25,
+      details: { viewBox32: d1, sun: d2, water: d3, pelicanShapes: d4, completeClosure: d5, shapeCount, dLen },
+    };
+  }
+
+  function extractCleanHtmlOrSvg(rawText) {
+    if (!rawText || typeof rawText !== "string") return { code: "", isTruncated: false };
+    const text = rawText.trim();
+    if (!/<svg\b|<!doctype\s+html|<html\b/i.test(text)) return { code: "", isTruncated: false };
+    let extracted = "";
+    let isTruncated = false;
+    const mClosed = text.match(/```(?:html|xml|svg)?\s*([\s\S]*?)```/i);
+    if (mClosed && /<svg\b|<!doctype\s+html|<html\b/i.test(mClosed[1])) {
+      extracted = mClosed[1].trim();
+    } else {
+      const mOpen = text.match(/```(?:html|xml|svg)?\s*([\s\S]+)/i);
+      if (mOpen && /<svg\b|<!doctype\s+html|<html\b/i.test(mOpen[1])) {
+        extracted = mOpen[1].trim();
+        isTruncated = true;
+      }
+    }
+    if (!extracted || (!/<svg\b/i.test(extracted) && /<svg\b/i.test(text))) {
+      const htmlClosed = text.match(/(<!DOCTYPE\s+html[\s\S]*?<\/html>|<html[\s\S]*?<\/html>)/i);
+      if (htmlClosed) {
+        extracted = htmlClosed[1].trim();
+      } else {
+        const svgClosed = text.match(/(<svg[\s\S]*?<\/svg>)/i);
+        if (svgClosed) {
+          extracted = svgClosed[1].trim();
+        } else {
+          const htmlOpen = text.match(/(<!DOCTYPE\s+html[\s\S]+|<html[\s\S]+)/i);
+          const svgOpen = text.match(/(<svg[\s\S]+)/i);
+          if (htmlOpen) { extracted = htmlOpen[1].trim(); isTruncated = true; }
+          else if (svgOpen) { extracted = svgOpen[1].trim(); isTruncated = true; }
+        }
+      }
+    }
+    if (!extracted) return { code: "", isTruncated: false };
+    if (/<svg\b/i.test(extracted) && !/<\/svg>/i.test(extracted)) {
+      isTruncated = true;
+      if (!/<html\b|<!doctype\s+html/i.test(extracted)) {
+        extracted = healTruncatedSvg(extracted);
+      } else {
+        extracted += "\n</svg>";
+      }
+    }
+    if (/<html\b/i.test(extracted) && !/<\/html>/i.test(extracted)) {
+      isTruncated = true;
+      if (!/<\/body>/i.test(extracted)) extracted += "\n</body>";
+      extracted += "\n</html>";
+    }
+    return { code: extracted, isTruncated };
+  }
+
+  function extractHtmlSvgFeatures(rawCode, forcedCodeType = "") {
+    const cleaned = extractCleanHtmlOrSvg(rawCode);
+    const c = (cleaned.code || String(rawCode || ""))
+      .replace(/<script>\(function\(\)\{function c\(\)\{var b=a\.contentDocument[\s\S]*?<\/script>/ig, "")
+      .replace(/\s+data-nonce=["'][^"']*["']/ig, "");
+    const cl = c.toLowerCase();
+    const bytes = typeof Buffer !== "undefined" ? Buffer.byteLength(c, "utf8") : (typeof TextEncoder !== "undefined" ? new TextEncoder().encode(c).length : unescape(encodeURIComponent(c)).length);
+    const lines = Math.max(1, c.split(/\r?\n/).length);
+    const codeType = forcedCodeType || ((/<html\b|<!doctype html/i.test(c) || bytes > 4500) ? "html_svg" : "svg32");
+    const vbs = Array.from(c.matchAll(/viewBox=["']([^"']+)["']/ig), m => m[1].trim());
+    const parsed = vbs.map(v => {
+      const n = (v.match(/[-+]?\d*\.?\d+/g) || []).map(Number);
+      return { v, n, area: n.length >= 4 ? n[2] * n[3] : 0 };
+    }).sort((a, b) => b.area - a.area);
+    const mainVB = parsed.length ? parsed[0].v : "";
+    const vbN = parsed.length ? parsed[0].n : [0, 0, 800, 500];
+    const minVBArea = parsed.length ? parsed[parsed.length - 1].area : 0;
+    const vbW = vbN.length >= 4 ? vbN[2] : 800;
+    const vbH = vbN.length >= 4 ? vbN[3] : 500;
+    const htmlComments = Array.from(c.matchAll(/<!--[\s\S]*?-->/g)).length;
+    const jsComments = Array.from(c.matchAll(/\/\/[^\r\n]*/g)).length;
+    const tagCounts = {};
+    for (const m of c.matchAll(/<([a-zA-Z][a-zA-Z0-9_-]*)\b/g)) {
+      const tag = m[1];
+      tagCounts[tag] = (tagCounts[tag] || 0) + 1;
+    }
+    const count = (...names) => names.reduce((n, k) => n + (tagCounts[k] || 0), 0);
+    const hex = Array.from(c.matchAll(/#[0-9a-fA-F]{3,6}\b/g), m => m[0]);
+    const upperHex = hex.filter(h => /[A-F]/.test(h.slice(1))).length / Math.max(1, hex.length);
+    const dAll = Array.from(c.matchAll(/\bd=["']([^"']+)["']/g), m => m[1]).join(" ");
+    const upperCmds = (dAll.match(/[MLCQAZHVST]/g) || []).length;
+    const lowerCmds = (dAll.match(/[mlcqazhvst]/g) || []).length;
+    const relCmdRatio = lowerCmds / Math.max(1, upperCmds + lowerCmds);
+    const commaSep = (dAll.match(/\d,\d/g) || []).length;
+    const spaceSep = (dAll.match(/\d\s+\d/g) || []).length;
+    const commaRatio = commaSep / Math.max(1, commaSep + spaceSep);
+    const noLead = (dAll.match(/(?<!\d)\.\d+/g) || []).length;
+    const withLead = (dAll.match(/\b0\.\d+/g) || []).length;
+    const noLeadRatio = noLead / Math.max(1, noLead + withLead);
+    const rootMatch = c.match(/<svg\b[^>]*>/i);
+    const rootTag = rootMatch ? rootMatch[0] : "";
+    const rootStroke = /\bstroke=/.test(rootTag) ? 1 : 0;
+    const rootWH = /\bwidth=/.test(rootTag) && /\bheight=/.test(rootTag) ? 1 : 0;
+    const whFirst = /width=["']32["'][^>]*viewBox=["']0 0 32 32["']/i.test(rootTag) ? 1 : 0;
+    const rxMatch = c.match(/<rect\b[^>]*\brx=["'](\d+(?:\.\d+)?)["']/i);
+    const rx = rxMatch ? Number(rxMatch[1]) : 0;
+
+    const hasAriaRole = (cl.includes('role="img"') || cl.includes("aria-label") || cl.includes("aria-labelledby")) ? 1 : 0;
+    const hasSvgTitleDesc = (count("title") >= 1 && count("desc") >= 1) ? 1 : 0;
+    const hasCssClamp = cl.includes("clamp(") ? 1 : 0;
+    const hasGridPlace = cl.includes("place-items") ? 1 : 0;
+    const hasTransformBox = cl.includes("transform-box") ? 1 : 0;
+    const hasFeFilter = /<fe(?:gaussianblur|dropshadow|turbulence|displacementmap)\b/i.test(cl) ? 1 : 0;
+    const hasVisChange = cl.includes("visibilitychange") ? 1 : 0;
+    const hasSetAttr = cl.includes("setattribute(") ? 1 : 0;
+    const uniqueHexCnt = new Set(hex.map(h => h.toLowerCase())).size;
+
+    const num = x => Math.log1p(Math.max(0, x));
+    const nPath = count("path");
+    const nCircle = count("circle");
+    const nEllipse = count("ellipse");
+    const nRect = count("rect");
+    const nLine = count("line");
+    const nPoly = count("polyline", "polygon");
+    const nG = count("g");
+    const nGrad = count("linearGradient", "radialGradient", "lineargradient", "radialgradient");
+    const nFilter = count("filter", "clipPath", "clippath");
+    const nUse = count("use");
+    const hasRaf = cl.includes("requestanimationframe") ? 1 : 0;
+    const hasCancelRaf = cl.includes("cancelanimationframe") ? 1 : 0;
+    const hasKeyframes = cl.includes("@keyframes") ? 1 : 0;
+    const hasSmil = /<animate(?:transform|motion)?\b/i.test(c) ? 1 : 0;
+    const hasTrig = (cl.includes("math.sin") || cl.includes("math.cos")) ? 1 : 0;
+    const hasInvTrig = (cl.includes("math.atan2") || cl.includes("math.acos")) ? 1 : 0;
+    const hasCssVar = (c.includes("--") && cl.includes("var(--")) ? 1 : 0;
+    const hasReducedMotion = cl.includes("prefers-reduced-motion") ? 1 : 0;
+
+    const vec = [
+      num(bytes), num(lines), num(bytes / lines), lines <= 5 ? 1 : 0,
+      num(vbW), num(vbH), vbW / Math.max(1, vbH), vbs.length > 1 ? 1 : 0,
+      mainVB.includes("0 0 1200 800") ? 1 : 0,
+      mainVB.includes("0 0 800 500") ? 1 : 0,
+      mainVB.includes("0 0 1440 900") ? 1 : 0,
+      mainVB.includes("0 0 960 600") ? 1 : 0,
+      mainVB.includes("0 0 1000 620") ? 1 : 0,
+      hasRaf, hasCancelRaf, hasKeyframes, hasSmil, hasTrig, hasInvTrig, hasCssVar, hasReducedMotion,
+      num(htmlComments), num(jsComments), upperHex, relCmdRatio, commaRatio, noLeadRatio,
+      rootStroke, rootWH, whFirst, num(rx),
+      num(nPath), num(nCircle), num(nEllipse), num(nRect),
+      num(nLine), num(nPoly), num(nG),
+      num(nGrad), num(nFilter), num(nUse),
+      hasAriaRole, hasSvgTitleDesc, hasCssClamp, hasGridPlace, hasTransformBox,
+      hasFeFilter, hasVisChange, hasSetAttr, num(uniqueHexCnt)
+    ];
+
+    const cNoGeom = codeType === "html_svg" ? c.replace(/\b(?:d|points)=["'][^"']*["']/g, " ") : c;
+    const tokens = new Set((cNoGeom.match(/[a-zA-Z_][a-zA-Z0-9_-]{2,32}/g) || []));
+    if (codeType === "html_svg") {
+      for (const m of cNoGeom.matchAll(/\bclass=["']([^"']+)["']/g)) {
+        for (const cn of m[1].trim().split(/\s+/)) {
+          if (cn) tokens.add("CLS_" + cn.toLowerCase());
+        }
+      }
+      for (const m of cNoGeom.matchAll(/\bid=["']([^"']+)["']/g)) {
+        if (m[1].trim()) tokens.add("ID_" + m[1].trim().toLowerCase());
+      }
+      for (const m of cNoGeom.matchAll(/@keyframes\s+([a-zA-Z0-9_-]+)/ig)) {
+        tokens.add("KF_" + m[1].toLowerCase());
+      }
+    }
+    for (const h of new Set(hex)) tokens.add("HEX_" + h.toLowerCase());
+    if (mainVB) tokens.add("VB_" + mainVB.replace(/\s+/g, "_"));
+    if (vbs.length > 1) tokens.add("MULTI_SVG");
+    if (rootStroke) tokens.add("ROOT_SVG_STROKE");
+    if (whFirst) tokens.add("WH_BEFORE_VB");
+    if (commaRatio > 0.35) tokens.add("PATH_COMMA_SEP");
+    if (relCmdRatio > 0.25) tokens.add("PATH_REL_CMDS");
+    if (noLeadRatio > 0.4) tokens.add("PATH_OMIT_LEAD_ZERO");
+    if (upperHex > 0.5) tokens.add("UPPERCASE_HEX_DOMINANT");
+    if (hasAriaRole) tokens.add("ARCH_ARIA_ROLE_IMG");
+    if (hasSvgTitleDesc) tokens.add("ARCH_SVG_TITLE_DESC");
+    if (hasCssClamp) tokens.add("ARCH_CSS_CLAMP");
+    if (hasGridPlace) tokens.add("ARCH_GRID_PLACE_ITEMS");
+    if (hasTransformBox) tokens.add("ARCH_TRANSFORM_BOX");
+    if (hasFeFilter) tokens.add("ARCH_FE_FILTER");
+    if (hasVisChange) tokens.add("ARCH_VISIBILITY_CHANGE");
+    if (hasSetAttr && hasRaf) tokens.add("ARCH_RAF_SETATTR");
+
+    // Michaelis-Menten 非饱和有理分式谱图复杂度评分（消除 100 分天花板粘连）
+    const phi = 14.5 * num(nPath + nCircle + nEllipse + nPoly)
+      + 18.2 * num(nG + nGrad * 2 + nFilter * 2)
+      + 16.0 * (hasRaf + hasTrig * 0.6 + hasInvTrig * 0.8)
+      + 11.0 * (hasKeyframes + hasSmil + hasTransformBox * 0.6)
+      + 8.5 * num(uniqueHexCnt);
+    const spectralScore = Math.round((100 * phi / (phi + 92)) * 10) / 10;
+
+    // 12 维紧凑签名（供习惯库样本 meta 持久化与跨会话比对）
+    const sig12 = [
+      Math.min(1, num(bytes) / 11),
+      Math.min(1, (vbW / Math.max(1, vbH)) / 2.2),
+      hasRaf,
+      hasKeyframes,
+      hasSmil,
+      Math.round(upperHex * 1000) / 1000,
+      Math.round(relCmdRatio * 1000) / 1000,
+      Math.round(commaRatio * 1000) / 1000,
+      Math.round(noLeadRatio * 1000) / 1000,
+      Math.min(1, num(nPath + nG) / 6),
+      Math.min(1, num(htmlComments + jsComments) / 5),
+      Math.min(1, spectralScore / 100),
+    ].map(x => Math.round((Number(x) || 0) * 1000) / 1000);
+
+    const svgStyleV2 = extractSvgStyleV2(c);
+    const miniSvg32Referee = codeType === "svg32" ? scoreMiniSvg32Pelican(c) : null;
+
+    return {
+      code_type: codeType,
+      isTruncated: cleaned.isTruncated,
+      vec,
+      sig12,
+      svgStyleV2,
+      miniSvg32Referee,
+      spectralScore,
+      tokens,
+      bytes,
+      lines,
+      vbs,
+      main_vb: mainVB,
+      min_vb_area: minVBArea,
+      n_path: nPath,
+      n_circle: nCircle,
+      n_g: nG,
+      n_grad: nGrad,
+      n_hcomm: htmlComments,
+      has_raf: Boolean(hasRaf),
+      root_tag: rootTag,
+      root_stroke: rootStroke,
+      wh_first: whFirst,
+      comma_ratio: commaRatio,
+      rect_rx: rx,
+      raw: c,
+      lower: cl,
+    };
+  }
+
+  function htmlSvgRuleScores(f) {
+    const b = f.bytes, cl = f.lower, vb = f.main_vb, vbs = f.vbs || [], rules = {}, reasons = {};
+    const add = (mid, score, why) => {
+      rules[mid] = (rules[mid] || 0) + score;
+      if (why) (reasons[mid] || (reasons[mid] = [])).push(why);
+    };
+    if (f.code_type === "html_svg") {
+      const argonKeys = ["pelicanBodyGroup", "basketFish", "cloudsLayer", "wavesLayer", "maxReach", "bodyPitch", "baseAngle", "headNod", "wheelTemplate", "windLines", "gull1", "gull2"];
+      const hits = argonKeys.filter(k => f.raw.includes(k)).length;
+      if (f.has_raf && hits >= 3) add("google/gemini-4-argon", 0.48 + Math.min(0.35, hits * 0.05), `Argon专属骨骼变量(${hits}项)+RAF`);
+      else if (f.has_raf && (cl.includes("math.sin") || cl.includes("math.cos")) && f.n_hcomm >= 65 && b >= 28000) add("google/gemini-4-argon", 0.45, `Argon高密度注释(${f.n_hcomm})+RAF逆运动学`);
+
+      if ((cl.includes("overscroll-behavior: none") && cl.includes("viewport-fit=cover")) || (cl.includes("paper-noise") && cl.includes("sea-light") && cl.includes("islands"))) {
+        add("openai/gpt-6-astra", 0.75, "GPT 6 Astra viewport-fit/paper-noise/sea-light视差");
+      }
+
+      const hasSmall = vbs.length > 1 && f.min_vb_area > 0 && f.min_vb_area <= 2500 && !vbs.includes("0 0 32 32") && !vbs.includes("0 0 120 50");
+      if (hasSmall && f.has_raf && (cl.includes("cancelanimationframe") || cl.includes("visibilitychange") || cl.includes("updateleg") || cl.includes("scenelabel") || cl.includes("scenetitle") || cl.includes("scene-title"))) {
+        add("openai/gpt-6.1-sol", 0.68, "GPT 6.1 Sol 多SVG控件+RAF/visibilitychange驱动");
+      } else if (/\*\{box-sizing:border-box\}html,body\{margin:0;width:100%;height:100%;overflow:hidden;background:#[0-9a-f]{6}\}body\{display:grid;place-items:center\}/.test(cl) && (cl.includes(".crank") || cl.includes("pedalfront") || cl.includes("toggle")) && !cl.includes(".hill-back")) {
+        add("openai/gpt-6.1-sol", 0.58, "GPT 6.1 Sol 紧凑Grid+crank/pedal驱动");
+      } else if ((cl.includes("#scene") || cl.includes(".scene")) && cl.includes('id="scene"') && cl.includes('id="title"') && cl.includes('id="desc"') && cl.includes('id="roadmarks"') && cl.includes('id="toggle"')) {
+        add("openai/gpt-6.1-sol", 0.58, "GPT 6.1 Sol scene/roadmarks/toggle结构");
+      } else if (cl.includes('preserveaspectratio="xmidymid slice"') && cl.includes("scrollers") && cl.includes("performance.now()")) {
+        add("openai/gpt-6.1-sol", 0.60, "GPT 6.1 Sol scrollers视差卷轴驱动");
+      } else if (cl.includes('<meta name="color-scheme" content="light">') && vb.includes("0 0 1440 900") && (cl.includes("nearcrank") || cl.includes("farcrank"))) {
+        add("openai/gpt-6.1-sol", 0.65, "GPT 6.1 Sol 1440×900双曲柄(nearCrank/farCrank)");
+      } else if ((cl.includes(".masthead") || cl.includes(".eyebrow")) && cl.includes("calc(100% - 64px)") && cl.includes("visibilitychange") && f.has_raf) {
+        add("openai/gpt-6.1-sol", 0.65, "GPT 6.1 Sol masthead/eyebrow+visibilitychange");
+      }
+
+      if (cl.includes('rel="icon"') && cl.includes("data:image/svg+xml") && cl.includes("whlf") && cl.includes("whlr")) add("anthropic/claude-opus-5.5", 0.72, "Claude Opus 5.5 内嵌SVG Favicon+whlF/whlR");
+      if (cl.includes(".spin-fast") && cl.includes("pouchg") && cl.includes("@keyframes neck")) add("anthropic/claude-opus-5.5", 0.68, "Claude Opus 5.5 spin-fast+neck/pouchG关键帧");
+
+      if (cl.includes(".leg-a") && cl.includes(".leg-b") && cl.includes("lega") && cl.includes("legb")) add("x-ai/grok-4.7", 0.58, "Grok 4.7 leg-a/leg-b关键帧");
+      if ((cl.includes("ui-rounded") || cl.includes("sf pro rounded") || cl.includes("bird-bob") || cl.includes("sun-breathe") || cl.includes("wheel-turn") || cl.includes(".hill-back") || cl.includes("bikepaint") || (cl.includes("road-drift") && cl.includes("softshadow")) || (vb.includes("0 0 1200 700") && !cl.includes("tinyshadow") && !cl.includes("whlf") && !cl.includes("pouchg"))) && !f.has_raf && !cl.includes("walk-clip") && !cl.includes("bird-feather") && !cl.includes("water-glint")) {
+        add("openai/gpt-6-luna", 0.52, "GPT 6 Luna ui-rounded/bird-bob/wheel-turn纯CSS+SMIL");
+      } else if (cl.includes('lang="es"') && vb.includes("0 0 800 500")) {
+        add("openai/gpt-6-luna", 0.58, "GPT 6 Luna 多语种标题与800×500结构");
+      }
+      if ((vb.includes("0 0 800 500") || vb.includes("0 0 800 450") || vb.includes("0 0 1000 560") || vb.includes("0 0 1000 600")) && (cl.includes("#bfe6ff") || cl.includes("#e3f6ff") || cl.includes("hillsfar") || cl.includes("hillsnear") || cl.includes("鹈鹕骑自行车</title>") || cl.includes("风一吹，就出发")) && !cl.includes("pelicanfeather") && !cl.includes("pedalu") && !cl.includes("pelican-rider") && !cl.includes("spokesrear") && !cl.includes('lang="es"')) {
+        add("anthropic/claude-sonnet-5.5", 0.54, "Claude Sonnet 5.5 800×500+#e3f6ff/hillsFar");
+      }
+      if (!f.has_raf && f.n_hcomm >= 70 && (cl.includes("skygrad") || cl.includes("pouchgrad"))) {
+        if (cl.includes("spincw") || cl.includes("spinccw") || cl.includes("scarfwave") || cl.includes("belltoast") || b > 40000) add("google/gemini-3.7-flash", 0.58, "Gemini 3.7 Flash 超高注释(>70)+纯CSS/SMIL");
+        else add("google/gemini-3.8-flash", 0.55, "Gemini 3.8 Flash 高注释+纯CSS关键帧");
+      } else if (cl.includes("roadfill") && cl.includes("wingbeat") && vb.includes("0 0 1200 760")) {
+        add("google/gemini-3.8-flash", 0.55, "Gemini 3.8 Flash roadFill/wingbeat+1200×760");
+      }
+      if (vb.includes("0 0 900 520") && (cl.includes("sunrays") || cl.includes("plumeg") || cl.includes("chainfwd"))) add("z-ai/glm-5.3", 0.58, "GLM 5.3 900×520+sunRays/plumeG");
+      if ((cl.includes("wheelspin") || cl.includes("cloudrift") || cl.includes("clouddrift1") || (cl.includes("hillback") && cl.includes("hillfore")) || (f.lines <= 35 && b > 25000) || (f.n_path === 0 && b > 15000)) && !cl.includes(".masthead") && !vbs.includes("0 0 120 50")) add("moonshotai/kimi-k3", 0.55, "Kimi K3 关键帧/几何图元结构");
+      if (b <= 11200 && (cl.includes("cranka") || cl.includes("crankb") || (vb.includes("0 0 800 500") && (cl.includes("#ff9a2e") || cl.includes("legfront") || cl.includes("pelican-head") || cl.includes("#fff8e7") || cl.includes("pedal-spin") || cl.includes("spokes") || cl.includes("groundline") || (cl.includes("@keyframes ride") && cl.includes("@keyframes ground")))))) add("anthropic/claude-haiku-5.5", 0.55, "Claude Haiku 5.5 紧凑800×500+crankA/crankB");
+      if (cl.includes("grassblock") || cl.includes("treeblock") || (cl.includes('id="roadg"') && cl.includes('id="pouchg"') && cl.includes('id="sung"') && !cl.includes('id="plumeg"'))) add("meta/muse-spark-1.3", 0.58, "Muse Spark 1.3 roadG/pouchG/grassBlock");
+      if ((cl.includes("bird-feather") && cl.includes("grass-sway")) || (cl.includes("pouchpaint") && cl.includes("beakpaint") && cl.includes("riderbob"))) add("xiaomi/mimo-v2.6-flash", 0.55, "MiMo V2.6 Flash grass-sway/pouchPaint");
+      if ((cl.includes("driftscenery") && cl.includes("driftforeground")) || (cl.includes("spokesrear") && cl.includes("spokesfront") && vb.includes("0 0 800 500"))) add("anthropic/claude-opus-5", 0.58, "Claude Opus 5 driftScenery/spokesRear");
+      if (cl.includes("sceneryrow") || (cl.includes('id="hills2"') && vb.includes("0 0 800 450"))) add("deepseek/deepseek-v4.1-flash", 0.55, "DeepSeek V4.1 Flash sceneryRow/hills2");
+      if (cl.includes("backlegoutline") || cl.includes("frontlegoutline") || (cl.includes("rearspokes") && cl.includes("frontspokes") && cl.includes("speckle"))) add("openai/gpt-6-sol", 0.55, "GPT 6 Sol backLegOutline/frontLegOutline");
+      if (cl.includes("tinyshadow") && cl.includes("framepaint")) add("openai/gpt-5.6-sol", 0.55, "GPT 5.6 Sol tinyShadow/framePaint");
+      if (cl.includes("farlegpath") || cl.includes("farshoe") || cl.includes("badgepulse")) add("openai/gpt-5.6-luna", 0.55, "GPT 5.6 Luna farLegPath/farShoe/badgePulse");
+      if (cl.includes("walk-clip") || (cl.includes("boardwalk") && cl.includes("wheel-spin--back"))) add("openai/gpt-5.5", 0.55, "GPT 5.5 boardwalk/walk-clip/BEM");
+      if (cl.includes("pedalu") && cl.includes("pedald") && (cl.includes("legu") || cl.includes("legd"))) add("anthropic/claude-fable-5.1", 0.55, "Claude Fable 5.1 pedalU/pedalD/legU/legD");
+      if (cl.includes("pelican-rider") && (cl.includes("ground-dashes") || cl.includes("pedal-group"))) add("xiaomi/mimo-v2.6-pro", 0.55, "MiMo V2.6 Pro pelican-rider/ground-dashes");
+      if (cl.includes("water-glint") && cl.includes("sun-blur")) add("upstage/solar-pro4", 0.55, "Solar Pro 4 water-glint/sun-blur");
+      if (cl.includes('id="tuft"') && cl.includes('id="rider"') && vb.includes("0 0 960 600")) add("nvidia/nemotron-3-ultra", 0.55, "Nemotron 3 Ultra tuft/rider图层");
+      if (vb.includes("0 0 800 400") && cl.includes('id="scenery"') && cl.includes('id="rider"')) add("minimax/minimax-m3", 0.55, "MiniMax M3 800×400+scenery/rider");
+      if (cl.includes('id="ttl"') && cl.includes('id="roadg"')) add("z-ai/glm-5.2", 0.55, "GLM 5.2 ttl/roadG结构");
+      if (cl.includes('class="stage"') && cl.includes('class="caption"') && vb.includes("0 0 800 500") && !cl.includes("sceneryrow")) add("qwen/qwen3.7-max", 0.55, "Qwen 3.7 Max stage/caption+800×500");
+    } else {
+      if (f.root_stroke && (/#1f2a44|#1f3a5f|#f4a259|#f5b82e/.test(cl) || f.comma_ratio > 0.35)) add("anthropic/claude-opus-5.5", 0.62, "Claude Opus 5.5 SVG32根节点stroke+逗号坐标");
+      else if (!f.root_stroke) add("anthropic/claude-opus-5.5", -0.25, "");
+      if (f.wh_first && f.rect_rx === 4 && (/#fff5df|#244b52|#78c2ca/.test(cl))) add("openai/gpt-6-astra", 0.65, "GPT 6 Astra SVG32 width优先+rx=4");
+      if (f.wh_first && f.rect_rx === 5 && (/#fff6e5|#294f52|#f3bc58/.test(cl))) add("openai/gpt-6.1-sol", 0.65, "GPT 6.1 Sol SVG32 width优先+rx=5");
+      if (!f.wh_first && (f.rect_rx === 4 || f.rect_rx === 5)) {
+        add("openai/gpt-6-astra", -0.28, "");
+        add("openai/gpt-6.1-sol", -0.28, "");
+      }
+      if (f.root_tag.includes('role="img"') && f.rect_rx === 3.5) add("openai/gpt-5.6-terra", 0.52, "GPT 5.6 Terra SVG32 role=img+rx=3.5");
+    }
+    return { scores: rules, reasons };
+  }
+
+  function predictHtmlSvgEffort(mid, target, sims) {
+    const slug = String(mid || "").split("/").pop().toLowerCase();
+    if (sims && sims.length && (sims[0].source === 2 || sims[0].rawSim >= 0.999) && sims[0].sim >= 0.96 && sims[0].effort && sims[0].effort !== "standard") {
+      return sims[0].effort;
+    }
+    const ct = target.code_type;
+    const b = target.bytes;
+    const lines = target.lines;
+    const nPath = target.n_path;
+    const nG = target.n_g;
+    const nGrad = target.n_grad;
+    const nHcomm = target.n_hcomm;
+    const raf = target.has_raf ? 1 : 0;
+    const vb = target.main_vb || "";
+    const cl = target.lower || "";
+
+    if (ct === "html_svg") {
+      if (slug === "claude-sonnet-5.5") return (b <= 11500 && raf === 0) ? "low" : "high";
+      if (slug === "gpt-6.1-sol") {
+        if (raf === 0 && (nGrad <= 2 || lines <= 75)) return "low";
+        if (raf === 0) return nPath >= 35 ? "max" : "high";
+        if (nPath >= 100 || nG >= 44 || b < 25000) return "max";
+        return "high";
+      }
+      if (slug === "gemini-4-argon") {
+        if (b < 33500 && nG <= 26) return "medium";
+        if (vb.includes("800 500") || vb.includes("900 560") || (nHcomm >= 98 && nHcomm <= 105 && vb.includes("960 600"))) return "max";
+        return "high";
+      }
+      if (slug === "gpt-6-luna") {
+        if (["art-title", "poster", "status-dot", "bikepaint"].some(k => cl.includes(k))) return "low";
+        if (raf === 1 || vb.includes("1200 700") || b < 9000 || cl.includes("feather-lilt")) return "max";
+        return "medium";
+      }
+      if (slug === "gemini-3.7-flash") return b < 47000 ? "low" : "high";
+    } else {
+      if (slug === "gpt-6-astra") {
+        if (sims && sims[0] && sims[0].sim >= 0.94 && sims[0].effort) return sims[0].effort;
+        return "low";
+      }
+      if (slug === "claude-opus-5.5") return "max";
+      if (slug === "gpt-6.1-sol") {
+        if (sims && sims[0] && sims[0].sim >= 0.94 && sims[0].effort) return sims[0].effort;
+        return "max";
+      }
+    }
+
+    const use = (sims || []).filter(x => x.effort && x.effort !== "standard");
+    if (use.length) {
+      const votes = {};
+      use.slice(0, 3).forEach((x, i) => {
+        votes[x.effort] = (votes[x.effort] || 0) + Math.pow(Math.max(0.1, x.sim), 8) * (x.source === 2 ? 2.2 : (i === 0 ? 1.8 : 1));
+      });
+      const bestEff = Object.entries(votes).sort((a, b) => b[1] - a[1])[0]?.[0];
+      if (bestEff) return bestEff;
+    }
+    return "high";
+  }
+
+  function classifyHtmlSvg(code, opts = {}) {
+    if (!code || typeof code !== "string") return null;
+    const target = extractHtmlSvgFeatures(code, opts.codeType || "");
+    if (!target || (!/<svg\b|<!doctype html|<html\b/i.test(target.raw) && target.bytes < 60)) return null;
+    const ctBit = target.code_type === "html_svg" ? 1 : 0;
+    const weights = HTML_SVG_CLASSIFIER_BANK.w || [];
+    const catalog = HTML_SVG_CLASSIFIER_BANK.c || {};
+    const protosAll = HTML_SVG_CLASSIFIER_BANK.p || [];
+    const pool = protosAll.filter(p => p[2] === ctBit);
+    const rules = htmlSvgRuleScores(target);
+    const byModel = new Map();
+    for (const p of pool) {
+      const mid = p[0];
+      let arr = byModel.get(mid);
+      if (!arr) { arr = []; byModel.set(mid, arr); }
+      arr.push(p);
+    }
+    const modelIds = new Set([...byModel.keys(), ...Object.keys(rules.scores)]);
+    const scores = [];
+    for (const mid of modelIds) {
+      const protos = byModel.get(mid) || [];
+      const sims = protos.map(p => {
+        const pEff = p[1] || "high";
+        const pSrc = p[3] || 0;
+        const pVec = p[4] || [];
+        const pToks = p[5] || {};
+        let d2 = 0, wSum = 0;
+        const n = Math.min(target.vec.length, pVec.length);
+        for (let i = 0; i < n; i++) {
+          const w = i < weights.length ? weights[i] : 1.0;
+          const d = (target.vec[i] || 0) - (pVec[i] || 0);
+          d2 += w * d * d;
+          wSum += w;
+        }
+        const vSim = Math.exp(-1.6 * Math.sqrt(d2 / Math.max(1, wSum)));
+        let pTokOverlap = 0;
+        for (const [tok, w] of Object.entries(pToks)) {
+          if (target.tokens.has(tok)) pTokOverlap += Number(w) || 0;
+        }
+        const tCos = Math.min(1, pTokOverlap / 18);
+        const rawSim = target.code_type === "html_svg" ? (0.68 * vSim + 0.32 * tCos) : vSim;
+        const sim = rawSim * (pSrc === 2 ? 1.25 : (pSrc === 1 ? 1.06 : 1));
+        return { sim, rawSim, effort: pEff, source: pSrc };
+      }).sort((a, b) => b.sim - a.sim);
+
+      const top = sims.slice(0, 3);
+      const bestProtoSim = top.length ? top[0].rawSim : (rules.scores[mid] >= 0.4 ? 0.72 : 0.25);
+      const best = top.length ? top[0].sim : (rules.scores[mid] >= 0.4 ? 0.72 : 0.25);
+      const mean = top.length ? top.reduce((a, x) => a + x.sim, 0) / top.length : (rules.scores[mid] >= 0.4 ? 0.68 : 0.25);
+      const learnedTokens = {};
+      for (const p of protos) {
+        const pt = p[5] || {};
+        for (const [k, v] of Object.entries(pt)) {
+          if (v > (learnedTokens[k] || 0)) learnedTokens[k] = v;
+        }
+      }
+      let tokenScore = 0;
+      const matched = [];
+      for (const tok of target.tokens) {
+        const w = learnedTokens[tok];
+        if (w) {
+          tokenScore += w;
+          if (w >= 2.2) matched.push([w, tok]);
+        }
+      }
+      matched.sort((a, b) => b[0] - a[0]);
+      const tokenNorm = Math.min(1, tokenScore / 22);
+      let rule = rules.scores[mid] || 0;
+      if (best >= 0.995 && rule < 0) rule = 0;
+      const combined = 0.45 * best + 0.20 * mean + 0.25 * tokenNorm + rule;
+      const rawEffort = predictHtmlSvgEffort(mid, target, sims);
+      const catMeta = catalog[mid] || { label: mid, vendor: String(mid).split("/")[0] || "unknown" };
+      const slug = String(mid).split("/").pop().toLowerCase();
+      const isTieredFam = TIERED_HTML_SVG_FAMILIES.has(slug);
+      const cleanEffort = isTieredFam ? rawEffort : "standard";
+      const baseSlugOrLabel = isTieredFam && cleanEffort !== "standard"
+        ? `${slug}-${cleanEffort}`
+        : slug;
+      const decomp = decomposeModelIdentity(baseSlugOrLabel, {
+        vendor: catMeta.vendor,
+        family: slug,
+        effort: cleanEffort,
+        rawLabel: catMeta.label || slug,
+      });
+      const isOpen = isOpenName(decomp.canon || decomp.family || mid);
+      if (opts.strictOpenClosed && typeof opts.isOpenThink === "boolean" && isOpen !== opts.isOpenThink) {
+        continue;
+      }
+      scores.push({
+        model_id: mid,
+        canon: decomp.canon,
+        label: decomp.displayLabel || formatDisplayModelLabel(decomp.canon, catMeta.label),
+        vendor: decomp.vendorLabel,
+        vendorId: decomp.vendor,
+        family: decomp.family,
+        familyLabel: decomp.familyLabel,
+        effort: decomp.effort,
+        rawEffort,
+        effortLabel: decomp.effortLabel,
+        isOpen,
+        score: Math.round(combined * 1000) / 1000,
+        protoSim: Math.round(bestProtoSim * 1000) / 1000,
+        tokenNorm: Math.round(tokenNorm * 1000) / 1000,
+        ruleScore: Math.round(rule * 1000) / 1000,
+        reasons: [...(rules.reasons[mid] || []), ...matched.slice(0, 3).map(x => "特征词:" + x[1])],
+      });
+    }
+    scores.sort((a, b) => b.score - a.score);
+    const top = scores.slice(0, opts.topK || 5);
+    const maxS = top[0]?.score || 0;
+    const exps = top.map(x => Math.exp((x.score - maxS) * 6.5));
+    const sumExp = exps.reduce((a, b) => a + b, 0) || 1;
+    top.forEach((x, i) => { x.confidence = Math.round((exps[i] / sumExp) * 1000) / 1000; });
+    return {
+      code_type: target.code_type,
+      spectralScore: target.spectralScore,
+      isTruncated: target.isTruncated,
+      svgStyleV2: target.svgStyleV2,
+      miniSvg32Referee: target.miniSvg32Referee,
+      features: {
+        bytes: target.bytes,
+        lines: target.lines,
+        viewBox: target.main_vb,
+        hasRaf: target.has_raf,
+        nPath: target.n_path,
+        nCircle: target.n_circle,
+        nG: target.n_g,
+        nGrad: target.n_grad,
+        sig12: target.sig12,
+        vector17: target.svgStyleV2 ? target.svgStyleV2.vector17 : null,
+        structuralSignature: target.svgStyleV2 ? target.svgStyleV2.structuralSignature : "",
+      },
+      top_candidates: top,
+      best: top[0] || null,
+    };
   }
 
   // 从已保存的 habitTags / habitFeatures（或导入的诊断 JSON）重建习惯特征（当对话消息尚未从 IndexedDB 加载时的即时还原）
@@ -2300,7 +3432,7 @@ const ChatHabitFingerprint = (() => {
     const lastP = lastM?.parts?.at(-1);
     const lastPLen = typeof lastP?.text === 'string' ? lastP.text.length : (typeof lastP?.inputText === 'string' ? lastP.inputText.length : 0);
     const mRef = modelEntry || (sidKey && typeof Models !== 'undefined' ? Models.get(sidKey) : null);
-    const featCacheKey = sidKey ? `${sidKey}:${allMsgs.length}:${lastM?.id || ''}:${lastM?.parts?.length || 0}:${chat?.busy ? (lastPLen >> 8) : lastPLen}:${chat?.fmt?.tN ? (chat.fmt.tN >> 4) : 0}:${mRef?.name || ''}:${mRef?.userCorrected ? 1 : 0}:${mRef?.reverseScore || 0}:${mRef?.habitTags?.length || 0}:${bankRev}` : '';
+    const featCacheKey = sidKey ? `${sidKey}:${allMsgs.length}:${lastM?.id || ''}:${lastM?.parts?.length || 0}:${chat?.busy ? (lastPLen >> 8) : lastPLen}:${chat?.fmt?.tN ? (chat.fmt.tN >> 4) : 0}:${mRef?.name || ''}:${mRef?.userCorrected ? 1 : 0}:${mRef?.reverseScore || 0}:${mRef?.habitTags?.length || 0}:${allMsgs.length ? 0 : bankRev}` : '';
     if (featCacheKey && _featCache.has(sidKey) && _featCache.get(sidKey).key === featCacheKey) {
       return _featCache.get(sidKey).val;
     }
@@ -2326,6 +3458,7 @@ const ChatHabitFingerprint = (() => {
     let preToolTextChars = 0, interToolTextChars = 0;
     let pyHeredoc = 0, catHeredoc = 0, chainAnd = 0, rgSed = 0, gitCmd = 0;
     let cssRoot = 0, raf = 0, svgRich = 0, boxComment = 0, htmlMaxLen = 0, writtenChars = 0, claudeWarmPalette = 0;
+    let bestHtmlSvgCode = "";
     let lowerDoctype = 0, colorSchemeCss = 0, prefersReducedMotion = 0, svgSmilNoScript = 0, ariaLabelledby = 0, sandboxLink = 0;
     let emDash = 0, cnColon = 0, curlyApostrophe = 0, unspacedEmDash = 0, h2 = 0, h3 = 0, totalChars = 0, codeBlocks = 0;
     let askQCount = 0, askOptTotal = 0, askDescChars = 0, askDescCount = 0, askPeriodCount = 0, askIdHasUnderscore = 0, askIdBareIntent = 0;
@@ -2338,6 +3471,7 @@ const ChatHabitFingerprint = (() => {
     let tableCount = 0, listLineCount = 0, selfCheckCount = 0, thinkStepLines = 0, thinkDurSumMs = 0, thinkDurCount = 0;
     let codeOmissionCount = 0, codeDefensiveCount = 0;
     let searchSourcesCount = 0, citationCount = 0, mediaImgCount = 0, mediaVideoCount = 0;
+    let bashReadFiles = 0, bashEditFiles = 0, bashSearchOps = 0, bashTestRuns = 0, bashBuildRuns = 0, editAddedLines = 0, editDeletedLines = 0;
     const turnRichnessArr = [];
     const recentUserMsgs = allMsgs.filter(m => m && m.role === 'user').slice(-3);
     const firstUserMsg = recentUserMsgs[0] || allMsgs.find(m => m && m.role === 'user');
@@ -2359,6 +3493,7 @@ const ChatHabitFingerprint = (() => {
       scanCodeRigor(src);
       if (!/<!doctype html|<html\b|<svg\b/i.test(src)) return;
       if (src.length > htmlMaxLen) htmlMaxLen = src.length;
+      if (src.length > bestHtmlSvgCode.length && (/<svg\b/i.test(src) || src.length >= 260)) bestHtmlSvgCode = src;
       if (/:root\s*\{/.test(src)) cssRoot++;
       if (/requestAnimationFrame/.test(src)) raf++;
       if (/<(?:linearGradient|radialGradient|filter)\b/.test(src)) svgRich++;
@@ -2477,6 +3612,29 @@ const ChatHabitFingerprint = (() => {
             if (/&&/.test(cmd)) chainAnd++;
             if (/\b(?:rg|grep|sed|awk)\b/.test(cmd)) rgSed++;
             if (/\bgit\s+/.test(cmd)) gitCmd++;
+            if (typeof CmdTranslate !== 'undefined' && CmdTranslate.describe) {
+              try {
+                const cd = CmdTranslate.describe(cmd, inp.cwd || '');
+                const co = cd.ops || {};
+                bashReadFiles += Array.isArray(co.read) ? co.read.length : 0;
+                bashEditFiles += Array.isArray(co.edit) ? co.edit.length : 0;
+                bashSearchOps += Number(co.search) || 0;
+                if (Array.isArray(cd.acts)) {
+                  if (cd.acts.includes('跑测试')) bashTestRuns++;
+                  if (cd.acts.some(a => /^(构建|打包|编译|语法检查)/.test(a))) bashBuildRuns++;
+                }
+                if (cd.stat) {
+                  editAddedLines += Number(cd.stat.add) || 0;
+                  editDeletedLines += Number(cd.stat.del) || 0;
+                }
+              } catch {}
+            } else {
+              if (/\b(?:cat|head|tail|sed\s+-n)\s+\S/.test(cmd)) bashReadFiles++;
+              if (/(?:>|tee\s+|sed\s+-i|open\([^)]*['"][wa])/.test(cmd)) bashEditFiles++;
+              if (/\b(?:grep|rg|find|fd|ls)\b/.test(cmd)) bashSearchOps++;
+              if (/\b(?:pytest|jest|vitest|mocha|node\s+--test|npm\s+(?:run\s+)?test)\b/.test(cmd)) bashTestRuns++;
+              if (/\b(?:node\s+--check|py_compile|tsc|npm\s+run\s+(?:build|package))\b/.test(cmd)) bashBuildRuns++;
+            }
             scanHtmlHabits(cmd);
           } else if (tName === 'write_file') {
             write++;
@@ -2485,12 +3643,22 @@ const ChatHabitFingerprint = (() => {
             if (/[a-z]+_[a-z]+\.html$/i.test(fpath)) writeUnderscoreName++;
             const content = String(inp.content || '');
             writtenChars += content.length;
+            if (content) editAddedLines += content.split('\n').length;
             scanHtmlHabits(content);
           } else if (tName === 'edit_file') {
             edit++;
             turnEdit++;
-            const nt = String(inp.new_text || '');
+            const ot = String(inp.old_text ?? inp.old_string ?? '');
+            const nt = String(inp.new_text ?? inp.new_string ?? '');
             writtenChars += nt.length;
+            if (typeof CmdTranslate !== 'undefined' && CmdTranslate.lineDiff) {
+              const df = CmdTranslate.lineDiff(ot, nt);
+              editAddedLines += Number(df.add) || 0;
+              editDeletedLines += Number(df.del) || 0;
+            } else if (ot || nt) {
+              editAddedLines += nt ? nt.split('\n').length : 0;
+              editDeletedLines += ot ? ot.split('\n').length : 0;
+            }
             scanHtmlHabits(nt);
           } else if (tName === 'read_file') {
             read++;
@@ -2906,10 +4074,20 @@ const ChatHabitFingerprint = (() => {
     if (pyHeredoc > 0) habitTags.push(`Python Heredoc(${pyHeredoc}次)`);
     if (catHeredoc > 0) habitTags.push(`Cat Heredoc(${catHeredoc}次)`);
     if (chainAnd >= 2) habitTags.push(`Bash && 链式(${chainAnd}次)`);
+    if (bashReadFiles + bashEditFiles >= 2) habitTags.push(`Bash读写(读${bashReadFiles}/改${bashEditFiles})`);
+    if (bashTestRuns > 0) habitTags.push(`跑测试验证(${bashTestRuns}次)`);
+    if (edit > 0 && (editAddedLines > 0 || editDeletedLines > 0)) habitTags.push(`行级改写(+${editAddedLines}/−${editDeletedLines})`);
     if (cssRoot > 0 || raf > 0) habitTags.push(`HTML习惯(:root${cssRoot ? '✓' : ''}/rAF${raf ? '✓' : ''})`);
     if (cnColon >= 2 || emDash >= 2) habitTags.push(`行文(**冒号**${cnColon}/破折号${emDash})`);
     else if (curlyApostrophe >= 1 || unspacedEmDash >= 1) habitTags.push(`英文标点(弯撇号${curlyApostrophe}/紧凑破折号${unspacedEmDash})`);
     if (isMicroProbeChat) habitTags.push('微缩探针');
+    const htmlSvgMatch = (bestHtmlSvgCode && bestHtmlSvgCode.length >= 60 && (/<svg\b/i.test(bestHtmlSvgCode) || bestHtmlSvgCode.length >= 3800))
+      ? classifyHtmlSvg(bestHtmlSvgCode, { isOpenThink, strictOpenClosed: !isEvalChat })
+      : null;
+    if (htmlSvgMatch?.best && (htmlSvgMatch.best.ruleScore >= 0.48 || (htmlSvgMatch.code_type === "html_svg" && htmlSvgMatch.features.bytes >= 3800 && htmlSvgMatch.best.protoSim >= 0.80) || (htmlSvgMatch.code_type === "svg32" && htmlSvgMatch.features.viewBox === "0 0 32 32" && htmlSvgMatch.best.protoSim >= 0.82))) {
+      const hmBest = htmlSvgMatch.best;
+      habitTags.push(`🦩 代码指纹(${hmBest.familyLabel}${hmBest.effort && hmBest.effort !== "standard" ? "·" + hmBest.effortLabel : ""})`);
+    }
     if (memoDeltaCountEarly >= 4 && memoAvgChunkEarly > 0) habitTags.push(`流块(${memoAvgChunkEarly}字)`);
     habitTags.push(`推理分 ${habitReasoningScore}`);
 
@@ -3012,9 +4190,18 @@ const ChatHabitFingerprint = (() => {
       citationCount,
       mediaImgCount,
       mediaVideoCount,
+      bashReadFiles,
+      bashEditFiles,
+      bashSearchOps,
+      bashTestRuns,
+      bashBuildRuns,
+      editAddedLines,
+      editDeletedLines,
       multiTurnPersistence: Math.round(multiTurnPersistence * 1000) / 1000,
       promptEntropy: Math.round(promptEntropy * 1000) / 1000,
       anomalous,
+      htmlSvgMatch,
+      htmlSvgSig: htmlSvgMatch?.features?.sig12 || null,
       tierVec,
       vec,
       habitReasoningScore,
@@ -3114,17 +4301,11 @@ const ChatHabitFingerprint = (() => {
       const seedModel = (name, weight = 1) => {
         const clean = String(name || '').replace(/[?？]+$/, '').trim();
         if (!clean || /^(未知型号|待定|未识别)$/.test(clean)) return;
-        const canon = clean === '开源模型' ? '开源模型' : (typeof Strength !== 'undefined' && Strength.canon ? Strength.canon(clean) : clean);
-        const s = canon.toLowerCase();
-        let vid = 'other';
-        if (/gpt|openai|sol|astra|luna|terra/.test(s)) vid = 'openai';
-        else if (/claude|anthropic|opus|sonnet|haiku|fable/.test(s)) vid = 'anthropic';
-        else if (/gemini|google|argon|barium/.test(s)) vid = 'google';
-        else if (/grok|x-ai/.test(s)) vid = 'xai';
-        else if (/deepseek|qwen|glm|kimi|mimo|step|beam|nemotron|inkling|开源/.test(s)) vid = 'open';
-        const fam = canon.replace(/\s*\((?:none|minimal|low|medium|high|xhigh|max)\)\s*$/i, '').replace(/-(?:none|minimal|low|medium|high|xhigh|max)$/i, '').trim();
-        const effM = /\b(max|xhigh|high|medium|low)\b/i.exec(canon);
-        const eff = effM ? effM[1].toLowerCase() : 'high';
+        const decomp = decomposeModelIdentity(clean);
+        const canon = decomp.canon || (clean === '开源模型' ? '开源模型' : (typeof Strength !== 'undefined' && Strength.canon ? Strength.canon(clean) : clean));
+        const vid = decomp.vendor || 'other';
+        const fam = decomp.family || canon;
+        const eff = decomp.effort || 'standard';
         stats.vendors[vid] = (stats.vendors[vid] || 0) + weight;
         stats.families[fam.toLowerCase()] = (stats.families[fam.toLowerCase()] || 0) + weight;
         stats.models[canon.toLowerCase()] = (stats.models[canon.toLowerCase()] || 0) + weight;
@@ -3150,19 +4331,12 @@ const ChatHabitFingerprint = (() => {
     try {
       const stats = getUsageStats();
       const clean = String(modelLabel || '').replace(/[?？]+$/, '').trim();
-      const canon = clean === '开源模型' ? '开源模型' : (typeof Strength !== 'undefined' && Strength.canon ? Strength.canon(clean) : clean);
+      const decomp = decomposeModelIdentity(clean, { vendor: vendorHint, family: familyHint, effort: effortHint || undefined });
+      const canon = decomp.canon || (clean === '开源模型' ? '开源模型' : (typeof Strength !== 'undefined' && Strength.canon ? Strength.canon(clean) : clean));
       const s = canon.toLowerCase();
-      let vid = vendorHint;
-      if (!vid) {
-        if (/gpt|openai|sol|astra|luna|terra/.test(s)) vid = 'openai';
-        else if (/claude|anthropic|opus|sonnet|haiku|fable/.test(s)) vid = 'anthropic';
-        else if (/gemini|google|argon|barium/.test(s)) vid = 'google';
-        else if (/grok|x-ai/.test(s)) vid = 'xai';
-        else vid = 'open';
-      }
-      const fam = (familyHint || canon.replace(/\s*\((?:none|minimal|low|medium|high|xhigh|max)\)\s*$/i, '').replace(/-(?:none|minimal|low|medium|high|xhigh|max)$/i, '')).trim().toLowerCase();
-      const effM = /\b(max|xhigh|high|medium|low)\b/i.exec(effortHint || canon);
-      const eff = effM ? effM[1].toLowerCase() : 'high';
+      const vid = decomp.vendor || vendorHint || 'open';
+      const fam = (familyHint || decomp.family || canon).trim().toLowerCase();
+      const eff = decomp.effort || 'standard';
       stats.vendors[vid] = (stats.vendors[vid] || 0) + 3;
       if (fam) stats.families[fam] = (stats.families[fam] || 0) + 3;
       if (s) stats.models[s] = (stats.models[s] || 0) + 3;
@@ -3245,9 +4419,17 @@ const ChatHabitFingerprint = (() => {
       citationCount: feat.citationCount || 0,
       mediaImgCount: feat.mediaImgCount || 0,
       mediaVideoCount: feat.mediaVideoCount || 0,
+      bashReadFiles: feat.bashReadFiles || 0,
+      bashEditFiles: feat.bashEditFiles || 0,
+      bashSearchOps: feat.bashSearchOps || 0,
+      bashTestRuns: feat.bashTestRuns || 0,
+      bashBuildRuns: feat.bashBuildRuns || 0,
+      editAddedLines: feat.editAddedLines || 0,
+      editDeletedLines: feat.editDeletedLines || 0,
       multiTurnPersistence: feat.multiTurnPersistence ?? 0.78,
       promptEntropy: feat.promptEntropy ?? 0.45,
       tierVec: Array.isArray(feat.tierVec) && feat.tierVec.length === 12 ? feat.tierVec : undefined,
+      htmlSvgSig: Array.isArray(feat.htmlSvgSig) && feat.htmlSvgSig.length === 12 ? feat.htmlSvgSig : undefined,
       isGeminiCoding: Boolean(feat.isGeminiCoding),
       isOpenThink: Boolean(feat.isOpenThink),
     };
@@ -3310,13 +4492,28 @@ const ChatHabitFingerprint = (() => {
     if ((feat.searchSourcesCount || 0) > 0 || (meta.searchSourcesCount || 0) > 0) {
       addD(feat.searchSourcesCount || 0, meta.searchSourcesCount || 0, 8.0, 1.6);
     }
+    if ((feat.bash || 0) > 0 && (meta.bash || 0) > 0 && (meta.bashReadFiles !== undefined || meta.bashEditFiles !== undefined || meta.bashSearchOps !== undefined)) {
+      addD(feat.bashReadFiles || 0, meta.bashReadFiles || 0, 6.0, 1.2);
+      addD(feat.bashEditFiles || 0, meta.bashEditFiles || 0, 4.0, 1.3);
+      addD(feat.bashSearchOps || 0, meta.bashSearchOps || 0, 5.0, 1.1);
+      addD(feat.bashTestRuns || 0, meta.bashTestRuns || 0, 3.0, 1.2);
+    }
+    if ((feat.edit || 0) > 0 && (meta.edit || 0) > 0 && (meta.editAddedLines !== undefined || meta.editDeletedLines !== undefined)) {
+      addD(feat.editAddedLines || 0, meta.editAddedLines || 0, 120.0, 1.1);
+      addD(feat.editDeletedLines || 0, meta.editDeletedLines || 0, 80.0, 1.0);
+    }
+    if (Array.isArray(feat.htmlSvgSig) && feat.htmlSvgSig.length === 12 && Array.isArray(meta.htmlSvgSig) && meta.htmlSvgSig.length === 12) {
+      for (let si = 0; si < 12; si++) {
+        addD(feat.htmlSvgSig[si], meta.htmlSvgSig[si], 1.0, 0.45);
+      }
+    }
     const baseMetaSim = Math.max(0, Math.min(1, 1 - Math.sqrt(dSq / Math.max(1e-6, wSum))));
     return tvSim != null ? (baseMetaSim * 0.72 + tvSim * 0.28) : baseMetaSim;
   }
 
   // 二阶段同家族相邻档位解耦判别器（Stage-2 Intra-Family Effort-Tier Disentangler）：
   // 在 Stage-1 锁定候选模型家族后，专门使用 12 维档位微差子空间 tierVec、Battle 对偶超平面、多模态画像与厂商因子化档位先验，
-  // 精准分离 opus-5.5-medium vs high、6.1-sol-medium vs high vs xhigh、gemini-3.8-flash-medium vs high 等同家族相邻档位
+  // 精准分离同家族内已存在的多个强度档位候选（绝不向 scoreMap 注入伪造或派生行，强度识别与型号本体识别严格解耦）
   function disentangleIntraFamilyTiers(scoreMap, feat, calib, bankByKey, isEvalAnalyze = false) {
     try {
       if (!scoreMap || !feat || !Array.isArray(feat.tierVec) || feat.tierVec.length !== 12) return;
@@ -3324,39 +4521,11 @@ const ChatHabitFingerprint = (() => {
       const mod = String(feat.evalModality || 'chat').toLowerCase();
       const TIER_IDEAL_EFFORT = { low: 0.25, medium: 0.48, high: 0.68, xhigh: 0.81, max: 0.92 };
 
-      // 1. 若 calib.tierCentroids 中已有某家族的被揭晓档位（如 Claude Opus 5.5 (Medium)），但静态 PROTOTYPES 未实例化该档位，动态补齐进同家族候选池
-      if (calib?.tierCentroids && typeof calib.tierCentroids === 'object') {
-        for (const [ck, cent] of Object.entries(calib.tierCentroids)) {
-          if (!cent || !Array.isArray(cent.tierVec) || cent.tierVec.length !== 12 || scoreMap.has(ck)) continue;
-          const parsed = parseModelFamilyAndTier(ck);
-          if (!parsed.famKey || !parsed.tier) continue;
-          // 查找 scoreMap 中同家族基准条目
-          let sibling = null;
-          for (const item of scoreMap.values()) {
-            const pItem = parseModelFamilyAndTier(item.canon || item.label);
-            if (pItem.famKey === parsed.famKey && item.sim >= 0.78) {
-              if (!sibling || item.sim > sibling.sim) sibling = item;
-            }
-          }
-          if (sibling) {
-            const dispCanon = formatFamilyTierCanon(sibling.canon || sibling.label, parsed.tier);
-            scoreMap.set(ck, {
-              ...sibling,
-              id: `${parsed.famKey}-${parsed.tier}`,
-              label: dispCanon,
-              canon: dispCanon,
-              sim: Math.max(0.75, sibling.sim - 0.008),
-              tags: ['⚔️ Battle档位质心派生', ...(sibling.tags || []).slice(0, 4)],
-              userLearned: Boolean((cent.truthWeightSum || 0) >= 6.0),
-            });
-          }
-        }
-      }
-
-      // 2. 按 famKey 聚合候选家族，仅对头部高潜家族（最高 sim >= 0.78）执行家族内档位精排
+      // 1. 按 famKey 聚合现有候选家族（不再从 tierCentroids 派生新行进入 scoreMap，防止强度档位与型号习惯冲突或产生双后缀）
       const famGroups = new Map();
       for (const [k, item] of scoreMap.entries()) {
         if (!item) continue;
+        item.label = formatDisplayModelLabel(item.label, item.canon);
         const p = parseModelFamilyAndTier(item.canon || item.label);
         if (!p.famKey || !p.tier) continue;
         if (!famGroups.has(p.famKey)) famGroups.set(p.famKey, []);
@@ -3364,6 +4533,10 @@ const ChatHabitFingerprint = (() => {
       }
 
       for (const [famKey, members] of famGroups.entries()) {
+        const effInfo = identifyEffortTier(feat, famKey, calib);
+        if (effInfo?.tier) {
+          for (const m of members) m.item.detectedEffort = effInfo.tier;
+        }
         if (members.length < 2) continue;
         const maxFamSim = Math.max(...members.map(m => m.item.sim || 0));
         if (maxFamSim < 0.78) continue;
@@ -3375,14 +4548,14 @@ const ChatHabitFingerprint = (() => {
           let ev = 0;
           let wSum = 0;
 
-          // (A) 该档位专属 Battle/Direct 真值质心匹配度（最高优先）
+          // (A) 该档位专属 Battle/Direct 真值质心匹配度（最高优先，高权重锚定）
           const cent = calib?.tierCentroids?.[m.key];
           if (cent && Array.isArray(cent.tierVec) && cent.tierVec.length === 12) {
             const cSim = tierVecSimilarity(tv, cent.tierVec, mod, cent.stdVec);
             if (cSim != null) {
-              const truthConf = Math.min(1.0, (Number(cent.truthWeightSum) || (cent.count || 1) * 2) / 10.0);
-              const wCent = 2.6 * (0.45 + 0.55 * truthConf);
-              ev += (cSim - 0.76) * wCent;
+              const truthConf = Math.min(1.0, (Number(cent.truthWeightSum) || (cent.count || 1) * 2) / 9.0);
+              const wCent = 3.4 * (0.45 + 0.55 * truthConf);
+              ev += (cSim - 0.75) * wCent;
               wSum += wCent;
             }
           }
@@ -3392,8 +4565,8 @@ const ChatHabitFingerprint = (() => {
           if (modProf && Array.isArray(modProf.tierVec) && modProf.tierVec.length === 12) {
             const mSim = tierVecSimilarity(tv, modProf.tierVec, mod);
             if (mSim != null) {
-              const wMod = 1.65;
-              ev += (mSim - 0.76) * wMod;
+              const wMod = 1.85;
+              ev += (mSim - 0.75) * wMod;
               wSum += wMod;
             }
           }
@@ -3410,7 +4583,7 @@ const ChatHabitFingerprint = (() => {
             }
           }
 
-          // (D) Battle 同题对偶线性超平面 margin 投票（如 high>medium, max>high）
+          // (D) Battle 同题对偶线性超平面 margin 投票（如 high>medium, max>high）：大幅拉开同家族不同强度档位误差
           if (hyperMap && typeof hyperMap === 'object') {
             for (const [pk, hObj] of Object.entries(hyperMap)) {
               if (!hObj || !Array.isArray(hObj.wVec) || hObj.wVec.length !== 12) continue;
@@ -3419,9 +4592,9 @@ const ChatHabitFingerprint = (() => {
               const proj = tv.reduce((acc, val, idx) => acc + (Number(hObj.wVec[idx]) || 0) * (Number(val) || 0), 0);
               const margin = proj - (Number(hObj.threshold) || 0);
               const dir = m.tier === hiT ? 1 : -1;
-              const hConf = Math.min(1.0, (Number(hObj.count) || 1) / 4);
-              ev += Math.max(-0.18, Math.min(0.18, dir * margin * 1.35)) * (1.8 * hConf);
-              wSum += 1.2 * hConf;
+              const hConf = Math.min(1.0, (Number(hObj.count) || 1) / 3);
+              ev += Math.max(-0.24, Math.min(0.24, dir * margin * 1.85)) * (2.4 * hConf);
+              wSum += 1.5 * hConf;
             }
           }
 
@@ -3429,14 +4602,18 @@ const ChatHabitFingerprint = (() => {
           const idealE = TIER_IDEAL_EFFORT[m.tier] ?? 0.68;
           const actualE = (Number(tv[11]) || 0.65) * 0.55 + (Number(tv[0]) || 0.5) * 0.25 + (Number(tv[4]) || 0.5) * 0.20;
           const eDist = Math.abs(actualE - idealE);
-          ev += (0.18 - eDist) * 0.95;
-          wSum += 0.95;
+          ev += (0.18 - eDist) * 1.05;
+          wSum += 1.05;
 
           const normEv = wSum > 0 ? (ev / wSum) : 0;
           tierScores.set(m.key, normEv);
         }
 
-        // 零均值中心化微调：保持该模型家族整体对外竞争力不变，仅在同家族内部拉开真实档位差距
+        // 零均值中心化精排：保持该模型家族整体对外竞争力不变，在有 Battle/Direct 真值校准时果断拉开不同强度档位差距
+        const hasLearnedFamTier = Boolean(
+          (hyperMap && Object.keys(hyperMap).length > 0) ||
+          members.some(m => calib?.tierCentroids?.[m.key])
+        );
         const vals = [...tierScores.values()];
         const meanEv = vals.reduce((a, b) => a + b, 0) / Math.max(1, vals.length);
         let bestMember = null, bestRel = -999;
@@ -3446,10 +4623,12 @@ const ChatHabitFingerprint = (() => {
             bestRel = rel;
             bestMember = m;
           }
-          const delta = Math.max(-0.026, Math.min(0.032, rel * 0.22));
-          m.item.sim = Math.max(0.12, Math.min(0.993, m.item.sim + delta));
+          const delta = hasLearnedFamTier
+            ? Math.max(-0.075, Math.min(0.085, rel * 0.52))
+            : Math.max(-0.026, Math.min(0.032, rel * 0.22));
+          m.item.sim = Math.max(0.12, Math.min(0.994, m.item.sim + delta));
         }
-        if (bestMember && bestRel >= 0.035 && calib?.tierCentroids?.[bestMember.key]) {
+        if (bestMember && bestRel >= 0.028 && calib?.tierCentroids?.[bestMember.key]) {
           const tag = `🎯 同族档位微差锁定(${bestMember.tier.toUpperCase()})`;
           bestMember.item.tags = [tag, ...(bestMember.item.tags || []).filter(t => t !== tag).slice(0, 4)];
         }
@@ -4015,13 +5194,13 @@ const ChatHabitFingerprint = (() => {
         const isMimo26Med = !isBeamCaveman && feat.tagReiTier === 'medium';
         if (proto.id === 'contenders/caveman-agent' && isBeamCaveman) {
           sim = Math.max(0.96, sim + 0.28);
-        } else if (proto.id === 'deepseek/deepseek-v4.1-flash-20260910-max' && isDs41Flash0910) {
+        } else if (/^deepseek\/deepseek-v4\.1-flash-20260910/i.test(proto.id) && isDs41Flash0910) {
           sim = Math.max(0.96, sim + 0.26);
-        } else if (proto.id === 'alibaba/qwen3.8-flash-next-low' && isQwen38FlashNextLow) {
+        } else if (/^alibaba\/qwen3\.8-flash-next/i.test(proto.id) && isQwen38FlashNextLow) {
           sim = Math.max(0.96, sim + 0.26);
-        } else if (proto.id === 'alibaba/qwen3.8-max-low' && isQwen38MaxLow) {
+        } else if (/^alibaba\/qwen3\.8-max/i.test(proto.id) && isQwen38MaxLow) {
           sim = Math.max(0.96, sim + 0.26);
-        } else if (proto.id === 'xiaomi/mimo-v2.6-flash-medium' && isMimo26Med) {
+        } else if (/^xiaomi\/mimo-v2\.6-flash/i.test(proto.id) && isMimo26Med) {
           sim = Math.max(0.96, sim + 0.26);
         } else if (isBeamCaveman || isDs41Flash0910 || isQwen38FlashNextLow || isQwen38MaxLow || isMimo26Med) {
           sim = Math.min(0.86, sim - 0.08);
@@ -4043,7 +5222,7 @@ const ChatHabitFingerprint = (() => {
         }
       }
       // 结合本账号用户历史常用纠偏先验（越用越准，温和加权不喧宾夺主）
-      const famKey = canon.replace(/\s*\((?:none|minimal|low|medium|high|xhigh|max)\)\s*$/i, '').replace(/-(?:none|minimal|low|medium|high|xhigh|max)$/i, '').trim().toLowerCase();
+      const famKey = parseModelFamilyAndTier(canon).famKey || canon.toLowerCase();
       const freqHits = (usageStats.models?.[k] || 0) + (usageStats.families?.[famKey] || 0) * 0.5;
       if (freqHits > 0) {
         sim += Math.min(0.022, Math.log10(1 + freqHits) * 0.014);
@@ -4074,8 +5253,9 @@ const ChatHabitFingerprint = (() => {
       const isConfirmedSample = Boolean(sample.userConfirmed || sample.importedFromDiag || truthRank >= 2 || (sample.autoTeacher && (Number(sample.teacherConf) || 0) >= 85));
       const isExactSid = Boolean(!ignoreExactSid && sid && sample.sid && String(sample.sid) === sid && (sample.userConfirmed || sample.importedFromDiag || isBattleOrDirectTruth) && !sample.autoTeacher);
       const sampleOpen = Boolean(sample.isOpen ?? isOpenName(sample.model));
-      if (!isExactSid && sampleOpen !== feat.isOpenThink && !((isEvalAnalyze || sample.battleRevealed || sample.directMode) && feat.visR === 0)) continue;
+      if (!isExactSid && sampleOpen !== feat.isOpenThink && !(isEvalAnalyze && feat.visR === 0)) continue;
       if (!isExactSid && isSyntheticStubSample(sample)) continue;
+      const isToollessEvalOnAgent = Boolean(!isExactSid && !isEvalAnalyze && (feat.totalTools || 0) > 0 && (sample.battleRevealed || sample.directMode) && (sample.meta?.totalTools || 0) === 0);
       let vSim = isExactSid
         ? 0.998
         : (sample.battleRevealed || sample.directMode) && (feat.totalTools || 0) > 0 && (sample.meta?.totalTools || 0) === 0
@@ -4095,7 +5275,8 @@ const ChatHabitFingerprint = (() => {
       const sampleTierVec = Array.isArray(sample.tierVec) && sample.tierVec.length === 12
         ? sample.tierVec
         : (Array.isArray(sample.meta?.tierVec) && sample.meta.tierVec.length === 12 ? sample.meta.tierVec : null);
-      const tvSim = (!isExactSid && sampleTierVec && Array.isArray(feat.tierVec) && feat.tierVec.length === 12)
+      // 在非评测（Max/Agent）模式下，型号习惯匹配仅比较 20 维 + meta 习惯特征，强度档位交由独立强度识别器处理，避免强度向量干扰型号归属
+      const tvSim = (!isExactSid && isEvalAnalyze && sampleTierVec && Array.isArray(feat.tierVec) && feat.tierVec.length === 12)
         ? tierVecSimilarity(feat.tierVec, sampleTierVec, feat.evalModality || sample.evalModality || 'chat')
         : null;
       const basePairSim = mSim !== null ? (vSim * 0.52 + mSim * 0.48) : vSim;
@@ -4105,15 +5286,39 @@ const ChatHabitFingerprint = (() => {
             ? (basePairSim * 0.74 + tvSim * 0.26)
             : basePairSim);
       if (!isExactSid && sim < 0.80) continue;
-      const label = typeof Strength !== 'undefined' && Strength.canon ? Strength.canon(sample.model) : sample.model;
+      let label = sanitizeCorruptedTierSlug(typeof Strength !== 'undefined' && Strength.canon ? Strength.canon(sample.model) : sample.model);
       const isManualExactSid = Boolean(isExactSid && sample.userConfirmed && !sample.autoTeacher);
-      if (!isManualExactSid && !isEvalAnalyze && !sample.battleRevealed && !sample.directMode) {
+      if (!isManualExactSid && !isEvalAnalyze) {
         if (feat.isGeminiCoding && !/gemini|google/i.test(label)) continue;
         if (!feat.isGeminiCoding && /gemini|google|argon|barium/i.test(label)) continue;
         if ((isDefiniteOpenAiChunkStream || hasStrongOpenAiSig) && !/gpt|openai|sol|astra|luna|terra/i.test(label)) continue;
         if ((hasClaudeChunkSig || hasAnthropicSig) && !/claude|anthropic|haiku|sonnet|opus|fable/i.test(label)) continue;
       }
-      const k = String(label || sample.model).toLowerCase();
+      let k = String(label || sample.model).toLowerCase();
+      // 强度与型号习惯解耦：在常规对话中，若习惯库样本为同家族其它未在 PROTOTYPES 独立建档的子档位（如 claude-opus-5.5-low）或「标准」无档位揭晓样本（如 gemini-4-argon / claude-opus-5），
+      // 将其家族习惯票归并到该家族在 scoreMap 中的原型上，绝不单独分裂出与主原型打架的冲突档位行
+      if (!isExactSid && !isEvalAnalyze && !scoreMap.has(k)) {
+        const pSample = parseModelFamilyAndTier(label);
+        if (pSample.famKey) {
+          const famEntries = [...scoreMap.entries()].filter(([, it]) => parseModelFamilyAndTier(it.canon || it.label).famKey === pSample.famKey);
+          if (famEntries.length === 1) {
+            k = famEntries[0][0];
+            label = famEntries[0][1].canon || famEntries[0][1].label;
+          } else if (famEntries.length > 1 && !pSample.hasExplicitTier) {
+            const prefTier = identifyEffortTier(feat, pSample.famKey, calib)?.tier || '';
+            const hitTierEntry = prefTier
+              ? famEntries.find(([, it]) => parseModelFamilyAndTier(it.canon || it.label).tier === prefTier)
+              : null;
+            const chosenEntry = hitTierEntry || famEntries[0];
+            k = chosenEntry[0];
+            label = chosenEntry[1].canon || chosenEntry[1].label;
+          } else if (famEntries.length === 0 && isToollessEvalOnAgent) {
+            continue;
+          }
+        } else if (isToollessEvalOnAgent) {
+          continue;
+        }
+      }
       if (!bankByKey.has(k)) bankByKey.set(k, []);
       bankByKey.get(k).push({ sample, sim, mSim, tvSim, truthRank, isExactSid, isConfirmedSample, label, sampleOpen, softWeight: 1.0 });
       // 弹性方向软邻域扩散（Elastic Soft-Target Neighborhood Pull）：非精确同会话命中时，将相似度向邻近思考档位与折射候选同步扩散
@@ -4121,9 +5326,9 @@ const ChatHabitFingerprint = (() => {
         for (const [softModel, sWeight] of Object.entries(sample.softTargets)) {
           const sw = Number(sWeight) || 0;
           if (sw <= 0 || sw >= 0.55) continue;
-          const sCanon = typeof Strength !== 'undefined' && Strength.canon ? Strength.canon(softModel) : softModel;
+          const sCanon = sanitizeCorruptedTierSlug(typeof Strength !== 'undefined' && Strength.canon ? Strength.canon(softModel) : softModel);
           const sk = String(sCanon || softModel).toLowerCase();
-          if (!sk || sk === k) continue;
+          if (!sk || sk === k || (!isEvalAnalyze && !scoreMap.has(sk))) continue;
           const softSim = Math.max(0.80, sim * (0.91 + sw * 0.25));
           if (!bankByKey.has(sk)) bankByKey.set(sk, []);
           bankByKey.get(sk).push({ sample, sim: softSim, mSim, tvSim, truthRank: 2, isExactSid: false, isConfirmedSample, label: sCanon, sampleOpen, softWeight: sw, isElasticNeighbor: true });
@@ -4149,21 +5354,24 @@ const ChatHabitFingerprint = (() => {
       const top3 = hits.slice(0, 3);
       const meanTopSim = top3.reduce((acc, h) => acc + h.sim, 0) / top3.length;
       const topTruthRank = top.truthRank || getSampleTruthRank(top.sample);
-      const isBattleOrDirectTop = topTruthRank >= 3;
+      const isCrossModeToollessEval = Boolean(!top.isExactSid && !isEvalAnalyze && (feat.totalTools || 0) > 0 && (top.sample.battleRevealed || top.sample.directMode) && (top.sample.meta?.totalTools || 0) === 0);
+      const isBattleOrDirectTop = topTruthRank >= 3 && !isCrossModeToollessEval;
       const effPullScale = top.isElasticNeighbor
         ? (0.55 + (Number(top.softWeight) || 0.25))
-        : (topTruthRank >= 4 ? 1.32 : topTruthRank === 3 ? 1.18 : 1.0);
+        : isCrossModeToollessEval
+          ? 0.65
+          : (topTruthRank >= 4 ? 1.32 : topTruthRank === 3 ? 1.18 : 1.0);
       const nudge = top.isExactSid ? 0.45 : Math.max(0, (meanTopSim - 0.79) * (top.isConfirmedSample ? 0.22 : 0.09) * effPullScale);
-      const isStrictTwin = !top.isExactSid && top.isConfirmedSample && !top.sample.autoTeacher && (
+      const isStrictTwin = !top.isExactSid && top.isConfirmedSample && !top.sample.autoTeacher && !isCrossModeToollessEval && (
         (top.mSim !== null && top.mSim >= 0.92 && top.sim >= 0.92) ||
         (meanTopSim >= 0.90 && hits.length >= 2) ||
         (isBattleOrDirectTop && top.sim >= 0.885 && (top.tvSim ?? 0.88) >= 0.86)
       );
-      const isStrongLearnedPull = !top.isExactSid && top.isConfirmedSample && (meanTopSim >= 0.855 || (isBattleOrDirectTop && meanTopSim >= 0.835));
+      const isStrongLearnedPull = !top.isExactSid && top.isConfirmedSample && !isCrossModeToollessEval && (meanTopSim >= 0.855 || (isBattleOrDirectTop && meanTopSim >= 0.835));
       if (top.isExactSid) winExactKey = k;
       const existing = scoreMap.get(k);
-      const isManualUserSample = Boolean(top.sample.userConfirmed && !top.sample.autoTeacher && !top.sample.importedFromDiag);
-      const truthMult = topTruthRank >= 4 ? 1.052 : topTruthRank === 3 ? 1.044 : isManualUserSample ? 1.036 : top.isConfirmedSample ? 1.012 : 0.975;
+      const isManualUserSample = Boolean(top.sample.userConfirmed && !top.sample.autoTeacher && !top.sample.importedFromDiag && !top.sample.battleRevealed && !top.sample.directMode);
+      const truthMult = isCrossModeToollessEval ? 0.985 : topTruthRank >= 4 ? 1.052 : topTruthRank === 3 ? 1.044 : isManualUserSample ? 1.036 : top.isConfirmedSample ? 1.012 : 0.975;
       if (existing) {
         const kernelTarget = Math.min(0.992, meanTopSim * truthMult + Math.min(0.036, Math.log10(1 + hits.length) * 0.016));
         existing.sim = top.isExactSid
@@ -4195,7 +5403,7 @@ const ChatHabitFingerprint = (() => {
         }
       } else {
         const protoMatch = PROTOTYPES.find(p => String(Strength?.canon ? Strength.canon(p.label) : p.label).toLowerCase() === k);
-        const dispLabel = protoMatch?.label || (top.isElasticNeighbor ? top.label : (top.sample.rawLabel || top.sample.model || top.label));
+        const dispLabel = formatDisplayModelLabel(protoMatch?.label || (top.isElasticNeighbor ? top.label : (top.sample.rawLabel || top.sample.model || top.label)), top.sample.rawLabel);
         scoreMap.set(k, {
           id: protoMatch?.id || top.sample.model,
           label: dispLabel,
@@ -4209,20 +5417,25 @@ const ChatHabitFingerprint = (() => {
         });
       }
     }
-    // 全局后验排斥抑制（Post-Bank Contrastive Repulsion）：确保被用户在相似对话上手动纠偏排除的模型（即使存在内置诊断样本）也会让位于用户新纠偏的目标与弹性邻域
+    // 全局后验排斥抑制（Post-Bank Contrastive Repulsion）：确保被用户纠偏或 Battle 排他校准排除的模型让位于真实目标与正确强度档位
     if (calib?.repelledModels && typeof calib.repelledModels === 'object') {
       for (const [rk, rList] of Object.entries(calib.repelledModels)) {
         const entry = scoreMap.get(rk);
         if (!entry || !Array.isArray(rList) || !rList.length) continue;
         let maxRSim = 0;
+        let maxBattleRSim = 0;
         for (const rItem of rList) {
           if (!rItem || !Array.isArray(rItem.vec)) continue;
           const rV = vectorSimilarity(feat.vec, rItem.vec, feat);
           const rM = rItem.meta ? metaSimilarity(feat, rItem.meta) : null;
           const rS = rM !== null ? (rV * 0.50 + rM * 0.50) : rV;
           if (rS > maxRSim) maxRSim = rS;
+          if (rItem.battleRepel && rS > maxBattleRSim) maxBattleRSim = rS;
         }
-        if (maxRSim >= 0.84) {
+        if (maxBattleRSim >= 0.80) {
+          entry.sim = Math.min(entry.sim, 0.865) - Math.min(0.115, (maxBattleRSim - 0.78) * 0.48);
+          entry.userLearned = false;
+        } else if (maxRSim >= 0.84) {
           entry.sim = Math.min(entry.sim, 0.885) - Math.min(0.065, (maxRSim - 0.82) * 0.30);
           entry.userLearned = false;
         }
@@ -4235,6 +5448,58 @@ const ChatHabitFingerprint = (() => {
         }
       }
     } else {
+      // 融合 50 维 HTML/SVG 代码结构、运动学与专属 Token 指纹（当回复包含真实 SVG/HTML 动画或绘图代码时）
+      const hm = feat.htmlSvgMatch;
+      const hf = hm?.features || null;
+      const topHtmlCand = (hm && Array.isArray(hm.top_candidates) && hm.top_candidates.length > 0) ? hm.top_candidates[0] : null;
+      const hasRichSvgOrHtml = Boolean(hm && hf && topHtmlCand && (
+        topHtmlCand.ruleScore >= 0.48
+        || (hm.code_type === "html_svg" && hf.bytes >= 3800 && (hf.nPath + hf.nG + hf.nCircle) >= 4 && topHtmlCand.protoSim >= 0.80)
+        || (hm.code_type === "svg32" && hf.viewBox === "0 0 32 32" && topHtmlCand.protoSim >= 0.82)
+      ));
+      if (hasRichSvgOrHtml) {
+        for (let hi = 0; hi < Math.min(4, hm.top_candidates.length); hi++) {
+          const hc = hm.top_candidates[hi];
+          if (!hc || (hc.ruleScore < 0.35 && hc.protoSim < 0.70)) continue;
+          if (!isEvalAnalyze && hc.isOpen !== feat.isOpenThink) continue;
+          if (feat.wireFam === "anthropic" && hc.vendorId !== "anthropic") continue;
+          if (feat.wireFam === "openai" && hc.vendorId !== "openai") continue;
+          const hk = String(hc.canon || "").toLowerCase();
+          let targetEntry = scoreMap.get(hk);
+          if (!targetEntry && hc.family) {
+            for (const [, it] of scoreMap.entries()) {
+              if (parseModelFamilyAndTier(it.canon || it.label).famKey === hc.family) {
+                targetEntry = it;
+                break;
+              }
+            }
+          }
+          const htmlPull = Math.min(0.14, Math.max(0.02, (hc.score - 0.45) * 0.24));
+          const htmlTag = `🦩 ${hc.reasons?.[0] || ("HTML/SVG指纹:" + hc.familyLabel)}`;
+          if (targetEntry) {
+            if (hi === 0 && (hc.ruleScore >= 0.48 || hc.protoSim >= 0.84)) {
+              targetEntry.sim = Math.max(targetEntry.sim, Math.min(0.966, Math.max(targetEntry.sim + htmlPull, 0.84 + hc.score * 0.14)));
+            } else {
+              targetEntry.sim = Math.min(0.962, targetEntry.sim + htmlPull * (hi === 0 ? 0.85 : 0.45));
+            }
+            if (hc.effort && hc.effort !== "standard") targetEntry.detectedEffort = hc.effort;
+            targetEntry.tags = [htmlTag, ...(targetEntry.tags || []).filter(t => t !== htmlTag).slice(0, 5)];
+          } else if (hi === 0 && (hc.ruleScore >= 0.52 || hc.protoSim >= 0.85)) {
+            scoreMap.set(hk, {
+              id: hc.model_id,
+              label: hc.label,
+              canon: hc.canon,
+              vendor: hc.vendor,
+              isOpen: hc.isOpen,
+              sim: Math.min(0.958, 0.83 + hc.score * 0.14),
+              detectedEffort: hc.effort,
+              tags: [htmlTag, ...feat.habitTags.slice(0, 4)],
+              learnedHits: 0,
+              userLearned: false,
+            });
+          }
+        }
+      }
       // Stage-2：在非精确同会话锁定时，执行同家族相邻档位微差解耦精排（Opus 5.5 Medium vs High、Sol Medium vs High 等）
       disentangleIntraFamilyTiers(scoreMap, feat, calib, bankByKey, isEvalAnalyze);
     }
@@ -4255,11 +5520,22 @@ const ChatHabitFingerprint = (() => {
     }
     const candidates = sorted.slice(0, 6).map((c, idx) => {
       const pct = Math.round(Math.max(35, Math.min(99.2, c.sim * 100)) * 10) / 10;
+      const dispLbl = formatDisplayModelLabel(c.label, c.canon);
+      const decomp = decomposeModelIdentity(c.canon || dispLbl, {
+        vendor: c.vendor,
+        effort: c.detectedEffort || undefined,
+        rawLabel: dispLbl,
+      });
       return {
         id: c.id,
-        label: c.label,
-        canon: c.canon || c.label,
-        vendor: c.vendor,
+        label: dispLbl,
+        canon: sanitizeCorruptedTierSlug(c.canon || dispLbl, dispLbl),
+        vendor: c.vendor || decomp.vendorLabel,
+        vendorId: decomp.vendor,
+        family: decomp.family,
+        familyLabel: decomp.familyLabel,
+        effort: decomp.effort,
+        effortLabel: decomp.effortLabel,
         match: pct,
         habitPct: pct,
         source: 'habit',
@@ -4267,14 +5543,21 @@ const ChatHabitFingerprint = (() => {
         learnedHits: c.learnedHits,
         matchedDims: c.tags,
         habitScore: calibratedScore,
+        detectedEffort: c.detectedEffort || decomp.effort,
         rank: idx + 1,
       };
     });
 
+    const topDecomp = topWinner ? decomposeModelIdentity(topWinner.canon || topWinner.label, { effort: topWinner.detectedEffort }) : null;
+    const topFamKey = topDecomp?.family || (topWinner ? parseModelFamilyAndTier(topWinner.canon || topWinner.label).famKey : '');
+    const identifiedEffort = (topDecomp && !topDecomp.hasExplicitTier)
+      ? 'standard'
+      : (topWinner?.detectedEffort || (topFamKey ? (identifyEffortTier(feat, topFamKey, calib)?.tier || 'standard') : 'standard'));
     const anaOut = {
       features: feat,
       reasoningScore: calibratedScore,
       habitTags: feat.habitTags,
+      identifiedEffort,
       candidates,
       best: candidates[0] || null,
       learnedTotal: bank.length,
@@ -4336,6 +5619,9 @@ const ChatHabitFingerprint = (() => {
       battleSide = null,
       directMode = false,
       evalModality = null,
+      vendorHint = '',
+      familyHint = '',
+      effortHint = '',
     } = optsObj;
     if (!chat?.sid || !modelName) return null;
     const rawName = String(modelName || '').replace(/[?？]+$/, '').trim();
@@ -4343,7 +5629,13 @@ const ChatHabitFingerprint = (() => {
     if (/gemini[-\s]*4|argon|barium-bb-v2-4xts/i.test(rawName) && CONFIRMED_GEMINI_FLASH_SIDS.has(String(chat.sid))) {
       return null;
     }
-    const canon = rawName === '开源模型' ? '开源模型' : (typeof Strength !== 'undefined' && Strength.canon ? Strength.canon(rawName) : rawName);
+    const decomp = decomposeModelIdentity(rawName, {
+      vendor: vendorHint,
+      family: familyHint,
+      effort: effortHint || undefined,
+      rawLabel: rawName,
+    });
+    const canon = decomp.canon || (rawName === '开源模型' ? '开源模型' : (typeof Strength !== 'undefined' && Strength.canon ? Strength.canon(rawName) : rawName));
     const isBattleRev = Boolean(battleRevealed || chat?.battleSide || /#[ab]$/i.test(String(chat.sid)));
     const isDirectRev = Boolean(directMode || chat?.evalMode === 'direct' || chat?.directModelName);
     const known = modelMeta || (typeof Models !== 'undefined' ? Models.get(chat.sid) : null);
@@ -4352,7 +5644,7 @@ const ChatHabitFingerprint = (() => {
     const isHighTrustTeacher = Boolean(isBattleRev || isDirectRev || isManualUserConfirm || (autoTeacher && (Number(teacherConf) || 0) >= 85));
     if (!feat && !isHighTrustTeacher) return null;
     if (!isHighTrustTeacher && feat && feat.turns < 1) return null;
-    const protoFallback = PROTOTYPES.find(p => String(Strength?.canon ? Strength.canon(p.label) : p.label).toLowerCase() === canon.toLowerCase() || p.label.toLowerCase() === rawName.toLowerCase());
+    const protoFallback = PROTOTYPES.find(p => String(Strength?.canon ? Strength.canon(p.label) : p.label).toLowerCase() === canon.toLowerCase() || p.label.toLowerCase() === rawName.toLowerCase() || parseModelFamilyAndTier(p.label).famKey === decomp.family);
     const vec = (feat && Array.isArray(feat.vec) && feat.vec.length === 20)
       ? feat.vec
       : (protoFallback ? [...protoFallback.vec] : [1, 0, 0.08, 0.14, 0.22, 0.08, 0.34, 0.08, 0.14, 0.08, 0.72, 0.64, 0.70, 0.30, 0.26, 0.46, 0.54, 0.56, 0.52, 0.48]);
@@ -4385,6 +5677,12 @@ const ChatHabitFingerprint = (() => {
         if (hasRicherMeta && String(prev.model || '').toLowerCase() === String(canon || '').toLowerCase()) {
           const enriched = {
             ...prev,
+            vendor: prev.vendor || decomp.vendor,
+            vendorLabel: prev.vendorLabel || decomp.vendorLabel,
+            family: prev.family || decomp.family,
+            familyLabel: prev.familyLabel || decomp.familyLabel,
+            effort: prev.effort || decomp.effort,
+            effortLabel: prev.effortLabel || decomp.effortLabel,
             vec: vec.map(v => Math.round((Number(v) || 0) * 1000) / 1000),
             tierVec: Array.isArray(feat?.tierVec) && feat.tierVec.length === 12 ? feat.tierVec : prev.tierVec,
             meta: extractCompactMeta(feat),
@@ -4409,6 +5707,12 @@ const ChatHabitFingerprint = (() => {
       sid: chat.sid,
       model: canon,
       rawLabel: rawName,
+      vendor: decomp.vendor,
+      vendorLabel: decomp.vendorLabel,
+      family: decomp.family,
+      familyLabel: decomp.familyLabel,
+      effort: decomp.effort,
+      effortLabel: decomp.effortLabel,
       isOpen: (isBattleRev || isDirectRev || chat?.isEvaluation) ? Boolean(isOpenName(canon)) : Boolean(feat?.isOpenThink || isOpenName(canon)),
       score: targetScore,
       rawHabitScore: feat?.habitReasoningScore ?? null,
@@ -4469,7 +5773,7 @@ const ChatHabitFingerprint = (() => {
       recordTeacherCalibration(canon, feat, targetScore, resolvedWeight, chat.sid);
     }
     saveBank(cleanedBank, { replace: cleanedBank.length !== bank.length });
-    if (isManualUserConfirm || isBattleRev || isDirectRev) recordModelUse(canon);
+    if (isManualUserConfirm || isBattleRev || isDirectRev) recordModelUse(canon, decomp.vendor, decomp.family, decomp.effort);
     return entry;
   }
 
@@ -4482,19 +5786,28 @@ const ChatHabitFingerprint = (() => {
     if (!sid) return null;
     const label = String(topRev.effortProfile?.stealthModelLabel || topRev.dynamicLabel || topRev.label || topRev.canon || topRev.id || '').replace(/[?？]+$/, '').trim();
     if (!label || /^(未知型号|待定|未识别)$/.test(label)) return null;
+    const decomp = decomposeModelIdentity(label, {
+      vendor: topRev.vendor || modelEntry?.vendor,
+      family: topRev.family || modelEntry?.family,
+      effort: topRev.effortProfile?.effort || topRev.effort || undefined,
+      rawLabel: label,
+    });
     const isOkScore = s => s != null && s !== '' && Number.isFinite(+s) && +s >= 10 && +s <= 100;
     const resolvedScore = isOkScore(teacherScore)
       ? +teacherScore
       : (isOkScore(modelEntry?.reverseScore) && !modelEntry?.habitInferred)
         ? +modelEntry.reverseScore
         : null;
-    return learnFromChat(chat || { sid, messages: [] }, label, {
+    return learnFromChat(chat || { sid, messages: [] }, decomp.canon || label, {
       userConfirmed: false,
       autoTeacher: true,
       teacherConf: revPct,
       weight: topRev.diophantinePassed ? 3.2 : 2.2,
       score: resolvedScore,
       modelMeta: modelEntry,
+      vendorHint: decomp.vendor,
+      familyHint: decomp.family,
+      effortHint: decomp.effort,
     });
   }
 
@@ -4518,33 +5831,8 @@ const ChatHabitFingerprint = (() => {
       const calObj = data.calibration || data?.habitLearnBank?.calibration || null;
       const statsObj = data.usageStats || data?.habitLearnBank?.usageStats || null;
       const res = mergeSharedBank(bankSamplesArr, calObj, statsObj);
-      if (typeof Chats !== 'undefined') {
-        for (const [otherSid, otherChat] of Chats.entries()) {
-          if (!otherSid || otherChat?.busy) continue;
-          const om = typeof Models !== 'undefined' ? Models.get(otherSid) : null;
-          if (!om || (!om.userCorrected && (om.habitInferred || om.guess || om.pendingConfirm || !om.sure))) {
-            try { identifyAndApply(otherChat, { force: true }); } catch {}
-          } else if (om && typeof Models !== 'undefined') {
-            try {
-              const hab = analyze(otherChat, om);
-              if (hab && Array.isArray(hab.candidates) && hab.candidates.length) {
-                Models.set(otherSid, {
-                  ...om,
-                  habitCandidates: hab.candidates.slice(0, 5),
-                  habitTags: hab.habitTags || om.habitTags,
-                });
-              }
-            } catch {}
-          }
-        }
-      }
       try { if (typeof BillingProbe !== 'undefined' && typeof BillingProbe.clearSummaryCache === 'function') BillingProbe.clearSummaryCache(); } catch {}
-      try {
-        UI?.renderList?.();
-        UI?.renderTabs?.();
-        Dock?.render?.();
-        Bar?.render?.();
-      } catch {}
+      try { syncAllOpenAndKnownChats(); } catch {}
       return {
         kind: 'bank',
         imported: bankSamplesArr.length,
@@ -4594,7 +5882,13 @@ const ChatHabitFingerprint = (() => {
       if (!rawModel || /^(未知型号|待定|未识别)$/.test(rawModel)) {
         throw new Error('请选择或输入该诊断 JSON 对应的已知模型名称');
       }
-      const canon = rawModel === '开源模型' ? '开源模型' : (typeof Strength !== 'undefined' && Strength.canon ? Strength.canon(rawModel) : rawModel);
+      const decomp = decomposeModelIdentity(rawModel, {
+        vendor: item.vendor || item.model?.vendor,
+        family: item.family || item.model?.family,
+        effort: item.effort || item.model?.effort,
+        rawLabel: rawModel,
+      });
+      const canon = decomp.canon || (rawModel === '开源模型' ? '开源模型' : (typeof Strength !== 'undefined' && Strength.canon ? Strength.canon(rawModel) : rawModel));
       const localChat = (typeof Chats !== 'undefined' && sid ? Chats.get(sid) : null) || null;
       const modelMeta = {
         ...(item.model || item.storedModel || {}),
@@ -4610,7 +5904,7 @@ const ChatHabitFingerprint = (() => {
         ? [...feat.vec]
         : (Array.isArray(modelMeta.habitFeatures?.vec) && modelMeta.habitFeatures.vec.length === 20 ? [...modelMeta.habitFeatures.vec] : null);
       if (!Array.isArray(vec) || vec.length !== 20) {
-        const proto = PROTOTYPES.find(p => String(Strength?.canon ? Strength.canon(p.label) : p.label).toLowerCase() === canon.toLowerCase() || p.label.toLowerCase() === rawModel.toLowerCase());
+        const proto = PROTOTYPES.find(p => String(Strength?.canon ? Strength.canon(p.label) : p.label).toLowerCase() === canon.toLowerCase() || p.label.toLowerCase() === rawModel.toLowerCase() || parseModelFamilyAndTier(p.label).famKey === decomp.family);
         vec = proto ? [...proto.vec] : [1, 0, 0.15, 0.15, 0.2, 0.2, 0.35, 0.15, 0.15, 0.1, 0.75, 0.7, 0.75, 0.35, 0.25, 0.55, 0.6, 0.65, 0.6, 0.55];
       }
       if (!/gemini|google/i.test(canon) && !isOpenName(canon) && vec[0] === 0 && vec[1] === 1) {
@@ -4623,6 +5917,12 @@ const ChatHabitFingerprint = (() => {
         sid,
         model: canon,
         rawLabel: rawModel,
+        vendor: decomp.vendor,
+        vendorLabel: decomp.vendorLabel,
+        family: decomp.family,
+        familyLabel: decomp.familyLabel,
+        effort: decomp.effort,
+        effortLabel: decomp.effortLabel,
         isOpen: Boolean(feat?.isOpenThink || isOpenName(canon)),
         score,
         vec: vec.map(v => Math.round((Number(v) || 0) * 1000) / 1000),
@@ -4639,7 +5939,7 @@ const ChatHabitFingerprint = (() => {
       recordTeacherCalibration(canon, feat || { vec: entry.vec, tierVec: entry.meta?.tierVec, meta: entry.meta, habitReasoningScore: score }, score, 3.5, sid);
       importedCount++;
       lastModel = canon;
-      recordModelUse(canon);
+      recordModelUse(canon, decomp.vendor, decomp.family, decomp.effort);
       if (sid && !sid.startsWith('diag-')) importedSids.push({ sid, rawModel, canon });
     }
 
@@ -4652,35 +5952,7 @@ const ChatHabitFingerprint = (() => {
       }
     }
 
-    // 立即用新导入的习惯样本刷新本机所有已加载对话的习惯候选（未锁定对话同步应用，已锁定对话同步刷新 habitCandidates）
-    if (typeof Chats !== 'undefined') {
-      for (const [otherSid, otherChat] of Chats.entries()) {
-        if (!otherSid || otherChat?.busy) continue;
-        const om = typeof Models !== 'undefined' ? Models.get(otherSid) : null;
-        if (!om || (!om.userCorrected && (om.habitInferred || om.guess || om.pendingConfirm || !om.sure))) {
-          try { identifyAndApply(otherChat, { force: true }); } catch {}
-        } else if (om && typeof Models !== 'undefined') {
-          try {
-            const hab = analyze(otherChat, om);
-            if (hab && Array.isArray(hab.candidates) && hab.candidates.length) {
-              Models.set(otherSid, {
-                ...om,
-                habitCandidates: hab.candidates.slice(0, 5),
-                habitTags: hab.habitTags || om.habitTags,
-                habitFeatures: hab.features ? { vec: hab.features.vec, meta: extractCompactMeta(hab.features), isOpenThink: Boolean(hab.features.isOpenThink), habitTags: hab.features.habitTags, habitReasoningScore: hab.features.habitReasoningScore } : om.habitFeatures,
-              });
-            }
-          } catch {}
-        }
-      }
-    }
     try { if (typeof BillingProbe !== 'undefined' && typeof BillingProbe.clearSummaryCache === 'function') BillingProbe.clearSummaryCache(); } catch {}
-    try {
-      UI?.renderList?.();
-      UI?.renderTabs?.();
-      Dock?.render?.();
-      Bar?.render?.();
-    } catch {}
     try { syncAllOpenAndKnownChats(); } catch {}
     return { kind: 'diagnostic', imported: importedCount, model: lastModel, total: bank.length };
   }
@@ -4753,11 +6025,16 @@ const ChatHabitFingerprint = (() => {
     const best = res.best;
     const second = res.candidates[1] || null;
     const isStandout = !second || (best.match - second.match) >= 0.5 || best.match >= 82;
-    const canon = best.label === '开源模型' ? '开源模型' : (typeof Strength !== 'undefined' && Strength.canon ? Strength.canon(best.label) : best.label).replace(/[?？]+$/, '');
+    const decomp = decomposeModelIdentity(best.canon || best.label, {
+      vendor: best.vendorId || best.vendor,
+      family: best.family,
+      effort: best.effort || best.detectedEffort || res.identifiedEffort || undefined,
+      rawLabel: best.label,
+    });
+    const canon = decomp.canon || (best.label === '开源模型' ? '开源模型' : (typeof Strength !== 'undefined' && Strength.canon ? Strength.canon(best.label) : best.label).replace(/[?？]+$/, ''));
     const sameKnownModel = Boolean(known?.name && (typeof Strength !== 'undefined' && Strength.canon ? Strength.canon(known.name) : String(known.name)).replace(/[?？]+$/, '').toLowerCase() === canon.toLowerCase());
     const revScore = (!interactive && sameKnownModel && known && !known.habitInferred && known.reverseScore != null) ? known.reverseScore : res.reasoningScore;
-    const effMatch = /\b(none|minimal|low|medium|high|xhigh|max)\b/i.exec(canon);
-    const curEffort = effMatch ? effMatch[1].toLowerCase() : (revScore >= 82 ? 'max' : revScore >= 65 ? 'high' : 'medium');
+    const curEffort = decomp.effort || 'standard';
     // 绝不把 structuralRev 写入 reverseCandidates（保留全部真实 /cost 反推候选池）
     const preservedRevCands = Array.isArray(known?.reverseCandidates)
       ? known.reverseCandidates.filter(rc => rc && !rc.structuralRev && rc.source !== 'habit' && rc.source !== 'fp' && !rc.habitSource && (!CONFIRMED_GEMINI_FLASH_SIDS.has(sid) || !/gemini[-\s]*4|argon/i.test(String(rc.label || rc.id || ''))) && (rc.diophantinePassed || (rc.revPct != null && (!interactive || Number(rc.revPct ?? rc.match ?? 0) >= 80))))
@@ -4775,6 +6052,9 @@ const ChatHabitFingerprint = (() => {
       name: canon,
       candidateName: canon,
       rawLabel: best.label,
+      vendor: decomp.vendor,
+      family: decomp.family,
+      effort: curEffort,
       reverseCandidateId: best.id || canon,
       reverseLabel: best.label,
       reverseEffort: curEffort,
@@ -4866,12 +6146,17 @@ const ChatHabitFingerprint = (() => {
     const chat = (typeof Chats !== 'undefined' && Chats.get(sid)) || (typeof chatOf === 'function' ? chatOf(sid) : null) || { sid, messages: [] };
     const known = typeof Models !== 'undefined' ? Models.get(sid) : null;
     const habitRes = analyze(chat, known);
-    const canon = cleaned === '开源模型' ? '开源模型' : (typeof Strength !== 'undefined' && Strength.canon ? Strength.canon(cleaned) : cleaned).replace(/[?？]+$/, '');
+    const decomp = decomposeModelIdentity(cleaned, {
+      vendor: vendorHint,
+      family: familyHint,
+      effort: effortHint || undefined,
+      rawLabel: cleaned,
+    });
+    const canon = decomp.canon || (cleaned === '开源模型' ? '开源模型' : (typeof Strength !== 'undefined' && Strength.canon ? Strength.canon(cleaned) : cleaned).replace(/[?？]+$/, ''));
     const prevRecognizedModel = String(known?.rawLabel || known?.name || known?.candidateName || habitRes?.best?.label || '').replace(/[?？]+$/, '').trim();
     const sameKnownModel = Boolean(prevRecognizedModel && (typeof Strength !== 'undefined' && Strength.canon ? Strength.canon(prevRecognizedModel) : prevRecognizedModel).replace(/[?？]+$/, '').toLowerCase() === canon.toLowerCase());
-    const effMatch = /\b(none|minimal|low|medium|high|xhigh|max)\b/i.exec(canon);
-    const curEffort = effMatch ? effMatch[1].toLowerCase() : (habitRes?.reasoningScore >= 82 ? 'max' : habitRes?.reasoningScore >= 65 ? 'high' : 'medium');
-    const tierDefaultScore = curEffort === 'max' ? 86 : curEffort === 'xhigh' ? 78 : curEffort === 'high' ? 70 : curEffort === 'medium' ? 58 : 46;
+    const curEffort = decomp.effort || 'standard';
+    const tierDefaultScore = curEffort === 'max' ? 86 : curEffort === 'xhigh' ? 78 : curEffort === 'high' ? 70 : curEffort === 'medium' ? 58 : curEffort === 'low' ? 46 : 70;
     const rawBaseScore = (sameKnownModel && known?.reverseScore != null) ? known.reverseScore : (habitRes?.reasoningScore ?? known?.reverseScore ?? tierDefaultScore);
     const score = sameKnownModel ? rawBaseScore : Math.round((rawBaseScore * 0.55 + tierDefaultScore * 0.45) * 10) / 10;
     const isOpen = canon === '开源模型' || isOpenName(canon);
@@ -4886,10 +6171,20 @@ const ChatHabitFingerprint = (() => {
         .map(c => String(c.canon || c.label || '').toLowerCase())
         .filter(k => k && k !== canon.toLowerCase());
     }
-    recordModelUse(canon, vendorHint, familyHint, effortHint || curEffort);
+    recordModelUse(canon, decomp.vendor || vendorHint, decomp.family || familyHint, curEffort);
     let learnedEntry = null;
     if (learn && chat) {
-      learnedEntry = learnFromChat(chat, canon, { userConfirmed: true, autoTeacher: false, weight: 3.5, score, modelMeta: known, oldModel: prevRecognizedModel });
+      learnedEntry = learnFromChat(chat, canon, {
+        userConfirmed: true,
+        autoTeacher: false,
+        weight: 3.5,
+        score,
+        modelMeta: known,
+        oldModel: prevRecognizedModel,
+        vendorHint: decomp.vendor || vendorHint,
+        familyHint: decomp.family || familyHint,
+        effortHint: curEffort,
+      });
     }
     const refreshedHabit = analyze(chat, known) || habitRes;
 
@@ -4897,9 +6192,12 @@ const ChatHabitFingerprint = (() => {
       ...(known || {}),
       name: canon,
       candidateName: canon,
-      rawLabel: cleaned,
+      rawLabel: decomp.displayLabel || cleaned,
+      vendor: decomp.vendor,
+      family: decomp.family,
+      effort: curEffort,
       reverseCandidateId: canon,
-      reverseLabel: cleaned,
+      reverseLabel: decomp.displayLabel || cleaned,
       reverseEffort: curEffort,
       reverseMatch: 100,
       confidence: 100,
@@ -5018,25 +6316,30 @@ const ChatHabitFingerprint = (() => {
     return loadCalibration();
   }
 
+  let _bgSyncTimer = null;
   function syncAllOpenAndKnownChats({ excludeSid = '' } = {}) {
     try {
-      _featCache.clear();
       _analyzeCache.clear();
       if (typeof BillingProbe !== 'undefined' && typeof BillingProbe.clearSummaryCache === 'function') {
         BillingProbe.clearSummaryCache();
       }
     } catch {}
+    if (_bgSyncTimer) { clearTimeout(_bgSyncTimer); _bgSyncTimer = null; }
     let retroUpdatedCount = 0;
+    const openKeys = typeof Chats !== 'undefined' && typeof Chats.keys === 'function' ? [...Chats.keys()] : [];
+    const activeSid = (typeof Tabs !== 'undefined' && Tabs.cur?.sid) || (typeof UI !== 'undefined' && UI.els?.chat?.sid) || '';
+    const prioritySet = new Set([activeSid, ...openKeys].filter(Boolean));
     const allSids = new Set([
-      ...(typeof Chats !== 'undefined' && typeof Chats.keys === 'function' ? [...Chats.keys()] : []),
+      ...prioritySet,
       ...(typeof Models !== 'undefined' && Models.all ? Object.keys(Models.all) : []),
     ]);
-    for (const otherSid of allSids) {
-      if (!otherSid || otherSid === excludeSid) continue;
-      const otherChat = (typeof Chats !== 'undefined' && Chats.get(otherSid)) || (typeof chatOf === 'function' ? chatOf(otherSid) : null) || { sid: otherSid, messages: [] };
-      if (otherChat?.busy) continue;
+    const syncOneSid = (otherSid) => {
+      if (!otherSid || otherSid === excludeSid) return false;
+      const otherChat = (typeof Chats !== 'undefined' && Chats.get(otherSid)) || { sid: otherSid, messages: [] };
+      if (otherChat?.busy) return false;
       const om = typeof Models !== 'undefined' ? Models.get(otherSid) : null;
-      if (om?.userCorrected || om?.routed) continue;
+      if (om?.userCorrected || om?.routed) return false;
+      let changed = false;
       try {
         const prevCanon = (typeof Strength !== 'undefined' && Strength.canon ? Strength.canon(om?.name || '') : String(om?.name || '')).replace(/[?？]+$/, '').toLowerCase();
         let didSyncViaSummary = false;
@@ -5049,7 +6352,7 @@ const ChatHabitFingerprint = (() => {
           const afterOm = typeof Models !== 'undefined' ? Models.get(otherSid) : null;
           const afterCanon = (typeof Strength !== 'undefined' && Strength.canon ? Strength.canon(afterOm?.name || '') : String(afterOm?.name || '')).replace(/[?？]+$/, '').toLowerCase();
           if (afterCanon && afterCanon !== prevCanon) {
-            retroUpdatedCount++;
+            changed = true;
             didSyncViaSummary = true;
           } else if (sumOut?.mergedCandidates?.length) {
             didSyncViaSummary = true;
@@ -5058,15 +6361,42 @@ const ChatHabitFingerprint = (() => {
         if (!didSyncViaSummary) {
           const updated = identifyAndApply(otherChat, { force: true, fromCostFallback: true });
           const nextCanon = (typeof Strength !== 'undefined' && Strength.canon ? Strength.canon(updated?.name || '') : String(updated?.name || '')).replace(/[?？]+$/, '').toLowerCase();
-          if (nextCanon && nextCanon !== prevCanon) retroUpdatedCount++;
+          if (nextCanon && nextCanon !== prevCanon) changed = true;
         }
-        if (typeof Titles !== 'undefined' && Titles.local) {
+        if (changed && typeof Titles !== 'undefined' && Titles.local) {
           Titles.local(otherSid);
         }
       } catch {}
+      return changed;
+    };
+
+    const sidsArr = [...allSids].filter(s => s && s !== excludeSid);
+    const syncLimit = Math.max(40, prioritySet.size);
+    const immediateSids = sidsArr.slice(0, syncLimit);
+    const deferredSids = sidsArr.slice(syncLimit);
+    for (const otherSid of immediateSids) {
+      if (syncOneSid(otherSid)) retroUpdatedCount++;
+    }
+    if (deferredSids.length > 0 && typeof setTimeout === 'function') {
+      let idx = 0;
+      const step = () => {
+        _bgSyncTimer = null;
+        const end = Math.min(deferredSids.length, idx + 25);
+        let batchChanged = false;
+        for (; idx < end; idx++) {
+          if (syncOneSid(deferredSids[idx])) batchChanged = true;
+        }
+        if (batchChanged) {
+          try { UI?.renderListSoon?.(); } catch {}
+        }
+        if (idx < deferredSids.length) {
+          _bgSyncTimer = setTimeout(step, 16);
+        }
+      };
+      _bgSyncTimer = setTimeout(step, 16);
     }
     try {
-      UI?.renderList?.();
+      UI?.renderListSoon ? UI.renderListSoon() : UI?.renderList?.();
       UI?.renderTabs?.();
       Dock?.render?.();
       Bar?.render?.();
@@ -5110,6 +6440,7 @@ const ChatHabitFingerprint = (() => {
       'Claude Opus 5.6 (High)',
       'Claude Opus 5.5 (Max)',
       'Claude Opus 5.5 (High)',
+      'Claude Opus 5',
       'Claude Sonnet 5.5 (Max)',
       'Claude Sonnet 5.5 (High)',
       'Claude Fable 5.1 (Max)',
@@ -5120,6 +6451,7 @@ const ChatHabitFingerprint = (() => {
       'Gemini 4 Argon (High)',
       'Gemini 4 Argon (Medium)',
       'Gemini 4 Argon (Low)',
+      'Gemini 4 Argon',
       'Gemini 3.8 Flash (High)',
       'Gemini 3.8 Flash (Medium)',
       'Gemini 3.8 Flash (Max)',
@@ -5129,21 +6461,21 @@ const ChatHabitFingerprint = (() => {
       'Grok 4.7 (Max)',
       'Grok 4.6 (High)',
       'Grok 4.20 (High)',
-      'DeepSeek V4.1 Flash (Max)',
-      'DeepSeek V4.1 Flash 1017 (Max)',
+      'DeepSeek V4.1 Flash',
+      'DeepSeek V4.1 Flash 1017',
       'Beam 1.0 501B A23B',
-      'GLM 5.3 (Max)',
-      'GLM 5.2 (Max)',
-      'Qwen 3.8 Max (Max)',
-      'Qwen 3.8 Flash Next (High)',
-      'Qwen 3.7 Max (High)',
-      'Kimi K3 (Max)',
-      'MiMo V2.6 Pro (High)',
-      'MiMo V2.6 Flash (High)',
+      'GLM 5.3 Max',
+      'GLM 5.2 Max',
+      'Qwen 3.8 Max',
+      'Qwen 3.8 Flash Next',
+      'Qwen 3.7 Max',
+      'Kimi K3',
+      'MiMo V2.6 Pro',
+      'MiMo V2.6 Flash',
       'Muse Spark 1.3 (Max)',
       'Muse Spark 1.2 (xHigh)',
-      'Muse Wonder (Max)',
-      'Muse Spark Open (Max)',
+      'Muse Wonder',
+      'Muse Spark Open',
       '开源模型',
     ];
     const body = h('div', { class: 'caltab habit-lib-modal' });
@@ -5236,17 +6568,27 @@ const ChatHabitFingerprint = (() => {
       for (const s of samples.slice(0, 600)) {
         const sidShort = s.sid ? String(s.sid).slice(0, 8) : 'sample';
         const tagText = Array.isArray(s.tags) ? s.tags.join(' · ') : '';
+        const decomp = decomposeModelIdentity(s.model || s.rawLabel || '', {
+          vendor: s.vendor,
+          family: s.family,
+          effort: s.effort,
+          rawLabel: s.rawLabel,
+        });
+        const vendorText = s.vendorLabel || decomp.vendorLabel || s.vendor || '未知厂商';
+        const familyText = s.familyLabel || decomp.familyLabel || s.family || s.model || '';
+        const effortText = s.effortLabel || decomp.effortLabel || ((s.effort || decomp.effort || 'standard') === 'standard' ? '标准' : (s.effort || decomp.effort));
+        const tupleDisplay = `[${vendorText}] ${familyText} · 强度:${effortText}`;
         const softNeighbors = s.softTargets && typeof s.softTargets === 'object'
           ? Object.keys(s.softTargets).filter(k => k.toLowerCase() !== String(s.model || '').toLowerCase()).slice(0, 2)
           : [];
         const elasticBadge = (softNeighbors.length || s.rejectedModel)
           ? ` · 🧭邻域[${softNeighbors.join('/') || '—'}]${s.rejectedModel ? ` 排斥[${s.rejectedModel}]` : ''}`
           : '';
-        const fullRowTip = [tagText, softNeighbors.length ? `弹性邻域牵引：${softNeighbors.join(', ')}` : '', s.rejectedModel ? `对比排斥旧模型：${s.rejectedModel}` : ''].filter(Boolean).join('\n');
+        const fullRowTip = [`厂商: ${vendorText} | 型号: ${familyText} | 强度: ${effortText} (${decomp.canon})`, tagText, softNeighbors.length ? `弹性邻域牵引：${softNeighbors.join(', ')}` : '', s.rejectedModel ? `对比排斥旧模型：${s.rejectedModel}` : ''].filter(Boolean).join('\n');
         listWrap.append(h('div', { class: 'mc-row', title: fullRowTip },
           h('span', { style: { flex: '1', minWidth: '0', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } },
             (s.battleRevealed ? '⚔️ Battle揭晓 · ' : s.importedFromDiag ? '📥 诊断导入 · ' : (s.userConfirmed && !s.autoTeacher) ? '★ 弹性纠偏 · ' : '⚡ 自动沉淀 · ') + sidShort + elasticBadge + (tagText ? ' · ' + tagText.slice(0, 36) : '')),
-          h('b', { style: { marginRight: '8px' } }, `${s.model}${s.score != null ? ` · 推理分 ${s.score}` : ''}`),
+          h('b', { style: { marginRight: '8px' } }, `${tupleDisplay}${s.score != null ? ` · 推理分 ${s.score}` : ''}`),
           h('button', {
             type: 'button',
             class: 'btn ghost sm',
@@ -5352,24 +6694,40 @@ const ChatHabitFingerprint = (() => {
     const baseSid = String(chat.sid).replace(/#[ab]$/i, '');
     const rawRev = targetPos === 'b' ? (chat.voteState?.modelBName || null) : (chat.voteState?.modelAName || null);
     const revealedModelName = (rawRev && !/^(未知|待定|Model [AB])$/i.test(String(rawRev).trim())) ? String(rawRev).trim() : null;
+    const hasAsstContent = m => {
+      if (!m || typeof m !== 'object') return false;
+      if (Array.isArray(m.parts) && m.parts.some(p => p && ((p.text && String(p.text).trim()) || p.url || (p.type && p.type.startsWith('tool-'))))) {
+        return true;
+      }
+      if (typeof m.content === 'string' && m.content.trim()) return true;
+      if (Array.isArray(m.content) && m.content.some(p => p && ((typeof p === 'string' && p.trim()) || (p.text && String(p.text).trim())))) return true;
+      if (typeof m.reasoning === 'string' && m.reasoning.trim()) return true;
+      if (Array.isArray(m.experimental_attachments) && m.experimental_attachments.some(a => a && a.url)) return true;
+      return false;
+    };
     const filteredMsgs = (Array.isArray(chat.messages) ? chat.messages : []).filter(m => {
       if (!m) return false;
       if (m.role === 'user') return true;
       if (m.role === 'assistant') {
-        if (m.participantPosition === 'a' || m.participantPosition === 'b') {
-          return m.participantPosition === targetPos;
-        }
-        return targetPos === 'a';
+        const matchesPos = (m.participantPosition === 'a' || m.participantPosition === 'b')
+          ? (m.participantPosition === targetPos)
+          : (targetPos === 'a');
+        if (!matchesPos) return false;
+        if ((m.status === 'failed' || m.failed) && !hasAsstContent(m)) return false;
+        if (!hasAsstContent(m) && !m.metadata?.pending) return false;
+        return true;
       }
       return false;
     });
+    const hasSideAsst = filteredMsgs.some(m => m && m.role === 'assistant' && hasAsstContent(m));
     return {
       ...chat,
       sid: `${baseSid}#${targetPos}`,
       parentSid: baseSid,
       battleSide: targetPos,
       revealedModelName,
-      messages: filteredMsgs,
+      hasSideAsst,
+      messages: hasSideAsst ? filteredMsgs : [],
     };
   }
 
@@ -5380,10 +6738,10 @@ const ChatHabitFingerprint = (() => {
     const vChatB = buildSideVirtualChat(chat, 'b');
     const hintA = vChatA?.revealedModelName ? { name: vChatA.revealedModelName } : null;
     const hintB = vChatB?.revealedModelName ? { name: vChatB.revealedModelName } : null;
-    const featA = vChatA ? extractFeatures(vChatA, hintA) : null;
-    const featB = vChatB ? extractFeatures(vChatB, hintB) : null;
-    const anaA = vChatA && featA ? analyze(vChatA, hintA) : null;
-    const anaB = vChatB && featB ? analyze(vChatB, hintB) : null;
+    const featA = (vChatA && vChatA.hasSideAsst) ? extractFeatures(vChatA, hintA) : null;
+    const featB = (vChatB && vChatB.hasSideAsst) ? extractFeatures(vChatB, hintB) : null;
+    const anaA = (vChatA && vChatA.hasSideAsst && featA) ? analyze(vChatA, hintA) : null;
+    const anaB = (vChatB && vChatB.hasSideAsst && featB) ? analyze(vChatB, hintB) : null;
 
     const ensureRevealedCandidate = (cands, revName, feat) => {
       const list = Array.isArray(cands) ? [...cands] : [];
@@ -5459,10 +6817,47 @@ const ChatHabitFingerprint = (() => {
     const evalModality = String(chat.evalModality || payload?.evalModality || 'chat').toLowerCase();
     const vChatA = buildSideVirtualChat(chat, 'a');
     const vChatB = buildSideVirtualChat(chat, 'b');
+    if (vChatA) vChatA.evalModality = evalModality;
+    if (vChatB) vChatB.evalModality = evalModality;
+
+    if (payload?.fromHistory && !payload?.force) {
+      const baseSid = String(chat.sid).replace(/#[ab]$/i, '');
+      const exA = validA ? getBankSampleBySid(`${baseSid}#a`) : null;
+      const exB = validB ? getBankSampleBySid(`${baseSid}#b`) : null;
+      const turnsA = vChatA ? vChatA.messages.filter(m => m && m.role === 'assistant').length : 0;
+      const turnsB = vChatB ? vChatB.messages.filter(m => m && m.role === 'assistant').length : 0;
+      const okA = !validA || (exA && exA.battleRevealed && (exA.meta?.turns || 0) >= turnsA);
+      const okB = !validB || (exB && exB.battleRevealed && (exB.meta?.turns || 0) >= turnsB);
+      if (okA && okB && (exA || exB)) {
+        if (chat.voteState) {
+          chat.voteState.learnedAt = Date.now();
+          chat.voteState.learnedA = Boolean(exA);
+          chat.voteState.learnedB = Boolean(exB);
+        }
+        analyzeBattleChat(chat);
+        return { learnedA: exA, learnedB: exB };
+      }
+    }
+
+    // 1. 揭晓前捕获盲测预判候选（用于揭晓后针对性排他压制错误高分候选）并提取双侧特征用于强度档位锚定
+    let preAnaA = null, preAnaB = null, featPreA = null, featPreB = null;
+    try {
+      if (vChatA && validA) {
+        featPreA = extractFeatures(vChatA, { evalModality });
+        preAnaA = analyze(vChatA, null, { ignoreExactSid: true });
+      }
+      if (vChatB && validB) {
+        featPreB = extractFeatures(vChatB, { evalModality });
+        preAnaB = analyze(vChatB, null, { ignoreExactSid: true });
+      }
+    } catch {}
+
+    const resolvedNameA = validA ? resolveBattleModelWithTier(nameA, featPreA, featPreB, nameB) : '';
+    const resolvedNameB = validB ? resolveBattleModelWithTier(nameB, featPreB, featPreA, nameA) : '';
+
     let learnedA = null, learnedB = null;
     if (vChatA && validA) {
-      vChatA.evalModality = evalModality;
-      learnedA = learnFromChat(vChatA, nameA, {
+      learnedA = learnFromChat(vChatA, resolvedNameA || nameA, {
         userConfirmed: true,
         autoTeacher: false,
         teacherConf: 100,
@@ -5472,10 +6867,21 @@ const ChatHabitFingerprint = (() => {
         battleSide: 'a',
         evalModality,
       });
+      // 针对盲测预判中排名靠前但并非真值的错误候选执行高比重排他排斥（Battle Exclusive Repulsion）
+      if (learnedA && featPreA && Array.isArray(preAnaA?.candidates)) {
+        const trueKeyA = String(learnedA.model || '').toLowerCase();
+        const wrongTopA = preAnaA.candidates
+          .map(c => String(c?.canon || c?.label || '').trim())
+          .filter(c => c && c.toLowerCase() !== trueKeyA)
+          .slice(0, 2);
+        vChatA._lastHabitTopKeys = wrongTopA.map(c => c.toLowerCase());
+        for (const wrongModel of wrongTopA) {
+          recordElasticCorrection(vChatA, featPreA, wrongModel, learnedA.model, learnedA.score, 9.5);
+        }
+      }
     }
     if (vChatB && validB) {
-      vChatB.evalModality = evalModality;
-      learnedB = learnFromChat(vChatB, nameB, {
+      learnedB = learnFromChat(vChatB, resolvedNameB || nameB, {
         userConfirmed: true,
         autoTeacher: false,
         teacherConf: 100,
@@ -5485,18 +6891,29 @@ const ChatHabitFingerprint = (() => {
         battleSide: 'b',
         evalModality,
       });
+      if (learnedB && featPreB && Array.isArray(preAnaB?.candidates)) {
+        const trueKeyB = String(learnedB.model || '').toLowerCase();
+        const wrongTopB = preAnaB.candidates
+          .map(c => String(c?.canon || c?.label || '').trim())
+          .filter(c => c && c.toLowerCase() !== trueKeyB)
+          .slice(0, 2);
+        vChatB._lastHabitTopKeys = wrongTopB.map(c => c.toLowerCase());
+        for (const wrongModel of wrongTopB) {
+          recordElasticCorrection(vChatB, featPreB, wrongModel, learnedB.model, learnedB.score, 9.5);
+        }
+      }
     }
-    // 双子星同题差分对比学习：直接利用 A/B 在同一 Prompt 与同一模态下的响应差异训练同家族档位分界超平面
+    // 双子星同题差分对比学习：直接利用 A/B 在同一 Prompt 与同一模态下的响应差异执行双向排他并训练同家族档位分界超平面
     if (isPaired && vChatA && vChatB) {
       try {
-        const featA = extractFeatures(vChatA, { name: learnedA?.model || nameA, evalModality });
-        const featB = extractFeatures(vChatB, { name: learnedB?.model || nameB, evalModality });
+        const featA = featPreA || extractFeatures(vChatA, { name: learnedA?.model || resolvedNameA || nameA, evalModality });
+        const featB = featPreB || extractFeatures(vChatB, { name: learnedB?.model || resolvedNameB || nameB, evalModality });
         if (featA && featB) {
           recordBattlePairwiseContrast(
             chat,
-            learnedA?.model || nameA,
+            learnedA?.model || resolvedNameA || nameA,
             featA,
-            learnedB?.model || nameB,
+            learnedB?.model || resolvedNameB || nameB,
             featB,
             payload?.vote || chat.voteState?.vote || 'tie',
             evalModality
@@ -5523,8 +6940,12 @@ const ChatHabitFingerprint = (() => {
       if (!chat || !chat.sid) return null;
       const rawModel = String(explicitModelName || chat.directModelName || chat.directModelId || '').trim();
       if (!rawModel || /^(未知|待定|Model [AB])$/i.test(rawModel)) return null;
-      const hasCompletedAsst = Array.isArray(chat.messages) && chat.messages.some(m => m && m.role === 'assistant' && ((typeof m.text === 'string' && m.text.trim().length > 10) || (Array.isArray(m.parts) && m.parts.length > 0)));
-      if (!hasCompletedAsst) return null;
+      const asstMsgs = Array.isArray(chat.messages) ? chat.messages.filter(m => m && m.role === 'assistant' && ((typeof m.text === 'string' && m.text.trim().length > 10) || (Array.isArray(m.parts) && m.parts.length > 0))) : [];
+      if (!asstMsgs.length) return null;
+      const ex = getBankSampleBySid(String(chat.sid));
+      if (ex && ex.directMode && (ex.meta?.turns || 0) >= Math.min(3, asstMsgs.length)) {
+        return ex;
+      }
       const evalModality = String(chat.evalModality || 'chat').toLowerCase();
       return learnFromChat(chat, rawModel, {
         userConfirmed: true,
@@ -5545,10 +6966,23 @@ const ChatHabitFingerprint = (() => {
   return {
     extractFeatures,
     extractCompactMeta,
+    healTruncatedSvg,
+    extractSvgStyleV2,
+    scoreMiniSvg32Pelican,
+    extractCleanHtmlOrSvg,
+    extractHtmlSvgFeatures,
+    classifyHtmlSvg,
     tierVecSimilarity,
     getSampleTruthRank,
+    identifyEffortTier,
+    parseModelFamilyAndTier,
+    decomposeModelIdentity,
+    formatFamilyTierCanon,
+    formatDisplayModelLabel,
+    sanitizeCorruptedTierSlug,
     recordElasticCorrection,
     recordBattlePairwiseContrast,
+    rebuildCalibrationFromBank,
     analyze,
     structuralReverse,
     learnFromChat,
@@ -5556,6 +6990,7 @@ const ChatHabitFingerprint = (() => {
     buildSideVirtualChat,
     analyzeBattleChat,
     learnBattleReveal,
+    resolveBattleModelWithTier,
     learnDirectSession,
     isEvalSession,
     loadCalibration,
@@ -6156,9 +7591,16 @@ const BillingProbe = (() => {
     }
   }
   function cleanModelLabel(s) {
-    const raw = String(s || '').trim();
+    let raw = String(s || '').trim();
     if (!raw) return raw;
-    return raw.replace(/(?:\s*\((None|Minimal|Low|Medium|High|xHigh|Max)\))+$/i, (_, lastTier) => ` (${lastTier})`);
+    if (typeof ChatHabitFingerprint !== 'undefined' && typeof ChatHabitFingerprint.sanitizeCorruptedTierSlug === 'function') {
+      raw = ChatHabitFingerprint.sanitizeCorruptedTierSlug(raw);
+    }
+    raw = raw.replace(/(?:\s*\((None|Minimal|Low|Medium|High|xHigh|Max)\))+$/i, (_, lastTier) => ` (${lastTier})`);
+    if (!/\s/.test(raw) && /^[a-z0-9._-]+$/i.test(raw) && typeof ChatHabitFingerprint !== 'undefined' && typeof ChatHabitFingerprint.formatDisplayModelLabel === 'function') {
+      raw = ChatHabitFingerprint.formatDisplayModelLabel(raw, raw);
+    }
+    return raw;
   }
   function shortCanonLabel(s) {
     const cleaned = cleanModelLabel(s);
@@ -6169,10 +7611,14 @@ const BillingProbe = (() => {
     return cleaned.replace(/[?？]+$/, '');
   }
   function canonKey(name) {
-    const raw = cleanModelLabel(String(name || '').replace(/\?+$/, '').trim());
+    let raw = cleanModelLabel(String(name || '').replace(/\?+$/, '').trim());
     if (!raw) return '';
     try {
-      if (typeof Strength !== 'undefined' && Strength.canon) return String(Strength.canon(raw)).toLowerCase();
+      if (typeof Strength !== 'undefined' && Strength.canon) raw = String(Strength.canon(raw));
+      if (typeof ChatHabitFingerprint !== 'undefined' && typeof ChatHabitFingerprint.sanitizeCorruptedTierSlug === 'function') {
+        raw = ChatHabitFingerprint.sanitizeCorruptedTierSlug(raw);
+      }
+      return raw.toLowerCase();
     } catch {}
     return raw.toLowerCase();
   }
@@ -6273,12 +7719,17 @@ const BillingProbe = (() => {
   }
 
   function detectHabitAndMessageRoute(sid, chatObj, d, m, habitRes, rawRevList) {
-    const stripBase = s => String(s || '')
-      .replace(/\s*\((?:None|Minimal|Low|Medium|High|XHigh|Max)\)\s*$/i, '')
-      .replace(/-(?:none|minimal|low|medium|high|xhigh|max)$/i, '')
-      .replace(/[?？]+$/, '')
-      .trim()
-      .toLowerCase();
+    const stripBase = s => {
+      if (typeof ChatHabitFingerprint !== 'undefined' && ChatHabitFingerprint.parseModelFamilyAndTier) {
+        return ChatHabitFingerprint.parseModelFamilyAndTier(s).famKey || String(s || '').trim().toLowerCase();
+      }
+      return String(s || '')
+        .replace(/\s*\((?:None|Minimal|Low|Medium|High|XHigh|Max)\)\s*$/i, '')
+        .replace(/-(?:none|minimal|low|medium|high|xhigh|max)$/i, '')
+        .replace(/[?？]+$/, '')
+        .trim()
+        .toLowerCase();
+    };
     const inferFam = s => {
       const low = String(s || '').toLowerCase();
       if (/gemini|google|argon|barium-bb-v2-4xts/.test(low)) return 'google';
@@ -6632,7 +8083,9 @@ const BillingProbe = (() => {
 
   function applyChatRouteAnnotations(sid, chatObj, d, m, habitRoute, routeType, routeFromLabel, routeToLabel, routeReason = '') {
     if (!routeType) return null;
-    const stripTierKey = s => String(s || '').replace(/\s*\((?:none|minimal|low|medium|high|xhigh|max)\)\s*$/i, '').replace(/-(?:none|minimal|low|medium|high|xhigh|max)$/i, '').replace(/[?？]+$/, '').trim().toLowerCase();
+    const stripTierKey = s => (typeof ChatHabitFingerprint !== 'undefined' && ChatHabitFingerprint.parseModelFamilyAndTier)
+      ? (ChatHabitFingerprint.parseModelFamilyAndTier(s).famKey || String(s || '').trim().toLowerCase())
+      : String(s || '').replace(/\s*\((?:none|minimal|low|medium|high|xhigh|max)\)\s*$/i, '').replace(/-(?:none|minimal|low|medium|high|xhigh|max)$/i, '').replace(/[?？]+$/, '').trim().toLowerCase();
     const cleanFrom = cleanModelLabel(routeFromLabel || habitRoute?.fromLabel || d?.initialModelLabel || m?.routeFrom || '前序模型');
     const cleanTo = cleanModelLabel(routeToLabel || habitRoute?.toLabel || d?.routedModelLabel || m?.routeTo || m?.name || '当前模型');
     const fromShort = shortCanonLabel(cleanFrom) || cleanFrom || '原模型';
@@ -7010,37 +8463,18 @@ const BillingProbe = (() => {
         if (!k) continue;
         let existing = byKey.get(k);
         // 同家族不同思考档位（Low/Medium/High/xHigh/Max）共享完全一致的 /cost 单价与丢番图原像解：
-        // 若习惯引擎（尤其是弹性纠偏自学习样本）指向同家族的另一思考档位，则继承该家族的 /cost 原像验证并重定档位
+        // 若 /cost 候选池中该家族对应条目尚未匹配到精确档位的习惯分，则合并家族习惯分（保持 /cost 反推档位为准，绝不派生伪造第二行）
         if (!existing && hasRealCostRev) {
-          const stripBaseTier = s => String(s || '').toLowerCase().replace(/-(?:none|minimal|low|medium|high|xhigh|max)$/i, '');
+          const stripBaseTier = s => (typeof ChatHabitFingerprint !== 'undefined' && ChatHabitFingerprint.parseModelFamilyAndTier)
+            ? (ChatHabitFingerprint.parseModelFamilyAndTier(s).famKey || String(s || '').toLowerCase())
+            : String(s || '').toLowerCase().replace(/(?:-(?:none|minimal|low|medium|high|xhigh|max))+$/i, '');
           const baseFamKey = stripBaseTier(k);
           if (baseFamKey) {
             for (const [otherK, otherVal] of byKey.entries()) {
               if (otherVal && otherVal.revPct != null && !otherVal.structuralRev && stripBaseTier(otherK) === baseFamKey) {
-                const effTierMatch = /\b(none|minimal|low|medium|high|xhigh|max)\b/i.exec(canon);
-                const newEff = effTierMatch ? effTierMatch[1].toLowerCase() : otherVal.inferredEffort;
-                if (!otherVal.habitPct && (hc.userLearned || hc.match >= 85)) {
-                  // 将原未校准档位直接升级为习惯/弹性纠偏锁定的思考档位
-                  byKey.delete(otherK);
-                  otherVal.key = k;
-                  otherVal.label = hLabel;
-                  otherVal.dynamicLabel = hLabel;
-                  otherVal.canon = canon;
-                  otherVal.inferredEffort = newEff;
-                  byKey.set(k, otherVal);
+                const hasExactOtherInHabit = habitRes.candidates.some(c => canonKey(c.canon || c.label || c.id) === otherK);
+                if (!otherVal.habitPct && !hasExactOtherInHabit) {
                   existing = otherVal;
-                } else if (hc.userLearned || hc.match >= 75) {
-                  // 同一家族的不同思考档位（如 Low / Medium / High）共享同家族 /cost 可行解
-                  existing = {
-                    ...otherVal,
-                    key: k,
-                    label: hLabel,
-                    dynamicLabel: hLabel,
-                    canon,
-                    inferredEffort: newEff,
-                    matchedDims: [...(otherVal.matchedDims || [])],
-                  };
-                  byKey.set(k, existing);
                 }
                 break;
               }
@@ -7117,7 +8551,9 @@ const BillingProbe = (() => {
       const ucLabel = cleanModelLabel(m.rawLabel || m.name);
       const ucCanon = ucLabel === '开源模型' ? '开源模型' : (typeof Strength !== 'undefined' && Strength.canon ? Strength.canon(ucLabel) : ucLabel);
       const ucKey = canonKey(ucCanon) || 'user-corrected';
-      const stripBaseTierUc = s => String(s || '').toLowerCase().replace(/-(?:none|minimal|low|medium|high|xhigh|max)$/i, '');
+      const stripBaseTierUc = s => (typeof ChatHabitFingerprint !== 'undefined' && ChatHabitFingerprint.parseModelFamilyAndTier)
+        ? (ChatHabitFingerprint.parseModelFamilyAndTier(s).famKey || String(s || '').toLowerCase())
+        : String(s || '').toLowerCase().replace(/-(?:none|minimal|low|medium|high|xhigh|max)$/i, '');
       const ucFamKey = stripBaseTierUc(ucKey);
       let sameFamCost = null;
       if (!byKey.has(ucKey) && ucFamKey) {
@@ -7232,7 +8668,9 @@ const BillingProbe = (() => {
     }
     const habitRoute = detectHabitAndMessageRoute(sid, chatObj, d, m, habitRes, rawRevList);
     if (habitRoute && habitRoute.routed && (!m?.userCorrected || isPollutedUserCorrection)) {
-      const stripBaseTier = s => String(s || '').toLowerCase().replace(/\s*\((?:none|minimal|low|medium|high|xhigh|max)\)\s*$/i, '').replace(/-(?:none|minimal|low|medium|high|xhigh|max)$/i, '').replace(/[?？]+$/, '').trim();
+      const stripBaseTier = s => (typeof ChatHabitFingerprint !== 'undefined' && ChatHabitFingerprint.parseModelFamilyAndTier)
+        ? (ChatHabitFingerprint.parseModelFamilyAndTier(s).famKey || String(s || '').toLowerCase())
+        : String(s || '').toLowerCase().replace(/\s*\((?:none|minimal|low|medium|high|xhigh|max)\)\s*$/i, '').replace(/-(?:none|minimal|low|medium|high|xhigh|max)$/i, '').replace(/[?？]+$/, '').trim();
       const fromBase = habitRoute.fromBase || stripBaseTier(habitRoute.fromCanon || habitRoute.fromLabel);
       const toBase = habitRoute.toBase || stripBaseTier(habitRoute.toCanon || habitRoute.toLabel);
       const toCanonKey = canonKey(habitRoute.toCanon || habitRoute.toLabel);
@@ -7374,8 +8812,12 @@ const BillingProbe = (() => {
     const tailPart = tailMsg?.parts?.at(-1);
     const tailLen = typeof tailPart?.text === 'string' ? tailPart.text.length : (typeof tailPart?.inputText === 'string' ? tailPart.inputText.length : 0);
     const busySig = chat?.busy ? `1:${tailMsg?.id || ''}:${tailMsg?.parts?.length || 0}:${tailLen >> 8}:${chat?.fmt?.tN ? (chat.fmt.tN >> 4) : 0}` : '0';
-    const cacheKey = sid ? `${state.at || 0}:${state.status || ''}:${state.httpStatus || 0}:${state.retryAt || 0}:${state.pending ? 1 : 0}:${latest?.id || ''}:${chat?.messages?.length || 0}:${busySig}:${model?.at || 0}:${model?.name || ''}:${model?.reverseVer || 0}:${model?.routed ? 1 : 0}:${trace?.done ? 1 : 0}:${isCostProbeEnabled() ? 1 : 0}:${bRev}:${rf.rev ? 1 : 0}:${rf.habit ? 1 : 0}` : '';
-    if (cacheKey && summaryCache.has(sid) && summaryCache.get(sid).key === cacheKey) return summaryCache.get(sid).val;
+    const makeSumCacheKey = (mObj) => sid ? `${state.at || 0}:${state.status || ''}:${state.httpStatus || 0}:${state.retryAt || 0}:${state.pending ? 1 : 0}:${latest?.id || ''}:${chat?.messages?.length || 0}:${busySig}:${mObj?.at || 0}:${mObj?.name || ''}:${mObj?.reverseVer || 0}:${mObj?.routed ? 1 : 0}:${trace?.done ? 1 : 0}:${isCostProbeEnabled() ? 1 : 0}:${bRev}:${rf.rev ? 1 : 0}:${rf.habit ? 1 : 0}` : '';
+    const cacheKey = makeSumCacheKey(model);
+    if (cacheKey && summaryCache.has(sid)) {
+      const hit = summaryCache.get(sid);
+      if (hit && (hit.key === cacheKey || hit.prevKey === cacheKey)) return hit.val;
+    }
     const paymentsList = Array.isArray(state.payments) ? state.payments : [];
     const rawPay = latest ? paymentsList.find(p => p?.messageId === latest.id) : paymentsList.at(-1);
     const payment = rawPay ? {
@@ -7452,7 +8894,12 @@ const BillingProbe = (() => {
         const rawCurCanon = (typeof Strength !== 'undefined' && Strength.canon ? Strength.canon(model?.name || '') : String(model?.name || '')).replace(/[?？]+$/, '');
         const curCanon = (rawCurCanon && typeof Strength !== 'undefined' && Strength.foldVer) ? Strength.foldVer(rawCurCanon) : rawCurCanon;
         const nextMatch = Math.round(Number(top0.match || 0) * 10) / 10;
-        const topEff = String(top0.inferredEffort || top0.effortProfile?.effort || (/\b(none|minimal|low|medium|high|xhigh|max)\b/i.exec(topCanon)?.[1]) || model?.reverseEffort || '').toLowerCase();
+        const topDecomp = (typeof ChatHabitFingerprint !== 'undefined' && ChatHabitFingerprint.decomposeModelIdentity)
+          ? ChatHabitFingerprint.decomposeModelIdentity(topCanon, { effort: top0.inferredEffort || top0.effortProfile?.effort })
+          : null;
+        const topEff = topDecomp
+          ? topDecomp.effort
+          : String(top0.inferredEffort || top0.effortProfile?.effort || model?.reverseEffort || 'standard').toLowerCase();
         const calcRevSc = (typeof Strength !== 'undefined' && Strength.reverseDepthScore)
           ? Strength.reverseDepthScore(sid, { ...(model || {}), name: topCanon, reverseEffort: topEff, routed: isNowRouted }, out, chat)
           : null;
@@ -7513,7 +8960,8 @@ const BillingProbe = (() => {
     }
     if (cacheKey) {
       if (summaryCache.size > 1000) summaryCache.delete(summaryCache.keys().next().value);
-      summaryCache.set(sid, { key: cacheKey, val: out });
+      const postKey = makeSumCacheKey(Models.get(sid));
+      summaryCache.set(sid, { key: postKey || cacheKey, prevKey: cacheKey, val: out });
     }
     return out;
   }
@@ -7527,6 +8975,13 @@ const BillingProbe = (() => {
     }
     const m = mi || (typeof Models !== 'undefined' ? Models.get(sid) : null);
     if (m?.userCorrected && m?.name) return 100;
+    const isActiveSid = Boolean((typeof Tabs !== 'undefined' && Tabs.cur?.sid === sid) || (typeof UI !== 'undefined' && UI.els?.chat?.sid === sid));
+    if (!isActiveSid && m && (m.reverseVer || 0) >= 174) {
+      const persistedConf = Number(m.reverseMatch ?? m.confidence ?? 0);
+      if (Number.isFinite(persistedConf) && persistedConf > 0) {
+        return Math.max(0, Math.min(100, persistedConf));
+      }
+    }
     const bRev = typeof ChatHabitFingerprint !== 'undefined' && typeof ChatHabitFingerprint.bankRevision === 'function' ? ChatHabitFingerprint.bankRevision() : 0;
     const tcKey = `${sid}:${m?.name || ''}:${m?.at || 0}:${m?.reverseMatch || 0}:${m?.confidence || 0}:${m?.userCorrected ? 1 : 0}:${bRev}:${isCostProbeEnabled() ? 1 : 0}`;
     if (topConfidenceCache.has(sid) && topConfidenceCache.get(sid).key === tcKey) {
@@ -7636,9 +9091,14 @@ const BillingProbe = (() => {
     const canonName = fallbackQuestionMark ? (baseCanon + '?') : baseCanon;
     const latestTok = sum.preimage?.latest || sum.preimage?.totals || null;
     const tierOrder = { none: 0, minimal: 1, low: 2, medium: 3, high: 4, xhigh: 5, max: 6 };
-    const stripTierKey = s => String(s || '').replace(/\s*\((?:none|minimal|low|medium|high|xhigh|max)\)\s*$/i, '').replace(/-(?:none|minimal|low|medium|high|xhigh|max)$/i, '').replace(/[?？]+$/, '').trim().toLowerCase();
-    const curBaseName = stripTierKey(baseCanon);
-    const curEffort = String(d?.latestEffort || best.inferredEffort || best.effortProfile?.primaryEffort || (/\b(none|minimal|low|medium|high|xhigh|max)\b/i.exec(baseCanon)?.[1]) || '').toLowerCase();
+    const stripTierKey = s => (typeof ChatHabitFingerprint !== 'undefined' && ChatHabitFingerprint.parseModelFamilyAndTier)
+      ? (ChatHabitFingerprint.parseModelFamilyAndTier(s).famKey || String(s || '').trim().toLowerCase())
+      : String(s || '').replace(/\s*\((?:none|minimal|low|medium|high|xhigh|max)\)\s*$/i, '').replace(/-(?:none|minimal|low|medium|high|xhigh|max)$/i, '').replace(/[?？]+$/, '').trim().toLowerCase();
+    const curDecomp = (typeof ChatHabitFingerprint !== 'undefined' && ChatHabitFingerprint.decomposeModelIdentity)
+      ? ChatHabitFingerprint.decomposeModelIdentity(baseCanon, { effort: d?.latestEffort || best.inferredEffort || best.effortProfile?.primaryEffort })
+      : null;
+    const curBaseName = curDecomp?.family || stripTierKey(baseCanon);
+    const curEffort = curDecomp?.effort || String(d?.latestEffort || best.inferredEffort || best.effortProfile?.primaryEffort || 'standard').toLowerCase();
     const compMsgs = globalThis.ArenaBilling.completed(chat);
     if (standout && best.match >= 85 && compMsgs.length === 1 && !chat._routeBaseline) {
       chat._routeBaseline = {
@@ -8049,15 +9509,25 @@ const BillingProbe = (() => {
   const HAIKU_55_MEDIUM_SIDS = new Set([
     '01a13ee4-294d-7e67-8554-fad3b69284f6',
   ]);
+  let _fullOpus56MigratedAcct = '';
+  let _fullOpus56MigratedCount = -1;
   function upgradeCachedOpus56(sid) {
     if (typeof Models === 'undefined' || !Models.all) return;
     if (sid) {
       const mQuick = Models.get(sid);
-      if (mQuick && (mQuick.reverseVer || 0) >= 172 && !mQuick.routed && !GEMINI_FLASH_FIX_SIDS.has(sid) && !SOL_61_SIDS.has(sid) && !HAIKU_55_MEDIUM_SIDS.has(sid) && !ARGON_HIGH_SIDS.has(sid) && sid !== '01a13f8c-41c2-7ad3-8e77-73feb405f68d' && !/opus[-\s]*5\.5/i.test(String(mQuick.name || ''))) {
+      if (mQuick && (mQuick.reverseVer || 0) >= 174 && !mQuick.routed && !GEMINI_FLASH_FIX_SIDS.has(sid) && !SOL_61_SIDS.has(sid) && !HAIKU_55_MEDIUM_SIDS.has(sid) && !ARGON_HIGH_SIDS.has(sid) && sid !== '01a13f8c-41c2-7ad3-8e77-73feb405f68d' && !/opus[-\s]*5\.5/i.test(String(mQuick.name || ''))) {
         return;
       }
+    } else {
+      const curAcct = String((typeof UI !== 'undefined' && (UI.host?.account?.id || UI.me?.id)) || 'default');
+      const curCnt = Object.keys(Models.all).length;
+      if (_fullOpus56MigratedAcct === curAcct && _fullOpus56MigratedCount === curCnt) return;
+      _fullOpus56MigratedAcct = curAcct;
+      _fullOpus56MigratedCount = curCnt;
     }
-    const stripTierSimple = s => String(s || '').replace(/\s*\((?:none|minimal|low|medium|high|xhigh|max)\)\s*$/i, '').replace(/-(?:none|minimal|low|medium|high|xhigh|max)$/i, '').replace(/[?？]+$/, '').trim().toLowerCase();
+    const stripTierSimple = s => (typeof ChatHabitFingerprint !== 'undefined' && ChatHabitFingerprint.parseModelFamilyAndTier)
+      ? (ChatHabitFingerprint.parseModelFamilyAndTier(s).famKey || String(s || '').trim().toLowerCase())
+      : String(s || '').replace(/\s*\((?:none|minimal|low|medium|high|xhigh|max)\)\s*$/i, '').replace(/-(?:none|minimal|low|medium|high|xhigh|max)$/i, '').replace(/[?？]+$/, '').trim().toLowerCase();
     const targets = sid ? [[sid, Models.get(sid)]] : [
       ...Object.entries(Models.all),
       ...[...GEMINI_FLASH_FIX_SIDS].filter(k => !Models.all[k] && typeof History !== 'undefined' && History.byId?.(k)).map(k => [k, null]),
@@ -8078,6 +9548,9 @@ const BillingProbe = (() => {
       } catch {}
     };
     for (const [id, m] of targets) {
+      if (m && (m.reverseVer || 0) >= 174 && !m.routed && !GEMINI_FLASH_FIX_SIDS.has(id) && !SOL_61_SIDS.has(id) && !HAIKU_55_MEDIUM_SIDS.has(id) && !ARGON_HIGH_SIDS.has(id) && id !== '01a13f8c-41c2-7ad3-8e77-73feb405f68d' && !/opus[-\s]*5\.5/i.test(String(m.name || ''))) {
+        continue;
+      }
       const nmCur = String(m?.name || m?.candidateName || m?.reverseLabel || m?.rawLabel || '');
       if (GEMINI_FLASH_FIX_SIDS.has(id)) {
         const needFix = !m || !/gemini[-\s]*3\.8[-\s]*flash/i.test(nmCur) || Boolean(m?.userCorrected) || (m?.reverseVer || 0) < 163;
@@ -8563,7 +10036,10 @@ const BillingProbe = (() => {
           const topLabel = cleanModelLabel(topRc.effortProfile?.stealthModelLabel || topRc.dynamicLabel || topRc.label || topRc.id || '');
           const topCanon = (typeof Strength !== 'undefined' && Strength.canon ? Strength.canon(topLabel) : topLabel).replace(/[?？]+$/, '');
           const topMatch = Math.round(Number(topRc.revPct ?? topRc.match ?? 95) * 10) / 10;
-          const topEffort = String(topRc.inferredEffort || topRc.effortProfile?.effort || (/\b(none|minimal|low|medium|high|xhigh|max)\b/i.exec(topCanon)?.[1]) || m.reverseEffort || 'high').toLowerCase();
+          const topRcDecomp = (typeof ChatHabitFingerprint !== 'undefined' && ChatHabitFingerprint.decomposeModelIdentity)
+            ? ChatHabitFingerprint.decomposeModelIdentity(topCanon, { effort: topRc.inferredEffort || topRc.effortProfile?.effort })
+            : null;
+          const topEffort = topRcDecomp?.effort || String(topRc.inferredEffort || topRc.effortProfile?.effort || m.reverseEffort || 'standard').toLowerCase();
           const isValidSc = s => s != null && s !== '' && Number.isFinite(+s) && +s >= 10 && +s <= 100;
           const topScore = (!m.habitInferred && isValidSc(m.reverseScore)
             ? +m.reverseScore
@@ -8602,7 +10078,7 @@ const BillingProbe = (() => {
           try { if (typeof Titles !== 'undefined' && Titles.local) { Titles.local(id); Titles.touch?.(id); } } catch {}
           continue;
         }
-        const chatObj = (typeof Chats !== 'undefined' && Chats.get(id)) || (typeof chatOf === 'function' ? chatOf(id) : null) || { sid: id, messages: [] };
+        const chatObj = (typeof Chats !== 'undefined' && Chats.get(id)) || { sid: id, messages: [] };
         const hasLoadedAsst = Array.isArray(chatObj.messages) && chatObj.messages.some(x => x && x.role === 'assistant' && x.status !== 'pending');
         if (!hasLoadedAsst && typeof MsgCache !== 'undefined' && typeof MsgCache.get === 'function' && !chatObj._upgradingFromCache) {
           chatObj._upgradingFromCache = true;
@@ -8697,10 +10173,10 @@ const BillingProbe = (() => {
   function automatic(chat) {
     if (!chat?.sid || chat._inAutomatic) return;
     if (ChatHabitFingerprint.isEvalSession?.(chat)) return;
+    if (!autoEnabled() || chat.busy || chat.gacha?.fingerprint || chat.gacha?.mode === 'autoqa' || chat.gacha?.mode === 'habit' || isOtherProbeBusy(chat)) return;
     chat._inAutomatic = true;
     try {
       try { upgradeCachedOpus56(chat.sid); } catch {}
-      if (!autoEnabled() || chat.busy || chat.gacha?.fingerprint || chat.gacha?.mode === 'autoqa' || chat.gacha?.mode === 'habit' || isOtherProbeBusy(chat)) return;
       if (shouldSkipCostForOpenSource(chat)) {
         markAsOpenSourceModel(chat);
         return;
@@ -9417,7 +10893,7 @@ const BillingProbe = (() => {
     if (!candidates.length) {
       if (activeIdentSid) {
         activeIdentSid = null;
-        try { UI.renderList?.(); } catch {}
+        try { UI.renderListSoon ? UI.renderListSoon() : UI.renderList?.(); } catch {}
       }
       return;
     }
@@ -9428,10 +10904,13 @@ const BillingProbe = (() => {
         activeIdentSid = target.id;
         const prevAtt = bgSweepAttempts.get(target.id) || { count: 0, lastAt: 0 };
         bgSweepAttempts.set(target.id, { count: prevAtt.count + 1, lastAt: now() });
-        try { UI.renderList?.(); } catch {}
+        try { UI.renderListSoon ? UI.renderListSoon() : UI.renderList?.(); } catch {}
 
         const c = typeof chatOf === 'function' ? chatOf(target.id) : (typeof Chats !== 'undefined' ? Chats.get(target.id) : null);
-        if (!c || c.busy) return;
+        if (!c || c.busy) {
+          queuedIdentSids.delete(target.id);
+          return;
+        }
         // 关键修复：后台自动调用 c.load() 拉取未打开会话的消息内容，无需用户手动点击打开对话！
         if ((!c.loaded || !globalThis.ArenaBilling.completed(c).length) && typeof c.load === 'function') {
           try { await c.load(); } catch {}
@@ -9523,7 +11002,7 @@ const BillingProbe = (() => {
     } catch {} finally {
       activeIdentSid = null;
       bgSweeping = false;
-      try { UI.renderList?.(); } catch {}
+      try { UI.renderListSoon ? UI.renderListSoon() : UI.renderList?.(); } catch {}
       if (candidates.length > batch.length || queuedIdentSids.size > 0) {
         scheduleBgSweep(isCostProbeEnabled() && globalCost429Until <= now() ? 1400 : 450);
       }

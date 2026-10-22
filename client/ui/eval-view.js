@@ -1,7 +1,11 @@
 // Battle 双栏并排对比消息视图、底部四键投票揭晓栏与 Evaluation 辅助渲染器
-const evalMd = (text, streaming = false) => {
-  const d = h('div', { class: 'md prose' + (streaming ? ' streaming' : ''), lang: '', translate: 'no' });
+const evalMd = (text, streaming = false, keyPrefix = '') => {
   const raw = String(text || '');
+  if (keyPrefix && typeof StreamMD !== 'undefined' && typeof Seg !== 'undefined' && !Seg.off) {
+    const box = Seg.box('eval', keyPrefix, () => h('div', { class: 'md prose muted', lang: '', translate: 'no' }));
+    return StreamMD.paint(box, raw, Boolean(streaming));
+  }
+  const d = h('div', { class: 'md prose' + (streaming ? ' streaming' : ''), lang: '', translate: 'no' });
   if (typeof MD !== 'undefined' && typeof MD.render === 'function') {
     d.innerHTML = MD.render(raw);
   } else {
@@ -23,6 +27,73 @@ const EvalView = {
       return true;
     }
     return Boolean(chat.isEvaluation && chat.evalMode !== 'direct');
+  },
+
+  isBattleEntry(entry = null, chat = null, tab = null) {
+    if (chat && this.isBattleChat(chat)) return true;
+    if (entry) {
+      if (entry.mode === 'direct') return false;
+      if (entry.mode === 'battle' || entry.mode === 'direct-battle' || entry.mode === 'side-by-side') return true;
+      if (entry.type === 'evaluation') {
+        if (entry.modelAId && !entry.modelBId && entry.mode !== 'battle') return false;
+        return true;
+      }
+      if (typeof ModeState !== 'undefined' && typeof ModeState.inferEntryMode === 'function' && ModeState.inferEntryMode(entry) === 'battle') {
+        return true;
+      }
+    }
+    if (!chat && !entry && tab && !tab.sid && !tab.kind) {
+      if (typeof ModeState !== 'undefined' && typeof ModeState.getMode === 'function' && ModeState.getMode() === 'battle') {
+        return true;
+      }
+    }
+    return false;
+  },
+
+  // Battle 模式标签与列表状态文案：仅显示「生成中」「待选择」「已完成」三个状态，不显示具体对话内容或厂商
+  getBattleStatusLabel(chat = null, entry = null) {
+    const sid = chat?.sid || entry?.id || '';
+    const c = chat || (sid && typeof Chats !== 'undefined' ? Chats.get(sid) : null);
+    const e = entry || (sid && typeof History !== 'undefined' && typeof History.byId === 'function' ? History.byId(sid) : null);
+    const isGenerating = Boolean(
+      c && (
+        c.busy ||
+        c.streaming ||
+        c._evalStreaming ||
+        c.status === 'submitted' ||
+        c.status === 'streaming' ||
+        c.voteState?.submitting ||
+        (Array.isArray(c.messages) && c.messages.some(m => m && m.role === 'assistant' && m.metadata?.pending))
+      )
+    );
+    if (isGenerating) return '生成中';
+
+    const mi = (sid && typeof Models !== 'undefined' && typeof Models.get === 'function') ? Models.get(sid) : null;
+    const isCompleted = Boolean(
+      c?.voteState?.voted ||
+      (c?.modelAId && c?.modelBId) ||
+      (e?.modelAId && e?.modelBId) ||
+      (Array.isArray(c?.pairwiseFeedbacks) && c.pairwiseFeedbacks.length > 0) ||
+      mi?.battleRevealed
+    );
+    if (isCompleted) return '已完成';
+
+    return '待选择';
+  },
+
+  renderBattleLogo(size = 15, st = '') {
+    const swordsSvg = this._svgIcon(
+      '<path d="M14.5 17.5 3 6V3h3l11.5 11.5"/><path d="M13 19l6-6"/><path d="M16 16l4 4"/><path d="M19 21l2-2"/><path d="M9.5 6.5 21 18v3h-3L6.5 9.5"/><path d="M5 13l6 6"/><path d="M4 16l4 4"/><path d="M3 19l2 2"/>',
+      'battle-tab-ic'
+    );
+    swordsSvg.style.width = Math.max(11, size - 3) + 'px';
+    swordsSvg.style.height = Math.max(11, size - 3) + 'px';
+    const cls = 'vlogo battle-vlogo' + (st === 'run' ? ' busy st-run' : st ? ' st-' + st : '');
+    return h('span', {
+      class: cls,
+      style: { width: size + 'px', height: size + 'px' },
+      'aria-hidden': 'true',
+    }, swordsSvg);
   },
 
   isDirectChat(chat) {
@@ -144,10 +215,11 @@ const EvalView = {
     const isFailed = Boolean(msg?.status === 'failed' || msg?.failed || (Array.isArray(msg?.parts) && msg.parts.some(p => p?.type === 'error')));
     const isEmptyDone = Boolean(!isStreaming && (!msg || !(msg.parts || []).some(p => (p?.type === 'text' && String(p.text || '').trim()) || p?.type === 'image' || p?.type === 'video')));
     const prominent = isFailed || isEmptyDone;
+    const sideLabel = pos === 'b' ? 'Model B' : (chat?.evalMode === 'direct' ? '当前模型' : 'Model A');
     const btn = h('button', {
       type: 'button',
       class: 'battle-regen-btn' + (prominent ? ' is-prominent' : '') + (isStreaming ? ' is-loading' : ''),
-      title: isStreaming ? '正在生成中 · 点击可中止并重新生成本轮回复' : '模型加载异常或未响应时，点击重新生成本轮回复',
+      title: isStreaming ? `正在生成中 · 点击可中止并重新生成 ${sideLabel} 回复` : `点击直接重新生成 ${sideLabel} 回复（无需切浏览器模式）`,
       'aria-label': '重新生成',
       onclick: async e => {
         e.stopPropagation();
@@ -155,8 +227,8 @@ const EvalView = {
         btn.classList.add('is-loading');
         try {
           if (typeof EvalEngine !== 'undefined' && typeof EvalEngine.regenerateTurn === 'function') {
-            if (typeof toast === 'function') toast('正在重新生成本轮回复…');
-            await EvalEngine.regenerateTurn(chat, { turn, pos });
+            if (typeof toast === 'function') toast(`正在重新生成 ${sideLabel} 回复…`);
+            await EvalEngine.regenerateTurn(chat, { turn, pos, msg });
           } else if (typeof EvalEngine !== 'undefined' && typeof EvalEngine.loadChat === 'function') {
             await EvalEngine.loadChat(chat, true);
           }
@@ -226,6 +298,38 @@ const EvalView = {
     const thinkMs = Number(timing.thinkingMs) || (timing.reasoningStartedAt && timing.reasoningCompletedAt ? (timing.reasoningCompletedAt - timing.reasoningStartedAt) : 0);
     const secStr = thinkMs > 0 ? `${(thinkMs / 1000).toFixed(1)}s` : '';
 
+    if (typeof Seg !== 'undefined' && !Seg.off && typeof StreamMD !== 'undefined') {
+      const det = Seg.box('eval', thinkKey + ':det', () => {
+        const titleSpan = h('span', { class: 'think-box-title rs-t', hidden: true });
+        const pulseEl = h('i', { class: 'think-pulse', 'aria-hidden': 'true', hidden: true });
+        const bodyBox = h('div', { class: 'think-box-body md prose muted', lang: '', translate: 'no' });
+        const dEl = h('details', { class: 'think-box reason not-prose', open: isOpen ? '' : null },
+          h('summary', { class: 'think-box-sum', role: 'button', title: '思考过程' },
+            typeof icon === 'function' ? icon('brain') : null,
+            titleSpan,
+            pulseEl
+          ),
+          bodyBox
+        );
+        dEl.__titleSpan = titleSpan;
+        dEl.__pulseEl = pulseEl;
+        dEl.__bodyBox = bodyBox;
+        dEl.addEventListener('toggle', () => {
+          this._openThinks.set(thinkKey, dEl.open);
+        });
+        return dEl;
+      });
+      det.classList.toggle('is-streaming', partStreaming);
+      if (this._openThinks.has(thinkKey)) det.open = Boolean(this._openThinks.get(thinkKey));
+      if (det.__titleSpan) {
+        det.__titleSpan.hidden = !secStr;
+        if (secStr && det.__titleSpan.textContent !== secStr) det.__titleSpan.textContent = secStr;
+      }
+      if (det.__pulseEl) det.__pulseEl.hidden = !partStreaming;
+      if (det.__bodyBox) StreamMD.paint(det.__bodyBox, txt || '…', partStreaming);
+      return det;
+    }
+
     const det = h('details', {
       class: 'think-box reason not-prose' + (partStreaming ? ' is-streaming' : ''),
       open: isOpen ? '' : null,
@@ -236,7 +340,7 @@ const EvalView = {
         partStreaming ? h('i', { class: 'think-pulse', 'aria-hidden': 'true' }) : null
       ),
       h('div', { class: 'think-box-body md prose muted', lang: '', translate: 'no' },
-        txt ? evalMd(txt, partStreaming) : h('span', { class: 'dim' }, '…')
+        txt ? evalMd(txt, partStreaming, thinkKey) : h('span', { class: 'dim' }, '…')
       )
     );
     det.addEventListener('toggle', () => {
@@ -319,8 +423,9 @@ const EvalView = {
       )
     );
   },
-  renderColumnBody(chat, msg, pos, isLastTurn) {
-    const body = h('div', { class: 'battle-col-body' });
+  renderColumnBody(chat, msg, pos, isLastTurn, reuseBody = null) {
+    const body = reuseBody || h('div', { class: 'battle-col-body' });
+    const kids = [];
     const isPending = Boolean(msg?.metadata?.pending || (isLastTurn && chat?.busy && (!msg || msg.status === 'pending')));
     const parts = Array.isArray(msg?.parts) ? msg.parts : [];
     let hasContent = false;
@@ -331,29 +436,29 @@ const EvalView = {
       if (!p || !p.type) continue;
       if (p.type === 'reasoning') {
         const th = this.renderThinkPart(p, msg, pos, isPending);
-        if (th) { body.append(th); hasContent = true; }
+        if (th) { kids.push(th); hasContent = true; }
       } else if (p.type === 'text') {
         const txt = String(p.text || '');
         if (!txt.trim()) continue;
         fullText += (fullText ? '\n' : '') + txt;
         const streaming = Boolean(isPending && p.state === 'streaming');
         if (typeof R !== 'undefined' && typeof R.text === 'function') {
-          body.append(R.text(p, streaming, msg, chat, (msg?.id || pos) + ':t' + i));
+          kids.push(R.text(p, streaming, msg, chat, (msg?.id || pos) + ':t' + i));
         } else {
-          body.append(evalMd(txt, streaming));
+          kids.push(evalMd(txt, streaming));
         }
         hasContent = true;
       } else if (p.type === 'image' || p.type === 'video' || (p.type === 'file' && /^(image|video)\//i.test(p.mediaType || p.contentType || ''))) {
         const mediaEl = this.renderMediaPart(p);
-        if (mediaEl) { body.append(mediaEl); hasContent = true; }
+        if (mediaEl) { kids.push(mediaEl); hasContent = true; }
       } else if (p.type === 'sources' && Array.isArray(p.sources)) {
         const srcEl = this.renderSourcesPart(p.sources);
-        if (srcEl) { body.append(srcEl); hasContent = true; }
+        if (srcEl) { kids.push(srcEl); hasContent = true; }
       } else if (p.type === 'source-url') {
         const srcEl = this.renderSourcesPart([p]);
-        if (srcEl) { body.append(srcEl); hasContent = true; }
+        if (srcEl) { kids.push(srcEl); hasContent = true; }
       } else if (p.type === 'error') {
-        body.append(h('div', { class: 'eval-error-box' }, typeof icon === 'function' ? icon('alert') : null, h('span', {}, String(p.text || '生成异常'))));
+        kids.push(h('div', { class: 'eval-error-box' }, typeof icon === 'function' ? icon('alert') : null, h('span', {}, String(p.text || '生成异常'))));
         hasContent = true;
       }
     }
@@ -366,42 +471,80 @@ const EvalView = {
           url: att.url,
           contentType: att.contentType,
         });
-        if (mediaEl) { body.append(mediaEl); hasContent = true; }
+        if (mediaEl) { kids.push(mediaEl); hasContent = true; }
       }
     }
     if (Array.isArray(msg?.sources) && msg.sources.length && !parts.some(p => p.type === 'sources')) {
       const srcEl = this.renderSourcesPart(msg.sources);
-      if (srcEl) { body.append(srcEl); hasContent = true; }
+      if (srcEl) { kids.push(srcEl); hasContent = true; }
     }
 
     if (msg?.status === 'failed' || msg?.failed) {
-      body.append(h('div', { class: 'eval-error-box' }, typeof icon === 'function' ? icon('alert') : null, h('span', {}, String(msg.failureReason || msg.errorText || '生成失败'))));
+      const sideLabel = pos === 'b' ? 'Model B' : (chat?.evalMode === 'direct' ? '当前模型' : 'Model A');
+      const inlineRetryBtn = h('button', {
+        type: 'button',
+        class: 'battle-regen-btn is-prominent eval-inline-retry-btn',
+        style: 'margin-left:auto;flex-shrink:0',
+        title: `直接重新生成 ${sideLabel} 回复`,
+        onclick: async e => {
+          e.stopPropagation();
+          if (!chat || typeof EvalEngine === 'undefined' || typeof EvalEngine.regenerateTurn !== 'function') return;
+          inlineRetryBtn.classList.add('is-loading');
+          try {
+            if (typeof toast === 'function') toast(`正在重新生成 ${sideLabel} 回复…`);
+            await EvalEngine.regenerateTurn(chat, { pos, msg });
+            if (typeof UI !== 'undefined' && UI.els?.chat === chat) {
+              UI.renderChat(chat, false);
+            }
+          } catch (err) {
+            if (typeof toast === 'function') {
+              toast('重新生成失败：' + (typeof describe === 'function' ? describe(err) : (err?.message || String(err))), 'err');
+            }
+          } finally {
+            inlineRetryBtn.classList.remove('is-loading');
+          }
+        },
+      },
+        typeof icon === 'function' ? icon('refresh') : '↻',
+        h('span', { class: 'regen-txt' }, '点击重试')
+      );
+      kids.push(
+        h('div', { class: 'eval-error-box', style: 'display:flex;align-items:center;gap:8px' },
+          typeof icon === 'function' ? icon('alert') : null,
+          h('span', {}, String(msg.failureReason || msg.errorText || '生成失败')),
+          inlineRetryBtn
+        )
+      );
       hasContent = true;
     }
 
     if (!hasContent && isPending) {
-      body.append(
+      kids.push(
         h('div', { class: 'msg-body typing-row' },
           h('div', { class: 'typing' }, h('i'), h('i'), h('i'))
         )
       );
     } else if (!hasContent && !msg) {
-      body.append(h('div', { class: 'battle-empty-col dim' }, '…'));
+      kids.push(h('div', { class: 'battle-empty-col dim' }, '…'));
     }
 
     if (fullText) {
       const copyTxt = fullText;
-      body.append(
-        h('div', { class: 'battle-col-foot' },
-          h('button', {
-            type: 'button',
-            class: 'ib xs',
-            title: `复制 (${copyTxt.length} 字)`,
-            onclick: () => typeof copyText === 'function' && copyText(copyTxt),
-          }, typeof icon === 'function' ? icon('copy') : '复制')
-        )
+      const footEl = reuseBody?.__footEl || h('div', { class: 'battle-col-foot' },
+        h('button', {
+          type: 'button',
+          class: 'ib xs',
+          onclick: () => typeof copyText === 'function' && copyText(footEl.__copyTxt || ''),
+        }, typeof icon === 'function' ? icon('copy') : '复制')
       );
+      footEl.__copyTxt = copyTxt;
+      const btn = footEl.querySelector('button');
+      if (btn) btn.title = `复制 (${copyTxt.length} 字)`;
+      if (reuseBody) reuseBody.__footEl = footEl;
+      kids.push(footEl);
     }
+    if (typeof patchKids === 'function') patchKids(body, kids);
+    else body.replaceChildren(...kids);
     return body;
   },
 
@@ -417,39 +560,82 @@ const EvalView = {
       const isStreamingB = Boolean(turn.b?.metadata?.pending || (isLastTurn && chat.busy && (!turn.b || turn.b.status === 'pending')));
       const winA = Boolean(vs?.voted && vs?.value === 'model_a');
       const winB = Boolean(vs?.voted && vs?.value === 'model_b');
+      const bSid = 'battle:' + (chat.sid || 'cur');
+      const msgSig = (m, isStr) => {
+        if (!m) return 'none:' + (isStr ? '1' : '0');
+        const pLen = Array.isArray(m.parts) ? m.parts.length : 0;
+        const lastP = pLen ? m.parts[pLen - 1] : null;
+        return `${m.id || ''}:${m.v || 0}:${m.status || ''}:${m.failed ? 1 : 0}:${isStr ? 1 : 0}:${pLen}:${lastP?.type || ''}:${(lastP?.text || '').length}:${(m.text || '').length}:${(m.reasoning || '').length}`;
+      };
+      const voteSig = `${vs?.voted ? 1 : 0}:${vs?.value || ''}:${vs?.revealed ? 1 : 0}:${vs?.modelAName || ''}:${vs?.modelBName || ''}`;
+      const colASig = `${msgSig(turn.a, isStreamingA)}:${winA ? 1 : 0}:${isLastTurn ? 1 : 0}:${voteSig}`;
+      const colBSig = `${msgSig(turn.b, isStreamingB)}:${winB ? 1 : 0}:${isLastTurn ? 1 : 0}:${voteSig}`;
+      const renderCol = (pos, msg, isStreaming, win, colSig) => {
+        const cls = `battle-col col-${pos}` + (win ? ' is-winner' : '') + (isStreaming ? ' is-streaming' : '');
+        const headSig = `${isStreaming ? 1 : 0}:${msg?.id || ''}:${msg?.status || ''}:${msg?.failed ? 1 : 0}:${msg?.modelId || ''}:${voteSig}`;
+        if (typeof Seg !== 'undefined' && !Seg.off && typeof patchKids === 'function') {
+          const colEl = Seg.box(bSid, `col${pos.toUpperCase()}Box:` + turn.id, () => {
+            const bodyEl = h('div', { class: 'battle-col-body' });
+            const el = h('div', { class: cls, 'data-pos': pos }, bodyEl);
+            el.__body = bodyEl;
+            return el;
+          });
+          if (colEl.__sig === colSig) return colEl;
+          colEl.__sig = colSig;
+          colEl.className = cls;
+          if (msg?.id) colEl.setAttribute('data-message-id', msg.id);
+          else colEl.removeAttribute('data-message-id');
+          if (colEl.__headSig !== headSig || !colEl.__head) {
+            colEl.__head = this.renderColumnHeader(chat, msg, pos, isStreaming, turn);
+            colEl.__headSig = headSig;
+          }
+          this.renderColumnBody(chat, msg, pos, isLastTurn, colEl.__body);
+          patchKids(colEl, [colEl.__head, colEl.__body]);
+          return colEl;
+        }
+        return h('div', {
+          class: cls,
+          'data-pos': pos,
+          'data-message-id': msg?.id || null,
+        },
+          this.renderColumnHeader(chat, msg, pos, isStreaming, turn),
+          this.renderColumnBody(chat, msg, pos, isLastTurn)
+        );
+      };
+      const colA = renderCol('a', turn.a, isStreamingA, winA, colASig);
+      const colB = renderCol('b', turn.b, isStreamingB, winB, colBSig);
+      const userSig = turn.user ? `${turn.user.id || ''}:${turn.user.v || 0}:${(turn.user.text || '').length}` : '0';
+      const userEl = turn.user
+        ? ((typeof Seg !== 'undefined' && !Seg.off) ? Seg.use(bSid, 'usr:' + turn.id, userSig, () => this.renderUserBubble(turn.user, chat)) : this.renderUserBubble(turn.user, chat))
+        : null;
 
-      const colA = h('div', {
-        class: 'battle-col col-a' + (winA ? ' is-winner' : '') + (isStreamingA ? ' is-streaming' : ''),
-        'data-pos': 'a',
-        'data-message-id': turn.a?.id || null,
-      },
-        this.renderColumnHeader(chat, turn.a, 'a', isStreamingA, turn),
-        this.renderColumnBody(chat, turn.a, 'a', isLastTurn)
-      );
-
-      const colB = h('div', {
-        class: 'battle-col col-b' + (winB ? ' is-winner' : '') + (isStreamingB ? ' is-streaming' : ''),
-        'data-pos': 'b',
-        'data-message-id': turn.b?.id || null,
-      },
-        this.renderColumnHeader(chat, turn.b, 'b', isStreamingB, turn),
-        this.renderColumnBody(chat, turn.b, 'b', isLastTurn)
-      );
-
-      const turnEl = h('div', {
-        class: 'battle-turn',
-        'data-turn-id': turn.id,
-      },
-        turn.user ? this.renderUserBubble(turn.user, chat) : null,
-        h('div', { class: 'battle-grid' }, colA, colB)
-      );
+      let turnEl;
+      if (typeof Seg !== 'undefined' && !Seg.off && typeof patchKids === 'function') {
+        turnEl = Seg.box(bSid, 'turnBox:' + turn.id, () => {
+          const g = h('div', { class: 'battle-grid' });
+          const tEl = h('div', { class: 'battle-turn', 'data-turn-id': turn.id }, g);
+          tEl.__grid = g;
+          return tEl;
+        });
+        patchKids(turnEl.__grid, [colA, colB]);
+        patchKids(turnEl, userEl ? [userEl, turnEl.__grid] : [turnEl.__grid]);
+      } else {
+        turnEl = h('div', {
+          class: 'battle-turn',
+          'data-turn-id': turn.id,
+        },
+          userEl,
+          h('div', { class: 'battle-grid' }, colA, colB)
+        );
+      }
       els.push(turnEl);
     });
 
     const voteBar = this.renderVoteBar(chat);
     if (voteBar) els.push(voteBar);
 
-    threadEl.replaceChildren(...els);
+    if (typeof patchKids === 'function') patchKids(threadEl, els);
+    else threadEl.replaceChildren(...els);
   },
 
   renderVoteBar(chat) {

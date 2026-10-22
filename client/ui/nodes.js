@@ -324,14 +324,17 @@ const NodeMgr = {
     const res = new Map();
     function renderNodes() {
       if (!Nodes.list.length) { list.replaceChildren(h('p', { class: 'note' }, '还没有节点。点「导入」粘贴订阅地址或 vless:// 链接。')); return; }
+      const acctParsed = Nodes.accts.filter(a => isVless(a.proxy)).map(a => ({ a, key: Nodes.key(Vless.parse(a.proxy)) }));
       list.replaceChildren(...Nodes.list.map(n => {
-        const used = Nodes.usedBy(n), r = res.get(n.id);
+        const nk = Nodes.key(n), used = acctParsed.filter(x => x.a.nodeId === n.id || x.key === nk).map(x => x.a);
+        const r = res.get(n.id);
         const st = h('span', { class: 'nm-st ' + (r?.ok ? 'ok' : r?.bad ? 'bad' : 'dim') }, r?.text || '');
+        const paintSt = rv => { st.className = 'nm-st ' + (rv?.ok ? 'ok' : rv?.bad ? 'bad' : 'dim'); st.textContent = rv?.text || ''; };
         return h('div', { class: 'nm-row' },
           h('div', { class: 'nm-main' }, h('b', {}, n.name || n.address), h('span', { class: 'dim' }, n.address + ':' + n.port + ' · ' + n.network + (n.security !== 'none' ? '+' + n.security : '') + (n.ech ? ' · ECH' : '') + (Vless.proxyIpOf(n.path) ? ' · proxyip=' + Vless.proxyIpOf(n.path) : '')),
             h('span', { class: 'nm-used dim' }, used.length ? used.length + ' 个账号在用：' + used.map(a => emailUser(a)).join('、') : '没有账号在用'), st),
           h('div', { class: 'nm-act' },
-            h('button', { class: 'btn ghost xs', onclick: async () => { res.set(n.id, { text: '测试中…' }); renderNodes(); const t0 = now(); const x = await Host.testIp({ proxy: Vless.toLink(n), proxyIp: '' }).catch(e => ({ error: cleanErr(e) })); res.set(n.id, x?.ip ? { ok: 1, text: '✓ ' + x.ip + (x.loc ? ' ' + x.loc : '') + ' · ' + ((now() - t0) / 1000).toFixed(1) + 's' } : { bad: 1, text: '✗ ' + (x?.error || '失败') }); renderNodes(); } }, '测试'),
+            h('button', { class: 'btn ghost xs', onclick: async () => { const w = { text: '测试中…' }; res.set(n.id, w); paintSt(w); const t0 = now(); const x = await Host.testIp({ proxy: Vless.toLink(n), proxyIp: '' }).catch(e => ({ error: cleanErr(e) })); const fin = x?.ip ? { ok: 1, text: '✓ ' + x.ip + (x.loc ? ' ' + x.loc : '') + ' · ' + ((now() - t0) / 1000).toFixed(1) + 's' } : { bad: 1, text: '✗ ' + (x?.error || '失败') }; res.set(n.id, fin); paintSt(fin); } }, '测试'),
             h('button', { class: 'btn ghost xs', onclick: () => NodeEditor.open(n, () => renderNodes()) }, '编辑'),
             h('button', { class: 'btn ghost xs', title: '复制分享链接', onclick: () => copyText(Vless.toLink(n)) }, icon('copy')),
             h('button', { class: 'btn ghost xs danger', onclick: async () => { if (!await Dialog.confirm({ title: '删除节点', text: '删除「' + (n.name || n.address) + '」？' + (used.length ? '\n正在使用它的账号会保留当前配置，但以后不再同步。' : ''), ok: '删除', danger: true })) return; Nodes.list = Nodes.list.filter(x => x !== n); Nodes.save(); renderNodes(); } }, '删除')));

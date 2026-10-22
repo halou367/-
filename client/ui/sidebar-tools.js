@@ -138,7 +138,7 @@ const ActiveFrame = {
     this.path=document.createElementNS(ns,'path');this.svg.append(this.path);main.append(this.svg);
     this.ro=new ResizeObserver(()=>this.schedule());this.ro.observe(main);this.ro.observe(tabs);this.ro.observe(document.querySelector('#tabs'));
     this.mo=new MutationObserver(()=>this.schedule());this.mo.observe(tabs,{childList:true,subtree:true,attributes:true,attributeFilter:['class','style']});
-    this.mo.observe(body,{childList:true,subtree:true,attributes:true,attributeFilter:['id']});
+    this.mo.observe(body,{childList:true,subtree:false});
     this.scrollRoot=tabs;this.onScroll=()=>this.schedule();tabs.addEventListener('scroll',this.onScroll,{passive:true});this.schedule();
   },
   schedule() { if(this.raf)return;this.raf=requestAnimationFrame(()=>{this.raf=0;this.paint();}); },

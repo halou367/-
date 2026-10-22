@@ -91,9 +91,22 @@ const PelicanTest = (() => {
             } catch {}
           }
           const latestMi = Models.get(sid);
-          const latestName = latestMi && !latestMi.guess && latestMi.name ? Strength.canon(latestMi.name) : name;
-          if (latestName && latestName !== name) {
-            remember(sid, { at: now(), score, think: est.think, thought: own != null, estimated: own != null && !real, name: latestName });
+          const hmBest = latestMi?.habitFeatures?.htmlSvgMatch?.best || chat?._habitFeatures?.htmlSvgMatch?.best || null;
+          const spectralScore = latestMi?.habitFeatures?.htmlSvgMatch?.spectralScore ?? chat?._habitFeatures?.htmlSvgMatch?.spectralScore ?? null;
+          const latestName = (latestMi && !latestMi.guess && latestMi.name)
+            ? Strength.canon(latestMi.name)
+            : (name || (hmBest?.canon ? Strength.canon(hmBest.canon) : ''));
+          if ((latestName && latestName !== name) || spectralScore != null) {
+            remember(sid, {
+              at: now(),
+              score,
+              think: est.think,
+              thought: own != null,
+              estimated: own != null && !real,
+              name: latestName || name,
+              ...(spectralScore != null ? { spectralScore } : {}),
+              ...(hmBest?.canon ? { htmlSvgModel: hmBest.canon, htmlSvgVendor: hmBest.vendor, htmlSvgEffort: hmBest.effort } : {}),
+            });
           }
           shot = await PelicanShots.auto(sid, chat);
           if (shot?.rec) { try { Dock.render(); } catch {} toast('鹈鹕测试图已自动保存 · ' + shot.rec.model + '（模型信息 · 概览 · 鹈鹕测试图）'); }
@@ -180,25 +193,14 @@ const PelicanTest = (() => {
     }
 
     let prompt = '';
-    if (normKind === 'pelican' || normKind === 'svg') {
-      prompt = (typeof GachaPrompts !== 'undefined' && typeof GachaPrompts.svg === 'function')
-        ? GachaPrompts.svg()
-        : 'Create a new standalone HTML file. Use inline SVG to show a 2D animation of a pelican pedaling a bicycle forward. Keep the scene clean and the movement smooth. Output the completed file directly; do not run tests or checks.';
-    } else if (normKind === 'habit' || normKind === 'micro' || normKind === 'probe') {
+    if (normKind === 'habit' || normKind === 'micro' || normKind === 'probe') {
       prompt = (typeof GachaPrompts !== 'undefined' && typeof GachaPrompts.habit === 'function')
         ? GachaPrompts.habit()
         : '请在工作区创建并保存一个自包含的单文件 `.html` 卡片，内联一个极简 2D 动态 SVG 状态徽章，全文控制在 35～45 行以内，随后用中文分 2～3 条加粗要点总结你的设计与动效实现。';
     } else {
-      const ta = (typeof UI !== 'undefined' && UI.els?.composer?.querySelector?.('textarea'))
-        || (typeof document !== 'undefined' ? document.querySelector?.('#view .composer textarea') : null);
-      const typed = String(ta?.value || '').trim();
-      if (typed) {
-        prompt = typed;
-      } else if (typeof GachaPrompts !== 'undefined' && typeof GachaPrompts.autoqaOne === 'function') {
-        prompt = GachaPrompts.autoqaOne(1);
-      } else {
-        prompt = '请无需调用任何工具，直接用中文分 2 条简短加粗要点说明如果为卡片组件增加深色模式，你会如何调整配色与对比度（80 字以内）？';
-      }
+      prompt = (typeof GachaPrompts !== 'undefined' && typeof GachaPrompts.svg === 'function')
+        ? GachaPrompts.svg()
+        : 'Create a new standalone HTML file. Use inline SVG to show a 2D animation of a pelican pedaling a bicycle forward. Keep the scene clean and the movement smooth. Output the completed file directly; do not run tests or checks.';
     }
 
     if (typeof UI !== 'undefined' && typeof UI.sendQuickTestPrompt === 'function') {
@@ -250,7 +252,7 @@ const PelicanTest = (() => {
       {
         kind: 'pelican',
         title: '鹈鹕测试',
-        sub: '发送英文 2D 鹈鹕骑车动态 SVG 标准题，测试动画与思考强度',
+        sub: '随机以多国语言发送 2D 鹈鹕骑车动态 SVG 标准题，测试动画与思考强度',
         ico: 'pelican',
       },
       {
@@ -258,12 +260,6 @@ const PelicanTest = (() => {
         title: '微缩探针测试',
         sub: '发送 35～45 行 HTML+SVG 微缩徽章探针，单轮点亮 20 维习惯特征',
         ico: 'fingerprint',
-      },
-      {
-        kind: 'text',
-        title: '快速发送文字进行测试',
-        sub: '无需工具调用，快速发送短文字测试题对比响应速度与行文习惯',
-        ico: 'send',
       },
     ];
 
@@ -332,5 +328,14 @@ const PelicanTest = (() => {
     return pop;
   }
 
-  return { start, isRunning, result, of: result, all, merge, drop, openMenu, closeMenu, runQuickTest };
+  function classifyHtmlSvg(code, opts = {}) {
+    try {
+      if (typeof BillingProbe !== 'undefined' && BillingProbe?.habit?.classifyHtmlSvg) {
+        return BillingProbe.habit.classifyHtmlSvg(code, opts);
+      }
+    } catch {}
+    return null;
+  }
+
+  return { start, isRunning, result, of: result, all, merge, drop, openMenu, closeMenu, runQuickTest, classifyHtmlSvg };
 })();

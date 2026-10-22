@@ -220,15 +220,23 @@
     *,*::before,*::after{scrollbar-width:none!important}
     *::-webkit-scrollbar{display:none!important;width:0!important;height:0!important}
   `);
+  const setStyleIf = (st, prop, val, pri = '') => {
+    if (st.getPropertyValue(prop) !== val || (pri && st.getPropertyPriority(prop) !== pri)) st.setProperty(prop, val, pri);
+  };
   const pushPage = () => {
     if (!document.adoptedStyleSheets.includes(viewportSheet)) document.adoptedStyleSheets = [...document.adoptedStyleSheets, viewportSheet];
     const st = document.documentElement.style;
-    st.setProperty('--anc-bar', bottom ? `calc(${H}px + var(--sa-bottom,0px))` : `calc(${H}px + var(--sa-top,0px))`);
-    if (bottom) st.setProperty('margin-bottom', 'calc(var(--anc-bar) + var(--anc-foot,0px))', 'important'); else { st.setProperty('margin-top', 'var(--anc-bar)', 'important'); st.setProperty('margin-bottom', 'var(--anc-foot,0px)', 'important'); }
+    setStyleIf(st, '--anc-bar', bottom ? `calc(${H}px + var(--sa-bottom,0px))` : `calc(${H}px + var(--sa-top,0px))`);
+    if (bottom) setStyleIf(st, 'margin-bottom', 'calc(var(--anc-bar) + var(--anc-foot,0px))', 'important');
+    else { setStyleIf(st, 'margin-top', 'var(--anc-bar)', 'important'); setStyleIf(st, 'margin-bottom', 'var(--anc-foot,0px)', 'important'); }
     // 只给 html 加边距挡不住「position:fixed; top:0」的元素（官网侧栏顶部的 logo / 折叠按钮、顶部条会被浏览条盖住）。
     // 让 body 成为 fixed 元素的定位容器（transform 不为 none），fixed 元素就排在「浏览条以下」的区域里，弹窗 / 浮层同理。
     const b = document.body;
-    if (b) { b.style.setProperty('margin', '0', 'important'); b.style.setProperty('transform', 'translate(0,0)', 'important'); b.style.setProperty('min-height', 'calc(100svh - var(--anc-bar,0px) - var(--anc-foot,0px))', 'important'); }
+    if (b) {
+      setStyleIf(b.style, 'margin', '0', 'important');
+      setStyleIf(b.style, 'transform', 'translate(0,0)', 'important');
+      setStyleIf(b.style, 'min-height', 'calc(100svh - var(--anc-bar,0px) - var(--anc-foot,0px))', 'important');
+    }
   };
   // ---- 浏览器模式（Brana 官网）：左侧对话卡片套用客户端样式；保留官网原生输入框不修改 ----
   // 只加样式表（构造样式表，不受 CSP 影响），不改官网的 DOM 结构和事件；官网改版时最多是样式没套上，不会坏功能。
@@ -551,7 +559,7 @@
       window.fetch = wrappedFetch;
 
       const scanRescueBanner = () => {
-        if (!document.body) return;
+        if (!document.body || !(document.body.textContent || '').includes('The AI service rejected this request')) return;
         const chatM = /\/(?:chat|c|agent)\/([0-9a-f-]{20,})/i.exec(location.pathname);
         const chatId = chatM ? chatM[1] : '';
         const divs = document.body.querySelectorAll('div,p,span');

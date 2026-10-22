@@ -17,20 +17,25 @@ function archivePayload(buffer) {
   // Local packages are explicitly approved by the user; this does not verify a Web Store signature.
   return buffer.subarray(offset);
 }
+const _manifestCache = new Map();
 async function manifest(folder) {
   const file = path.join(folder, 'manifest.json'), st = await fs.stat(file);
   if (!st.isFile() || st.size > 1024 * 1024) throw Error('扩展 manifest.json 无效');
+  const sig = `${st.mtimeMs}:${st.size}`, hit = _manifestCache.get(file);
+  if (hit && hit.sig === sig) return hit.m;
   const m = JSON.parse(await fs.readFile(file, 'utf8'));
   if (![2, 3].includes(m.manifest_version) || typeof m.name !== 'string' || typeof m.version !== 'string') throw Error('扩展清单缺少有效名称、版本或 manifest_version');
+  _manifestCache.set(file, { sig, m });
+  if (_manifestCache.size > 128) _manifestCache.delete(_manifestCache.keys().next().value);
   return m;
 }
 function createExtensions({ root, sessionFor, storage, compat }) {
   const api=ses=>ses.extensions&&typeof ses.extensions.loadExtension==='function'?ses.extensions:ses;
   // One registry; website sessions stay separate while extension local storage is mirrored globally.
-  const sessions = new Map(), errors = new Map();
+  const sessions = new Map(), errors = new Map(), attached = new Set(), iconCache = new Map();
   const directory = id => { if (!/^[\w-]{1,80}$/.test(id)) throw Error('账号标识无效'); return path.join(root, id); };
   const shared = directory('shared');
-  let statePromise, queue = Promise.resolve();
+  let statePromise, queue = Promise.resolve(), mutating = 0;
   const loaded = (id, e) => api(sessions.get(id)).getAllExtensions().find(x => path.resolve(x.path) === path.resolve(e.path));
   async function readRegistry(file) {
     const rows = JSON.parse(await fs.readFile(file, 'utf8'));
@@ -80,12 +85,14 @@ function createExtensions({ root, sessionFor, storage, compat }) {
     directory(id);
     if (sessions.has(id)) return;
     const ses=sessionFor(id);compat?.prepareSession(id,ses);sessions.set(id,ses);errors.set(id,new Map());
-    for (const e of s.entries) if (e.enabled) {
+    await Promise.all(s.entries.filter(e => e.enabled).map(async e => {
       try { const ext=loaded(id,e);if(ext)await syncStorage(id,e,ext);else await load(id,e); } catch (error) { errors.get(id).set(e.key,error.message); }
-    }
+    }));
+    attached.add(id);
   }
-  function serial(id, fn) {
-    const job = queue.catch(() => {}).then(async () => { const s = await state(); await attach(id,s); return fn(s); });
+  function serial(id, fn, isMutation = false) {
+    if (isMutation) mutating++;
+    const job = queue.catch(() => {}).then(async () => { const s = await state(); await attach(id,s); return fn(s); }).finally(() => { if (isMutation) mutating = Math.max(0, mutating - 1); });
     queue = job; return job;
   }
   async function rows(id, s) {
@@ -99,7 +106,7 @@ function createExtensions({ root, sessionFor, storage, compat }) {
     return {entries,error:s.error};
   }
   const list = id => serial(id, s => rows(id,s));
-  const ready = id => serial(id, () => undefined);
+  const ready = id => (attached.has(id) && !mutating && /^[\w-]{1,80}$/.test(id)) ? Promise.resolve() : serial(id, () => undefined);
   // Roll back every touched session when a load or durable registry write fails.
   async function update(s, e, enabled, next, reload=false) {
     if (s.error) throw Error('请先修复无法读取的扩展记录，未覆盖原文件');
@@ -152,7 +159,7 @@ function createExtensions({ root, sessionFor, storage, compat }) {
       if (s.entries.some(e => path.resolve(e.path) === path.resolve(prepared.path))) throw Error('此目录已经加载');
       const e = {key:crypto.randomUUID(),path:prepared.path,owned:prepared.owned,enabled:true};
       await update(s,e,true,[...s.entries,e]); return rows(id,s);
-    });
+    }, true);
   }
   async function change(id, key, action) {
     return serial(id, async s => {
@@ -163,7 +170,7 @@ function createExtensions({ root, sessionFor, storage, compat }) {
       await update(s,e,enabled,next,action==='reload');
       if (action === 'remove') await cleanup(id,e);
       return rows(id,s);
-    });
+    }, true);
   }
   async function pin(id, key, pinned) {
     return serial(id, async s => {
@@ -174,7 +181,7 @@ function createExtensions({ root, sessionFor, storage, compat }) {
       s.entries = before.map(x => x === e ? {...x,pinned} : x);
       try { await persist(s); } catch (error) { s.entries = before; throw error; }
       return rows(id,s);
-    });
+    }, true);
   }
   async function toolbar(id,tabId) {
     const data = await list(id);
@@ -187,7 +194,15 @@ function createExtensions({ root, sessionFor, storage, compat }) {
           const base = await fs.realpath(e.path), file = await fs.realpath(path.resolve(base,relative)), rel = path.relative(base,file);
           if (!rel.startsWith('..') && !path.isAbsolute(rel) && /\.(png|jpe?g|webp)$/i.test(file)) {
             const stat = await fs.stat(file);
-            if (stat.isFile() && stat.size <= 128*1024) icon = 'data:image/'+(/\.png$/i.test(file)?'png':/\.webp$/i.test(file)?'webp':'jpeg')+';base64,'+(await fs.readFile(file)).toString('base64');
+            if (stat.isFile() && stat.size <= 128*1024) {
+              const sig = `${stat.mtimeMs}:${stat.size}`, hit = iconCache.get(file);
+              if (hit && hit.sig === sig) icon = hit.icon;
+              else {
+                icon = 'data:image/'+(/\.png$/i.test(file)?'png':/\.webp$/i.test(file)?'webp':'jpeg')+';base64,'+(await fs.readFile(file)).toString('base64');
+                iconCache.set(file, { sig, icon });
+                if (iconCache.size > 128) iconCache.delete(iconCache.keys().next().value);
+              }
+            }
           }
         }
       } catch {}

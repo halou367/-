@@ -513,9 +513,9 @@ const MobFit = {
   },
   init() {
     if (this.t) return;
-    const run = () => { cancelAnimationFrame(this.raf); this.raf = requestAnimationFrame(() => this.measure()); };
+    const run = () => { if (!isMob()) return; cancelAnimationFrame(this.raf); this.raf = requestAnimationFrame(() => this.measure()); };
     addEventListener('resize', run); window.visualViewport?.addEventListener('resize', run); window.visualViewport?.addEventListener('scroll', run);
-    document.addEventListener('focusin', () => setTimeout(run, 60)); document.addEventListener('focusout', () => setTimeout(run, 120));
+    document.addEventListener('focusin', () => { if (isMob()) setTimeout(run, 60); }); document.addEventListener('focusout', () => { if (isMob()) setTimeout(run, 120); });
     try { new ResizeObserver(run).observe(document.body); } catch {}
     this.t = setInterval(() => { if (isMob() && !document.body.classList.contains('ws-off')) this.measure(); }, 700);
     run();

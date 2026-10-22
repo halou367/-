@@ -1,0 +1,445 @@
+[
+ {
+  "cmd": "cat a.txt b.txt | grep x > out.txt 2>/dev/null",
+  "cwd": "/home/user/proj",
+  "expected": {
+   "read": [
+    "/home/user/proj/a.txt",
+    "/home/user/proj/b.txt"
+   ],
+   "edit": [
+    "/home/user/proj/out.txt"
+   ],
+   "search": 1
+  }
+ },
+ {
+  "cmd": "cd src && sed -i 's/a/b/' x.ts y.ts; sed -n 1,5p z.ts",
+  "cwd": "/home/user/proj",
+  "expected": {
+   "read": [
+    "/home/user/proj/src/z.ts"
+   ],
+   "edit": [
+    "/home/user/proj/src/x.ts",
+    "/home/user/proj/src/y.ts"
+   ]
+  }
+ },
+ {
+  "cmd": "cp a.js b.js dist/; mv old.txt new.txt; cp -r lib/ /home/user/backup/",
+  "cwd": "/home/user/proj",
+  "expected": {
+   "read": [
+    "/home/user/proj/a.js",
+    "/home/user/proj/b.js",
+    "/home/user/proj/old.txt",
+    "/home/user/proj/lib"
+   ],
+   "edit": [
+    "/home/user/proj/dist/a.js",
+    "/home/user/proj/dist/b.js",
+    "/home/user/proj/new.txt",
+    "/home/user/backup/lib"
+   ]
+  }
+ },
+ {
+  "cmd": "python3 -c \"open('w.txt','w').write('x'); open('r.txt').read()\"",
+  "cwd": "/home/user/proj",
+  "expected": {
+   "read": [
+    "/home/user/proj/r.txt"
+   ],
+   "edit": [
+    "/home/user/proj/w.txt"
+   ]
+  }
+ },
+ {
+  "cmd": "python3 - <<'PY'\np='cfg.json'\nopen(p,'w').write('1')\nfrom pathlib import Path\nPath('n.md').write_text('x')\nPY\necho done",
+  "cwd": "/home/user/proj",
+  "expected": {
+   "edit": [
+    "/home/user/proj/cfg.json",
+    "/home/user/proj/n.md"
+   ]
+  }
+ },
+ {
+  "cmd": "cat > f.txt <<EOF\nhello > not_a_file\nEOF",
+  "cwd": "/home/user/proj",
+  "expected": {
+   "edit": [
+    "/home/user/proj/f.txt"
+   ]
+  }
+ },
+ {
+  "cmd": "echo 'a # b' \"c \\\" d\" e\\ f # comment > x",
+  "cwd": "/home/user/proj",
+  "expected": {}
+ },
+ {
+  "cmd": "echo \"unterminated > y",
+  "cwd": "/home/user/proj",
+  "expected": {
+   "edit": [
+    "/home/user/proj/y"
+   ]
+  }
+ },
+ {
+  "cmd": "echo \"keep \\n backslash\" > z1",
+  "cwd": "/home/user/proj",
+  "expected": {
+   "edit": [
+    "/home/user/proj/z1"
+   ]
+  }
+ },
+ {
+  "cmd": "timeout 30 env -u FOO A=1 node --test test/ 2>&1 | tee log.txt",
+  "cwd": "/home/user/proj",
+  "expected": {
+   "edit": [
+    "/home/user/proj/log.txt"
+   ]
+  }
+ },
+ {
+  "cmd": "python3 -B 云端本地协同工具包/bridge_sync.py push --files a b --summary 'x'",
+  "cwd": "/home/user/proj",
+  "expected": {
+   "push": 1
+  }
+ },
+ {
+  "cmd": "python3 -B 云端本地协同工具包/bridge_sync.py pull x; python3 bridge_sync.py notes --current a",
+  "cwd": "/home/user/proj",
+  "expected": {
+   "pull": 1,
+   "notes": 1
+  }
+ },
+ {
+  "cmd": "python3 云端聊天室/chatroom.py skill code-location; python3 chatroom.py skill add https://github.com/o/r/my-skill/",
+  "cwd": "/home/user/proj",
+  "expected": {
+   "skills": [
+    {
+     "id": "code-location",
+     "how": "read"
+    },
+    {
+     "id": "my-skill",
+     "how": "install"
+    }
+   ]
+  }
+ },
+ {
+  "cmd": "python3 chatroom.py --state /s skill list; python3 chatroom.py skill add owner/repo",
+  "cwd": "/home/user/proj",
+  "expected": {
+   "skills": [
+    {
+     "id": "repo",
+     "how": "install"
+    }
+   ]
+  }
+ },
+ {
+  "cmd": "curl -sS -X POST https://h/api/bundle -d @x; curl https://h/api/file?p=1; curl 'https://h/api/agent/skill?id=%E4%B8%AD'",
+  "cwd": "/home/user/proj",
+  "expected": {
+   "skills": [
+    {
+     "id": "中",
+     "how": "read"
+    }
+   ],
+   "push": 1,
+   "pull": 1
+  }
+ },
+ {
+  "cmd": "curl https://h/api/bundle?x=1; curl https://h/api/read",
+  "cwd": "/home/user/proj",
+  "expected": {
+   "pull": 2
+  }
+ },
+ {
+  "cmd": "rsync -a src/ host:dst; scp a b:c",
+  "cwd": "/home/user/proj",
+  "expected": {
+   "read": [
+    "/home/user/proj/src",
+    "/home/user/proj/a"
+   ],
+   "edit": [
+    "/home/user/proj/host:dst",
+    "/home/user/proj/b:c"
+   ],
+   "push": 2
+  }
+ },
+ {
+  "cmd": "touch new.txt && rm -f old.txt tmp/*.log && unlink z",
+  "cwd": "/home/user/proj",
+  "expected": {
+   "edit": [
+    "/home/user/proj/new.txt",
+    "/home/user/proj/old.txt",
+    "/home/user/proj/tmp/*.log",
+    "/home/user/proj/z"
+   ]
+  }
+ },
+ {
+  "cmd": "sudo nice -n 5 cat ~/x.txt; ls -la; find . -name '*.js'; diff -rq a b; diff a b",
+  "cwd": "/home/user/proj",
+  "expected": {
+   "read": [
+    "/home/user/proj/a",
+    "/home/user/proj/b"
+   ],
+   "search": 3
+  }
+ },
+ {
+  "cmd": "awk '{print}' in.txt; awk -f prog.awk data.txt; sed -e s/x/y/ -e s/a/b/ f1 f2",
+  "cwd": "/home/user/proj",
+  "expected": {
+   "read": [
+    "/home/user/proj/in.txt",
+    "/home/user/proj/prog.awk",
+    "/home/user/proj/data.txt",
+    "/home/user/proj/s/x/y",
+    "/home/user/proj/s/a/b",
+    "/home/user/proj/f1",
+    "/home/user/proj/f2"
+   ]
+  }
+ },
+ {
+  "cmd": "cat < input.txt; wc -l <<< 'abc'; cmd 2>&1 >&2; echo x >| forced.txt; echo y &>> both.log",
+  "cwd": "/home/user/proj",
+  "expected": {
+   "read": [
+    "/home/user/proj/input.txt"
+   ],
+   "edit": [
+    "/home/user/proj/forced.txt",
+    "/home/user/proj/both.log"
+   ]
+  }
+ },
+ {
+  "cmd": "echo a 1> one.txt; echo b 2> err.txt",
+  "cwd": "/home/user/proj",
+  "expected": {
+   "edit": [
+    "/home/user/proj/one.txt"
+   ]
+  }
+ },
+ {
+  "cmd": "cat /tmp/x /dev/null /var/tmp/y ./rel/../file",
+  "cwd": "/home/user/proj",
+  "expected": {
+   "read": [
+    "/home/user/proj/file"
+   ]
+  }
+ },
+ {
+  "cmd": "cat agent-lib/me/skills/sk1/SKILL.md; cat 云端本地Agent/skills/sk2/x",
+  "cwd": "/home/user/proj",
+  "expected": {
+   "skills": [
+    {
+     "id": "sk1",
+     "how": "read"
+    },
+    {
+     "id": "sk2",
+     "how": "read"
+    }
+   ],
+   "read": [
+    "/home/user/proj/agent-lib/me/skills/sk1/SKILL.md",
+    "/home/user/proj/云端本地Agent/skills/sk2/x"
+   ]
+  }
+ },
+ {
+  "cmd": "(cd sub && cat inner.txt); cat outer.txt",
+  "cwd": "/home/user/proj",
+  "expected": {
+   "read": [
+    "/home/user/proj/sub/inner.txt",
+    "/home/user/proj/sub/);",
+    "/home/user/proj/sub/cat",
+    "/home/user/proj/sub/outer.txt"
+   ]
+  }
+ },
+ {
+  "cmd": "cd ..; cat up.txt; cd ~/home2; cat h.txt; cd -; cat dash.txt",
+  "cwd": "/home/user/proj",
+  "expected": {
+   "read": [
+    "/home/user/up.txt",
+    "/home/user/~/home2/h.txt",
+    "/home/user/~/home2/dash.txt"
+   ]
+  }
+ },
+ {
+  "cmd": "for f in a b; do cat $f; done; cat $HOME/v.txt",
+  "cwd": "/home/user/proj",
+  "expected": {
+   "read": [
+    "$HOME/v.txt"
+   ]
+  }
+ },
+ {
+  "cmd": "X=1 Y='a b' python3 script.py arg",
+  "cwd": "/home/user/proj",
+  "expected": {}
+ },
+ {
+  "cmd": "cat '' \"\" 'q'",
+  "cwd": "/home/user/proj",
+  "expected": {
+   "read": [
+    "/home/user/proj/q"
+   ]
+  }
+ },
+ {
+  "cmd": "echo a\\\nb",
+  "cwd": "/home/user/proj",
+  "expected": {}
+ },
+ {
+  "cmd": "install -m 644 a.conf /etc/a.conf; cp only_one",
+  "cwd": "/home/user/proj",
+  "expected": {
+   "read": [
+    "/home/user/proj/644",
+    "/home/user/proj/a.conf"
+   ],
+   "edit": [
+    "/etc/a.conf"
+   ]
+  }
+ },
+ {
+  "cmd": "truncate -s 0 big.log; patch -p1 < fix.diff",
+  "cwd": "/home/user/proj",
+  "expected": {
+   "read": [
+    "/home/user/proj/fix.diff"
+   ],
+   "edit": [
+    "/home/user/proj/0",
+    "/home/user/proj/big.log"
+   ]
+  }
+ },
+ {
+  "cmd": "python3 <<'EOF'\nf=open(\"data/in.csv\")\nwith open('out/res.txt', mode='a') as g: pass\nEOF",
+  "cwd": "/home/user/proj",
+  "expected": {
+   "read": [
+    "/home/user/proj/data/in.csv"
+   ],
+   "edit": [
+    "/home/user/proj/out/res.txt"
+   ]
+  }
+ },
+ {
+  "cmd": "jq . pkg.json | head -3; md5sum a b; xxd bin | less",
+  "cwd": "/home/user/proj",
+  "expected": {
+   "read": [
+    "/home/user/proj",
+    "/home/user/proj/pkg.json",
+    "/home/user/proj/a",
+    "/home/user/proj/b",
+    "/home/user/proj/bin"
+   ]
+  }
+ },
+ {
+  "cmd": "rg foo src; fd bar; tree -L 2; locate x; ag y",
+  "cwd": "/home/user/proj",
+  "expected": {
+   "search": 5
+  }
+ },
+ {
+  "cmd": "nohup stdbuf -oL tail -f server.log &",
+  "cwd": "/home/user/proj",
+  "expected": {}
+ },
+ {
+  "cmd": "command exec time cat t1.txt",
+  "cwd": "/home/user/proj",
+  "expected": {
+   "read": [
+    "/home/user/proj/t1.txt"
+   ]
+  }
+ },
+ {
+  "cmd": "env A=1 B=2 cat envfile; timeout -s KILL 5m cat tm.txt",
+  "cwd": "/home/user/proj",
+  "expected": {
+   "read": [
+    "/home/user/proj/envfile"
+   ]
+  }
+ },
+ {
+  "cmd": "cat \"quoted path/with space.txt\" 'single q.txt'",
+  "cwd": "/home/user/proj",
+  "expected": {
+   "read": [
+    "/home/user/proj/quoted path/with space.txt",
+    "/home/user/proj/single q.txt"
+   ]
+  }
+ },
+ {
+  "cmd": "cat a#b c # trailing",
+  "cwd": "/home/user/proj",
+  "expected": {
+   "read": [
+    "/home/user/proj/a"
+   ]
+  }
+ },
+ {
+  "cmd": "grep -r x . | xargs sed -i s/a/b/",
+  "cwd": "/home/user/proj",
+  "expected": {
+   "search": 1
+  }
+ },
+ {
+  "cmd": "cd /home/user/proj/sub/../other && cat ./x/../y.txt",
+  "cwd": "/home/user/proj",
+  "expected": {
+   "read": [
+    "/home/user/proj/other/y.txt"
+   ]
+  }
+ }
+]

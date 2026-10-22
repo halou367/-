@@ -17,7 +17,7 @@ ICON.pvtable = ICON.pvtable || '<rect x="4" y="4" width="16" height="16" rx="2"/
 const HtmlPreview = (() => {
   const CSP = "default-src 'none'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; media-src data:; base-uri 'none'; form-action 'none'";
   const CSP_RUN = "default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; media-src data: blob:; base-uri 'none'; form-action 'none'";
-  const NOBAR = 'html,body{scrollbar-width:none;overflow:hidden!important}::-webkit-scrollbar{display:none}*,*::before,*::after{animation-play-state:paused!important;transition:none!important;backdrop-filter:none!important;-webkit-backdrop-filter:none!important}';
+  const NOBAR = 'html,body{scrollbar-width:none;overflow:hidden!important}::-webkit-scrollbar{display:none}';
   const MAXCODE = 400000;
   let st = null, root = null, frame = null;
   const countLinesFast = s => { if (!s) return 0; let n = 1; for (let i = 0, L = s.length; i < L; i++) if (s.charCodeAt(i) === 10) n++; return n; };
@@ -40,8 +40,13 @@ const HtmlPreview = (() => {
     d.querySelectorAll('a[href]').forEach(a => { if (!/^#/.test(a.getAttribute('href'))) a.removeAttribute('href'); });
     d.querySelectorAll('form').forEach(f => f.removeAttribute('action'));
     const m = d.createElement('meta'); m.setAttribute('http-equiv', 'Content-Security-Policy'); m.setAttribute('content', run ? CSP_RUN : CSP);
+    if (run) {
+      const syncSc = d.createElement('script');
+      syncSc.textContent = `(function(){var E=Math.floor(Date.now()/3600000)*3600000;var sNow=function(){return Date.now()-E;};try{Object.defineProperty(performance,'now',{value:sNow,configurable:true,writable:true});}catch(e){}try{var oRaf=window.requestAnimationFrame;if(typeof oRaf==='function'){window.requestAnimationFrame=function(cb){return oRaf.call(window,function(){cb(sNow());});};}}catch(e){}function sync(){try{var t=sNow();if(document.getAnimations){var as=document.getAnimations({subtree:true});for(var i=0;i<as.length;i++){try{as[i].play();var tm=as[i].effect&&as[i].effect.getComputedTiming?as[i].effect.getComputedTiming():null;if(tm&&(tm.iterations===Infinity||tm.iterations>=5)){as[i].currentTime=t;}}catch(e){}}}var svgs=document.querySelectorAll('svg');for(var j=0;j<svgs.length;j++){try{if(svgs[j].unpauseAnimations)svgs[j].unpauseAnimations();if(svgs[j].setCurrentTime)svgs[j].setCurrentTime(t/1000);}catch(e){}}}catch(e){}}if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',sync,{once:true});else sync();window.addEventListener('load',function(){sync();setTimeout(sync,60);},{once:true});})();`;
+      d.head.prepend(syncSc);
+    }
     d.head.prepend(m);
-    if (thumb) { const s = d.createElement('style'); s.textContent = NOBAR; d.head.append(s); }   // 小窗只是缩略图：不画页面自己的滚动条并冻结动画
+    if (thumb) { const s = d.createElement('style'); s.textContent = NOBAR; d.head.append(s); }   // 小窗隐藏滚动条，保留动态动画与脚本同步运行
     const out = '<!doctype html>' + d.documentElement.outerHTML;
     if (docCache.size >= 64) docCache.delete(docCache.keys().next().value);
     docCache.set(cKey, out);
@@ -152,10 +157,19 @@ const HtmlPreview = (() => {
         const bg = bgOf(); if (bg) stage.style.background = bg;
         if (stageMetaCache.size >= 120) stageMetaCache.delete(stageMetaCache.keys().next().value);
         stageMetaCache.set(metaKey, { W, H, wfit, fill, bg });
+        if (o.thumb && o.probe) { try { o.probe.remove(); } catch {} }
       } catch {}
       place();
     };
-    m.addEventListener('load', analyse);
+    const onLoadAnalyse = () => {
+      if (dead) return;
+      if (o.thumb && !stageMetaCache.has(metaKey)) {
+        setTimeout(analyse, 24);
+      } else {
+        analyse();
+      }
+    };
+    m.addEventListener('load', onLoadAnalyse);
     try {
       ro = new ResizeObserver(() => {
         if (dead) return;
@@ -169,7 +183,7 @@ const HtmlPreview = (() => {
       ro.observe(stage);
     } catch {}
     place();
-    return { destroy() { dead = true; if (roT) { clearTimeout(roT); roT = 0; } try { ro?.disconnect(); } catch {} m.removeEventListener('load', analyse); }, reset() { place(); } };
+    return { destroy() { dead = true; if (roT) { clearTimeout(roT); roT = 0; } try { ro?.disconnect(); } catch {} m.removeEventListener('load', onLoadAnalyse); if (o.thumb && o.probe) { try { o.probe.remove(); } catch {} } }, reset() { place(); } };
   }
   // ---------- 对话里的预览小窗（和网页版一样：Write 出 html 后，在这一行下面直接显示页面缩略图，点一下放大） ----------
   const cards = new Map();
@@ -190,11 +204,15 @@ const HtmlPreview = (() => {
       cardMountTimer = setTimeout(flushCardMountQueue, Math.max(40, 135 - dt));
       return;
     }
-    const c = cardMountQueue.shift();
-    if (c && c.live && c.o && c.text != null && !c.stage.querySelector('iframe')) {
-      c.renderNow(c.text, String(c.o.path || '').split('/').pop());
+    let mounted = 0;
+    while (cardMountQueue.length && mounted < 2) {
+      const c = cardMountQueue.shift();
+      if (c && c.live && c.o && c.text != null && !c.stage.querySelector('iframe.pvc-frame')) {
+        c.renderNow(c.text, String(c.o.path || '').split('/').pop());
+        mounted++;
+      }
     }
-    if (cardMountQueue.length) cardMountTimer = setTimeout(flushCardMountQueue, 45);
+    if (cardMountQueue.length) cardMountTimer = setTimeout(flushCardMountQueue, 30);
   }
   function scheduleCardMount(c) {
     const lastSc = typeof window !== 'undefined' ? (window.__ancLastScrollAt || 0) : 0;
@@ -213,7 +231,7 @@ const HtmlPreview = (() => {
     c.el = h('div', { class: 'pvc', role: 'button', tabindex: '0', onclick: () => c.open(), onkeydown: e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); c.open(); } } },
       h('div', { class: 'pvc-h' }, icon('pvwin'), title, badge), h('div', { class: 'pvc-box' }, c.stage, c.ph, h('span', { class: 'pvc-zoom', 'aria-hidden': 'true' }, icon('pvfull'))));
     c.title = title; c.badge = badge;
-    c.open = () => { const o = c.o; if (o) open({ sid: o.getWsid?.() || Tabs.cur?.sid || null, path: o.path, get: o.get, wsid: o.getWsid?.() || null }); };
+    c.open = () => { const o = c.o; if (!o) return; if (typeof o.onOpen === 'function') { o.onOpen('run'); return; } open({ sid: o.getWsid?.() || Tabs.cur?.sid || null, path: o.path, get: o.get, wsid: o.getWsid?.() || null }); };
     c.paint = () => {
       const o = c.o, sid = o.getWsid?.() || (typeof Tabs !== 'undefined' ? Tabs.cur?.sid : null), text = textFrom(o.get, sid, o.path), name = String(o.path || '').split('/').pop() || o.path;
       const tSig = name + ':' + text.length + ':' + text.slice(0, 96);
@@ -228,15 +246,23 @@ const HtmlPreview = (() => {
       c.text = text; if (c.live) c.render(text, name); else c.pending = true;
     };
     c.renderNow = (text, name) => {
-      c.pending = false; const old = c.stage.querySelector('iframe');
+      c.pending = false;
+      const olds = [...c.stage.querySelectorAll('iframe')];
       const f = h('iframe', { class: 'pvc-frame', title: name, tabindex: '-1', 'aria-hidden': 'true', referrerpolicy: 'no-referrer' });
-      f.setAttribute('sandbox', 'allow-same-origin'); f.setAttribute('csp', CSP); f.style.visibility = 'hidden';
-      const prev = c.mount; c.mount = mountStage(c.stage, f, text, name, { thumb: true });
+      f.setAttribute('sandbox', 'allow-scripts'); f.setAttribute('csp', CSP_RUN); f.style.visibility = 'hidden';
+      const metaKey = 't:' + textSig(String(text || ''), name);
+      const p = stageMetaCache.has(metaKey) ? null : h('iframe', { class: 'pv-probe', tabindex: '-1', 'aria-hidden': 'true', referrerpolicy: 'no-referrer' });
+      if (p) {
+        p.setAttribute('sandbox', 'allow-same-origin'); p.setAttribute('csp', CSP);
+        p.srcdoc = docOf(text, name, { run: false, thumb: true });
+        c.stage.append(p);
+      }
+      const prev = c.mount; c.mount = mountStage(c.stage, f, text, name, { thumb: true, probe: p });
       f.addEventListener('load', () => {
-        try { f.contentDocument?.querySelectorAll('svg').forEach(s => s.pauseAnimations?.()); } catch {}
-        old?.remove(); prev?.destroy(); f.style.visibility = ''; c.shown = text; c.ph.hidden = true;
+        olds.forEach(el => { try { el.remove(); } catch {} });
+        prev?.destroy(); f.style.visibility = ''; c.shown = text; c.ph.hidden = true;
       }, { once: true });
-      f.srcdoc = docOf(text, name, { thumb: true }); c.stage.append(f);
+      f.srcdoc = docOf(text, name, { run: true, thumb: true }); c.stage.append(f);
     };
     c.render = (text, name) => {
       c.pending = false;
@@ -268,38 +294,379 @@ const HtmlPreview = (() => {
       setTimeout(() => g.remove(), 260);
     } catch {}
   }
-  function dismiss(fromY = 0) { if (!st) return; if (mobile()) ghostOut(fromY); close(); }
+  const userClosedSids = new Set();
+  function dismiss(fromY = 0) {
+    if (!st) return;
+    if (st.sid) userClosedSids.add(st.sid);
+    if (mobile()) ghostOut(fromY);
+    close();
+  }
   function close() {
     if (!st) return; try { st.stage?.destroy(); } catch {} try { st.img?.revoke?.(); } catch {} st = null; root?.classList.remove('pv-full'); frame = null; closeTok++;
     document.body.classList.remove('pv-on'); if (root) { root.classList.remove('pv-enter'); root.replaceChildren(); }
     try { UI.layout(); } catch {}
   }
+
+  function extractMarkdownCodeBlocks(text, msgId = 'msg') {
+    const raw = String(text || '');
+    if (!raw.includes('```')) return [];
+    const out = [];
+    const re = /```([A-Za-z0-9_+-]*)[ \t]*([^\n`]*)\n([\s\S]*?)```/g;
+    let m, idx = 0;
+    const extMap = {
+      html: 'html', htm: 'html', svg: 'svg', xml: 'svg',
+      tsx: 'tsx', ts: 'ts', jsx: 'jsx', js: 'js', javascript: 'js', typescript: 'ts',
+      css: 'css', scss: 'scss', json: 'json', md: 'md', markdown: 'md',
+      py: 'py', python: 'py', sh: 'sh', bash: 'sh', sql: 'sql', yaml: 'yaml', yml: 'yml',
+      rust: 'rs', rs: 'rs', go: 'go', java: 'java', cpp: 'cpp', c: 'c', vue: 'vue', svelte: 'svelte',
+    };
+    const midShort = String(msgId || 'msg').replace(/[^A-Za-z0-9]/g, '').slice(-6) || 'msg';
+    while ((m = re.exec(raw)) !== null) {
+      const lang = String(m[1] || '').trim().toLowerCase();
+      const meta = String(m[2] || '').trim();
+      const code = String(m[3] || '');
+      if (!code.trim() || code.trim().length < 24) continue;
+      idx++;
+      const ext = extMap[lang] || (lang && /^[a-z0-9]{1,6}$/.test(lang) ? lang : 'txt');
+      let pathHint = '';
+      if (meta && /^[A-Za-z0-9_./-]+\.[A-Za-z0-9]+$/.test(meta)) {
+        pathHint = meta;
+      } else {
+        const firstLine = code.split('\n', 1)[0] || '';
+        const cm = /^(?:\/\/|#|\/\*+|<!--)\s*([A-Za-z0-9_./-]+\.[A-Za-z0-9]{1,8})/.exec(firstLine.trim());
+        if (cm) pathHint = cm[1];
+      }
+      const vpath = pathHint || `snippet-${midShort}-${idx}.${ext}`;
+      out.push({ path: vpath, content: code, lang: lang || ext });
+    }
+    return out;
+  }
+
+  function extractEvalBundle(chat, msg) {
+    if (!msg || typeof msg !== 'object') {
+      return { previewUrl: null, files: [], localHtmlFile: null, isPendingBuild: false, hasAnyPreview: false, templateKind: null };
+    }
+    const isWebDevChat = Boolean(
+      chat?.modality === 'webdev' ||
+      chat?.evalModality === 'webdev' ||
+      chat?.resolvedModality === 'webdev' ||
+      msg.webdev ||
+      msg.webdevTemplate ||
+      msg.metadata?.webdevTemplate ||
+      msg.activeWorkflowRunId ||
+      msg.metadata?.workflowRunId
+    );
+    const wd = msg.webdev || (typeof EvalEngine !== 'undefined' && EvalEngine.reconstructWebDevFromMessage ? EvalEngine.reconstructWebDevFromMessage(msg, isWebDevChat ? 'webdev' : '') : null);
+    const fileMap = new Map();
+    const sid = chat?.sid || st?.sid || null;
+
+    if (wd && Array.isArray(wd.files)) {
+      for (const f of wd.files) {
+        if (!f || !f.path) continue;
+        const pth = String(f.path).replace(/^\/+/, '');
+        const txt = String(f.content ?? '');
+        fileMap.set(pth, {
+          path: pth,
+          content: txt,
+          get: () => {
+            const curWd = msg.webdev?.files?.find(x => x && String(x.path).replace(/^\/+/, '') === pth);
+            return curWd ? String(curWd.content ?? '') : txt;
+          },
+          wsid: sid,
+        });
+      }
+    }
+
+    for (const p of msg.parts || []) {
+      if (!p) continue;
+      if (String(p.type || '').startsWith('tool-')) {
+        const tName = String(p.toolName || String(p.type).replace(/^tool-/, '')).toLowerCase();
+        const inp = p.input || (typeof R !== 'undefined' && R.tinput ? R.tinput(p) : {}) || {};
+        const pth = String(inp.path || inp.file_path || '').replace(/^\/home\/user\//, '').replace(/^~\//, '').replace(/^\.\//, '').replace(/^\/+/, '');
+        if (!pth) continue;
+        if (/^(write_?file|create_?file|write)$/.test(tName)) {
+          const txt = String(inp.content ?? inp.text ?? '');
+          if (!fileMap.has(pth) || txt) {
+            fileMap.set(pth, {
+              path: pth,
+              content: txt,
+              get: () => {
+                const curWd = msg.webdev?.files?.find(x => x && String(x.path).replace(/^\/+/, '') === pth);
+                if (curWd && curWd.content != null) return String(curWd.content);
+                return txt;
+              },
+              wsid: sid,
+            });
+          }
+        } else if (/^(edit_file|str_replace|edit)$/.test(tName) && fileMap.has(pth)) {
+          const prev = fileMap.get(pth);
+          const ctx = inp.context ?? inp.old_text ?? inp.old_str ?? '';
+          const rep = inp.replacement ?? inp.new_text ?? inp.new_str ?? '';
+          if (ctx && typeof EvalEngine !== 'undefined' && EvalEngine.applyWebDevEdit) {
+            const nextTxt = EvalEngine.applyWebDevEdit(prev.content || '', ctx, rep);
+            fileMap.set(pth, { ...prev, content: nextTxt, get: () => nextTxt });
+          }
+        }
+      } else if (p.type === 'text' && p.text) {
+        if (typeof R !== 'undefined' && typeof R.extractInlineHtmlSegments === 'function') {
+          const segs = R.extractInlineHtmlSegments(p.text, p.state === 'streaming');
+          if (Array.isArray(segs)) {
+            for (const hs of segs) {
+              if (!hs || hs.type !== 'html' || !hs.code) continue;
+              const vpath = typeof R.inlineHtmlPath === 'function' ? R.inlineHtmlPath(msg, hs) : `inline-${hs.idx + 1}.${hs.ext || 'html'}`;
+              const codeStr = String(hs.code);
+              fileMap.set(vpath, {
+                path: vpath,
+                content: codeStr,
+                running: !!hs.running,
+                get: () => codeStr,
+                wsid: sid,
+              });
+            }
+          }
+        }
+        const mdBlocks = extractMarkdownCodeBlocks(p.text, msg.id);
+        for (const blk of mdBlocks) {
+          if ( /\.(html?|svg)$/i.test(blk.path) && [...fileMap.keys()].some(k => /\.(html?|svg)$/i.test(k)) ) continue;
+          if (!fileMap.has(blk.path)) {
+            const codeStr = blk.content;
+            fileMap.set(blk.path, {
+              path: blk.path,
+              content: codeStr,
+              get: () => codeStr,
+              wsid: sid,
+            });
+          }
+        }
+      }
+    }
+
+    const fileList = [...fileMap.values()];
+    const localHtmlFile = fileList.find(f => /\.(?:html?|svg)$/i.test(f.path)) || null;
+    let previewUrl = wd?.previewUrl || msg.metadata?.previewUrl || null;
+    if (!previewUrl && isWebDevChat && msg.id && msg.status === 'success' && wd?.status !== 'build-error' && wd?.status !== 'no-artifact') {
+      previewUrl = `https://${msg.id}.arena.site`;
+    }
+    const isPendingBuild = Boolean(
+      isWebDevChat &&
+      (msg.status === 'pending' || msg.status === 'streaming' || wd?.status === 'pending') &&
+      !previewUrl
+    );
+    const hasAnyPreview = Boolean(previewUrl || localHtmlFile || fileList.length > 0 || isPendingBuild);
+    return {
+      previewUrl,
+      files: fileList,
+      localHtmlFile,
+      isPendingBuild,
+      hasAnyPreview,
+      templateKind: wd?.templateKind || msg.webdevTemplate || msg.metadata?.webdevTemplate || null,
+      buildError: wd?.status === 'build-error' ? (wd.message || msg.failureReason || 'Build failed') : null,
+    };
+  }
+
+  function findEvalTurnMessages(chat, targetMsgId = null) {
+    if (!chat || !Array.isArray(chat.messages)) return { msgA: null, msgB: null };
+    const assts = chat.messages.filter(m => m && m.role === 'assistant');
+    if (!assts.length) return { msgA: null, msgB: null };
+    if (targetMsgId) {
+      const target = assts.find(m => m.id === targetMsgId);
+      if (target) {
+        const parentId = Array.isArray(target.parentMessageIds) ? target.parentMessageIds[0] : null;
+        if (parentId) {
+          const siblings = assts.filter(m => Array.isArray(m.parentMessageIds) && m.parentMessageIds[0] === parentId);
+          const sA = siblings.find(m => m.participantPosition !== 'b') || null;
+          const sB = siblings.find(m => m.participantPosition === 'b') || null;
+          if (sA || sB) return { msgA: sA, msgB: sB };
+        }
+      }
+    }
+    const msgA = [...assts].reverse().find(m => m.participantPosition !== 'b') || assts[0] || null;
+    const msgB = chat.evalMode === 'battle'
+      ? ([...assts].reverse().find(m => m.participantPosition === 'b') || null)
+      : null;
+    return { msgA, msgB };
+  }
+
   function open(o) {
-    const wasOpen = !!st, kind = o.img ? 'image' : (kindOf(o.path) || 'code'), prev = st;
+    const wasOpen = !!st;
+    const hasRemotePreview = Boolean(o.previewUrl || o.isPendingBuild);
+    const kind = o.img ? 'image' : hasRemotePreview ? 'html' : (kindOf(o.path) || 'code');
+    const prev = st;
+    if (o.sid && !o.autoSync) userClosedSids.delete(o.sid);
     try { prev?.stage?.destroy(); } catch {}
     try { if (prev?.img && prev.img.src !== o.img?.src) prev.img.revoke?.(); } catch {}
-    st = { sid: o.sid || null, path: o.path || '', kind, name: (o.path || '').split('/').pop() || o.path || '预览', get: o.get, view: o.view ?? null, suffix: o.suffix || '', wsid: o.wsid || null, mode: (o.mode === 'code' || o.mode === 'run') ? o.mode : (kind === 'code' ? 'code' : 'run'), at: now(), frame: 0, list: o.list || null, img: o.img || null };
+    st = {
+      sid: o.sid || null,
+      path: o.path || '',
+      kind,
+      name: (o.path || '').split('/').pop() || o.path || '预览',
+      get: o.get,
+      view: o.view ?? null,
+      suffix: o.suffix || '',
+      wsid: o.wsid || null,
+      mode: (o.mode === 'code' || o.mode === 'run') ? o.mode : (kind === 'code' ? 'code' : 'run'),
+      at: now(),
+      frame: 0,
+      list: o.list || null,
+      img: o.img || null,
+      evalPos: o.evalPos || prev?.evalPos || 'a',
+      evalMsgId: o.evalMsgId || null,
+      previewUrl: o.previewUrl || null,
+      isPendingBuild: Boolean(o.isPendingBuild),
+      buildError: o.buildError || null,
+      templateKind: o.templateKind || null,
+      viewport: o.viewport || prev?.viewport || 'desktop',
+      routePath: o.routePath || '/',
+      highlightStart: o.highlightStart || 0,
+      highlightEnd: o.highlightEnd || 0,
+    };
     if (prev && prev.kind === kind && o.keepMode) st.mode = prev.mode;
     document.body.classList.add('pv-on');
     if (!wasOpen && root && mobile()) { root.classList.add('pv-enter'); const tok = ++closeTok; setTimeout(() => { if (closeTok === tok) root?.classList.remove('pv-enter'); }, 420); }
     render(); if (!wasOpen) try { UI.layout(); } catch {}
   }
+
+  function openEvalMessage(chat, msg, opts = {}) {
+    if (!chat || !msg) return;
+    if (chat.sid && !opts.autoSync) userClosedSids.delete(chat.sid);
+    const pos = opts.pos || (msg.participantPosition === 'b' ? 'b' : 'a');
+    if (chat.modality === 'webdev' || chat.evalModality === 'webdev' || msg.webdev || msg.activeWorkflowRunId || msg.metadata?.workflowRunId) {
+      if (typeof EvalEngine !== 'undefined' && typeof EvalEngine.fetchWebDevMetadata === 'function') {
+        void EvalEngine.fetchWebDevMetadata(chat, msg, false);
+      }
+    }
+    const bundle = extractEvalBundle(chat, msg);
+    const targetPath = opts.path
+      || (opts.mode === 'code' ? (bundle.files[0]?.path || 'index.tsx') : (bundle.localHtmlFile?.path || bundle.files[0]?.path || 'preview.html'));
+    const matchedFile = bundle.files.find(f => f.path === targetPath)
+      || bundle.files.find(f => f.path.endsWith('/' + targetPath) || targetPath.endsWith('/' + f.path))
+      || bundle.localHtmlFile
+      || bundle.files[0]
+      || null;
+    const wantMode = opts.mode || ((bundle.previewUrl || bundle.localHtmlFile || bundle.isPendingBuild) ? 'run' : 'code');
+    open({
+      sid: chat.sid,
+      wsid: chat.sid,
+      path: matchedFile?.path || targetPath,
+      get: matchedFile?.get || (() => matchedFile?.content || ''),
+      list: () => extractEvalBundle(chat, msg).files,
+      mode: wantMode,
+      evalPos: pos,
+      evalMsgId: msg.id || null,
+      previewUrl: bundle.previewUrl,
+      isPendingBuild: bundle.isPendingBuild,
+      buildError: bundle.buildError,
+      templateKind: bundle.templateKind,
+      highlightStart: opts.highlightStart || 0,
+      highlightEnd: opts.highlightEnd || 0,
+      autoSync: Boolean(opts.autoSync),
+    });
+  }
+
+  function selectEvalOption(pos = 'a', opts = {}) {
+    const sid = opts.sid || st?.sid || (typeof Tabs !== 'undefined' ? Tabs.cur?.sid : null);
+    const chat = sid && typeof Chats !== 'undefined' ? Chats.get?.(sid) : null;
+    if (!chat) return;
+    const { msgA, msgB } = findEvalTurnMessages(chat, opts.msgId || st?.evalMsgId || null);
+    const target = pos === 'b' ? (msgB || msgA) : (msgA || msgB);
+    if (!target) return;
+    openEvalMessage(chat, target, { ...opts, pos });
+  }
+
+  function syncEval(chat, opts = {}) {
+    if (!chat || !chat.isEvaluation) return;
+    const activeSid = typeof Tabs !== 'undefined' ? Tabs.cur?.sid : null;
+    if (activeSid && chat.sid && activeSid !== chat.sid) return;
+    const { msgA, msgB } = findEvalTurnMessages(chat, st?.evalMsgId || null);
+    const bA = msgA ? extractEvalBundle(chat, msgA) : null;
+    const bB = msgB ? extractEvalBundle(chat, msgB) : null;
+    const isWebDev = chat.modality === 'webdev' || chat.evalModality === 'webdev' || chat.resolvedModality === 'webdev';
+
+    if (st && st.sid === chat.sid) {
+      const curPos = st.evalPos === 'b' && msgB ? 'b' : 'a';
+      const curMsg = curPos === 'b' ? (msgB || msgA) : (msgA || msgB);
+      const curBundle = curPos === 'b' ? (bB || bA) : (bA || bB);
+      if (curMsg && curBundle) {
+        const urlChanged = (curBundle.previewUrl || null) !== (st.previewUrl || null);
+        const buildChanged = Boolean(curBundle.isPendingBuild) !== Boolean(st.isPendingBuild);
+        const prevCount = st._lastFileCount || 0;
+        const nextCount = curBundle.files.length;
+        st.previewUrl = curBundle.previewUrl || null;
+        st.isPendingBuild = Boolean(curBundle.isPendingBuild);
+        st.buildError = curBundle.buildError || null;
+        st.templateKind = curBundle.templateKind || st.templateKind;
+        st.list = () => extractEvalBundle(chat, curMsg).files;
+        if ((!st.path || st.path === 'preview.html') && curBundle.files[0]) {
+          st.path = curBundle.files[0].path;
+          st.name = st.path.split('/').pop() || st.path;
+          st.get = curBundle.files[0].get;
+        } else {
+          const hit = curBundle.files.find(f => f.path === st.path);
+          if (hit) st.get = hit.get;
+        }
+        st._lastFileCount = nextCount;
+        if (urlChanged || buildChanged || (prevCount === 0 && nextCount > 0)) {
+          render();
+          return;
+        }
+        if (st.mode === 'code') {
+          syncLive(chat.sid);
+        }
+      }
+      return;
+    }
+
+    if (isWebDev && !userClosedSids.has(chat.sid) && !mobile()) {
+      const voteVal = chat.voteState?.value;
+      const defaultPos = voteVal === 'model_b' && msgB ? 'b' : 'a';
+      const targetMsg = defaultPos === 'b' ? (msgB || msgA) : (msgA || msgB);
+      const targetBundle = defaultPos === 'b' ? (bB || bA) : (bA || bB);
+      if (targetMsg && targetBundle && targetBundle.hasAnyPreview) {
+        openEvalMessage(chat, targetMsg, { pos: defaultPos, autoSync: true });
+      }
+    }
+  }
+
   function full(on) { if (!root || !st) return; root.classList.toggle('pv-full', on); render(); try { UI.layout(); } catch {} }
   // 图片：右侧窗格里看（跟官方一样：右边收起成预览器，适应窗格 / 点一下原始大小，顶上有下拉 · 下载 · 全屏 · 关闭）
   function image(o) { open({ sid: o.sid ?? (typeof Tabs !== 'undefined' ? Tabs.cur?.sid : null) ?? null, path: o.path || o.name || 'image', img: { src: o.src, revoke: o.revoke || null, sub: o.sub || '', thumb: o.thumb || '' }, list: o.list || null }); }
   function setMode(m) { if (!st || st.mode === m) return; st.mode = m; render(); }
+  function setViewport(vp) { if (!st || st.viewport === vp) return; st.viewport = vp; render(); }
   function btn(ic, title, fn, cls = '') { return h('button', { type: 'button', class: 'ib sm pv-b ' + cls, title, 'aria-label': title, onclick: fn }, icon(ic)); }
   // 文件下拉：这个对话里 Write 出来的所有可预览文件（同一路径只留最新一次），点一个就切换
   function files() {
     let l = []; try { l = (st.list ? st.list() : (typeof R !== 'undefined' && R.writes ? R.writes(st.sid) : [])) || []; } catch {}
-    if (!l.some(x => x.path === st.path)) l = [{ path: st.path, get: st.get, wsid: st.wsid, img: st.img }, ...l];
+    if (st.path && st.path !== 'preview.html' && !l.some(x => x.path === st.path)) {
+      l = [{ path: st.path, get: st.get, wsid: st.wsid, img: st.img }, ...l];
+    }
     return l;
+  }
+  function selectFileItem(x, keepMode = true) {
+    if (!st || !x) return;
+    open({
+      sid: st.sid,
+      path: x.path,
+      get: x.get,
+      img: x.img,
+      wsid: x.wsid || st.wsid,
+      list: st.list,
+      evalPos: st.evalPos,
+      evalMsgId: st.evalMsgId,
+      previewUrl: st.previewUrl,
+      isPendingBuild: st.isPendingBuild,
+      buildError: st.buildError,
+      templateKind: st.templateKind,
+      viewport: st.viewport,
+      routePath: st.routePath,
+      mode: keepMode ? st.mode : (/\.(?:html?|svg)$/i.test(x.path) && !st.previewUrl ? 'run' : 'code'),
+      keepMode,
+    });
   }
   function menu(anchor, sheet) {
     sheet.querySelector('.pv-menu')?.remove(); const l = files(); if (l.length < 2) return;
     const m = h('div', { class: 'pv-menu', role: 'listbox' }, ...l.map(x => {
       const t = x.img ? '' : textFrom(x.get), n = x.path.split('/').pop(), cur = x.path === st.path;
-      return h('button', { type: 'button', class: 'pv-mi' + (cur ? ' on' : ''), role: 'option', 'aria-selected': String(cur), onclick: () => { m.remove(); if (!cur) open({ sid: st.sid, path: x.path, get: x.get, img: x.img, wsid: x.wsid || st.wsid, list: st.list, keepMode: true }); } },
+      return h('button', { type: 'button', class: 'pv-mi' + (cur ? ' on' : ''), role: 'option', 'aria-selected': String(cur), onclick: () => { m.remove(); if (!cur) selectFileItem(x, true); } },
         x.img ? h('img', { class: 'pv-mthumb', src: x.img.thumb || x.img.src, alt: '', loading: 'lazy' }) : icon('file'), h('span', { class: 'pv-mn' }, h('b', {}, n), h('small', {}, x.img ? (x.img.sub || '图片') : x.path !== n ? x.path : (t ? countLinesFast(t) + ' 行' : ''))), cur ? icon('check') : null);
     }));
     sheet.append(m);
@@ -307,6 +674,14 @@ const HtmlPreview = (() => {
     setTimeout(() => document.addEventListener('pointerdown', off, true), 0);
   }
   function download(text) {
+    const l = files();
+    if (!text && l.length > 0) {
+      const combined = l.map(f => `// ===== FILE: ${f.path} =====\n${textFrom(f.get, st.sid, f.path)}`).join('\n\n');
+      const fname = (st.name && st.name !== '预览' && st.name !== 'preview.html') ? st.name : 'project-files.txt';
+      const run = typeof FileExport !== 'undefined' ? FileExport.text(combined, fname, 'text/plain') : Promise.reject(Error('当前版本不支持保存文件'));
+      Promise.resolve(run).catch(e => toast('保存失败：' + describe(e), 'err'));
+      return;
+    }
     const n = st.name, run = typeof FileExport !== 'undefined' ? FileExport.text(text, n, mimeOf(n)) : Promise.reject(Error('当前版本不支持保存文件'));
     Promise.resolve(run).catch(e => toast('保存失败：' + describe(e), 'err'));
   }
@@ -322,23 +697,146 @@ const HtmlPreview = (() => {
     };
     grab.addEventListener('pointerup', end); grab.addEventListener('pointercancel', end);
   }
+
+  function buildEvalTopBar() {
+    const sid = st?.sid || (typeof Tabs !== 'undefined' ? Tabs.cur?.sid : null);
+    const chat = sid && typeof Chats !== 'undefined' ? Chats.get?.(sid) : null;
+    if (!chat || !chat.isEvaluation) return null;
+    const { msgA, msgB } = findEvalTurnMessages(chat, st?.evalMsgId || null);
+    if (!msgA && !msgB) return null;
+    const isBattle = chat.evalMode === 'battle';
+    const voted = Boolean(chat.voteState?.voted);
+    const voteVal = chat.voteState?.value || null;
+    const curPos = st?.evalPos === 'b' && msgB ? 'b' : 'a';
+
+    const renderOptTab = (pos, msg) => {
+      if (!msg) return null;
+      const b = extractEvalBundle(chat, msg);
+      const isCur = curPos === pos;
+      const revealedName = pos === 'a'
+        ? (chat.voteState?.modelAName || (msg.modelId && typeof ModelCatalog !== 'undefined' ? ModelCatalog.resolveModelName(msg.modelId, chat.revealedModels) : ''))
+        : (chat.voteState?.modelBName || (msg.modelId && typeof ModelCatalog !== 'undefined' ? ModelCatalog.resolveModelName(msg.modelId, chat.revealedModels) : ''));
+      const label = (voted && revealedName)
+        ? revealedName
+        : (!isBattle ? (chat.directModelName || revealedName || 'Direct Preview') : (pos === 'a' ? 'Option A' : 'Option B'));
+      const isWin = voted && ((pos === 'a' && voteVal === 'model_a') || (pos === 'b' && voteVal === 'model_b'));
+      const statusDot = b.isPendingBuild
+        ? h('i', { class: 'spin pv-opt-spin', title: '正在构建预览…' })
+        : (b.previewUrl || b.localHtmlFile)
+          ? h('span', { class: 'pv-opt-dot ok', title: '预览已就绪' })
+          : b.files.length
+            ? h('span', { class: 'pv-opt-cnt' }, b.files.length + ' 文件')
+            : null;
+      return h('button', {
+        type: 'button',
+        class: 'pv-opt-tab' + (isCur ? ' active' : '') + (isWin ? ' win' : ''),
+        onclick: () => selectEvalOption(pos, { sid: chat.sid, keepMode: false }),
+      },
+        h('span', { class: 'pv-opt-badge pos-' + pos }, pos.toUpperCase()),
+        h('span', { class: 'pv-opt-name' }, label),
+        isWin ? h('span', { class: 'pv-opt-win' }, '🏆') : null,
+        statusDot
+      );
+    };
+
+    const canVoteNow = isBattle && !voted && !chat.voteState?.submitting && msgA && msgB
+      && msgA.status !== 'pending' && msgB.status !== 'pending';
+
+    const voteQuickBar = canVoteNow && typeof EvalEngine !== 'undefined'
+      ? h('div', { class: 'pv-inline-vote' },
+          h('button', {
+            type: 'button',
+            class: 'pv-vbtn va',
+            title: '投给 Option A',
+            onclick: () => void EvalEngine.submitVote(chat.sid, 'model_a'),
+          }, '👈 A好'),
+          h('button', {
+            type: 'button',
+            class: 'pv-vbtn vtie',
+            title: '平局',
+            onclick: () => void EvalEngine.submitVote(chat.sid, 'tie'),
+          }, '🤝 平'),
+          h('button', {
+            type: 'button',
+            class: 'pv-vbtn vb',
+            title: '投给 Option B',
+            onclick: () => void EvalEngine.submitVote(chat.sid, 'model_b'),
+          }, '👉 B好')
+        )
+      : null;
+
+    return h('div', { class: 'pv-eval-bar' },
+      h('div', { class: 'pv-opt-tabs' },
+        renderOptTab('a', msgA),
+        isBattle && msgB ? renderOptTab('b', msgB) : null
+      ),
+      voteQuickBar
+    );
+  }
+
+  function buildFilePillsBar(fileList) {
+    if (!Array.isArray(fileList) || fileList.length <= 1) return null;
+    return h('div', { class: 'pv-file-pills' },
+      ...fileList.map(f => {
+        const active = f.path === st.path;
+        const shortName = f.path.split('/').pop() || f.path;
+        return h('button', {
+          type: 'button',
+          class: 'pv-fpill' + (active ? ' on' : ''),
+          title: f.path,
+          onclick: () => selectFileItem(f, st.mode === 'code'),
+        },
+          icon('file'),
+          h('span', { class: 'pv-fpill-n' }, f.path.length <= 28 ? f.path : shortName)
+        );
+      })
+    );
+  }
+
+  function buildRemoteUrlWithEmbed(rawUrl, routePath = '/') {
+    if (!rawUrl) return '';
+    try {
+      const u = new URL(rawUrl);
+      if (routePath && routePath.startsWith('/')) u.pathname = routePath;
+      if (!u.searchParams.has('embed')) u.searchParams.set('embed', 'true');
+      return u.toString();
+    } catch {
+      return rawUrl;
+    }
+  }
+
   function render() {
     if (!root) return;
     if (!st) { root.replaceChildren(); return; }
     try { st.stage?.destroy(); } catch {}
     st.stage = null;
     const isImg = st.kind === 'image', text = isImg ? '' : textOf(), kind = st.kind, script = kind === 'html' && hasScript(text), lines = text ? countLinesFast(text) : 0;
+    const hasRemotePv = Boolean(st.previewUrl || st.isPendingBuild);
+    const canRunPreview = !isImg && (kind !== 'code' || hasRemotePv || files().some(f => /\.(?:html?|svg)$/i.test(f.path)));
     const seg = (k, ic, l) => h('button', { type: 'button', class: st.mode === k ? 'on' : '', 'aria-label': l, title: l, onclick: () => setMode(k) }, icon(ic), h('span', {}, l));
-    const sheet = h('div', { class: 'pv-sheet' }), many = files().length > 1;
+    const sheet = h('div', { class: 'pv-sheet' });
+    const allFiles = files();
+    const many = allFiles.length > 1;
+    const evalTopBar = buildEvalTopBar();
+    const filePills = (st.mode === 'code' || allFiles.length > 1) ? buildFilePillsBar(allFiles) : null;
     const fileBtn = h('button', { type: 'button', class: 'pv-file' + (many ? ' many' : ''), title: st.path, 'aria-haspopup': many ? 'listbox' : null, onclick: () => { if (many) menu(fileBtn, sheet); } },
       icon('pvfolder'), h('b', { class: 'pv-n', title: st.path }, st.name), many ? icon('pvdown', 'pv-caret') : null);
+    const vpBar = (!isImg && st.mode === 'run' && (hasRemotePv || kind === 'html') && !mobile())
+      ? h('div', { class: 'pv-vp-seg', title: '切换预览视口尺寸' },
+          h('button', { type: 'button', class: 'pv-vp-btn' + ((st.viewport || 'desktop') === 'desktop' ? ' on' : ''), title: '桌面端宽度 (100%)', onclick: () => setViewport('desktop') }, '🖥'),
+          h('button', { type: 'button', class: 'pv-vp-btn' + (st.viewport === 'tablet' ? ' on' : ''), title: '平板宽度 (768px)', onclick: () => setViewport('tablet') }, '📱'),
+          h('button', { type: 'button', class: 'pv-vp-btn' + (st.viewport === 'mobile' ? ' on' : ''), title: '手机宽度 (390px)', onclick: () => setViewport('mobile') }, '📲')
+        )
+      : null;
     const head = h('div', { class: 'pv-h' },
-      kind === 'code' || isImg ? null : h('div', { class: 'pv-seg', role: 'tablist' }, kind === 'md' ? seg('run', 'pvplay', '预览') : seg('run', 'pvplay', '运行'), seg('code', 'pvcode', kind === 'md' ? '源码' : '代码')),
+      !canRunPreview ? null : h('div', { class: 'pv-seg', role: 'tablist' }, kind === 'md' ? seg('run', 'pvplay', '预览') : seg('run', 'pvplay', '预览'), seg('code', 'pvcode', kind === 'md' ? '源码' : '代码')),
       fileBtn,
+      vpBar,
       isImg ? null : btn('refresh', '重新读取并刷新', () => { render(); }),
+      st.previewUrl ? h('button', { type: 'button', class: 'ib sm pv-b', title: '在独立浏览器标签页打开实时预览 (' + st.previewUrl + ')', onclick: () => window.open(st.previewUrl, '_blank', 'noopener,noreferrer') }, '↗') : null,
       isImg && typeof ImgAct !== 'undefined' && ImgAct.canCopy() ? btn('copy', '复制图片', () => ImgAct.copy(st.img.src)) : null,
-      kind !== 'html' ? null : h('button', { type: 'button', class: 'ib sm pv-b pv-rec', title: '把现在看到的画面记录为「鹈鹕测试图」（全客户端共享 · 存到模型信息 · 概览）', 'aria-label': '记录为鹈鹕测试图', onclick: () => void record() }, icon('pvcam'), h('span', {}, '记录')),
-      kind !== 'html' ? null : h('button', { type: 'button', class: 'ib sm pv-b pv-tbl', title: '打开全客户端鹈鹕测试库（查看 / 多模型并排对比 / 导入合并 / 导出分享）', 'aria-label': '鹈鹕测试库', onclick: () => PelicanShots.table({ compareModel: PelicanShots.modelOf(st.sid || Tabs.cur?.sid || null).model }) }, icon('pvtable'), h('span', {}, '测试库')),
+      kind !== 'html' || hasRemotePv ? null : h('button', { type: 'button', class: 'ib sm pv-b pv-rec', title: '把现在看到的画面记录为「鹈鹕测试图」（全客户端共享 · 存到模型信息 · 概览）', 'aria-label': '记录为鹈鹕测试图', onclick: () => void record() }, icon('pvcam'), h('span', {}, '记录')),
+      kind !== 'html' || hasRemotePv ? null : h('button', { type: 'button', class: 'ib sm pv-b pv-tbl', title: '打开全客户端鹈鹕测试库（查看 / 多模型并排对比 / 导入合并 / 导出分享）', 'aria-label': '鹈鹕测试库', onclick: () => PelicanShots.table({ compareModel: PelicanShots.modelOf(st.sid || Tabs.cur?.sid || null).model }) }, icon('pvtable'), h('span', {}, '测试库')),
       isImg ? btn('pvdl', '下载图片', () => typeof ImgAct !== 'undefined' ? ImgAct.save(st.img.src, st.name) : null, 'pv-dl') : btn('pvdl', '下载文件', () => download(text), 'pv-dl'),
       mobile() ? null : (root.classList.contains('pv-full') ? btn('pvunfull', '退出全屏', () => full(false), 'pv-fs') : btn('pvfull', '全屏显示', () => full(true), 'pv-fs')),
       btn('x', '关闭预览（恢复原来的面板）', () => dismiss(), 'pv-x'));
@@ -351,7 +849,7 @@ const HtmlPreview = (() => {
       const up = () => { grip.removeEventListener('pointermove', mv); grip.removeEventListener('pointerup', up); document.body.classList.remove('resizing'); savePrefs(); };
       grip.addEventListener('pointermove', mv); grip.addEventListener('pointerup', up);
     });
-    const body = h('div', { class: 'pv-body' + (isImg ? ' pv-imgb' : '') });
+    const body = h('div', { class: 'pv-body' + (isImg ? ' pv-imgb' : '') + (st.viewport && st.viewport !== 'desktop' && st.mode === 'run' ? ' pv-vp-' + st.viewport : '') });
     let dim = null, stageToMount = null;
     if (isImg) {
       dim = h('span', { class: 'grow' }, '载入中…');
@@ -362,12 +860,64 @@ const HtmlPreview = (() => {
       im.oncontextmenu = e => { if (typeof ImgAct === 'undefined') return; e.preventDefault(); ImgAct.menu(e, st.img.src, st.name, true); };
       body.append(im); frame = null;
     } else if (st.mode === 'code') {
-      body.append(h('pre', { class: 'pv-code' }, text.length > MAXCODE ? text.slice(0, MAXCODE) + '\n…' : text || '（正在写入代码…）'), h('button', { type: 'button', class: 'ib sm pv-copy', title: '复制源码', 'aria-label': '复制源码', onclick: () => copyText(textOf() || text) }, icon('copy')));
+      const codeStr = text.length > MAXCODE ? text.slice(0, MAXCODE) + '\n…' : text || '（正在写入代码…）';
+      const pre = h('pre', { class: 'pv-code' });
+      if (st.highlightStart > 0 && codeStr) {
+        const cLines = codeStr.split('\n');
+        const hStart = Math.max(1, st.highlightStart);
+        const hEnd = Math.max(hStart, st.highlightEnd || hStart);
+        cLines.forEach((ln, idx) => {
+          const lNum = idx + 1;
+          const isHl = lNum >= hStart && lNum <= hEnd;
+          pre.append(h('div', { class: 'pv-cln' + (isHl ? ' hl' : ''), 'data-ln': lNum },
+            h('span', { class: 'pv-lno' }, String(lNum)),
+            h('span', { class: 'pv-ltxt' }, ln || ' ')
+          ));
+        });
+        setTimeout(() => {
+          const firstHl = pre.querySelector('.pv-cln.hl');
+          if (firstHl && firstHl.scrollIntoView) firstHl.scrollIntoView({ block: 'center', behavior: 'smooth' });
+        }, 40);
+      } else {
+        pre.textContent = codeStr;
+      }
+      body.append(pre, h('button', { type: 'button', class: 'ib sm pv-copy', title: '复制源码', 'aria-label': '复制源码', onclick: () => copyText(textOf() || text) }, icon('copy')));
+      frame = null;
+    } else if (st.previewUrl) {
+      const embedUrl = buildRemoteUrlWithEmbed(st.previewUrl, st.routePath || '/');
+      const f = h('iframe', {
+        class: 'pv-frame pv-remote-frame',
+        title: st.name || 'WebDev Preview',
+        src: embedUrl,
+        allow: 'accelerometer; autoplay; camera; clipboard-read; clipboard-write; encrypted-media; fullscreen; geolocation; gyroscope; hid; microphone; midi; payment; picture-in-picture; usb; vr; xr-spatial-tracking',
+        sandbox: 'allow-forms allow-modals allow-popups allow-popups-to-escape-sandbox allow-presentation allow-same-origin allow-scripts allow-downloads',
+      });
+      const stage = h('div', { class: 'pv-stage pv-remote-stage' }, f);
+      frame = f;
+      st.probe = null;
+      st.frameAt = now();
+      body.append(stage);
+    } else if (st.isPendingBuild && (!text.trim() || !/\.(?:html?|svg)$/i.test(st.path))) {
+      const buildBox = h('div', { class: 'pv-build-wait' },
+        h('div', { class: 'pv-build-spin' }, h('i', { class: 'spin' })),
+        h('div', { class: 'pv-build-title' }, '正在构建交互预览环境 (Building preview…)'),
+        h('div', { class: 'pv-build-sub' }, allFiles.length ? `已生成 ${allFiles.length} 个源码文件，构建完成后将自动加载实时预览` : '模型正在编写并编译项目代码…'),
+        allFiles.length ? h('button', {
+          type: 'button',
+          class: 'btn sm ghost pv-build-codebtn',
+          onclick: () => setMode('code'),
+        }, icon('pvcode'), h('span', {}, ' 先查看实时代码 (' + allFiles.length + ' 个文件)')) : null
+      );
+      body.append(buildBox);
+      frame = null;
+    } else if (st.buildError && !text.trim()) {
+      body.append(h('div', { class: 'pv-empty pv-build-err' }, '⚠ 构建预览失败：' + st.buildError));
       frame = null;
     } else if (kind === 'md' && text.trim()) { const d = h('div', { class: 'pv-md md' }); d.innerHTML = MD.render(text); body.append(d); frame = null; }
     else if (!text.trim()) { body.append(h('div', { class: 'pv-empty' }, h('i', { class: 'spin' }), ' 正在生成或读取文件内容，写入后将自动加载显示…')); frame = null; }
     else {
-      const src = st.view != null && st.kind === 'html' ? st.view : text;
+      const localHtml = /\.(?:html?|svg)$/i.test(st.path) ? text : (allFiles.find(f => /\.(?:html?|svg)$/i.test(f.path)) ? textFrom(allFiles.find(f => /\.(?:html?|svg)$/i.test(f.path)).get, st.sid, allFiles.find(f => /\.(?:html?|svg)$/i.test(f.path)).path) : text);
+      const src = st.view != null && st.kind === 'html' ? st.view : localHtml;
       const f = h('iframe', { class: 'pv-frame', title: st.name, referrerpolicy: 'no-referrer' });
       const p = h('iframe', { class: 'pv-probe', tabindex: '-1', 'aria-hidden': 'true', referrerpolicy: 'no-referrer' });
       const stage = h('div', { class: 'pv-stage' }, f, p);
@@ -380,9 +930,12 @@ const HtmlPreview = (() => {
       body.append(stage);
       stageToMount = { stage, f, p, src };
     }
-    const foot = isImg ? h('div', { class: 'pv-note sm' }, dim, h('span', { class: 'dim' }, fmtClock2(st.at))) : script ? h('div', { class: 'pv-note' }, icon('alert'), h('span', { class: 'grow' }, '页面含脚本：已在沙盒里运行（断网、拿不到客户端数据）。需要联网或完整浏览器环境请用隔离窗口。'),
-      h('button', { type: 'button', class: 'btn ghost sm', onclick: () => void runIsolated() }, '在隔离窗口运行')) : h('div', { class: 'pv-note sm' }, h('span', { class: 'grow' }, kind === 'html' && st.mode === 'run' ? '沙盒运行 · 已断网' : lines + ' 行'), h('span', { class: 'dim' }, fmtClock2(st.at)));
-    sheet.append(handle, head, body, foot); drag(handle, sheet); drag(head, sheet);
+    const footLabel = st.previewUrl && st.mode === 'run'
+      ? ('云端沙盒实时预览 · ' + (st.templateKind || 'WebDev') + (allFiles.length ? ` · ${allFiles.length} 个文件` : ''))
+      : (kind === 'html' && st.mode === 'run' ? '沙盒运行 · 已断网' : lines + ' 行');
+    const foot = isImg ? h('div', { class: 'pv-note sm' }, dim, h('span', { class: 'dim' }, fmtClock2(st.at))) : (script && !st.previewUrl) ? h('div', { class: 'pv-note' }, icon('alert'), h('span', { class: 'grow' }, '页面含脚本：已在沙盒里运行（断网、拿不到客户端数据）。需要联网或完整浏览器环境请用隔离窗口。'),
+      h('button', { type: 'button', class: 'btn ghost sm', onclick: () => void runIsolated() }, '在隔离窗口运行')) : h('div', { class: 'pv-note sm' }, h('span', { class: 'grow' }, footLabel), h('span', { class: 'dim' }, fmtClock2(st.at)));
+    sheet.append(...[handle, evalTopBar, head, filePills, body, foot].filter(Boolean)); drag(handle, sheet); drag(head, sheet);
     root.onclick = e => { if (e.target === root && mobile()) dismiss(); };
     root.replaceChildren(grip, sheet);
     applyWidth();
@@ -514,7 +1067,7 @@ const HtmlPreview = (() => {
       open({ sid: getWsid?.() || Tabs.cur?.sid || null, path, get, wsid: getWsid?.() || null });
     });
   }
-  return { previewable, kindOf, inlineAssets, open, image, isFull: () => !!root?.classList.contains('pv-full'), close, dismiss, on, mount, bindRow, render, syncLive, record, shoot, shootText, card, titleOf, sid: () => st?.sid || null, docOf };
+  return { previewable, kindOf, inlineAssets, open, openEvalMessage, selectEvalOption, syncEval, extractEvalBundle, activeEvalPos: () => st?.evalPos || null, activeEvalMsgId: () => st?.evalMsgId || null, image, isFull: () => !!root?.classList.contains('pv-full'), close, dismiss, on, mount, bindRow, render, syncLive, record, shoot, shootText, card, titleOf, sid: () => st?.sid || null, docOf };
 })();
 
 // ---------- 鹈鹕测试库（全客户端共享）：记录 / 概览卡片 / 导出与导入合并 / 多模型并排对比 / 能力表（SVG） ----------
@@ -698,8 +1251,28 @@ const PelicanShots = (() => {
         let merged = mergeRows(remoteRows1, localRows, dm, acct);
         saveDel(dm);
         const pelLocal = typeof PelicanTest !== 'undefined' && PelicanTest.all ? PelicanTest.all() : {};
-        const modelsLocal = typeof Models !== 'undefined' && Models.all ? Models.all : {};
-        await writeShared({ rows: merged, del: dm, pelican: pelLocal, models: modelsLocal, acct, harvest: !!forceHarvest });
+        const modelsSlim = {};
+        if (typeof Models !== 'undefined' && Models.all) {
+          for (const r of merged) {
+            if (r?.sid && Models.all[r.sid]) {
+              const mv = Models.all[r.sid];
+              modelsSlim[r.sid] = { name: mv.name, reverseScore: mv.reverseScore, habitScore: mv.habitScore, sure: mv.sure };
+            }
+          }
+        }
+        const remoteSig = JSON.stringify(remoteRows1.map(x => [x.id, x.model, x.score, x.think, x.acct]));
+        const mergedSig = JSON.stringify(merged.map(x => [x.id, x.model, x.score, x.think, x.acct]));
+        const hasNewModelEnrich = Object.keys(modelsSlim).some(sid => {
+          const r = remoteRows1.find(x => x?.sid === sid);
+          return r && isBetterModel(modelsSlim[sid]?.name, r.model);
+        });
+        const remoteDelObj = (remote && !Array.isArray(remote) && remote.del && typeof remote.del === 'object') ? remote.del : {};
+        const remotePelObj = (remote && !Array.isArray(remote) && remote.pelican && typeof remote.pelican === 'object') ? remote.pelican : {};
+        const hasNewDel = Object.keys(dm).some(id => !remoteDelObj[id] || dm[id] > remoteDelObj[id]);
+        const hasNewPel = Object.keys(pelLocal).some(id => !remotePelObj[id] || (pelLocal[id]?.at || 0) > (remotePelObj[id]?.at || 0));
+        if (forceHarvest || !remote || mergedSig !== remoteSig || hasNewModelEnrich || hasNewDel || hasNewPel || Host.platform === 'android') {
+          await writeShared({ rows: merged, del: dm, pelican: pelLocal, models: modelsSlim, acct, harvest: !!forceHarvest });
+        }
         if (forceHarvest && Host.platform !== 'android') {
           await new Promise(r => setTimeout(r, 240));
           const remote2 = await readShared();
@@ -720,7 +1293,8 @@ const PelicanShots = (() => {
     })();
     return pullP;
   }
-  function push() { void pull(false, true); }
+  let pushT = 0;
+  function push() { clearTimeout(pushT); pushT = setTimeout(() => { pushT = 0; void pull(false, true); }, 600); }
   function syncSid(sid) {
     if (!sid) return;
     const rawList = all();

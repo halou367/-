@@ -48,9 +48,11 @@
    */
   const REF_VERSIONS = [
     { id: 'ref-10-14', input: 3200n, cacheWrite: 2695n, cacheRead: 160n, output: 8700n },
+    { id: 'ref-10-15', input: 4350n, cacheWrite: 5438n, cacheWriteHalf: 10875n, cacheRead: 100n, output: 8700n },
     { id: 'ref-10-09', input: 4350n, cacheWrite: 5438n, cacheWriteHalf: 10875n, cacheRead: 150n, output: 12000n },
     { id: 'ref-10-08-16h', input: 4000n, cacheWrite: 5000n, cacheRead: 150n, output: 12000n },
     { id: 'ref-10-05/08', input: 2156n, cacheWrite: 2695n, cacheRead: 100n, output: 6468n },
+    { id: 'ref-10-16', input: 2156n, cacheWrite: 2695n, cacheRead: 100n, output: 6468n },
     { id: 'ref-10-01', input: 2156n, cacheWrite: 2695n, cacheRead: 200n, output: 12000n },
   ];
 
@@ -60,12 +62,16 @@
   function parseDec(value) {
     if (value === null || value === undefined) return null;
     const s = String(value).trim();
+    // Bound arbitrary-precision work before regex/BigInt/power operations.
+    if (s.length > 256) return null;
     const m = /^([+-]?)(\d*)(?:\.(\d*))?(?:[eE]([+-]?\d+))?$/.exec(s);
     if (!m || (!m[2] && !m[3])) return null;
+    if ((m[2] || '').length + (m[3] || '').length > 128) return null;
+    const exp = m[4] ? Number(m[4]) : 0;
+    if (!Number.isSafeInteger(exp) || Math.abs(exp) > 128) return null;
     const neg = m[1] === '-';
     let P = BigInt((m[2] || '0') + (m[3] || ''));
     let k = (m[3] || '').length;
-    const exp = m[4] ? Number(m[4]) : 0;
     if (exp > 0) {
       if (k >= exp) { k -= exp; } else { P *= TEN ** BigInt(exp - k); k = 0; }
     } else if (exp < 0) {
@@ -119,31 +125,37 @@
 
   /**
    * 所有满足 round(price·n/1e6, 1e-10) === cost 的非负整数 n。
-   *   · cost 恰为 0 且 price > 0  ⇒ [0n]（唯一走法）
+   *   · cost 为 0 仍按量化区间求解；足够低的正单价可能对应多个 token 数。
    *   · price ≤ 0 / cost < 0      ⇒ []（无解，注意：这不等于「免费」）
    */
   function tokensForCostAll(costStr, priceStr, maxResults = MAX_CANDIDATES) {
     const C = quanta10(costStr);
     const p = parseDec(priceStr);
-    if (C === null || !p) return [];
-    if (p.neg || p.P === 0n) return [];
-    if (C < 0n) return [];
-    if (C === 0n) return [0n];
-
+    if (C === null || !p || p.neg || p.P === 0n || C < 0n) return [];
+    const requestedLimit = Number(maxResults);
+    const limit = Number.isSafeInteger(requestedLimit) && requestedLimit > 0
+      ? Math.min(requestedLimit, MAX_ASSIGN_NODES) : MAX_CANDIDATES;
     const pow = TEN ** BigInt(p.k);
     const numLo = (2n * C - 1n) * pow;
     const numHi = (2n * C + 1n) * pow;
     const den = 2n * p.P * TEN ** 4n;
     const nMin = numLo <= 0n ? 0n : (numLo + den - 1n) / den;
-    const nMax = numHi / den;
+    // The upper half-rounding boundary is STRICT, including for zero amounts.
+    const nMax = (numHi - 1n) / den;
     if (nMax < nMin) return [];
-
     const out = [];
-    for (let n = nMin; n <= nMax && out.length < maxResults; n++) {
+    let n = nMin;
+    for (; n <= nMax && out.length < limit; n++) {
       const a = p.P * n * TEN ** 4n;
       const q = (2n * a + pow) / (2n * pow);
       if (q === C) out.push(n);
     }
+    // Non-enumerable: preserve the public array/JSON shape, but expose coverage.
+    Object.defineProperties(out, {
+      truncated: { value: n <= nMax },
+      minimum: { value: nMin },
+      maximum: { value: nMax },
+    });
     return out;
   }
 
@@ -156,13 +168,15 @@
   // ───────────────────────────────────────────── 3. 参考方程
 
   /** 在各通道候选表里找一组满足 base 参考方程的组合。找不到返回 null。 */
-  function searchAssignment(lists, refV, baseStr) {
+  function inspectAssignments(lists, refV, baseStr) {
     const baseQ = quanta10(baseStr);
-    if (baseQ === null) return null;
+    const result = { solutions: [], nodes: 0, budgetExceeded: false };
+    if (baseQ === null) return result;
     const combo = COMPONENTS.map(() => 0n);
-    let nodes = 0;
     const dfs = (i) => {
-      if (nodes++ > MAX_ASSIGN_NODES) return null;
+      if (result.solutions.length >= 2 || result.budgetExceeded) return;
+      if (result.nodes >= MAX_ASSIGN_NODES) { result.budgetExceeded = true; return; }
+      result.nodes++;
       if (i === COMPONENTS.length) {
         let sum2 = 0n;
         for (let j = 0; j < COMPONENTS.length; j++) {
@@ -170,20 +184,25 @@
           const c2 = (comp === 'cacheWrite' && refV.cacheWriteHalf) ? refV.cacheWriteHalf : (2n * refV[comp]);
           sum2 += c2 * combo[j];
         }
-        const sum = (sum2 + 1n) / 2n;
-        if (sum !== baseQ && (sum2 / 2n) !== baseQ) return null;
+        if ((sum2 + 1n) / 2n !== baseQ && sum2 / 2n !== baseQ) return;
         const tokens = {};
         for (let j = 0; j < COMPONENTS.length; j++) tokens[COMPONENTS[j]] = combo[j];
-        return tokens;
+        result.solutions.push(tokens);
+        return;
       }
       for (const n of lists[i]) {
         combo[i] = n;
-        const hit = dfs(i + 1);
-        if (hit) return hit;
+        dfs(i + 1);
+        if (result.solutions.length >= 2 || result.budgetExceeded) return;
       }
-      return null;
     };
-    return dfs(0);
+    dfs(0);
+    return result;
+  }
+
+  // Compatibility existence query. A first solution is NOT a uniqueness proof.
+  function searchAssignment(lists, refV, baseStr) {
+    return inspectAssignments(lists, refV, baseStr).solutions[0] || null;
   }
 
   /** charged == base × costMultiplier × marginMultiplier（精确判定）。数据不全 ⇒ null。 */
@@ -217,59 +236,69 @@
     const res = {
       status: null, tokens: null, refVersion: null,
       candidates: {}, missingPrices: [], unobserved: [],
+      truncatedComponents: [], candidateRanges: {}, referenceStatus: 'unobserved',
       chargedIdentity: chargedIdentity(msg.base, msg.charged, msg.cm, msg.mm),
       total: null,
     };
     const lists = {};
-
     for (const comp of COMPONENTS) {
       const cost = msg.costs ? msg.costs[comp] : null;
       if (cost === null || cost === undefined) { res.unobserved.push(comp); lists[comp] = null; continue; }
       const price = scalarPrice(prices ? prices[comp] : null);
-      if (price === null) {
-        // 费用为 0 时不需要单价也能断定 n=0（前提：单价 > 0）
-        if (quanta10(cost) === 0n) { lists[comp] = [0n]; res.candidates[comp] = ['0']; continue; }
-        res.missingPrices.push(comp);
-        lists[comp] = null;
-        continue;
-      }
+      // A zero charge without a known positive price does not prove zero tokens.
+      if (price === null) { res.missingPrices.push(comp); lists[comp] = null; continue; }
       const ns = tokensForCostAll(String(cost), price);
       if (!ns.length) { res.status = 'no-solution'; res.failedComponent = comp; return res; }
       lists[comp] = ns;
       res.candidates[comp] = ns.map(String);
+      if (ns.truncated) res.truncatedComponents.push(comp);
+      if (ns.minimum !== undefined) res.candidateRanges[comp] = { min: String(ns.minimum), max: String(ns.maximum), truncated: !!ns.truncated };
     }
-
     if (res.unobserved.length) { res.status = 'unobserved'; return res; }
     if (res.missingPrices.length) { res.status = 'missing-price'; return res; }
 
-    // 参考方程优先：能对上就是唯一确定解。
     const ordered = COMPONENTS.map((c) => lists[c]);
+    const solutions = new Map();
+    let searchIncomplete = false;
     if (msg.base != null) {
-      for (const v of versions) {
-        const tokens = searchAssignment(ordered, v, String(msg.base));
-        if (tokens) {
-          res.status = 'exact';
-          res.refVersion = v.id;
-          res.tokens = {};
-          let t = 0n;
-          for (const c of COMPONENTS) { res.tokens[c] = tokens[c].toString(); t += tokens[c]; }
-          res.total = t.toString();
+      res.referenceStatus = 'unmatched';
+      for (const version of versions) {
+        const checked = inspectAssignments(ordered, version, String(msg.base));
+        searchIncomplete = searchIncomplete || checked.budgetExceeded;
+        for (const tokens of checked.solutions) {
+          const key = COMPONENTS.map((c) => tokens[c].toString()).join('|');
+          if (!solutions.has(key)) solutions.set(key, { tokens, refVersion: version.id });
+        }
+        if (solutions.size > 1) {
+          res.status = 'ambiguous';
+          res.referenceStatus = 'multiple-solutions';
+          res.reason = 'multiple-reference-solutions';
           return res;
         }
       }
     }
-
-    // 参考方程对不上（或没有 base）：各通道各自唯一就仍算定死。
-    if (COMPONENTS.every((c) => lists[c].length === 1)) {
-      res.status = 'exact';
-      res.tokens = {};
-      let t = 0n;
-      for (const c of COMPONENTS) { res.tokens[c] = lists[c][0].toString(); t += lists[c][0]; }
-      res.total = t.toString();
+    if (res.truncatedComponents.length || searchIncomplete) {
+      res.status = 'ambiguous';
+      res.reason = searchIncomplete ? 'assignment-budget-exceeded' : 'candidate-enumeration-truncated';
+      res.referenceStatus = solutions.size ? 'matched-incomplete' : 'incomplete';
       return res;
     }
-
+    const unique = solutions.size === 1 ? solutions.values().next().value : null;
+    if (unique || COMPONENTS.every((c) => lists[c].length === 1)) {
+      res.status = 'exact';
+      res.refVersion = unique ? unique.refVersion : null;
+      if (unique) res.referenceStatus = 'unique-token-vector';
+      res.tokens = {};
+      let total = 0n;
+      for (const comp of COMPONENTS) {
+        const value = unique ? unique.tokens[comp] : lists[comp][0];
+        res.tokens[comp] = value.toString(); total += value;
+      }
+      res.total = total.toString();
+      return res;
+    }
     res.status = 'ambiguous';
+    res.reason = 'multiple-channel-preimages';
     return res;
   }
 
@@ -498,7 +527,7 @@
   const API = {
     COMPONENTS, CACHE_COMPONENTS, COST_FIELD, REF_VERSIONS, QUANTUM_DIGITS,
     parseDec, quanta10, formatQuanta, gcdBig, scalarPrice,
-    tokensForCostAll, tokensForCost, searchAssignment, chargedIdentity,
+    tokensForCostAll, tokensForCost, inspectAssignments, searchAssignment, chargedIdentity,
     solveMessage, derivePriceForMissing, extractMessages, solveMessages, solveSession,
     deriveCostMultiplier, identityScopes,
   };

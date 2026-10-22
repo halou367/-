@@ -22,7 +22,7 @@ test('Issue 1: used tool row hover and spinner animations do not flicker', () =>
 
 test('Issue 2: open-source thinking is never folded into tool groups and is strongly highlighted in red', () => {
   // Open-source thinking (ThinkingStatus.visible(p) === true) is not pushed into grp.items
-  assert.match(viewSrc, /if \(p\.type === 'reasoning' && !ThinkingStatus\.visible\(p\) && grp\) return;/);
+  assert.match(viewSrc, /if \(p\.type === 'reasoning' && !ThinkingStatus\.visible\(p\) && grp(?: && !isEvalMsg)?\) return;/);
   assert.doesNotMatch(viewSrc, /if \(p\.type === 'reasoning' && grp\) \{ if \(p\.text\) grp\.items\.push\(p\); return; \}/);
   // Open-source thinking gets .open-think class, .rs-open-badge, and stays collapsed by default (wantOpen = openThink ? false : streaming)
   assert.match(viewSrc, /d\.classList\.toggle\('open-think', openThink\)/);
@@ -35,7 +35,7 @@ test('Issue 2: open-source thinking is never folded into tool groups and is stro
 test('Issue 3: inline HTML preview card (.pvc) and preview pane (#pv) use isolated sandboxes and proportional scene scaling', () => {
   assert.match(hpSrc, /f\.setAttribute\('sandbox', 'allow-same-origin'\)/);
   assert.match(hpSrc, /f\.setAttribute\('sandbox', 'allow-scripts'\)/);
-  assert.match(hpSrc, /f\.srcdoc = docOf\(text, name, \{ thumb: true \}\)/);
+  assert.match(hpSrc, /f\.srcdoc = docOf\(text, name, \{ (?:run: true, )?thumb: true/);
   assert.match(hpSrc, /function mountStage\(stage, f, text, name, o = \{\}\)/);
 });
 

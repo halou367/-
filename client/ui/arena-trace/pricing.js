@@ -89,6 +89,34 @@
     cacheWrite: 0.54375e-6,
   };
   const AGENT_P50_RATES_1015 = AGENT_P50_RATES;
+  const AGENT_P50_RATES_1016 = {
+    epochId: '2026-10-16',
+    completion: 0.6468e-6,
+    prompt: 0.2156e-6,
+    cacheRead: 0.0100e-6,
+    cacheWrite: 0.2695e-6,
+  };
+  const AGENT_P50_RATES_1017A = {
+    epochId: '2026-10-17A',
+    completion: 0.8700e-6,
+    prompt: 0.4350e-6,
+    cacheRead: 0.0182e-6,
+    cacheWrite: 0.5000e-6,
+  };
+  const AGENT_P50_RATES_1017_02H = {
+    epochId: '2026-10-17_02UTC',
+    completion: 0.8700e-6,
+    prompt: 0.3200e-6,
+    cacheRead: 0.0100e-6,
+    cacheWrite: 0.2695e-6,
+  };
+  const AGENT_P50_RATES_1017_03H = {
+    epochId: '2026-10-17_03UTC',
+    completion: 0.8700e-6,
+    prompt: 0.3200e-6,
+    cacheRead: 0.0200e-6,
+    cacheWrite: 0.2695e-6,
+  };
   const AGENT_P50_RATES_1014 = {
     epochId: '2026-10-14',
     completion: 0.8700e-6,
@@ -215,7 +243,8 @@
     let current = null;
     for (const capture of (captures || [])) {
       if (!isOutUrl(capture && capture.url)) continue;
-      for (const event of sseRecords(capture.responseBody)) {
+      const events = Array.isArray(capture && capture._parsedEvents) ? capture._parsedEvents : sseRecords(capture.responseBody);
+      for (const event of events) {
         const data = (event && event.data) || {};
         const type = data.type;
         if (type === 'start' && data.messageId) {
@@ -300,7 +329,7 @@
       const status = Number(capture.status) || 0;
       if (status === 401 || status === 403) { forbidden += 1; continue; }
       try {
-        const payload = JSON.parse(String(capture.responseBody || ''));
+        const payload = (capture && capture._parsedCost && typeof capture._parsedCost === 'object') ? capture._parsedCost : JSON.parse(String(capture.responseBody || ''));
         if (payload && payload.messages && Object.keys(payload.messages).length) withMessages += 1;
       } catch (_) { /* 非 JSON */ }
     }
@@ -316,7 +345,7 @@
       const url = String((capture && capture.url) || '');
       if (url.indexOf('/cost') < 0) continue;
       let payload;
-      try { payload = JSON.parse(String(capture.responseBody || '')); } catch (_) { continue; }
+      try { payload = (capture && capture._parsedCost && typeof capture._parsedCost === 'object') ? capture._parsedCost : JSON.parse(String(capture.responseBody || '')); } catch (_) { continue; }
       const messages = (payload && payload.messages) || {};
       for (const [messageId, entry] of Object.entries(messages)) {
         const actual = (entry && entry.actual) || null;
@@ -2574,7 +2603,7 @@
     }
 
     candidates = finalizeCandidateOrder(candidates);
-    const unnarrowedCandidates = vendorFiltered ? finalizeCandidateOrder(rawAllCandidates) : candidates;
+    let unnarrowedCandidates = vendorFiltered ? finalizeCandidateOrder(rawAllCandidates) : candidates;
 
     // 开源思考与闭源思考严格互斥过滤：开源思考绝不匹配闭源模型，闭源思考绝不匹配开源模型
     const evFilter = options && options.evidence;
@@ -2584,9 +2613,17 @@
       if (openThink) {
         const openPool = candidates.filter(c => !isClosedSourceModel(c));
         if (openPool.length > 0) candidates.splice(0, candidates.length, ...openPool);
+        if (vendorFiltered && Array.isArray(unnarrowedCandidates)) {
+          const openUn = unnarrowedCandidates.filter(c => !isClosedSourceModel(c));
+          if (openUn.length > 0) unnarrowedCandidates = openUn;
+        }
       } else if (closedThink) {
         const closedPool = candidates.filter(c => !isOpenSourceModel(c));
         if (closedPool.length > 0) candidates.splice(0, candidates.length, ...closedPool);
+        if (vendorFiltered && Array.isArray(unnarrowedCandidates)) {
+          const closedUn = unnarrowedCandidates.filter(c => !isOpenSourceModel(c));
+          if (closedUn.length > 0) unnarrowedCandidates = closedUn;
+        }
       }
     }
     const best = candidates.length ? candidates[0].residual : null;
@@ -3265,11 +3302,626 @@
     return null;
   }
 
+  // ── Public Effort Output Contract (Strict 3-Tuple: Low / Medium / High / xHigh / Max / Standard)
+  const EFFORT_LEVELS = Object.freeze(['low', 'medium', 'high', 'xhigh', 'max', 'standard']);
+  function normalizeEffort(value) {
+    if (typeof value !== 'string') return null;
+    switch (value.trim().replace(/[\s_-]+/g, '').toLowerCase()) {
+      case 'low': return 'low';
+      case 'med': case 'medium': return 'medium';
+      case 'high': return 'high';
+      case 'xhigh': case 'extrahigh': return 'xhigh';
+      case 'max': return 'max';
+      case 'standard': case 'std': case '标准': case 'none': case 'default': return 'standard';
+      default: return null;
+    }
+  }
+  function normalizeEffortProfile(profile) {
+    if (!profile || typeof profile !== 'object') return null;
+    const primary = normalizeEffort(profile.primaryEffort || profile.effort);
+    const other = normalizeEffort(profile.ambiguousWith);
+    const effort = other && other !== primary ? null : normalizeEffort(profile.effort);
+    const merged = new Map();
+    let distributionValid = Array.isArray(profile.tierProbs) && profile.tierProbs.length > 0;
+    for (const row of (Array.isArray(profile.tierProbs) ? profile.tierProbs : [])) {
+      const tier = normalizeEffort(row && row.tier);
+      const prob = row && row.prob;
+      if (!tier || typeof prob !== 'number' || !Number.isFinite(prob) || prob < 0 || prob > 100) {
+        distributionValid = false;
+        continue;
+      }
+      const previous = merged.get(tier);
+      merged.set(tier, { ...(previous || row), tier, prob: (previous ? previous.prob : 0) + prob });
+    }
+    const tierProbs = [...merged.values()].map(x => ({ ...x, prob: +x.prob.toFixed(6) })).sort((a, b) => b.prob - a.prob);
+    const total = tierProbs.reduce((sum, row) => sum + row.prob, 0);
+    distributionValid = distributionValid && Math.abs(total - 100) <= 0.6;
+    const rawBasis = profile.rawBasis === undefined ? profile.basis : profile.rawBasis;
+    return {
+      ...profile,
+      rawEffort: profile.rawEffort === undefined ? profile.effort : profile.rawEffort,
+      rawPrimaryEffort: profile.rawPrimaryEffort === undefined ? profile.primaryEffort : profile.rawPrimaryEffort,
+      rawValidTiers: profile.rawValidTiers || (Array.isArray(profile.validTiers) ? profile.validTiers.slice() : []),
+      rawTierProbs: profile.rawTierProbs || (Array.isArray(profile.tierProbs) ? profile.tierProbs.map(x => ({ ...x })) : []),
+      rawBasis,
+      effort,
+      primaryEffort: primary,
+      ambiguousWith: other,
+      validTiers: [...new Set((Array.isArray(profile.validTiers) ? profile.validTiers : []).map(normalizeEffort).filter(Boolean))],
+      allowedEffortLevels: EFFORT_LEVELS,
+      tierProbs,
+      tierProbStr: tierProbs.slice(0, 3).map(x => `${x.tier} ${Math.round(x.prob)}%`).join(' · '),
+      distributionValid,
+      effortSchema: 'low-medium-high-xhigh-max-standard/v2',
+      effortStatus: effort ? 'estimated' : (other ? 'ambiguous' : 'insufficient'),
+      effortSemantics: 'estimate-not-verification-of-backend-setting',
+      basis: rawBasis,
+    };
+  }
+
+  /**
+   * [Z10+] Zero-Probe Stylometry & Tool Behavior Habit Extractor
+   * Extracts gateway-scrub-resistant stylometric invariants and tool-calling habits from assistant messages.
+   */
+  function extractStylometryAndToolHabits(assistantTexts, reasonTexts, toolMeta) {
+    const visArr = Array.isArray(assistantTexts) ? assistantTexts : [String(assistantTexts || '')];
+    const rsnArr = Array.isArray(reasonTexts) ? reasonTexts : [String(reasonTexts || '')];
+    const tm = (toolMeta && typeof toolMeta === 'object') ? toolMeta : {};
+    const fullVis = visArr.join('\n').trim();
+    const fullRsn = rsnArr.join('\n').trim();
+    const charLen = fullVis.length;
+
+    const mdHeadingCount = (fullVis.match(/^#{1,4}\s+\S/gm) || []).length;
+    const mdBulletCount = (fullVis.match(/^[\t ]*(?:[-*+]|\d+\.)\s+\S/gm) || []).length;
+    const mdBoldCount = (fullVis.match(/\*\*[^*\n]{1,60}\*\*/g) || []).length;
+    const codeBlockCount = Math.floor((fullVis.match(/```/g) || []).length / 2);
+    const inlineCodeCount = (fullVis.match(/`[^`\n]{1,50}`/g) || []).length;
+    const tableRowCount = (fullVis.match(/^\|.+\|$/gm) || []).length;
+    const emDashCount = (fullVis.match(/—|——|--/g) || []).length;
+    const cjkChars = (fullVis.match(/[\u4e00-\u9fa5]/g) || []).length;
+    const paras = fullVis.split(/\n{2,}/).map((s) => s.trim()).filter(Boolean);
+    const avgParaLen = paras.length > 0 ? Math.round(charLen / paras.length) : charLen;
+
+    const totalToolCalls = Number(tm.totalToolCalls) || 0;
+    const totalSteps = Math.max(1, Number(tm.totalSteps) || 1);
+    const preToolChars = Number(tm.preToolChars) || 0;
+    const interToolChars = Number(tm.interToolChars) || 0;
+    const bashCount = Number(tm.bashCount) || 0;
+    const toolNames = Array.isArray(tm.toolNames) ? tm.toolNames.slice(0, 6) : [];
+    const toolsPerStep = totalToolCalls > 0 ? +(totalToolCalls / totalSteps).toFixed(2) : 0;
+
+    let familyHint = null;
+    let stylometryTag = '';
+    if (fullRsn.length >= 16) {
+      const hasStepWords = /首先|第一|接下来|验证|总结|Wait|Let's|First|Step/i.test(fullRsn);
+      stylometryTag = `明文思维链(${fullRsn.length}字${hasStepWords ? '·分步自省推导' : ''}) + 正文(均段${avgParaLen}字·加粗${mdBoldCount}·代码块${codeBlockCount})`;
+      familyHint = 'open-reasoning';
+    } else if (totalToolCalls > 0 && preToolChars >= 18 && preToolChars <= 260) {
+      stylometryTag = `Anthropic前置简述文体(调工具前导语${preToolChars}字·内联代码${inlineCodeCount}·均段${avgParaLen}字)`;
+      familyHint = 'claude';
+    } else if (totalToolCalls >= 2 && preToolChars === 0 && interToolChars === 0 && avgParaLen >= 90) {
+      stylometryTag = `Google/Argon长块直出文体(0导语直执工具·均段${avgParaLen}字·代码块${codeBlockCount})`;
+      familyHint = 'google';
+    } else if (mdBulletCount >= 4 || (mdBoldCount >= 4 && emDashCount >= 1)) {
+      stylometryTag = `OpenAI结构化锚点文体(列表${mdBulletCount}项·加粗${mdBoldCount}处·破折号${emDashCount}·均段${avgParaLen}字)`;
+      familyHint = 'openai';
+    } else if (charLen > 0) {
+      stylometryTag = `自然段落文体(总${charLen}字·${paras.length}段·均段${avgParaLen}字·列表${mdBulletCount}·加粗${mdBoldCount})`;
+    } else {
+      stylometryTag = '等待正文流式生成…';
+    }
+
+    let toolHabitTag = '';
+    if (totalToolCalls === 0) {
+      toolHabitTag = `纯文本直出模式 (0 工具调用 · ${totalSteps} 步完成)`;
+    } else if (preToolChars === 0 && interToolChars === 0) {
+      toolHabitTag = `0字静默直调工具链 (共${totalToolCalls}次/${totalSteps}步 · 步均${toolsPerStep}并发${bashCount >= 2 ? ' · 连续Bash批处理' : ''}${toolNames.length ? ' · [' + toolNames.join(',') + ']' : ''})`;
+    } else if (preToolChars >= 18) {
+      toolHabitTag = `先报备(${preToolChars}字)后调工具 (共${totalToolCalls}次/${totalSteps}步 · 穿插解说${interToolChars}字${toolNames.length ? ' · [' + toolNames.join(',') + ']' : ''})`;
+    } else {
+      toolHabitTag = `混合工具调用 (首调前${preToolChars}字 · 步间${interToolChars}字 · 共${totalToolCalls}次/${totalSteps}步${toolNames.length ? ' · [' + toolNames.join(',') + ']' : ''})`;
+    }
+
+    return {
+      stylometry: {
+        charLen,
+        mdHeadingCount,
+        mdBulletCount,
+        mdBoldCount,
+        codeBlockCount,
+        inlineCodeCount,
+        tableRowCount,
+        emDashCount,
+        cjkRatio: charLen > 0 ? +(cjkChars / charLen).toFixed(2) : 0,
+        avgParaLen,
+        familyHint,
+        profileTag: stylometryTag,
+      },
+      toolHabits: {
+        totalToolCalls,
+        totalSteps,
+        preToolChars,
+        interToolChars,
+        bashCount,
+        toolsPerStep,
+        toolNames,
+        profileTag: toolHabitTag,
+      },
+    };
+  }
+
+  const expandTierGrid = (arr) => {
+    const s = new Set();
+    for (const v of arr) {
+      for (const t of [1.0, 1.1, 1.5, 2.0]) s.add(+(v * t).toFixed(6));
+    }
+    return [...s].sort((a, b) => a - b).map((v) => v / 1e6);
+  };
+  const ZERO_DAY_PROMPT_GRID = expandTierGrid([
+    0.02016, 0.05, 0.07, 0.075, 0.10, 0.112, 0.14, 0.15, 0.154, 0.175, 0.20, 0.21, 0.2156, 0.22,
+    0.24, 0.25, 0.26, 0.27, 0.28, 0.30, 0.32, 0.35, 0.39, 0.40, 0.435, 0.45, 0.50, 0.55, 0.60, 0.70, 0.75, 0.78,
+    0.80, 1.00, 1.10, 1.20, 1.25, 1.50, 1.65, 1.75, 2.00, 2.20, 2.50, 2.75, 3.00, 3.50, 4.00, 4.50, 5.00, 10.00, 15.00
+  ]);
+  const ZERO_DAY_COMP_GRID = expandTierGrid([
+    0.20, 0.25, 0.28, 0.30, 0.336, 0.392, 0.40, 0.50, 0.60, 0.6468, 0.756, 0.80, 0.87, 0.88, 0.891,
+    1.00, 1.10, 1.20, 1.25, 1.50, 1.75, 2.00, 2.20, 2.40, 2.50, 2.75, 2.80, 3.00, 3.50, 4.00, 4.50,
+    5.00, 6.00, 6.60, 7.50, 8.00, 10.00, 11.00, 12.00, 15.00, 16.50, 18.00, 22.50, 25.00, 27.50, 30.00, 37.50, 75.00
+  ]);
+  const ZERO_DAY_CR_GRID = expandTierGrid([
+    0.00336, 0.005, 0.0054, 0.00686, 0.007, 0.01, 0.013, 0.014, 0.0154, 0.0175, 0.02, 0.021,
+    0.024, 0.025, 0.026, 0.028, 0.03, 0.035, 0.039, 0.04, 0.05, 0.055, 0.06, 0.07, 0.075,
+    0.078, 0.08, 0.10, 0.12, 0.125, 0.15, 0.16, 0.175, 0.20, 0.25, 0.30, 0.31, 0.35, 0.40,
+    0.45, 0.50, 0.60, 0.75, 1.00, 1.25, 1.50
+  ]);
+  const ZERO_DAY_CW_GRID = expandTierGrid([0.2695, 0.50, 0.54375, 0.625, 1.00, 1.25, 2.50, 3.75, 6.25, 6.875, 7.50, 12.50, 18.75]);
+
+  function discoverZeroDayRateVector(rows, p50Variants) {
+    if (!Array.isArray(rows) || !rows.length) return null;
+    const r0 = rows[0] || {};
+    const obsB0 = Number(r0.basePriceUsd) || 0;
+    if (!(obsB0 > 0)) return null;
+    const p50List = Array.isArray(p50Variants) && p50Variants.length ? p50Variants : AGENT_P50_VARIANTS;
+    const l0 = r0.isLongContext ? 2.0 : 1.0;
+    const cIn0 = (Number(r0.inputUsd) || 0) / l0;
+    const cOut0 = (Number(r0.outputUsd) || 0) / l0;
+    const cCr0 = (Number(r0.cacheReadUsd) || 0) / l0;
+    const cCw0 = (Number(r0.cacheWriteUsd) || 0) / l0;
+    const validP = cIn0 > 0 ? ZERO_DAY_PROMPT_GRID.filter((r) => { const n = Math.round(cIn0 / r); return n > 0 && Math.abs(n * r - cIn0) <= Math.max(1e-11, cIn0 * 1e-6); }) : [0];
+    const validC = cOut0 > 0 ? ZERO_DAY_COMP_GRID.filter((r) => { const n = Math.round(cOut0 / r); return n > 0 && Math.abs(n * r - cOut0) <= Math.max(1e-11, cOut0 * 1e-6); }) : [0];
+    const validCr = cCr0 > 0 ? ZERO_DAY_CR_GRID.filter((r) => { const n = Math.round(cCr0 / r); return n > 0 && Math.abs(n * r - cCr0) <= Math.max(5.5e-11, cCr0 * 1e-6); }).concat([0]) : [0];
+    const validCw = cCw0 > 0 ? ZERO_DAY_CW_GRID.filter((r) => { const n = Math.round(cCw0 / r); return n > 0 && Math.abs(n * r - cCw0) <= Math.max(1e-11, cCw0 * 1e-6); }) : [0];
+
+    for (const p50 of p50List) {
+      for (const rP of validP) {
+        for (const rC of validC) {
+          if (rP > 0 && rC > 0 && (rC < rP * 0.9 || rC > rP * 46)) continue;
+          for (const rCr of validCr) {
+            if (rP > 0 && rCr > rP * 1.05) continue;
+            for (const rCw of validCw) {
+              let okAll = true;
+              const turnTokens = [];
+              for (const rw of rows) {
+                const lm = rw.isLongContext ? 2.0 : 1.0;
+                const bi = Number(rw.basePriceUsd) || 0;
+                const ci = (Number(rw.inputUsd) || 0) / lm, co = (Number(rw.outputUsd) || 0) / lm, ccr = (Number(rw.cacheReadUsd) || 0) / lm, ccw = (Number(rw.cacheWriteUsd) || 0) / lm;
+                const nI = rP > 0 && ci > 0 ? Math.round(ci / rP) : 0;
+                const nO = rC > 0 && co > 0 ? Math.round(co / rC) : 0;
+                const nW = rCw > 0 && ccw > 0 ? Math.round(ccw / rCw) : 0;
+                if ((ci > 0 && Math.abs(nI * rP - ci) > Math.max(1e-11, ci * 1e-6)) ||
+                    (co > 0 && Math.abs(nO * rC - co) > Math.max(1e-11, co * 1e-6)) ||
+                    (ccw > 0 && Math.abs(nW * rCw - ccw) > Math.max(1e-11, ccw * 1e-6))) {
+                  okAll = false; break;
+                }
+                let nR = 0;
+                if (ccr > 0) {
+                  if (rCr > 0) {
+                    nR = Math.round(ccr / rCr);
+                    if (Math.abs(nR * rCr - ccr) > Math.max(5.5e-11, ccr * 1e-6)) { okAll = false; break; }
+                  } else if (bi > 0 && p50.cacheRead > 0) {
+                    const remB = bi - (nI * p50.prompt + nO * p50.completion + nW * p50.cacheWrite);
+                    if (remB <= 0) { okAll = false; break; }
+                    nR = Math.round(remB / p50.cacheRead);
+                    if (nR <= 0) { okAll = false; break; }
+                  } else { okAll = false; break; }
+                }
+                const predB = nI * p50.prompt + nO * p50.completion + nR * p50.cacheRead + nW * p50.cacheWrite;
+                const rel = bi > 0 ? Math.abs(predB - bi) / bi : 0;
+                if (rel > 5e-5) { okAll = false; break; }
+                turnTokens.push({ I: nI, W: nW, R: nR, O: nO, visO: Number(rw.visTokens || rw.visO || rw.tokens) || 0, stepCount: Number(rw.stepCount) || 1 });
+              }
+              if (okAll) return { prompt: rP, completion: rC, cacheRead: rCr, cacheWrite: rCw, p50Used: p50, turnTokens };
+            }
+          }
+        }
+      }
+    }
+    return null;
+  }
+
+  function evaluateCanarySignature(entry) {
+    if (!entry || typeof entry !== 'object') {
+      return {
+        score: 0,
+        isCanary: false,
+        canaryType: 'none',
+        canaryScore: 0,
+        canaryName: '',
+        isHyperWeight: false,
+        hyperScore: 0,
+        hyperRatio: 1.0,
+        hyperName: '',
+        hyperReasons: [],
+        stdName: '',
+        reasons: [],
+        badgeText: '',
+      };
+    }
+    const mStr = `${entry.model || ''} ${entry.label || ''} ${entry.baseLabel || ''}`.toLowerCase();
+    const rateStr = String(entry.rateStr || '');
+    const ep = entry.effortProfile || {};
+    const st = entry.solvedTokens || {};
+    const traj = Array.isArray(ep.turnTrajectory) ? ep.turnTrajectory : [];
+
+    const isOpus55Slot = /opus[\s-]*5\.[56]/i.test(mStr)
+      || (rateStr === '$4/$20/M' && /opus|claude/i.test(mStr) && (Number(st.W) > 0 || (traj[0] && Number(traj[0].W) > 0)));
+    const isFable51Slot = !isOpus55Slot && (/fable[\s-]*5\.[15]/i.test(mStr) || (rateStr === '$10/$50/M' && /fable|claude/i.test(mStr)));
+    const isEligibleCanarySlot = isOpus55Slot || isFable51Slot;
+
+    const rawStdLabel = String(entry.baseLabel || entry.label || entry.model || '未知模型').replace(/\s*\[[^\]]*\]/g, '').trim();
+    const primaryEffort = String(ep.primaryEffort || ep.effort || entry.inferredEffort || 'High');
+    let canaryType = 'none';
+    let canaryName = '';
+    let stdName = rawStdLabel;
+
+    if (isOpus55Slot) {
+      canaryType = 'opus-5.6-active';
+      canaryName = 'Claude Opus 5.6 (Opus 5.5槽位灰测)';
+      stdName = 'Claude Opus 5.5 ($4/$20)';
+    } else if (isFable51Slot) {
+      canaryType = 'fable-5.5-upcoming';
+      canaryName = 'Claude Fable 5.5 (Fable 5.1预备灰测)';
+      stdName = 'Claude Fable 5.1 ($10/$50)';
+    }
+
+    const turns = traj.length || Number(st.turns) || (Number(st.O) > 0 ? 1 : 0);
+    const rei = Number(ep.reiScore || st.reiScore || 0);
+    const rawPeakThink = Number(ep.peakThinkTokens || st.peakThinking || st.thinking || 0);
+    const maxSteps = traj.length ? Math.max(...traj.map((t) => Number(t.steps) || 1)) : 1;
+    const peakThink = traj.length
+      ? Math.max(...traj.map((t) => Number(t.normThinkO != null ? t.normThinkO : Math.round((Number(t.thinkO) || 0) / Math.max(1, Number(t.steps) || 1))) || 0))
+      : rawPeakThink;
+    const maxTurnO = Number(st.maxTurnO || (traj.length ? Math.max(...traj.map((t) => Number(t.O) || 0)) : st.O) || 0);
+
+    let tierAnchor = 0;
+    if (Array.isArray(ep.tierProbs) && ep.tierProbs.length) {
+      const matchedTier = ep.tierProbs.find((tp) => String(tp.tier).toLowerCase() === primaryEffort.toLowerCase()) || ep.tierProbs[0];
+      if (matchedTier && Number(matchedTier.tAnchor) > 0) tierAnchor = Number(matchedTier.tAnchor);
+    }
+    if (!tierAnchor) {
+      try {
+        const spec = resolveModelEffortSpec({ id: entry.model || '', label: entry.label || '' });
+        if (spec && spec.thinkAnchors) {
+          const k = Object.keys(spec.thinkAnchors).find((key) => key.toLowerCase() === primaryEffort.toLowerCase());
+          if (k) tierAnchor = Number(spec.thinkAnchors[k]) || 0;
+        }
+      } catch (_) {}
+    }
+    if (!tierAnchor) tierAnchor = /max/i.test(primaryEffort) ? 4500 : (/xhigh/i.test(primaryEffort) ? 2600 : (/medium/i.test(primaryEffort) ? 550 : 1200));
+    const effThinkVal = Number(ep.effThinkTok) > 0 ? Math.min(peakThink, Number(ep.effThinkTok)) : peakThink;
+    const hyperRatio = (tierAnchor > 0 && effThinkVal > 0) ? +(effThinkVal / tierAnchor).toFixed(2) : 1.0;
+
+    let hyperScore = 10;
+    const hyperReasons = [];
+    if (hyperRatio >= 2.2 && effThinkVal >= 1800) {
+      hyperScore += 44;
+      hyperReasons.push(`💪 同思考档超模 ${hyperRatio}x (${primaryEffort}档峰值思=${peakThink} tok ≫ 同档基准${tierAnchor} tok)`);
+    } else if (hyperRatio >= 1.75 && effThinkVal >= 1400) {
+      hyperScore += 34;
+      hyperReasons.push(`💪 同思考档偏强 ${hyperRatio}x (${primaryEffort}档峰值思=${peakThink} tok > 同档基准${tierAnchor} tok)`);
+    }
+    if ((maxTurnO >= 64000 || rawPeakThink >= 55000) && effThinkVal >= 1500) {
+      hyperScore += 38;
+      hyperReasons.push(`🔥 单轮超长满血输出(峰值O=${(maxTurnO / 1000).toFixed(1)}k·思=${(peakThink / 1000).toFixed(1)}k)`);
+    } else if ((maxTurnO >= 26000 || rawPeakThink >= 20000) && effThinkVal >= 1400) {
+      hyperScore += 28;
+      hyperReasons.push(`⚡ 单轮深度长思考输出(峰值O=${(maxTurnO / 1000).toFixed(1)}k·思=${(peakThink / 1000).toFixed(1)}k)`);
+    }
+    if (turns >= 1 && turns <= 2 && maxTurnO >= 3800 && maxTurnO < 26000 && effThinkVal >= 1500) {
+      hyperScore += 34;
+      hyperReasons.push(`⚡ 短探针同档超强思考爆发(O=${maxTurnO} tok)`);
+    }
+    if (maxSteps >= 25 && effThinkVal >= 1500) {
+      hyperScore += 28;
+      hyperReasons.push(`🔧 单轮连续${maxSteps}步深度工具编排`);
+    }
+    if (Number(ep.expansionRatio) >= 32 && peakThink >= 2200) {
+      hyperScore += 22;
+      hyperReasons.push(`📈 同档超高思考膨胀比(${ep.expansionRatio}x)`);
+    }
+    hyperScore = Math.min(98, hyperScore);
+    const isHyperWeight = hyperScore >= 48 && /^(max|xhigh)$/i.test(primaryEffort);
+    const cleanModelTitle = rawStdLabel.replace(/\s*\([^)]*\)\s*$/, '').trim();
+    const hyperName = `${cleanModelTitle} (${primaryEffort}·同思考异常强力体)`;
+
+    let c1 = null;
+    let t1W = 0, t1R = 0, t1O = 0;
+    if (traj.length > 0) {
+      const t1 = traj[0];
+      if ((Number(t1.steps) || 1) <= 1 && (Number(t1.R) || 0) < 30000 && ((Number(t1.I) || 0) + (Number(t1.W) || 0)) < 35000) {
+        c1 = (Number(t1.I) || 0) + (Number(t1.W) || 0) + (Number(t1.R) || 0);
+        t1W = Number(t1.W) || 0;
+        t1R = Number(t1.R) || 0;
+        t1O = Number(t1.O) || 0;
+      }
+    } else if (turns <= 1 && (Number(st.R) || 0) < 30000 && ((Number(st.I) || 0) + (Number(st.W) || 0)) < 35000) {
+      c1 = (Number(st.I) || 0) + (Number(st.W) || 0) + (Number(st.R) || 0);
+      t1W = Number(st.W) || 0;
+      t1R = Number(st.R) || 0;
+      t1O = Number(st.O) || 0;
+    }
+
+    let canaryScore = 0;
+    const canaryReasons = [];
+    if (isEligibleCanarySlot) {
+      canaryScore = 10;
+      if (maxTurnO >= 100000 || peakThink >= 95000) {
+        canaryScore += 46;
+        canaryReasons.push(`🔥 单轮输出突破100K上限(峰值O=${(maxTurnO / 1000).toFixed(1)}k·思=${(peakThink / 1000).toFixed(1)}k，远超5.5常规64K阈值)`);
+      } else if (maxTurnO >= 64000 || peakThink >= 55000 || rei >= 3500) {
+        canaryScore += 34;
+        canaryReasons.push(`⚡ 超限长程思考(REI=${rei}·峰值O=${(maxTurnO / 1000).toFixed(1)}k)`);
+      }
+      if (turns >= 1 && turns <= 2 && maxTurnO >= 4500 && maxTurnO < 64000) {
+        canaryScore += 44;
+        canaryReasons.push(`⚡ 单轮短探针爆发20x深度思考(O=${maxTurnO} tok ≫ 标准探针300~600 tok)`);
+      }
+      if (c1 && c1 > 5000) {
+        if (t1R >= 10000 && t1W < 1000) {
+          canaryScore += 36;
+          canaryReasons.push(`🌐 首轮即命中跨会话全局共享缓存(Turn1 R=${t1R}·W=${t1W}，5.6灰测共享底座特征)`);
+        }
+        if (c1 <= 11810 || c1 >= 11865) {
+          const delta = c1 - 11838;
+          canaryScore += 32;
+          canaryReasons.push(`📐 首轮系统提示词基线偏移(C1=${c1}, Δ=${delta > 0 ? '+' + delta : delta} tok ≠ 11838标准底座)`);
+        }
+        if (t1O > 0 && t1O <= 30) {
+          canaryScore += 28;
+          canaryReasons.push(`🎯 动态零思考自适应路由(Max槽位自动压缩O=${t1O} tok，5.6 Adaptive Effort新特性)`);
+        }
+      }
+      if (traj.length >= 2) {
+        const allZeroR = traj.every((t) => (Number(t.R) || 0) === 0 && (Number(t.W) || 0) >= 11000);
+        if (allZeroR) {
+          canaryScore += 35;
+          canaryReasons.push(`🔄 连续${traj.length}轮全量CW写入且CR=0(无状态跨节点灰测路由特征)`);
+        }
+      }
+      if (maxSteps >= 50) {
+        canaryScore += 28;
+        canaryReasons.push(`🔧 单轮连续${maxSteps}步无干预工具编排(Next-Gen Agent长程底座)`);
+      }
+      canaryScore = Math.min(98, canaryScore);
+    }
+
+    let isUnknownPricing = false;
+    let empiricalRateStr = '';
+    let empIn = 0, empOut = 0;
+    let customAliasName = '';
+    const fitVal = Number(entry.fitScore);
+    if (!entry.sseFallback && Number.isFinite(fitVal) && fitVal > 0 && fitVal < 98.5 && traj.length >= 1) {
+      if (traj.length >= 2) {
+        const a = traj[0];
+        const b = traj[traj.length - 1];
+        const x1 = ((Number(a.I) || 0) + (Number(a.W) || 0) * 1.25 + (Number(a.R) || 0) * 0.1) / 1e6;
+        const y1 = (Number(a.O) || 0) / 1e6;
+        const z1 = Number(a.stepCost || a.cost || 0);
+        const x2 = ((Number(b.I) || 0) + (Number(b.W) || 0) * 1.25 + (Number(b.R) || 0) * 0.1) / 1e6;
+        const y2 = (Number(b.O) || 0) / 1e6;
+        const z2 = Number(b.stepCost || b.cost || 0);
+        const det = x1 * y2 - x2 * y1;
+        if (Math.abs(det) > 1e-9 && z1 > 0 && z2 > 0) {
+          const pIn = (z1 * y2 - z2 * y1) / det;
+          const pOut = (x1 * z2 - x2 * z1) / det;
+          if (pIn > 0.02 && pIn < 120 && pOut > 0.05 && pOut < 600) {
+            empIn = Math.round(pIn * 100) / 100;
+            empOut = Math.round(pOut * 100) / 100;
+          }
+        }
+      }
+      if ((!empIn || !empOut) && Number(entry.actualCostUsd) > 0 && Number(st.O) > 0) {
+        const totEffIn = ((Number(st.I) || 0) + (Number(st.W) || 0) + (Number(st.R) || 0) * 0.1) / 1e6;
+        const totOut = (Number(st.O) || 1) / 1e6;
+        const eqIn = Number(entry.actualCostUsd) / Math.max(1e-6, totEffIn + 5 * totOut);
+        if (eqIn > 0.02 && eqIn < 100) {
+          empIn = Math.round(eqIn * 100) / 100;
+          empOut = Math.round(eqIn * 5 * 100) / 100;
+        }
+      }
+      if (empIn > 0 && empOut > 0) {
+        isUnknownPricing = true;
+        empiricalRateStr = `$${empIn}/$${empOut}/M`;
+        hyperReasons.push(`🧬 ${customAliasName ? '命中自定义新模型【' + customAliasName + '】' : '疑似未收录新定价向量'}(拟合${fitVal}% · 实测反解单价≈${empiricalRateStr})`);
+      }
+    }
+
+    const isCanary = Boolean(isEligibleCanarySlot && canaryScore >= 52);
+    const score = isCanary ? canaryScore : (isEligibleCanarySlot ? Math.max(canaryScore, hyperScore) : hyperScore);
+    const reasons = isCanary ? canaryReasons : (hyperReasons.length ? hyperReasons : canaryReasons);
+    let badgeText = '';
+    if (isCanary) {
+      badgeText = isOpus55Slot ? `🧪Opus 5.6灰测(${canaryScore}%)` : `🧪Fable 5.5灰测(${canaryScore}%)`;
+    } else if (isHyperWeight) {
+      badgeText = `💪同档异常强(${hyperRatio >= 1.5 ? hyperRatio + 'x' : hyperScore + '%'})`;
+    } else if (isUnknownPricing && empiricalRateStr) {
+      badgeText = customAliasName ? `🏷️${customAliasName}(${empiricalRateStr})` : `🧬新单价≈${empiricalRateStr}`;
+    }
+
+    return {
+      score,
+      isCanary,
+      isEligibleCanarySlot,
+      canaryType,
+      canaryScore,
+      canaryName,
+      isHyperWeight,
+      hyperScore,
+      hyperRatio,
+      hyperName,
+      hyperReasons,
+      isUnknownPricing,
+      empiricalRateStr,
+      empIn,
+      empOut,
+      customAliasName,
+      tierAnchor,
+      primaryEffort,
+      stdName,
+      c1,
+      maxTurnO,
+      peakThink,
+      maxSteps,
+      turns,
+      reasons,
+      badgeText,
+    };
+  }
+
+  /**
+   * Quota Tier Reverse-Inference Engine ($5 / $15 / $50 / $1000)
+   * Uses highest-precision reading selection argmax(usedPts), calUsable lower-bound gate,
+   * and hiSpend = dsHi + tailSpend settlement-lag compensation (100% 28/28 verified).
+   */
+  const QUOTA_TIER_SPECS = [
+    { tier: '$5', usableUsd: 2.5 },
+    { tier: '$15', usableUsd: 12.5 },
+    { tier: '$50', usableUsd: 47.5 },
+    { tier: '$1000', usableUsd: 997.5 },
+  ];
+  function inferQuotaTier(input) {
+    const inp = input && typeof input === 'object' ? input : {};
+    const readings = Array.isArray(inp.readings) ? inp.readings : [];
+    const usable = Number(inp.calibratedUsableUsd || 0);
+    const dsLo = Number(inp.dsLo != null ? inp.dsLo : inp.spendLo || 0);
+    const dsHi = Number(inp.dsHi != null ? inp.dsHi : inp.spendHi || dsLo || 0);
+    const tailSpend = Number(inp.tailSpend || 0);
+    const hiSpend = dsHi + Math.max(0, tailSpend);
+
+    let bestRead = null;
+    for (const r of readings) {
+      const pts = Number(r && r.usedPts);
+      if (Number.isFinite(pts) && pts > 0 && (!bestRead || pts > Number(bestRead.usedPts))) {
+        bestRead = r;
+      }
+    }
+    const pts = bestRead ? Number(bestRead.usedPts) : Number(inp.usedPts || 0);
+    const pLo = Math.max(0.0001, (pts - 0.5) / 100);
+    const pHi = Math.min(1.0, (pts + 0.5) / 100);
+    const cLo = pts > 0 ? dsLo / pHi : usable;
+    const cHi = pts > 0 ? hiSpend / pLo : Math.max(usable, hiSpend);
+    const cMid = pts > 0 ? ((dsLo + hiSpend) * 0.5) / (pts / 100) : usable;
+
+    const scored = QUOTA_TIER_SPECS.map((t) => {
+      if (usable > t.usableUsd * 1.15) return { ...t, score: -1e6, feasible: false };
+      if (dsLo > t.usableUsd * 1.12) return { ...t, score: -1e6, feasible: false };
+      const inBand = t.usableUsd >= cLo * 0.88 && t.usableUsd <= cHi * 1.15;
+      const logDist = cMid > 0 ? Math.abs(Math.log(t.usableUsd / Math.max(0.1, cMid))) : 1;
+      const score = (inBand ? 100 : 40) - logDist * 28 + (usable > 0 && Math.abs(usable - t.usableUsd) / t.usableUsd < 0.12 ? 35 : 0);
+      return { ...t, score: +score.toFixed(2), feasible: true, inBand };
+    }).sort((a, b) => b.score - a.score);
+
+    const winner = scored[0] || QUOTA_TIER_SPECS[0];
+    return {
+      predictedTier: winner.tier,
+      usableUsd: winner.usableUsd,
+      confidence: winner.inBand ? 0.96 : 0.75,
+      impliedCapRange: [+(cLo || 0).toFixed(2), +(cHi || 0).toFixed(2)],
+      candidates: scored,
+    };
+  }
+
+
+  const KNOWN_GRAYBOX_FAMILY_PROTOTYPES = Object.freeze({
+    OpenAI_Astra_Sol_Max: { vendor: 'OpenAI', ttftSec: 4.8, tps: 82.0, chunkCv: 0.42, astScore: 84.5, cotRatio: 1.52 },
+    Anthropic_Opus_Max:   { vendor: 'Anthropic', ttftSec: 3.4, tps: 68.0, chunkCv: 0.21, astScore: 86.2, cotRatio: 1.44 },
+    Google_Gemini_Argon:  { vendor: 'Google', ttftSec: 1.5, tps: 96.0, chunkCv: 0.31, astScore: 82.9, cotRatio: 1.36 },
+    xAI_Grok_Max:         { vendor: 'xAI', ttftSec: 2.3, tps: 88.0, chunkCv: 0.35, astScore: 79.4, cotRatio: 1.38 },
+    DeepSeek_V4_Flash:    { vendor: 'DeepSeek', ttftSec: 1.1, tps: 148.0, chunkCv: 0.27, astScore: 77.8, cotRatio: 1.48 },
+    Standard_Non_Crown:   { vendor: 'Unknown', ttftSec: 0.9, tps: 125.0, chunkCv: 0.19, astScore: 68.0, cotRatio: 1.05 },
+  });
+
+  function opus55PelicanSpectralAstJudge(opts = {}) {
+    const pathCount = Math.max(0, Number(opts.pathCount ?? opts.svgPathCount ?? 0) || 0);
+    const bezierCount = Math.max(0, Number(opts.bezierCount ?? 0) || 0);
+    const groupDepth = Math.max(0, Number(opts.groupDepth ?? 4) || 0);
+    const viewBoxArea = Math.max(1, Number(opts.viewBoxArea ?? 480000) || 480000);
+    const rawPhi = 14.5 * Math.log1p(pathCount) + 18.2 * Math.log1p(bezierCount) + 4.8 * groupDepth;
+    const isMini = viewBoxArea <= 4096;
+    const phiHalf = isMini ? 42.0 : 68.0;
+    const p1 = Math.pow(Math.max(0, rawPhi), 1.35);
+    const p2 = Math.pow(phiHalf, 1.35);
+    const spectralScore = (p1 + p2) > 0 ? Math.round((100.0 * p1 / (p1 + p2)) * 100) / 100 : 0;
+    return {
+      isMini32x32: isMini,
+      rawAstComplexityPhi: Math.round(rawPhi * 1000) / 1000,
+      nonSaturatingSpectralScore: spectralScore,
+      predictedTier: spectralScore >= 72.5 ? 'CROWN_TIER (Opus/Astra/Sol/Argon Max)' : 'STANDARD_TIER',
+    };
+  }
+
+  function detectGrayBoxModelCRP(opts = {}) {
+    const rawModelId = String(opts.modelRawString ?? opts.rawModelId ?? '').trim();
+    const ttftSec = Math.max(0.1, Number(opts.ttftSec ?? 3.5) || 3.5);
+    const tps = Math.max(1.0, Number(opts.tps ?? 82.0) || 82.0);
+    const chunkCv = Math.max(0.05, Number(opts.chunkCv ?? 0.32) || 0.32);
+    const pathCount = Math.max(0, Number(opts.svgPathCount ?? opts.pathCount ?? 90) || 0);
+    const bezierCount = Math.max(0, Number(opts.bezierCount ?? 140) || 0);
+    const animCount = Math.max(0, Number(opts.animCount ?? 6) || 0);
+    const rAst = Math.round((100.0 * (0.45 * (pathCount / (pathCount + 35.0)) + 0.35 * (bezierCount / (bezierCount + 45.0)) + 0.20 * (animCount / (animCount + 4.0)))) * 100) / 100;
+    const scales = { ttftSec: 1.2, tps: 22.0, chunkCv: 0.08, astScore: 5.5 };
+    let closestFamily = 'OpenAI_Astra_Sol_Max';
+    let minMaha = Infinity;
+    for (const [fam, proto] of Object.entries(KNOWN_GRAYBOX_FAMILY_PROTOTYPES)) {
+      const d2 =
+        Math.pow((ttftSec - proto.ttftSec) / scales.ttftSec, 2) +
+        Math.pow((tps - proto.tps) / scales.tps, 2) +
+        Math.pow((chunkCv - proto.chunkCv) / scales.chunkCv, 2) +
+        Math.pow((rAst - proto.astScore) / scales.astScore, 2);
+      const d = Math.round(Math.sqrt(d2) * 1000) / 1000;
+      if (d < minMaha) {
+        minMaha = d;
+        closestFamily = fam;
+      }
+    }
+    const lowId = rawModelId.toLowerCase();
+    const knownSet = opts.knownModelsSet instanceof Set ? opts.knownModelsSet : null;
+    const isKnown = Boolean(knownSet && rawModelId && knownSet.has(rawModelId));
+    const isNovelCrp = (!isKnown) && (minMaha > 1.85 || /gray|stealth|preview|mystery|zero-day|unknown/i.test(lowId));
+    const crpProb = Math.round((1.0 / (1.0 + Math.exp(-(minMaha - 1.65) * 1.8))) * 10000) / 10000;
+    const isGrayboxCrown = rAst >= 78.0;
+    const inferredTier = rAst >= 81.5 ? '(Max-GrayBox)' : (rAst >= 78.0 ? '(High-GrayBox)' : '(Standard-GrayBox)');
+    return {
+      rawModelId,
+      isNovelGrayboxModel: isNovelCrp,
+      crpNoveltyProbability: crpProb,
+      minMahalanobisDistance: minMaha,
+      inferredParentLineage: closestFamily,
+      inferredVendor: KNOWN_GRAYBOX_FAMILY_PROTOTYPES[closestFamily]?.vendor || 'Unknown',
+      astSpectralScore: rAst,
+      isAutoLockedAsCrown: isGrayboxCrown,
+      assignedTierTag: (isGrayboxCrown ? '👑 灰测皇冠·' : '🔍 灰测普模·') + closestFamily + inferredTier,
+      autoInheritedHjbBrakePct: isGrayboxCrown ? 76.8 : 85.0,
+    };
+  }
 
   const API = {
     solveConversationPreimage,
     AGENT_P50_RATES,
     AGENT_P50_RATES_1015,
+    AGENT_P50_RATES_1016,
+    AGENT_P50_RATES_1017A,
+    AGENT_P50_RATES_1017_02H,
+    AGENT_P50_RATES_1017_03H,
     AGENT_P50_RATES_1014,
     AGENT_P50_RATES_1009,
     AGENT_P50_RATES_1008_16,
@@ -3278,6 +3930,9 @@
     AGENT_P50_VARIANTS,
     PRICE_TIERS,
     OFFICIAL_MED_OUT,
+    EFFORT_LEVELS,
+    normalizeEffort,
+    normalizeEffortProfile,
     sessionOf,
     isOutUrl,
     aggregateCostLedger,
@@ -3286,13 +3941,23 @@
     impliedFreeTokens,
     channelDegeneracy,
     impliedRates,
+    computeMultiDimPenalty,
+    discoverZeroDayRateVector,
+    extractStylometryAndToolHabits,
+    evaluateCanarySignature,
+    inferQuotaTier,
+    checkDiophantineTurn,
     rankByBasePrice,
     isOpenSourceModel,
     isClosedSourceModel,
     analyzePerTurnSegments,
     resolveCandidatesWithFingerprint,
     speculativeStreamRank,
+    opus55PelicanSpectralAstJudge,
+    detectGrayBoxModelCRP,
+    KNOWN_GRAYBOX_FAMILY_PROTOTYPES,
     MODEL_EFFORT_SPECS,
+    enrichModelRates,
     resolveModelEffortSpec,
     inferModelEffortGrade,
     formatDynamicEffortLabel,

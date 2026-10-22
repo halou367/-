@@ -1783,24 +1783,296 @@ test('v0.13.169: Battle mode hides Gacha controls and renders top-bar Pelican bu
   const anchorBtn = makeNode('button');
   const pop = PT.openMenu(anchorBtn, { mode: 'battle' });
   assert.ok(pop);
-  assert.equal(pop.children.length, 3);
+  assert.equal(pop.children.length, 2);
   assert.deepEqual(
     pop.children.map(btn => btn.getAttribute('data-test-kind')),
-    ['pelican', 'habit', 'text']
+    ['pelican', 'habit']
   );
 
-  // Trigger all 3 test modes in Battle mode
+  // Trigger test modes in Battle mode
   await PT.runQuickTest('pelican', { mode: 'battle' });
   await PT.runQuickTest('habit', { mode: 'battle' });
-  await PT.runQuickTest('text', { mode: 'battle' });
 
-  assert.equal(sentPrompts.length, 3);
+  assert.equal(sentPrompts.length, 2);
   assert.equal(sentPrompts[0].opts.kind, 'pelican');
   assert.match(sentPrompts[0].prompt, /pelican/i);
   assert.equal(sentPrompts[1].opts.kind, 'habit');
   assert.match(sentPrompts[1].prompt, /35～45 行以内/);
-  assert.equal(sentPrompts[2].opts.kind, 'text');
-  assert.match(sentPrompts[2].prompt, /无需调用任何工具/);
 });
+
+test('v0.13.167: Battle regenerateTurn retries single message via PUT /nextjs-api/stream/retry-evaluation-session-message and filters 0-char failed side from habit blind guess', async () => {
+  const vm = require('node:vm');
+  const evalCoreSrc = read('ui/eval-core.js');
+  const evalViewSrc = read('ui/eval-view.js');
+  const bpuiSrc = read('ui/billing-probe-ui.js');
+  const dockSrc = read('ui/dock.js');
+
+  assert.match(evalCoreSrc, /\/nextjs-api\/stream\/retry-evaluation-session-message\/\$\{encodeURIComponent\(chat\.sid\)\}\/messages\/\$\{encodeURIComponent\(msgId\)\}/);
+  assert.match(evalCoreSrc, /method:\s*'PUT'/);
+  assert.match(evalCoreSrc, /'chat_retry'/);
+  assert.match(evalCoreSrc, /val\.finishReason === 'error'/);
+  assert.match(evalViewSrc, /EvalEngine\.regenerateTurn\(chat,\s*\{\s*turn,\s*pos,\s*msg\s*\}\)/);
+  assert.match(bpuiSrc, /if \(\(m\.status === 'failed' \|\| m\.failed\) && !hasAsstContent\(m\)\) return false;/);
+  assert.match(dockSrc, /生成失败 · 点击可直接重试/);
+
+  const calls = [];
+  const recaptchaActions = [];
+  const streamChunks = [
+    'bg:"Thinking about COMET FROST card..."\n',
+    'b0:"Here is the 40-line HTML card:\\n```html\\n<!doctype html><html><body>COMET · FROST #49</body></html>\\n```"\n',
+    'bd:{"finishReason":"stop"}\n',
+  ];
+
+  const ctx = vm.createContext({
+    console,
+    AbortController,
+    TextDecoder,
+    TextEncoder,
+    URL,
+    setTimeout,
+    clearTimeout,
+    Store: { get: () => null, set: () => true },
+    Bus: { on() {}, emit() {} },
+    Recaptcha: {
+      take: async act => { recaptchaActions.push(act); return 'v3_tok_' + act; },
+      v3: async act => { recaptchaActions.push(act); return 'v3_tok_' + act; },
+    },
+    packClientInteraction: () => 'cx_test_token',
+    rawFetch: async (url, init = {}) => {
+      calls.push({ url, method: init.method || 'GET', body: init.body ? JSON.parse(init.body) : null });
+      let idx = 0;
+      const enc = new TextEncoder();
+      return {
+        ok: true,
+        status: 200,
+        body: {
+          getReader: () => ({
+            read: async () => {
+              if (idx >= streamChunks.length) return { done: true, value: undefined };
+              return { done: false, value: enc.encode(streamChunks[idx++]) };
+            },
+          }),
+        },
+      };
+    },
+    window: {},
+  });
+
+  vm.runInContext(evalCoreSrc, ctx);
+  const { EvalEngine } = ctx.window;
+  assert.equal(typeof EvalEngine.retryEvalMessage, 'function');
+  assert.equal(typeof EvalEngine.regenerateTurn, 'function');
+
+  const msgUser = { id: '01a16235-4ea7-788d-afe8-960e69b4b06c', role: 'user', parts: [{ type: 'text', text: 'Create COMET FROST card' }] };
+  const msgA = {
+    id: '01a16235-4ea7-788d-794b-98e1c0be9c87',
+    role: 'assistant',
+    participantPosition: 'a',
+    status: 'success',
+    parts: [{ type: 'text', text: 'Model A intact 44-line HTML response', state: 'done' }],
+    metadata: { pending: false },
+  };
+  const msgB = {
+    id: '01a16235-4ea7-788d-a2f4-6262af8e6634',
+    role: 'assistant',
+    participantPosition: 'b',
+    status: 'failed',
+    failureReason: 'The generation failed',
+    parts: [],
+    metadata: { pending: false },
+  };
+  const chat = {
+    sid: '01a16235-4ea7-7381-aa5e-8ad419b46ba8',
+    isEvaluation: true,
+    evalMode: 'battle',
+    loaded: true,
+    messages: [msgUser, msgA, msgB],
+    emit() {},
+    emitStreamSoon() {},
+  };
+
+  const ok = await EvalEngine.regenerateTurn(chat, {
+    turn: { user: msgUser, a: msgA, b: msgB },
+    pos: 'b',
+    msg: msgB,
+  });
+  assert.equal(ok, true);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].method, 'PUT');
+  assert.equal(calls[0].url, '/nextjs-api/stream/retry-evaluation-session-message/01a16235-4ea7-7381-aa5e-8ad419b46ba8/messages/01a16235-4ea7-788d-a2f4-6262af8e6634');
+  assert.equal(calls[0].body.recaptchaV3Token, 'v3_tok_chat_retry');
+  assert.equal(calls[0].body.cx, 'cx_test_token');
+  assert.deepEqual(recaptchaActions, ['chat_retry']);
+
+  // Verify msgA was never removed or mutated and msgB was updated in-place
+  assert.equal(chat.messages.length, 3);
+  assert.equal(chat.messages[1], msgA);
+  assert.equal(msgA.parts[0].text, 'Model A intact 44-line HTML response');
+  assert.equal(chat.messages[2], msgB);
+  assert.equal(msgB.id, '01a16235-4ea7-788d-a2f4-6262af8e6634');
+  assert.equal(msgB.status, 'success');
+  assert.equal(msgB.parts.length, 2);
+  assert.equal(msgB.parts[0].type, 'reasoning');
+  assert.match(msgB.parts[1].text, /COMET · FROST #49/);
+});
+
+test('v0.13.168: Battle mode tabs/cards show Battle icon + status-only label (生成中/待选择/已完成) & Battle reveal performs exclusive repulsion + effort tier separation', () => {
+  const evalViewSrc = read('ui/eval-view.js');
+  const titlesSrc = read('ui/titles.js');
+  const viewSrc = read('ui/view.js');
+  const bpUiSrc = read('ui/billing-probe-ui.js');
+
+  assert.match(evalViewSrc, /getBattleStatusLabel\s*\(/);
+  assert.match(evalViewSrc, /renderBattleLogo\s*\(/);
+  assert.match(evalViewSrc, /return '生成中'/);
+  assert.match(evalViewSrc, /return '待选择'/);
+  assert.match(evalViewSrc, /return '已完成'/);
+  assert.match(titlesSrc, /vid:\s*'',\s*model:\s*'',[\s\S]*battleStatus,\s*gold:\s*false,\s*isBattle:\s*true/);
+  assert.match(viewSrc, /EvalView\.renderBattleLogo\(15,\s*battleSt\)/);
+  assert.match(viewSrc, /const label = isBattleTab\s*\?\s*battleStatus/);
+
+  // Verify EvalView.getBattleStatusLabel state transitions
+  const vm = require('node:vm');
+  const evCtx = vm.createContext({
+    Chats: new Map(),
+    History: { byId: () => null },
+    Models: { get: () => null },
+    ModeState: { getMode: () => 'battle', inferEntryMode: () => 'battle' },
+    h: (tag, attrs, ...children) => ({ tag, attrs, children, style: {} }),
+    document: { createElementNS: () => ({ setAttribute() {}, style: {} }) },
+  });
+  vm.runInContext(evalViewSrc + '\nthis.EvalView = EvalView;', evCtx);
+  const EV = evCtx.EvalView;
+  assert.equal(EV.getBattleStatusLabel({ sid: 'b1', busy: true, isEvaluation: true, evalMode: 'battle' }), '生成中');
+  assert.equal(EV.getBattleStatusLabel({ sid: 'b1', busy: false, isEvaluation: true, evalMode: 'battle', voteState: { voted: false } }), '待选择');
+  assert.equal(EV.getBattleStatusLabel({ sid: 'b1', busy: false, isEvaluation: true, evalMode: 'battle', voteState: { voted: true } }), '已完成');
+
+  // Verify Battle exclusive repulsion & standalone effort tier separation (without syntheticMargin / double-tier conflict)
+  assert.match(bpUiSrc, /function resolveBattleModelWithTier\(/);
+  assert.match(bpUiSrc, /function identifyEffortTier\(/);
+  assert.match(bpUiSrc, /function sanitizeCorruptedTierSlug\(/);
+  assert.match(bpUiSrc, /battleRepel:\s*isBattleTruth/);
+});
+
+test('v0.13.172: Decouple Battle effort tier identification from model habit calibration & prevent double-tier / open-source -max corruption', () => {
+  const vm = require('node:vm');
+  const strengthSrc = read('ui/strength.js');
+  const bpUiSrc = read('ui/billing-probe-ui.js');
+  const storeMap = new Map();
+  const ctx = vm.createContext({
+    console, Date, Math, Set, Map, Array, Object, String, Number, Boolean, RegExp, JSON, Promise,
+    setTimeout: () => 0, clearTimeout: () => {}, setInterval: () => 0, clearInterval: () => {}, addEventListener: () => {},
+    noVertex: s => String(s || ''),
+    noteBase: s => String(s || ''),
+    now: () => Date.now(),
+    Trace: { turns: () => [], index: () => ({}) },
+    Gacha: { settings: () => ({ prompt: '' }) },
+    Store: {
+      get: (k, d) => (storeMap.has(k) ? structuredClone(storeMap.get(k)) : d),
+      set: (k, v) => { storeMap.set(k, structuredClone(v)); return true; },
+    },
+    Brand: { of: () => 'anthropic', tierOf: () => '', NAME: { anthropic: 'Anthropic', openai: 'OpenAI' } },
+    Models: { all: {}, get: () => null, set: () => {} },
+    Chats: new Map(),
+    Bus: { on() {}, emit() {} },
+  });
+  vm.runInContext(strengthSrc + '\nthis.Strength = Strength;', ctx);
+  vm.runInContext(bpUiSrc.split('const BillingProbe =')[0] + '\nthis.ChatHabitFingerprint = ChatHabitFingerprint;', ctx);
+  const Strength = ctx.Strength;
+  const FP = ctx.ChatHabitFingerprint;
+
+  // 1. Strength.canon & formatFamilyTierCanon must never produce double-tier slugs like claude-opus-5.5-high-low
+  assert.equal(Strength.canon('claude-opus-5.5-high (Low)'), 'claude-opus-5.5-low');
+  assert.equal(Strength.canon('claude-opus-5.5-high-low'), 'claude-opus-5.5-high');
+  assert.equal(FP.formatFamilyTierCanon('claude-opus-5.5-high', 'low'), 'claude-opus-5.5-low');
+  assert.equal(FP.formatDisplayModelLabel('claude-opus-5.5-high-low'), 'Claude Opus 5.5 (High)');
+  assert.equal(FP.formatDisplayModelLabel('claude-opus-5.5-low'), 'Claude Opus 5.5 (Low)');
+
+  // 2. Open-source models with -max in their family name (qwen3.8-max, glm-5.3-max, kimi-k3) must not have -max parsed as an effort tier or appended with -low
+  assert.equal(Strength.canon('qwen3.8-max (Low)'), 'qwen3.8-max');
+  assert.equal(FP.sanitizeCorruptedTierSlug('qwen3.8-max-low'), 'qwen3.8-max');
+  assert.equal(FP.sanitizeCorruptedTierSlug('deepseek-v4.1-flash-20260910-max'), 'deepseek-v4.1-flash-20260910');
+  const qwenParsed = FP.parseModelFamilyAndTier('qwen3.8-max');
+  assert.equal(qwenParsed.hasExplicitTier, false);
+  assert.equal(qwenParsed.tier, '');
+  assert.equal(qwenParsed.effort, 'standard');
+  assert.equal(FP.formatFamilyTierCanon('qwen3.8-max', 'low'), 'qwen3.8-max');
+
+  // 3. Strict 3-tuple decomposition (厂商 / 型号 / 强度) with 'standard' (标准) when no explicit effort exists
+  const dSol = FP.decomposeModelIdentity('GPT 6.1 Sol (High)');
+  assert.equal(dSol.vendor, 'openai');
+  assert.equal(dSol.family, 'gpt-6.1-sol');
+  assert.equal(dSol.effort, 'high');
+  assert.equal(dSol.effortLabel, 'High');
+  assert.equal(dSol.hasExplicitTier, true);
+
+  const dQwen = FP.decomposeModelIdentity('qwen3.8-max-0902');
+  assert.equal(dQwen.vendor, 'qwen');
+  assert.equal(dQwen.family, 'qwen3.8-max-0902');
+  assert.equal(dQwen.effort, 'standard');
+  assert.equal(dQwen.effortLabel, '标准');
+  assert.equal(dQwen.hasExplicitTier, false);
+  assert.equal(dQwen.canon, 'qwen3.8-max-0902');
+
+  const dOpus5 = FP.decomposeModelIdentity('claude-opus-5');
+  assert.equal(dOpus5.vendor, 'anthropic');
+  assert.equal(dOpus5.family, 'claude-opus-5');
+  assert.equal(dOpus5.effort, 'standard');
+  assert.equal(dOpus5.effortLabel, '标准');
+  assert.equal(dOpus5.canon, 'claude-opus-5');
+
+  const dArgonNoTier = FP.decomposeModelIdentity('gemini-4-argon');
+  assert.equal(dArgonNoTier.vendor, 'google');
+  assert.equal(dArgonNoTier.family, 'gemini-4-argon');
+  assert.equal(dArgonNoTier.effort, 'standard');
+  assert.equal(dArgonNoTier.effortLabel, '标准');
+  assert.equal(dArgonNoTier.canon, 'gemini-4-argon');
+
+  // 4. Battle reveal of tierless models must keep pure model name and effort = 'standard' (no forced -high / -max suffix)
+  assert.equal(FP.resolveBattleModelWithTier('claude-opus-5', null, null, 'gemini-4-argon'), 'claude-opus-5');
+  assert.equal(FP.resolveBattleModelWithTier('gemini-4-argon', null, null, 'claude-opus-5'), 'gemini-4-argon');
+  assert.equal(FP.resolveBattleModelWithTier('claude-opus-5.5-medium', null, null, 'gpt-6.1-sol-high'), 'claude-opus-5.5-medium');
+
+  // 5. Historical bank repair: tierless Battle rawLabel samples and sid 01a155ea-d645-7385-9d00-0a95851f21d9 are normalized into conflict-free 3-tuples
+  storeMap.set('habitLearnBank:v1', [
+    {
+      sid: 'battle-test-1#a',
+      model: 'claude-opus-5-high',
+      rawLabel: 'claude-opus-5',
+      battleRevealed: true,
+      vec: new Array(20).fill(0.5),
+    },
+    {
+      sid: '01a155ea-d645-7385-9d00-0a95851f21d9',
+      model: 'gemini-4-argon-medium',
+      rawLabel: 'Gemini 4 Argon (High)',
+      userConfirmed: true,
+      vec: new Array(20).fill(0.4),
+    },
+  ]);
+  const repairedBank = FP.loadBank();
+  const sBattle = repairedBank.find(s => s.sid === 'battle-test-1#a');
+  assert.equal(sBattle.model, 'claude-opus-5');
+  assert.equal(sBattle.vendor, 'anthropic');
+  assert.equal(sBattle.family, 'claude-opus-5');
+  assert.equal(sBattle.effort, 'standard');
+  assert.equal(sBattle.effortLabel, '标准');
+
+  const sArgon = repairedBank.find(s => s.sid === '01a155ea-d645-7385-9d00-0a95851f21d9');
+  assert.equal(sArgon.model, 'gemini-4-argon-high');
+  assert.equal(sArgon.vendor, 'google');
+  assert.equal(sArgon.family, 'gemini-4-argon');
+  assert.equal(sArgon.effort, 'high');
+  assert.equal(sArgon.effortLabel, 'High');
+
+  // 6. Standalone effort tier identification works without spawning synthetic rows in analyze() candidates
+  const effOut = FP.identifyEffortTier({
+    tierVec: [0.85, 0.82, 0.70, 0.65, 0.80, 0.75, 0.60, 0.55, 0.70, 0.65, 0.84, 0.88],
+    evalModality: 'chat',
+  }, 'claude-opus-5.5');
+  assert.ok(effOut && typeof effOut.tier === 'string');
+});
+
+
 
 

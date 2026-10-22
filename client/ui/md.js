@@ -20,11 +20,16 @@ const MD = (() => {
     }
     return [u, tail];
   }
+  const _inCache = new Map();
   function inline(src) {
+    const raw = String(src || '');
+    if (!raw) return '';
+    const hit = _inCache.get(raw);
+    if (hit !== undefined) return hit;
     const slots = [], put = html => { slots.push(html); return '\u0001' + (slots.length - 1) + '\u0001'; };
     // 行内代码里的文件名 / 路径：可点击，在工作区文件查看器里打开
     const fp = c => { try { return FileLink.looks(c); } catch { return false; } };
-    let s = String(src).replace(/`([^`\n]+)`/g, (_, c) => put(fp(c) ? `<code class="fpath" data-fpath="${esc(c.trim())}" title="在工作区打开 ${esc(c.trim())}">${esc(c)}</code>` : `<code>${esc(c)}</code>`));
+    let s = raw.replace(/`([^`\n]+)`/g, (_, c) => put(fp(c) ? `<code class="fpath" data-fpath="${esc(c.trim())}" title="在工作区打开 ${esc(c.trim())}">${esc(c)}</code>` : `<code>${esc(c)}</code>`));
     s = s.replace(MDLINK, (_, img, t, a, b) => { const u = a || b; return img && !local(u) ? put(`<img alt="${esc(t)}" src="${esc(safeUrl(u))}">`) : put(aTag(u, (img ? '🖼 ' : '') + emph(esc(t)))); });
     s = s.replace(/<((?:https?:\/\/|mailto:)[^\s<>]+)>/g, (_, u) => put(aTag(u, esc(u))));
     s = s.replace(BARE, m => { const [u, tail] = trimUrl(m); return (u.length > 10 ? put(aTag(u, esc(u))) : u) + tail; });
@@ -32,6 +37,10 @@ const MD = (() => {
     s = s.replace(/(^|[\s(（:：,，])((?:\/home\/user\/|~\/|\.\/)?(?:[\w.-]+\/)+[\w.-]*[\w-]\.[a-zA-Z0-9]{1,8})(?=$|[\s)）,，。;；:：!?！？])/g, (m, pre, p) => fp(p) ? pre + put(`<span class="fpath" data-fpath="${esc(p)}" title="在工作区打开">${esc(p)}</span>`) : m);
     s = emph(esc(s));
     for (let i = 0; i < 3 && s.includes('\u0001'); i++) s = s.replace(/\u0001(\d+)\u0001/g, (_, i) => slots[+i]);
+    if (raw.length <= 600) {
+      if (_inCache.size >= 1024) _inCache.delete(_inCache.keys().next().value);
+      _inCache.set(raw, s);
+    }
     return s;
   }
 

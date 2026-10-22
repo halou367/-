@@ -5,7 +5,17 @@ const Fmt = {
   fresh(t0) { return { ids: [], rN: 0, rE: 0, rChars: 0, rHead: '', rEnd: false, tN: 0, tChars: 0, tidCount: 0, tidChars: 0, tools: 0, toolIds: [], done: false,
     t0: t0 || 0, stepAt: t0 || 0, recs: t0 ? [{ timestamp: t0, data: { type: 'data-agent-dispatch' } }] : [], seen: false, think: 0, vis: 0, visR: 0, tEnd: 0, stepR: 0, gen: 0, lastOut: 0, open: false }; },
   // 字数 → token（中日韩文字约 1 字 1 token，其余约 4 字符 1 token）
-  tok(s) { s = String(s || ''); const cjk = (s.match(/[\u3000-\u9fff\uac00-\ud7af\uff00-\uffef]/g) || []).length; return cjk + (s.length - cjk) / 4; },
+  tok(s) {
+    s = String(s || '');
+    const len = s.length;
+    if (!len) return 0;
+    let cjk = 0;
+    for (let i = 0; i < len; i++) {
+      const c = s.charCodeAt(i);
+      if ((c >= 0x3000 && c <= 0x9fff) || (c >= 0xac00 && c <= 0xd7af) || (c >= 0xff00 && c <= 0xffef)) cjk++;
+    }
+    return cjk + (len - cjk) / 4;
+  },
   // 计时：ts = 这个片段到达的时间（毫秒）；每一步第一次有可见输出时，把之前的等待记成思考时间
   clock(f, ch, ts) {
     if (!ts) return; const t = ch.type;
@@ -22,7 +32,7 @@ const Fmt = {
   // Claude（思考隐藏）：输出 token ≈ 生成时间 × 约 110 tok/秒（实测 opus-5.5 约 105、sonnet-5.5 约 145），花费 ≈ 输出 × $0.000022（实测中位数）；
   // 其他接口：隐藏思考时间 × 100 + 可见文字 / 思考按字数折算，不估花费
   // 标准题：固定的鹈鹕动画 SVG 题（指纹题单独走 Fingerprint）；只有标准题才打推理分
-  stdPrompt(text) { const t = String(text || ''); return /pelican/i.test(t) && /svg/i.test(t); },
+  stdPrompt(text) { const t = String(text || ''); return /pelican|pélican|pelícano|pelicano|pellicano|pelikan|pelikaan|pelecan|鹈鹕|鵜鶘|ペリカン|펠리컨|пеликан|بجع|پلیکان|שקנאי|mwari|ፔሊካን|पेलिकन|bồ nông|นกกระทุง|πελεκάν/i.test(t) && /svg/i.test(t); },
   est(f, fam, std) {
     if (!f || !f.t0 || !f.tEnd) return null;
     const gen = (f.gen + (f.open ? Math.max(0, f.lastOut - f.stepAt - 800) : 0)) / 1000;
@@ -39,8 +49,6 @@ const Fmt = {
     if (!f || !ch) return;
     const t = ch.type;
     try { this.clock(f, ch, ts); } catch {}
-    // 强度分细则（cscore.js）要用的精简记录：类型 + 到达时间，正文片段保留文字
-    if (f.recs && f.recs.length < 30000 && t && !t.startsWith('data-')) f.recs.push({ timestamp: ts || 0, data: t === 'text-delta' ? { type: t, delta: String(ch.delta || '') } : { type: t } });
     if (t === 'text-delta' || t === 'reasoning-delta') f.vis += this.tok(ch.delta);
     else if (t === 'tool-input-available') f.vis += this.tok(JSON.stringify(ch.input || '')) ;
     if (t === 'tool-input-start' && ch.toolCallId && f.toolIds.length < 8) f.toolIds.push(String(ch.toolCallId));
@@ -327,4 +335,3 @@ const Calib = {
   verdict(row, opt) { if (row?.rep) return { action: 'retry', why: '同一对话重复问探针题，分数不准' }; return row ? CS.verdict(row.ok ? this.result(row) : { valid: false, why: row.why }, this.calib(row.p, row.fam), opt) : { action: 'retry', why: '没有打分' }; },
 };
 Bus.on('model', (c, e) => { try { if (c?.sid && e?.name && !e.guess) Calib.label(c.sid, e.name); } catch {} });
-setTimeout(() => { try { Calib.pull(); } catch {} }, 4000);

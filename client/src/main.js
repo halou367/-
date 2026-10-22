@@ -55,6 +55,9 @@ const cookiePersistence = require('./session-persistence').createCookiePersisten
 const SiteLogins = require('./site-logins');
 process.on('uncaughtExceptionMonitor', error => runtimeLog('main-exception', { kind: error?.name, code: error?.code }));
 process.on('unhandledRejection', error => {
+  if ((typeof quitting !== 'undefined' && quitting) || storageClosing) {
+    if (/destroyed|disposed|closed|关闭/i.test(String(error?.message || ''))) return;
+  }
   runtimeLog('main-unhandled-rejection', { kind: error?.name, code: error?.code });
   console.error('Unhandled rejection:', error);
 });
@@ -62,6 +65,30 @@ process.on('uncaughtException', error => {
   runtimeLog('main-uncaught-exception', { kind: error?.name, code: error?.code });
   console.error('Uncaught exception:', error);
 });
+let _rendererLogBuf = '', _rendererLogTimer = 0;
+function appendRendererLog(line) {
+  if (!line || /was preloaded using link preload|Download the React DevTools|Third-party cookie will be blocked/i.test(line)) return;
+  _rendererLogBuf += line.endsWith('\n') ? line : line + '\n';
+  if (_rendererLogTimer) return;
+  _rendererLogTimer = setTimeout(async () => {
+    _rendererLogTimer = 0;
+    const chunk = _rendererLogBuf;
+    _rendererLogBuf = '';
+    if (!chunk) return;
+    try {
+      const logDir = path.join(app.getPath('userData'), 'logs');
+      const logFile = path.join(logDir, 'renderer.log');
+      await fs.promises.mkdir(logDir, { recursive: true });
+      const st = await fs.promises.stat(logFile).catch(() => null);
+      if (st && st.size > 2 * 1024 * 1024) {
+        await fs.promises.rm(logFile + '.1', { force: true }).catch(() => {});
+        await fs.promises.rename(logFile, logFile + '.1').catch(() => {});
+      }
+      await fs.promises.appendFile(logFile, chunk, 'utf8');
+    } catch {}
+  }, 1500);
+  _rendererLogTimer.unref?.();
+}
 app.on('child-process-gone', (_, details) => runtimeLog('child-process-gone', { kind: details.type, reason: details.reason, exitCode: details.exitCode }));
 const UA = `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${process.versions.chrome} Safari/537.36`;
 
@@ -77,9 +104,62 @@ if (!hasSingleLock && process.argv.includes('--updated')) {
 if (!hasSingleLock) { app.quit(); process.exit(0); }
 
 let BUNDLE = '';
-const loadBundle = () => { BUNDLE = build(path.join(__dirname, '..', 'ui'), VERSION); };
+const loadBundle = () => { BUNDLE = build(path.join(__dirname, '..', 'ui'), VERSION, { skipSyntaxCheck: true }); };
 
 // ---------- 账号存储 ----------
+const TOXIC_MAIN_IPS = new Set([
+  '150.109.11.223', '31.57.27.38', '5.175.236.53', '126.78.133.130', '188.253.22.211',
+  '207.65.189.9', '193.122.119.241', '139.28.169.72', '67.220.80.99', '104.238.191.179',
+  '194.147.88.43', '132.243.30.210', '14.137.235.154', '162.4.173.74', '192.236.234.71',
+  '213.176.18.108', '219.76.13.167', '176.10.125.114', '62.182.198.178', '82.118.20.234',
+  '185.232.204.222', '78.129.155.37', '84.234.17.132', '159.203.18.237', '23.246.165.123',
+  '198.20.138.119', '83.228.193.177', '43.170.8.95', '43.175.16.48', '38.65.9.251',
+  '77.73.71.200',
+]);
+function healBannedAccountProxyIps() {
+  if (!Array.isArray(DB?.accounts) || !DB.accounts.length) return false;
+  const pool = DB.shared?.pippool;
+  if (!pool || typeof pool !== 'object') return false;
+  const ips = pool.ips || {}, ban = pool.ban || {}, rep = pool.rep || {};
+  const isBadPip = k => {
+    const raw = String(k || '').trim();
+    if (!raw) return false;
+    const host = raw.replace(/^\[|\]$/g, '').split(':')[0];
+    if (TOXIC_MAIN_IPS.has(host) || ban[raw.toLowerCase()] || ban[host.toLowerCase()]) return true;
+    const e = ips[raw] || ips[host];
+    if (e && (e.banned || e.gone)) return true;
+    const eg = String(e?.eg || host).trim();
+    if (eg && TOXIC_MAIN_IPS.has(eg)) return true;
+    const r = (eg && rep[eg]) || rep[host];
+    if (r?.pu && Number.isFinite(+r.pu.fs) && +r.pu.fs >= 50) return true;
+    return false;
+  };
+  const used = new Set(DB.accounts.map(a => String(a?.proxyIp || '').trim()).filter(Boolean));
+  let changed = false;
+  for (const a of DB.accounts) {
+    if (!a || !a.proxyIp || RouteState.locked(a)) continue;
+    if (!isBadPip(a.proxyIp)) continue;
+    used.delete(String(a.proxyIp).trim());
+    const cc = String(a.region || a.routeHome || '').trim().toUpperCase();
+    const cands = Object.entries(ips).filter(([k, e]) => {
+      if (!e || e.ok !== true || e.gone || e.banned || used.has(k) || isBadPip(k)) return false;
+      if (cc && e.loc !== cc) return false;
+      const eg = e.eg || k.replace(/^\[|\]$/g, '').split(':')[0];
+      const fsVal = rep[eg]?.pu?.fs;
+      return fsVal === undefined || +fsVal < 35;
+    }).sort((x, y) => {
+      const fsX = rep[x[1].eg || x[0]]?.pu?.fs ?? 28;
+      const fsY = rep[y[1].eg || y[0]]?.pu?.fs ?? 28;
+      return (fsX * 12 + (x[1].ms || 600)) - (fsY * 12 + (y[1].ms || 600));
+    });
+    const nextPip = cands[0]?.[0] || '';
+    a.proxyIp = nextPip;
+    if (nextPip) used.add(nextPip);
+    if (a.route && typeof a.route === 'object' && a.route.mode === 'vless') a.route.proxyIp = nextPip;
+    changed = true;
+  }
+  return changed;
+}
 const dataFile = () => path.join(app.getPath('userData'), 'accounts.json');
 let DB = { accounts: [], open: [] };
 const isRichDB = d => {
@@ -194,13 +274,19 @@ function loadDB() {
           path.join(roamingRoot, 'Brana AI Extension Test', 'accounts.json'),
           path.join(roamingRoot, 'Arena Client', 'accounts.json'),
         ].filter(f => f !== curFile && fs.existsSync(f));
+        const sibMtimeKey = sibFiles.map(sf => { try { return sf + ':' + Math.floor(fs.statSync(sf).mtimeMs); } catch { return ''; } }).filter(Boolean).join('|');
+        const needForceSib = (DB.accounts || []).some(a => a?.id && ((Number(a.status?.stats?.total) || 0) === 0 || !DB.shared?.['hist@' + a.id]?.items?.length));
         let sibAccounts = [], sibShared = {};
-        for (const sf of sibFiles) {
-          try {
-            const sd = JSON.parse(fs.readFileSync(sf, 'utf8'));
-            if (Array.isArray(sd?.accounts)) sibAccounts.push(...sd.accounts);
-            if (sd?.shared && typeof sd.shared === 'object') Object.assign(sibShared, sd.shared);
-          } catch {}
+        if (sibMtimeKey && (needForceSib || DB.shared._sibSyncKey !== sibMtimeKey)) {
+          for (const sf of sibFiles) {
+            try {
+              const sd = JSON.parse(fs.readFileSync(sf, 'utf8'));
+              if (Array.isArray(sd?.accounts)) sibAccounts.push(...sd.accounts);
+              if (sd?.shared && typeof sd.shared === 'object') Object.assign(sibShared, sd.shared);
+            } catch {}
+          }
+          DB.shared._sibSyncKey = sibMtimeKey;
+          ch = true;
         }
         const canonEm = e => { const r = String(e || '').trim().toLowerCase(); const [l, d] = r.split('@'); return d ? l.replace(/\+.*$/, '').replace(/[.,\-_]/g, '') + '@' + d : r; };
         for (const a of (DB.accounts || [])) {
@@ -281,15 +367,66 @@ function loadDB() {
           if (a.pw !== beforePw) ch = true;
         }
       }
+      if (healBannedAccountProxyIps()) ch = true;
+      if (DB.shared && typeof DB.shared === 'object' && DB.accounts.length > 0) {
+        const validAcctIds = new Set(DB.accounts.map(a => a?.id).filter(Boolean));
+        if (validAcctIds.size > 0) {
+          for (const k of Object.keys(DB.shared)) {
+            const m = /^(?:hist|draft|gacha|webreg|gtok|signup|mailtok|regpw|models)@([\w-]{1,64})$/.exec(k);
+            if (m && !validAcctIds.has(m[1])) {
+              delete DB.shared[k];
+              ch = true;
+            }
+          }
+        }
+      }
+    }
+    if (DB.strs && typeof DB.strs === 'object') {
+      if (DB.strs.S && typeof DB.strs.S === 'object') {
+        for (const k of ['habitLearnBank:v1', 'habit:calibration:v1']) {
+          if (k in DB.strs.S) { delete DB.strs.S[k]; ch = true; }
+        }
+      }
+      if (DB.strs.clr && typeof DB.strs.clr === 'object') {
+        for (const [k, v] of Object.entries(DB.strs.clr)) {
+          if (typeof v !== 'number' || !Number.isFinite(v)) { delete DB.strs.clr[k]; ch = true; }
+        }
+      }
     }
   } catch {}
   if (ch) saveDB();
 }
 function saveDB(strict = false) {
   const file = dataFile(), tmp = file + '.rename.tmp';
+  if (!strict && fs.promises?.writeFile && fs.promises?.rename) {
+    try {
+      const payload = JSON.stringify(DB);
+      if (payload === saveDB._lastPayload) return;
+      saveDB._lastPayload = payload;
+      const rich = isRichDB(DB);
+      const writeJob = async () => {
+        const aTmp = file + '.async.tmp';
+        try {
+          await fs.promises.mkdir(path.dirname(file), { recursive: true });
+          await fs.promises.writeFile(aTmp, payload);
+          try { await fs.promises.rename(aTmp, file); }
+          catch { await fs.promises.copyFile(aTmp, file); }
+          const nowTs = Date.now();
+          if (rich && nowTs - (saveDB._lastBakAt || 0) >= 15000) {
+            saveDB._lastBakAt = nowTs;
+            await fs.promises.copyFile(file, file + '.bak').catch(() => {});
+          }
+        } catch (e) { console.error(e); }
+        finally { try { await fs.promises.unlink(aTmp).catch(() => {}); } catch {} }
+      };
+      saveDB._q = (saveDB._q || Promise.resolve()).then(writeJob, writeJob);
+    } catch (e) { console.error(e); }
+    return;
+  }
   try {
+    const payload = JSON.stringify(DB);
+    if (!strict && payload === saveDB._lastPayload) return;
     fs.mkdirSync(path.dirname(file), { recursive: true });
-    const payload = JSON.stringify(DB, null, 2);
     // Always write to tmp first and atomically replace file so concurrent/interrupted reads never see a truncated accounts.json.
     fs.writeFileSync(tmp, payload);
     try {
@@ -299,7 +436,10 @@ function saveDB(strict = false) {
       try { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 30); fs.renameSync(tmp, file); }
       catch { fs.copyFileSync(tmp, file); }
     }
-    if (isRichDB(DB)) {
+    saveDB._lastPayload = payload;
+    const nowTs = Date.now();
+    if (isRichDB(DB) && (strict || nowTs - (saveDB._lastBakAt || 0) >= 15000)) {
+      saveDB._lastBakAt = nowTs;
       try { fs.copyFileSync(file, file + '.bak'); } catch {}
     }
   } catch (e) { console.error(e); if (strict) throw e; }
@@ -339,7 +479,7 @@ const liteStats = S => {
   r = { ...S, vendors: V, lite: true }; liteCache.set(S, r); return r;
 };
 const pubLite = a => { const o = pub(a); if (o?.status?.stats) o.status = { ...o.status, stats: liteStats(o.status.stats) }; return o; };
-let saveT = 0; const saveSoon = () => { clearTimeout(saveT); saveT = setTimeout(saveDB, 800); };
+let saveT = 0; const saveSoon = (ms = 800) => { clearTimeout(saveT); saveT = setTimeout(saveDB, ms); };
 // 浏览器模式里登录过的第三方网站（目前只有 GitHub）：只看该账号分区里的 Cookie 名字，不发请求、不读密码；结果存进账号记录，切换账号的卡片据此显示站点标记
 const siteLogins = SiteLogins.createSiteLogins({ log: runtimeLog, read: id => acct(id)?.sites, write: (id, sites) => { const a = acct(id); if (!a) return; a.sites = sites; saveSoon(); } });
 // 密码只存本机：优先用系统钥匙串加密（safeStorage），不可用时退回 base64；跨资料夹（正式版 / 测试版 / s 子目录）迁移后自动兜底解密并自愈重加密
@@ -480,7 +620,7 @@ function xrayBin() {
   return null;
 }
 const freePort = () => new Promise((res, rej) => { const sv = net.createServer(); sv.on('error', rej); sv.listen(0, '127.0.0.1', () => { const p = sv.address().port; sv.close(() => res(p)); }); });
-async function waitPort(port, ms) { const end = Date.now() + ms; while (Date.now() < end) { const ok = await new Promise(r => { const c = net.connect(port, '127.0.0.1'); c.once('connect', () => { c.destroy(); r(true); }); c.once('error', () => r(false)); }); if (ok) return true; await new Promise(r => setTimeout(r, 150)); } return false; }
+async function waitPort(port, ms) { const end = Date.now() + ms; let step = 0; await new Promise(r => setTimeout(r, 12)); while (Date.now() < end) { const ok = await new Promise(r => { const c = net.connect(port, '127.0.0.1'); c.once('connect', () => { c.destroy(); r(true); }); c.once('error', () => r(false)); }); if (ok) return true; step++; await new Promise(r => setTimeout(r, step < 4 ? 22 : step < 10 ? 45 : 100)); } return false; }
 const tunnels = new Map();
 async function ensureTunnel(key, link, pip) {
   const v = parseVless(link); if (!v) throw new Error('VLESS 链接格式不正确');
@@ -505,8 +645,14 @@ async function ensureTunnel(key, link, pip) {
   })();
   try { return await t.starting; } finally { t.starting = null; }
 }
-function stopTunnel(key) { const t = tunnels.get(key); if (!t) return; tunnels.delete(key); try { t.proc.kill?.(); } catch {} }
-app.on('will-quit', () => { for (const k of [...tunnels.keys()]) stopTunnel(k); killKids(); });
+function stopTunnel(key) {
+  const t = tunnels.get(key);
+  if (t) { tunnels.delete(key); try { t.proc.kill?.(); } catch {} }
+  if (/^(?:delay|probe|route-test|ip-test)-/.test(String(key || ''))) {
+    try { const cfg = path.join(app.getPath('userData'), 'xray', String(key).replace(/[^\w-]/g, '_') + '.json'); fs.promises.unlink(cfg).catch(() => {}); } catch {}
+  }
+}
+app.on('will-quit', () => { if (saveT) { clearTimeout(saveT); saveT = 0; try { saveDB(true); } catch {} } for (const k of [...tunnels.keys()]) stopTunnel(k); killKids(); });
 // All web origins, including Google/reCAPTCHA, share the account's selected exit.
 // Keep old IPC/settings callers compatible, but never probe the direct network or honor gDirect.
 const G = { net: 0, at: 0, ms: 0 };
@@ -530,7 +676,8 @@ async function applyProxy(a, {force=false,deferReload=false}={}) {
   const ses = prepSession(a), routeSignature = RouteState.signature(a);
   const tunnel = tunnels.get(a.id), tunnelReady = !/^vless:/i.test(proxyStr(a)) || (tunnel && !tunnel.starting && tunnel.proc.exitCode === null);
   // Navigating a verification link or saving unchanged settings must not reset the auth session.
-  const existingView = wins.get(a.id)?.webContents;
+  const existingWin = wins.get(a.id);
+  const existingView = existingWin && !existingWin.isDestroyed?.() ? existingWin.webContents : null;
   const privacyReady = (!existingView || (!!existingView.__uam && !existingView.__privacyFailed && existingView.debugger?.isAttached())) && (typeof extensionTabs==='undefined'||!extensionTabs||extensionTabs.ready(a.id));
   if (!force && !ses.__routeBlocked && !ses.__routeApplying && tunnelReady && privacyReady && ses.__routeReadySignature === routeSignature) return ses;
   if (RouteState.locked(actual) && actual.routeAuth.snapshot !== routeSignature) throw Error('认证环境已改变，已阻止代理重置');
@@ -544,10 +691,12 @@ async function applyProxy(a, {force=false,deferReload=false}={}) {
     try {
       check(); await ses.closeAllConnections?.();
       const config=await proxyConfig(snapshot);check();
-      await ses.setProxy(config);check();
+      const proxyRuleKey=(config.proxyRules||'')+'|'+(config.proxyBypassRules||'');
+      if(force||ses.__lastProxyRuleKey!==proxyRuleKey){await ses.setProxy(config);ses.__lastProxyRuleKey=proxyRuleKey;check();}
       await ses.clearHostResolverCache?.();check();
       applyFp(snapshot);
-      const wc=wins.get(a.id)?.webContents;
+      const curWin=wins.get(a.id);
+      const wc=curWin&&!curWin.isDestroyed?.()?curWin.webContents:null;
       if (wc && (!wc.__uam || wc.__privacyFailed)) {
         // Recover only on a local blank page with networking still fenced. Never release a detached debugger.
         wc.__privacyReset?.();
@@ -595,7 +744,16 @@ function cleanFp(f) {
   return { seed: n(f.seed, 1, 2 ** 31 - 1, crypto.randomInt(1, 2 ** 31 - 1)), screen: m ? m[1] + 'x' + m[2] : '1920x1080', cores: n(f.cores, 1, 64, 8), mem: [0.5, 1, 2, 4, 8].includes(+f.mem) ? +f.mem : 8, gpuVendor: String(f.gpuVendor || GPUS[0][0]).slice(0, 80), gpu: String(f.gpu || GPUS[0][1]).slice(0, 200), lang: String(f.lang || LANGS[0]).replace(/[^\w,;=.\- ]/g, '').slice(0, 120) || LANGS[0], timezone: BrowserPrivacy.canonical(f.timezone), ua: String(f.ua || '').replace(/[\r\n]/g, '').slice(0, 300), at: Date.now() };
 }
 const langList = l => String(l || '').split(',').map(x => x.split(';')[0].trim()).filter(Boolean);
-function applyFp(a) { const ses = session.fromPartition(partOf(a.id)), f = a.fp || {}, p=BrowserPrivacy.profile(a); ses.setUserAgent(f.ua || UA, (p.languages.length?p.languages:app.getPreferredSystemLanguages()).join(',')); googleHdr(ses); }
+function applyFp(a) {
+  const ses = session.fromPartition(partOf(a.id)), f = a.fp || {}, p = BrowserPrivacy.profile(a);
+  const uaTarget = f.ua || UA, langTarget = (p.languages.length ? p.languages : app.getPreferredSystemLanguages()).join(',');
+  if (ses.__lastUa !== uaTarget || ses.__lastLang !== langTarget) {
+    ses.setUserAgent(uaTarget, langTarget);
+    ses.__lastUa = uaTarget;
+    ses.__lastLang = langTarget;
+  }
+  googleHdr(ses);
+}
 // 官方 Google 登录：Google 会看 Sec-CH-UA 判断是不是内嵌浏览器（Electron 只报 Chromium）。
 // 只对 Google 登录页补上和 UA 同版本的 Google Chrome 品牌，其它请求不动
 function googleHdr(ses) {
@@ -777,7 +935,7 @@ function prepSession(a) {
   cookiePersistence.watch(ses); siteLogins.watch(a.id, ses);
   applyFp(a);
   ses.webRequest.onBeforeRequest({urls:['http://*/*','https://*/*','ws://*/*','wss://*/*']},(d,cb)=>cb({cancel:!!ses.__routeBlocked||TELEMETRY_BLOCK_RE.test(String(d?.url||''))}));
-  ses.webRequest.onHeadersReceived((d,cb)=>{const headers={...d.responseHeaders};for(const key of Object.keys(headers))if(key.toLowerCase()==='x-dns-prefetch-control')delete headers[key];headers['X-DNS-Prefetch-Control']=['off'];cb({responseHeaders:headers});});
+  ses.webRequest.onHeadersReceived((d,cb)=>{const rh=d.responseHeaders;if(!rh){cb({});return;}let headers=null;for(const key of Object.keys(rh))if(key.toLowerCase()==='x-dns-prefetch-control'){if(!headers)headers={...rh};delete headers[key];}if(!headers&&rh['X-DNS-Prefetch-Control']?.[0]==='off'){cb({responseHeaders:rh});return;}headers=headers||{...rh};headers['X-DNS-Prefetch-Control']=['off'];cb({responseHeaders:headers});});
   // reCAPTCHA 的 iframe 会申请 storage-access：拒绝会让 grecaptcha.execute 一直不返回（发不出新对话）
   const ALLOW = ['notifications', 'clipboard-sanitized-write', 'clipboard-read', 'storage-access', 'top-level-storage-access', 'fullscreen'];
   ses.setPermissionRequestHandler((wc, perm, cb) => cb(ALLOW.includes(perm)));
@@ -1106,11 +1264,11 @@ async function openAccount(id, opt = {}) {
       }
       await wc.loadFile(OFFLINE, { query: { desc: String(desc), code: String(code), recovery: manual ? 'manual' : '', url: safeNavigationURL(url) } });
     })()
-      .catch(error => runtimeLog('offline-load-failed', { window: wc.id, code: error.code }))
+      .catch(error => runtimeLog('offline-load-failed', { window: w.__runtimeId, code: error.code }))
       .finally(() => { w.__offlinePending = false; reveal(); });
   };
   wc.__privacyFault = reason => {
-    runtimeLog('privacy-blocked', { window: wc.id, reason });
+    runtimeLog('privacy-blocked', { window: w.__runtimeId, reason });
     offline('浏览器隐私保护中断，网络已阻断。窗口和账号数据已保留；请点击重试恢复。', 'PRIVACY', true, retryTarget.get());
   };
   const navigationFailed = failure => {
@@ -1127,11 +1285,11 @@ async function openAccount(id, opt = {}) {
     retryTarget.remember(url || UI_URL);
     const navigationId = navigationFailures.begin(url || UI_URL);
     // 诊断：哪一步（扩展 / 代理与隐私环境 / 页面加载）超过 20 秒还没完成，记进 runtime.jsonl，窗口长时间空白时能定位
-    let stage = 'extensions'; const slow = setTimeout(() => runtimeLog('navigation-slow', { window: wc.id, code: stage }), 20000);
+    let stage = 'extensions'; const slow = setTimeout(() => runtimeLog('navigation-slow', { window: w.__runtimeId, code: stage }), 20000);
     w.__navigateP = (async () => {
       try {
-        await extensionStore.ready(a.id); stage = 'route';
-        await applyProxy(a); stage = 'load';
+        await extensionStore.ready(a.id); if (w.isDestroyed()) return false; stage = 'route';
+        await applyProxy(a); if (w.isDestroyed()) return false; stage = 'load';
         if (!w.isDestroyed()) {
           const targetUrl = url || UI_URL;
           const isFix = Boolean(process.env.BRANA_EXTENSION_TEST_DATA || /^(?:https?:\/\/|socks5:\/\/)?127\.0\.0\.1:(?:1|9|10)\b/i.test(String(proxyStr(a) || '')) || /@example\.invalid$/i.test(String(a?.email || '')));
@@ -1144,7 +1302,7 @@ async function openAccount(id, opt = {}) {
         return true;
       } catch (error) {
         if (w.isDestroyed() || ['ERR_ABORTED','ERR_RENDER_PROCESS_GONE','ERR_WEB_CONTENTS_DESTROYED'].includes(error.code)) return false;
-        runtimeLog('navigation-failed', { window: wc.id, code: error.code, kind: error.name });
+        runtimeLog('navigation-failed', { window: w.__runtimeId, code: error.code, kind: error.name });
         navigationFailed(navigationFailures.rejected(navigationId, error));
         return false;
       }
@@ -1157,14 +1315,14 @@ async function openAccount(id, opt = {}) {
   wc.on('did-start-navigation', (e, url, inPlace, isMain) => { if (isMain && !inPlace) { wc.__clientShell = String(url || '').startsWith(UI_URL); navigationFailures.started(url); retryTarget.remember(url); } if (isMain && waitUi && !shown) splashText('连接 arena.ai' + via() + '…'); });
   wc.on('console-message', (_e, level, msg, line) => {
     if (level >= 2) {
-      try { fs.appendFileSync(path.join(app.getPath('userData'), 'logs', 'renderer.log'), `[CONSOLE L${level} line=${line}] ${msg}\n`); } catch {}
+      appendRendererLog(`[CONSOLE L${level} line=${line}] ${msg}\n`);
     }
   });
   wc.on('dom-ready', () => {
     const u = wc.getURL();
     // 客户端界面（robots.txt）马上注入；浏览器模式的官网页面等官网自己先加载完（did-finish-load，最多等 2.5 秒）再注入 3.6MB 的客户端脚本，
     // 完整功能延后；轻量顶部栏与底部占位由 preload 在页面创建时挂载，dom-ready 仅兜底。
-    if (u.startsWith(UI_URL)) { wc.__clientShell = true; wc.executeJavaScript(BUNDLE).catch(e => { console.error('inject', e); try { fs.appendFileSync(path.join(app.getPath('userData'), 'logs', 'renderer.log'), `[INJECT-ERR] ${e?.stack || e}\n`); } catch {} }); }
+    if (u.startsWith(UI_URL)) { wc.__clientShell = true; wc.executeJavaScript(BUNDLE).catch(e => { console.error('inject', e); appendRendererLog(`[INJECT-ERR] ${e?.stack || e}\n`); }); }
     else if (u.startsWith('https://arena.ai/')) {
       const seq = wc.__injSeq = (wc.__injSeq || 0) + 1; let fired = false;
       const go = () => { if (fired || wc.isDestroyed() || wc.__injSeq !== seq) return; fired = true; clearTimeout(t); wc.off('did-finish-load', go); if (wc.getURL().startsWith('https://arena.ai/') && !wc.getURL().startsWith(UI_URL)) wc.executeJavaScript(BUNDLE).catch(e => console.error('inject', e)); };
@@ -1186,14 +1344,14 @@ async function openAccount(id, opt = {}) {
   // Navigation and OAuth popups stay in this account session; no implicit system-browser escape.
   wc.on('page-title-updated', e => e.preventDefault());
   wc.on('render-process-gone', (_, details) => {
-    runtimeLog('render-process-gone', { window: wc.id, reason: details.reason, exitCode: details.exitCode });
+    runtimeLog('render-process-gone', { window: w.__runtimeId, reason: details.reason, exitCode: details.exitCode });
     wc.session.__routeBlocked = true; wc.__privacyFailed = true;
     const recent = w.__crashes = (w.__crashes || []).filter(at => Date.now() - at < 60000); recent.push(Date.now());
     clearTimeout(w.__recoverT);
     w.__recoverT = setTimeout(() => {
       if (w.isDestroyed() || quitting) return;
       if (recent.length > 2) offline('界面进程反复退出，已暂停自动重载。可手动重试；诊断记录在数据目录 logs/runtime.jsonl。', 'RENDER', true);
-      else { runtimeLog('renderer-recover', { window: wc.id, attempt: recent.length }); void wc.__navigate(retryTarget.get()); }
+      else { runtimeLog('renderer-recover', { window: w.__runtimeId, attempt: recent.length }); void wc.__navigate(retryTarget.get()); }
     }, 1000);
   });
   wc.on('did-fail-load', (e, code, desc, url, isMain) => {
@@ -1368,6 +1526,14 @@ ipcMain.handle('host:removeAccount', createAccountRemoval({
   },
   async cleanup(id) {
     destroyWindow(wins.get(id)); stopTunnel(id); siteLogins.forget(id);
+    if (DB.shared && typeof DB.shared === 'object') {
+      let shDirty = false;
+      for (const pfx of ['hist@', 'draft@', 'gacha@', 'webreg@', 'gtok@', 'signup@', 'mailtok@', 'regpw@', 'models@']) {
+        if ((pfx + id) in DB.shared) { delete DB.shared[pfx + id]; shDirty = true; }
+      }
+      if (shDirty) saveSoon();
+    }
+    try { fs.promises.unlink(path.join(app.getPath('userData'), 'xray', String(id).replace(/[^\w-]/g, '_') + '.json')).catch(() => {}); } catch {}
     try { await session.fromPartition(partOf(id)).clearStorageData(); } catch {}
     try { GB.cancel(id); setTimeout(() => fs.rm(path.join(app.getPath('userData'), 'gbrowser', String(id).replace(/[^\w-]/g, '_')), { recursive: true, force: true }, () => {}), 3000); } catch {}
   },
@@ -1683,36 +1849,42 @@ ipcMain.handle('host:protoFetch', async (e, u, opt = {}) => {
     for (let i = 0; i < dplCandidates.length; i++) {
       const skewDpl = dplCandidates[i];
       if (opt?.costShown === true && (ses.__appliedSkewDpl !== skewDpl || nowMs - (ses.__costCookieSetAt || 0) > 600000)) {
+        const baseCookieStale = nowMs - (ses.__costCookieSetAt || 0) > 600000;
         ses.__appliedSkewDpl = skewDpl;
-        ses.__costCookieSetAt = nowMs;
-        // 移除可能存在的 canary httpOnly arena_build_bucket，强制锁定 stable + 2-key ph-toolbar-overrides + __vdpl
-        try {
-          for (const c of allCookies || []) {
-            if (c && c.name === 'arena_build_bucket' && (c.value !== 'stable' || c.httpOnly)) {
-              const host = String(c.domain || 'arena.ai').replace(/^\.+/, '');
-              await ses.cookies.remove('https://' + host + (c.path || '/'), 'arena_build_bucket').catch(() => {});
+        const tasks = [];
+        if (baseCookieStale) {
+          ses.__costCookieSetAt = nowMs;
+          // 移除可能存在的 canary httpOnly arena_build_bucket，强制锁定 stable + 2-key ph-toolbar-overrides + __vdpl
+          try {
+            for (const c of allCookies || []) {
+              if (c && c.name === 'arena_build_bucket' && (c.value !== 'stable' || c.httpOnly)) {
+                const host = String(c.domain || 'arena.ai').replace(/^\.+/, '');
+                await ses.cookies.remove('https://' + host + (c.path || '/'), 'arena_build_bucket').catch(() => {});
+              }
             }
-          }
-        } catch {}
-        await Promise.all([
-          ses.cookies.set({
-            url: 'https://arena.ai',
-            name: 'arena_build_bucket',
-            value: 'stable',
-            path: '/',
-            secure: true,
-            sameSite: 'lax',
-            expirationDate: Math.floor(nowMs / 1000) + 31536000,
-          }).catch(() => {}),
-          ses.cookies.set({
-            url: 'https://arena.ai',
-            name: 'ph-toolbar-overrides',
-            value: costValue,
-            path: '/',
-            secure: true,
-            sameSite: 'lax',
-            expirationDate: Math.floor(nowMs / 1000) + 2592000,
-          }).catch(() => {}),
+          } catch {}
+          tasks.push(
+            ses.cookies.set({
+              url: 'https://arena.ai',
+              name: 'arena_build_bucket',
+              value: 'stable',
+              path: '/',
+              secure: true,
+              sameSite: 'lax',
+              expirationDate: Math.floor(nowMs / 1000) + 31536000,
+            }).catch(() => {}),
+            ses.cookies.set({
+              url: 'https://arena.ai',
+              name: 'ph-toolbar-overrides',
+              value: costValue,
+              path: '/',
+              secure: true,
+              sameSite: 'lax',
+              expirationDate: Math.floor(nowMs / 1000) + 2592000,
+            }).catch(() => {})
+          );
+        }
+        tasks.push(
           skewDpl ? ses.cookies.set({
             url: 'https://arena.ai',
             name: '__vdpl',
@@ -1724,8 +1896,9 @@ ipcMain.handle('host:protoFetch', async (e, u, opt = {}) => {
           }).catch(() => {}) : Promise.all([
             ses.cookies.remove('https://arena.ai', '__vdpl').catch(() => {}),
             ses.cookies.remove('https://arena.ai/', '__vdpl').catch(() => {}),
-          ]),
-        ]);
+          ])
+        );
+        await Promise.all(tasks);
       }
       const filteredCookies = Array.isArray(allCookies)
         ? allCookies.filter(c => c && c.name && (opt?.costShown !== true || (c.name !== '__vdpl' && c.name !== 'ph-toolbar-overrides' && c.name !== 'arena_build_bucket')))
@@ -1991,11 +2164,11 @@ function purityCacheOpt(ds) {
       const rep = (DB.shared.pippool.rep ||= {});
       const entry = (rep[ip] ||= {});
       const at = Date.now();
-      if (pure && Number.isFinite(+pure.fs) && !entry.pu) {
-        entry.pu = { fs: +pure.fs, res: !!pure.res, bc: !!pure.bc, dc: !!pure.dc, org: String(pure.org || '').slice(0, 40), at };
+      if (pure && Number.isFinite(+pure.fs) && (!entry.pu || !entry.pu.real || pure.real)) {
+        entry.pu = { fs: +pure.fs, res: !!pure.res, bc: !!pure.bc, dc: !!pure.dc, org: String(pure.org || '').slice(0, 40), at, ...(pure.real ? { real: 1 } : {}) };
       }
       if (ipa && !entry.a) {
-        Object.assign(entry, { a: at, h: !!ipa.h, px: !!ipa.px, m: !!ipa.m, isp: String(ipa.isp || '').slice(0, 40), as: String(ipa.as || '').slice(0, 12) });
+        Object.assign(entry, { a: at, h: !!ipa.h, px: !!ipa.px, m: !!ipa.m, isp: String(ipa.isp || '').slice(0, 40), as: String(ipa.as || '').split(' ')[0].slice(0, 12) });
       }
     },
   };
@@ -2007,10 +2180,17 @@ ipcMain.handle('host:ippureDirect', async (_e, ip) => {
     const ds = await directSession().catch(() => null);
     const pOpt = purityCacheOpt(ds);
     const cached = pOpt.getCachedRep(qIp);
-    if (cached?.pu && Number.isFinite(+cached.pu.fs) && (Date.now() - (+cached.pu.at || 0) < 7 * 86400e3)) {
-      return { ip: qIp, fs: +cached.pu.fs, res: !!cached.pu.res, bc: !!cached.pu.bc, dc: !!cached.pu.dc, org: String(cached.pu.org || '') };
+    const isSuspect = Boolean(cached?.pu && !cached.pu.real && [8, 12, 15, 16, 22].includes(+cached.pu.fs));
+    if (cached?.pu && !isSuspect && Number.isFinite(+cached.pu.fs) && (Date.now() - (+cached.pu.at || 0) < 7 * 86400e3)) {
+      return { ip: qIp, fs: +cached.pu.fs, res: !!cached.pu.res, bc: !!cached.pu.bc, dc: !!cached.pu.dc, org: String(cached.pu.org || ''), ...(cached.pu.real ? { real: 1 } : {}) };
     }
-    const r = await RouteNative.ippureDirect(qIp, 3500);
+    let r = await RouteNative.ippureDirect(qIp, 3500);
+    if ((!r || !r.real) && _e?.sender?.session) {
+      const sesR = await RouteNative.ippure(_e.sender.session, 2800).catch(() => null);
+      if (sesR && Number.isFinite(+sesR.fs) && (!sesR.ip || sesR.ip.toLowerCase() === qIp.toLowerCase())) {
+        r = sesR;
+      }
+    }
     if (r && pOpt.onCacheRep) pOpt.onCacheRep(qIp, { pure: r });
     return r || null;
   } catch {
@@ -3149,6 +3329,7 @@ function promoteRegPw(a, email) {
 ipcMain.handle('host:noteAccount', (e, o) => {
   const a = winAcct(e.sender); if (!a || !o || typeof o !== 'object') return false;
   const st = { ...(a.status || {}) };
+  const prevGachaDone = +st.gacha?.done || 0;
   for (const k of ['loggedIn', 'ip', 'loc']) if (o[k] !== undefined) st[k] = o[k];
   const richNoteEmail = o.email ? AuthFlow.pickRichEmail(a.email || a.name, String(o.email)) : '';
   if (richNoteEmail) st.me = richNoteEmail;
@@ -3173,7 +3354,8 @@ ipcMain.handle('host:noteAccount', (e, o) => {
   st.at = Date.now(); a.status = st;
   if (o.loggedIn && a.noAuto) a.noAuto = false;
   if (!a.email && richNoteEmail && !byEmail(richNoteEmail)) a.email = richNoteEmail;
-  saveSoon(); return true;
+  const isTransient = Boolean((o.statsBusy && !o.stats && !o.statsDone) || (o.gacha?.busy && prevGachaDone === (+o.gacha.done || 0))) && !o.loggedIn && !o.email && !o.ip && !o.loc && !o.quota;
+  saveSoon(isTransient ? 5000 : 800); return true;
 });
 // 推理分样本：所有账号共用一份（各账号窗口各自记录，统一在这里合并），{ 型号: [样本] } + 清除记录（清除时间之前的样本不再合并回来）
 ipcMain.handle('host:strMerge', (e, patch) => {
@@ -3314,7 +3496,19 @@ function mergeSharedPelshots(v, sender = null, { broadcast = true } = {}) {
   for (const r of (Array.isArray(prev.rows) ? prev.rows : [])) putRow(r, '');
   for (const r of inRows) putRow(r, acctLabel);
   const rows = [...byId.values()].sort((a, b) => (b.at || 0) - (a.at || 0)).slice(0, 240);
+  const pelStateSig = (rs, d, p) => {
+    const rKey = (Array.isArray(rs) ? rs : []).map(x => `${x.id}|${x.at || 0}|${x.model || ''}|${x.score ?? ''}|${x.think ?? ''}|${x.acct || ''}|${x.url ? x.url.length : 0}`).join('\n');
+    const dKey = Object.keys(d || {}).sort().map(k => `${k}:${d[k]}`).join(',');
+    const pKey = Object.keys(p || {}).sort().map(k => `${k}:${p[k]?.name || ''}:${p[k]?.score ?? ''}:${p[k]?.at || 0}`).join(',');
+    return `${rKey}#${dKey}#${pKey}`;
+  };
+  const prevSig = Array.isArray(DB.shared.pelshots?.rows) ? pelStateSig(prev.rows, prev.del, prev.pelican) : '';
+  const nextSig = pelStateSig(rows, del, pelMap);
   DB.shared.pelican = pelMap;
+  if (prevSig && prevSig === nextSig && !isImport) {
+    if (inObj.harvest && typeof harvestAccountPelicanSoon === 'function') harvestAccountPelicanSoon(true);
+    return true;
+  }
   DB.shared.pelshots = { rows, del, pelican: pelMap, at: Date.now() };
   saveSoon();
   if (broadcast && typeof BrowserWindow !== 'undefined') {
@@ -3328,10 +3522,14 @@ let pelHarvesting = false, pelHarvestedOnce = false;
 function harvestAccountPelicanSoon(force = false) {
   if (pelHarvesting || (!force && pelHarvestedOnce)) return;
   if (process.env.BRANA_EXTENSION_TEST_DATA || typeof app === 'undefined' || !app.isReady?.()) return;
+  if (!force && Array.isArray(DB?.accounts) && DB.accounts.every(a => !a?.id || a.pelHarvested)) {
+    pelHarvestedOnce = true;
+    return;
+  }
   pelHarvesting = true;
   pelHarvestedOnce = true;
   setTimeout(async () => {
-    let changed = false;
+    let changed = false, markDirty = false;
     try {
       const parseSafe = (s, d) => { try { return s ? JSON.parse(s) : d; } catch { return d; } };
       const jsExpr = '({shots:localStorage.getItem("anc:pelican-shots"),del:localStorage.getItem("anc:pelican-shots-del"),pelican:localStorage.getItem("anc:pelican"),models:localStorage.getItem("anc:models")})';
@@ -3347,14 +3545,14 @@ function harvestAccountPelicanSoon(force = false) {
             mergeSharedPelshots({ rows: shots, del, pelican, models, acct: label }, null, { broadcast: false });
             if ((DB.shared?.pelshots?.rows || []).length !== before) changed = true;
           }
-          if (a) a.pelHarvested = 1;
+          if (a && !a.pelHarvested) { a.pelHarvested = 1; markDirty = true; }
         }
       }
       if (typeof WebContentsView === 'function' && Array.isArray(DB?.accounts)) {
         for (const a of DB.accounts) {
           if (!a?.id || (typeof wins !== 'undefined' && wins.has(a.id)) || (!force && a.pelHarvested)) continue;
           const ldbDir = path.join(app.getPath('userData'), 'Partitions', 'acct-' + a.id, 'Local Storage', 'leveldb');
-          if (!fs.existsSync(ldbDir)) { a.pelHarvested = 1; continue; }
+          if (!fs.existsSync(ldbDir)) { if (!a.pelHarvested) { a.pelHarvested = 1; markDirty = true; } continue; }
           const ses = session.fromPartition(partOf(a.id));
           const wasBlocked = ses.__routeBlocked;
           let view = null;
@@ -3385,7 +3583,7 @@ function harvestAccountPelicanSoon(force = false) {
                 if ((DB.shared?.pelshots?.rows || []).length !== before) changed = true;
               }
             }
-            a.pelHarvested = 1;
+            if (!a.pelHarvested) { a.pelHarvested = 1; markDirty = true; }
           } catch {}
           finally {
             ses.__routeBlocked = wasBlocked;
@@ -3393,14 +3591,14 @@ function harvestAccountPelicanSoon(force = false) {
           }
         }
       }
+      if (changed || markDirty) saveSoon();
       if (changed && typeof BrowserWindow !== 'undefined') {
-        saveSoon();
         const cmd = { pelshotsSync: true, at: Date.now() };
         for (const w of BrowserWindow.getAllWindows()) if (!w.isDestroyed()) { try { w.webContents.send('anc-cmd', cmd); } catch {} }
       }
     } catch {}
     finally { pelHarvesting = false; }
-  }, 120);
+  }, force ? 120 : 6000);
 }
 ipcMain.handle('host:shared', (e, k, v) => {
   // 固定密码：{on, pw}，密码用系统钥匙串加密（和记住的账号密码一样），读出来时解密
@@ -3495,9 +3693,31 @@ ipcMain.handle('host:shared', (e, k, v) => {
     const isCorrupt4000MetaObj = m => Boolean(m && Number(m.meanChars) === 4000 && (Number(m.writtenChars) || 0) === 0 && (Number(m.memoAvgChunk) || 0) === 0 && (Number(m.cps) === 1 || Number(m.cps) === 2 || (Number(m.totalTools) === 0 && (Number(m.write) > 0 || Number(m.askUser) > 0))));
     const isUnloaded4500StubMeta = m => Boolean(m && Number(m.meanChars) === 4500 && (Number(m.writtenChars) || 0) === 0 && (Number(m.avgTurnDurMs) || 0) === 0 && (Number(m.cps) || 0) === 0 && (Number(m.memoAvgChunk) || 0) === 0 && (Number(m.bash) || 0) === 0 && (Number(m.askUser) || 0) === 0 && (Number(m.lowerDoctype) || 0) === 0 && (Number(m.colorSchemeCss) || 0) === 0 && (Number(m.prefersReducedMotion) || 0) === 0 && (Number(m.sandboxLink) || 0) === 0 && (Number(m.svgSmilNoScript) || 0) === 0);
     const isSyntheticStubVecObj = v => Array.isArray(v) && v.length === 20 && v[12] === 0.8 && v[15] === 0.52 && v[2] === 0.05 && v[3] === 0;
-    const canonHabitModel = raw => {
+    const MODEL_NAME_MAX_RE = /^(?:qwen[\d.]*|qwen-\d[\d.]*|glm-[\d.]+|minimax[\w.-]*|step-[\d.]+|yi-[\w.-]+|gpt-[\d.]+-codex)-max(?:-0\d{3}|-\d{4,8})?$/i;
+    const OPEN_NO_TIER_BASE_RE = /^(?:(?:qwen[\d.]*|qwen-\d[\d.]*|glm-[\d.]+)-max(?:-0\d{3}|-\d{4,8})?|kimi-k\d[\d.]*|deepseek-v[\d.]+-flash(?:-\d+)?|mimo-v[\d.]+-(?:flash|pro)|qwen[\d.]*-flash(?:-next)?|glm-[\d.]+-flash|minimax-m\d[\w.-]*|muse-wonder|muse-spark-open|beam-[\d.]+-\d+b-a\d+b|horizon-[\d.]+|step-\d[\w.-]*|hy\d[\w.-]*|kibitz|kalmia)$/i;
+    const sanitizeTierSlug = (str, rawHint = '') => {
+      if (!str) return '';
+      let out = String(str).trim().replace(/\s*\((?:标准|standard)\)\s*$/i, '');
+      if (/qwen3\.8-max-0902/i.test(String(rawHint || '')) && /^qwen3\.8-max(?:-(?:none|minimal|low|medium|high|xhigh|max))?$/i.test(out)) {
+        return 'qwen3.8-max-0902';
+      }
+      if (/^kimi-k3-max$/i.test(out)) return 'kimi-k3';
+      if (/^muse-wonder-(?:none|minimal|low|medium|high|xhigh|max)$/i.test(out)) return 'muse-wonder';
+      if (/^muse-spark-open-(?:none|minimal|low|medium|high|xhigh|max)$/i.test(out)) return 'muse-spark-open';
+      const mOpen = /^(.+?)-(none|minimal|low|medium|high|xhigh|max)$/i.exec(out);
+      if (mOpen && (OPEN_NO_TIER_BASE_RE.test(mOpen[1]) || MODEL_NAME_MAX_RE.test(mOpen[1]))) {
+        out = mOpen[1];
+      }
+      const mDouble = /^(.+?)-(none|minimal|low|medium|high|xhigh|max)-(none|minimal|low|medium|high|xhigh|max)$/i.exec(out);
+      if (mDouble) {
+        out = `${mDouble[1]}-${mDouble[2]}`;
+      }
+      if (/^kimi-k3-max$/i.test(out)) return 'kimi-k3';
+      return out;
+    };
+    const canonHabitModel = (raw, rawHint = '') => {
       if (!raw) return '';
-      let s = String(raw).replace(/[?？]+$/, '').replace(/\s+/g, ' ').trim();
+      let s = String(raw).replace(/[?？]+$/, '').replace(/\s*\((?:标准|standard)\)\s*$/i, '').replace(/\s+/g, ' ').trim();
       if (!s || s === '开源模型') return s;
       if (/gpt-5\.6-luna/i.test(s)) s = s.replace(/gpt-5\.6-luna/ig, 'gpt-6-luna');
       if (/barium-bb-v2-4xts(?:-agent)?/i.test(s)) s = s.replace(/barium-bb-v2-4xts(?:-agent)?/ig, 'gemini-4-argon');
@@ -3511,8 +3731,35 @@ ipcMain.handle('host:shared', (e, k, v) => {
       const base = (em ? bare.slice(0, em.index) : bare).trim();
       const slug = base.toLowerCase().replace(/[^a-z0-9.]+/g, '-').replace(/^-+|-+$/g, '');
       if (!slug) return s;
-      if (eff && !slug.endsWith('-' + eff)) return `${slug}-${eff}`;
-      return slug;
+      if (eff && !slug.endsWith('-' + eff) && !OPEN_NO_TIER_BASE_RE.test(slug) && !MODEL_NAME_MAX_RE.test(slug)) {
+        return sanitizeTierSlug(`${slug}-${eff}`, rawHint || s);
+      }
+      return sanitizeTierSlug(slug, rawHint || s);
+    };
+    const decomposeHabitTriple = (modelSlug, rawLbl = '') => {
+      const clean = sanitizeTierSlug(canonHabitModel(modelSlug, rawLbl) || String(modelSlug || ''), rawLbl);
+      let family = clean;
+      let effort = 'standard';
+      if (!OPEN_NO_TIER_BASE_RE.test(clean) && !MODEL_NAME_MAX_RE.test(clean)) {
+        const mDash = /^(.+?)-(none|minimal|low|medium|high|xhigh|max)$/i.exec(clean);
+        if (mDash && !OPEN_NO_TIER_BASE_RE.test(mDash[1]) && !MODEL_NAME_MAX_RE.test(mDash[1])) {
+          family = mDash[1];
+          const rt = mDash[2].toLowerCase();
+          effort = (rt === 'none' || rt === 'minimal') ? 'low' : rt;
+        }
+      }
+      let vendor = 'compat';
+      if (/gpt|openai|sol|luna|astra|terra|\bo[134]\b/i.test(family)) vendor = 'openai';
+      else if (/claude|anthropic|opus|sonnet|haiku|fable/i.test(family)) vendor = 'anthropic';
+      else if (/gemini|google|argon|barium/i.test(family)) vendor = 'google';
+      else if (/grok|xai/i.test(family)) vendor = 'xai';
+      else if (/deepseek|beam/i.test(family)) vendor = 'deepseek';
+      else if (/qwen|qwq|alibaba/i.test(family)) vendor = 'qwen';
+      else if (/glm|zhipu/i.test(family)) vendor = 'zhipu';
+      else if (/kimi|moonshot/i.test(family)) vendor = 'moonshot';
+      else if (/mimo|xiaomi/i.test(family)) vendor = 'xiaomi';
+      else if (/muse|llama|meta/i.test(family)) vendor = 'meta';
+      return { vendor, family, effort, canon: effort === 'standard' ? family : `${family}-${effort}` };
     };
     const PURGED_STUB_SIDS = new Set([
       '01a14d10-88e5-7e0d-a2dc-59b80e865028', '01a14d11-a5dc-773c-8c0c-88f6a16d6655', '01a148c7-9e1b-7544-884d-4e7cc1476a64',
@@ -3533,11 +3780,34 @@ ipcMain.handle('host:shared', (e, k, v) => {
       const sidStr = String(raw.sid || '');
       if (PURGED_STUB_SIDS.has(sidStr)) return null;
       const rawM = String(raw.model || '').trim();
-      let m = canonHabitModel(rawM) || rawM;
+      const rawLblClean = String(raw.rawLabel || '').trim();
+      let m = canonHabitModel(rawM, rawLblClean) || rawM;
       const sc = Number(raw.score);
       const validSc = Number.isFinite(sc) && sc >= 10 && sc <= 100 ? sc : (Number.isFinite(+raw.rawHabitScore) && +raw.rawHabitScore >= 10 && +raw.rawHabitScore <= 100 ? +raw.rawHabitScore : 75);
       const out = { ...raw, model: m, score: validSc };
       delete out.id;
+      delete out._sources;
+      const isPureImgModel = /^(gpt-image|mai-image|muse-image|imagen-|flux-|recraft-|ideogram-|dall-e|midjourney|pumpkin-pancake)/i.test(m) || out.evalModality === 'image';
+      const mChars = Number(out.meta?.meanChars) || 0;
+      const wChars = Number(out.meta?.writtenChars) || 0;
+      const tTools = Number(out.meta?.totalTools) || 0;
+      if (isPureImgModel && mChars < 60 && wChars === 0) return null;
+      if ((out.battleRevealed || out.directMode || /#[ab]$/i.test(sidStr)) && out.meta && mChars < 40 && wChars === 0 && tTools === 0) return null;
+      // 还原无档位 Battle/Direct 揭晓样本（如 claude-opus-5、gemini-4-argon、kimi-k3、qwen3.8-max-0902）为纯型号 + 标准强度
+      if ((out.battleRevealed || out.directMode) && rawLblClean && !/\((?:none|minimal|low|medium|high|xhigh|max)\)/i.test(rawLblClean)) {
+        const rlSlug = rawLblClean.toLowerCase().replace(/^[^/]+\//, '').replace(/\s+/g, '-');
+        const rlHasTier = /-(?:none|minimal|low|medium|high|xhigh|max)$/i.test(rlSlug) && !MODEL_NAME_MAX_RE.test(rlSlug) && !OPEN_NO_TIER_BASE_RE.test(rlSlug);
+        if (!rlHasTier) {
+          m = canonHabitModel(rawLblClean, rawLblClean) || rlSlug;
+          out.model = m;
+          out.effort = 'standard';
+        }
+      }
+      if (sidStr === '01a155ea-d645-7385-9d00-0a95851f21d9' && /gemini-4-argon/i.test(m) && /high/i.test(rawLblClean)) {
+        m = 'gemini-4-argon-high';
+        out.model = m;
+        out.effort = 'high';
+      }
       if (!out.rawLabel && rawM !== m) out.rawLabel = rawM;
       if (KNOWN_DIAG_SIDS.has(sidStr)) out.importedFromDiag = true;
       if (sidStr === '01a13ef8-3b56-7b99-a43b-d991064c46d8' || sidStr === '01a151de-5840-75e5-b5e0-9bf662f543dd') out.userConfirmed = true;
@@ -3581,6 +3851,11 @@ ipcMain.handle('host:shared', (e, k, v) => {
         }
         if (Array.isArray(out.tags)) out.tags = out.tags.filter(t => !/^闭源隐藏思考/.test(String(t || '')));
       }
+      const triple = decomposeHabitTriple(out.model, out.rawLabel);
+      out.vendor = triple.vendor;
+      out.family = triple.family;
+      out.effort = out.effort || triple.effort;
+      out.model = triple.canon || out.model;
       return out;
     };
     const mergeBankSamples = (a, b) => {
@@ -3615,7 +3890,49 @@ ipcMain.handle('host:shared', (e, k, v) => {
           importedFromDiag: Boolean(prev.importedFromDiag || s.importedFromDiag),
         });
       }
-      return [...bySid.values()].sort((x, y) => (Number(Boolean(y.userConfirmed || y.importedFromDiag)) - Number(Boolean(x.userConfirmed || x.importedFromDiag))) || ((y.at || 0) - (x.at || 0))).slice(0, 1200);
+      const getRank = s => {
+        if (!s) return 0;
+        if (s.truthTier === 'battle_paired') return 5;
+        if (s.battleRevealed || s.truthTier === 'battle_single' || /#[ab]$/i.test(String(s.sid || '')) || s.importedFromDiag) return 4;
+        if (s.directMode || s.truthTier === 'direct_locked') return 3;
+        if (s.userConfirmed && !s.autoTeacher) return 2;
+        if (s.userConfirmed || s.autoTeacher) return 1;
+        return 0;
+      };
+      const vecCos = (va, vb) => {
+        if (!Array.isArray(va) || !Array.isArray(vb) || va.length !== vb.length) return 0;
+        let dot = 0, na = 0, nb = 0;
+        for (let i = 0; i < va.length; i++) {
+          const x = Number(va[i]) || 0, y = Number(vb[i]) || 0;
+          dot += x * y; na += x * x; nb += y * y;
+        }
+        return (na > 0 && nb > 0) ? (dot / (Math.sqrt(na) * Math.sqrt(nb))) : 0;
+      };
+      const sorted = [...bySid.values()].sort((x, y) => {
+        const rx = getRank(x), ry = getRank(y);
+        if (ry !== rx) return ry - rx;
+        const cx = (Number(x.meta?.cps) > 0 ? 1 : 0) + ((Number(x.meta?.meanChars) >= 240 || Number(x.meta?.writtenChars) >= 240) ? 1 : 0);
+        const cy = (Number(y.meta?.cps) > 0 ? 1 : 0) + ((Number(y.meta?.meanChars) >= 240 || Number(y.meta?.writtenChars) >= 240) ? 1 : 0);
+        if (cy !== cx) return cy - cx;
+        return (Number(y.weight) || 1) - (Number(x.weight) || 1) || ((y.at || 0) - (x.at || 0));
+      });
+      const MAX_PER_MODEL = 10;
+      const MAX_TOTAL = 480;
+      const byModel = new Map();
+      const kept = [];
+      for (const s of sorted) {
+        if (kept.length >= MAX_TOTAL) break;
+        const mk = String(s.model || '').toLowerCase();
+        const bucket = byModel.get(mk) || [];
+        if (bucket.length >= MAX_PER_MODEL) continue;
+        if (bucket.length >= 3 && bucket.some(ex => vecCos(ex.vec, s.vec) >= 0.975 && (Number(ex.meta?.cps) > 0) >= (Number(s.meta?.cps) > 0))) {
+          continue;
+        }
+        bucket.push(s);
+        byModel.set(mk, bucket);
+        kept.push(s);
+      }
+      return kept;
     };
     const mergeCalibObj = (a, b) => {
       const base = (a && typeof a === 'object') ? a : {};
@@ -3623,203 +3940,260 @@ ipcMain.handle('host:shared', (e, k, v) => {
       const protoCentroids = { ...(base.protoCentroids || {}) };
       for (const [mk, rc] of Object.entries(inc.protoCentroids || {})) {
         if (!rc || typeof rc !== 'object') continue;
+        const cKey = canonHabitModel(mk) || mk;
         const fixedRc = (Number(rc.count) || 0) > 50 ? { ...rc, count: 12 } : rc;
-        const lc = protoCentroids[mk];
-        if (!lc || (fixedRc?.updatedAt || 0) >= (lc?.updatedAt || 0)) protoCentroids[mk] = fixedRc;
+        const lc = protoCentroids[cKey];
+        if (!lc || (fixedRc?.updatedAt || 0) >= (lc?.updatedAt || 0)) protoCentroids[cKey] = fixedRc;
       }
       const scoreOffsets = { ...(base.scoreOffsets || {}) };
       for (const [mk, rs] of Object.entries(inc.scoreOffsets || {})) {
         if (!rs || typeof rs !== 'object') continue;
+        const cKey = canonHabitModel(mk) || mk;
         const fixedRs = (Number(rs.count) || 0) > 50 ? { ...rs, count: 12 } : rs;
-        const ls = scoreOffsets[mk];
-        if (!ls || (fixedRs?.updatedAt || 0) >= (ls?.updatedAt || 0)) scoreOffsets[mk] = fixedRs;
+        const ls = scoreOffsets[cKey];
+        if (!ls || (fixedRs?.updatedAt || 0) >= (ls?.updatedAt || 0)) scoreOffsets[cKey] = fixedRs;
       }
-      return { v: 1, protoCentroids, scoreOffsets, updatedAt: Math.max(base.updatedAt || 0, inc.updatedAt || 0, Date.now()) };
-    };
-    let diskSamples = [], diskCalib = {};
-    try {
-      const builtinBank = require('../ui/habit-builtin-bank.js');
-      if (Array.isArray(builtinBank?.samples)) diskSamples = mergeBankSamples(diskSamples, builtinBank.samples);
-      if (builtinBank?.calibration && typeof builtinBank.calibration === 'object') diskCalib = mergeCalibObj(diskCalib, builtinBank.calibration);
-    } catch {}
-    for (const bf of bankFiles) {
-      try {
-        if (fs.existsSync(bf)) {
-          const d = JSON.parse(fs.readFileSync(bf, 'utf8'));
-          if (Array.isArray(d?.samples)) diskSamples = mergeBankSamples(diskSamples, d.samples);
-          if (d?.calibration && typeof d.calibration === 'object') diskCalib = mergeCalibObj(diskCalib, d.calibration);
+      const tierCentroids = {};
+      for (const [mk, rt] of [...Object.entries(base.tierCentroids || {}), ...Object.entries(inc.tierCentroids || {})]) {
+        if (!rt || typeof rt !== 'object' || !Array.isArray(rt.tierVec)) continue;
+        if (rt.syntheticMargin) continue;
+        const cKey = canonHabitModel(mk) || mk;
+        if (OPEN_NO_TIER_BASE_RE.test(cKey) || MODEL_NAME_MAX_RE.test(cKey)) continue;
+        const lt = tierCentroids[cKey];
+        if (!lt || (Number(rt.truthWeightSum) || 0) >= (Number(lt.truthWeightSum) || 0) || (rt.updatedAt || 0) >= (lt.updatedAt || 0)) {
+          tierCentroids[cKey] = rt;
         }
-      } catch {}
-    }
-    for (const df of dbFiles) {
-      try {
-        if (fs.existsSync(df)) {
-          const d = JSON.parse(fs.readFileSync(df, 'utf8'));
-          const hb = d?.shared?.habitLearnBank;
-          if (Array.isArray(hb?.samples)) diskSamples = mergeBankSamples(diskSamples, hb.samples);
-          if (hb?.calibration && typeof hb.calibration === 'object') diskCalib = mergeCalibObj(diskCalib, hb.calibration);
-        }
-      } catch {}
-    }
-    if (!global._harvestedLegacyPartitionBanks) {
-      global._harvestedLegacyPartitionBanks = true;
-      let partSamples = [], partCalib = {};
-      const partRoots = [
-        path.join(roamingRoot, 'Arena Client', 'Partitions'),
-        path.join(roamingRoot, 'Brana AI Extension Test', 's', 'Partitions'),
-        path.join(roamingRoot, 'Brana AI Extension Test', 'Partitions'),
-      ].filter((p, idx, arr) => arr.indexOf(p) === idx);
-      const extractJsonObjectsWithSamples = str => {
-        const out = [];
-        let pos = 0;
-        while ((pos = str.indexOf('"samples":[', pos)) !== -1) {
-          let start = str.lastIndexOf('{"v":', pos);
-          if (start === -1 || pos - start > 120) start = str.lastIndexOf('{', pos);
-          if (start !== -1 && pos - start < 200) {
-            let depth = 0, inStr = false, esc = false, end = -1;
-            for (let i = start; i < str.length; i++) {
-              const ch = str[i];
-              if (inStr) {
-                if (esc) esc = false;
-                else if (ch === '\\') esc = true;
-                else if (ch === '"') inStr = false;
-              } else if (ch === '"') inStr = true;
-              else if (ch === '{') depth++;
-              else if (ch === '}') {
-                depth--;
-                if (depth === 0) { end = i + 1; break; }
-              }
-            }
-            if (end !== -1) {
-              try { out.push(JSON.parse(str.slice(start, end))); } catch {}
+      }
+      const mergeNestedMap = (mA, mB) => {
+        const out = { ...(mA && typeof mA === 'object' ? mA : {}) };
+        if (mB && typeof mB === 'object') {
+          for (const [k, v] of Object.entries(mB)) {
+            if (v && typeof v === 'object' && !Array.isArray(v)) {
+              out[k] = { ...(out[k] && typeof out[k] === 'object' ? out[k] : {}), ...v };
+            } else {
+              out[k] = v;
             }
           }
-          pos += 11;
         }
         return out;
       };
-      for (const pr of partRoots) {
+      const intraFamilyHyperplanes = mergeNestedMap(base.intraFamilyHyperplanes, inc.intraFamilyHyperplanes);
+      const vendorTierDeltas = mergeNestedMap(base.vendorTierDeltas, inc.vendorTierDeltas);
+      const modalityProfiles = mergeNestedMap(base.modalityProfiles, inc.modalityProfiles);
+      const dimWeights = mergeNestedMap(base.dimWeights, inc.dimWeights);
+      const repelledModels = mergeNestedMap(base.repelledModels, inc.repelledModels);
+      const rcA = (base.reverseCalib && typeof base.reverseCalib === 'object') ? base.reverseCalib : {};
+      const rcB = (inc.reverseCalib && typeof inc.reverseCalib === 'object') ? inc.reverseCalib : {};
+      const reverseCalib = {
+        effortScales: { ...(rcA.effortScales || {}), ...(rcB.effortScales || {}) },
+        tierLogPriors: mergeNestedMap(rcA.tierLogPriors, rcB.tierLogPriors),
+        modelResidualBias: { ...(rcA.modelResidualBias || {}), ...(rcB.modelResidualBias || {}) },
+        updatedAt: Math.max(rcA.updatedAt || 0, rcB.updatedAt || 0),
+      };
+      return {
+        v: 3,
+        protoCentroids,
+        scoreOffsets,
+        tierCentroids,
+        intraFamilyHyperplanes,
+        vendorTierDeltas,
+        modalityProfiles,
+        dimWeights,
+        repelledModels,
+        reverseCalib,
+        updatedAt: Math.max(base.updatedAt || 0, inc.updatedAt || 0, Date.now()),
+      };
+    };
+    if (v === undefined && global._memHabitBank && Array.isArray(global._memHabitBank.samples)) {
+      return global._memHabitBank;
+    }
+    const persistHabitBankFiles = bankObj => {
+      global._memHabitBank = bankObj;
+      clearTimeout(global._habitBankWriteTimer);
+      global._habitBankWriteTimer = setTimeout(() => {
+        const json = JSON.stringify(bankObj);
+        for (const bf of bankFiles) {
+          try {
+            if (bf === bankFiles[0] || fs.existsSync(path.dirname(bf))) {
+              fs.mkdirSync(path.dirname(bf), { recursive: true });
+              fs.writeFileSync(bf, json);
+            }
+          } catch {}
+        }
+      }, 300);
+    };
+    let diskSamples = [], diskCalib = {};
+    if (global._memHabitBank && Array.isArray(global._memHabitBank.samples)) {
+      diskSamples = global._memHabitBank.samples;
+      diskCalib = global._memHabitBank.calibration || {};
+    } else {
+      try {
+        const builtinBank = require('../ui/habit-builtin-bank.js');
+        if (Array.isArray(builtinBank?.samples)) diskSamples = mergeBankSamples(diskSamples, builtinBank.samples);
+        if (builtinBank?.calibration && typeof builtinBank.calibration === 'object') diskCalib = mergeCalibObj(diskCalib, builtinBank.calibration);
+      } catch {}
+      for (const bf of bankFiles) {
         try {
-          if (!fs.existsSync(pr)) continue;
-          for (const dirName of fs.readdirSync(pr)) {
-            if (!dirName.startsWith('acct-')) continue;
-            const ldbDir = path.join(pr, dirName, 'Local Storage', 'leveldb');
-            if (!fs.existsSync(ldbDir)) continue;
-            for (const fn of fs.readdirSync(ldbDir)) {
-              if (!fn.endsWith('.ldb') && !fn.endsWith('.log')) continue;
-              let buf;
-              try { buf = fs.readFileSync(path.join(ldbDir, fn)); } catch { continue; }
-              for (const enc of ['utf8', 'utf16le']) {
-                const str = buf.toString(enc);
-                if (str.includes('"samples":[')) {
-                  for (const obj of extractJsonObjectsWithSamples(str)) {
-                    if (Array.isArray(obj?.samples)) partSamples = mergeBankSamples(partSamples, obj.samples);
-                    if (obj?.calibration && typeof obj.calibration === 'object') partCalib = mergeCalibObj(partCalib, obj.calibration);
-                  }
+          if (fs.existsSync(bf)) {
+            const d = JSON.parse(fs.readFileSync(bf, 'utf8'));
+            if (Array.isArray(d?.samples)) diskSamples = mergeBankSamples(diskSamples, d.samples);
+            if (d?.calibration && typeof d.calibration === 'object') diskCalib = mergeCalibObj(diskCalib, d.calibration);
+          }
+        } catch {}
+      }
+      for (const df of dbFiles) {
+        try {
+          if (fs.existsSync(df)) {
+            const d = JSON.parse(fs.readFileSync(df, 'utf8'));
+            const hb = d?.shared?.habitLearnBank;
+            if (Array.isArray(hb?.samples)) diskSamples = mergeBankSamples(diskSamples, hb.samples);
+            if (hb?.calibration && typeof hb.calibration === 'object') diskCalib = mergeCalibObj(diskCalib, hb.calibration);
+          }
+        } catch {}
+      }
+      if (!global._harvestedLegacyPartitionBanks && diskSamples.length < 200) {
+        global._harvestedLegacyPartitionBanks = true;
+        let partSamples = [], partCalib = {};
+        const partRoots = [
+          path.join(roamingRoot, 'Arena Client', 'Partitions'),
+          path.join(roamingRoot, 'Brana AI Extension Test', 's', 'Partitions'),
+          path.join(roamingRoot, 'Brana AI Extension Test', 'Partitions'),
+        ].filter((p, idx, arr) => arr.indexOf(p) === idx);
+        const extractJsonObjectsWithSamples = str => {
+          const out = [];
+          let pos = 0;
+          while ((pos = str.indexOf('"samples":[', pos)) !== -1) {
+            let start = str.lastIndexOf('{"v":', pos);
+            if (start === -1 || pos - start > 120) start = str.lastIndexOf('{', pos);
+            if (start !== -1 && pos - start < 200) {
+              let depth = 0, inStr = false, esc = false, end = -1;
+              for (let i = start; i < str.length; i++) {
+                const ch = str[i];
+                if (inStr) {
+                  if (esc) esc = false;
+                  else if (ch === '\\') esc = true;
+                  else if (ch === '"') inStr = false;
+                } else if (ch === '"') inStr = true;
+                else if (ch === '{') depth++;
+                else if (ch === '}') {
+                  depth--;
+                  if (depth === 0) { end = i + 1; break; }
                 }
-                if (str.includes('"habitFeatures":')) {
-                  const re = /"(01a1[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})"\s*:\s*\{/g;
-                  let mMatch;
-                  while ((mMatch = re.exec(str)) !== null) {
-                    const sid = mMatch[1];
-                    const start = mMatch.index + mMatch[0].length - 1;
-                    let depth = 0, inStr = false, esc = false, end = -1;
-                    const maxEnd = Math.min(str.length, start + 60000);
-                    for (let i = start; i < maxEnd; i++) {
-                      const ch = str[i];
-                      if (inStr) {
-                        if (esc) esc = false;
-                        else if (ch === '\\') esc = true;
-                        else if (ch === '"') inStr = false;
-                      } else if (ch === '"') inStr = true;
-                      else if (ch === '{') depth++;
-                      else if (ch === '}') {
-                        depth--;
-                        if (depth === 0) { end = i + 1; break; }
-                      }
+              }
+              if (end !== -1) {
+                try { out.push(JSON.parse(str.slice(start, end))); } catch {}
+              }
+            }
+            pos += 11;
+          }
+          return out;
+        };
+        for (const pr of partRoots) {
+          try {
+            if (!fs.existsSync(pr)) continue;
+            for (const dirName of fs.readdirSync(pr)) {
+              if (!dirName.startsWith('acct-')) continue;
+              const ldbDir = path.join(pr, dirName, 'Local Storage', 'leveldb');
+              if (!fs.existsSync(ldbDir)) continue;
+              for (const fn of fs.readdirSync(ldbDir)) {
+                if (!fn.endsWith('.ldb') && !fn.endsWith('.log')) continue;
+                let buf;
+                try { buf = fs.readFileSync(path.join(ldbDir, fn)); } catch { continue; }
+                for (const enc of ['utf8', 'utf16le']) {
+                  const str = buf.toString(enc);
+                  if (str.includes('"samples":[')) {
+                    for (const obj of extractJsonObjectsWithSamples(str)) {
+                      if (Array.isArray(obj?.samples)) partSamples = mergeBankSamples(partSamples, obj.samples);
+                      if (obj?.calibration && typeof obj.calibration === 'object') partCalib = mergeCalibObj(partCalib, obj.calibration);
                     }
-                    if (end !== -1) {
-                      try {
-                        const mObj = JSON.parse(str.slice(start, end));
-                        const hf = mObj?.habitFeatures;
-                        const isUConf = Boolean(mObj?.userCorrected || mObj?.userConfirmed);
-                        const isRConf = Boolean(!isUConf && mObj?.reverseName && Number(mObj?.reverseConfidence) >= 0.88 && !mObj?.habitInferred);
-                        if ((isUConf || isRConf) && Array.isArray(hf?.vec) && hf.vec.length === 20 && !isSyntheticStubVecObj(hf.vec)) {
-                          const rawLbl = String(isUConf ? (mObj.name || mObj.reverseName || '') : (mObj.reverseName || mObj.name || '')).replace(/[?？]+$/, '').trim();
-                          const cMod = canonHabitModel(rawLbl);
-                          if (cMod && cMod !== '开源模型') {
-                            partSamples = mergeBankSamples(partSamples, [{
-                              sid,
-                              model: cMod,
-                              rawLabel: rawLbl,
-                              vec: hf.vec,
-                              score: Number(hf.score || hf.habitReasoningScore || 75) || 75,
-                              tags: Array.isArray(hf.tags || mObj.habitTags) ? (hf.tags || mObj.habitTags).slice(0, 6) : [],
-                              meta: hf.meta || mObj.habitMeta || null,
-                              userConfirmed: true,
-                              autoTeacher: !isUConf,
-                              weight: isUConf ? 3.5 : 2.8,
-                              at: Number(mObj.updatedAt || mObj.at || 0) || 1792400000000,
-                            }]);
-                          }
+                  }
+                  if (str.includes('"habitFeatures":')) {
+                    const re = /"(01a1[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})"\s*:\s*\{/g;
+                    let mMatch;
+                    while ((mMatch = re.exec(str)) !== null) {
+                      const sid = mMatch[1];
+                      const start = mMatch.index + mMatch[0].length - 1;
+                      let depth = 0, inStr = false, esc = false, end = -1;
+                      const maxEnd = Math.min(str.length, start + 60000);
+                      for (let i = start; i < maxEnd; i++) {
+                        const ch = str[i];
+                        if (inStr) {
+                          if (esc) esc = false;
+                          else if (ch === '\\') esc = true;
+                          else if (ch === '"') inStr = false;
+                        } else if (ch === '"') inStr = true;
+                        else if (ch === '{') depth++;
+                        else if (ch === '}') {
+                          depth--;
+                          if (depth === 0) { end = i + 1; break; }
                         }
-                      } catch {}
+                      }
+                      if (end !== -1) {
+                        try {
+                          const mObj = JSON.parse(str.slice(start, end));
+                          const hf = mObj?.habitFeatures;
+                          const isUConf = Boolean(mObj?.userCorrected || mObj?.userConfirmed);
+                          const isRConf = Boolean(!isUConf && mObj?.reverseName && Number(mObj?.reverseConfidence) >= 0.88 && !mObj?.habitInferred);
+                          if ((isUConf || isRConf) && Array.isArray(hf?.vec) && hf.vec.length === 20 && !isSyntheticStubVecObj(hf.vec)) {
+                            const rawLbl = String(isUConf ? (mObj.name || mObj.reverseName || '') : (mObj.reverseName || mObj.name || '')).replace(/[?？]+$/, '').trim();
+                            const cMod = canonHabitModel(rawLbl);
+                            if (cMod && cMod !== '开源模型') {
+                              partSamples = mergeBankSamples(partSamples, [{
+                                sid,
+                                model: cMod,
+                                rawLabel: rawLbl,
+                                vec: hf.vec,
+                                score: Number(hf.score || hf.habitReasoningScore || 75) || 75,
+                                tags: Array.isArray(hf.tags || mObj.habitTags) ? (hf.tags || mObj.habitTags).slice(0, 6) : [],
+                                meta: hf.meta || mObj.habitMeta || null,
+                                userConfirmed: true,
+                                autoTeacher: !isUConf,
+                                weight: isUConf ? 3.5 : 2.8,
+                                at: Number(mObj.updatedAt || mObj.at || 0) || 1792400000000,
+                              }]);
+                            }
+                          }
+                        } catch {}
+                      }
                     }
                   }
                 }
               }
             }
-          }
-        } catch {}
-      }
-      if (partSamples.length) diskSamples = mergeBankSamples(diskSamples, partSamples);
-      if (Object.keys(partCalib).length) diskCalib = mergeCalibObj(diskCalib, partCalib);
-      global._cachedPartitionSamples = partSamples;
-      global._cachedPartitionCalib = partCalib;
-    } else {
-      if (Array.isArray(global._cachedPartitionSamples) && global._cachedPartitionSamples.length) {
-        diskSamples = mergeBankSamples(diskSamples, global._cachedPartitionSamples);
-      }
-      if (global._cachedPartitionCalib && typeof global._cachedPartitionCalib === 'object') {
-        diskCalib = mergeCalibObj(diskCalib, global._cachedPartitionCalib);
+          } catch {}
+        }
+        if (partSamples.length) diskSamples = mergeBankSamples(diskSamples, partSamples);
+        if (Object.keys(partCalib).length) diskCalib = mergeCalibObj(diskCalib, partCalib);
+        global._cachedPartitionSamples = partSamples;
+        global._cachedPartitionCalib = partCalib;
+      } else {
+        global._harvestedLegacyPartitionBanks = true;
       }
     }
     if (v === undefined) {
       const merged = mergeBankSamples(diskSamples, DB.shared.habitLearnBank?.samples || []);
       const mergedCal = mergeCalibObj(diskCalib, DB.shared.habitLearnBank?.calibration);
       const nextBank = { v: 2, updatedAt: DB.shared.habitLearnBank?.updatedAt || Date.now(), samples: merged, calibration: mergedCal };
-      if (merged.length > (DB.shared.habitLearnBank?.samples?.length || 0)) {
+      const needsMigration = !Array.isArray(DB.shared.habitLearnBank?.samples) || DB.shared.habitLearnBank.samples.some(s => !s || !s.vendor || !s.family || !s.effort);
+      global._memHabitBank = nextBank;
+      if (merged.length > (DB.shared.habitLearnBank?.samples?.length || 0) || needsMigration) {
         DB.shared.habitLearnBank = nextBank;
-        for (const bf of bankFiles) {
-          try {
-            if (bf === bankFiles[0] || fs.existsSync(path.dirname(bf))) {
-              fs.mkdirSync(path.dirname(bf), { recursive: true });
-              fs.writeFileSync(bf, JSON.stringify(nextBank, null, 2));
-            }
-          } catch {}
-        }
+        persistHabitBankFiles(nextBank);
         saveSoon();
       }
       return nextBank;
     }
     if (v && typeof v === 'object') {
       const baseSamples = mergeBankSamples(diskSamples, DB.shared.habitLearnBank?.samples || []);
-      const merged = v.replace === true
-        ? mergeBankSamples([], v.samples)
+      const merged = (v.replace === true && (!Array.isArray(v.samples) || v.samples.length === 0))
+        ? []
         : mergeBankSamples(baseSamples, v.samples);
       const mergedCal = v.replace === true && (!v.samples || !v.samples.length)
         ? (v.calibration || {})
         : mergeCalibObj(mergeCalibObj(diskCalib, DB.shared.habitLearnBank?.calibration), v.calibration);
       const nextBank = { v: 2, updatedAt: Date.now(), samples: merged, calibration: mergedCal };
       DB.shared.habitLearnBank = nextBank;
-      for (const bf of bankFiles) {
-        try {
-          if (bf === bankFiles[0] || fs.existsSync(path.dirname(bf))) {
-            fs.mkdirSync(path.dirname(bf), { recursive: true });
-            fs.writeFileSync(bf, JSON.stringify(nextBank, null, 2));
-          }
-        } catch {}
-      }
+      persistHabitBankFiles(nextBank);
       saveSoon();
       try {
         for (const bw of BrowserWindow.getAllWindows()) {
@@ -3875,6 +4249,7 @@ ipcMain.handle('host:shared', (e, k, v) => {
     v = { ...v, goldMode: prevPrefs.goldMode, goldSet: prevPrefs.goldSet, goldChats: prevPrefs.goldChats, goldAt: prevPrefs.goldAt };
   }
   DB.shared[k] = v;
+  if (k === 'pippool') healBannedAccountProxyIps();
   if (k === 'prefs' && v && typeof v === 'object' && (v.goldMode || Array.isArray(v.goldSet))) {
     DB.shared.gold = { mode: v.goldMode || 'auto', set: Array.isArray(v.goldSet) ? v.goldSet : [], chats: Array.isArray(v.goldChats) ? v.goldChats : [], at: v.goldAt || Date.now() };
   }
@@ -3952,11 +4327,14 @@ ipcMain.handle('host:winDrag', (e, phase) => {
     b = { x: Math.round(p0.x - rx * nb.width), y: Math.round(p0.y - oy), width: nb.width, height: nb.height };
     w.setBounds(b);
   }
-  const d = { iv: null, t: Date.now() };
+  const d = { iv: null, t: Date.now(), lastX: b.x, lastY: b.y };
   d.iv = setInterval(() => {
     if (w.isDestroyed() || Date.now() - d.t > 60000) { stop(); return; }
     const p = screen.getCursorScreenPoint();
-    try { w.setBounds({ x: b.x + p.x - p0.x, y: b.y + p.y - p0.y, width: b.width, height: b.height }); } catch {}
+    const nx = b.x + p.x - p0.x, ny = b.y + p.y - p0.y;
+    if (nx === d.lastX && ny === d.lastY) return;
+    d.lastX = nx; d.lastY = ny;
+    try { w.setBounds({ x: nx, y: ny, width: b.width, height: b.height }); } catch {}
   }, 12);
   winDrags.set(w.id, d);
   return true;
@@ -4057,7 +4435,7 @@ const refreshAllAccounts = createAccountRefresh({
       if (!w || w.isDestroyed()) stopTunnel(a.id);
     }
   },
-  save: saveDB, concurrency: 4,
+  save: saveSoon, concurrency: 4,
 });
 ipcMain.handle('host:refreshQuotas', async (_e, force) => {
   if (!force && lastQuotaRefreshResult && Date.now() - lastQuotaRefreshAt < 180000) return lastQuotaRefreshResult;
@@ -4234,4 +4612,32 @@ app.whenReady().then(async () => {
     DB.last = savedLast;
     try { saveDB(); } catch {}
   }
+  setTimeout(async () => {
+    try {
+      const userData = app.getPath('userData');
+      const xDir = path.join(userData, 'xray');
+      const activeIds = new Set((DB.accounts || []).map(a => String(a?.id || '').replace(/[^\w-]/g, '_')).filter(Boolean));
+      const xFiles = await fs.promises.readdir(xDir).catch(() => []);
+      for (const f of xFiles) {
+        if (/^(?:delay|probe|route-test|ip-test)-.*\.json$/i.test(f)) {
+          await fs.promises.unlink(path.join(xDir, f)).catch(() => {});
+        } else {
+          const m = /^([0-9a-f]{10})\.json$/i.exec(f);
+          if (m && !activeIds.has(m[1])) {
+            await fs.promises.unlink(path.join(xDir, f)).catch(() => {});
+          }
+        }
+      }
+      const sPath = path.join(userData, 's');
+      const sFiles = await fs.promises.readdir(sPath).catch(() => []);
+      const cutoff = Date.now() - 5 * 60e3;
+      for (const f of sFiles) {
+        if (/\.tmp$/i.test(f)) {
+          const full = path.join(sPath, f);
+          const st = await fs.promises.stat(full).catch(() => null);
+          if (st && st.mtimeMs < cutoff) await fs.promises.unlink(full).catch(() => {});
+        }
+      }
+    } catch {}
+  }, 4000).unref?.();
 }).catch(error => { runtimeLog('startup-failed', { kind: error.name, code: error.code }); closeSplash(); dialog.showErrorBox('Brana AI 启动失败', '请重试。账号数据未删除；诊断记录在数据目录 logs/runtime.jsonl。'); });

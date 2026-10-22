@@ -1731,7 +1731,8 @@ const TitleCompact = (() => {
   "spark-ultra"
 ]);
   // The model ID table above is APPEND ONLY. Never sort/reassign an existing ID.
-  const INDEX = new Map(MODELS.map((name,id)=>[name,id]));
+  let _index = null;
+  const getIndex = () => _index ||= new Map(MODELS.map((name,id)=>[name,id]));
   const TIERS = Object.freeze(['','none','minimal','low','medium','high','xhigh','max','mid','balanced','fast','adaptive','auto','thinking','reasoning','standard']);
   const SOURCES = Object.freeze(['local','fingerprint','api']);
   const SUFFIXES = Object.freeze(['',...['因思考跳过','数字超量','回复超长','循环输出','单条超时','多段回复异常','输出异常'].flatMap(s=>[' · '+s,' · '+s+'（停止未确认）'])]);
@@ -1749,7 +1750,7 @@ const TitleCompact = (() => {
   }
   function canonical(value) {
     if(!Array.isArray(value)||value.length!==10||![1,2].includes(value[0]))throw invalid('名称字段结构不兼容');
-    const [,name,confidence,score,average,time,,tier,source]=value,parts=modelParts(name),id=INDEX.get(parts.base);
+    const [,name,confidence,score,average,time,,tier,source]=value,parts=modelParts(name),id=getIndex().get(parts.base);
     if(id===undefined)throw invalid('该型号尚未收录到固定映射表：'+String(name).slice(0,100)+'；请更新型号表，不会映射为其他型号');
     if(!Number.isSafeInteger(time)||time<0||time>4398046511103)throw invalid('时间不在固定格式范围内（Unix 毫秒，至 2109 年）');
     if(!SOURCES.includes(source))throw invalid('名称信息来源不合法');
@@ -1770,7 +1771,7 @@ const TitleCompact = (() => {
       return TitleFlex.pack(value);
     }
     const v=canonical(value),parts=modelParts(v[1]);
-    const fields=[[INDEX.get(parts.base),12],[v[2]===null?1023:Math.round(v[2]*1000),10],
+    const fields=[[getIndex().get(parts.base),12],[v[2]===null?1023:Math.round(v[2]*1000),10],
       [parts.state?65519+parts.state:v[3]===null?65535:Math.round(v[3]*10),16],
       [v[4]===null?262143:Math.round(v[4]*10),18],[v[5],42],[SOURCES.indexOf(v[8]),2],[TIERS.indexOf(v[7]),4]];
     let n=0n;for(const [value,bits]of fields)n=(n<<BigInt(bits))|BigInt(value);
@@ -1815,9 +1816,9 @@ const TitleCompact = (() => {
   }
   function canonical3(value) {
     if(!Array.isArray(value)||value.length!==10||![1,2].includes(value[0]))throw invalid('名称字段结构不兼容');
-    const [,name,confidence,score,average,time,,tier,source]=value,parts=modelParts(name);
+    const [,name,confidence,score,average,time,,tier,source]=value,parts=modelParts(name),idxMap=getIndex();
     let base=parts.base;
-    if(!INDEX.has(base)){base=normalName(base);if(!INDEX.has(base)&&!base)throw invalid('型号名称为空，无法同步');}
+    if(!idxMap.has(base)){base=normalName(base);if(!idxMap.has(base)&&!base)throw invalid('型号名称为空，无法同步');}
     if(!Number.isSafeInteger(time)||time<0||time>4398046511103)throw invalid('时间不在固定格式范围内（Unix 毫秒，至 2109 年）');
     if(!SOURCES.includes(source))throw invalid('名称信息来源不合法');
     for(const v of [confidence,score,average])if(v!==null&&(!Number.isFinite(v)||v<0))throw invalid('名称数值不合法');
@@ -1829,7 +1830,7 @@ const TitleCompact = (() => {
     return [2,base+SUFFIXES[parts.state],probability,s,a,time,'',t,source,time];
   }
   function pack3(value) {
-    const v=canonical3(value),parts=modelParts(v[1]),id=INDEX.get(parts.base);
+    const v=canonical3(value),parts=modelParts(v[1]),id=getIndex().get(parts.base);
     let n=0n;const put=(val,bits)=>{n=(n<<BigInt(bits))|BigInt(val);};
     put(id===undefined?1:0,2);put(parts.state,4);
     put(v[2]===null?1023:Math.round(v[2]*1000),10);put(v[3]===null?1048575:Math.round(v[3]*10),20);

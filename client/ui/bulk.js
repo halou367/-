@@ -142,9 +142,11 @@ const Bulk = {
         const c = Chats.get(sid); if (c) { try { c.ctl?.abort(); } catch {} Chats.delete(sid); }
         if (Models.all[sid]) { delete Models.all[sid]; dm = true; }
         if (typeof AcctStats !== 'undefined' && AcctStats.turns && AcctStats.turns[sid]) { delete AcctStats.turns[sid]; dt = true; }
-        try { Notes.drop(sid); Trace.clear(sid); Fav.set(sid, false); } catch {}
+        try { Trace.clear(sid); } catch {}
       }
-      if (dm) Store.set('models', Models.all);
+      try { if (typeof Notes !== 'undefined' && Notes.dropMany) Notes.dropMany(gone); else for (const sid of gone) Notes.drop?.(sid); } catch {}
+      try { if (typeof Fav !== 'undefined' && Fav.setMany) Fav.setMany(gone, false); else for (const sid of gone) Fav.set?.(sid, false); } catch {}
+      if (dm) { if (typeof Models !== 'undefined' && Models.save) Models.save(); else Store.set('models2', Models.all); }
       if (dt) try { AcctStats.save?.(); } catch {}
     }
     Bus.emit('history'); try { AcctStats.report(); } catch {} try { UI.renderList(); UI.renderTabs(); } catch {}

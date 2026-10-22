@@ -17,6 +17,7 @@ function blocked(response) {
 // IPPure 官方直连 HTTP/2 接口（api.123169.xyz / api.ippure.com）：直接按目标出口 IP 查询纯净度与原生/广播/家宽属性（0 节点请求量）
 const _h2Sessions = new Map();
 const _inFlightPure = new Map();
+let _h2QuotaExhaustedUntil = 0;
 function _getH2Session(host) {
   const http2 = require('node:http2');
   let entry = _h2Sessions.get(host);
@@ -29,7 +30,8 @@ function _getH2Session(host) {
   _h2Sessions.set(host, entry);
   return entry;
 }
-async function _ippureH2Host(host, qIp, ms = 3200, signal) {
+async function _ippureH2Host(host, qIp, ms = 3200, signal, optV4Host = '') {
+  if (Date.now() < _h2QuotaExhaustedUntil) return null;
   const crypto = require('node:crypto');
   const entry = _getH2Session(host);
   const h2Get = (p, extra = {}) => new Promise((res, rej) => {
@@ -85,7 +87,7 @@ async function _ippureH2Host(host, qIp, ms = 3200, signal) {
     return false;
   };
   const callSigned = async p => {
-    if (!entry.xk) {
+    if (!entry.xk || (Date.now() - (entry.lt || 0) > 45000)) {
       if (!entry.handshake) {
         entry.handshake = h2Get(p).then(r0 => { updateToken(r0.headers); return r0; }).finally(() => { entry.handshake = null; });
       }
@@ -103,26 +105,42 @@ async function _ippureH2Host(host, qIp, ms = 3200, signal) {
   };
   const encIp = encodeURIComponent(qIp);
   const isV4 = /^\d{1,3}(?:\.\d{1,3}){3}$/.test(qIp);
+  const v4Fallback = (!isV4 && optV4Host && /^\d{1,3}(?:\.\d{1,3}){3}$/.test(optV4Host)) ? optV4Host : '';
   const [basicRes, riskRes] = await Promise.all([
     callSigned('/api/info/ip-basic/' + encIp),
-    isV4 ? callSigned('/api/info/ip-risk/' + encIp).catch(() => null) : Promise.resolve(null),
+    isV4
+      ? callSigned('/api/info/ip-risk/' + encIp).catch(() => null)
+      : (v4Fallback ? callSigned('/api/info/ip-risk/' + encodeURIComponent(v4Fallback)).catch(() => null) : Promise.resolve(null)),
   ]);
   if (!basicRes?.text) return null;
   const bJson = JSON.parse(basicRes.text.slice(0, 20000));
   const rJson = riskRes?.text ? (() => { try { return JSON.parse(riskRes.text.slice(0, 8000)); } catch { return null; } })() : null;
+  if (/quota is exhausted/i.test(String(bJson?.message || rJson?.message || ''))) {
+    _h2QuotaExhaustedUntil = Date.now() + 3600_000;
+    return null;
+  }
   if (!bJson?.ok || !bJson?.data) return null;
   const d = bJson.data;
   const ip = String(d.ip || qIp).slice(0, 64);
   const org = String(d.asn?.organization || '').slice(0, 40);
   const asnType = String(d.asn?.type || '').toLowerCase();
-  const dc = asnType ? /hosting|datacenter|cloud/i.test(asnType) : (d.asn?.is_residential === false && /cloudflare|oracle|amazon|google|microsoft|linode|akamai|vultr|digitalocean|hetzner|ovh|choopa|datacamp|contabo|zenlayer|cogent|hurricane|hosting|datacenter|cloud|vps|server/i.test(org));
+  const dc = asnType ? /hosting|datacenter|cloud/i.test(asnType) : (d.asn?.is_residential === false && /akile|baxet|dromatics|cloudflare|oracle|amazon|google|microsoft|linode|akamai|vultr|digitalocean|hetzner|ovh|choopa|datacamp|contabo|zenlayer|cogent|hurricane|hosting|datacenter|cloud|vps|server/i.test(org));
   const res = d.asn?.is_residential !== undefined ? !!d.asn.is_residential : (!dc && /broadband|telecom|communications|cable|mobile|fpt|kt|ntt|softbank|kddi|comcast|verizon|charter/i.test(org));
   const bc = !!d.traits?.is_broadcast;
   let fs = Number(rJson?.data?.risk_score);
-  if (!Number.isFinite(fs)) {
-    fs = (dc || /cloudflare|oracle|amazon|google|microsoft|linode|akamai|vultr|digitalocean|hetzner|ovh|choopa|datacamp|contabo|zenlayer|cogent|hurricane/i.test(org)) ? 15 : 8;
+  if ((isV4 || v4Fallback) && !Number.isFinite(fs)) {
+    const retryTarget = isV4 ? encIp : encodeURIComponent(v4Fallback);
+    const retryRisk = await callSigned('/api/info/ip-risk/' + retryTarget).catch(() => null);
+    const retryJson = retryRisk?.text ? (() => { try { return JSON.parse(retryRisk.text.slice(0, 8000)); } catch { return null; } })() : null;
+    fs = Number(retryJson?.data?.risk_score);
+    if (isV4 && !Number.isFinite(fs)) return null;
   }
-  return { fs: Math.max(0, Math.min(100, Math.round(fs))), ip, res, bc, dc, org };
+  const hasRealRisk = Number.isFinite(fs);
+  if (!hasRealRisk) {
+    if (res && !dc && !bc) fs = 10;
+    else fs = (dc && bc) ? 35 : 28;
+  }
+  return { fs: Math.max(0, Math.min(100, Math.round(fs))), ip, res, bc, dc, org, ...(hasRealRisk ? { real: 1 } : {}) };
 }
 function isReservedOrFixtureTarget(s, allowTestNet = false) {
   const h = String(s || '').trim().replace(/^\[|\]$/g, '').replace(/:\d{1,5}$/, '');
@@ -132,24 +150,60 @@ function isReservedOrFixtureTarget(s, allowTestNet = false) {
   if (/(?:^|\.)(?:invalid|example|localhost|test)$/i.test(h) || /\.example\./i.test(h)) return true;
   return false;
 }
+async function _fallbackDirectRisk(qIp, ms = 2800, signal, optV4Host = '') {
+  if (typeof fetch !== 'function') return null;
+  const target = (qIp.includes(':') && optV4Host && /^\d{1,3}(?:\.\d{1,3}){3}$/.test(optV4Host)) ? optV4Host : qIp;
+  const ctl = new AbortController(), tm = setTimeout(() => ctl.abort(), Math.max(1200, ms));
+  const abort = () => ctl.abort(); if (signal?.aborted) abort(); else signal?.addEventListener('abort', abort, { once: true });
+  try {
+    const r = await fetch('https://proxycheck.io/v2/' + encodeURIComponent(target) + '?vpn=1&asn=1&risk=1', {
+      method: 'GET',
+      signal: ctl.signal,
+      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
+    });
+    if (!r.ok) return null;
+    const j = JSON.parse((await r.text()).slice(0, 16000));
+    const x = j?.[target];
+    if (!x || typeof x !== 'object') return null;
+    const org = String(x.provider || x.organisation || '').slice(0, 40);
+    const risk = Math.max(0, Math.min(100, +x.risk || 0));
+    const isProxy = x.proxy === 'yes' || /vpn|tor|proxy/i.test(String(x.type || ''));
+    const subnetCnt = +x.devices?.subnet || 0;
+    const dc = /hosting|datacenter|cloud/i.test(String(x.type || '')) || /akile|baxet|dromatics|hostkey|cloudflare|oracle|amazon|google|microsoft|linode|akamai|vultr|digitalocean|hetzner|ovh|choopa|datacamp|contabo|zenlayer|cogent|hurricane|m247|server|vps|cloud/i.test(org);
+    const res = !dc && !isProxy && (/residential|wireless/i.test(String(x.type || '')) || /broadband|telecom|communications|cable|mobile|fpt|kt|korea telecom|ntt|softbank|kddi|gmo internet|comcast|verizon|charter/i.test(org));
+    let fs;
+    if (isProxy || risk >= 50) fs = Math.max(52, risk || 55);
+    else if (subnetCnt >= 15 || /akile|baxet|dromatics|hostkey|m247|datacamp|contabo/i.test(org)) fs = Math.max(42, Math.min(85, risk + Math.round(subnetCnt * 1.5)));
+    else if (risk === 0 && subnetCnt <= 6) fs = res ? 7 : (dc ? 26 : 14);
+    else fs = Math.max(26, risk);
+    return { fs: Math.max(0, Math.min(100, Math.round(fs))), ip: qIp, res, bc: subnetCnt >= 12, dc: dc || isProxy, org, real: 1 };
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(tm);
+    signal?.removeEventListener('abort', abort);
+  }
+}
 async function ippureDirect(targetIp, ms = 3200, signal, opt = null) {
   const qIp = String(targetIp || '').trim().replace(/^\[|\]$/g, '');
   if (!qIp || (!/^\d{1,3}(?:\.\d{1,3}){3}$/.test(qIp) && !qIp.includes(':'))) return null;
   if (isReservedOrFixtureTarget(qIp, opt?.allowTestNet === true)) return null;
-  const inflight = _inFlightPure.get(qIp);
+  const v4Host = String(opt?.fallbackV4Host || '').trim().replace(/^\[|\]$/g, '').replace(/:\d{1,5}$/, '');
+  const cacheKey = v4Host && qIp.includes(':') ? `${qIp}|${v4Host}` : qIp;
+  const inflight = _inFlightPure.get(cacheKey);
   if (inflight && !signal) return inflight;
   const task = (async () => {
     for (const host of ['api.123169.xyz', 'api.ippure.com']) {
       try {
-        const r = await _ippureH2Host(host, qIp, ms, signal);
+        const r = await _ippureH2Host(host, qIp, ms, signal, v4Host);
         if (r && Number.isFinite(r.fs)) return r;
       } catch {}
     }
-    return null;
+    return await _fallbackDirectRisk(qIp, ms, signal, v4Host);
   })();
   if (!signal) {
-    _inFlightPure.set(qIp, task);
-    task.finally(() => { if (_inFlightPure.get(qIp) === task) _inFlightPure.delete(qIp); });
+    _inFlightPure.set(cacheKey, task);
+    task.finally(() => { if (_inFlightPure.get(cacheKey) === task) _inFlightPure.delete(cacheKey); });
   }
   return task;
 }
@@ -162,11 +216,12 @@ async function ippure(ses, ms=3200, signal) {
   try { const r=await ses.fetch('https://my.ippure.com/v1/info',{method:'GET',signal:ctl.signal,credentials:'omit',cache:'no-store',redirect:'follow'}); if(!r.ok)return null;
     const j=JSON.parse((await r.text()).slice(0,20000)), ip=String(j?.ip||'').slice(0,64), org=String(j?.asOrganization||'').slice(0,40);
     let fs=Number(j?.fraudScore);
-    if(!Number.isFinite(fs)){
+    const hasReal=Number.isFinite(fs);
+    if(!hasReal){
       if(!ip||!ip.includes(':'))return null;
-      fs=/cloudflare|oracle|amazon|google|microsoft|linode|akamai|vultr|digitalocean|hetzner|ovh|choopa|datacamp|contabo|zenlayer|cogent|hurricane/i.test(org)?15:8;
+      fs=(j?.isResidential===true&&!j?.isDataCenter&&!j?.isBroadcast)?10:28;
     }
-    return {fs:Math.max(0,Math.min(100,Math.round(fs))),ip,res:j?.isResidential!==undefined?!!j.isResidential:/broadband|telecom|communications|cable|mobile|fpt|kt|ntt|softbank|kddi|comcast|verizon|charter/i.test(org),bc:!!j?.isBroadcast,dc:!!j?.isDataCenter,org}; }
+    return {fs:Math.max(0,Math.min(100,Math.round(fs))),ip,res:j?.isResidential!==undefined?!!j.isResidential:/broadband|telecom|communications|cable|mobile|fpt|kt|ntt|softbank|kddi|comcast|verizon|charter/i.test(org),bc:!!j?.isBroadcast,dc:!!j?.isDataCenter,org,...(hasReal?{real:1}:{})}; }
   catch { return null; } finally { clearTimeout(t);signal?.removeEventListener('abort',abort); }
 }
 // ip-api（经隧道或按已实测出口 IP 查询）：是否代理 / 机房 / 移动网络，免费不限每日次数 —— 和 IPPure 一起测，保证测延迟时就评出纯净度
@@ -202,8 +257,9 @@ async function purity(ses, ms=3200, signal, targetIp='', opt=null) {
   const qIp=String(targetIp||'').trim();
   const rep=(typeof opt?.getCachedRep==='function'&&qIp)?opt.getCachedRep(qIp):(opt?.cachedRep||null);
   const nowMs=Date.now();
-  const cachedPu=(qIp&&rep?.pu&&Number.isFinite(+rep.pu.fs)&&(nowMs-(+rep.pu.at||0)<7*86400e3))
-    ?{ip:qIp,fs:+rep.pu.fs,res:!!rep.pu.res,bc:!!rep.pu.bc,dc:!!rep.pu.dc,org:String(rep.pu.org||'')}
+  const isSuspectFallbackPu=Boolean(rep?.pu&&!rep.pu.real&&[8,12,15,16,22].includes(+rep.pu.fs)&&(qIp.includes(':')||rep.h||rep.px||rep.pu.dc));
+  const cachedPu=(qIp&&rep?.pu&&Number.isFinite(+rep.pu.fs)&&!isSuspectFallbackPu&&(nowMs-(+rep.pu.at||0)<7*86400e3))
+    ?{ip:qIp,fs:+rep.pu.fs,res:!!rep.pu.res,bc:!!rep.pu.bc,dc:!!rep.pu.dc,org:String(rep.pu.org||''),...(rep.pu.real?{real:1}:{})}
     :null;
   const cachedIpa=(qIp&&rep?.a&&(nowMs-(+rep.a||0)<7*86400e3))
     ?{ip:qIp,h:!!rep.h,px:!!rep.px,m:!!rep.m,isp:String(rep.isp||''),as:String(rep.as||'')}
@@ -223,18 +279,25 @@ async function purity(ses, ms=3200, signal, targetIp='', opt=null) {
   const cmExit=opt?.cmliuExit||null;
   if(!ipa&&qIp&&cmExit&&(cmExit.asOrganization||cmExit.org||cmExit.asn)){
     const orgStr=String(cmExit.asOrganization||cmExit.org||'').replace(/^AS\d+\s+/i,'').trim().slice(0,40);
-    const isHosting=/\b(?:cloudflare|oracle|amazon|aws|google|microsoft|azure|linode|akamai|vultr|digitalocean|hetzner|ovh|choopa|datacamp|contabo|zenlayer|cogent|hurricane|hosting|datacenter|cloud|vps|server)\b/i.test(orgStr)||Boolean(cmExit.botManagement?.corporateProxy);
+    const isHosting=/\b(?:akile|baxet|dromatics|cloudflare|oracle|amazon|aws|google|microsoft|azure|linode|akamai|vultr|digitalocean|hetzner|ovh|choopa|datacamp|contabo|zenlayer|cogent|hurricane|hosting|datacenter|cloud|vps|server)\b/i.test(orgStr)||Boolean(cmExit.botManagement?.corporateProxy);
     ipa={ip:qIp,h:isHosting,px:false,m:false,isp:orgStr,as:cmExit.asn?'AS'+cmExit.asn:''};
   }
   if(!pure&&targetIp&&ipa&&(!ipa.ip||ipa.ip.toLowerCase()===String(targetIp).trim().toLowerCase())){
     const bmScore=Number(cmExit?.botManagement?.score);
     const bmCorp=Boolean(cmExit?.botManagement?.corporateProxy);
-    let fallbackFs=ipa.px?22:(ipa.h||bmCorp?16:12);
-    if(Number.isFinite(bmScore)&&bmScore>0&&bmScore<30&&!ipa.px)fallbackFs=Math.max(fallbackFs,Math.min(75,99-bmScore));
-    pure={ip:String(targetIp).trim(),fs:fallbackFs,res:!ipa.h&&!ipa.px&&!bmCorp,bc:false,dc:!!(ipa.h||bmCorp),org:String(ipa.isp||'')};
+    if(Number.isFinite(bmScore)&&bmScore>0&&bmScore<30){
+      const fallbackFs=Math.max(55,Math.min(85,99-bmScore));
+      pure={ip:String(targetIp).trim(),fs:fallbackFs,res:false,bc:false,dc:!!(ipa.h||bmCorp),org:String(ipa.isp||'')};
+    }
   }
   if(qIp&&(pure||ipa)&&typeof opt?.onCacheRep==='function'){
-    try{opt.onCacheRep(qIp,{pure,ipa});}catch{}
+    try{
+      opt.onCacheRep(qIp,{pure,ipa});
+      const v4Host=String(opt?.fallbackV4Host||'').trim().replace(/^\[|\]$/g,'').replace(/:\d{1,5}$/,'');
+      if(pure?.real&&v4Host&&v4Host!==qIp&&/^\d{1,3}(?:\.\d{1,3}){3}$/.test(v4Host)){
+        opt.onCacheRep(v4Host,{pure:{...pure,ip:v4Host},ipa:null});
+      }
+    }catch{}
   }
   return {...(pure?{pure}:{}),...(ipa?{ipa}:{})};
 }
@@ -285,7 +348,9 @@ async function checkProxyIpDirect(pip, ms=9000, signal=null, directFetch=null, o
       const netMs=Math.max(1,Math.round(Number(probe?.http_ms||probe?.connect_ms||j.responseTime||elapsed)));
       const coldMs=Math.max(netMs,Math.round(Number(j.responseTime||elapsed)));
       const leftMs=Math.max(1800,Math.min(4000,ms-(Date.now()-t0)));
-      const pur=await purity(null,leftMs,signal,ip,{...(opt||{}),directFetch:doFetch,directIppure:true,cmliuExit:exit});
+      const rawHost=raw.replace(/^\[|\]$/g,'').replace(/:\d{1,5}$/,'');
+      const fallbackV4Host=/^\d{1,3}(?:\.\d{1,3}){3}$/.test(rawHost)?rawHost:'';
+      const pur=await purity(null,leftMs,signal,ip,{...(opt||{}),directFetch:doFetch,directIppure:true,cmliuExit:exit,fallbackV4Host});
       return {pip:raw,ip,loc,ms:netMs,cold:coldMs,status:200,brana:true,via:'direct-check',...pur};
     }catch{
       if(signal?.aborted)return {cancelled:true};

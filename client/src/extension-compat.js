@@ -35,8 +35,9 @@ function createExtensionCompat({ipcMain,createTab,navigateTab,preload=path.join(
  function tab(a,id){const t=a.tabs.get(id);if(!t||t.wc.isDestroyed())throw Error('标签页不存在或不属于此账号');return t;}
  function current(a,ctx){return ctx?.wc&&a.tabs.has(ctx.wc.id)?ctx.wc.id:a.current;}
  function info(a,t,ext){
-  const result={id:t.wc.id,windowId:t.windowId,index:0,active:true,highlighted:true,pinned:false,incognito:false,status:t.wc.isLoading?.()?'loading':'complete'};
-  const url=t.wc.getURL();if(canReadURL(ext.manifest,url,ext.id)){result.url=url;result.title=t.wc.getTitle?.()||'';}
+  const tabId=t.id??t.wc.id;
+  const result={id:tabId,windowId:t.windowId,index:0,active:true,highlighted:true,pinned:false,incognito:false,status:t.wc.isDestroyed?.()?'complete':(t.wc.isLoading?.()?'loading':'complete')};
+  if(!t.wc.isDestroyed?.()){const url=t.wc.getURL();if(canReadURL(ext.manifest,url,ext.id)){result.url=url;result.title=t.wc.getTitle?.()||'';}}
   return result;
  }
  function state(a,id,tabId){
@@ -116,13 +117,13 @@ function createExtensionCompat({ipcMain,createTab,navigateTab,preload=path.join(
  }
  function registerTab(id,wc,window){
   const a=account(id);if(wc.session!==a.session)throw Error('标签页与账号会话不一致');
-  if(a.tabs.has(wc.id))return;
-  const windowId=window.id,t={wc,window,windowId};a.tabs.set(wc.id,t);if(!a.current)a.current=wc.id;
-  const focus=()=>{a.current=wc.id;sendEvent(a,'tabs.onActivated',()=>[{tabId:wc.id,windowId}]);};
+  const tabId=wc.id;if(a.tabs.has(tabId))return;
+  const windowId=window.id,t={id:tabId,wc,window,windowId};a.tabs.set(tabId,t);if(!a.current)a.current=tabId;
+  const focus=()=>{a.current=tabId;sendEvent(a,'tabs.onActivated',()=>[{tabId,windowId}]);};
   window.on('focus',focus);
-  const update=status=>sendEvent(a,'tabs.onUpdated',ext=>[wc.id,{status},info(a,t,ext)]);
+  const update=status=>{if(!wc.isDestroyed?.())sendEvent(a,'tabs.onUpdated',ext=>[tabId,{status},info(a,t,ext)]);};
   wc.on('did-start-loading',()=>update('loading'));wc.on('did-finish-load',()=>update('complete'));
-  wc.once('destroyed',()=>{a.tabs.delete(wc.id);if(a.current===wc.id)a.current=a.tabs.keys().next().value||null;window.removeListener('focus',focus);sendEvent(a,'tabs.onRemoved',()=>[wc.id,{windowId,isWindowClosing:true}]);});
+  wc.once('destroyed',()=>{a.tabs.delete(tabId);if(a.current===tabId)a.current=a.tabs.keys().next().value||null;try{if(!window.isDestroyed?.())window.removeListener('focus',focus);}catch{}sendEvent(a,'tabs.onRemoved',()=>[tabId,{windowId,isWindowClosing:true}]);});
   sendEvent(a,'tabs.onCreated',ext=>[info(a,t,ext)]);
  }
  async function dispatch(ctx,name,args){

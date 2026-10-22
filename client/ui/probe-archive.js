@@ -21,35 +21,38 @@ const ProbeArchive = (() => {
   }
   function scan(){
     if(!started)return;load();
-    for(const [sid,entry]of Object.entries(Models.all||{}))if(thinking(entry?.fingerprint)&&canCleanup(sid,typeof Chats!=='undefined'?Chats.get(sid):null)&&History.byId(sid)&&!History.byId(sid).isArchived&&!queue.has(sid)&&done.get(sid)!==stamp(entry))queue.set(sid,{sid,at:now(),next:0});
-    save();if(queue.size)soon();
+    let dirty=false;
+    for(const [sid,entry]of Object.entries(Models.all||{}))if(thinking(entry?.fingerprint)&&canCleanup(sid,typeof Chats!=='undefined'?Chats.get(sid):null)&&History.byId(sid)&&!History.byId(sid).isArchived&&!queue.has(sid)&&done.get(sid)!==stamp(entry)){queue.set(sid,{sid,at:now(),next:0});dirty=true;}
+    if(dirty)save();if(queue.size)soon();
   }
   async function drain(){
     if(busy||!started)return;load();if(retryAt>now()){soon(Math.min(30000,retryAt-now()));return;}const account=owner(),scope=key;busy=true;
+    let dirty=false;
     try{
       for(const [sid,item]of queue){
         if(owner()!==account||key!==scope)return;
         const entry=Models.get(sid),chat=Chats.get(sid),history=History.byId(sid);
-        if((entry&&!thinking(entry.fingerprint))||!canCleanup(sid,chat)){queue.delete(sid);continue;}
-        if(!history&&History.full){queue.delete(sid);continue;}
+        if((entry&&!thinking(entry.fingerprint))||!canCleanup(sid,chat)){queue.delete(sid);dirty=true;continue;}
+        if(!history&&History.full){queue.delete(sid);dirty=true;continue;}
         if(!entry||!history||item.next>now())continue;
-        if(history.isArchived){done.set(sid,stamp(entry));queue.delete(sid);continue;}
+        if(history.isArchived){done.set(sid,stamp(entry));queue.delete(sid);dirty=true;continue;}
         if(chat?.busy||chat?.fpLocked||chat?.queue?.length||Fingerprint.isRunning?.(chat)||FingerprintBatch.owns(sid))continue;
         if(typeof Hitl!=='undefined'&&chat&&Hitl.pending(chat).length)continue;
         try{
           await History.archive(sid);
           if(owner()!==account||key!==scope)return;
-          done.set(sid,stamp(entry));queue.delete(sid);
+          done.set(sid,stamp(entry));queue.delete(sid);dirty=true;
           Gacha.noteArchived?.(sid);
           Bus.emit('probe-archive',sid);Bus.emit('gacha');
         }catch(error){
           if(owner()!==account||key!==scope)return;
           item.next=now()+Math.max(45000,error?.retryAfterMs||0);item.error=describe(error);if(error?.status===429||error?.retryAfterMs)retryAt=Math.max(retryAt,item.next);
+          dirty=true;
           toast('思考跳过对话归档失败，已保留并排队重试：'+item.error,'err');
         }
-        save();break; // bounded, one archive request per tick
+        if(dirty){save();dirty=false;}break; // bounded, one archive request per tick
       }
-    }finally{busy=false;if(key===scope&&owner()===account){save();if(queue.size)soon(5000);}}
+    }finally{busy=false;if(key===scope&&owner()===account){if(dirty)save();if(queue.size)soon(5000);}}
   }
   function start(){started=true;load();scan();}
   Bus.on('history',scan);

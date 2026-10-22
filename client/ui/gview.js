@@ -55,21 +55,30 @@ const Side = {
   sortRows(rs) { return this.modelGroups(rs).flatMap(g=>g.rows); },
   // 收藏就是标金：无论是否有目标厂商或是「不限」状态，收藏对话始终独立置顶并显示金色效果。
   build(items) {
-    const gs = this.build0(items);
-    if (!items.some(e => Fav.has(e.id))) return this.paint(gs);
-    const favs = [];
-    for (const g of gs) g.rows = g.rows.filter(r => Fav.has(r.e.id) ? (favs.push(r), false) : true);
+    if (!items.some(e => Fav.has(e.id))) return this.paint(this.build0(items));
+    const favItems = [], restItems = [];
+    for (const e of items) {
+      if (Fav.has(e.id)) favItems.push(e);
+      else restItems.push(e);
+    }
+    const favGs = this.build0(favItems);
+    const favs = favGs.flatMap(g => g.rows);
     const sortedFavs = Gacha.settings().targetKeywords.length ? this.sortRows(favs) : favs.sort(Side.cmp);
     for (const r of sortedFavs) r.vip = true;   // 收藏组用金色传说的显示效果（金底 + 左侧金边，深浅跟着排序）
-    const restItems = items.filter(e => !Fav.has(e.id));
     return this.paint([{ group: '收藏', rows: sortedFavs, fav: true }, ...(restItems.length ? this.build0(restItems) : [])]);
   },
   // Tint follows the DISPLAYED order (top → bottom = deep → light), computed after sorting/pinning.
   // Only rows of the chosen target vendor (hit) / gold rows are tinted; everything else keeps the plain background.
   paint(groups) {
-    const flat = groups.flatMap(g => g.rows), vips = flat.filter(r => r.vip), hits = flat.filter(r => r.hit && !r.vip);
-    const tint = (arr, v) => { const n = arr.length, k = arr.indexOf(v); return k < 0 ? '' : (10 + 26 * (n - k) / n).toFixed(1) + '%'; };
-    for (const r of flat) r.tint = r.vip ? tint(vips, r) : r.hit ? tint(hits, r) : '';
+    const flat = groups.flatMap(g => g.rows), vips = [], hits = [];
+    for (const r of flat) {
+      r.tint = '';
+      if (r.vip) vips.push(r);
+      else if (r.hit) hits.push(r);
+    }
+    const vn = vips.length, hn = hits.length;
+    for (let k = 0; k < vn; k++) vips[k].tint = (10 + 26 * (vn - k) / vn).toFixed(1) + '%';
+    for (let k = 0; k < hn; k++) hits[k].tint = (10 + 26 * (hn - k) / hn).toFixed(1) + '%';
     return groups;
   },
   // 返回 [{ group, rows }]；命中目标厂商的卡片跨分组统一放最上面
@@ -99,7 +108,7 @@ const Side = {
       const currentIsGold = Boolean(nm && Brand.of(nm) && typeof Gold !== 'undefined' && (manualNow ? Gold.has?.(nm) : Gold.isUnifiedGold?.(nm)));
       const staleGpGold = Boolean(nm && Brand.of(nm) && !currentIsGold && (!gpModelCanon || gpModelCanon !== nm));
       const gpGold = !!(gp?.gold && !staleGpGold && !(typeof Gold !== 'undefined' && Gold.unmarkAt?.[e.id]));
-      return { e, i, vid, hit, vip: false, gpGold, nm, mid: vid ? this.modelId(nm, vid) : '', at, ver: vid ? (Strength.ver10(nm) || null) : null, lv: vid ? Strength.level(nm) : null, score: ConversationLabels.score(mi, noteBase(cleanTitle)) ?? gp?.score ?? null };
+      return { e, i, tv, vid, hit, vip: false, gpGold, nm, mid: vid ? this.modelId(nm, vid) : '', at, ver: vid ? (Strength.ver10(nm) || null) : null, lv: vid ? Strength.level(nm) : null, score: ConversationLabels.score(mi, noteBase(cleanTitle)) ?? gp?.score ?? null };
     });
     const grouped = rs => this.modelGroups(rs).map(g=>({group:'',rows:g.rows}));
     const manual = typeof Gold !== 'undefined' ? (typeof Gold.manual === 'function' ? Gold.manual() : !!Gold.manual) : false;
@@ -228,7 +237,17 @@ const GView = {
     reason.textContent = rs; reason.className = 'greason' + (run && !busy && run.code && run.code !== 'RELOADED' ? ' bad' : '');
     // 老虎机
     this.paintSlot(run);
-    if (!force && this.lastRev === Gacha.rev) return; this.lastRev = Gacha.rev;
+    if (!force && this.lastRev === Gacha.rev) return;
+    const nowTs = typeof now === 'function' ? now() : Date.now();
+    if (!force && busy && this._lastRenderAt && nowTs - this._lastRenderAt < 200) {
+      if (!this._renderTimer) {
+        this._renderTimer = setTimeout(() => { this._renderTimer = null; this.update(false); }, 200 - (nowTs - this._lastRenderAt));
+      }
+      return;
+    }
+    if (this._renderTimer) { clearTimeout(this._renderTimer); this._renderTimer = null; }
+    this._lastRenderAt = nowTs;
+    this.lastRev = Gacha.rev;
     // 统计
     const q = Quota.chat, bu = Quota.blockedUntil(), p = Pulse.v;
     const stat = (l, v, cls = '') => h('div', { class: 'gstat ' + cls }, h('b', {}, v), h('span', {}, l));
@@ -245,9 +264,11 @@ const GView = {
     if (!list.length) res.replaceChildren(h('div', { class: 'empty' }, '还没有结果'));
     else res.replaceChildren(...list.slice(0, 200).map(a => {
       const gs = !a.done && Gacha.stepInfo ? Gacha.stepInfo(a) : null;
+      const griKey = a.done ? `${a.no}:${a.draw}:${a.model || ''}:${a.tier || ''}:${a.power ?? ''}:${a.verdict || ''}:${a.archived ? 1 : 0}:${a.idMs || 0}:${a.note || ''}` : '';
+      if (griKey && a._griEl && a._griKey === griKey) return a._griEl;
       const vd = a.done ? VERDICT[a.verdict] || [a.verdict || '—', ''] : [gs?.text || a.phase || '进行中', 'run'];
       const name = a.model || a.early || '', vid = Brand.of(name);
-      return h('div', { class: 'gri ' + (a.verdict === 'hit' ? 'hit' : '') + (gs ? ' gstep-card' : ''), title: gs?.phase || '' },
+      const rowEl = h('div', { class: 'gri ' + (a.verdict === 'hit' ? 'hit' : '') + (gs ? ' gstep-card' : ''), title: gs?.phase || '' },
         h('span', { class: 'gno' }, a.verdict === 'skipped' ? '不计' : (a.draw ? '#' + a.draw : '·' + (a.no || ''))),
         vid ? VIcon.el(vid, 15) : h('span', { class: 'vicon' }),
         h('span', { class: 'gname', title: [a.model, a.note, gs?.phase].filter(Boolean).join('\n') }, name ? Brand.short(name).replace(/-(none|minimal|low|medium|high|xhigh|max)$/i, '') : (a.note || (a.done ? '—' : (gs?.phase || '等待…')))),
@@ -256,6 +277,8 @@ const GView = {
         h('span', { class: 'dim gms' }, a.idMs ? (a.idMs / 1000).toFixed(1) + 's' : ''),
         a.sid ? h('button', { class: 'ib', title: '打开对话', onclick: () => Tabs.open(a.sid, { title: a.model || '抽卡对话' }) }, icon('open')) : h('span', { class: 'ib' }),
         gs ? h('i', { class: 'gstep-bar', 'aria-hidden': 'true' }, h('b', { style: { width: gs.pct + '%' } })) : null);
+      if (griKey) { a._griKey = griKey; a._griEl = rowEl; }
+      return rowEl;
     }));
     const tidy = this.$('tidy'); if (tidy) tidy.disabled = !run || busy;
     // 日志

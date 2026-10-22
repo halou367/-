@@ -96,7 +96,30 @@ const WebLayer = (() => {
     };
     out = walk(0, css.length); return out;
   }
+  let lazyDark = null, lazyTheme = null;
+  function patchBody() {
+    const body = document.body;
+    if (!body || body.__ancPatched) return;
+    body.__ancPatched = true;
+    const orig = { append: Element.prototype.append, appendChild: Node.prototype.appendChild };
+    body.append = function (...nodes) {
+      if (nodes.length && nodes.every(n => n && n.__anc)) {
+        const L = WebLayer.el() || ensure(lazyDark, lazyTheme);
+        if (L) return orig.append.apply(L, nodes);
+      }
+      return orig.append.apply(this, nodes);
+    };
+    body.appendChild = function (n) {
+      if (n && n.__anc) {
+        const L = WebLayer.el() || ensure(lazyDark, lazyTheme);
+        if (L) return orig.appendChild.call(L, n);
+      }
+      return orig.appendChild.call(this, n);
+    };
+  }
   function ensure(dark, T) {
+    if (dark !== undefined) lazyDark = dark;
+    if (T !== undefined) lazyTheme = T;
     if (el?.isConnected) return el;
     if (!document.body || typeof CSS !== 'string' || !CSS) return null;
     const S = '#__anc_layer';
@@ -107,21 +130,17 @@ const WebLayer = (() => {
     }
     el = document.createElement('div'); el.id = '__anc_layer'; el.className = 'anc-layer' + (Host.platform === 'android' ? ' m' : '');
     el.dataset.platform = Host.platform === 'android' ? 'android mobile' : 'desktop';
-    WebLayer.theme(dark, T);
+    WebLayer.theme(lazyDark, lazyTheme);
     const body = document.body, orig = { append: Element.prototype.append, appendChild: Node.prototype.appendChild };
     orig.append.call(body, el);
-    // 只改挂客户端自己的元素（h() 标记过的）；官网自己的节点照常挂到 body
-    if (!body.__ancPatched) {
-      body.__ancPatched = true;
-      body.append = function (...nodes) { const L = WebLayer.el(); if (L && nodes.length && nodes.every(n => n && n.__anc)) return orig.append.apply(L, nodes); return orig.append.apply(this, nodes); };
-      body.appendChild = function (n) { const L = WebLayer.el(); if (L && n && n.__anc) return orig.appendChild.call(L, n); return orig.appendChild.call(this, n); };
-    }
+    patchBody();
     return el;
   }
   return {
     sheet: null, scope,
     el() { return el?.isConnected ? el : null; },
-    theme(dark, T) { if (!el) return; el.dataset.theme = dark ? 'dark' : 'light'; if (T?.color) { el.style.setProperty('--bg', T.color); if (T.symbolColor) el.style.setProperty('--fg', T.symbolColor); } },
+    theme(dark, T) { lazyDark = dark; lazyTheme = T; if (!el) return; el.dataset.theme = dark ? 'dark' : 'light'; if (T?.color) { el.style.setProperty('--bg', T.color); if (T.symbolColor) el.style.setProperty('--fg', T.symbolColor); } },
+    hookLazy(dark, T) { lazyDark = dark; lazyTheme = T; try { patchBody(); } catch {} },
     start(dark, T) { try { return ensure(dark, T); } catch (e) { console.warn('WebLayer', e); return null; } },
   };
 })();
@@ -155,8 +174,8 @@ const WebBar = (() => {
     const body = document.createElement('div'); body.className = 'anc-r' + (mob ? ' m' : '');
     barEl = document.createElement('div'); barEl.id = 'bar';
     body.append(barEl); wrap.append(body); root.append(wrap); document.documentElement.appendChild(host);
-    // 栏上的按钮：刷新键就地刷新；其余（额度明细、榜单、指纹库、出口 IP / 节点环境、版本、抽卡验证…）都在当前页面以悬浮窗口打开，不切回客户端
-    WebLayer.start(dark, T);
+    // 栏上的按钮：刷新键就地刷新；其余（额度明细、榜单、指纹库、出口 IP / 节点环境、版本、抽卡验证…）都在当前页面以悬浮窗口打开，不切回客户端（首次打开弹窗时按需构建 WebLayer CSS）
+    WebLayer.hookLazy(dark, T);
     barEl.addEventListener('click', e => {
       const path = e.composedPath();
       const hit = sel => path.find(n => n instanceof Element && n.matches?.(sel));
@@ -451,12 +470,14 @@ const WebSide = (() => {
   const textEl = a => { let best = null; for (const el of a.querySelectorAll('*')) { if (el.closest('button,svg')) continue; if ([...el.childNodes].some(n => n.nodeType === 3 && n.nodeValue.trim())) best = el; } return best; };
   // 和客户端侧栏卡片一样：短型号名（opus-5.5 / 6-astra），有备注就接在后面
   const labelOf = meta => { const full = TitleSync.modelLabel(meta) || '', m = cardName(meta?.model || full) || full; const note = String(meta?.note || '').trim(); return m + (note ? ' · ' + note : ''); };
+  let paintRaf = 0;
+  const schedulePaint = () => { if (!paintRaf) paintRaf = requestAnimationFrame(() => { paintRaf = 0; paint(); }); };
   async function decode(sid, raw) {
     const k = sid + '|' + raw; if (cache.has(k) || pending.has(k)) return; pending.add(k);
     let label = '', vid = '', full = '';
     try { if (!TitleCipher.unlocked) TitleCipher.unlock(TitleCipher.DEFAULT_PASSPHRASE); const meta = TitleSync.validate(await TitleCipher.decrypt(sid, raw)); label = labelOf(meta); full = TitleSync.modelLabel(meta) || label; vid = Brand.of(full) || ''; }
     catch { try { const mi = Models.get(sid); if (mi?.name) { label = cardName(mi.name) || Strength.canon(mi.name); vid = Brand.of(mi.name) || ''; } } catch {} }   // 解不开（别的口令）：用本机识别过的型号
-    cache.set(k, label ? { label, vid, full: full || label } : null); pending.delete(k); paint();
+    cache.set(k, label ? { label, vid, full: full || label } : null); pending.delete(k); schedulePaint();
   }
   function paint() {
     for (const a of document.querySelectorAll('a[href^="/agent/"]')) {

@@ -88,10 +88,11 @@ const NodeRoutes = (() => {
       const cur=regionRows.find(r=>r.v===regionVal)||{v:regionVal,name:regionVal==='*'?'自动':regionVal?regionLabel(regionVal):'自动（优先用 ProxyIP）'};
       region.replaceChildren(...[h('span',{class:'rsel-n'},cur.name),rselTail(cur),chev()].filter(Boolean));
       {const rr=regionRows.filter(r=>r.v&&r.v!=='*');regionCnt.textContent=rr.length?rr.filter(r=>r.ok).length+' / '+rr.length+' 个可用':'';}paintFooter();
+      if(!regionOpen)return;
       regionList.replaceChildren(...regionRows.map(r=>h('div',{class:'rsel-row'+(r.v===regionVal?' on':''),role:'option','aria-selected':String(r.v===regionVal),onclick:()=>{regionSet(r.v,true);}},
         h('span',{class:'rsel-n'},r.name),r.ok?h('span',{class:'rsel-c'},r.ok+' 个可用'):null,rselTail(r))));
     }
-    function regionToggle(open){regionOpen=open==null?!regionOpen:open;regionList.hidden=!regionOpen;region.setAttribute('aria-expanded',String(regionOpen));}
+    function regionToggle(open){regionOpen=open==null?!regionOpen:open;regionList.hidden=!regionOpen;region.setAttribute('aria-expanded',String(regionOpen));if(regionOpen)paintRegion();}
     function regionSet(v,fire){v=v||'';const changedNow=v!==regionVal;regionVal=v;paintRegion();regionToggle(false);if(fire&&changedNow)region.dispatchEvent(new Event('change'));}
     Object.defineProperty(region,'value',{get:()=>regionVal,set:v=>{regionVal=v||'';paintRegion();}});
     paintRegion();
@@ -105,7 +106,7 @@ const NodeRoutes = (() => {
     const pipList=h('div',{class:'pip-list',role:'radiogroup','aria-label':'出口 IP',hidden:true});
     let pipOpen=false;const pipCnt=h('span',{class:'np-cnt'}),pipVal=h('span',{class:'pip-cv'});
     const pipBtn=h('button',{type:'button',class:'pip-cur','aria-haspopup':'listbox','aria-expanded':'false','aria-label':'出口 IP',onclick:()=>pipToggle()},pipVal,chev());
-    function pipToggle(open){pipOpen=open==null?!pipOpen:!!open;pipList.hidden=!pipOpen;pipBtn.setAttribute('aria-expanded',String(pipOpen));pipBox.classList.toggle('open',pipOpen);}
+    function pipToggle(open){pipOpen=open==null?!pipOpen:!!open;pipList.hidden=!pipOpen;pipBtn.setAttribute('aria-expanded',String(pipOpen));pipBox.classList.toggle('open',pipOpen);if(pipOpen)fillPips();}
     const pipBox=h('div',{class:'pip-box2'},pipBtn,pipList);
     const refreshPipListBtn=h('button',{type:'button',class:'btn ghost xs pip-refresh-btn',title:'打开 ProxyIP 列表：查看 / 添加 / 刷新检测 / 拉黑',onclick:e=>{e.stopPropagation();if(typeof ProxySet!=='undefined'&&typeof ProxySet.open==='function')ProxySet.open();}},typeof icon==='function'?icon('globe'):'☰','ProxyIP 列表');
     const pipHead=secHead('出口 IP（ProxyIP）',pipCnt,refreshPipListBtn,testAllPips);
@@ -280,23 +281,47 @@ const NodeRoutes = (() => {
       regionRows=[{v:'*',name:regAuto&&cc?'自动 · '+ccF(cc):'自动（优先用 ProxyIP）',ms:au?.ms||0,ok:au?.ok||0},...order.map(c=>({v:c,name:regionLabel(c),ms:st[c].ms||0,ok:st[c].ok||0,busy:domBusy&&!st[c].ms}))];
       region.value=regAuto?'*':cc;
     }
-    // Stream completed IPs immediately. Mutations re-check the current job INSIDE the write queue.
+    // Stream completed IPs immediately. Mutations re-check the current job INSIDE the write queue and coalesce rapid items.
     async function probeMany(keys,link,onPart,j){
       const modern=!!(Host.onProbeProgress&&P.streamProbe),size=modern?32:4,q=[];
       for(let i=0;i<keys.length;i+=size)q.push(keys.slice(i,i+size));let fatal='',consecFail=0,okSeen=0;
       const worker=async()=>{while(q.length&&!fatal&&workLive(j)){
-        const part=q.shift(),seen=new Set(),sources=new Map(part.map(k=>[k,P.d?.ips?.[k]?.src||'']));
+        const part=q.shift(),seen=new Set(),sources=new Map(part.map(k=>[k,P.d?.ips?.[k]?.src||''])),pendingBatch=[];
+        let flushJob=null;
+        const applyOne=(d,k,r)=>{const e=d.ips[k];if(workLive(j)&&e&&!e.gone&&(e.src||'')===sources.get(k)&&!(d.drop?.[k]>j.started)&&!P.banned?.(k)){P.apply(d,k,r);if(typeof IPRep!=='undefined'&&!IPRep.trusted?.(k)&&IPRep.risky?.(k,e))P.banForever?.(d,k,'高风险 · 已永久拉黑');}};
+        const flushBatch=async()=>{
+          if(!pendingBatch.length)return;
+          const items=pendingBatch.splice(0,pendingBatch.length);
+          await P.mutate(d=>{for(const [k,r] of items)applyOne(d,k,r);});
+        };
         const receive=async(k,r)=>{
           if(!workLive(j)||seen.has(k)||!part.includes(k))return;seen.add(k);
-          await P.mutate(d=>{const e=d.ips[k];if(workLive(j)&&e&&!e.gone&&(e.src||'')===sources.get(k)&&!(d.drop?.[k]>j.started)&&!P.banned?.(k)){P.apply(d,k,r);if(typeof IPRep!=='undefined'&&!IPRep.trusted?.(k)&&IPRep.risky?.(k,e))P.banForever?.(d,k,'高风险 · 已永久拉黑');}});
+          pendingBatch.push([k,r]);
+          if(!flushJob)flushJob=Promise.resolve().then(()=>flushBatch()).finally(()=>{flushJob=null;});
+          await flushJob;
           if(!workLive(j))return;pipBusy.delete(k);j.done++;if(r.ip&&r.brana){okSeen++;consecFail=0;}else{j.failed++;consecFail++;}onPart?.([k],[r]);paintPoolSoon();
         };
         const args={link,timeout:12000,signal:j.ctl.signal,cancelled:()=>!workLive(j),onItem:receive,onStage:stage=>{if(workLive(j)&&j.phase!=='probing'){j.phase=stage;paintWork();}}};
         const r=P.streamProbe?await P.streamProbe(part,args):await Host.probe({link,pips:part,timeout:12000}).catch(e=>({error:String(e?.message||e)}));
+        if(flushJob)await flushJob;
+        if(pendingBatch.length)await flushBatch();
         if(!workLive(j))return;
         if(r?.cancelled){fatal=r.error||'检测已取消';return;}
-        if(Array.isArray(r)){for(const k of part)await receive(k,r.find(x=>x.pip===k)||{error:'未返回检测结果'});}
+        if(Array.isArray(r)){
+          const rest=[];
+          for(const k of part){if(!seen.has(k)){seen.add(k);rest.push([k,r.find(x=>x.pip===k)||{error:'未返回检测结果'}]);}}
+          if(rest.length){
+            await P.mutate(d=>{for(const [k,res] of rest)applyOne(d,k,res);});
+            if(!workLive(j))return;
+            for(const [k,res] of rest){pipBusy.delete(k);j.done++;if(res.ip&&res.brana){okSeen++;consecFail=0;}else{j.failed++;consecFail++;}onPart?.([k],[res]);}
+            paintPoolSoon();
+          }
+        }
         else {fatal=r?.error||'检测失败';return;}
+        if(workLive(j)&&typeof IPRep!=='undefined'&&Host.fetchText){
+          const unrated=part.filter(k=>{const e=P.d?.ips?.[k];return e&&e.ok===true&&!e.gone&&!P.banned?.(k)&&!IPRep.trusted?.(k)&&!IPRep.score(k,e).known;});
+          if(unrated.length){await IPRep.rate(unrated).catch(()=>{});await P.purgeImpureAndUnstable?.().catch(()=>{});if(workLive(j))paintPoolSoon();}
+        }
         if(consecFail>=24&&okSeen===0){fatal='连续 '+consecFail+' 个候选连接失败，已自动熔断停止全量扫描（可直接点「应用更改」使用节点自身代理兜底）';return;}
       }};
       await Promise.all(Array.from({length:Math.min(2,q.length)},worker));return fatal;
@@ -358,20 +383,23 @@ const NodeRoutes = (() => {
       if(auto){const k=bestPip(),e=P?.d?.ips?.[k];autoExit.textContent='出口：自动'+(k?' · 当前最优 '+pipShow(k,e).main+(e?.ms?' · '+e.ms+' ms':''):(cc?' · 正在为该地区挑选':' · 从全部纯净 IP 自动优选'))+'（按延迟、限流冷却和纯净度）';}
       if(auto||!hasP){pipCnt.textContent='';paintFooter();return;}
       const rows=pipRows(),best=bestPip();
-      const autoRow=h('div',{class:'pip-row pip-auto'+(selPip===AUTO?' on':''),role:'radio','aria-checked':String(selPip===AUTO),'data-k':AUTO,onclick:()=>pickPip(AUTO)},h('span',{class:'pip-dot'}),h('span',{class:'pip-k'},'自动选择'),h('span',{class:'pip-meta'},best?'当前最优 '+pipShow(best,P?.d?.ips?.[best]).main:'从全部纯净 IP 自动优选'));
-      const items=rows.map(([k,e])=>{
-        const b=pipBadge(k,e),sc=R?R.score(k,e):null,rl=sc?R.label(sc):'',dis=blocked(k),cool=cooling(e);
-        const sh=pipShow(k,e),meta=[sh.via,used(k)?'已被其他账号占用':P.banned?.(k)?'已拉黑':riskyK(k)?'高风险 · 禁止使用':''].filter(Boolean).join(' · ');
-        return h('div',{class:'pip-row'+(k===selPip?' on':'')+(dis?' dis':''),role:'radio','aria-checked':String(k===selPip),'aria-disabled':dis?'true':null,'data-k':k,title:k+(sh.eg?'\n出口 IP '+sh.eg:'\n出口 IP 未识别（检测后显示）')+(b.title?'\n'+b.title:''),onclick:()=>{if(!dis)pickPip(k);}},
-          h('span',{class:'pip-dot'}),h('span',{class:'pip-k'},sh.main),kindTag(k,e),h('span',{class:'pip-meta'},meta),
-          cool?h('span',{class:'lim',title:'触发限流后冷却，冷却结束前自动选择会跳过'},'限流 · 冷却 '+mins(e.cool)+' 分'):null,
-          rl?h('span',{class:'risk '+(rl==='纯净'?'r-good':rl==='一般'?'r-mid':rl==='高风险'?'r-bad':'r-none'),title:sc?.known?'纯净度 '+sc.s+'%':''},rl+(sc?.known?' '+Math.round(sc.s)+'%':'')):null,
-          h('span',{class:'dly '+b.cls},b.text),
-          h('button',{type:'button',class:'pip-t',title:'用当前节点单独 ping 这个 IP',disabled:pipBusy.has(k)||null,onclick:ev=>{ev.stopPropagation();void testPips([k]);}},'ping'));
-      });
       if(P&&R?.prime&&cc&&!P.prog&&!rows.length)void R.prime(cc);
-      const empty=!rows.length?[h('div',{class:'pip-empty'},P?(poolWork?.running?'正在检测候选；结果可用且纯净后立即加入，不必等全部完成。':'暂无已验证且纯净的出口；可点刷新或闪电检测候选。'):'此页面不支持 ProxyIP 列表')]:[];
-      pipList.replaceChildren(autoRow,...items,...empty);testAllPips.hidden=!candidateRows().length||!hasP;
+      if(pipOpen){
+        const autoRow=h('div',{class:'pip-row pip-auto'+(selPip===AUTO?' on':''),role:'radio','aria-checked':String(selPip===AUTO),'data-k':AUTO,onclick:()=>pickPip(AUTO)},h('span',{class:'pip-dot'}),h('span',{class:'pip-k'},'自动选择'),h('span',{class:'pip-meta'},best?'当前最优 '+pipShow(best,P?.d?.ips?.[best]).main:'从全部纯净 IP 自动优选'));
+        const items=rows.map(([k,e])=>{
+          const b=pipBadge(k,e),sc=R?R.score(k,e):null,rl=sc?R.label(sc):'',dis=blocked(k),cool=cooling(e);
+          const sh=pipShow(k,e),meta=[sh.via,used(k)?'已被其他账号占用':P.banned?.(k)?'已拉黑':riskyK(k)?'高风险 · 禁止使用':''].filter(Boolean).join(' · ');
+          return h('div',{class:'pip-row'+(k===selPip?' on':'')+(dis?' dis':''),role:'radio','aria-checked':String(k===selPip),'aria-disabled':dis?'true':null,'data-k':k,title:k+(sh.eg?'\n出口 IP '+sh.eg:'\n出口 IP 未识别（检测后显示）')+(b.title?'\n'+b.title:''),onclick:()=>{if(!dis)pickPip(k);}},
+            h('span',{class:'pip-dot'}),h('span',{class:'pip-k'},sh.main),kindTag(k,e),h('span',{class:'pip-meta'},meta),
+            cool?h('span',{class:'lim',title:'触发限流后冷却，冷却结束前自动选择会跳过'},'限流 · 冷却 '+mins(e.cool)+' 分'):null,
+            rl?h('span',{class:'risk '+(rl==='纯净'?'r-good':rl==='一般'?'r-mid':rl==='高风险'?'r-bad':'r-none'),title:sc?.known?'纯净度 '+sc.s+'%':''},rl+(sc?.known?' '+Math.round(sc.s)+'%':'')):null,
+            h('span',{class:'dly '+b.cls},b.text),
+            h('button',{type:'button',class:'pip-t',title:'用当前节点单独 ping 这个 IP',disabled:pipBusy.has(k)||null,onclick:ev=>{ev.stopPropagation();void testPips([k]);}},'ping'));
+        });
+        const empty=!rows.length?[h('div',{class:'pip-empty'},P?(poolWork?.running?'正在检测候选；结果可用且纯净后立即加入，不必等全部完成。':'暂无已验证且纯净的出口；可点刷新或闪电检测候选。'):'此页面不支持 ProxyIP 列表')]:[];
+        pipList.replaceChildren(autoRow,...items,...empty);
+      }
+      testAllPips.hidden=!candidateRows().length||!hasP;
       {const candidates=candidateRows(),pending=candidates.filter(([,e])=>e.ok==null).length;pipCnt.textContent=rows.length+' 个纯净 · '+readyCount()+' 可用'+(pending?' · '+pending+' 待检':'');}
       { const k=selPip===AUTO?best:selPip,e=k?P?.d?.ips?.[k]:null,b=k&&e?pipBadge(k,e):null,sc=k&&e&&R?R.score(k,e):null,rl=sc?R.label(sc):'';
         pipVal.replaceChildren(...[h('span',{class:'pip-k',title:k||''},selPip===AUTO?'自动选择'+(best?' · '+pipShow(best,e).main:''):selPip?pipShow(selPip,e).main:'选择出口 IP'),kindTag(k,e),rl?h('span',{class:'risk '+(rl==='纯净'?'r-good':rl==='一般'?'r-mid':rl==='高风险'?'r-bad':'r-none')},rl+(sc?.known?' '+Math.round(sc.s)+'%':'')):null,b?.text?h('span',{class:'dly '+b.cls},b.text):null].filter(Boolean)); }

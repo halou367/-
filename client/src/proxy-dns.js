@@ -158,35 +158,47 @@ function isCloudflareOfficialIp(ip){
   if(a===197&&b===234&&c>=240&&c<=243)return true;// 197.234.240.0/22
   return false;
 }
+const resolveAllCache=new Map(), resolveAllInflight=new Map();
 async function resolveAll(name){
   name=String(name||'').trim().replace(/^\[|\]$/g,'');
   if(net.isIPv4(name))return isCloudflareOfficialIp(name)?[]:[name];
   if(!/^[a-z0-9.-]{1,253}$/i.test(name))throw Error('域名格式不正确');
-  const urls=[
-    'https://223.5.5.5/resolve?edns_client_subnet=8.8.8.8/24',
-    'https://223.6.6.6/resolve?edns_client_subnet=1.1.1.1/24',
-    'https://1.12.12.12/dns-query?edns_client_subnet=8.8.8.8/24',
-    'https://120.53.53.53/dns-query?edns_client_subnet=8.8.8.8/24'
-  ];
-  const reqs=[];
-  const one=base=>new Promise(resolve=>{
-    const sep=base.includes('?')?'&':'?';
-    const req=https.get(base+sep+'name='+encodeURIComponent(name)+'&type=A',{headers:{Accept:'application/dns-json'},timeout:2500,agent:false},res=>{
-      let text='';res.on('data',c=>{text+=c;if(text.length>262144)req.destroy();});res.on('error',()=>resolve(null));
-      res.on('end',()=>{try{if(res.statusCode!==200)return resolve(null);const j=JSON.parse(text);if(j.Status!==0&&j.Status!==3)return resolve(null);resolve((j.Answer||[]).filter(r=>r.type===1&&net.isIPv4(r.data)).map(r=>r.data));}catch{resolve(null);}});
+  const key=name.toLowerCase(), cached=resolveAllCache.get(key);
+  if(cached&&cached.until>Date.now())return cached.ips.slice();
+  if(resolveAllInflight.has(key))return (await resolveAllInflight.get(key)).slice();
+  const job=(async()=>{
+    const urls=[
+      'https://223.5.5.5/resolve?edns_client_subnet=8.8.8.8/24',
+      'https://223.6.6.6/resolve?edns_client_subnet=1.1.1.1/24',
+      'https://1.12.12.12/dns-query?edns_client_subnet=8.8.8.8/24',
+      'https://120.53.53.53/dns-query?edns_client_subnet=8.8.8.8/24'
+    ];
+    const reqs=[];
+    const one=base=>new Promise(resolve=>{
+      const sep=base.includes('?')?'&':'?';
+      const req=https.get(base+sep+'name='+encodeURIComponent(name)+'&type=A',{headers:{Accept:'application/dns-json'},timeout:2500,agent:false},res=>{
+        let text='';res.on('data',c=>{text+=c;if(text.length>262144)req.destroy();});res.on('error',()=>resolve(null));
+        res.on('end',()=>{try{if(res.statusCode!==200)return resolve(null);const j=JSON.parse(text);if(j.Status!==0&&j.Status!==3)return resolve(null);resolve((j.Answer||[]).filter(r=>r.type===1&&net.isIPv4(r.data)).map(r=>r.data));}catch{resolve(null);}});
+      });
+      reqs.push(req);
+      req.on('timeout',()=>{req.destroy();resolve(null);});
+      req.on('error',()=>resolve(null));
     });
-    reqs.push(req);
-    req.on('timeout',()=>{req.destroy();resolve(null);});
-    req.on('error',()=>resolve(null));
-  });
-  const got=await new Promise(done=>{
-    const out=[];let left=urls.length,timer=null,finished=false;
-    const fin=()=>{if(finished)return;finished=true;clearTimeout(timer);for(const r of reqs){try{r.destroy();}catch{}}done(out.slice());};
-    for(const u of urls)one(u).then(v=>{if(v&&v.length){out.push(v);if(!timer)timer=setTimeout(fin,450);}if(--left===0)fin();});
-  });
-  const badIp=ip=>/^198\.1[89]\./.test(ip)||isCloudflareOfficialIp(ip);
-  let ips=[...new Set(got.flat())].filter(ip=>!badIp(ip));
-  if(!ips.length){try{ips=(await require('dns').promises.resolve4(name)).filter(ip=>!badIp(ip));}catch{ips=[];}}
-  return ips;
+    const got=await new Promise(done=>{
+      const out=[];let left=urls.length,timer=null,finished=false;
+      const fin=()=>{if(finished)return;finished=true;clearTimeout(timer);for(const r of reqs){try{r.destroy();}catch{}}done(out.slice());};
+      for(const u of urls)one(u).then(v=>{if(v&&v.length){out.push(v);if(!timer)timer=setTimeout(fin,450);}if(--left===0)fin();});
+    });
+    const badIp=ip=>/^198\.1[89]\./.test(ip)||isCloudflareOfficialIp(ip);
+    let ips=[...new Set(got.flat())].filter(ip=>!badIp(ip));
+    if(!ips.length){try{ips=(await require('dns').promises.resolve4(name)).filter(ip=>!badIp(ip));}catch{ips=[];}}
+    if(ips.length){
+      resolveAllCache.set(key,{ips,until:Date.now()+120000});
+      if(resolveAllCache.size>256)resolveAllCache.delete(resolveAllCache.keys().next().value);
+    }
+    return ips;
+  })().finally(()=>resolveAllInflight.delete(key));
+  resolveAllInflight.set(key,job);
+  return (await job).slice();
 }
 module.exports={resolveAll,isCloudflareOfficialIp,resolveBootstrap,resolveStaticEch,parseEchSpec,DEFAULT_STATIC_ECH,DEFAULT_ECH_SPEC,protectConfig};

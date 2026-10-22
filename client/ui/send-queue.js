@@ -235,9 +235,11 @@ const SendQ = {
     if (this.started) return; this.started = true;
     const tick = () => {
       if (!UI.authed || !UI.me || (navigator.onLine === false && !(typeof NetHealth !== 'undefined' && NetHealth.recent()))) return;
-      for (const c of Chats.values()) if (this.of(c).length) this.check(c);
+      for (const c of Chats.values()) if (c.queue?.length || (!c._qh && Drafts.load().q?.[c.sid]?.items?.length)) this.check(c);
       // Restore unopened queued chats as well, with bounded loading and failure backoff.
-      const pending = Object.entries(Drafts.load().q).filter(([, q]) => q?.items?.length && !q.paused);
+      const qMap = Drafts.load().q;
+      if (!qMap) return;
+      const pending = Object.entries(qMap).filter(([, q]) => q?.items?.length && !q.paused);
       for (const [sid] of pending) {
         const c = chatOf(sid); if (c.loaded || c.loading || c.gacha || (c._qLoadAt || 0) > now() || (this.loads || 0) >= 2) continue;
         c._qLoadAt = now() + 30000; this.loads = (this.loads || 0) + 1;

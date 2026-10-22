@@ -879,24 +879,734 @@ const StreamMD = {
 };
 
 // ---------- 消息渲染 ----------
+// ---------- 命令翻译（移植并优化自 Arena 命令翻译 v1.2.5，素雅配色 + 辅助习惯识别）----------
+const CmdTranslate = (() => {
+  const HOME = '/home/user';
+  const PUNCT = ';&|<>()';
+  const set = s => { const o = Object.create(null); s.split(' ').forEach(k => { if (k) o[k] = 1; }); return o; };
+  const OP_READ = set('cat head tail less more bat nl wc jq diff cmp md5sum sha256sum xxd hexdump file strings');
+  const OP_SEARCH = set('grep egrep fgrep rg ag find fd ls tree locate');
+  const OP_SKIP = set('sudo nice time command exec nohup stdbuf xargs');
+  const OP_SEP = set('&& || ; | & |& ;; ( )');
+  const VALUE_OPT = set('--state --cwd --room --timeout --port --limit --after --wait-seconds --seq --text --summary --grep --path --checkpoint --base --url --history --level --key');
+  const NOT_FILE = set('head tail cut sort uniq grep sed awk cat echo xargs wc tr python3 python node bash sh');
+  const HEREDOC = /(?<!<)<<-?(?!<)\s*(['"]?)([A-Za-z_]\w*)\1/g;
+  const PY_OPEN = /open\(\s*([^,()]+?)\s*(?:,\s*(?:mode\s*=\s*)?['"]([rwaxbt+]{1,4})['"])?\s*[,)]/g;
+  const PY_ASSIGN = /(?:^|[;\s])([A-Za-z_]\w*)\s*=\s*(['"])([^'"\n]{1,300})\2/gm;
+  const PY_WTEXT = /Path\(\s*(['"])([^'"]+)\1\s*\)\.write_(?:text|bytes)/g;
+  const SK_VALID = /^[\w\u4e00-\u9fff][\w\u4e00-\u9fff.-]{0,63}$/;
+  const SK_API = /\/api\/agent\/skill\?(?:[^\s'"]*&)?id=([^&\s'"]{1,200})/g;
+  const SK_PATH = /(?:云端本地Agent|agent-lib\/[^/]+)\/skills\/([^/]+)(?:\/|$)/;
+  const _partCache = new Map();
+
+  function normpath(p) {
+    if (!p) return '.';
+    const abs = p.charAt(0) === '/';
+    const initial = abs && p.slice(0, 2) === '//' && p.charAt(2) !== '/' ? 2 : (abs ? 1 : 0);
+    const out = [];
+    p.split('/').forEach(c => {
+      if (!c || c === '.') return;
+      if (c !== '..' || (!initial && !out.length) || (out.length && out[out.length - 1] === '..')) out.push(c);
+      else if (out.length) out.pop();
+    });
+    const s = (initial ? '/'.repeat(initial) : '') + out.join('/');
+    return s || '.';
+  }
+  function join(a, b) { if (b.charAt(0) === '/') return b; if (!a) return b; return a.charAt(a.length - 1) === '/' ? a + b : a + '/' + b; }
+  function basename(p) { const i = p.lastIndexOf('/'); return p.slice(i + 1); }
+  function expanduser(p) { return p === '~' ? HOME : (p.slice(0, 2) === '~/' ? HOME + p.slice(1) : p); }
+  function scratch(p) { return /^\/(tmp|dev|proc|var\/tmp)\//.test(p) || p === '/tmp' || p === '/dev/null' || p === '-'; }
+  function shortName(p) { return basename(String(p || '').replace(/\/+$/, '')) || p; }
+  function host(u) { const m = /^[a-z]+:\/\/([^/?#\s]+)/i.exec(u || ''); return m ? m[1] : ''; }
+
+  function shlexSplit(s) {
+    const toks = [];
+    let tok = '', state = ' ', quoted = false, i = 0;
+    const push = () => { if (tok !== '' || quoted) toks.push(tok); tok = ''; quoted = false; };
+    while (i <= s.length) {
+      const c = i < s.length ? s.charAt(i) : null; i++;
+      if (state === "'") { if (c === null) throw new Error('No closing quotation'); if (c === "'") state = 'a'; else tok += c; continue; }
+      if (state === '"') {
+        if (c === null) throw new Error('No closing quotation');
+        if (c === '"') { state = 'a'; continue; }
+        if (c === '\\') { const n = i < s.length ? s.charAt(i) : null; if (n === null) throw new Error('No closing quotation'); if (n === '"' || n === '\\') { tok += n; i++; } else { tok += c + n; i++; } continue; }
+        tok += c; continue;
+      }
+      if (state === 'p') {
+        if (c !== null && PUNCT.indexOf(c) >= 0) { tok += c; continue; }
+        toks.push(tok); tok = ''; state = ' '; i--; continue;
+      }
+      if (c === null) { if (state === 'a') push(); break; }
+      if (c === ' ' || c === '\t' || c === '\r' || c === '\n') { if (state === 'a') push(); state = ' '; continue; }
+      if (c === '#') { if (state === 'a') push(); state = ' '; while (i < s.length && s.charAt(i) !== '\n') i++; continue; }
+      if (PUNCT.indexOf(c) >= 0) { if (state === 'a') push(); tok = c; state = 'p'; continue; }
+      if (c === '\\') { if (i >= s.length) throw new Error('No escaped character'); tok += s.charAt(i); i++; state = 'a'; continue; }
+      if (c === "'" || c === '"') { quoted = true; state = c; continue; }
+      tok += c; state = 'a';
+    }
+    if (state === 'p' && tok) toks.push(tok);
+    return toks;
+  }
+
+  function pyFiles(body) {
+    const names = Object.create(null), rd = [], wr = [];
+    let m;
+    PY_ASSIGN.lastIndex = 0; while ((m = PY_ASSIGN.exec(body))) names[m[1]] = m[3];
+    PY_OPEN.lastIndex = 0;
+    while ((m = PY_OPEN.exec(body))) {
+      const arg = m[1].trim(), mode = m[2] || 'r';
+      let path;
+      if (arg.length > 1 && (arg[0] === "'" || arg[0] === '"') && arg[arg.length - 1] === arg[0]) path = arg.slice(1, -1);
+      else if (/^[A-Za-z_]\w*$/.test(arg) && names[arg] !== undefined) path = names[arg];
+      else continue;
+      (/[wax+]/.test(mode) ? wr : rd).push(path);
+    }
+    PY_WTEXT.lastIndex = 0; while ((m = PY_WTEXT.exec(body))) wr.push(m[2]);
+    return [rd, wr];
+  }
+
+  function cmdOps(cmd, cwd) {
+    const read = [], edit = [], cnt = { search: 0, push: 0, pull: 0, notes: 0 }, skills = [];
+    let cur = cwd || '/';
+    const skill = (sid, how) => {
+      sid = String(sid || '').trim();
+      if (SK_VALID.test(sid) && !skills.some(k => k.id === sid && k.how === how) && skills.length < 8) skills.push({ id: sid, how });
+    };
+    const norm = p => {
+      p = String(p || '').trim();
+      if (!p || p.charAt(0) === '-' || p.indexOf('\n') >= 0) return null;
+      if (p.slice(0, 2) === '~/') p = expanduser(p);
+      if (p.charAt(0) !== '/' && p.charAt(0) !== '$') p = join(cur, p);
+      if (p.charAt(0) !== '$') p = normpath(p);
+      return scratch(p) ? null : p;
+    };
+    const add = (lst, p) => { const q = norm(p); if (q && lst.indexOf(q) < 0 && lst.length < 40) lst.push(q); };
+    const lines = String(cmd || '').split('\n'), logical = [];
+    let i = 0;
+    while (i < lines.length) {
+      const ln = lines[i++]; const bodies = [];
+      let m;
+      HEREDOC.lastIndex = 0;
+      while ((m = HEREDOC.exec(ln))) {
+        const tag = m[2], body = [];
+        while (i < lines.length && lines[i].trim() !== tag) { body.push(lines[i]); i++; }
+        i++;
+        if (/\bpython[\d.]*\b[^|;&]*<</.test(ln)) bodies.push(body.join('\n'));
+      }
+      logical.push([ln, bodies]);
+    }
+    logical.forEach(pair => {
+      const ln = pair[0].replace(HEREDOC, ' ');
+      let toks;
+      try { toks = shlexSplit(ln); } catch { toks = ln.split(/\s+/).filter(Boolean); }
+      let words = [];
+      const segs = [];
+      toks.concat([';']).forEach(t => { if (OP_SEP[t]) { segs.push(words); words = []; } else words.push(t); });
+      segs.forEach(w => {
+        const clean = [];
+        let j = 0;
+        while (j < w.length) {
+          const t = w[j];
+          if ((t === '>' || t === '>>' || t === '>|' || t === '&>' || t === '&>>') && j + 1 < w.length) {
+            const fd = clean.length && (clean[clean.length - 1] === '1' || clean[clean.length - 1] === '2') ? clean[clean.length - 1] : '';
+            if (fd !== '2') add(edit, w[j + 1]);
+            if (fd) clean.pop();
+            j += 2; continue;
+          }
+          if (t === '>&' || t === '<&' || t === '<<<') { j += 2; continue; }
+          if (t === '<' && j + 1 < w.length) { add(read, w[j + 1]); j += 2; continue; }
+          clean.push(t); j++;
+        }
+        w = clean;
+        while (w.length && (/^[A-Za-z_]\w*=[^\n]*$/.test(w[0]) || OP_SKIP[w[0]])) w = w.slice(1);
+        if (w.length && w[0] === 'timeout') { w = w.slice(1); while (w.length && (w[0].charAt(0) === '-' || /^[\d.]+[smhd]?$/.test(w[0]))) w = w.slice(1); }
+        if (w.length && w[0] === 'env') { w = w.slice(1); while (w.length && (w[0].charAt(0) === '-' || w[0].indexOf('=') >= 0)) w = (w[0] === '-u' || w[0] === '--unset') ? w.slice(2) : w.slice(1); }
+        if (!w.length) return;
+        const name = basename(w[0]), args = w.slice(1);
+        if (name === 'cd') { if (args.length && args[0] !== '-') { const q = args[0].charAt(0) === '/' ? args[0] : join(cur, args[0]); cur = normpath(expanduser(q)); } return; }
+        const files = args.filter(a => a.charAt(0) !== '-');
+        if (OP_SEARCH[name] || (name === 'diff' && args.some(a => a.charAt(0) === '-' && (a.indexOf('r') >= 0 || a.indexOf('q') >= 0)))) { cnt.search++; return; }
+        if (OP_READ[name]) { files.forEach(a => add(read, a)); return; }
+        if (name === 'sed' || name === 'awk' || name === 'gawk') {
+          const inplace = name === 'sed' && args.some(a => a === '-i' || a.slice(0, 2) === '-i' || a === '--in-place');
+          const hasE = args.some(a => a === '-e' || a === '-f' || a === '--expression');
+          (hasE ? files : files.slice(1)).forEach(a => add(inplace ? edit : read, a));
+          return;
+        }
+        if (name === 'tee') { files.forEach(a => add(edit, a)); return; }
+        if (name === 'cp' || name === 'mv' || name === 'install' || name === 'rsync' || name === 'scp') {
+          if (files.length >= 2) {
+            files.slice(0, -1).forEach(a => add(read, a));
+            const dst = files[files.length - 1];
+            if (((name === 'cp' || name === 'mv') && files.length > 2) || dst.charAt(dst.length - 1) === '/') files.slice(0, -1).forEach(a => add(edit, join(dst, basename(a.replace(/\/+$/, '')))));
+            else add(edit, dst);
+            if (name === 'rsync' || name === 'scp') cnt.push++;
+          }
+          return;
+        }
+        if (name === 'touch' || name === 'truncate' || name === 'rm' || name === 'unlink' || name === 'patch') { files.forEach(a => add(edit, a)); return; }
+        if (/^python[\d.]*$/.test(name)) {
+          const script = files[0] || '';
+          const k = args.indexOf('-c');
+          if (k >= 0) { if (k + 1 < args.length) { const rw = pyFiles(args[k + 1]); rw[0].forEach(p => add(read, p)); rw[1].forEach(p => add(edit, p)); } return; }
+          if (/chatroom\.py$/.test(script)) {
+            let rest = args.slice(args.indexOf(script) + 1);
+            while (rest.length && rest[0].charAt(0) === '-') rest = rest[0] === '--state' ? rest.slice(2) : rest.slice(1);
+            if (rest.length >= 2 && rest[0] === 'skill') {
+              if (rest[1] === 'add' && rest.length >= 3 && /^(https?:\/\/|[\w.-]+\/[\w.-]+)/.test(rest[2])) skill(rest[2].replace(/\/+$/, '').split('/').pop().slice(0, 64), 'install');
+              else if (rest[1].charAt(0) !== '-' && ['add', 'list', 'ls'].indexOf(rest[1]) < 0) skill(rest[1], 'read');
+            }
+            return;
+          }
+          if (/bridge_sync\.py$/.test(script)) {
+            const sub = args.slice(args.indexOf(script) + 1).filter(a => a.charAt(0) !== '-')[0] || '';
+            if (sub === 'push') cnt.push++; else if (sub === 'pull' || sub === 'restore') cnt.pull++; else if (sub === 'notes') cnt.notes++;
+          }
+          return;
+        }
+        if (name === 'curl') {
+          const url = args.join(' ');
+          let mm;
+          SK_API.lastIndex = 0; while ((mm = SK_API.exec(url))) { let id; try { id = decodeURIComponent(mm[1]); } catch { id = mm[1]; } skill(id.slice(0, 64), 'read'); }
+          if (url.indexOf('/api/bundle') >= 0) cnt[/(?:^|\s)(?:-X\s*POST|-d|--data\S*|-F|--json)\b/.test(url) ? 'push' : 'pull']++;
+          else if (/\/api\/(?:file|read)\b/.test(url)) cnt.pull++;
+          return;
+        }
+      });
+      pair[1].forEach(b => { const rw = pyFiles(b); rw[0].forEach(p => add(read, p)); rw[1].forEach(p => add(edit, p)); });
+    });
+    read.concat(edit).forEach(p => { const m = SK_PATH.exec(p); if (m) skill(m[1], 'read'); });
+    const out = {};
+    if (skills.length) out.skills = skills;
+    if (read.length) out.read = read;
+    if (edit.length) out.edit = edit;
+    for (const key in cnt) if (cnt[key]) out[key] = cnt[key];
+    return out;
+  }
+
+  function scriptArgs(a, script) {
+    const i = a.indexOf(script), out = [];
+    for (let j = i + 1; j < a.length; j++) {
+      const x = a[j];
+      if (x.length > 1 && x.charAt(0) === '-') { if (x.indexOf('=') < 0 && VALUE_OPT[x]) j++; continue; }
+      out.push(x);
+    }
+    return out;
+  }
+
+  function looksLikeFile(p) {
+    const b = shortName(p);
+    return !!b && !/^\d+$/.test(b) && !/[(){};'"`|<>,$]/.test(b) && !NOT_FILE[b];
+  }
+  function filterFiles(list) { return (list || []).filter(looksLikeFile); }
+  function disp(p) {
+    const b = shortName(p);
+    if (/[*?]/.test(b)) { const sg = String(p).replace(/\/+$/, '').split('/'); return sg.slice(-2).join('/'); }
+    return b;
+  }
+  function names(list, max) {
+    const n = list.map(disp);
+    return n.slice(0, max).join('、') + (n.length > max ? ' 等 ' + n.length + ' 个' : '');
+  }
+  function kindOf(s) {
+    if (/^(跑测试|语法检查|类型检查|检查)/.test(s)) return 'test';
+    if (/^(构建|打包|编译|安装)/.test(s)) return 'build';
+    if (/^(浏览器|网络请求|抓取)/.test(s)) return 'web';
+    if (/^(本机终端|聊天室|MCP)/.test(s)) return 'chat';
+    if (/^(写回本机|拉取|更新交接笔记|交接笔记|查看本机|检查连接|查看同步)/.test(s)) return 'sync';
+    if (/^等待/.test(s)) return 'wait';
+    if (/^删除/.test(s)) return 'del';
+    if (/^(后台启动|停止后台)/.test(s)) return 'proc';
+    return 'act';
+  }
+  function countLines(t) { return t ? String(t).split('\n').length : 0; }
+  function lineDiff(a, b) {
+    const x = String(a || '').split('\n'), y = String(b || '').split('\n');
+    let i = 0;
+    while (i < x.length && i < y.length && x[i] === y[i]) i++;
+    let j = 0;
+    while (j < x.length - i && j < y.length - i && x[x.length - 1 - j] === y[y.length - 1 - j]) j++;
+    return { add: y.length - i - j, del: x.length - i - j };
+  }
+  function heredocWrites(cmd) {
+    const out = {};
+    const re = /(?:^|[\n;&|]\s*)(?:cat|tee(?:\s+-a)?)\s*(>>?)?\s*['"]?([^\s'"<>|;&]+)['"]?\s*<<-?\s*['"]?(\w+)['"]?[^\n]*\n([\s\S]*?)\n\3[ \t]*(?=\n|$)/g;
+    let m;
+    while ((m = re.exec(cmd))) out[m[2]] = (out[m[2]] || 0) + countLines(m[4]);
+    return out;
+  }
+
+  function actions(cmd) {
+    const acts = [], seen = Object.create(null), cards = [];
+    acts.cards = cards;
+    const act = (s, weight = 5, bridge = false) => { if (s && !seen[s]) { seen[s] = 1; acts.push({ s, w: weight, b: !!bridge }); } };
+    const card = c => {
+      Object.keys(c).forEach(k => { if (c[k] === '' || (k === 'meta' && /\$/.test(c[k]))) delete c[k]; });
+      const sig = JSON.stringify(c);
+      if (!cards.some(x => JSON.stringify(x) === sig) && cards.length < 3) cards.push(c);
+    };
+    const optVal = (a, name) => { const i = a.indexOf(name); return i >= 0 && i + 1 < a.length ? a[i + 1] : ''; };
+    const optList = (a, name) => { const i = a.indexOf(name), out = []; if (i < 0) return out; for (let j = i + 1; j < a.length && a[j].charAt(0) !== '-'; j++) out.push(a[j]); return out; };
+    const body = String(cmd || '').split('\n');
+    let lines = [], i = 0, m;
+    while (i < body.length) {
+      const ln = body[i++]; HEREDOC.lastIndex = 0;
+      while ((m = HEREDOC.exec(ln))) { const tag = m[2]; while (i < body.length && body[i].trim() !== tag) i++; i++; }
+      lines.push(ln.replace(HEREDOC, ' '));
+    }
+    const merged = [];
+    let buf = null;
+    lines.forEach(ln => {
+      buf = buf === null ? ln : buf + '\n' + ln;
+      let q = '', esc = false;
+      for (let c = 0; c < buf.length; c++) {
+        const ch = buf.charAt(c);
+        if (esc) { esc = false; continue; }
+        if (ch === '\\' && q !== "'") { esc = true; continue; }
+        if (q) { if (ch === q) q = ''; }
+        else if (ch === '"' || ch === "'") q = ch;
+        else if (ch === '#' && (c === 0 || /\s/.test(buf.charAt(c - 1)))) break;
+      }
+      if (!q) { merged.push(buf); buf = null; }
+    });
+    if (buf !== null) merged.push(buf);
+    lines = merged;
+    const vars = { HOME }, trivial = [];
+    const subst = t => t.replace(/\$\{?([A-Za-z_]\w*)\}?/g, (all, k) => Object.prototype.hasOwnProperty.call(vars, k) ? vars[k] : all);
+    lines.forEach(ln => {
+      let toks;
+      try { toks = shlexSplit(ln); } catch { toks = ln.split(/\s+/).filter(Boolean); }
+      const segs = [];
+      let words = [];
+      for (let k = 0; k < toks.length; k++) {
+        const t = toks[k];
+        if (OP_SEP[t] || (/^[();&|]+$/.test(t) && /[;&|]/.test(t))) { segs.push(words); words = []; continue; }
+        if (/^[<>&]+\|?$/.test(t)) {
+          if (words.length && /^\d$/.test(words[words.length - 1])) words.pop();
+          if (t !== '<<' && t !== '<<-') k++;
+          continue;
+        }
+        words.push(t);
+      }
+      segs.push(words);
+      segs.forEach(w => {
+        if (w[0] === 'command' && w[1] === '-v') { trivial.push('检查命令'); return; }
+        while (w.length > 1 && /^(do|then|else|elif|if|while|until|!|\{)$/.test(w[0])) w = w.slice(1);
+        while (w.length && (/^[A-Za-z_]\w*=/.test(w[0]) || OP_SKIP[w[0]])) {
+          const mv = /^([A-Za-z_]\w*)=(.*)$/.exec(w[0]); if (mv && w.length === 1) vars[mv[1]] = mv[2];
+          w = w.slice(1);
+        }
+        w = [].concat(...w.map(t => { const r = subst(t); if (r !== t && /\s/.test(r)) { try { return shlexSplit(r); } catch { return r.split(/\s+/); } } return [r]; }));
+        while (w.length && w[0] === 'env') { w = w.slice(1); while (w.length && (w[0].charAt(0) === '-' || /^[A-Za-z_]\w*=/.test(w[0]))) { if (w[0] === '-u') w = w.slice(1); w = w.slice(1); } }
+        if (w.length && w[0] === 'timeout') { w = w.slice(1); while (w.length && (w[0].charAt(0) === '-' || /^[\d.]+[smhd]?$/.test(w[0]))) w = w.slice(1); }
+        if (!w.length) return;
+        const name = basename(w[0]), a = w.slice(1), plain = a.filter(x => x.charAt(0) !== '-');
+        const sub = plain[0] || '', joined = a.join(' ');
+        if (/^python[\d.]*$/.test(name)) {
+          const script = plain[0] || '', rest = scriptArgs(a, script);
+          if (/\.py$/.test(script) && (a.indexOf('--help') >= 0 || a.indexOf('-h') >= 0)) { act('查看用法 ' + shortName(script), 3); return; }
+          if (/bridge_sync\.py$/.test(script)) {
+            const s = rest[0], lbl = ({ push: '写回本机', pull: '从本机拉取', restore: '从本机拉取', notes: '更新交接笔记', changed: '查看本机改动', ping: '检查连接', status: '查看同步状态',
+              connect: '连接本机', clean: '清理', manifest: '查看文件清单', verify: '校验文件', checkpoints: '查看检查点', diff: '对比改动', seal: '封存', plan: '查看计划',
+              ask: '请你确认', 'ask-status': '查看确认状态', 'ask-wait': '等你确认', 'ask-images': '取你的图片', ls: '列本机目录', grep: '搜本机文件' })[s] || '同步 ' + (s || '');
+            act(lbl, 9, true);
+            const nf = optList(a, '--files').length, nd = optList(a, '--delete').length;
+            card({ k: s === 'push' ? 'push' : s === 'pull' || s === 'restore' ? 'pull' : s === 'notes' ? 'notes' : 'sync', label: s === 'push' ? '写回本机' : s === 'notes' ? '交接笔记' : lbl,
+              code: s === 'grep' || s === 'ls' ? plain.slice(2).join(' ') : '',
+              meta: s === 'push' ? [nf ? nf + ' 个文件' : '', nd ? '删 ' + nd + ' 个' : ''].filter(Boolean).join(' · ') : s === 'pull' ? (optList(a, '--files').length ? optList(a, '--files').length + ' 个文件' : (plain[2] ? shortName(plain[2]) : '')) : '',
+              tip: optVal(a, '--summary') });
+            return;
+          }
+          if (/chatroom\.py$/.test(script)) {
+            const c = rest[0];
+            const CR = { history: '翻聊天记录', rooms: '聊天室列表', 'sync-status': '同步状态', restore: '恢复聊天室', caps: '查看可用能力', mcp: 'MCP 管理', pending: '看未读消息', skills: '技能列表', export: '导出聊天记录', monitor: '监视面板', serve: '启动聊天室' };
+            act(c === 'say' ? (/--no-wait/.test(joined) ? '聊天室发言' : '聊天室发言并等回复') : c === 'wait' ? '等你回复' : c === 'skill' ? '读技能 ' + (rest[1] || '') : c === 'rules' ? '读规则' : CR[c] || '聊天室 ' + (c || ''), 9, true);
+            let said = '';
+            if (c === 'say') {
+              const hm = /chatroom\.py\b[^\n]*?\ssay\b[^\n]*<<-?\s*['"]?(\w+)['"]?[^\n]*\n([\s\S]*?)\n\1[ \t]*(?:\n|$)/.exec(cmd);
+              if (hm) said = (hm[2].split('\n').filter(x => x.trim())[0] || '').trim();
+              if (!said || /^\{/.test(said)) {
+                const jm = /"text"\s*:\s*"((?:[^"\\]|\\.)*)"/.exec(cmd);
+                if (jm) { try { said = JSON.parse('"' + jm[1] + '"'); } catch { said = jm[1]; } said = (said.split('\n').filter(x => x.trim())[0] || '').trim(); }
+              }
+            }
+            card({ k: c === 'say' || c === 'wait' ? 'chat' : 'lib', label: c === 'say' || c === 'wait' ? '聊天室' : c === 'skill' ? '技能' : c === 'rules' ? '规则' : '聊天室',
+              meta: c === 'say' ? (/--no-wait/.test(joined) ? '发言' : '发言 · 等回复') : c === 'wait' ? '等回复' : c === 'skill' ? (rest[1] || '') : c === 'rules' ? (rest[1] || '') : CR[c] || (c || ''),
+              quote: said, wait: c === 'wait' || (c === 'say' && !/--no-wait/.test(joined)) });
+            return;
+          }
+          if (/terminal_client\.py$/.test(script)) {
+            const inner = rest[1] || rest[0] || '';
+            const loop = /^\s*for\b.*?\bdo\s+@?(\S+)/i.exec(inner);
+            act('本机终端：' + (loop ? loop[1] : inner.split(/\s+/)[0] || '执行'), 8, true);
+            card({ k: 'term', label: '本机终端', code: inner.replace(/\s+/g, ' ').trim() });
+            return;
+          }
+          if (/mcp_client\.py$/.test(script)) {
+            if (rest[0] === 'call') {
+              const key = rest[1] || '', tool = rest[2] || '';
+              const PW = { browser_network_requests: '看网络请求', browser_console_messages: '看控制台', browser_fill_form: '填表单', browser_select_option: '选下拉项', browser_hover: '悬停', browser_drag: '拖动', browser_file_upload: '上传文件', browser_handle_dialog: '处理弹窗', browser_resize: '调窗口大小', browser_navigate_back: '后退', browser_install: '安装浏览器', browser_run_code_unsafe: '运行脚本', browser_run_code: '运行脚本', browser_navigate: '打开网页', browser_evaluate: '执行页面脚本', browser_tabs: '管理标签页', browser_take_screenshot: '截图', browser_snapshot: '读页面结构', browser_click: '点击', browser_type: '输入', browser_press_key: '按键', browser_wait_for: '等待', browser_close: '关闭' };
+              act(key === 'mcp_playwright' ? '浏览器 · ' + (PW[tool] || tool.replace(/^browser_/, '')) : 'MCP · ' + key + ' ' + tool, 8, true);
+              card(key === 'mcp_playwright' ? { k: 'web', label: '浏览器', meta: PW[tool] || tool.replace(/^browser_/, '') } : { k: 'mcp', label: 'MCP', meta: key.replace(/^mcp_/, '') + ' · ' + tool });
+            } else {
+              const ML = { tools: '查看工具列表', schema: '查看工具参数', list: '服务列表' };
+              act('MCP ' + (ML[rest[0]] || rest[0] || ''), 7, true);
+              card({ k: 'mcp', label: 'MCP', meta: (ML[rest[0]] || rest[0] || '') + (rest[1] ? ' · ' + rest[1].replace(/^mcp_/, '') : '') });
+            }
+            return;
+          }
+          if (/(^|\/)qj\.py$/.test(script)) {
+            const q = rest[0] || '', q1 = rest[1] || '', q2 = rest[2] || '';
+            const firstLine = t => (String(t || '').split('\n').filter(x => x.trim())[0] || '').trim();
+            const hdoc = () => { const hm = /qj\.py\b[^\n]*<<-?\s*['"]?(\w+)['"]?[^\n]*\n([\s\S]*?)\n\1[ \t]*(?:\n|$)/.exec(cmd); return hm ? firstLine(hm[2]) : ''; };
+            const GIT = { clone: '取岗位代码', save: '保存到岗位 Git', load: '拉岗位代码', undo: '撤销保存', log: '看岗位提交', sync: '同步岗位代码' };
+            const DLV = { deliver: '交付', review: '复核交付', accept: '通过交付', reject: '打回交付' };
+            const LIB = { brief: '看简报', me: '看门牌', who: '看成员', rules: '读规矩', policy: '看本群开关', index: '看资源地图', skill: '读技能', memory: '看记忆', card: '身份卡', door: '看门牌', history: '翻群记录' };
+            const MISC = { join: '接入千机阁', guard: '沙箱守护', relocate: '换 Hub 地址', serve: '常驻进程', disk: '查沙箱占用', get: '取附件', remind: '提醒', plan: '公开计划', meeting: '会议' };
+            if (q === 'say') { const qs = q1 && q1 !== '-' ? firstLine(q1) : hdoc(); act('群聊发言', 9, true); card({ k: 'qj', label: '千机阁', meta: '群聊', quote: qs }); return; }
+            if (q === 'note' || q === 'call') { const qn = q2 && q2 !== '-' ? firstLine(q2) : hdoc(); act((q === 'note' ? '留言给 ' : '专线叫 ') + q1, 9, true); card({ k: 'qj', label: '千机阁', meta: (q === 'note' ? '留言 → ' : '专线 → ') + q1, quote: qn }); return; }
+            if (q === 'read' || q === 'wait') { act(q === 'read' ? '读群消息' : '等群消息', 9, true); card({ k: 'qj', label: '千机阁', meta: q === 'read' ? '读消息' : '等消息', wait: q === 'wait', waitT: '等消息' }); return; }
+            if (q === 'status') { act('自报状态 ' + q1, 7, true); card({ k: 'qj', label: '千机阁', meta: '自报 · ' + q1, quote: firstLine(q2) }); return; }
+            if (q === 'task') { const tl = ({ add: '新建任务', claim: '领取任务', done: '完成任务', drop: '放下任务' })[q1] || '看任务'; act(tl + (q1 && q1 !== 'add' ? ' ' + q2 : ''), 7, true); card({ k: 'qj', label: '任务', meta: tl + (q1 === 'add' ? '' : q2 ? ' ' + q2 : ''), quote: q1 === 'add' ? firstLine(q2) : '' }); return; }
+            if (DLV[q]) { act(DLV[q] + (q1 && q !== 'deliver' ? ' ' + q1 : ''), 8, true); card({ k: 'push', label: DLV[q], meta: q === 'deliver' ? '' : q1, quote: q === 'deliver' ? firstLine(q1) : q === 'reject' ? firstLine(q2) : '' }); return; }
+            if (GIT[q]) { act(GIT[q], 8, true); card({ k: q === 'save' || q === 'sync' ? 'push' : 'pull', label: '岗位 Git', meta: GIT[q], quote: q === 'save' ? firstLine(q1) : '' }); return; }
+            if (q === 'run') { const rc = rest.slice(1).join(' '); act('本机终端：' + (rc.split(/\s+/)[0] || '执行'), 8, true); card({ k: 'term', label: '本机终端', code: rc.replace(/\s+/g, ' ').trim() }); return; }
+            if (q === 'mcp') {
+              if (q1 === 'call') { const mk = q2, mt = rest[3] || ''; act(mk === 'mcp_playwright' ? '浏览器 · ' + mt.replace(/^browser_/, '') : 'MCP · ' + mk + ' ' + mt, 8, true); card(mk === 'mcp_playwright' ? { k: 'web', label: '浏览器', meta: mt.replace(/^browser_/, '') } : { k: 'mcp', label: 'MCP', meta: mk.replace(/^mcp_/, '') + ' · ' + mt }); }
+              else { const ml = ({ tools: '查看工具列表', host: '常驻进程' })[q1] || '服务列表'; act('MCP ' + ml, 7, true); card({ k: 'mcp', label: 'MCP', meta: ml + (q1 === 'tools' && q2 ? ' · ' + q2 : '') }); }
+              return;
+            }
+            if (LIB[q]) { act(LIB[q] + (q === 'skill' || q === 'rules' ? (q1 ? ' ' + q1 : '') : ''), 7, true); card({ k: 'lib', label: '千机阁', meta: LIB[q] + ((q === 'skill' || q === 'rules') && q1 ? ' · ' + q1 : '') }); return; }
+            act(MISC[q] || ('千机阁 ' + q).trim(), 7, true); card({ k: 'qj', label: '千机阁', meta: MISC[q] || q }); return;
+          }
+          if (a.indexOf('-m') >= 0) { const mod = a[a.indexOf('-m') + 1] || ''; if (mod === 'py_compile' || mod === 'compileall') { act('语法检查 ' + a.slice(a.indexOf('-m') + 2).filter(x => x.charAt(0) !== '-').map(shortName).join('、'), 6); return; } act(/^(pytest|unittest)$/.test(mod) ? '跑测试' : mod === 'pip' ? (/install/.test(joined) ? '安装依赖' : 'pip') : '运行 ' + mod, 7); return; }
+          if (/\/api\/handoff\/notes/.test(cmd) && /payload|notes_set/.test(cmd)) { act('更新交接笔记', 9, true); card({ k: 'notes', label: '交接笔记' }); return; }
+          if (a.indexOf('-c') >= 0 || script === '-' || !script || /<</.test(ln)) { act('运行 Python 脚本', 4); return; }
+          if (/(^|\/)(pull|push)file\.py$/.test(script)) { act(/pull/.test(script) ? '从本机拉取' : '写回本机', 9, true); return; }
+          if (/\$/.test(script)) { act('运行脚本', 6); return; }
+          if (/(^|[\/_.-])(tests?|e2e|spec)([\/_.-]|$)|run-tests/i.test(script)) { act('跑测试', 8); return; }
+          act('运行 ' + shortName(script), 6); return;
+        }
+        if (name === 'node') {
+          if (a.indexOf('--test') >= 0) { act('跑测试', 8); return; }
+          if (a.indexOf('--check') >= 0) { act('语法检查 ' + plain.map(shortName).join('、'), 6); return; }
+          if (a.indexOf('-e') >= 0 || a.indexOf('-p') >= 0) { act('运行 JS 片段', 4); return; }
+          if (/\$/.test(sub)) { act('运行脚本', 6); return; }
+          if (/(^|[\/_.-])(tests?|e2e|spec)([\/_.-]|$)|run-tests/i.test(sub)) { act('跑测试', 8); return; }
+          act(/build/i.test(sub) ? '构建' : '运行 ' + shortName(sub || 'node'), 6); return;
+        }
+        if (name === 'npm' || name === 'pnpm' || name === 'yarn' || name === 'npx') {
+          const task = sub === 'run' ? plain[1] || '' : sub;
+          if (/^(i|install|ci|add)$/.test(sub)) act('安装依赖', 7);
+          else if (/test/.test(task)) act('跑测试', 8);
+          else if (/package|vsce/.test(task) || /vsce/.test(joined)) act('打包', 8);
+          else if (/build|compile|tsc/.test(task)) act('构建', 7);
+          else act(name + ' ' + task, 5);
+          return;
+        }
+        if (/^(pytest|jest|vitest|mocha)$/.test(name)) { act('跑测试', 8); return; }
+        if (name === 'tsc') { act('编译 TypeScript', 7); return; }
+        if (name === 'vsce') { act('打包', 8); return; }
+        if (/^pip\d?$/.test(name) || name === 'apt' || name === 'apt-get') { act(/install/.test(joined) ? '安装依赖' : name + ' ' + sub, 7); return; }
+        if (name === 'git') { let ga = a.slice(); while (ga.length && /^-[Cc]$/.test(ga[0])) ga = ga.slice(2); while (ga.length && ga[0].charAt(0) === '-') ga = ga.slice(1); act('git ' + (ga[0] || ''), 6); return; }
+        if (name === 'sleep') { act('等待 ' + (sub || '') + ' 秒', 6); return; }
+        if (name === 'curl' || name === 'wget') { const u = a.filter(x => /^https?:\/\//.test(x))[0]; act('网络请求 ' + (host(u) || ''), 5); return; }
+        if (name === 'rm') { const rmN = plain.filter(x => !/\$/.test(x)); act(rmN.length ? '删除 ' + rmN.slice(0, 2).map(disp).join('、') : '删除文件', 6); return; }
+        if (name === 'mkdir') { act('建目录', 2); return; }
+        if (name === 'kill' && a[0] === '-0') { act('检查进程还在不在', 2); return; }
+        if (name === 'kill' || name === 'pkill' || name === 'killall') { act('结束进程', 6); return; }
+        if (name === 'ps' || name === 'pgrep') { act('查看进程', 3); return; }
+        if (/^(ss|netstat|lsof)$/.test(name)) { act('查看端口', 3); return; }
+        if (a.length === 1 && /^(--version|-v|-V)$/.test(a[0])) { act('查看 ' + name + ' 版本', 2); return; }
+        if (name === 'du' || name === 'df') { act('查看磁盘', 3); return; }
+        if (/^(unzip|tar|zip|7z|gzip|gunzip)$/.test(name)) { act(name === 'unzip' || (/x/.test(a[0] || '') && name === 'tar') ? '解压' : '压缩/打包文件', 5); return; }
+        if (name === 'base64') { act('编码转换', 2); return; }
+        if (/^(ffmpeg|convert|magick)$/.test(name)) { act('处理媒体文件', 5); return; }
+        if (/^(echo|printf|true|false|test|\[|export|set|source|\.|cut|sort|uniq|tr|xargs|wc|head|tail|cat|grep|sed|awk|ls|find|cd|tee|cp|mv|touch|chmod|ln|basename|dirname|date|which|type|for|do|done|if|then|fi|else|while|exit|wait|local|read|python3|\{|\}|sh|bash)$/.test(name)) {
+          if (name !== 'cd' && name !== '{' && name !== '}') trivial.push(name);
+          return;
+        }
+        act('执行 ' + name, 3);
+      });
+    });
+    if (!acts.length && trivial.length) {
+      const u = [];
+      trivial.forEach(n => { if (u.indexOf(n) < 0 && /^[\w\u4e00-\u9fff][\w.\-\u4e00-\u9fff]*$/.test(n) && !/^(exit|true|false|then|fi|do|done|else|if|for|while|local|set|export)$/.test(n)) u.push(n); });
+      acts.push({ s: u.length ? u.slice(0, 3).join('、') : '检查环境', w: 1 });
+    }
+    return acts;
+  }
+
+  function describe(cmd, cwd) {
+    let ops = {}, acts = [];
+    try { ops = cmdOps(cmd || '', cwd || ''); } catch {}
+    try { acts = actions(cmd || ''); } catch {}
+    const cards = acts.cards || [];
+    let segs = acts.filter(x => x.w >= 6 && !(cards.length && x.b)).map(x => ({ k: kindOf(x.s), t: x.s }));
+    let ed = filterFiles(ops.edit);
+    let readOnly = filterFiles(ops.read).filter(p => ed.indexOf(p) < 0);
+    const sayIn = /python[\d.]*\s+(?:-\S+\s+)*\S*chatroom\.py\b[^\n]*?\ssay\b[^\n]*?<\s*(['"]?)([^\s'"|;&]+)\1/.exec(cmd || '');
+    if (sayIn) {
+      const notSay = p => shortName(p) !== shortName(sayIn[2]);
+      ed = ed.filter(notSay); readOnly = readOnly.filter(notSay);
+      ops = { ...ops, edit: (ops.edit || []).filter(notSay), read: (ops.read || []).filter(notSay) };
+    }
+    const gone = [];
+    acts.forEach(x => { if (/^删除 /.test(x.s)) x.s.slice(3).replace(/ 等 \d+ 个$/, '').split('、').forEach(n => gone.push(n)); });
+    ed = ed.filter(p => gone.indexOf(disp(p)) < 0 && !/\.(log|out)$/.test(p));
+    const edN = ed.map(shortName);
+    readOnly = readOnly.filter(p => edN.indexOf(shortName(p)) < 0);
+    if (ops.push && !cards.length && !segs.some(x => x.t === '写回本机')) segs.unshift({ k: 'sync', t: '写回本机' });
+    if (ed.length) segs.push({ k: 'edit', t: '改 ' + names(ed, 2) });
+    if (readOnly.length) segs.push({ k: 'read', t: '读 ' + names(readOnly, 2) });
+    if (ops.search) segs.push({ k: 'search', t: '搜索 ' + ops.search + ' 次' });
+    if (!segs.length && !cards.length) segs = acts.map(x => ({ k: kindOf(x.s), t: x.s }));
+    const seen = Object.create(null);
+    segs = segs.filter(x => { if (seen[x.t]) return false; seen[x.t] = 1; return true; });
+    const more = segs.length > 3;
+    segs = segs.slice(0, 3);
+    let stat = null, hw = {};
+    try { hw = heredocWrites(cmd || ''); } catch {}
+    let add = 0;
+    Object.keys(hw).forEach(f => {
+      const abs = f.charAt(0) === '/' ? f : null;
+      if (ed.some(p => p === f || shortName(p) === shortName(f) || p === abs)) add += hw[f];
+    });
+    if (add) stat = { add, del: 0 };
+    let all = acts.filter(x => x.w >= 6).map(x => x.s);
+    if (ops.push && all.indexOf('写回本机') < 0) all.unshift('写回本机');
+    if (ed.length) all.push('改 ' + names(ed, 2));
+    if (readOnly.length) all.push('读 ' + names(readOnly, 2));
+    if (ops.search) all.push('搜索 ' + ops.search + ' 次');
+    if (!all.length) all = acts.map(x => x.s);
+    const seenT = Object.create(null);
+    all = all.filter(t => { if (seenT[t]) return false; seenT[t] = 1; return true; });
+    ops = { ...ops, edit: ed, read: readOnly };
+    return { text: all.slice(0, 3).join(' · ') + (all.length > 3 ? ' …' : ''), cards, segs, more, stat, ops, acts: acts.map(x => x.s) };
+  }
+
+  function benignExit(p) {
+    const o = p?.output, cmd = String((p?.input || {}).command || ''), ec = o && typeof o === 'object' ? o.exit_code : null;
+    if (ec !== 2 && ec !== 5) return false;
+    const m = /qj\.py["']?\s+(?:--?\S+\s+)*(\w+)/.exec(cmd);
+    if (!m) return false;
+    return (ec === 2 && m[1] === 'wait') || (ec === 5 && /^(say|note|call)$/.test(m[1]));
+  }
+  function failed(p) {
+    const o = p?.output;
+    if (benignExit(p)) return false;
+    return p?.state === 'output-error' || p?.state === 'output-denied' || (o && typeof o === 'object' && typeof o.exit_code === 'number' && o.exit_code !== 0);
+  }
+  function endState(p) {
+    const o = p?.output && typeof p.output === 'object' ? p.output : {};
+    if (o.status === 'timeout' || o.timed_out) return { k: 'timeout', t: '超时（可能还在跑）' };
+    if (p?.state === 'output-error' && /abort|cancel|interrupt|stop/i.test(String(p.errorText || o.error || ''))) return { k: 'stop', t: '已中断' };
+    if (o.exit_code === 124) return { k: 'timeout', t: '超时（退出码 124）' };
+    if (failed(p)) return { k: 'fail', t: '失败' + (typeof o.exit_code === 'number' ? '（退出码 ' + o.exit_code + '）' : '') };
+    return null;
+  }
+
+  function partInfo(p) {
+    if (!p) return { text: '', segs: [], ops: {}, acts: [] };
+    const n = String(p.toolName || String(p.type || '').replace(/^tool-/, '')).toLowerCase();
+    const inp = (typeof R !== 'undefined' && R.tinput ? R.tinput(p) : p.input) || {};
+    const cmdOrPath = typeof inp === 'object' ? (inp.command || inp.path || inp.file_path || inp.query || inp.url || '') : String(inp || '');
+    const bodyLen = typeof inp === 'object' ? (inp.content || inp.new_text || inp.new_string || inp.new_str || '').length : 0;
+    const key = (p.toolCallId || p.id || '') + '|' + n + '|' + cmdOrPath.length + '|' + bodyLen;
+    if (key.length > 4 && _partCache.has(key)) return _partCache.get(key);
+    let r;
+    if (/^(bash|shell|run_command|execute_command)$/.test(n)) {
+      r = describe(inp.command || '', inp.cwd || '');
+    } else if (n === 'start_process') {
+      const d = describe(inp.command || '', inp.cwd || '');
+      const t0 = '后台启动' + (inp.name ? '「' + inp.name + '」' : '');
+      r = { text: t0 + (d.text ? ' · ' + d.text : ''), segs: [{ k: 'proc', t: t0 }].concat(d.segs.slice(0, 2)), ops: {}, acts: [] };
+    } else if (n === 'stop_process') {
+      r = { text: '停止后台进程', segs: [{ k: 'proc', t: '停止后台进程' }], ops: {}, acts: [] };
+    } else if (n === 'get_process_output') {
+      const wt = inp.wait_for ? ' · 等待 ' + inp.wait_for : '';
+      r = { text: '读进程日志' + wt, segs: [{ k: 'read', t: '读进程日志' + wt }], ops: {}, acts: [] };
+    } else if (/^(write_file|create_file|write|edit_file|str_replace|edit|read_file)$/.test(n) && (inp.path || inp.file_path)) {
+      const pth = inp.path || inp.file_path;
+      const isRd = n === 'read_file', isEd = /^(edit_file|str_replace|edit)$/.test(n);
+      const verb = isRd ? '读 ' : isEd ? '改 ' : '写 ';
+      const st = isEd
+        ? lineDiff(inp.old_text ?? inp.old_string ?? inp.old_str, inp.new_text ?? inp.new_string ?? inp.new_str)
+        : (!isRd && typeof (inp.content ?? inp.text) === 'string' ? { add: countLines(inp.content ?? inp.text), del: 0 } : null);
+      r = {
+        text: verb + shortName(pth),
+        segs: [{ k: isRd ? 'read' : 'edit', t: verb + shortName(pth) }],
+        stat: st,
+        ops: isRd ? { read: [pth] } : { edit: [pth] },
+        acts: [],
+      };
+    } else if (n === 'present_file' && (inp.path || inp.file_path)) {
+      const pth = inp.path || inp.file_path;
+      r = { text: '展示 ' + shortName(pth), segs: [{ k: 'read', t: '展示 ' + shortName(pth) }], ops: { read: [pth] }, acts: [] };
+    } else if (/^(web_search|search|image_search)$/.test(n) && inp.query) {
+      const q = String(inp.query).trim().slice(0, 24);
+      const lbl = (n === 'image_search' ? '搜图 ' : '搜索 ') + q;
+      r = { text: lbl, segs: [{ k: 'search', t: lbl }], ops: { search: 1 }, acts: [] };
+    } else if (/^(fetch_page|fetch)$/.test(n) && inp.url) {
+      const u = host(inp.url) || String(inp.url).slice(0, 24);
+      r = { text: '抓取 ' + u, segs: [{ k: 'web', t: '抓取 ' + u }], ops: {}, acts: [] };
+    } else {
+      r = { text: '', segs: [], ops: {}, acts: [] };
+    }
+    if (cmdOrPath && p.state !== 'input-streaming') {
+      if (_partCache.size > 800) _partCache.delete(_partCache.keys().next().value);
+      _partCache.set(key, r);
+    }
+    return r;
+  }
+
+  function isEnabled() {
+    return typeof Prefs === 'undefined' || Prefs.cmdTranslate !== false;
+  }
+
+  function makeChipEl(seg) {
+    const sp = seg.t.indexOf(' ');
+    const verb = /^(改|读|写|搜索|搜图|抓取|展示|删除) /.test(seg.t) && sp > 0 ? seg.t.slice(0, sp) : '';
+    return h('span', { class: 'ct-c ct-' + (seg.k || 'act') + (seg.sub ? ' ct-sub' : '') },
+      verb ? h('b', {}, verb) : null,
+      verb ? seg.t.slice(sp) : seg.t);
+  }
+
+  function makeStatEl(stat) {
+    if (!stat || (!stat.add && !stat.del)) return null;
+    return h('span', { class: 'ct-stat' },
+      stat.add ? h('span', { class: 'ct-add' }, '+' + stat.add) : null,
+      stat.del ? h('span', { class: 'ct-del' }, '−' + stat.del) : null);
+  }
+
+  function renderRowChips(p, st) {
+    if (!isEnabled()) return null;
+    const r = partInfo(p);
+    let segs = (r.segs || []).slice();
+    if (!segs.length && r.cards?.length) {
+      segs = r.cards.map(c => ({ k: c.k === 'push' || c.k === 'pull' || c.k === 'notes' ? 'sync' : c.k === 'web' ? 'web' : 'chat', t: c.label + (c.meta ? ' · ' + c.meta : '') }));
+    }
+    const e = st === 'run' ? null : endState(p);
+    if (e && (e.k === 'timeout' || e.k === 'stop' || (e.k === 'fail' && p?.output && typeof p.output === 'object' && typeof p.output.exit_code === 'number'))) {
+      segs = segs.concat([e]);
+    }
+    const statEl = st === 'run' ? null : makeStatEl(r.stat);
+    if (!segs.length && !statEl) return null;
+    return h('span', { class: 'ct-x', 'data-ct': r.text || '' },
+      ...segs.map(makeChipEl),
+      r.more ? h('span', { class: 'ct-more' }, '…') : null,
+      statEl);
+  }
+
+  function groupSummary(parts) {
+    const fr = Object.create(null), fe = Object.create(null);
+    let nS = 0, nP = 0, nL = 0, nN = 0, nT = 0, nB = 0, fails = 0, nTo = 0, nSt = 0, add = 0, del = 0;
+    (parts || []).forEach(p => {
+      const r = partInfo(p), o = r.ops || {};
+      filterFiles(o.read).forEach(x => { fr[x] = 1; });
+      filterFiles(o.edit).forEach(x => { fe[x] = 1; });
+      nS += o.search || 0; nP += o.push || 0; nL += o.pull || 0; nN += o.notes || 0;
+      if (r.stat) { add += r.stat.add || 0; del += r.stat.del || 0; }
+      if ((r.acts || []).indexOf('跑测试') >= 0) nT++;
+      if ((r.acts || []).some(a => /^(构建|打包|编译)/.test(a))) nB++;
+      const isRun = p.state === 'input-streaming' || p.state === 'input-available' || (p.state === 'output-available' && p.preliminary);
+      const e2 = isRun ? null : endState(p);
+      if (e2) { if (e2.k === 'fail') fails++; else if (e2.k === 'timeout') nTo++; else nSt++; }
+    });
+    const feN = Object.keys(fe).map(shortName);
+    Object.keys(fr).forEach(x => { if (fe[x] || feN.indexOf(shortName(x)) >= 0) delete fr[x]; });
+    const nR = Object.keys(fr).length, nE = Object.keys(fe).length;
+    const few = (o, n) => n <= 2 ? names(Object.keys(o), 2) : n + ' 个文件';
+    const times = n => n > 1 ? ' ' + n + ' 次' : '';
+    const segs = [];
+    if (nP) segs.push({ k: 'sync', t: '写回本机' + times(nP) });
+    if (nL) segs.push({ k: 'sync', t: '拉取' + times(nL) });
+    if (nN) segs.push({ k: 'sync', t: '交接笔记' + times(nN) });
+    const nMain = segs.length;
+    if (nE) segs.push({ k: 'edit', t: '改 ' + few(fe, nE) });
+    if (nR) segs.push({ k: 'read', t: '读 ' + few(fr, nR) });
+    if (nS) segs.push({ k: 'search', t: '搜索 ' + nS + ' 次' });
+    if (nT) segs.push({ k: 'test', t: '测试 ' + nT + ' 次' });
+    if (nB) segs.push({ k: 'build', t: '构建 ' + nB + ' 次' });
+    if (nMain) { for (let si = nMain; si < segs.length; si++) segs[si].sub = 1; }
+    if (nTo) segs.push({ k: 'timeout', t: nTo + ' 条超时' });
+    if (nSt) segs.push({ k: 'stop', t: nSt + ' 条中断' });
+    const stat = (add || del) ? { add, del } : null;
+    return { segs, stat, fails, nTo, nSt, nR, nE, nS, nT, nB, add, del };
+  }
+
+  function renderGroupChips(doneTools) {
+    if (!isEnabled() || !Array.isArray(doneTools) || !doneTools.length) return null;
+    const g = groupSummary(doneTools);
+    const statEl = makeStatEl(g.stat);
+    if (!g.segs.length && !statEl) return null;
+    return h('span', { class: 'ct-x ct-grp' },
+      ...g.segs.map(makeChipEl),
+      statEl);
+  }
+
+  return {
+    cmdOps,
+    actions,
+    describe,
+    lineDiff,
+    heredocWrites,
+    looksLikeFile,
+    kindOf,
+    endState,
+    benignExit,
+    partInfo,
+    groupSummary,
+    isEnabled,
+    renderRowChips,
+    renderGroupChips,
+  };
+})();
+if (typeof globalThis !== 'undefined') globalThis.CmdTranslate = CmdTranslate;
+
 const R = {
   text(p, streaming, m = null, chat = null, keyPrefix = 'txt') {
     const htmlSegs = R.extractInlineHtmlSegments(p?.text, streaming);
     if (htmlSegs) {
-      const wrap = h('div', { class: 'inline-html-flow' });
+      const canSeg = (streaming || keyPrefix !== 'txt') && typeof Seg !== 'undefined' && !Seg.off;
+      const sid = m?.id || 'eval';
+      const wrap = canSeg ? Seg.box(sid, keyPrefix + ':flow', () => h('div', { class: 'inline-html-flow' })) : h('div', { class: 'inline-html-flow' });
+      const kids = [];
       htmlSegs.forEach((hs, hi) => {
         if (hs.type === 'html') {
-          wrap.append(R.inlineHtmlCard(hs, keyPrefix + ':ih:' + hs.idx, m, chat));
+          const ihKey = keyPrefix + ':ih:' + hs.idx;
+          const hSig = (hs.running ? 'R' : 'D') + ':' + hs.code.length + ':' + hs.code.slice(-24);
+          kids.push(canSeg ? Seg.use(sid, ihKey, hSig, () => R.inlineHtmlCard(hs, ihKey, m, chat)) : R.inlineHtmlCard(hs, ihKey, m, chat));
         } else if (hs.text && hs.text.trim()) {
-          const d = h('div', { class: 'md prose' + (streaming && hi === htmlSegs.length - 1 ? ' streaming' : ''), lang: '', translate: 'no' });
-          d.innerHTML = MD.render(hs.text);
-          wrap.append(d);
+          const isTailStream = Boolean(streaming && hi === htmlSegs.length - 1);
+          if (canSeg && typeof StreamMD !== 'undefined') {
+            const box = Seg.box(sid, keyPrefix + ':m:' + hi, () => h('div', { class: 'md prose', lang: '', translate: 'no' }));
+            kids.push(StreamMD.paint(box, hs.text, isTailStream));
+          } else {
+            const d = h('div', { class: 'md prose' + (isTailStream ? ' streaming' : ''), lang: '', translate: 'no' });
+            d.innerHTML = MD.render(hs.text);
+            kids.push(d);
+          }
         }
       });
+      if (typeof patchKids === 'function') patchKids(wrap, kids);
+      else wrap.replaceChildren(...kids);
       return wrap;
     }
+    const rawText = String(p?.text || '');
+    if ((streaming || keyPrefix !== 'txt') && typeof StreamMD !== 'undefined' && typeof Seg !== 'undefined' && !Seg.off && (m?.id || keyPrefix !== 'txt')) {
+      const box = Seg.box(m?.id || 'eval', keyPrefix, () => h('div', { class: 'md prose', lang: '', translate: 'no' }));
+      return StreamMD.paint(box, rawText, Boolean(streaming));
+    }
+    if (!streaming && p && typeof p === 'object' && p._mdSrc === rawText && p._mdEl && !p._mdEl.isConnected) {
+      return p._mdEl;
+    }
     const d = h('div', { class: 'md prose' + (streaming ? ' streaming' : ''), lang: '', translate: 'no' });
-    d.innerHTML = MD.render(p.text);
+    d.innerHTML = MD.render(rawText);
+    if (!streaming && p && typeof p === 'object') {
+      p._mdSrc = rawText;
+      p._mdEl = d;
+    }
     return d;
   },
   reasoning(p, open, key, labels=null, live=true) {
@@ -1187,9 +1897,12 @@ const R = {
         }, p._routeStart.fromLabel ? `⚠️ 路由切换：${p._routeStart.fromLabel} → ${p._routeStart.toLabel}` : `⚠️ 路由提示：对话疑似 ${p._routeStart.toLabel}`)
       : null;
     const stIcon = st === 'run' ? h('i', { class: 'spin' }) : h('span', { class: 'tr-st' }, st === 'ok' ? '✓' : '✗');
-    const sm = h('summary', {}, icon('term', 'ti'), h('span', { class: 'min-w-0 tr-main' }, h('span', { class: 'tr-used' }, 'used'), h('b', {}, R.tlabel(n)),
+    const ctChips = CmdTranslate.renderRowChips(p, st);
+    const rawCmdTip = (inp && typeof inp === 'object' && (inp.command || inp.path || inp.file_path)) ? String(inp.command || inp.path || inp.file_path) : '';
+    const smTitle = rawCmdTip ? ((inp?.cwd ? '（' + inp.cwd + '）\n' : '') + (rawCmdTip.length > 800 ? rawCmdTip.slice(0, 800) + '…' : rawCmdTip)) : null;
+    const sm = h('summary', smTitle ? { title: smTitle } : {}, icon('term', 'ti'), h('span', { class: 'min-w-0 tr-main' }, h('span', { class: 'tr-used' }, 'used'), h('b', {}, R.tlabel(n)),
       stIcon,
-      durSpan, h('code', { class: 'tr-sum' }, String(R.tsum(inp)).split('\n')[0].slice(0, 160))), routeStartTag, nudgeBtn, icon('chev', 'tr-chev'));
+      durSpan, ctChips, h('code', { class: 'tr-sum' }, String(R.tsum(inp)).split('\n')[0].slice(0, 160))), routeStartTag, nudgeBtn, icon('chev', 'tr-chev'));
     sm.__reactFiber = { memoizedProps: { part: R.extPart(p, key) }, return: null };
     const isOpen = !!R.openOf(key, false);
     d = R.keep(h('details', { class: 'trow ' + st + (isBash ? ' is-bash' : '') + (p?._routeStart ? ' is-route-start' : ''), open: isOpen || null }, sm), key);
@@ -1211,6 +1924,11 @@ const R = {
           if (spinEl) spinEl.replaceWith(h('span', { class: 'tr-st' }, endSt === 'ok' ? '✓' : '✗'));
           durSpan.className = 'tr-dur';
           durSpan.textContent = R.tdur(curP, tid);
+          const oldCt = sm.querySelector('.ct-x');
+          const nextCt = CmdTranslate.renderRowChips(curP, endSt);
+          if (oldCt && nextCt) oldCt.replaceWith(nextCt);
+          else if (oldCt) oldCt.remove();
+          else if (nextCt) durSpan.after(nextCt);
           nudgeBtn?.remove();
           return;
         }
@@ -1251,7 +1969,8 @@ const R = {
     const what = allBash ? '命令' : '工具';
     const wrap = h('div', { class: 'tg-wrap' });
     if (n) {
-      const gsm = h('summary', {}, icon('chevr', 'tg-chev'), icon('term', 'ti'), h('span', {}, '已运行' + what), h('span', { class: 'tg-n' }, String(n)), bad ? h('span', { class: 'tg-bad' }, bad + ' 个失败') : null, hasRouteStart ? h('span', { class: 'tg-bad tg-route' }, '⚠️ 含路由转折') : null);
+      const grpChips = CmdTranslate.renderGroupChips(doneTools);
+      const gsm = h('summary', {}, icon('chevr', 'tg-chev'), icon('term', 'ti'), h('span', {}, '已运行' + what), h('span', { class: 'tg-n' }, String(n)), grpChips, bad ? h('span', { class: 'tg-bad' }, bad + ' 个失败') : null, hasRouteStart ? h('span', { class: 'tg-bad tg-route' }, '⚠️ 含路由转折') : null);
       gsm.__reactFiber$extcompat = { memoizedProps: { parts: doneTools.map((x, j) => R.extPart(x, key + ':' + j)), isActive: cut < items.length }, return: null };
       const isOpen = !!R.openOf(key, false);
       const d = R.keep(h('details', { class: 'tgroup', open: isOpen || null }, gsm), key);
@@ -1262,7 +1981,7 @@ const R = {
         doneItems.forEach((p, j) => {
           if (p.type === 'reasoning') { const r = R.reasoning(p, false, key + ':r' + j, labels, live); if (r) box.append(r); }
           else {
-            const rowKey = key + ':' + j, rowSig = R.tstate(p) + ':' + (p.errorText ? 1 : 0) + ':' + (R.openOf(rowKey, false) ? 1 : 0) + ':' + (p._routeStart ? 'R' : '');
+            const rowKey = key + ':' + j, rowSig = R.tstate(p) + ':' + (p.errorText ? 1 : 0) + ':' + (R.openOf(rowKey, false) ? 1 : 0) + ':' + (p._routeStart ? 'R' : '') + ':' + (CmdTranslate.isEnabled() ? 1 : 0);
             box.append(Seg.use(key, 'tr:' + j, rowSig, () => R.toolRow(p, rowKey)));
           }
         });
@@ -1402,12 +2121,39 @@ const R = {
     const ext = String(seg?.ext || 'html').toUpperCase();
     const posTag = m?.participantPosition === 'a' ? 'Model A · ' : m?.participantPosition === 'b' ? 'Model B · ' : '';
     const dispTitle = seg?.title ? `${posTag}${seg.title} (${vpath})` : `${posTag}内嵌 ${ext} 页面 (${vpath})`;
+    const existingWrap = !Seg.off ? R.wraps.get(key) : null;
+    if (existingWrap && existingWrap._detailsEl) {
+      const d = existingWrap._detailsEl;
+      d.__inlineCode = text;
+      d.classList.toggle('run', running);
+      d.classList.toggle('ok', !running);
+      if (existingWrap._titleEl && existingWrap._titleEl.textContent !== dispTitle) existingWrap._titleEl.textContent = dispTitle;
+      if (existingWrap._linesEl) {
+        const lTxt = lines ? lines + ' 行' : '';
+        if (existingWrap._linesEl.textContent !== lTxt) existingWrap._linesEl.textContent = lTxt;
+      }
+      if (existingWrap._spinEl) existingWrap._spinEl.hidden = !running;
+      if (d.open && existingWrap._preEl) {
+        existingWrap._preEl.textContent = text.length > 60000 ? text.slice(0, 60000) + '\n…' : text || '（空）';
+      }
+      if (typeof HtmlPreview !== 'undefined' && HtmlPreview.card) {
+        const card = HtmlPreview.card(key, { path: vpath, running, get: existingWrap._getTxt, getWsid: existingWrap._getWsid, onOpen: existingWrap._onOpen });
+        const old = existingWrap.querySelector(':scope>.pvc');
+        if (old !== card) old ? old.replaceWith(card) : existingWrap.append(card);
+      }
+      return existingWrap;
+    }
     let d = null;
     const sidOf = el => el?.closest?.('[data-wsid]')?.getAttribute('data-wsid') || chat?.sid || (typeof Tabs !== 'undefined' ? Tabs.cur?.sid : null) || null;
     const getTxt = () => d?.__inlineCode || text;
     const openPv = (mode = 'run') => {
       if (typeof HtmlPreview === 'undefined' || !HtmlPreview.open) return;
       const sid = sidOf(d);
+      const curChat = chat || (sid && typeof Chats !== 'undefined' ? Chats.get?.(sid) : null);
+      if (curChat?.isEvaluation && m && typeof HtmlPreview.openEvalMessage === 'function') {
+        HtmlPreview.openEvalMessage(curChat, m, { path: vpath, mode });
+        return;
+      }
       HtmlPreview.open({ sid, path: vpath, get: getTxt, wsid: sid, mode });
     };
     const pvBtn = h('button', {
@@ -1422,11 +2168,14 @@ const R = {
       title: '点击在预览窗口中查看完整代码',
       onclick: e => { e.preventDefault(); e.stopPropagation(); openPv('code'); }
     }, icon('pvcode'), h('span', {}, '代码'));
+    const titleEl = h('code', { class: 'wc-p', title: '点击在预览窗口展开查看' }, dispTitle);
+    const linesEl = h('span', { class: 'dim' }, lines ? lines + ' 行' : '');
+    const spinEl = h('i', { class: 'spin', hidden: !running });
     const wsm = h('summary', {},
       h('span', { class: 'wc-w' }, ext),
-      h('code', { class: 'wc-p', title: '点击在预览窗口展开查看' }, dispTitle),
-      h('span', { class: 'dim' }, lines ? lines + ' 行' : ''),
-      running ? h('i', { class: 'spin' }) : null,
+      titleEl,
+      linesEl,
+      spinEl,
       h('span', { class: 'grow' }),
       pvBtn,
       codeBtn,
@@ -1435,34 +2184,42 @@ const R = {
     const isOpen = Boolean(R.openOf(key, false));
     d = R.keep(h('details', { class: 'wcard ' + (running ? 'run' : 'ok') + ' pvable inline-html-card', open: isOpen || null }, wsm), key);
     d.__inlineCode = text;
-    if (typeof HtmlPreview !== 'undefined' && HtmlPreview.bindRow) {
-      HtmlPreview.bindRow(wsm, { path: vpath, get: getTxt, getWsid: () => sidOf(d) });
-    }
-    let bodyBuilt = false;
+    wsm.addEventListener('click', ev => {
+      if (ev.target.closest('.tg-chev,button')) return;
+      ev.preventDefault();
+      ev.stopPropagation();
+      openPv('run');
+    });
+    let bodyBuilt = false, preEl = null;
     const ensureBody = () => {
       if (bodyBuilt) return;
       bodyBuilt = true;
       const curTxt = getTxt();
+      preEl = h('pre', { class: 'wc-code' }, curTxt.length > 60000 ? curTxt.slice(0, 60000) + '\n…' : curTxt || '（空）');
+      if (wrap) wrap._preEl = preEl;
       d.append(h('div', { class: 'wc-card' },
         h('div', { class: 'wc-h' }, icon('file'), h('span', {}, dispTitle), h('span', { class: 'grow' }), h('span', { class: 'wc-lang' }, ext),
           h('button', { class: 'ib xs', title: '复制代码', onclick: e => { e.preventDefault(); e.stopPropagation(); copyText(getTxt()); } }, icon('copy'))),
-        h('pre', { class: 'wc-code' }, curTxt.length > 60000 ? curTxt.slice(0, 60000) + '\n…' : curTxt || '（空）')
+        preEl
       ));
     };
     if (isOpen) ensureBody();
     else d.addEventListener('toggle', () => { if (d.open) ensureBody(); }, { passive: true });
     if (Seg.off || typeof HtmlPreview === 'undefined' || !HtmlPreview.card) return d;
-    const card = HtmlPreview.card(key, { path: vpath, running, get: getTxt, getWsid: () => sidOf(d) });
-    let wrap = R.wraps.get(key);
-    if (!wrap) {
-      wrap = h('div', { class: 'wc-wrap inline-html-wrap' }, d, card);
-      R.wraps.set(key, wrap);
-      if (R.wraps.size > 200) R.wraps.delete(R.wraps.keys().next().value);
-    } else {
-      wrap.firstElementChild?.replaceWith(d);
-      const old = wrap.querySelector(':scope>.pvc');
-      if (old !== card) old ? old.replaceWith(card) : wrap.append(card);
-    }
+    const getWsidFn = () => sidOf(d);
+    const onOpenFn = mode => openPv(mode || 'run');
+    const card = HtmlPreview.card(key, { path: vpath, running, get: getTxt, getWsid: getWsidFn, onOpen: onOpenFn });
+    let wrap = h('div', { class: 'wc-wrap inline-html-wrap' }, d, card);
+    wrap._detailsEl = d;
+    wrap._titleEl = titleEl;
+    wrap._linesEl = linesEl;
+    wrap._spinEl = spinEl;
+    wrap._preEl = preEl;
+    wrap._getTxt = getTxt;
+    wrap._getWsid = getWsidFn;
+    wrap._onOpen = onOpenFn;
+    R.wraps.set(key, wrap);
+    if (R.wraps.size > 200) R.wraps.delete(R.wraps.keys().next().value);
     return wrap;
   },
   // 这个对话里 Write 出来的所有可预览文件（含对话正文内嵌的完整 HTML/SVG）：预览面板的「文件」下拉与自动截图共用
@@ -1812,20 +2569,25 @@ const R = {
     const running = p => p.state !== 'output-available' && p.state !== 'output-error' && p.state !== 'output-denied' || !!p.preliminary;
     const outSig = p => p.output === undefined ? -1 : typeof p.output === 'string' ? p.output.length : (p.output?.stdout?.length || 0) + (p.output?.stderr?.length || 0) + (p.output?.exit_code ?? 0);
     const pSig = p => p.type + ':' + (p.state || '') + ':' + (p.text?.length || 0) + ':' + (p.inputText?.length || 0) + ':' + (p.input ? 1 : 0) + ':' + outSig(p) + ':' + (p.preliminary ? 1 : 0) + ':' + (p.errorText ? 1 : 0);
+    const isEvalMsg = Boolean(chat?.isEvaluation || m.webdev || m.webdevTemplate || m.activeWorkflowRunId || m.metadata?.workflowRunId);
     let grp = null;
     const flush = () => {
       if (!grp) return; const g = grp; grp = null;
-      const sig = (live ? 'L' : '') + '|' + g.items.map(pSig).join(',');
+      const sig = (live ? 'L' : '') + (CmdTranslate.isEnabled() ? 'T' : '') + '|' + g.items.map(pSig).join(',');
+      if (isEvalMsg && typeof EvalView !== 'undefined' && typeof EvalView.renderToolStepGroup === 'function') {
+        segs.push(Seg.use(mid, 'wdg:' + g.start, sig, () => EvalView.renderToolStepGroup(g.items, chat, m, 'a', live)));
+        return;
+      }
       segs.push(Seg.use(mid, 'g:' + g.start, sig, () => R.group(g, mid + ':' + g.start, live, reasonLabels)));
     };
     (m.parts || []).forEach((p, i) => {
       if (!p || !p.type) return;
       const isTool = p.type.startsWith('tool-') || p.type === 'dynamic-tool';
       if (isTool && Hitl.name(p)) { flush(); segs.push(Seg.use(mid, 'h:' + (p.toolCallId || i), R.hitlSig(p, chat, isLast), () => R.hitl(p, chat, m, isLast))); return; }
-      if (isTool && !R.isWrite(p)) { (grp ||= { start: i, items: [] }).items.push(p); return; }
+      if (isTool && (isEvalMsg || !R.isWrite(p))) { (grp ||= { start: i, items: [] }).items.push(p); return; }
       if (p.type === 'step-start' || p.type.startsWith('data-') || (p.type === 'text' && !p.text)) return;
       // 开源思考（有可见思考文字）绝不能像 bash 一样被折叠进「已运行工具」中：先 flush 工具组，再独立标红展示
-      if (p.type === 'reasoning' && !ThinkingStatus.visible(p) && grp) return;
+      if (p.type === 'reasoning' && !ThinkingStatus.visible(p) && grp && !isEvalMsg) return;
       flush();
       if (isTool) { segs.push(Seg.use(mid, 'w:' + i, pSig(p), () => R.writeCard(p, mid + ':' + i))); return; }
       if (p.type === 'text') {
@@ -1865,13 +2627,17 @@ const R = {
         else if (d.__auto !== wantOpen) { d.__auto = wantOpen; d.open = wantOpen; }
         const st = d.open ? 'open' : 'closed'; d.dataset.state = st;
         const sm = d.querySelector(':scope > summary'); if (sm) { sm.setAttribute('aria-expanded', d.open ? 'true' : 'false'); sm.dataset.state = st; }
-        StreamMD.paint(d.__b, p.text || '…', false);
+        StreamMD.paint(d.__b, p.text || '…', streaming);
         segs.push(d); return;
       }
       const n = Seg.use(mid, 'p:' + i, pSig(p) + ':' + (p.url || '') + (live ? 'L' : ''), () => R.part(p, { live }));
       if (n) segs.push(n);
     });
     flush();
+    if (isEvalMsg && typeof EvalView !== 'undefined' && typeof EvalView.renderWebDevStatusFooter === 'function') {
+      const wdFoot = EvalView.renderWebDevStatusFooter(chat, m, 'a', live);
+      if (wdFoot) segs.push(wdFoot);
+    }
     const miRoute = typeof Models !== 'undefined' ? Models.get(chat.sid) : null;
     const stripTierV = s => String(s || '').replace(/\s*\((?:none|minimal|low|medium|high|xhigh|max)\)\s*$/i, '').replace(/-(?:none|minimal|low|medium|high|xhigh|max)$/i, '').replace(/[?？]+$/, '').trim().toLowerCase();
     const validNotice = n => {
@@ -1886,9 +2652,12 @@ const R = {
       ? Object.values(miRoute.routeNotices).map(validNotice).find(n => n && n.prevMessageId === m.id) || null
       : null;
     if (!seg?.hideFoot && !rn && !prevNotice && m.id && Array.isArray(chat?.messages)) {
-      const assts = chat.messages.filter(x => x && x.role === 'assistant' && x.id);
-      const myIdx = assts.findIndex(x => x.id === m.id);
-      const nextAsst = myIdx >= 0 ? assts[myIdx + 1] : null;
+      let nextAsst = seg?.nextAsstMsg !== undefined ? seg.nextAsstMsg : undefined;
+      if (nextAsst === undefined) {
+        const assts = chat.messages.filter(x => x && x.role === 'assistant' && x.id);
+        const myIdx = assts.findIndex(x => x.id === m.id);
+        nextAsst = myIdx >= 0 ? (assts[myIdx + 1] || null) : null;
+      }
       if (nextAsst) {
         prevNotice = validNotice(nextAsst._routeNotice || (nextAsst.id && miRoute?.routeNotices?.[nextAsst.id]) || null);
       }
@@ -2041,7 +2810,6 @@ const UI = {
             // 手机：账号旁边放调色板和设置
             h('button', { class: 'ib sbf-m sbf-thm', title: '切换主题（自动 / 浅色 / 深色）', 'aria-label': '切换主题', onclick: () => { const order = ['auto', 'light', 'dark']; Prefs.theme = order[(order.indexOf(Prefs.theme || 'auto') + 1) % order.length]; savePrefs(); this.applyTheme(); } }, icon('sun')),
             h('button', { class: 'ib sbf-m sbf-pal', title: '调色板：给窗口染色（按对话保存）', 'aria-label': '调色板', onclick: e => Palette.open(e.currentTarget) }, icon('palette')),
-            h('button', { class: 'ib sbf-m sbf-ext', title: '扩展程序（客户端与浏览器模式通用）', 'aria-label': '扩展程序', onclick: e => ExtPop.open(e.currentTarget) }, icon('ext')),
             h('button', { class: 'ib sbf-m sbf-set', title: '设置', 'aria-label': '设置', onclick: () => { this.closeDrawer(); this.settings(); } }, icon('gear')))),   // 刷新在底部栏（额度旁）
         h('div', { id: 'scrim', onclick: () => this.closeDrawer() }),
         h('main', { id: 'main' },
@@ -2355,11 +3123,23 @@ const UI = {
   // 侧栏卡片（油猴格式）：logo 圆 · 型号短名 + 备注（小字、不加粗）· 右侧 MM-DD HH:MM；进行中 logo 顺时针转，出错红、完成绿
   card(r, cur) {
     if (r.e?._pending) return h('div', { class: 'card pending busy gstep-card', role: 'status', title: '抽卡：正在创建对话（reCAPTCHA + 服务器创建），拿到 ID 后自动替换' }, h('i', { class: 'spin' }), h('span', { class: 'grow' }, r.e.title), h('span', { class: 'gstep-tag' }, '建连'), h('i', { class: 'gstep-bar', 'aria-hidden': 'true' }, h('b', { style: { width: '12%' } })), h('i', { class: 'pulse-wave', 'aria-hidden': 'true' }));
-    const e = r.e, c = Chats.get(e.id), v = Titles.view(e.id, e.title), mi = Models.get(e.id);
+    const e = r.e, c = Chats.get(e.id), v = r.tv || Titles.view(e.id, e.title), mi = Models.get(e.id);
     const isEvalEntry = Boolean(e.type === 'evaluation' || e.mode === 'battle' || e.mode === 'direct' || c?.isEvaluation);
+    const isBattleEntry = Boolean(v?.isBattle || (typeof EvalView !== 'undefined' && typeof EvalView.isBattleEntry === 'function' && EvalView.isBattleEntry(e, c)));
+    const battleStatus = isBattleEntry && typeof EvalView !== 'undefined' && typeof EvalView.getBattleStatusLabel === 'function'
+      ? EvalView.getBattleStatusLabel(c, e)
+      : (v?.battleStatus || '');
     const evalSub = (isEvalEntry && typeof EvalView !== 'undefined' && typeof EvalView.formatHistorySubtitle === 'function') ? EvalView.formatHistorySubtitle(e) : '';
-    const shown = isEvalEntry ? (evalSub || cardName(v.model || v.plain) || e.title || '未命名') : (cardName(v.model || v.plain) || '未命名');
-    const note = isEvalEntry ? (v.note || (evalSub && e.title ? String(e.title).slice(0, 26) : '')) : v.note;
+    const shown = isBattleEntry
+      ? (battleStatus || '待选择')
+      : isEvalEntry
+        ? (evalSub || cardName(v.model || v.plain) || e.title || '未命名')
+        : (cardName(v.model || v.plain) || '未命名');
+    const note = isBattleEntry
+      ? (v.note || (evalSub && evalSub !== 'Battle · 匿名盲测' ? evalSub : ''))
+      : isEvalEntry
+        ? (v.note || (evalSub && e.title ? String(e.title).slice(0, 26) : ''))
+        : v.note;
     const at = entAt(e);
     const d = new Date(at), tm = Number.isFinite(at) ? pad(d.getMonth() + 1) + '-' + pad(d.getDate()) + ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes()) : '';
     const gstep0 = typeof Gacha !== 'undefined' && Gacha.stepOf ? Gacha.stepOf(e.id) : null;
@@ -2370,11 +3150,11 @@ const UI = {
     const on = e.id === cur, st = isRunStep ? 'run' : c && chatState(c) === 'bad' ? 'bad' : '';
     const topConfSig = !isEvalEntry && typeof BillingProbe !== 'undefined' && BillingProbe.topConfidence ? BillingProbe.topConfidence(e.id, mi) : null;
     const goldChat = typeof Gold !== 'undefined' && typeof Gold.hasChat === 'function' ? Gold.hasChat(e.id) : false;
-    const sig = [CardSelect.mode,CardSelect.ids.has(e.id),SideTools.scope,on, !!c?.busy, st, gstep?.text || '', gstep?.pct || 0, gstep?.status || '', r.vip, r.hit, r.tint, r.vid || v.vid, shown, note, tm, v.title, mi?.name, mi?.routed, mi?.reverseMatch, mi?.reverseScore, mi?.confidence, topConfSig, e.title, e.updatedAt, Fav.has(e.id), goldChat, mi?.fingerprint?.thinkSec, mi?.fingerprint?.reasoning?.score, isEvalEntry, e.mode, e.modality, e.modelAId, e.modelBId, c?.voteState?.voted, c?.voteState?.modelAName, c?.voteState?.modelBName].join('\u0001');
-    if (this._cards?.has(e.id)) return this.cardEl(r, cur, { e, c, v, mi, shown, note, tm, on, st, gstep });   // 同一会话出现两次（分页重叠）：第二个单独建
+    const sig = [CardSelect.mode,CardSelect.ids.has(e.id),SideTools.scope,on, !!c?.busy, st, gstep?.text || '', gstep?.pct || 0, gstep?.status || '', r.vip, r.hit, r.tint, isBattleEntry ? 'battle' : (r.vid || v.vid), shown, note, tm, v.title, mi?.name, mi?.routed, mi?.reverseMatch, mi?.reverseScore, mi?.confidence, topConfSig, e.title, e.updatedAt, Fav.has(e.id), goldChat, mi?.fingerprint?.thinkSec, mi?.fingerprint?.reasoning?.score, isEvalEntry, isBattleEntry, battleStatus, e.mode, e.modality, e.modelAId, e.modelBId, c?.voteState?.voted, c?.voteState?.modelAName, c?.voteState?.modelBName].join('\u0001');
+    if (this._cards?.has(e.id)) return this.cardEl(r, cur, { e, c, v, mi, shown, note, tm, on, st, gstep, isBattleEntry, battleStatus });   // 同一会话出现两次（分页重叠）：第二个单独建
     const prev = this._cardOld?.get(e.id);
     if (prev && prev.sig === sig) { this._cards?.set(e.id, prev); return prev.el; }
-    const el = this.cardEl(r, cur, { e, c, v, mi, shown, note, tm, on, st, gstep });
+    const el = this.cardEl(r, cur, { e, c, v, mi, shown, note, tm, on, st, gstep, isBattleEntry, battleStatus });
     this._cards?.set(e.id, { sig, el });
     return el;
   },
@@ -2411,8 +3191,9 @@ const UI = {
     if (think != null) bits.push('思考 ' + think + 's');
     return { conf, tip: bits.join(' · ') };
   },
-  cardEl(r, cur, { e, c, v, mi, shown, note, tm, on, st, gstep }) {
-    const cm = this.cardMetrics(shown, mi, e.id);
+  cardEl(r, cur, { e, c, v, mi, shown, note, tm, on, st, gstep, isBattleEntry, battleStatus }) {
+    const cm = isBattleEntry ? { conf: null, tip: '' } : this.cardMetrics(shown, mi, e.id);
+    const battleSt = isBattleEntry ? (battleStatus === '生成中' ? 'run' : battleStatus === '已完成' ? 'ok' : 'wait') : st;
     return h('div', { 'data-sid':e.id, role:'option', 'aria-selected':String(CardSelect.ids.has(e.id)), tabindex:'0', class: 'card' + (CardSelect.ids.has(e.id)?' selected':'') + (CardSelect.mode?' selecting':'') + (on ? ' on' : '') + ((c?.busy || gstep?.active || st === 'run') ? ' busy' : '') + (gstep?.active ? ' gstep-card' : '') + (r.vip ? ' vip' : r.hit ? ' hit' : '') + (Fav.has(e.id) ? ' fv' : '') + (cm.conf != null ? ' cf' : ''), style: r.tint || cm.conf != null ? { ...(r.tint ? { '--tint': r.tint } : {}), ...(cm.conf != null ? { '--cp': cm.conf + '%' } : {}) } : null, title: [v.title, mi?.routed ? ('⚠️ 检测到中途路由：' + (mi.routeFrom ? mi.routeFrom + ' → ' : '') + (mi.routeTo || mi.name || '')) : '', mi?.fingerprint ? Fingerprint.details(mi) : '', mi?.name && mi.name !== v.model ? '型号：' + mi.name : '', note ? '备注：' + note : ''].filter(Boolean).join('\n'),
       onmousedown: ev=>{if(ev.ctrlKey||ev.metaKey||ev.shiftKey)ev.preventDefault();},
       onkeydown:ev=>{if(ev.target!==ev.currentTarget)return;if(ev.key===' '){ev.preventDefault();CardSelect.toggle(e.id);this.renderList();}else if(ev.key==='Enter'){ev.preventDefault();ev.currentTarget.click();}},
@@ -2421,8 +3202,10 @@ const UI = {
       onmouseleave: () => clearTimeout(this._pfT),
       onauxclick: ev => { if (ev.button === 1) Tabs.open(e.id, { focus: false, title: e.title }); },
       oncontextmenu: ev => { ev.preventDefault(); this.itemMenu(ev, e); } },
-      r.vid || v.vid ? stLogo(r.vid || v.vid, 16, st) : st === 'run' ? h('span', { class: 'vlogo busy' }, h('i', { class: 'spin' })) : h('span', { class: 'vlogo none' + (st ? ' st-' + st : '') }, (shown[0] || '?').toUpperCase()),
-      h('span', { class: 'cn' }, ...[].concat(metricName(shown, undefined, true))),
+      isBattleEntry && typeof EvalView !== 'undefined' && typeof EvalView.renderBattleLogo === 'function'
+        ? EvalView.renderBattleLogo(16, battleSt)
+        : (r.vid || v.vid ? stLogo(r.vid || v.vid, 16, st) : st === 'run' ? h('span', { class: 'vlogo busy' }, h('i', { class: 'spin' })) : h('span', { class: 'vlogo none' + (st ? ' st-' + st : '') }, (shown[0] || '?').toUpperCase())),
+      h('span', { class: 'cn' }, ...[].concat(isBattleEntry ? shown : metricName(shown, undefined, true))),
       Fav.has(e.id) ? h('span', { class: 'cfav', title: '已收藏' }, '★') : null,
       gstep?.active ? h('span', { class: 'gstep-tag' + (gstep.status === 'queued' ? ' ident-queue' : gstep.status === 'pending' ? ' ident-wait' : gstep.status === 'running' ? ' ident-run' : ''), title: gstep.phase || gstep.text }, gstep.text) : (cm.tip ? h('span', { class: 'cstat' }, cm.tip) : null),
       // 电脑上和原来一样排成一行（外层不占布局）；手机上备注在上、时间在下，靠右对齐
@@ -2466,12 +3249,15 @@ const UI = {
     if (isMob()) Pager.ensureSoon(250);   // 窗口增减 / 顺序变了：相邻的预搭页跟着调整
     const box = $('#tablist'); if (!box) return;
     // 内容没变就不重建（流式回复时每帧都会调用这里）
+    const curGlobalMode = (typeof ModeState !== 'undefined' && typeof ModeState.getMode === 'function') ? ModeState.getMode() : 'agent';
     const tsig = Tabs.list.map(t => { if (t.kind === 'gacha') { const r = Gacha.run; return 'g' + (t.key === Tabs.active) + Gacha.busy() + (r ? r.completed + '/' + (r.settings?.endless ? '∞' : r.settings?.maxAttempts) : ''); } if (t.kind === 'power') return 'p' + (t.key === Tabs.active);
-      const c = t.sid ? Chats.get(t.sid) : null, title = (t.sid && (History.byId(t.sid)?.title || c?.title)) || t.title || '', v = t.sid ? Titles.view(t.sid, title) : null;
-      return [t.key, t.key === Tabs.active, chatState(c), title, v?.note, v?.model, v?.plain, v?.pendingConfirm, v?.time, v?.vid, Models.get(t.sid || '')?.name, Models.get(t.sid || '')?.pendingConfirm, Palette.chip(t)?.sig].join('\u0001'); }).join('\u0002') + '|' + (this.host?.account ? emailUser(this.host.account) : '') + '|' + (IP.ip || '');
-    clearTimeout(this.barT); this.barT = setTimeout(() => Bar.render(), 200);
+      const c = t.sid ? Chats.get(t.sid) : null, he = t.sid ? History.byId(t.sid) : null, title = (t.sid && (he?.title || c?.title)) || t.title || '', v = t.sid ? Titles.view(t.sid, title) : null;
+      const isBattleTab = Boolean(v?.isBattle || (typeof EvalView !== 'undefined' && typeof EvalView.isBattleEntry === 'function' && EvalView.isBattleEntry(he, c, t)));
+      const bStat = isBattleTab && typeof EvalView !== 'undefined' && typeof EvalView.getBattleStatusLabel === 'function' ? EvalView.getBattleStatusLabel(c, he) : (v?.battleStatus || '');
+      return [t.key, t.key === Tabs.active, chatState(c), isBattleTab, bStat, title, v?.note, v?.model, v?.plain, v?.pendingConfirm, v?.time, v?.vid, Models.get(t.sid || '')?.name, Models.get(t.sid || '')?.pendingConfirm, Palette.chip(t)?.sig].join('\u0001'); }).join('\u0002') + '|' + curGlobalMode + '|' + (this.host?.account ? emailUser(this.host.account) : '') + '|' + (IP.ip || '');
     if (!box.__lp) { box.__lp = 1; TabPress.bind(box); }
     if (tsig === this._tabSig && box.children.length) return;
+    clearTimeout(this.barT); this.barT = setTimeout(() => Bar.render(), 200);
     const activeChanged = this._tabAct !== Tabs.active; this._tabSig = tsig; this._tabAct = Tabs.active;
     const frag = document.createDocumentFragment();
     for (const t of Tabs.list) {
@@ -2486,22 +3272,40 @@ const UI = {
           icon('bolt'), h('span', { class: 'tab-t' }, '推理分排行'), h('button', { class: 'x', onclick: () => Tabs.close(t.key) }, icon('x'))));
         continue;
       }
-      const c = t.sid ? Chats.get(t.sid) : null, mi = t.sid ? Models.get(t.sid) : null;
-      const title = (t.sid && (History.byId(t.sid)?.title || c?.title)) || t.title || '新对话';
+      const c = t.sid ? Chats.get(t.sid) : null, he = t.sid ? History.byId(t.sid) : null, mi = t.sid ? Models.get(t.sid) : null;
+      const title = (t.sid && (he?.title || c?.title)) || t.title || '新对话';
       t.title = title;
-      // 标签：厂商图标 + 备注（有备注只显示备注）/ 型号全名（不写厂商名）；图标转 = 进行中，红 = 出错，绿 = 完成
+      // 标签：厂商图标 + 备注（有备注只显示备注）/ 型号全名（不写厂商名）；Battle 模式固定显示 Battle 图标 + 状态（生成中 / 待选择 / 已完成）
       const v = t.sid ? Titles.view(t.sid, title) : null, st = chatState(c);
-      const label = !t.sid ? '新对话' : v.note || (v.model ? tabName(v.model) : '') || v.plain || '对话';
-      const tip = [label, v?.model && v.model !== label ? v.model : '', v?.time ? '最近对话 ' + v.time : '', st === 'run' ? '进行中' : st === 'bad' ? '出错了' : st === 'ok' ? '已完成' : ''].filter(Boolean).join('\n');
+      const isBattleTab = Boolean(v?.isBattle || (typeof EvalView !== 'undefined' && typeof EvalView.isBattleEntry === 'function' && EvalView.isBattleEntry(he, c, t)));
+      const battleStatus = isBattleTab
+        ? ((typeof EvalView !== 'undefined' && typeof EvalView.getBattleStatusLabel === 'function') ? EvalView.getBattleStatusLabel(c, he) : (v?.battleStatus || '待选择'))
+        : '';
+      const label = isBattleTab
+        ? battleStatus
+        : (!t.sid ? '新对话' : v.note || (v.model ? tabName(v.model) : '') || v.plain || '对话');
+      const battleSt = isBattleTab ? (battleStatus === '生成中' ? 'run' : battleStatus === '已完成' ? 'ok' : 'wait') : st;
+      const tip = isBattleTab
+        ? ['Battle 盲测 · ' + battleStatus, v?.time ? '最近对话 ' + v.time : ''].filter(Boolean).join('\n')
+        : [label, v?.model && v.model !== label ? v.model : '', v?.time ? '最近对话 ' + v.time : '', st === 'run' ? '进行中' : st === 'bad' ? '出错了' : st === 'ok' ? '已完成' : ''].filter(Boolean).join('\n');
       const pc = Palette.chip(t);   // 每个窗口有自己的颜色：标签小卡片也用它，一眼能分清
       const isSel = t.key === Tabs.active;
       const hasLamp = isSel && !!t.sid;
-      frag.append(h('div', { class: 'tab' + (isSel ? ' on' : '') + (hasLamp ? ' tab-lamp-on' : '') + (!t.sid ? ' tab-blank' : '') + (st ? ' st-' + st : '') + (pc ? ' tinted' : ''), style: pc ? { '--tc': pc.bg, '--tco': pc.on } : null, 'data-key': t.key, title: tip + (t.sid ? '\n长按 / 下拉：重新载入' : ''), onclick: e => { if (!e.target.closest('.x')) Tabs.focus(t.key); }, onauxclick: e => { if (e.button === 1) Tabs.close(t.key); } },
-        !t.sid ? icon('plus', 'tab-new') : stLogo(v.vid, 15, st), h('span', { class: 'tab-t' }, ...[].concat(v?.note || !v?.model ? label : metricName(label))), h('button', { class: 'x', onclick: () => Tabs.close(t.key) }, icon('x'))));
+      const tabLogoEl = isBattleTab && typeof EvalView !== 'undefined' && typeof EvalView.renderBattleLogo === 'function'
+        ? EvalView.renderBattleLogo(15, battleSt)
+        : (!t.sid ? icon('plus', 'tab-new') : stLogo(v.vid, 15, st));
+      const tabTextNodes = isBattleTab ? [label] : [].concat(v?.note || !v?.model ? label : metricName(label));
+      frag.append(h('div', { class: 'tab' + (isSel ? ' on' : '') + (hasLamp ? ' tab-lamp-on' : '') + (!t.sid ? ' tab-blank' : '') + (isBattleTab ? ' tab-battle' : '') + (battleSt ? ' st-' + battleSt : '') + (pc ? ' tinted' : ''), style: pc ? { '--tc': pc.bg, '--tco': pc.on } : null, 'data-key': t.key, title: tip + (t.sid ? '\n长按 / 下拉：重新载入' : ''), onclick: e => { if (!e.target.closest('.x')) Tabs.focus(t.key); }, onauxclick: e => { if (e.button === 1) Tabs.close(t.key); } },
+        tabLogoEl, h('span', { class: 'tab-t' }, ...tabTextNodes), h('button', { class: 'x', onclick: () => Tabs.close(t.key) }, icon('x'))));
     }
     box.replaceChildren(frag);
     if (activeChanged) box.querySelector('.tab.on')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
-    const cur = Tabs.cur, cv = cur?.sid ? Titles.view(cur.sid, cur.title) : null; Host.setTitle(`${cv ? (cv.note || tabName(cv.model) || cv.plain || 'Brana') : 'Brana'} · ${this.host?.account ? emailUser(this.host.account) : 'Brana'}${IP.ip ? ' · ' + IP.ip : ''}`);
+    const cur = Tabs.cur, curC = cur?.sid ? Chats.get(cur.sid) : null, curHe = cur?.sid ? History.byId(cur.sid) : null, cv = cur?.sid ? Titles.view(cur.sid, cur.title) : null;
+    const curIsBattle = Boolean(cv?.isBattle || (typeof EvalView !== 'undefined' && typeof EvalView.isBattleEntry === 'function' && EvalView.isBattleEntry(curHe, curC, cur)));
+    const curTitleHead = curIsBattle
+      ? ((typeof EvalView !== 'undefined' && typeof EvalView.getBattleStatusLabel === 'function') ? EvalView.getBattleStatusLabel(curC, curHe) : (cv?.battleStatus || '待选择'))
+      : (cv ? (cv.note || tabName(cv.model) || cv.plain || 'Brana') : 'Brana');
+    Host.setTitle(`${curTitleHead} · ${this.host?.account ? emailUser(this.host.account) : 'Brana'}${IP.ip ? ' · ' + IP.ip : ''}`);
   },
 
   // ----- 对话视图 -----
@@ -2647,6 +3451,8 @@ const UI = {
       } else {
         E.head.replaceChildren(...K(h('div', { class: 'chead-t', title: tip, 'aria-label': 'Session cumulative cost' }, stLogo(v.vid || Brand.of(mi?.name), 18, st), h('span', { class: 'chead-n' }, ...[].concat(v.note || metricName(mi?.name || v.model, cardName) || v.plain || '对话')), v.note && (mi?.name || v.model) ? h('span', { class: 'chead-md' }, '-', ...[].concat(metricName(mi?.name || v.model, cardName))) : null),
           isDirectChat ? h('span', { class: 'badge dim' }, 'Direct 直连') : null,
+          isDirectChat && chat.modality ? h('span', { class: 'badge dim' }, String(chat.modality).toUpperCase()) : null,
+          isDirectChat && typeof EvalView !== 'undefined' && typeof EvalView.renderPreviewHeaderBtns === 'function' ? EvalView.renderPreviewHeaderBtns(chat, (chat.messages || []).findLast(m => m && m.role === 'assistant'), 'a') : null,
           isDirectChat && typeof EvalView !== 'undefined' && typeof EvalView.renderRegenBtn === 'function' ? EvalView.renderRegenBtn(chat, (chat.messages || []).findLast(m => m && m.role === 'assistant'), 'a', Boolean(chat.busy), null) : null,
           window.__BRANA_BROWSE_MODE ? h('button', { type: 'button', class: 'badge warn browse-badge', title: '当前处于离线/免登查阅模式，点击返回登录或重连', onclick: () => { window.__BRANA_BROWSE_MODE = false; UI.loginGate('已退出查阅模式，请登录或刷新连接'); } }, '查阅模式 · 退出') : null,
           mi?.routed ? (() => {
@@ -2681,7 +3487,8 @@ const UI = {
             : !isEvalChat && !mi && chat.idErr ? h('button', { class: 'badge dim link', title: chat.idErr + '（点一下重试）', onclick: () => chat.identifyOld() }, '未识别') : null,
           h('span', { class: 'grow' }),
           !isEvalChat ? h('button', { class: 'ib revbtn' + (typeof BillingProbe !== 'undefined' && BillingProbe.isRunning?.(chat) ? ' run' : ''), 'aria-label': typeof BillingProbe !== 'undefined' && BillingProbe.isRunning?.(chat) ? '停止反推' : '费用反推', disabled: (chat.busy && !(typeof BillingProbe !== 'undefined' && BillingProbe.isRunning?.(chat))) || PelicanTest.isRunning(chat), title: typeof BillingProbe !== 'undefined' && BillingProbe.isRunning?.(chat) ? '停止反推识别' + (chat.probeProgress ? '（' + chat.probeProgress + '）' : '') : '反推识别：点一下读取账单与对话记录/工具调用，按最高置信度反推并锁定当前对话的真实模型与推理分。', onclick: () => void BillingProbe.reverseIdentify(chat, { interactive: true }) }, icon('pulse')) : null,
-          !isEvalChat ? h('button', { class: 'ib pelbtn' + (PelicanTest.isRunning(chat) ? ' run' : ''), 'aria-label': PelicanTest.isRunning(chat) ? '停止鹈鹕' : '鹈鹕测试', disabled: (chat.busy && !PelicanTest.isRunning(chat)), title: PelicanTest.isRunning(chat) ? '停止鹈鹕测试' + (chat.probeProgress ? '（' + chat.probeProgress + '）' : '') : '鹈鹕与探针测试：点击可选择鹈鹕测试、微缩探针测试或快速发送文字进行测试。', onclick: e => { e.stopPropagation(); if (PelicanTest.isRunning(chat)) { void PelicanTest.start(chat); return; } if (typeof PelicanTest !== 'undefined' && typeof PelicanTest.openMenu === 'function') PelicanTest.openMenu(e.currentTarget, { tab: Tabs.cur, chat, mode: 'agent' }); else void PelicanTest.start(chat); } }, icon('pelican')) : isDirectChat ? this.renderPelicanMenuBtn(Tabs.cur, chat, 'direct') : null,
+          !isEvalChat ? this.renderProbeTestBtn(Tabs.cur, chat, 'agent') : null,
+          !isEvalChat ? h('button', { class: 'ib pelbtn' + (PelicanTest.isRunning(chat) ? ' run' : ''), 'aria-label': PelicanTest.isRunning(chat) ? '停止鹈鹕' : '鹈鹕测试', disabled: (chat.busy && !PelicanTest.isRunning(chat)), title: PelicanTest.isRunning(chat) ? '停止鹈鹕测试' + (chat.probeProgress ? '（' + chat.probeProgress + '）' : '') : '鹈鹕测试：点一下直接发送 2D 鹈鹕骑车动态 SVG 标准测试题', onclick: e => { e.stopPropagation(); void PelicanTest.start(chat); } }, icon('pelican')) : isDirectChat ? this.renderPelicanMenuBtn(Tabs.cur, chat, 'direct') : null,
           h('button', { class: 'ib mdbtn', title: '导出这个对话的全部内容（正文、思考、bash 命令和输出、工具调用）为 Markdown，自己选保存位置', onclick: () => void ChatExport.run(chat) }, icon('doc')),
           !isEvalChat ? h('button', { class: 'ib wsbtn', title: WS.shown ? '收起工作区' : '显示工作区（沙盒文件）', onclick: () => { WS.set(!WS.shown); scheduleChat(chat); } }, icon('folder')) : null,
           chat.busy ? h('span', { class: 'phase' }, h('i', { class: 'spin' }), h('span', { class: 'ph-t' }, phase), chat.sentAt ? h('span', { class: 'dim anc-since', 'data-since': chat.sentAt }, '') : null) : null));
@@ -2706,21 +3513,46 @@ const UI = {
       // _held：已按发送、但要等服务器上一轮结束才真正发出的消息，在输入框上方的队列条里显示，不进对话区
       let lastIdx = chat.messages.length - 1; while (lastIdx >= 0 && chat.messages[lastIdx]._held) lastIdx--;
       const isVisibleUser = u => u && u.role === 'user' && !u._held && !u._autoContinue && !u.metadata?.autoContinue && (((u.parts || []).some(p => (p.type === 'text' && String(p.text || '').trim()) || p.type === 'data-tool-results')) || userAtts(u).length > 0);
-      const segMeta = new Array(chat.messages.length);
+      const msgLen = chat.messages.length;
+      const segMeta = new Array(msgLen);
+      const visUser = new Uint8Array(Math.max(0, lastIdx + 1));
+      const prevAsstArr = new Int32Array(Math.max(0, lastIdx + 1)).fill(-1);
+      const firstIdxArr = new Int32Array(Math.max(0, lastIdx + 1)).fill(-1);
+      const nextAsstArr = new Int32Array(Math.max(0, lastIdx + 1)).fill(-1);
+      let runFirstAsst = -1, runLastAsst = -1;
+      for (let i = 0; i <= lastIdx; i++) {
+        const m = chat.messages[i];
+        if (!m || m._held) continue;
+        if (isVisibleUser(m)) {
+          visUser[i] = 1;
+          runFirstAsst = -1;
+          runLastAsst = -1;
+        } else if (m.role === 'assistant') {
+          prevAsstArr[i] = runLastAsst;
+          firstIdxArr[i] = runFirstAsst >= 0 ? runFirstAsst : i;
+          if (runFirstAsst < 0) runFirstAsst = i;
+          runLastAsst = i;
+        }
+      }
+      let nextOverallAsst = null, runNextAsst = -1;
+      const nextOverallAsstByIdx = new Array(msgLen).fill(null);
+      for (let i = lastIdx; i >= 0; i--) {
+        const m = chat.messages[i];
+        if (!m || m._held) continue;
+        if (visUser[i]) {
+          runNextAsst = -1;
+          continue;
+        }
+        if (m.role !== 'assistant') continue;
+        nextAsstArr[i] = runNextAsst;
+        runNextAsst = i;
+        nextOverallAsstByIdx[i] = nextOverallAsst;
+        if (m.id) nextOverallAsst = m;
+      }
       for (let i = 0; i <= lastIdx; i++) {
         const m = chat.messages[i];
         if (!m || m._held || m.role !== 'assistant') continue;
-        let prevAsst = -1, nextAsst = -1, firstIdx = i;
-        for (let j = i - 1; j >= 0; j--) {
-          const mj = chat.messages[j]; if (!mj || mj._held) continue;
-          if (isVisibleUser(mj)) break;
-          if (mj.role === 'assistant') { if (prevAsst < 0) prevAsst = j; firstIdx = j; }
-        }
-        for (let j = i + 1; j <= lastIdx; j++) {
-          const mj = chat.messages[j]; if (!mj || mj._held) continue;
-          if (isVisibleUser(mj)) break;
-          if (mj.role === 'assistant') { nextAsst = j; break; }
-        }
+        const prevAsst = prevAsstArr[i], nextAsst = nextAsstArr[i], firstIdx = firstIdxArr[i] >= 0 ? firstIdxArr[i] : i;
         // Also merge consecutive tool-only segments that share the exact same completion minute even if separated by non-text records
         const curT1 = m.metadata?.timing?.completedAt || 0;
         const nextM = nextAsst >= 0 ? chat.messages[nextAsst] : null;
@@ -2735,7 +3567,8 @@ const UI = {
           mid: hasPrev && hasNext,
           tail: hasPrev && !hasNext,
           hideFoot: hasNext && (!hasText || sameClockAsNext),
-          turnStartAt
+          turnStartAt,
+          nextAsstMsg: nextOverallAsstByIdx[i]
         };
       }
       chat.messages.forEach((m, i) => {
@@ -2765,6 +3598,9 @@ const UI = {
         if (!stick && anchor && anchor.isConnected) { const d = anchor.offsetTop - prevTop - anchorOff; if (d) sc.scrollTop = prevTop + d; }
       }
       if (fk && document.activeElement !== ae) { const n = [...T.querySelectorAll('[data-fk]')].find(x => x.dataset.fk === fk); if (n && !n.disabled) { try { n.focus({ preventScroll: true }); if (fsel && n.setSelectionRange) n.setSelectionRange(fsel[0], fsel[1]); } catch {} } }
+      if (isEvalChat && typeof HtmlPreview !== 'undefined' && typeof HtmlPreview.syncEval === 'function') {
+        try { HtmlPreview.syncEval(chat); } catch {}
+      }
     }
     if (stick || full) sc.scrollTop = sc.scrollHeight;
     { const hh = sc.scrollHeight, grew = !!E.lastSH && hh > E.lastSH + 4; E.lastSH = hh; this.paintToBot(grew && !stick); }
@@ -3348,28 +4184,49 @@ const UI = {
       throw e;
     } finally { if (hint && hint.textContent === '正在创建对话…') hint.textContent = ''; }
   },
-  renderPelicanMenuBtn(tab, chat, mode) {
+  renderProbeTestBtn(tab, chat, mode) {
     const curMode = mode || (chat?.isEvaluation ? (chat.evalMode || 'battle') : (typeof ModeState !== 'undefined' && typeof ModeState.getMode === 'function' ? ModeState.getMode() : 'agent'));
-    const isRun = Boolean(chat && ((typeof PelicanTest !== 'undefined' && PelicanTest.isRunning?.(chat)) || (chat.isEvaluation && chat.busy)));
-    const btn = h('button', {
+    const isProbeRun = Boolean(chat && chat._isMicroProbe && chat.busy);
+    return h('button', {
       type: 'button',
-      class: 'ib pel-test-btn pelbtn' + (isRun ? ' run' : ''),
+      class: 'ib probebtn' + (isProbeRun ? ' run' : ''),
       'data-mode': curMode,
-      'aria-label': isRun ? '停止测试' : '鹈鹕测试与快速探针菜单',
-      'aria-haspopup': 'menu',
-      title: isRun
-        ? '停止当前测试'
-        : '点击选择测试：鹈鹕测试 · 微缩探针测试 · 快速发送文字进行测试',
+      'aria-label': isProbeRun ? '停止探针测试' : '微缩探针测试',
+      disabled: Boolean(chat && chat.busy && !isProbeRun),
+      title: isProbeRun
+        ? '停止当前微缩探针测试'
+        : '微缩探针测试：点一下直接发送 35～45 行 HTML+SVG 微缩徽章探针测试题',
       onclick: e => {
         e.stopPropagation();
-        if (typeof PelicanTest !== 'undefined' && typeof PelicanTest.openMenu === 'function') {
-          PelicanTest.openMenu(btn, { tab: tab || Tabs.cur, chat, mode: curMode });
+        if (typeof PelicanTest !== 'undefined' && typeof PelicanTest.runQuickTest === 'function') {
+          void PelicanTest.runQuickTest('habit', { tab: tab || Tabs.cur, chat, mode: curMode });
+        }
+      },
+    }, icon('fingerprint'));
+  },
+  renderPelicanMenuBtn(tab, chat, mode) {
+    const curMode = mode || (chat?.isEvaluation ? (chat.evalMode || 'battle') : (typeof ModeState !== 'undefined' && typeof ModeState.getMode === 'function' ? ModeState.getMode() : 'agent'));
+    const isPelRun = Boolean(chat && ((typeof PelicanTest !== 'undefined' && PelicanTest.isRunning?.(chat)) || (chat.isEvaluation && chat._isPelicanTest && chat.busy)));
+    const probeBtn = this.renderProbeTestBtn(tab, chat, curMode);
+    const pelBtn = h('button', {
+      type: 'button',
+      class: 'ib pel-test-btn pelbtn' + (isPelRun ? ' run' : ''),
+      'data-mode': curMode,
+      'aria-label': isPelRun ? '停止鹈鹕测试' : '鹈鹕测试',
+      disabled: Boolean(chat && chat.busy && !isPelRun),
+      title: isPelRun
+        ? '停止当前鹈鹕测试'
+        : '鹈鹕测试：点一下直接发送 2D 鹈鹕骑车动态 SVG 标准测试题',
+      onclick: e => {
+        e.stopPropagation();
+        if (typeof PelicanTest !== 'undefined' && typeof PelicanTest.runQuickTest === 'function') {
+          void PelicanTest.runQuickTest('pelican', { tab: tab || Tabs.cur, chat, mode: curMode });
         } else if (chat && typeof PelicanTest !== 'undefined' && typeof PelicanTest.start === 'function') {
           void PelicanTest.start(chat);
         }
       },
     }, icon('pelican'));
-    return btn;
+    return [probeBtn, pelBtn];
   },
   async sendQuickTestPrompt(prompt, opts = {}) {
     const text = String(prompt || '').trim();
@@ -3456,7 +4313,7 @@ document.addEventListener('visibilitychange',()=>{if(document.hidden)ChatPaint.h
 try { Tabs.enforceLimit(Tabs.active); Tabs.save(); } catch {}
 if (typeof Bus !== 'undefined') {
   Bus.on('history', () => { try { Tabs.enforceLimit(Tabs.active); Tabs.save(); UI.renderTabs?.(); } catch {} });
-  Bus.on('modechange', () => { try { UI.renderList(); UI.showTab(); } catch {} });
+  Bus.on('modechange', () => { try { UI.renderList(); UI.renderTabs?.(); UI.showTab(); } catch {} });
   Bus.on('modalitychange', () => { try { UI.showTab(); } catch {} });
   Bus.on('directmodelchange', () => { try { UI.showTab(); } catch {} });
   Bus.on('eval:vote-revealed', () => { try { if (UI.els?.chat) UI.renderChat(UI.els.chat, true); UI.renderTabs?.(); UI.renderListSoon?.(); } catch {} });

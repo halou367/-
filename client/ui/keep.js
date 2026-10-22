@@ -376,7 +376,14 @@ const KeepAlive = (() => {
     if (visible(c) && info.compact && t - st.sigAt > 4000) Pill.show(c, '上下文压缩', [], 'graphic', 60);
     else if (st.pillKind === 'info' || (st.pillKind === 'graphic' && !st.plan)) Pill.hide(c);
   }
-  function tick() { for (const c of Chats.values()) { try { check(c); } catch (e) { console.warn('keepalive', e); } } Pill.sync(); }
+  function tick() {
+    const t = now();
+    for (const c of Chats.values()) {
+      if (!c || (!c.busy && !c._ka?.plan && !c._ka?.pill && !c.fakeEnd && !c.midTurnStall && !(c.errAt && t - c.errAt < 180e3) && !(c.sentAt && t - c.sentAt < 180e3) && !(c.endAt && t - c.endAt < 90e3))) continue;
+      try { check(c); } catch (e) { console.warn('keepalive', e); }
+    }
+    Pill.sync();
+  }
 
   // 极简图形化状态胶囊（少文字、带微缩进度条、不弹弹窗）
   const Pill = {

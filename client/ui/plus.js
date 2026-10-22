@@ -86,8 +86,8 @@ const LeaderPop = {
     const s = Gacha.settings(), on = !!s.sortSidebar;
     const sid = Tabs.cur?.sid, cur = sid ? (Models.get(sid)?.name || Trace.latest(sid)?.best || '') : '';
     const curC = cur ? Strength.canon(cur).toLowerCase() : '';
-    const fams = GoldBoard.families(), autoSet = new Set(GoldBoard.autoGold(fams).map(n => n.toLowerCase()));
-    const goldList = Gold.manual ? [...Gold.set()].map(n => cardName(n) || n) : GoldBoard.autoGold(fams).map(n => cardName(n) || n);
+    const fams = GoldBoard.families(), autoGolds = GoldBoard.autoGold(fams), autoSet = new Set(autoGolds.map(n => n.toLowerCase()));
+    const goldList = Gold.manual ? [...Gold.set()].map(n => cardName(n) || n) : autoGolds.map(n => cardName(n) || n);
 
     const localHits = new Map();
     for (const m of Object.values(Models.all || {})) {
@@ -126,10 +126,16 @@ const LeaderPop = {
 
       const curToks = cur ? Brand.toks(cur) : [];
       const allRows = Strength.board();
+      const byName = new Map(), byToks = new Map();
+      for (const r of allRows) {
+        const nl = r.name.toLowerCase(), tk = Brand.toks(r.name).join('-');
+        if (!byName.has(nl)) byName.set(nl, r);
+        if (tk && !byToks.has(tk)) byToks.set(tk, r);
+      }
       for (const e of list) {
         const vid = Brand.of(e.name), hit = curToks.length && e.base.every(x => curToks.includes(x));
         const canonK = Strength.canon(e.id || e.name).toLowerCase();
-        const bRow = allRows.find(r => r.name.toLowerCase() === canonK || Brand.toks(r.name).join('-') === e.base.join('-'));
+        const bRow = byName.get(canonK) || byToks.get(e.base.join('-')) || null;
         const hits = localHits.get(canonK) || (bRow?.s?.nAll || 0);
         const isG = Gold.manual ? Gold.has(e.name) : autoSet.has(canonK);
         body.append(h('div', { class: 'lp-row' + (hit ? ' me' : '') + (isG ? ' gold' : ''), onclick: () => { this.close(); Tabs.openPower('rank'); } },

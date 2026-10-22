@@ -15,23 +15,36 @@ const ThinkingStatus = (() => {
     }
     return /^(?:gpt-(?!oss(?:-|$))|chatgpt-|o[134](?:-|$)|claude-|gemini-|grok-[234](?:-|$))/.test(id)?'closed':'unknown';
   }
+  const _accessMemo = typeof WeakMap !== 'undefined' ? new WeakMap() : null;
+  const _ofMemo = typeof WeakMap !== 'undefined' ? new WeakMap() : null;
   function access(chat,message=null) {
     if(!chat?.sid)return {type:'unknown',certain:false};
     // History must use the matching turn, never the current model of a possibly rerouted chat.
     const turns=typeof Trace!=='undefined'?(Trace.turns(chat.sid)||[]):[];
     const current=message||chat.live;
+    const m=Models.get(chat.sid);
+    const lastTurn=turns[turns.length-1];
+    const aSig=`${chat.sid}\0${current?.id||''}\0${message===chat.live||!message?1:0}\0${chat.turnInput||chat.awaitId||''}\0${turns.length}\0${lastTurn?.changed?1:0}:${lastTurn?.routing?1:0}:${lastTurn?.outcome||''}:${lastTurn?.response||''}:${lastTurn?.internal||''}:${lastTurn?.records?.length||0}\0${m?.name||''}:${m?.routed?1:0}:${m?.guess?1:0}:${m?.messageId||''}:${m?.inputId||''}:${m?.response||''}:${m?.internal||''}`;
+    if (_accessMemo && typeof chat === 'object') {
+      const hit = _accessMemo.get(chat);
+      if (hit && hit.sig === aSig) return hit.val;
+    }
+    const saveAcc = val => {
+      if (_accessMemo && typeof chat === 'object') _accessMemo.set(chat, { sig: aSig, val });
+      return val;
+    };
     const matches=current?.id?turns.filter(t=>(t.records||[]).some(r=>r.messageId===current.id)):[];
-    if(matches.length===1){const t=matches[0];if(t.changed||t.routing||t.outcome)return {type:'unknown',certain:false};const name=t.response||t.internal;return {type:classify(name,t),certain:true};}
-    if(matches.length>1)return {type:'unknown',certain:false};
-    const m=Models.get(chat.sid);if(!m||m.routed)return {type:'unknown',certain:false};
+    if(matches.length===1){const t=matches[0];if(t.changed||t.routing||t.outcome)return saveAcc({type:'unknown',certain:false});const name=t.response||t.internal;return saveAcc({type:classify(name,t),certain:true});}
+    if(matches.length>1)return saveAcc({type:'unknown',certain:false});
+    if(!m||m.routed)return saveAcc({type:'unknown',certain:false});
     // A session cache is historical, not evidence about the current turn. Only an
     // exact assistant message, or the dispatch input of this active turn, can bind it.
     const sameMessage=!!current?.id&&m.messageId===current.id;
     const input=chat.turnInput||chat.awaitId;
     const sameInput=(!message||message===chat.live)&&!!input&&m.inputId===input;
-    if((sameMessage||sameInput)&&!m.guess&&(m.response||m.internal))return {type:classify(m.response||m.internal,m),certain:true};
+    if((sameMessage||sameInput)&&!m.guess&&(m.response||m.internal))return saveAcc({type:classify(m.response||m.internal,m),certain:true});
     // Fingerprints are probes of a different response; they do not relabel this turn.
-    return {type:'unknown',certain:false};
+    return saveAcc({type:'unknown',certain:false});
   }
   // 思考块本身就能区分：开源模型的思考有可见文字；闭源模型的思考是空的 / 加密的（只显示「…」）
   const visible=p=>/[^\s.…·。]/.test(String(p?.text||''));
@@ -60,11 +73,23 @@ const ThinkingStatus = (() => {
     if (!chat) return null;
     const closedByApi = isClosed(chat);
     const f = chat.fmt;
+    const curM0 = chat.sid && typeof Models !== 'undefined' ? Models.get(chat.sid) : null;
+    const msgsArr = Array.isArray(chat.messages) ? chat.messages : [];
+    const lastM = chat.live || msgsArr[msgsArr.length - 1] || null;
+    const lastP = Array.isArray(lastM?.parts) && lastM.parts.length ? lastM.parts[lastM.parts.length - 1] : null;
+    const oSig = `${chat.sid || ''}\0${closedByApi ? 1 : 0}\0${msgsArr.length}\0${chat.live ? chat.live.id || 'L' : ''}\0${lastM?.id || ''}:${lastM?.parts?.length || 0}:${lastM?.metadata?.openThinkStopped ? 1 : 0}:${lastP?.type || ''}:${lastP?.state || ''}:${(lastP?.text || '').length}:${visible(lastP) ? 1 : 0}\0${curM0?.name || ''}:${curM0?.guess ? 1 : 0}:${curM0?.userCorrected ? 1 : 0}\0${f?.rChars || 0}:${f?.rBlocks || f?.rN || 0}:${f?.rHead || ''}:${chat.thinkStopped ? 1 : 0}`;
+    if (_ofMemo && typeof chat === 'object' && (chat._openSourceMarked || (!chat.sid))) {
+      const hit = _ofMemo.get(chat);
+      if (hit && hit.sig === oSig) return hit.val;
+    }
+    const saveOf = val => {
+      if (_ofMemo && typeof chat === 'object') _ofMemo.set(chat, { sig: oSig, val });
+      return val;
+    };
     let sawClosed = false;
-    const rawMsgs = Array.isArray(chat.messages) ? [...chat.messages] : [];
-    if (chat.live && !rawMsgs.includes(chat.live)) rawMsgs.push(chat.live);
+    const rawMsgs = Array.isArray(chat.messages) ? (chat.live && !chat.messages.includes(chat.live) ? [...chat.messages, chat.live] : chat.messages) : (chat.live ? [chat.live] : []);
     const asstMsgs = rawMsgs.filter(m => m && m.role === 'assistant');
-    const curM = chat.sid && typeof Models !== 'undefined' ? Models.get(chat.sid) : null;
+    const curM = curM0;
     if (curM?.name && curM.name !== '开源模型' && !/开源|compat|qwen|deepseek|glm|kimi|minimax|llama|mistral|nemotron|inkling|beam|caveman|gemma/i.test(curM.name) && !curM.guess) {
       sawClosed = true;
     }
@@ -102,7 +127,7 @@ const ThinkingStatus = (() => {
             }
           }
         } catch {}
-        return { kind: 'compat-thinking', label: '开源思考' };
+        return saveOf({ kind: 'compat-thinking', label: '开源思考' });
       }
     }
     if ((Number(f?.rChars) || 0) > 0 && !closedByApi && !sawClosed && !chat.thinkStopped && !asstMsgs.some(isStoppedMsg)) {
@@ -126,12 +151,12 @@ const ThinkingStatus = (() => {
             }
           }
         } catch {}
-        return { kind: 'compat-thinking', label: '开源思考' };
+        return saveOf({ kind: 'compat-thinking', label: '开源思考' });
       }
     }
     if ((Number(f?.rBlocks || f?.rN) || 0) > 0) sawClosed = true;
-    if (sawClosed) return { kind: 'closed-thinking', label: '闭源思考' };
-    return null;
+    if (sawClosed) return saveOf({ kind: 'closed-thinking', label: '闭源思考' });
+    return saveOf(null);
   }
   return {classify,access,label,phase,isClosed,eventPhase,byContent,visible,of};
 })();

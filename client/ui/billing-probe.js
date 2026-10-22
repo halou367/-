@@ -49,7 +49,7 @@
   };
   // Reconstruct only the evidence consumed by the upstream pure parser. No prompt/tool result/credential is included.
   function captures(chat, cost, hints = new Map()) {
-    const records = [], push = data => records.push({ body: JSON.stringify({ data }) });
+    const parsedEvents = [], push = data => parsedEvents.push({ data });
     const comp = completed(chat);
     for (const m of comp) {
       push({ type: 'start', messageId: m.id });
@@ -97,8 +97,27 @@
       }
     }
     const sid = encodeURIComponent(chat.sid);
-    return [{ url: '/ai-proxy/realtime/v1/sessions/' + sid + '/out', responseBody: 'data: ' + JSON.stringify({ records }) + '\n\n' },
-      { url: '/api/chat/' + sid + '/cost', status: 200, responseBody: JSON.stringify(cost) }];
+    let _outBody, _costBody;
+    const outCap = { url: '/ai-proxy/realtime/v1/sessions/' + sid + '/out', _parsedEvents: parsedEvents };
+    Object.defineProperty(outCap, 'responseBody', {
+      enumerable: true, configurable: true,
+      get() {
+        if (_outBody === undefined) {
+          const records = parsedEvents.map(ev => ({ body: JSON.stringify(ev) }));
+          _outBody = 'data: ' + JSON.stringify({ records }) + '\n\n';
+        }
+        return _outBody;
+      }
+    });
+    const costCap = { url: '/api/chat/' + sid + '/cost', status: 200, _parsedCost: cost };
+    Object.defineProperty(costCap, 'responseBody', {
+      enumerable: true, configurable: true,
+      get() {
+        if (_costBody === undefined) _costBody = JSON.stringify(cost);
+        return _costBody;
+      }
+    });
+    return [outCap, costCap];
   }
   function validCost(doc) {
     if (!doc?.messages || typeof doc.messages !== 'object' || Array.isArray(doc.messages)) return false;
@@ -220,7 +239,7 @@
     let hasAskUserTool = false, hasWebSearchTool = false;
     for (const um of (chat?.messages || []).filter(m => m?.role === 'user').slice(-3)) {
       const uTxt = String(um.content || (um.parts || []).map(p => p?.text || '').join(' ') || '');
-      if (/pelican|鹈鹕/i.test(uTxt)) sawPelicanWord = true;
+      if (/pelican|pélican|pelícano|pelicano|pellicano|pelikan|pelikaan|pelecan|鹈鹕|鵜鶘|ペリカン|펠리컨|пеликан|بجع|پلیکان|שקנאי|mwari|ፔሊካን|पेलिकन|bồ nông|นกกระทุง|πελεκάν/i.test(uTxt)) sawPelicanWord = true;
     }
     const toolIds = [];
     const msgVisTokensById = {}, msgReasonTokensById = {}, msgStepCountById = {}, msgDurationMsById = {};
@@ -241,7 +260,7 @@
         } else if (pt === 'text') {
           const tStr = String(p.text || '');
           msgVisText += tStr;
-          if (/pelican|鹈鹕/i.test(tStr)) sawPelicanWord = true;
+          if (/pelican|pélican|pelícano|pelicano|pellicano|pelikan|pelikaan|pelecan|鹈鹕|鵜鶘|ペリカン|펠리컨|пеликан|بجع|پلیکان|שקנאי|mwari|ፔሊካን|पेलिकन|bồ nông|นกกระทุง|πελεκάν/i.test(tStr)) sawPelicanWord = true;
           if (/<svg[\s>]/i.test(tStr)) sawSvgTag = true;
           const trimLen = tStr.trim().length;
           if (!seenTool) preToolChars += trimLen;
@@ -262,7 +281,7 @@
               const sIn = typeof pIn === 'string' ? pIn : JSON.stringify(pIn);
               msgVisText += sIn;
               toolInputChars += sIn.length;
-              if (/pelican|鹈鹕/i.test(sIn)) sawPelicanWord = true;
+              if (/pelican|pélican|pelícano|pelicano|pellicano|pelikan|pelikaan|pelecan|鹈鹕|鵜鶘|ペリカン|펠리컨|пеликан|بجع|پلیکان|שקנאי|mwari|ፔሊካን|पेलिकन|bồ nông|นกกระทุง|πελεκάν/i.test(sIn)) sawPelicanWord = true;
               if (/<svg[\s>]/i.test(sIn)) sawSvgTag = true;
             } catch {}
           }
@@ -469,7 +488,8 @@
     const catalog = normalize(doc), rows = captures(chat, cost, hints);
     const family = F.classifyFamily(rows);
     // A routed conversation can contain conflicting families. Never silently pick the majority.
-    const families = new Set(F.extractToolCalls(rows).map(c => F.matchToolCall(c.toolCallId)?.family).filter(f => f && f !== 'arena-normalized'));
+    const toolCalls = Array.isArray(family.toolCalls) ? family.toolCalls : F.extractToolCalls(rows);
+    const families = new Set(toolCalls.map(c => F.matchToolCall(c.toolCallId)?.family).filter(f => f && f !== 'arena-normalized'));
     const familyConflict = families.size > 1;
     const ch = (family.channels || [])[0];
     const routeSource = ch === 'vertex' ? 'google-vertex' : ch === 'bedrock' ? 'aws-bedrock' : ch === 'direct' ? 'anthropic-direct' : (family.routeSource || null);
@@ -480,13 +500,17 @@
     if (narrow.length && !result.baseMatch?.freeTokenMode) {
       const topN = result.baseMatch?.candidates?.[0];
       let unnarrowedList = result.baseMatch?.unnarrowedCandidates;
-      const fullRes = P.inferFromCaptures(rows, catalog, { sessionId: chat.sid, vendorHint: [], evidence });
-      unnarrowedList = fullRes?.baseMatch?.candidates || unnarrowedList;
+      let fullResMemo = null;
+      if (!Array.isArray(unnarrowedList) || !unnarrowedList.length || result.baseMatch?.routeSwitched) {
+        const fullRes = P.inferFromCaptures(rows, catalog, { sessionId: chat.sid, vendorHint: [], evidence });
+        fullResMemo = fullRes;
+        unnarrowedList = fullRes?.baseMatch?.candidates || unnarrowedList;
+      }
       const topF = Array.isArray(unnarrowedList) ? unnarrowedList[0] : null;
       let usedUnnarrowed = false;
       if (!topN || !topN.diophantinePassed || (topN.scoreResidual ?? topN.residual) > 0.02) {
         if (topF && (!topN || (topF.diophantinePassed && !topN.diophantinePassed) || (topF.scoreResidual ?? topF.residual) + 0.015 < (topN.scoreResidual ?? topN.residual))) {
-          result = fullRes;
+          result = fullResMemo || P.inferFromCaptures(rows, catalog, { sessionId: chat.sid, vendorHint: [], evidence });
           usedUnnarrowed = true;
         }
       }

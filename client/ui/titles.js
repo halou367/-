@@ -36,10 +36,16 @@ const Notes = {
   })(),
   save() {
     const ks=Object.keys(this.all);let excess=ks.length-600;
-    for(const k of ks){if(excess<=0)break;const n=this.all[k];if(n&&!n.dirty&&n.syncedData&&!n.n&&!n.legacyNote){delete this.all[k];excess--;}}
-    const ok=Store.set('notes2',this.all)!==false;
-    if(!ok){const message='本地名称缓存未写入，可能存储空间不足；当前结果仍在内存，请勿立即关闭。云端是否成功以同步状态为准。';if(typeof TitleSync!=='undefined')TitleSync.error(message);if(!this.storageWarnAt||now()-this.storageWarnAt>60000){this.storageWarnAt=now();toast(message,'err');}}
+    for (const k of ks) { if (excess <= 0) break; const n = this.all[k]; if (n && !n.dirty && n.syncedData && !n.n && !n.legacyNote) { delete this.all[k]; excess--; } }
+    clearTimeout(this._saveSoonT); this._saveSoonT = 0;
+    const ok = Store.set('notes2', this.all) !== false;
+    if (!ok) { const message = '本地名称缓存未写入，可能存储空间不足；当前结果仍在内存，请勿立即关闭。云端是否成功以同步状态为准。'; if (typeof TitleSync !== 'undefined') TitleSync.error(message); if (!this.storageWarnAt || now() - this.storageWarnAt > 60000) { this.storageWarnAt = now(); toast(message, 'err'); } }
     return ok;
+  },
+  saveSoon(ms = 400) {
+    if (this._saveSoonT) return true;
+    this._saveSoonT = setTimeout(() => { this._saveSoonT = 0; this.save(); }, ms);
+    return true;
   },
   // 显示用的备注：本地记录优先，其次云端名字里带的备注（别的设备 / 油猴脚本写的）
   get(sid) { const n = this.all[sid]; if (n) return n.n || ''; const e = History.byId(sid); return e ? splitNote(e.title).note : ''; },
@@ -60,9 +66,14 @@ const Notes = {
     text = String(text || '').replace(/\s+/g, ' ').trim().slice(0, 59);
     const n = this.rec(sid); n.n = text; delete n.noteLocal; // Synced inside the encrypted v4 (Qx) title.
     if (typeof TitleSync !== 'undefined') TitleSync.dirty(sid);
-    const saved=this.save(); Titles.local(sid); Titles.kick(800); return saved;
+    const saved = this.save(); Titles.local(sid); Titles.kick(800); return saved;
   },
   drop(sid) { if (this.all[sid]) { delete this.all[sid]; this.save(); } },
+  dropMany(sids) {
+    let changed = false;
+    for (const sid of sids || []) { if (sid && this.all[sid]) { delete this.all[sid]; changed = true; } }
+    if (changed) this.save();
+  },
 };
 
 // 收藏按账号保存在本机；收藏就是标金（无论是否有目标厂商或是不限状态，始终置顶并显示金色效果）。
@@ -121,6 +132,11 @@ const Titles = {
   known(sid) { const m = Models.get(sid); const hasValidName = !!(m?.name && !/^(未识别|未知型号|待定)$/.test(String(m.name).trim())); return !!(m && (!m.pendingConfirm || hasValidName) && (((!m.guess || m.habitInferred || m.reverseInferred || m.billingProbe || m.userCorrected) && hasValidName) || m.fingerprint)); },
   latestAt(sid) {
     const chat = typeof Chats !== 'undefined' ? Chats.get(sid) : null;
+    const entry = typeof History !== 'undefined' ? History.byId?.(sid) : null;
+    const msgs = Array.isArray(chat?.messages) ? chat.messages : null;
+    const lastMsg = msgs && msgs.length ? msgs[msgs.length - 1] : null;
+    const memoKey = (msgs ? msgs.length : 0) + ':' + (lastMsg?.id || '') + ':' + (lastMsg?._finishedAt || lastMsg?.metadata?.timing?.completedAt || 0) + ':' + (chat?.endAt || 0) + ':' + (chat?.sentAt || 0) + ':' + (entry?.updatedAt || entry?.createdAt || '');
+    if (chat && chat._latestAtKey === memoKey && typeof chat._latestAtVal === 'number') return chat._latestAtVal;
     const toMs = v => {
       const n = Number(v);
       if (Number.isFinite(n) && n > 0) return n;
@@ -128,14 +144,15 @@ const Titles = {
       return 0;
     };
     let messageAt = 0;
-    for (const m of (Array.isArray(chat?.messages) ? chat.messages : [])) {
+    for (const m of (msgs || [])) {
       const tm = m?.metadata?.timing || {};
       const idAt = typeof idTime === 'function' ? idTime(m?.id) : 0;
       messageAt = Math.max(messageAt, ...[tm.completedAt, m?._finishedAt, m?._sentAt, tm.startedAt, m?.createdAt, m?.created_at, m?.timestamp, m?.at, idAt].map(toMs));
     }
-    const entry = typeof History !== 'undefined' ? History.byId?.(sid) : null;
     const histAt = toMs(entry?.updatedAt || entry?.createdAt || 0);
-    return Math.max(messageAt, Number(chat?.endAt) || 0, Number(chat?.sentAt) || 0, histAt);
+    const val = Math.max(messageAt, Number(chat?.endAt) || 0, Number(chat?.sentAt) || 0, histAt);
+    if (chat) { chat._latestAtKey = memoKey; chat._latestAtVal = val; }
+    return val;
   },
   timeAt(sid, at = 0) { return Math.max(Number(at) || 0, this.latestAt(sid)); },
   want(sid) {
@@ -193,6 +210,7 @@ const Titles = {
   // 本地先显示新名字（左侧卡片、标签页立即变）
   local(sid) {
     if (!sid) return;
+    if (this._viewMemo) this._viewMemo.delete(sid);
     if (!Notes.owns(sid) && this.known(sid)) { Notes.rec(sid); Notes.save(); }
     const n = Notes.all[sid];
     if (n) { const ts = this.timeAt(sid, n.t || 0); if (ts > (Number(n.t) || 0)) { n.t = ts; Notes.save(); } }
@@ -262,15 +280,37 @@ const Titles = {
       return;
     }
   },
+  _viewMemo: new Map(),
   // 显示用：{ vid, model, note, time, title }
   view(sid, fallback) {
-    const cloudTitle = (sid && History.byId(sid)?.title) || Chats.get(sid)?.title || (sid && Notes.all?.[sid]?.c) || fallback || '';
+    const e = sid ? History.byId(sid) : null, cObj = sid ? Chats.get(sid) : null;
+    const mi0 = sid && typeof Models !== 'undefined' ? Models.get(sid) : null;
+    const nRec = sid && typeof Notes !== 'undefined' ? Notes.all?.[sid] : null;
+    const fp0 = mi0?.fingerprint;
+    const fpSig = fp0 ? `${fp0.result?.signals?.relative_probability ?? ''}:${fp0.reasoning?.score ?? ''}:${fp0.apiIdentity?.model ?? ''}:${fp0.result?.nearest?.id ?? ''}:${mi0.avgProbeSec ?? ''}` : '';
+    const rMeta0 = sid && typeof TitleSync !== 'undefined' && TitleSync.restored ? TitleSync.restored(sid) : null;
+    const favBit = sid && typeof Fav !== 'undefined' && typeof Fav.has === 'function' && Fav.has(sid) ? 1 : 0;
+    const goldKey = typeof Gold !== 'undefined' ? `${Gold.target || ''}:${Gold.hasChat?.(sid) ? 1 : 0}` : '';
+    const cMsgs = Array.isArray(cObj?.messages) ? cObj.messages : null;
+    const lastCM = cMsgs && cMsgs.length ? cMsgs[cMsgs.length - 1] : null;
+    const vSig = sid ? `${fallback || ''}\0${e?.title || ''}\0${e?.localTitle || ''}\0${e?.type || ''}\0${e?.mode || ''}\0${e?.modelAId || ''}\0${e?.modelBId || ''}\0${cObj?.title || ''}\0${cObj?.localTitle || ''}\0${cObj?.evalMode || ''}\0${cObj?.busy ? 1 : 0}\0${cObj?.streaming ? 1 : 0}\0${cObj?._evalStreaming ? 1 : 0}\0${cMsgs ? cMsgs.length : 0}:${lastCM?.status || ''}:${lastCM?.failed ? 1 : 0}\0${cObj?.voteState?.voted ? 1 : 0}\0${cObj?.voteState?.modelAName || ''}\0${cObj?.voteState?.modelBName || ''}\0${nRec?.n || ''}\0${nRec?.c || ''}\0${nRec?.t || ''}\0${nRec?.modelStamp || ''}\0${nRec?.modelData?.model || ''}\0${mi0?.name || ''}\0${mi0?.effort || ''}\0${mi0?.userCorrected ? 1 : 0}\0${mi0?.confidence ?? ''}\0${mi0?.reverseScore ?? ''}\0${mi0?.habitScore ?? ''}\0${mi0?.pendingConfirm ? 1 : 0}\0${mi0?.openSourcePending ? 1 : 0}\0${mi0?.guess ? 1 : 0}\0${mi0?.routed ? 1 : 0}\0${favBit}\0${goldKey}\0${fpSig}\0${typeof TitleCipher !== 'undefined' ? TitleCipher.generation : 0}\0${rMeta0 ? (rMeta0.model || '') + ':' + (rMeta0.note || '') + ':' + (rMeta0.score ?? '') : ''}` : '';
+    if (vSig && this._viewMemo) {
+      const hit = this._viewMemo.get(sid);
+      if (hit && hit.sig === vSig) return hit.val;
+    }
+    const saveView = val => {
+      if (vSig && this._viewMemo) {
+        if (this._viewMemo.size > 1500) this._viewMemo.clear();
+        this._viewMemo.set(sid, { sig: vSig, val });
+      }
+      return val;
+    };
+    const cloudTitle = (sid && e?.title) || cObj?.title || (sid && nRec?.c) || fallback || '';
     const gp = typeof TitleCipher !== 'undefined' && TitleCipher.decodeGoldPrefix ? TitleCipher.decodeGoldPrefix(cloudTitle) : null;
     if (sid && gp) {
       if (gp.fav && typeof Fav !== 'undefined' && !Fav.has(sid) && !(Fav.unfavAt && Fav.unfavAt[sid])) Fav.setQuiet(sid, true);
       if (gp.gold && typeof Gold !== 'undefined' && Gold.noteRestoredChat) Gold.noteRestoredChat(sid, gp);
     }
-    const e = sid ? History.byId(sid) : null, cObj = sid ? Chats.get(sid) : null;
     const isBattleSess = Boolean(cObj?.evalMode === 'battle' || (e?.type === 'evaluation' && (e?.mode === 'battle' || (!e?.mode && (e?.modelBId || !e?.modelAId)))));
     if (isBattleSess) {
       if (sid && typeof Models !== 'undefined' && Models.all && Models.all[sid] && !Models.all[sid].battleRevealed) {
@@ -289,24 +329,26 @@ const Titles = {
       const vsPlain = (mA && mB && !/^[0-9a-f]{8}-[0-9a-f]{4}-/i.test(mA) && !/^[0-9a-f]{8}-[0-9a-f]{4}-/i.test(mB))
         ? `${mA} vs ${mB}`
         : (spB.composite ? spB.base : rawB);
-      const vidB = (mA && Brand.of(mA)) || (mB && Brand.of(mB)) || '';
-      return { vid: vidB, model: '', note: noteB, time: spB.time, title: rawB, plain: vsPlain, gold: false, isBattle: true };
+      const battleStatus = (typeof EvalView !== 'undefined' && typeof EvalView.getBattleStatusLabel === 'function')
+        ? EvalView.getBattleStatusLabel(cObj, e)
+        : ((cObj?.busy || cObj?.streaming || cObj?._evalStreaming) ? '生成中' : ((cObj?.voteState?.voted || (mA && mB)) ? '已完成' : '待选择'));
+      return saveView({ vid: '', model: '', note: noteB, time: spB.time, title: rawB, plain: vsPlain, battleStatus, gold: false, isBattle: true });
     }
     const raw0 = (e && (e.localTitle || e.title)) || cObj?.localTitle || cObj?.title || fallback || '';
     const raw = (typeof TitleCipher !== 'undefined' && TitleCipher.isGoldPrefixed?.(raw0)) ? (TitleCipher.stripGoldPrefix(raw0) || '新对话') : raw0;
-    const sp = splitNote(raw), mi = sid ? Models.get(sid) : null;
+    const sp = splitNote(raw), mi = mi0;
     const note = sid ? Notes.get(sid) || sp.note : sp.note;
     const hasValidMiName = !!(mi?.name && !/^(未识别|未知型号|待定)$/.test(String(mi.name).trim()));
     const hasReidMi = !!(hasValidMiName && !mi?.pendingConfirm && (mi?.habitInferred || mi?.reverseInferred || mi?.billingProbe || mi?.userCorrected || !mi?.guess));
     const isGoldNow = !!(sid && typeof Gold !== 'undefined' && typeof Gold.isChatGold === 'function' ? Gold.isChatGold(sid, cloudTitle) : (gp?.gold || (sid && typeof Gold !== 'undefined' && Gold.hasChat?.(sid))));
     if (mi?.pendingConfirm && !hasValidMiName && !gp?.model) {
-      return { vid: '', model: '', pendingConfirm: true, note, time: sp.time, title: raw, plain: '请继续沟通', gold: isGoldNow };
+      return saveView({ vid: '', model: '', pendingConfirm: true, note, time: sp.time, title: raw, plain: '请继续沟通', gold: isGoldNow });
     }
-    const meta=sid&&typeof TitleSync!=='undefined'?(TitleSync.build(sid)||TitleSync.restored(sid)):null;
+    const meta=sid&&typeof TitleSync!=='undefined'?(TitleSync.build(sid)||rMeta0):null;
     const validMeta = (meta && meta.model && !/^(未识别|未知型号|待定)$/.test(String(meta.model).trim())) ? meta : null;
     const model = validMeta ? TitleSync.modelLabel(validMeta) : (hasReidMi ? ConversationLabels.label(mi, sp.composite ? sp.base : raw) : (gp?.model ? ConversationLabels.format({ name: gp.model, confidence: null, score: gp.score ?? null }) : (!hasValidMiName&&typeof TitleCipher!=='undefined'&&TitleCipher.isEncoded(raw)?'加密名称（待解码）':ConversationLabels.label(mi,sp.composite?sp.base:raw))));
     const vid = Brand.of(model) || Brand.of(sp.base) || '';
-    return { vid, model: model || '', note, time: sp.time, title: raw, plain: !model ? ConversationLabels.label(null, sp.composite ? sp.base : raw) : '', gold: isGoldNow };
+    return saveView({ vid, model: model || '', note, time: sp.time, title: raw, plain: !model ? ConversationLabels.label(null, sp.composite ? sp.base : raw) : '', gold: isGoldNow });
   },
 };
 setInterval(() => Titles.tick(), 5000);
@@ -372,9 +414,10 @@ const LocalCache = {
     for (const sid of list) {
       if (Models.all[sid]) { delete Models.all[sid]; dm = true; }
       if (typeof AcctStats !== 'undefined' && AcctStats.turns && AcctStats.turns[sid]) { delete AcctStats.turns[sid]; dt = true; }
-      try { Notes.drop(sid); Fav.setQuiet?.(sid, false); } catch {}
+      try { Fav.setQuiet?.(sid, false); } catch {}
     }
-    if (dm) Store.set('models', Models.all);
+    try { Notes.dropMany ? Notes.dropMany(list) : list.forEach(sid => Notes.drop(sid)); } catch {}
+    if (dm) { if (typeof Models !== 'undefined' && Models.save) Models.save(); else Store.set('models', Models.all); }
     if (dt) try { AcctStats.save?.(); } catch {}
     try { Strength.bookDrop(list); } catch {}
     try { PelicanTest.drop(list); } catch {}

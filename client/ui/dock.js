@@ -12,7 +12,13 @@ Object.assign(ICON, {
   upload: '<path d="M12 20V9M7 14l5-5 5 5M5 4h14"/>', download: '<path d="M12 4v11M7 10l5 5 5-5M5 20h14"/>', moon: '<path d="M20 14.5A8 8 0 0 1 9.5 4 8 8 0 1 0 20 14.5z"/>', sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>',
 });
 const TIER_LV = { none: 0, minimal: 1, low: 2, medium: 3, high: 4, xhigh: 5, max: 6 };
-const famTier = n => { const s = Brand.short(Strength.canon(n)), p = Strength.parts(n); if (p.tier && s.toLowerCase().endsWith('-' + p.tier)) return [s.slice(0, -p.tier.length - 1), p.tier]; const pm = /\s*\((none|minimal|low|medium|high|xhigh|max)\)\s*$/i.exec(s); return pm ? [s.slice(0, pm.index).trim(), pm[1].toLowerCase()] : [s, '']; };
+const famTier = n => {
+  const canonN = Strength.canon(n);
+  const s = Brand.short(canonN), p = Strength.parts(n);
+  if (p.tier && s.toLowerCase().endsWith('-' + p.tier)) return [s.slice(0, -p.tier.length - 1), p.tier];
+  const pm = /\s*\((none|minimal|low|medium|high|xhigh|max)\)\s*$/i.exec(s);
+  return pm ? [s.slice(0, pm.index).trim(), pm[1].toLowerCase()] : [s, ''];
+};
 // 卡片上的厂商 logo：白色圆底 + 深色图标（与油猴脚本一致）
 // 解析一次 SVG，之后克隆（侧栏 1500 张卡片每张一个 logo，每次 innerHTML 解析很慢）
 const VLOGO_T = new Map();
@@ -188,11 +194,12 @@ const Dock = {
     const unitTip = unit === 'usd' ? '消耗按美金显示 · 点一下切换为 Token' : '消耗按 Token 显示 · 点一下切换为美金';
     return h('button', { type: 'button', class: 'mc-unit mc-unit-inline', title: unitTip, 'aria-label': unitTip, onclick: e => { e?.stopPropagation?.(); Prefs.spendUnit = unit === 'usd' ? 'token' : 'usd'; if (typeof savePrefs === 'function') savePrefs(); this.render(); } }, unit === 'usd' ? '$' : 'T');
   },
-  exportBtns(sid) {
+  exportBtns(sid, billing = null) {
     sid = sid || (typeof this.sid === 'function' ? this.sid() : '') || (typeof Tabs !== 'undefined' ? Tabs.cur?.sid : '') || '';
     const chat = sid && typeof Chats !== 'undefined' ? (Chats.get(sid) || (typeof chatOf === 'function' ? chatOf(sid) : null)) : null;
     const mi = sid && typeof Models !== 'undefined' ? Models.get(sid) : null;
-    const diagOk = Boolean(sid && (mi || chat || (typeof BillingProbe !== 'undefined' && BillingProbe.summary?.(sid)?.mergedCandidates?.length)));
+    const sum = billing || (typeof BillingProbe !== 'undefined' ? BillingProbe.summary?.(sid) : null);
+    const diagOk = Boolean(sid && (mi || chat || sum?.mergedCandidates?.length));
     const diagTip = diagOk ? '导出诊断 JSON：导出本对话计费反推与习惯特征诊断文件（可导入习惯库）' : '导出诊断 JSON：当前对话暂无识别诊断数据';
     const toolTip = '导出调用工具：导出本对话模型调用过的全部工具及参数结构（JSON）';
     return h('span', { class: 'mc-foot-acts' },
@@ -237,7 +244,7 @@ const Dock = {
               learn: shouldLearn,
               vendorHint: vHint,
               familyHint: fHint,
-              effortHint: eHint,
+              effortHint: eHint || 'standard',
             });
             return;
           }
@@ -541,10 +548,10 @@ const Dock = {
         logo: 'deepseek',
         defaultRank: 5,
         models: [
-          { fam: 'DeepSeek V4.1 Flash', short: 'V4.1 Flash', defTier: 'Max', tiers: ['Max', 'High', 'Medium', 'Low'] },
-          { fam: 'DeepSeek V4.1 Flash 1017', short: 'V4.1 Flash 1017', defTier: 'Max', tiers: ['Max', 'High', 'Medium', 'Low'] },
-          { fam: 'DeepSeek V4.1 Flash 20260910', short: 'V4.1 Flash 0910', defTier: 'Max', tiers: ['Max', 'High', 'Medium', 'Low'] },
-          { fam: 'Beam 1.0 501B A23B', short: 'Beam 1.0 501B', defTier: '', direct: true, tiers: ['', 'High', 'Max'] },
+          { fam: 'DeepSeek V4.1 Flash', short: 'V4.1 Flash', defTier: '', direct: true, tiers: [''] },
+          { fam: 'DeepSeek V4.1 Flash 1017', short: 'V4.1 Flash 1017', defTier: '', direct: true, tiers: [''] },
+          { fam: 'DeepSeek V4.1 Flash 20260910', short: 'V4.1 Flash 0910', defTier: '', direct: true, tiers: [''] },
+          { fam: 'Beam 1.0 501B A23B', short: 'Beam 1.0 501B', defTier: '', direct: true, tiers: [''] },
           { fam: '开源模型', short: '开源模型', defTier: '', direct: true, tiers: [''] },
         ],
       },
@@ -554,8 +561,8 @@ const Dock = {
         logo: 'zhipu',
         defaultRank: 6,
         models: [
-          { fam: 'GLM 5.3', short: '5.3', defTier: 'Max', tiers: ['Max', 'High', 'Medium', 'Low'] },
-          { fam: 'GLM 5.2', short: '5.2', defTier: 'Max', tiers: ['Max', 'High', 'Medium', 'Low'] },
+          { fam: 'GLM 5.3 Max', short: '5.3 Max', defTier: '', direct: true, tiers: [''] },
+          { fam: 'GLM 5.2 Max', short: '5.2 Max', defTier: '', direct: true, tiers: [''] },
         ],
       },
       {
@@ -564,9 +571,9 @@ const Dock = {
         logo: 'qwen',
         defaultRank: 7,
         models: [
-          { fam: 'Qwen 3.8 Max', short: '3.8 Max', defTier: 'Max', tiers: ['Max', 'High', 'Medium', 'Low'] },
-          { fam: 'Qwen 3.8 Flash Next', short: '3.8 Flash Next', defTier: 'High', tiers: ['High', 'Medium', 'Low', 'Max'] },
-          { fam: 'Qwen 3.7 Max', short: '3.7 Max', defTier: 'High', tiers: ['Max', 'High', 'Medium', 'Low'] },
+          { fam: 'Qwen 3.8 Max', short: '3.8 Max', defTier: '', direct: true, tiers: [''] },
+          { fam: 'Qwen 3.8 Flash Next', short: '3.8 Flash Next', defTier: '', direct: true, tiers: [''] },
+          { fam: 'Qwen 3.7 Max', short: '3.7 Max', defTier: '', direct: true, tiers: [''] },
         ],
       },
       {
@@ -575,7 +582,7 @@ const Dock = {
         logo: 'moonshot',
         defaultRank: 8,
         models: [
-          { fam: 'Kimi K3', short: 'K3', defTier: 'Max', tiers: ['Max', 'High', 'Medium', 'Low'] },
+          { fam: 'Kimi K3', short: 'K3', defTier: '', direct: true, tiers: [''] },
         ],
       },
       {
@@ -584,8 +591,8 @@ const Dock = {
         logo: 'xiaomi',
         defaultRank: 9,
         models: [
-          { fam: 'MiMo V2.6 Pro', short: 'V2.6 Pro', defTier: 'High', tiers: ['Max', 'High', 'Medium', 'Low'] },
-          { fam: 'MiMo V2.6 Flash', short: 'V2.6 Flash', defTier: 'High', tiers: ['High', 'Medium', 'Low', 'Max'] },
+          { fam: 'MiMo V2.6 Pro', short: 'V2.6 Pro', defTier: '', direct: true, tiers: [''] },
+          { fam: 'MiMo V2.6 Flash', short: 'V2.6 Flash', defTier: '', direct: true, tiers: [''] },
         ],
       },
       {
@@ -594,10 +601,10 @@ const Dock = {
         logo: 'meta',
         defaultRank: 10,
         models: [
-          { fam: 'Muse Spark 1.3', short: 'Spark 1.3', defTier: 'Max', tiers: ['Max', 'High', 'Medium', 'Low'] },
-          { fam: 'Muse Spark 1.2', short: 'Spark 1.2', defTier: 'xHigh', tiers: ['xHigh', 'High', 'Medium', 'Low', 'Max'] },
-          { fam: 'Muse Wonder', short: 'Wonder', defTier: 'Max', tiers: ['Max', 'High', 'Medium', 'Low'] },
-          { fam: 'Muse Spark Open', short: 'Spark Open', defTier: 'Max', tiers: ['Max', 'High', 'Medium', 'Low'] },
+          { fam: 'Muse Spark 1.3', short: 'Spark 1.3', defTier: 'Max', tiers: ['Max', 'High', 'Medium', 'Low', ''] },
+          { fam: 'Muse Spark 1.2', short: 'Spark 1.2', defTier: 'xHigh', tiers: ['xHigh', 'High', 'Medium', 'Low', 'Max', ''] },
+          { fam: 'Muse Wonder', short: 'Wonder', defTier: '', direct: true, tiers: [''] },
+          { fam: 'Muse Spark Open', short: 'Spark Open', defTier: '', direct: true, tiers: [''] },
         ],
       },
     ];
@@ -624,7 +631,7 @@ const Dock = {
           learn: shouldLearn,
           vendorHint: vHint,
           familyHint: fHint,
-          effortHint: eHint,
+          effortHint: eHint || 'standard',
         });
       }
     };
@@ -653,10 +660,16 @@ const Dock = {
         if (hitM) {
           this.editVendor = v.id;
           this.editFamily = hitM.fam;
-          const tm = /\b(max|xhigh|high|medium|low)\b/i.exec(seedRaw);
-          if (tm) {
-            const tLow = tm[1].toLowerCase();
-            this.editTier = tLow === 'xhigh' ? 'xHigh' : (tLow[0].toUpperCase() + tLow.slice(1));
+          if (hitM.direct) {
+            this.editTier = '';
+          } else {
+            const tm = /\((max|xhigh|high|medium|low)\)\s*$/i.exec(seedRaw) || /-(max|xhigh|high|medium|low)$/i.exec(seedCanon);
+            if (tm) {
+              const tLow = tm[1].toLowerCase();
+              this.editTier = tLow === 'xhigh' ? 'xHigh' : (tLow[0].toUpperCase() + tLow.slice(1));
+            } else {
+              this.editTier = '';
+            }
           }
           break;
         }
@@ -1027,7 +1040,7 @@ const Dock = {
     card.append(h('div', { class: 'mc-sub' }, h('span', { class: 'dim' }, '账号额度 '), h('b', {}, e?.pulse != null ? e.pulse + '%' : '—'), t.head ? h('span', { class: 'dim' }, ' · 推断 ' + t.head) : null, tipI(t.why)));
     const foot = h('div', { class: 'mc-chips mc-foot-row' });
     if(billing)foot.append(BillingProbe.badge(sid,()=>{this.techOpen=true;this.render();}));
-    foot.append(this.exportBtns(sid));
+    foot.append(this.exportBtns(sid, billing));
     card.append(foot);
     { const ex = this.exportRow(sid); if (ex) card.append(ex); }
     return card;
@@ -1236,7 +1249,36 @@ const Dock = {
       );
       card.append(headerRow);
 
-      if (!feat || !(feat.turns > 0)) {
+      if (!feat || !(feat.turns > 0) || !((feat.totalChars || 0) > 0 || (feat.visR || 0) > 0 || (feat.hidR || 0) > 0 || (feat.totalTools || 0) > 0)) {
+        const sideAsst = Array.isArray(chat.messages)
+          ? [...chat.messages].reverse().find(m => m && m.role === 'assistant' && ((m.participantPosition === 'a' || m.participantPosition === 'b') ? m.participantPosition === pos : pos === 'a'))
+          : null;
+        const sideFailed = Boolean(sideAsst && (sideAsst.status === 'failed' || sideAsst.failed));
+        if (sideFailed && !chat.busy) {
+          const retryRow = h('div', { style: { marginTop: '6px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' } },
+            h('span', { class: 'note', style: { margin: 0, color: 'var(--warn, #f59e0b)' } }, '生成失败 · 点击可直接重试'),
+            h('button', {
+              type: 'button',
+              class: 'btn xs',
+              title: `直接重新生成 Model ${sideUpper} 回复（无需切浏览器模式）`,
+              onclick: async e => {
+                e.stopPropagation();
+                if (typeof EvalEngine !== 'undefined' && typeof EvalEngine.regenerateTurn === 'function') {
+                  if (typeof toast === 'function') toast(`正在重新生成 Model ${sideUpper} 回复…`);
+                  try {
+                    await EvalEngine.regenerateTurn(chat, { pos, msg: sideAsst });
+                    if (typeof UI !== 'undefined' && UI.els?.chat === chat) UI.renderChat(chat, false);
+                    this.render();
+                  } catch (err) {
+                    if (typeof toast === 'function') toast('重新生成失败：' + (err?.message || String(err)), 'err');
+                  }
+                }
+              },
+            }, '↻ 重新生成')
+          );
+          card.append(retryRow);
+          return card;
+        }
         card.append(h('p', { class: 'note', style: { marginTop: '6px' } }, chat.busy ? '正在接收回复并提取习惯特征…' : '暂无回复内容'));
         return card;
       }
@@ -1260,20 +1302,47 @@ const Dock = {
       const cands = Array.isArray(sideSnap?.candidates) ? sideSnap.candidates.slice(0, 3) : [];
       if (cands.length) {
         const candBox = h('div', { style: { marginTop: '8px' } },
-          h('div', { class: 'eyebrow', style: { marginBottom: '4px' } }, '习惯库盲猜候选')
+          h('div', { class: 'eyebrow', style: { marginBottom: '4px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' } },
+            h('span', {}, '识别候选'),
+            hasReveal ? h('span', {
+              class: 'bp-dual-dots',
+              title: '蓝紫前景条：揭晓前未入库识别率 · 金色底色条：入库后再遇识别率',
+              'data-tip': '蓝紫前景条：揭晓前未入库识别率 · 金色底色条：入库后再遇识别率'
+            },
+              h('i', { class: 'bp-dd-pre' }),
+              h('i', { class: 'bp-dd-post' })
+            ) : null
+          )
         );
         const normName = s => String(typeof Strength !== 'undefined' && Strength.canon ? Strength.canon(s) : (s || '')).toLowerCase().replace(/[^a-z0-9\u4e00-\u9fa5]+/g, '');
         const revNorm = hasReveal ? normName(revealedName) : '';
         cands.forEach((cand, idx) => {
           const cLbl = String(cand.label || cand.id || '');
-          const pct = Math.max(0, Math.min(100, Number(cand.match ?? cand.habitPct ?? cand.confidence ?? 0)));
           const cNorm = normName(cLbl);
-          const isHit = Boolean(revNorm && cNorm && (revNorm.includes(cNorm) || cNorm.includes(revNorm)));
-          candBox.append(h('div', { class: 'mc-fp-row' + (idx === 0 || isHit ? ' top' : ''), title: cLbl },
-            h('i', { class: 'mc-fp-bar', style: { width: pct + '%' } }),
+          const isRevRow = Boolean(hasReveal && (cand.isRevealed || (revNorm && cNorm && (revNorm.includes(cNorm) || cNorm.includes(revNorm)))));
+          const prePct = Math.max(0, Math.min(100, Number(cand.prePct ?? cand.match ?? cand.habitPct ?? cand.confidence ?? 0)));
+          const postPct = isRevRow ? Math.max(prePct, Math.min(100, Number(cand.postPct ?? 99.2))) : prePct;
+          const isPreHit = Boolean(isRevRow && cand.preHit);
+          const tipTxt = isRevRow
+            ? (isPreHit
+                ? (cLbl + ' · 习惯命中（揭晓前排第1） · 入库前 ' + prePct.toFixed(1) + '% → 入库后 ' + postPct.toFixed(1) + '%')
+                : (cLbl + ' · 入库前 ' + prePct.toFixed(1) + '%（' + (cand.preRank > 0 ? '揭晓前第' + cand.preRank + '候选' : '揭晓前未入候选') + '） → 入库后 ' + postPct.toFixed(1) + '%'))
+            : (cLbl + ' · 识别置信度 ' + prePct.toFixed(1) + '%');
+          candBox.append(h('div', {
+            class: 'mc-fp-row billing-fit' + (idx === 0 || isRevRow ? ' top' : '') + (isRevRow ? ' has-dual-bar' : '') + (isPreHit ? ' is-habit-hit' : ''),
+            title: tipTxt,
+            'data-tip': tipTxt,
+          },
+            isRevRow
+              ? h('i', { class: 'mc-fp-bar bar-bg bar-gold', style: { width: postPct + '%' } })
+              : h('i', { class: 'mc-fp-bar bar-fp', style: { width: prePct + '%' } }),
+            isRevRow
+              ? h('i', { class: 'mc-fp-bar-fg bar-fg bar-fp', style: { width: prePct + '%' } })
+              : null,
             h('span', { class: 'mc-fp-n' }, idx + 1),
-            h('span', { class: 'mc-fp-m' }, cLbl, isHit ? h('b', { style: { marginLeft: '6px', color: 'var(--fg)' } }, '· 盲猜命中') : null),
-            h('b', { class: 'mc-fp-p' }, pct.toFixed(1) + '%')
+            h('span', { class: 'mc-fp-src-ic ' + (isPreHit ? 'src-gold' : 'src-fp') }, icon(isPreHit ? 'check' : 'fingerprint')),
+            h('span', { class: 'mc-fp-m' }, cLbl),
+            h('b', { class: 'mc-fp-p' }, prePct.toFixed(1) + '%')
           ));
         });
         card.append(candBox);
@@ -1683,6 +1752,9 @@ const Dock = {
     box.append(
       grp('对话',
         row('自动保活', '出错 / 假结束 / 卡住时 3 秒后自动刷新对话（可取消）；刚发送、回答还没出现时不刷新。后台 / 最小化也工作。', sw('keepAlive', true)),
+        row('流输出保活与令牌续期', '实时流超过 120 秒静默断开或遇到 408/425/429/5xx 时后台无感重连（最长坚持 10 分钟）；会话令牌（JWT）剩余不足 2 分钟时在发消息、点停止或重连前主动续期，被拒（401/403）时换新令牌重发一次。', sw('streamKeepAlive', true)),
+        row('发消息前检测出口纯净度', '发消息准备令牌的同时并行校验当前 ProxyIP 的实际落地出口与 IPPure 纯净度（90 秒内已确认纯净则 0ms 直通）；若发现落地出口漂移变脏（< 75 分），在消息发出前自动拉黑并无感切换至同地区纯净 ProxyIP，避免撞上 403 人机验证。', sw('preSendPurityCheck', true)),
+        row('命令翻译', '将 Bash 命令、文件读写与工具调用翻译成素雅简短的中文说明（如「跑测试 · 改 a.js +12 −3」），并在折叠命令组标题后汇总读写改文件数、增删行数与超时/中断状态。', sw('cmdTranslate', true, () => UI.renderChat())),
         row('思考自动停止', '闭源模型突然出现开源思考（路由到开源模型）时立即自动暂停对话；已知闭源思考不误触发。', sw('thinkStop', true)),
         row('路由弹窗倒计时暂停', '检测到模型路由（路由到其他模型或同型号强度削弱）时仅轻提示提醒、不暂停对话；仅闭源模型突然出现开源思考时立即自动暂停。', sw('routePausePrompt', true)),
         row('逐字显示', '回复按帧匀速逐字出现（像官网那样），最多落后约 0.3 秒；关掉 = 收到多少立刻显示多少。只影响显示，不影响接收速度。', sw('smoothStream', true)),
@@ -2180,11 +2252,25 @@ const Bar = {
     if(bsState?.poolDetail){
       rows.splice(2,0,['号池分构成',bsState.poolDetail]);
     }
+    if(bsState?.sweetSpotSummary){
+      rows.splice(3,0,['甜区与轮次窗',bsState.sweetSpotSummary]);
+    }
+    if(bsState?.computeTideSummary){
+      rows.splice(4,0,['算力潮汐与爆率',bsState.computeTideSummary]);
+    }
+    if(bsState?.banWave?.active){
+      rows.splice(5,0,['风控清算窗',bsState.banWave.label+' · 已启用安全节拍']);
+    }
     if(bsState?.ja4BrowserRatio!=null){
       rows.splice(2,0,['JA4 浏览器真实率',Math.round(bsState.ja4BrowserRatio*100)+'%']);
     }
     if(bud?.total!=null)rows.splice(1,0,['推断总额度','≈ $'+Math.round(bud.total)+(bud.loose?'（偏差大）':'')],['推断余额','≈ $'+(bud.remaining>=100?Math.round(bud.remaining):bud.remaining.toFixed(2))]);
     else if(bud)rows.splice(1,0,['推断总额度',bt?.summary || '继续观测']);
+    if(bud?.hjb?.advice)rows.push(['HJB 甜区刹车线',bud.hjb.advice]);
+    try{
+      const ctxLife=sidNow&&typeof Budget!=='undefined'&&Budget.sessionContextLife?Budget.sessionContextLife(sidNow):null;
+      if(ctxLife)rows.push(['本会话上下文余量',`${ctxLife.remainingPct}%（第 ${ctxLife.turns}/${ctxLife.maxTurns} 轮 · KV折算 ${Math.round(ctxLife.kvCacheRatio*100)}%）${ctxLife.handoverAlert?' ⚠️ 建议适时新建会话':''}`]);
+    }catch{}
     if(bud){rows.push(['依据',bud.source==='charged'?'实际扣费账本':'含内容估价']);if(bud.cands?.length>1)rows.push(['可能档位',bud.cands.map(n=>'$'+n).join(' / ')]);if(bud.lo>0&&Number.isFinite(bud.hi)&&!['inconsistent','incomplete','settling'].includes(bud.status))rows.push(['总额度范围','$'+bud.lo.toFixed(2)+'–$'+bud.hi.toFixed(2)]);}
     // Preserve the actual card/close button across periodic footer refreshes.
     let graphic=box.querySelector('.bd-svg'),body=box.querySelector('.bd-rows');
@@ -2335,14 +2421,31 @@ Bus.on('gacha', () => { clearTimeout(GPop.t); GPop.t = setTimeout(() => { docume
 // ---------- 侧栏卡片放大（鼠标最近的卡片和上下各一张向右探出）----------
 const Mag = {
   bind(list) {
-    let raf = 0, ev = null, act = new Set();
-    const reset = () => { for (const a of act) a.style.removeProperty('--mag'); act = new Set(); list.classList.remove('mag-on'); };
+    let raf = 0, ev = null, act = new Set(), lastY = -999, lastCard = null;
+    const reset = () => { lastY = -999; lastCard = null; for (const a of act) a.style.removeProperty('--mag'); act = new Set(); list.classList.remove('mag-on'); };
+    const neighborCard = (el, dir) => {
+      let cur = dir < 0 ? el?.previousElementSibling : el?.nextElementSibling;
+      while (cur && !cur.classList?.contains('card')) cur = dir < 0 ? cur.previousElementSibling : cur.nextElementSibling;
+      return cur || null;
+    };
     list.addEventListener('mousemove', e => { ev = e; if (!raf) raf = requestAnimationFrame(() => {
-      raf = 0; if (Prefs.cardMag === false || matchMedia('(prefers-reduced-motion: reduce)').matches) return;
-      const cards = [...list.querySelectorAll('.card')], y = ev.clientY; let ni = -1, nd = Infinity;
-      cards.forEach((c, i) => { const r = c.getBoundingClientRect(), d = Math.abs(r.top + r.height / 2 - y); if (d < nd) { nd = d; ni = i; } });
+      raf = 0; if (!ev || Prefs.cardMag === false || matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+      const y = ev.clientY, hov = ev.target?.closest?.('.card');
+      if (hov && hov === lastCard && Math.abs(y - lastY) < 3) return;
+      lastY = y;
+      let center = hov && list.contains(hov) ? hov : null;
+      if (!center) {
+        const cards = list.querySelectorAll('.card'); let nd = Infinity;
+        for (let i = 0; i < cards.length; i++) { const c = cards[i], r = c.getBoundingClientRect(), d = Math.abs(r.top + r.height / 2 - y); if (d < nd) { nd = d; if (d < 40) center = c; } }
+      }
+      lastCard = center;
       const next = new Set(); list.classList.add('mag-on');
-      if (ni >= 0 && nd < 40) for (const [k, m] of [[0, 1.06], [-1, 1.025], [1, 1.025]]) { const c = cards[ni + k]; if (c) { c.style.setProperty('--mag', m); next.add(c); } }
+      if (center) {
+        center.style.setProperty('--mag', 1.06); next.add(center);
+        const prev = neighborCard(center, -1), nxt = neighborCard(center, 1);
+        if (prev) { prev.style.setProperty('--mag', 1.025); next.add(prev); }
+        if (nxt) { nxt.style.setProperty('--mag', 1.025); next.add(nxt); }
+      }
       for (const a of act) if (!next.has(a)) a.style.removeProperty('--mag'); act = next;
     }); });
     list.addEventListener('mouseleave', reset);

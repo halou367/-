@@ -542,10 +542,10 @@ const ModeSwitcher = {
       const filtered = !q
         ? allModels
         : allModels.filter(m => {
-            const hay = [m.displayName, m.publicName, m.name, m.id, m.organization, m.provider]
+            const hay = m._searchHay || (m._searchHay = [m.displayName, m.publicName, m.name, m.id, m.organization, m.provider]
               .filter(Boolean)
               .join(' ')
-              .toLowerCase();
+              .toLowerCase());
             return hay.includes(q);
           });
 

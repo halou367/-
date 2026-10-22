@@ -185,8 +185,13 @@ const StandbyPool = {
           }));
           const workingNodes = new Set(results.filter(x => x.r?.ip || RoutePolicy.good(x.r)).map(x => x.c?.proxy).filter(Boolean));
           for (const { c, r } of results) {
-            const pureOk = Boolean(c.proxyIp && r?.ip && !String(r.ip).includes(':') && ((r?.pure && Number.isFinite(+r.pure.fs) && +r.pure.fs < 25) || RoutePolicy.reputationOK(RoutePolicy.withProbe(first.pool || {}, r), c.proxyIp, { ...(first.pool?.ips?.[c.proxyIp] || {}), eg: r.ip }, now())) && (typeof IPRep === 'undefined' || !IPRep.risky?.(c.proxyIp, { eg: r?.ip || '' })));
+            const pureOk = Boolean(c.proxyIp && r?.ip && !String(r.ip).includes(':') && RoutePolicy.reputationOK(RoutePolicy.withProbe(first.pool || {}, r), c.proxyIp, { ...(first.pool?.ips?.[c.proxyIp] || {}), eg: r.ip }, now()) && (typeof IPRep === 'undefined' || !IPRep.risky?.(c.proxyIp, { eg: r?.ip || '' })));
             if (RoutePolicy.good(r) && r.ticket && pureOk) {
+              try {
+                if (typeof Pool !== 'undefined' && typeof IPRep !== 'undefined' && IPRep.putProbe) {
+                  void Pool.mutate(d => { IPRep.putProbe(d, c.proxyIp, r); });
+                }
+              } catch {}
               this.ips.push({
                 owner: a.id,
                 candidate: { ...c, region: r.loc || c.region || '' },
@@ -203,6 +208,7 @@ const StandbyPool = {
                 void Pool.mutate(d => {
                   const e = d.ips?.[c.proxyIp];
                   if (!e) return;
+                  if (typeof IPRep !== 'undefined' && IPRep.putProbe && r?.ip) IPRep.putProbe(d, c.proxyIp, r);
                   if (!pureOk && r?.pure && +r.pure.fs >= 25) {
                     Pool.banForever?.(d, c.proxyIp, '热备检测 IPPure 风险值 ' + (+r.pure.fs) + ' · 已永久拉黑');
                     return;
@@ -233,8 +239,13 @@ const StandbyPool = {
         if (nb.length) {
           const nRes = await Promise.all(nb.map(async c => ({ c, r: await AutoRoute.adapter.probe({ ...c, kind: 'standby' }).catch(() => null) })));
           for (const { c, r } of nRes) {
-            const pureOk = Boolean(c.proxyIp && r?.ip && !String(r.ip).includes(':') && ((r?.pure && Number.isFinite(+r.pure.fs) && +r.pure.fs < 25) || RoutePolicy.reputationOK(RoutePolicy.withProbe(first.pool || {}, r), c.proxyIp, { ...(first.pool?.ips?.[c.proxyIp] || {}), eg: r.ip }, now())) && (typeof IPRep === 'undefined' || !IPRep.risky?.(c.proxyIp, { eg: r?.ip || '' })));
+            const pureOk = Boolean(c.proxyIp && r?.ip && !String(r.ip).includes(':') && RoutePolicy.reputationOK(RoutePolicy.withProbe(first.pool || {}, r), c.proxyIp, { ...(first.pool?.ips?.[c.proxyIp] || {}), eg: r.ip }, now()) && (typeof IPRep === 'undefined' || !IPRep.risky?.(c.proxyIp, { eg: r?.ip || '' })));
             if (RoutePolicy.good(r) && r.ticket && pureOk) {
+              try {
+                if (typeof Pool !== 'undefined' && typeof IPRep !== 'undefined' && IPRep.putProbe) {
+                  void Pool.mutate(d => { IPRep.putProbe(d, c.proxyIp, r); });
+                }
+              } catch {}
               this.nodes.push({
                 owner: a.id,
                 candidate: { ...c, region: r.loc || c.region || '' },

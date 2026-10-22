@@ -32,7 +32,7 @@ const TitleCipher = (() => {
         const material = await crypto.subtle.importKey('raw', encoder.encode(phrase), 'PBKDF2', false, ['deriveKey']);
         return crypto.subtle.deriveKey({ name: 'PBKDF2', hash: 'SHA-256', salt, iterations: ITERATIONS }, material, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
       })();
-      if (keys.size >= 64) keys.delete(keys.keys().next().value);
+      if (keys.size >= 512) keys.delete(keys.keys().next().value);
       keys.set(id, p);
     }
     const key = await p;
@@ -168,37 +168,44 @@ const TitleCipher = (() => {
     if (n !== 1n) return null;
     return Uint8Array.from(arr.reverse());
   }
+  const GOLD_PFX_CACHE = new Map();
   function decodeGoldPrefix(rawTitle) {
-    const m = GOLD_PFX_RE.exec(String(rawTitle || ''));
-    if (!m) return null;
+    const rawStr = String(rawTitle || '');
+    if (!rawStr.startsWith('⟦')) return null;
+    if (GOLD_PFX_CACHE.has(rawStr)) return GOLD_PFX_CACHE.get(rawStr);
+    const m = GOLD_PFX_RE.exec(rawStr);
+    if (!m) { GOLD_PFX_CACHE.set(rawStr, null); return null; }
     const enc = fromB62(m[1]);
-    if (!enc || enc.length < 3) return null;
+    if (!enc || enc.length < 3) { GOLD_PFX_CACHE.set(rawStr, null); return null; }
     const pfxKey = 'arena-gp:v1:' + DEFAULT_PASSPHRASE;
     const mac = (enc[0] << 8) | enc[1];
     const plain = new Array(enc.length - 2);
     for (let i = 0; i < plain.length; i++) plain[i] = enc[2 + i] ^ streamByte(pfxKey + ':enc:' + mac, i);
-    if (((fnv32(pfxKey + ':mac:' + plain.join(',')) & 0xffff) !== mac) || ((plain[0] >> 5) !== 1)) return null;
+    if (((fnv32(pfxKey + ':mac:' + plain.join(',')) & 0xffff) !== mac) || ((plain[0] >> 5) !== 1)) { GOLD_PFX_CACHE.set(rawStr, null); return null; }
     const flags = plain[0], fav = !!(flags & 1), gold = !!(flags & 2);
     let pos = 1, model = '', score = null;
     const baseList = TitleCompact.models || [];
     if (flags & 4) {
-      if (pos + 2 > plain.length) return null;
+      if (pos + 2 > plain.length) { GOLD_PFX_CACHE.set(rawStr, null); return null; }
       const idx = (plain[pos] << 8) | plain[pos + 1]; pos += 2;
       if (idx < baseList.length) model = baseList[idx] || '';
       else if (idx - baseList.length < EXTRA_MODELS.length) model = EXTRA_MODELS[idx - baseList.length] || '';
     } else if (flags & 8) {
-      if (pos + 1 > plain.length) return null;
+      if (pos + 1 > plain.length) { GOLD_PFX_CACHE.set(rawStr, null); return null; }
       const len = plain[pos++];
-      if (pos + len > plain.length) return null;
-      try { model = decoder.decode(Uint8Array.from(plain.slice(pos, pos + len))); } catch { return null; }
+      if (pos + len > plain.length) { GOLD_PFX_CACHE.set(rawStr, null); return null; }
+      try { model = decoder.decode(Uint8Array.from(plain.slice(pos, pos + len))); } catch { GOLD_PFX_CACHE.set(rawStr, null); return null; }
       pos += len;
     }
     if (flags & 16) {
-      if (pos + 2 > plain.length) return null;
+      if (pos + 2 > plain.length) { GOLD_PFX_CACHE.set(rawStr, null); return null; }
       score = ((plain[pos] << 8) | plain[pos + 1]) / 10;
       pos += 2;
     }
-    return { v: 1, fav, gold, model, score, prefix: '⟦' + m[1] + '⟧', cleanTitle: String(m[2] || '').trim() };
+    const res = Object.freeze({ v: 1, fav, gold, model, score, prefix: '⟦' + m[1] + '⟧', cleanTitle: String(m[2] || '').trim() });
+    if (GOLD_PFX_CACHE.size >= 2000) GOLD_PFX_CACHE.clear();
+    GOLD_PFX_CACHE.set(rawStr, res);
+    return res;
   }
   function stripGoldPrefix(rawTitle) {
     let cur = String(rawTitle || '');

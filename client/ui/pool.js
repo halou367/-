@@ -98,7 +98,9 @@ const Pool = {
     try {
       await this.load();
       await this.purgeImpureAndUnstable().catch(() => {});
-      const add = await this.mutate(d => { if ((d.dv || 0) >= DEFAULT_PIP_V) return null; d.dv = DEFAULT_PIP_V; const a = DEFAULT_PIP_SRC.filter(l => !d.src.includes(l)); d.src.push(...a); return a; });
+      const add = (this.d && (this.d.dv || 0) >= DEFAULT_PIP_V)
+        ? null
+        : await this.mutate(d => { if ((d.dv || 0) >= DEFAULT_PIP_V) return null; d.dv = DEFAULT_PIP_V; const a = DEFAULT_PIP_SRC.filter(l => !d.src.includes(l)); d.src.push(...a); return a; });
       if (add?.length) {
         const r = await this.importText(add.join('\n'));
         if (this.link() && Host.probe) {
@@ -193,19 +195,23 @@ const Pool = {
   link() { const n = this.node(); return n ? Vless.toLink(n) : ''; },
   // 一行：IP、IP:端口、域名、域名:端口（也接受 proxyip=… / 带协议的写法）
   parse(s) {
+    const rawKey = typeof s === 'string' ? s : String(s || '');
+    const pm = this._parseMemo || (this._parseMemo = new Map());
+    if (pm.has(rawKey)) { const r = pm.get(rawKey); return r ? { ...r } : null; }
+    const put = r => { if (pm.size >= 4000) pm.clear(); pm.set(rawKey, r); return r ? { ...r } : null; };
     // API / 订阅地址：带路径或参数的 http(s) 链接（例：https://sub.xxx/vpngate?token=…）→ 定时拉取内容，里面的 sstp:// 等链式代理、IP、IP:端口逐行解析成出口
-    const am = /^(https?):\/\/([^\s/?#@]+)([/?][^\s]*)$/i.exec(String(s || '').trim());
-    if (am && am[3].length > 1 && !/proxyip=/i.test(am[3])) { const host = am[2].replace(/:\d+$/, '').toLowerCase(); if (/^[\w.-]{3,160}$/.test(host)) return { host, port: '', ip: false, api: true, line: am[1].toLowerCase() + '://' + am[2].toLowerCase() + am[3] }; }
+    const am = /^(https?):\/\/([^\s/?#@]+)([/?][^\s]*)$/i.exec(rawKey.trim());
+    if (am && am[3].length > 1 && !/proxyip=/i.test(am[3])) { const host = am[2].replace(/:\d+$/, '').toLowerCase(); if (/^[\w.-]{3,160}$/.test(host)) return put({ host, port: '', ip: false, api: true, line: am[1].toLowerCase() + '://' + am[2].toLowerCase() + am[3] }); }
     // 链式代理出口（edgetunnel 2.1+ 支持）：sstp://user:pass@host:port、socks5:// http:// https:// turn:// —— 整行原样作为一个出口，直接检测，不做域名解析
-    const cm = /^(socks5|https?|turn|sstp):\/\/(?:([\w.~%+=!$&'()*,;:-]{1,128})@)?((?:\[[0-9a-f:]+\]|[\w.-]{3,160})(?::(\d{1,5}))?)$/i.exec(String(s || '').trim());
-    if (cm && !(cm[4] && +cm[4] > 65535)) { const type = cm[1].toLowerCase(), host = cm[3].replace(/:\d+$/, '').toLowerCase(); return { host, port: cm[4] || '', ip: false, chain: type, line: type + '://' + (cm[2] ? cm[2] + '@' : '') + host + (cm[4] ? ':' + cm[4] : '') }; }
-    s = String(s || '').trim().replace(/^.*?proxyip=/i, '').replace(/^[a-z][\w+.-]*:\/\//i, '').replace(/[/?#].*$/, '').trim();
-    if (!s) return null;
+    const cm = /^(socks5|https?|turn|sstp):\/\/(?:([\w.~%+=!$&'()*,;:-]{1,128})@)?((?:\[[0-9a-f:]+\]|[\w.-]{3,160})(?::(\d{1,5}))?)$/i.exec(rawKey.trim());
+    if (cm && !(cm[4] && +cm[4] > 65535)) { const type = cm[1].toLowerCase(), host = cm[3].replace(/:\d+$/, '').toLowerCase(); return put({ host, port: cm[4] || '', ip: false, chain: type, line: type + '://' + (cm[2] ? cm[2] + '@' : '') + host + (cm[4] ? ':' + cm[4] : '') }); }
+    s = rawKey.trim().replace(/^.*?proxyip=/i, '').replace(/^[a-z][\w+.-]*:\/\//i, '').replace(/[/?#].*$/, '').trim();
+    if (!s) return put(null);
     let m = s.match(/^(\d{1,3}(?:\.\d{1,3}){3})(?::(\d{1,5}))?$/);
-    if (m) { if (m[1].split('.').some(x => +x > 255) || (m[2] && +m[2] > 65535)) return null; return { host: m[1], port: m[2] || '', ip: true, line: m[1] + (m[2] ? ':' + m[2] : '') }; }
+    if (m) { if (m[1].split('.').some(x => +x > 255) || (m[2] && +m[2] > 65535)) return put(null); return put({ host: m[1], port: m[2] || '', ip: true, line: m[1] + (m[2] ? ':' + m[2] : '') }); }
     m = s.match(/^((?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z][a-z0-9-]*)(?::(\d{1,5}))?$/i);
-    if (m && !(m[2] && +m[2] > 65535)) { const host = m[1].toLowerCase(); return { host, port: m[2] || '', ip: false, line: host + (m[2] ? ':' + m[2] : '') }; }
-    return null;
+    if (m && !(m[2] && +m[2] > 65535)) { const host = m[1].toLowerCase(); return put({ host, port: m[2] || '', ip: false, line: host + (m[2] ? ':' + m[2] : '') }); }
+    return put(null);
   },
   split(t) {
     const out = [];
@@ -580,6 +586,17 @@ const Pool = {
     return false;
   },
   purgeImpureAndUnstable() {
+    if (this.d && this.d.ips) {
+      let hasWork = false;
+      for (const [k, e] of Object.entries(this.d.ips)) {
+        if (!e) continue;
+        const isPure = typeof IPRep !== 'undefined' && Boolean(IPRep.pure?.(k, e)) && !IPRep.risky?.(k, e);
+        if (isPure && (e.banned || e.gone || this.d.ban?.[k.toLowerCase()]) && !/人机验证|429|高风险/.test(e.err || '')) { hasWork = true; break; }
+        const risky = typeof IPRep !== 'undefined' && !IPRep.trusted?.(k) && Boolean(IPRep.risky?.(k, e));
+        if (risky && !e.banned) { hasWork = true; break; }
+      }
+      if (!hasWork) return Promise.resolve(0);
+    }
     return this.mutate(d => {
       let n = 0;
       for (const [k, e] of Object.entries(d.ips || {})) {
@@ -753,8 +770,10 @@ const Pool = {
     this._occ = { sig, d: this.d, x, m }; return m;
   },
   owner(k, exceptId) {
-    const m = this.occ(exceptId), e = this.d?.ips?.[k], low = String(k).trim().toLowerCase();
-    return m.get(low) || m.get(String(this.parse(k)?.host || '').toLowerCase()) || (e?.eg && m.get(String(e.eg).toLowerCase())) || null;
+    const m = this.occ(exceptId);
+    if (!m.size) return null;
+    const e = this.d?.ips?.[k], low = String(k).trim().toLowerCase();
+    return m.get(low) || m.get(String(e?.ip || this.parse(k)?.host || '').toLowerCase()) || (e?.eg && m.get(String(e.eg).toLowerCase())) || null;
   },
   cooling: e => (e.cool || 0) > now(),
   // 黑名单（手动或自动永久拉黑的非纯净/失效 IP）：永远不分配；单独存，IP 从域名或 API 里消失再出现也永久拦截
@@ -876,6 +895,10 @@ const Pool = {
           }
         }
       });
+      if (typeof IPRep !== 'undefined' && IPRep.rate && Host.fetchText) {
+        const postUnrated = res.filter(([k, x]) => x.ip && x.brana && this.d.ips[k] && !IPRep.score(k, this.d.ips[k]).known).map(([k]) => k);
+        if (postUnrated.length) await IPRep.rate(postUnrated).catch(() => {});
+      }
       const good = res.filter(([k, x]) => {
         if (!(x.ip && x.brana && (!x.loc || x.loc === cc))) return false;
         if (this.banned(k)) return false;
@@ -1779,7 +1802,15 @@ const PoolMaint = {
   idle() { return (document.hidden || now() - this.input > 120e3) && this.quiet(); },
   async tick() {
     if (this.running || navigator.onLine === false || Pool.isFixtureEnv()) return;
-    try { await Nodes.load(); await Pool.load(true); } catch { return; }
+    try {
+      await Nodes.load();
+      if (!Pool.d) await Pool.load(true);
+    } catch { return; }
+    const hasLink = Boolean(Pool.link() && Host.probe);
+    const bgDue = hasLink && !Pool.prog && now() - (Pool.d?.bgScanAt || 0) >= 10 * 60e3;
+    const maintDue = Boolean((Pool.entries().length || Pool.d?.src?.length) && (now() - (Pool.d?.mt || 0) >= this.EVERY));
+    if (!bgDue && !maintDue) return;
+    try { await Pool.load(true); } catch { return; }
     await Pool.purgeImpureAndUnstable().catch(() => {});
     if (!Pool.link() || !Host.probe) return;
     // 仅当当前地区纯净可用 IP 不足（< 4）且跨窗口冷却已过时，才按需小批量补充检测最多 12 个待测 IP
@@ -1812,12 +1843,20 @@ const ApiMaint = {
   EVERY: 12 * 3600e3, running: false,
   async tick(force) {
     if (this.running || navigator.onLine === false || (!force && Pool.isFixtureEnv())) return;
-    try { await Pool.load(true); } catch { return; }
-    const ls = Pool.apis(); if (!ls.length) return;
+    try { if (!Pool.d || force) await Pool.load(true); } catch { return; }
+    let ls = Pool.apis(); if (!ls.length) return;
+    let dueLs = ls.filter(l => { const st = Pool.d.api?.[l]; const waitMs = st?.err ? 5 * 60e3 : this.EVERY; return force || now() - (st?.tried || 0) >= waitMs; });
+    if (!dueLs.length) return;
+    if (!force) {
+      try { await Pool.load(true); } catch { return; }
+      ls = Pool.apis();
+      dueLs = ls.filter(l => { const st = Pool.d.api?.[l]; const waitMs = st?.err ? 5 * 60e3 : this.EVERY; return now() - (st?.tried || 0) >= waitMs; });
+      if (!dueLs.length) return;
+    }
     this.running = true;
     try {
       const add = [];
-      for (const l of ls) { const st = Pool.d.api?.[l]; const waitMs = st?.err ? 5 * 60e3 : this.EVERY; if (!force && now() - (st?.tried || 0) < waitMs) continue; const r = await Pool.refreshApi(l, true).catch(() => null); if (r?.added?.length) add.push(...r.added); }
+      for (const l of dueLs) { const r = await Pool.refreshApi(l, true).catch(() => null); if (r?.added?.length) add.push(...r.added); }
       const lazyKeys = add.length ? Pool.lazyPendingKeys(12) : [];
       if (lazyKeys.length && Pool.link() && Host.probe) await Pool.probe(lazyKeys).catch(() => {});
       await Pool.purgeImpureAndUnstable().catch(() => {});

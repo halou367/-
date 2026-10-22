@@ -242,17 +242,18 @@ const AccountPicker = {
         const menu = ev => { contextStop(); contextStop = this.contextMenu(ev, c, a, root, remove, accounts.length > 1 && !deleting.size); };
         c.addEventListener('contextmenu', menu);
         c.addEventListener('keydown', ev => { if (ev.target === c && (ev.key === 'ContextMenu' || (ev.key === 'F10' && ev.shiftKey))) menu(ev); }); next.push(c);
-        if (next.length % 4 === 0) { await PanelWork.frame(); if (!alive() || run !== generation) return; }
+        if (next.length % 12 === 0 && next.length < selection.visible.length) { await PanelWork.frame(); if (!alive() || run !== generation) return; }
       }
       if (!alive() || run !== generation) return;
       cards = next; list.style.paddingTop = ''; list.style.paddingBottom = ''; list.replaceChildren(...cards);
       if (!cards.length) list.append(h('p', { class: 'acct-empty', role: 'status' }, accounts.length ? '没有匹配的账号，试试其他名称或清空搜索。' : '还没有账号，请添加或导入。'));
       wheelStop = acctWheel(list); management.reconcile(cards); building = false; updateStates();
-      void PanelWork.each(list, cards.filter(c => c._g && c._id !== cur), async c => { if (run !== generation || !c.isConnected) return; await Gacha.loadAcct(c._id); if (run === generation && c.isConnected) { GPop.paintAcct(c._g, GPop.acctState(c._id, false)); this.paintRun(c, GPop.acctState(c._id, false)); } });
+      const bgCards = cards.filter(c => c._g && c._id !== cur);
+      if (bgCards.length) void Promise.all(bgCards.map(async c => { if (run !== generation || !c.isConnected) return; await Gacha.loadAcct(c._id); if (run === generation && c.isConnected) { const st = GPop.acctState(c._id, false); GPop.paintAcct(c._g, st); this.paintRun(c, st); } }));
     };
     const refresh = async live => {
       const readAt = now(), L = await PanelWork.wait(() => Host.listAccounts(true)).catch(() => null); if (!live() || !Array.isArray(L) || building) return;
-      const fresh = this.mergeRead(L, readAt).filter(a => !removed.has(a.id)), changed = JSON.stringify(fresh.map(a => [a.id, a.remark, a.email, a.hasPw, a.win, a.live, a.status?.loggedIn, a.status?.ip, a.status?.loc, a.region, a.sites?.github])) !== JSON.stringify(accounts.map(a => [a.id, a.remark, a.email, a.hasPw, a.win, a.live, a.status?.loggedIn, a.status?.ip, a.status?.loc, a.region, a.sites?.github]));
+      const fresh = this.mergeRead(L, readAt).filter(a => !removed.has(a.id)), changed = fresh.map(a => [a.id, a.remark, a.email, a.hasPw, a.win, a.live, a.status?.loggedIn, a.status?.ip, a.status?.loc, a.region, a.sites?.github].join('\x01')).join('\n') !== accounts.map(a => [a.id, a.remark, a.email, a.hasPw, a.win, a.live, a.status?.loggedIn, a.status?.ip, a.status?.loc, a.region, a.sites?.github].join('\x01')).join('\n');
       accounts = fresh; const byId = new Map(accounts.map(a => [a.id, a]));
       for (const c of cards) { const a = byId.get(c._id); if (!a) continue; c._account = a; const old = GPop.remote.get(a.id);
         if (a.id !== cur && !(/启动中/.test(old?.phase || '') && now() - (old.at || 0) < 4000 && !a.status?.gacha?.busy)) GPop.remote.set(a.id, a.status?.gacha || null);

@@ -1,6 +1,6 @@
 // Cloud titles contain authenticated ciphertext only. Decoded metadata is presentation, not API identity.
 const TitleSync = (() => {
-  const cache = new Map(), texts = new Map(), failures = new Map(), conflicts = new Map();
+  const cache = new Map(), texts = new Map(), failures = new Map(), conflicts = new Map(), buildMemo = new Map();
   let timer = 0, hydrating = false, hydration = null, lastError = '', confirmed = 0;
   const numeric = value => Number.isFinite(value) && value >= 0 ? value : null;
   function validate(value) {
@@ -104,8 +104,14 @@ const TitleSync = (() => {
     }
     const n = Notes.all[sid] || (mi && !mi.pendingConfirm && (!mi.guess || hasReidMi) && mi.name ? Notes.rec(sid) : null);
     if (!n) return null;
-    if(n.modelData && n.modelData.model && !/^(未识别|未知型号|待定)$/.test(String(n.modelData.model).trim()) && n.modelStamp===modelStamp(mi) && (!hasReidMi || canonLower(n.modelData.model)===canonLower(mi.name)))return {...n.modelData,time:Number(n.t)||n.modelData.time,note:String(n.n||''),revision:Number(n.modifiedAt)||n.modelData.revision};
+    const mStamp = modelStamp(mi);
+    if(n.modelData && n.modelData.model && !/^(未识别|未知型号|待定)$/.test(String(n.modelData.model).trim()) && n.modelStamp===mStamp && (!hasReidMi || canonLower(n.modelData.model)===canonLower(mi.name)))return {...n.modelData,time:Number(n.t)||n.modelData.time,note:String(n.n||''),revision:Number(n.modifiedAt)||n.modelData.revision};
     const entry=History.byId(sid), raw=entry?.localTitle || (!TitleCipher.isEncoded(entry?.title) ? entry?.title : '') || '';
+    const memoKey = mStamp + '\u0001' + raw + '\u0001' + (prior?.model || '') + '\u0001' + (prior?.score ?? '') + '\u0001' + (prior?.confidence ?? '') + '\u0001' + (prior?.tier || '');
+    const cached0 = buildMemo.get(sid);
+    if (cached0 && cached0.key === memoKey) {
+      return { ...cached0.base, time: Number(n.t) || prior?.time || now(), note: String(n.n || ''), revision: Number(n.modifiedAt) || now() };
+    }
     const fp = mi?.fingerprint, parsed = ConversationLabels.parse(noteBase(raw));
     const measured=fp?ConversationLabels.fingerprintData(mi):null;
     // Format-based vendor guesses ("xxx（推测）") or pendingConfirm are never synced or shown as a model name.
@@ -120,8 +126,10 @@ const TitleSync = (() => {
     const sane = n => ConversationLabels.sane(numeric(n));
     const score = (mi?.routed ? sane(mi?.reverseScore) : null) ?? (hasReidMi ? sane(mi?.reverseScore ?? mi?.habitScore) : null) ?? sane(fp?.reasoning?.score) ?? sane(mi?.reverseScore ?? mi?.habitScore) ?? sane(mi?.est?.score) ?? (samePrior?sane(prior?.score):null) ?? (sameParsed?sane(parsed.score):null);
     const average = numeric(fp?.avgProbeSec) ?? (samePrior?prior?.average:null) ?? (sameParsed?numeric(parsed.average):null);
-    return {model,confidence:confidence !== null ? Math.min(1,confidence) : null,score,average,
-      time:Number(n.t)||prior?.time||now(),note:String(n.n||''),tier:String((mi?.routed && mi?.reverseEffort) || mi?.tier || fp?.reasoning?.tier || (samePrior?prior?.tier:'') || ''),source:fp&&!hasReidMi?'fingerprint':mi&&(!mi.guess||hasReidMi)?'api':(samePrior?prior?.source:'')||'local',revision:Number(n.modifiedAt)||now()};
+    const base = {model,confidence:confidence !== null ? Math.min(1,confidence) : null,score,average,tier:String((mi?.routed && mi?.reverseEffort) || mi?.tier || fp?.reasoning?.tier || (samePrior?prior?.tier:'') || ''),source:fp&&!hasReidMi?'fingerprint':mi&&(!mi.guess||hasReidMi)?'api':(samePrior?prior?.source:'')||'local'};
+    if (buildMemo.size >= 2000) buildMemo.clear();
+    buildMemo.set(sid, { key: memoKey, base });
+    return {...base,time:Number(n.t)||prior?.time||now(),note:String(n.n||''),revision:Number(n.modifiedAt)||now()};
   }
   function displayText(text) {
     const s = String(text || '');
@@ -162,7 +170,7 @@ const TitleSync = (() => {
   }
   function ingestPrefixes(entries = History.items) {
     if (typeof TitleCipher === 'undefined' || typeof TitleCipher.decodeGoldPrefix !== 'function') return false;
-    let changed = false;
+    let changed = false, modelsChanged = false;
     for (const e of entries || []) {
       if (!e?.id || !e?.title) continue;
       const gp = TitleCipher.decodeGoldPrefix(e.title);
@@ -180,7 +188,7 @@ const TitleSync = (() => {
         const cur = Models.get(e.id);
         if (!cur || cur.pendingConfirm || !cur.name || /^(未识别|未知型号|待定)$/.test(String(cur.name).trim())) {
           const canon = (typeof Strength !== 'undefined' && Strength.canon) ? Strength.canon(gp.model) : gp.model;
-          Models.set(e.id, {
+          Models.all[e.id] = {
             ...(cur || {}),
             name: canon,
             reverseScore: cur?.reverseScore ?? gp.score ?? undefined,
@@ -190,10 +198,16 @@ const TitleSync = (() => {
             sure: true,
             guess: false,
             pendingConfirm: false,
-          });
+            at: now(),
+          };
+          modelsChanged = true;
           changed = true;
         }
       }
+    }
+    if (modelsChanged && typeof Models !== 'undefined') {
+      try { Models.save?.(); } catch {}
+      try { Bus.emit('models'); } catch {}
     }
     return changed;
   }
@@ -206,6 +220,7 @@ const TitleSync = (() => {
     if (hydrating) { await hydration; return ingest(entries); }
     let finish; hydration = new Promise(resolve => { finish=resolve; });
     hydrating = true; const generation=TitleCipher.generation;
+    let didMutate = Boolean(pfxChanged);
     try {
       for (const e of entries) {
         if (generation!==TitleCipher.generation) return;
@@ -219,7 +234,8 @@ const TitleSync = (() => {
             const effMeta = (reid && canonLower(old.meta?.model) !== canonLower(mi.name))
               ? { ...old.meta, model: typeof Strength !== 'undefined' && Strength.canon ? Strength.canon(mi.name) : mi.name, confidence: null, score: ConversationLabels.sane(numeric(mi.reverseScore ?? mi.habitScore ?? mi.est?.score)) ?? null }
               : old.meta;
-            e.localTitle=label({...effMeta,note:Notes.all[e.id]?.n??(old.meta.version===1?old.meta.note:'')});
+            const nextLocal = label({...effMeta,note:Notes.all[e.id]?.n??(old.meta.version===1?old.meta.note:'')});
+            if (e.localTitle !== nextLocal) { e.localTitle = nextLocal; didMutate = true; }
           }
           continue;
         }
@@ -229,6 +245,7 @@ const TitleSync = (() => {
           if(generation!==TitleCipher.generation)return;
           if(e.title!==title || (History.byId(e.id) && History.byId(e.id).title!==title)){queue();continue;}
           cache.set(e.id,{title:title,meta,generation});texts.set(title,label(meta));failures.delete(e.id);
+          didMutate = true;
           const n=Notes.all[e.id];
           // 本机记录是解码之前建的空壳（模型事件 / 发送消息先到、云端标题还没解出来）：从没见过云端、备注 / 收藏都是空的，
           // 空值不是「清空备注」的编辑，不能和云端的备注 / 收藏冲突、更不能把它们传成空——先采用云端的这两项
@@ -244,13 +261,13 @@ const TitleSync = (() => {
           if(n?.dirty && local && !meta.v4 && !n.c && !n.syncedData && signature(local)!==signature(meta)){apply(e.id,title,meta);dirty(e.id);continue;}
           if(n?.dirty && differs && n.c!==title){conflicts.set(e.id,{title:title,meta});continue;}
           if(!n?.dirty || (local&&signature(local)===signature(meta)))apply(e.id,title,meta);
-        } catch(error){if(generation!==TitleCipher.generation)return;failures.set(e.id,{title:title,generation,error:describe(error)});}
+        } catch(error){if(generation!==TitleCipher.generation)return;failures.set(e.id,{title:title,generation,error:describe(error)});didMutate=true;}
       }
-      Notes.save(); UI.renderListSoon?.(); UI.renderTabs?.();
+      if (didMutate) { Notes.save(); UI.renderListSoon?.(); UI.renderTabs?.(); }
     } finally { hydrating=false; finish(); }
   }
   function queue() { clearTimeout(timer);timer=setTimeout(()=>void ingest(),100); }
-  function dirty(sid) { const n=Notes.all[sid];if(n){n.dirty=true;n.modifiedAt=now();delete n.e;if(n.lastStatus!==429)n.nx=0;} }   // never reset a 429 cooldown
+  function dirty(sid) { buildMemo.delete(sid); const n=Notes.all[sid];if(n){n.dirty=true;n.modifiedAt=now();delete n.e;if(n.lastStatus!==429)n.nx=0;} }   // never reset a 429 cooldown
   async function wireTitle(sid, opt = {}) {
     if (opt?.prefixMode) {
       const e = History.byId(sid), raw = String(e?.title || Chats.get(sid)?.title || '');

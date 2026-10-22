@@ -46,6 +46,12 @@ const AcctStats = {
     const activeItems = (History.items || []).filter(e => e?.id && !gone.has(e.id) && !e.isArchived && !e.archivedAt && !e._pending && e.type !== 'evaluation' && e.mode !== 'battle' && e.mode !== 'direct');
     for (const e of activeItems) {
       const mi = Models.get(e.id);
+      const noteVal = (typeof Notes !== 'undefined' && Notes.all?.[e.id]?.n) || '';
+      const cacheKey = (e.localTitle || '') + '\u0001' + (e.title || '') + '\u0001' + (mi?.name || '') + '\u0001' + (mi?.at || 0) + '\u0001' + (mi?.pendingConfirm ? 1 : 0) + '\u0001' + (mi?.guess ? 1 : 0) + '\u0001' + noteVal + '\u0001' + (e.updatedAt || e.createdAt || '');
+      if (e._astat && e._astat.key === cacheKey) {
+        rows.push(e._astat.row);
+        continue;
+      }
       const isBareGuess = Boolean(mi?.guess && !mi.userCorrected && !mi.habitInferred && !mi.reverseInferred && !mi.billingProbe);
       const fromM = !!(mi?.name && !isBareGuess && !mi.pendingConfirm && this.validModelName(mi.name));
       const tv = typeof Titles !== 'undefined' && Titles.view ? Titles.view(e.id, e.title, e.localTitle) : null;
@@ -57,7 +63,7 @@ const AcctStats = {
       const cleanRawTitle = gp ? (gp.cleanTitle || '') : rawTitle;
       const baseTitle = noteBase(cleanRawTitle);
       const fromTitle = !mi && this.validModelName(baseTitle) && (!/\s/.test(baseTitle) || /\s·\s/.test(cleanRawTitle)) && (Strength.ver10(Strength.canon(baseTitle)) != null || /(?:^|[-_.\s])\d/.test(baseTitle));
-      const rawNote = tv?.note || (typeof Notes !== 'undefined' && Notes.get ? Notes.get(e.id) : '') || '';
+      const rawNote = tv?.note || noteVal || (typeof Notes !== 'undefined' && Notes.get ? Notes.get(e.id) : '') || '';
       const noteCanon = rawNote ? Strength.canon(rawNote) : '';
       const fromNote = !!(noteCanon && this.validModelName(noteCanon) && (Strength.ver10(noteCanon) != null || /(?:^|[-_.\s])\d/.test(noteCanon)));
       let picked = fromM ? mi.name : (fromTv ? tvBase : (fromPrefix ? gp.model : (fromTitle ? baseTitle : (fromNote ? noteCanon : ''))));
@@ -65,7 +71,9 @@ const AcctStats = {
       const nm = picked ? (Strength.canon(picked) || '') : '';
       const vid = nm && this.validModelName(nm) ? (Brand.of(nm) || 'other') : 'other';
       const at = entAt(e) || 0;
-      rows.push({ id: e.id, title: String(cleanRawTitle || e.title || '').slice(0, 80), vid, nm: vid === 'other' ? '' : nm, at, ver: vid !== 'other' ? Strength.ver10(nm) || null : null, lv: vid !== 'other' ? Strength.level(nm) : null });
+      const row = { id: e.id, title: String(cleanRawTitle || e.title || '').slice(0, 80), vid, nm: vid === 'other' ? '' : nm, at, ver: vid !== 'other' ? Strength.ver10(nm) || null : null, lv: vid !== 'other' ? Strength.level(nm) : null };
+      e._astat = { key: cacheKey, row };
+      rows.push(row);
     }
     for (const r of rows) {
       if (r.vid === 'other' || !r.nm) continue;

@@ -40,7 +40,10 @@ const RoutePolicy = (() => {
       Object.assign(nextRep, { a: Date.now(), h: !!r.ipa.h, px: !!r.ipa.px, m: !!r.ipa.m, isp: String(r.ipa.isp || '').slice(0, 40) });
       changed = true;
     }
-    return changed ? { ...pool, rep: { ...(pool.rep || {}), [ip]: nextRep } } : pool;
+    if (!changed) return pool;
+    const repView = Object.create(pool.rep || null);
+    repView[ip] = nextRep;
+    return { ...pool, rep: repView };
   }
   function reputationOK(pool,k,e,at) {
     if(pool.trust?.[String(k).toLowerCase()])return true;
@@ -50,10 +53,19 @@ const RoutePolicy = (() => {
     if(!egIp)return !/[.:]/.test(String(k||''));
     const rEg = pool.rep?.[egIp] || null;
     const rHost = hIp && hIp !== egIp ? (pool.rep?.[hIp] || null) : null;
+    const mergePu = (a, b) => {
+      if (!a || !b) return a || b;
+      const aReal = Boolean(a.real || ![8, 12, 15, 16, 22].includes(+a.fs));
+      const bReal = Boolean(b.real || ![8, 12, 15, 16, 22].includes(+b.fs));
+      if (aReal !== bReal) return aReal ? a : b;
+      return (+b.fs > +a.fs)
+        ? { ...a, ...b, fs: +b.fs, dc: Boolean(a.dc || b.dc), bc: Boolean(a.bc || b.bc) }
+        : { ...b, ...a, fs: +a.fs, dc: Boolean(a.dc || b.dc), bc: Boolean(a.bc || b.bc) };
+    };
     const p = (rEg && rHost) ? {
       ...rHost,
       ...rEg,
-      pu: rEg.pu || rHost.pu,
+      pu: mergePu(rEg.pu, rHost.pu),
       a: rEg.a || rHost.a,
       c: rEg.c || rHost.c,
       r: Math.max(+rEg.r || 0, +rHost.r || 0),
@@ -67,7 +79,7 @@ const RoutePolicy = (() => {
     const q = pool.rq?.[egIp] || (hIp ? pool.rq?.[hIp] : null);
     const hasPu = Boolean(p.pu && Number.isFinite(+p.pu.fs));
     const hasCleanPu = Boolean(hasPu && +p.pu.fs < 25);
-    const isCloudIsp = /\b(?:akamai|linode|digitalocean|vultr|constant company|choopa|hetzner|ovh|oracle|amazon|aws|google cloud|microsoft|azure|cloudflare|alibaba|aliyun|tencent|aceville|6 collyer quay|huawei|contabo|fornex|ionos|kagoya|webhorizon|cyberverse|brainoza|eurohoster|virterion|kaopu|light\s*node|scaleway|leaseweb|m247|datacamp|cdn77|zenlayer|dmit|veesp|trabia|baxet|waicore|trunk networks|hostkey|timeweb|racknerd|hostpapa|alphavps|livi hosting|terratransit|rocketcloud|hosting|hoster|datacenter|data\s*center|server|vps|cloud|colocation|dedicated)\b/i.test((p.isp || '') + ' ' + (p.pu?.org || ''));
+    const isCloudIsp = /\b(?:akile|akilecloud|dromatics|akamai|linode|digitalocean|vultr|constant company|choopa|hetzner|ovh|oracle|amazon|aws|google cloud|microsoft|azure|cloudflare|alibaba|aliyun|tencent|aceville|6 collyer quay|huawei|contabo|fornex|ionos|kagoya|webhorizon|cyberverse|brainoza|eurohoster|virterion|kaopu|light\s*node|scaleway|leaseweb|m247|datacamp|cdn77|zenlayer|dmit|veesp|trabia|baxet|waicore|trunk networks|hostkey|timeweb|racknerd|hostpapa|alphavps|livi hosting|terratransit|rocketcloud|hosting|hoster|datacenter|data\s*center|server|vps|cloud|colocation|dedicated)\b/i.test((p.isp || '') + ' ' + (p.pu?.org || ''));
     const isHosting = Boolean(p.h || p.pu?.dc || isCloudIsp);
     let score=100,known=false;
     if(p.a){known=true;if(p.px&&!hasCleanPu){score-=35;if(isHosting)score-=15;}if(isHosting&&!hasCleanPu)score-=8;}
@@ -80,7 +92,7 @@ const RoutePolicy = (() => {
       if(p.pu.dc&&p.pu.bc)score-=8;
       else if(p.pu.res&&fs<25&&!p.px)score=Math.min(100,score+5);
     }
-    if(q){const n=(q.ok||0)+(q.rc||0);if(n>=3){known=true;const rates=Object.entries(pool.rq||{}).filter(([other,v])=>other!==egIp&&(v.ok||0)+(v.rc||0)>=3).map(([,v])=>(v.rc||0)/((v.ok||0)+(v.rc||0)));const best=rates.length?Math.min(...rates):1;score-=Math.max(0,Math.round(((q.rc||0)/n-Math.min(.5,best))*70));if(!q.rc&&q.ok>=5)score+=5;}else if((q.rc||0)>=1){known=true;score-=((q.rc||0)>=2&&!(q.ok||0)?55:30);}if(q.l&&at-(q.lt||0)<48*3600000)score-=Math.min(20,q.l*5);}
+    if(q){const n=(q.ok||0)+(q.rc||0);if(n>=3){known=true;let best=1;const rqObj=pool.rq||{};for(const other in rqObj){if(other===egIp)continue;const v=rqObj[other];if(!v)continue;const vn=(v.ok||0)+(v.rc||0);if(vn>=3){const rRate=(v.rc||0)/vn;if(rRate<best)best=rRate;}}score-=Math.max(0,Math.round(((q.rc||0)/n-Math.min(.5,best))*70));if(!q.rc&&q.ok>=5)score+=5;}else if((q.rc||0)>=1){known=true;score-=((q.rc||0)>=2&&!(q.ok||0)?55:30);}if(q.l&&at-(q.lt||0)<48*3600000)score-=Math.min(20,q.l*5);}
     return known&&score>=75;   // 只用已评估且纯净（≥75 分，与 IPRep.PURE 一致）的出口；未评估的不用
   }
   function candidates({ account:a, nodes=[], pool={}, accounts=[] }, link, at, cursor=0) {
@@ -94,9 +106,9 @@ const RoutePolicy = (() => {
     if (ns.length) { const offset=cursor%ns.length; ns.push(...ns.splice(0,offset)); }
     const same=[], other=[], seen=new Set([key(a)]);
     const add=(box,n,k,e)=>{const c={proxy:n.proxy,proxyIp:k,nodeId:n.id,region:e.loc||'',kind:'node'};const sig=key(c);if(!seen.has(sig)){seen.add(sig);box.push(c);}};
+    const local=ips.filter(([,e])=>e.loc===home), away=ips.filter(([,e])=>e.loc!==home&&!occupiedRegions.has(e.loc));
     // Interleave nodes before adding more exits, so one large node cannot consume the whole budget.
     for(let round=0;round<3;round++)for(const n of ns){
-      const local=ips.filter(([,e])=>e.loc===home), away=ips.filter(([,e])=>e.loc!==home&&!occupiedRegions.has(e.loc));
       if(local[round])add(same,n,...local[round]);
       if(away[round])add(other,n,...away[round]);
       if(round===0&&(!ips.length||/\/video\//i.test(n.proxy)))add(other,n,'',{loc:''}); // Only use bare node exit when no pure ProxyIPs exist or node is /video/ chain.

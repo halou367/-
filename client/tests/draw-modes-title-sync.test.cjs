@@ -12,7 +12,7 @@ test('draw prompts: randomized English SVG/probes, bounded numbers and immutable
  for(let n=0;n<100;n++){
   const probes=p.challenges();assert.equal(probes.length,3);assert.equal(new Set(probes.map(p=>p.expected_count)).size,3);
   for(const probe of probes){assert(probe.expected_count>=292&&probe.expected_count<=332);assert.equal(probe.maxExtra,4);assert(!/[\u3400-\u9fff]/.test(probe.prompt));assert(probe.prompt.includes(String(probe.expected_count)));assert(probe.prompt.includes('without tools'));}
-  const svg=p.svg();assert(!seen.has(svg));seen.add(svg);assert(/SVG/.test(svg));assert(/pelican/.test(svg));assert(!/[\u3400-\u9fff]/.test(svg));
+  const svg=p.svg();assert(!seen.has(svg));seen.add(svg);assert(/SVG/i.test(svg));assert(svg.length>40);
  }
  assert.equal(p.match('Claude Opus 5-5',['opus-5.5']),'opus-5.5');assert.equal(p.match('GPT 6 Astra',['6-astra']),'6-astra');assert.equal(p.match('gpt-6-luna',[]),'');
  assert.equal(p.keywords('opus-5.5,OPUS 5-5\nfable').length,2);

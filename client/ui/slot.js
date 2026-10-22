@@ -272,7 +272,7 @@ const GSlot = (() => {
   }
   Bus.on('gacha', () => { clearTimeout(check.t); check.t = setTimeout(check, 30); });
   document.addEventListener('visibilitychange', () => { if (!document.hidden) check(); });
-  setInterval(check, 700);
+  setInterval(() => { if (Gacha.run?.status === 'running' || (wrap && wrap.classList.contains('on'))) check(); }, 700);
   return {
     parts, check,
     // 老虎机正在显示（抽中提示交给老虎机，不再另外弹 toast）

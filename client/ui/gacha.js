@@ -41,9 +41,20 @@ const Brand = (() => {
   const VPRE = /^(?:[\w.-]+\/)?(?:gpt|chatgpt|claude|gemini|grok|kimi|qwen|deepseek|mimo|glm|llama|muse|mistral|doubao|minimax)(?:[-_ ]+(?=[\w])|(?=\d))/i;
   const short = n => { n = noVertex(String(n || '')).trim(); if (!of(n)) return n; let r = n.replace(VPRE, ''); if (/^k\d/.test(r)) r = 'K' + r.slice(1); return r || n; };
   const TIERS = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
-  const tierOf = n => (/-(none|minimal|low|medium|high|xhigh|max)$/i.exec(noVertex(String(n || '')).replace(/\/\d+-\d+-\d+:\d+$/, '').replace(/-(agent|public)$/i, '')) || [])[1]?.toLowerCase() || null;
-  // 型号（去厂商前缀和档位）：claude-opus-5-high → opus-5
-  const family = n => { const s = short(n); let r = s.replace(/-(none|minimal|low|medium|high|xhigh|max)$/i, ''); try { const c = /-([a-z][a-z0-9]{2,15})$/i.exec(r); if (c && Strength.codes.has(c[1].toLowerCase())) r = r.slice(0, -c[0].length); } catch {} return r || s; };
+  const MODEL_MAX_NAME_RE = /(?:^|[-/])(?:qwen[\d.]*|qwen-\d[\d.]*|glm-[\d.]+|kimi-k\d[\d.]*|codex)-max(?:-0\d{3}|-\d{4,8})?$/i;
+  const tierOf = n => {
+    const cleanN = noVertex(String(n || '')).replace(/\/\d+-\d+-\d+:\d+$/, '').replace(/-(agent|public)$/i, '');
+    if (MODEL_MAX_NAME_RE.test(cleanN)) return null;
+    return (/-(none|minimal|low|medium|high|xhigh|max)$/i.exec(cleanN) || [])[1]?.toLowerCase() || null;
+  };
+  // 型号（去厂商前缀和档位）：claude-opus-5-high → opus-5；保留 qwen3.8-max / glm-5.3-max 等型号自带的 -max
+  const family = n => {
+    const s = short(n);
+    const keepMax = MODEL_MAX_NAME_RE.test(noVertex(String(n || '')).replace(/-(agent|public)$/i, ''));
+    let r = keepMax ? s : s.replace(/-(none|minimal|low|medium|high|xhigh|max)$/i, '');
+    try { const c = /-([a-z][a-z0-9]{2,15})$/i.exec(r); if (c && Strength.codes.has(c[1].toLowerCase())) r = r.slice(0, -c[0].length); } catch {}
+    return r || s;
+  };
   return { of, NAME, version, short, family, tierOf, TIERS, toks, learn, vendorOfRoute, learnedOf: t => { const m = LRE && LRE.exec(String(t || '')); return m && !LIST.some(([, re]) => re.test(String(t))) ? learned[m[1].toLowerCase()] || '' : ''; } };
 })();
 
@@ -443,6 +454,19 @@ const Gacha = (() => {
   }
   function capRecent() { const l = (Store.get('gacha:capstat', {}) || {})[capKey()] || [], t = now(); return l.filter(v => t - v < CAP_WIN).length; }
   const capFloor = n => n >= 6 ? 60000 : n >= 3 ? 30000 : n >= 1 ? 12000 : 0;
+  // 吸收自千面助手 v9.2：首包耗时（TTFT）后端拥塞感知 + 每日风控清算窗安全节拍 + 皇冠奖杯模型防误删保护
+  const recentTtfts = [];
+  function noteTtft(ms) {
+    if (!Number.isFinite(ms) || ms < 200 || ms > 180000) return;
+    recentTtfts.push(Math.round(ms));
+    if (recentTtfts.length > 5) recentTtfts.shift();
+  }
+  function congestionFloor() {
+    if (recentTtfts.length < 2) return 0;
+    const avg = recentTtfts.reduce((s, v) => s + v, 0) / recentTtfts.length;
+    return avg >= 32000 ? 5000 : avg >= 22000 ? 2800 : 0;
+  }
+  const isTrophyModel = name => /\b(?:opus[-_ ]?5\.6|opus[-_ ]?5\.5[-_ (]*max|fable[-_ ]?5\.1|gpt[-_ ]?6[-_ ]?astra|gpt[-_ ]?6\.1[-_ ]?sol|barium|argon)\b/i.test(String(name || ''));
   // 滑动时间窗主动防 429 节流：控制 60s 内最大 POST 密度与突发最小间隔，抽卡主动避开 429
   const gachaPostWindow = [];
   async function paceGachaPost(myOrSignal, isFollowup = false) {
@@ -471,7 +495,16 @@ const Gacha = (() => {
   async function sendGap(my) {
     const s = run.settings, n = capRecent(), floor = capFloor(n);
     if (floor !== (run.capFloor || 0)) { run.capFloor = floor; if (floor) log('近 30 分钟本账号 / 当前出口 IP 触发人机验证 ' + n + ' 次：两抽间隔至少 ' + Math.round(floor / 1000) + ' 秒', 'warn'); else log('近 30 分钟没有再触发人机验证，恢复正常间隔'); }
-    const base = Math.max(s.intervalMs || 0, s.turbo && s.parallel > 1 ? TURBO_GAP : 0, run.gap || 0, floor);
+    const bw = (typeof BotService !== 'undefined' && BotService.banWaveStatus) ? BotService.banWaveStatus() : null;
+    const bwFloor = bw?.active ? 10500 : 0;
+    if (bw?.active && run._bwNotedLabel !== bw.label) {
+      run._bwNotedLabel = bw.label;
+      log('当前处于 ' + bw.label + '：已自动启用 ≥10.5 秒安全护航节拍（不中断抽卡）');
+    } else if (!bw?.active && run._bwNotedLabel) {
+      run._bwNotedLabel = '';
+    }
+    const congWait = congestionFloor();
+    const base = Math.max(s.intervalMs || 0, s.turbo && s.parallel > 1 ? TURBO_GAP : 0, run.gap || 0, floor, bwFloor) + congWait;
     // 随机抖动：固定节拍的请求更容易被判成脚本；最多加 25%（不超过 4 秒）
     const gap = base + (base > 0 ? Math.round(Math.random() * Math.min(4000, base * 0.25)) : 0);
     const quotaWait = Math.max(0, (typeof Quota !== 'undefined' && Quota.blockedUntil ? Quota.blockedUntil(true) : 0) - now());
@@ -494,16 +527,18 @@ const Gacha = (() => {
 
   // 需要人机验证时提醒你：系统通知 + 提示音（手机振动），并自动弹出官方验证框
   // App 在后台时等你切回来再弹；只弹官方组件，由你自己完成；取消后不反复弹，可随时点「完成验证」
+  let _beepCtx = null;
   function beep() {
     try {
       const AC = window.AudioContext || window.webkitAudioContext; if (!AC) return;
-      const ac = new AC(), t = ac.currentTime;
+      if (!_beepCtx || _beepCtx.state === 'closed') _beepCtx = new AC();
+      if (_beepCtx.state === 'suspended') _beepCtx.resume().catch(() => {});
+      const ac = _beepCtx, t = ac.currentTime;
       for (const [f, d] of [[880, 0], [1175, 0.18]]) {
         const o = ac.createOscillator(), g = ac.createGain(); o.frequency.value = f;
         g.gain.setValueAtTime(0.0001, t + d); g.gain.exponentialRampToValueAtTime(0.18, t + d + 0.02); g.gain.exponentialRampToValueAtTime(0.0001, t + d + 0.16);
         o.connect(g).connect(ac.destination); o.start(t + d); o.stop(t + d + 0.18);
       }
-      setTimeout(() => ac.close().catch(() => {}), 800);
     } catch {}
   }
   function capOpen() {
@@ -653,7 +688,7 @@ const Gacha = (() => {
     if (typeof Fav !== 'undefined' && Fav.has?.(sid)) return false;
     if (typeof Notes !== 'undefined' && Notes.get?.(sid)?.n) return false;
     const ch = c || (typeof Chats !== 'undefined' ? Chats.get(sid) : null);
-    if (ch && ch._gachaKept) return false;
+    if (ch && (ch._gachaKept || ch._trophyProtected)) return false;
     const isRunningGacha = Boolean(run && ['running', 'stopping'].includes(run.status));
     const att = (run && Array.isArray(run.attempts)) ? run.attempts.find(a => a && a.sid === sid) : null;
     if (att && (att.verdict === 'hit' || att.verdict === 'keep' || att.kept)) return false;
@@ -762,6 +797,10 @@ const Gacha = (() => {
       if (c.busy) {
         const basePct = roundNo === 1 ? 24 : roundNo === 2 ? 56 : 80;
         const tChars = Number(c.fmt?.tChars) || 0;
+        if (roundNo === 1 && !a.ttftMs && (tChars > 0 || (c.fmt?.toolIds && c.fmt.toolIds.length > 0))) {
+          a.ttftMs = Math.max(1, now() - (a.sentAt || startAt));
+          noteTtft(a.ttftMs);
+        }
         const nextPct = Math.min(basePct + 26, basePct + (tChars > 6000 ? 24 : tChars > 2000 ? 16 : tChars > 120 ? 8 : tChars > 20 ? 5 : 2));
         const stepLbl = isHabitMode ? (roundNo === 1 ? '1/2 初筛回复' : '2/2 精测回复') : (roundNo + '/3 回复');
         if (a.pct !== nextPct || a.step !== stepLbl) { a.step = stepLbl; a.pct = nextPct; changed(); }
@@ -1093,10 +1132,15 @@ const Gacha = (() => {
     run.completed++; a.draw = run.completed; a.no = run.completed; run.seq = Math.max(run.seq || 0, run.completed); run.skips = 0; run.pauseStreak = 0; run.skipHeal = 0;
     if (id.routed) { a.routed = true; log('第 ' + a.no + ' 轮原模型调用失败，Brana 已改派；按实际回答的 ' + id.name + ' 计'); }
     log('#' + a.draw + ' ' + (id.fingerprint ? Fingerprint.describe(id) : id.name) + (id.tier ? ' · ' + id.tier : '') + (cs != null ? ' · 强度分 ' + cs : id.cs && !id.cs.ok ? ' · 打分作废' : '') + (id.csv ? '（' + ({ keep: '满意', ok: '勉强', reroll: '换', retry: '作废' }[id.csv.action] || '') + '：' + id.csv.why + (id.csv.top ? '，最像 ' + id.csv.top.label + ' ' + id.csv.top.p + '%' : '') + '）' : '') + ' → ' + ({ hit: '命中目标', keep: '保留', archive: '归档' }[verdict]) + ' · 发送后 ' + (a.idMs / 1000).toFixed(1) + ' 秒识别');
-    if (verdict === 'hit' || verdict === 'keep') {
+    if (verdict === 'hit' || verdict === 'keep' || isTrophyModel(id.name)) {
       if (a.sid) unmarkGachaCreatedSid(a.sid);
       const keptCh = a.sid && typeof Chats !== 'undefined' ? Chats.get(a.sid) : null;
-      if (keptCh) { keptCh._gachaKept = true; keptCh._wasGachaAutoQA = false; keptCh.gacha = null; }
+      if (keptCh) {
+        keptCh._gachaKept = true;
+        if (verdict === 'hit' || isTrophyModel(id.name)) keptCh._trophyProtected = true;
+        keptCh._wasGachaAutoQA = false;
+        keptCh.gacha = null;
+      }
     }
     if (verdict === 'hit') {
       run.hits = [...(run.hits || []), id.name].slice(-50);
@@ -1471,7 +1515,7 @@ const Gacha = (() => {
     if (s.fingerprint) log('英文动态指纹：默认1条；首次候选命中优选名单才补测至3条；不追加SVG，不纳入固定题个人参考库；结果保留，置信度不是身份概率');
     else if (s.mode === 'habit') log('习惯速测模式（两段全自动精测）：第 1 轮极速微缩探针初筛（秒杀开源与非目标家族）→ 命中目标闭源家族自动补发第 2 轮鹈鹕 SVG 精测锁定型号与档位（全程 0 人工干预）');
     else if (s.mode === 'autoqa') log('自动问答模式：首轮两步微缩探针 + 习惯/反推双引擎智能锁定');
-    else log(s.mode === 'svg' ? 'SVG模式：每次发送不同的英文鹈鹕动画指令' : '自定义模式：四位随机数 + 提示词；本机同提示词前缀不重复');
+    else log(s.mode === 'svg' ? 'SVG模式：每次随机以不同语言发送不同的鹈鹕动画指令' : '自定义模式：四位随机数 + 提示词；本机同提示词前缀不重复');
     const my = ++token; changed(); void loop(my); return { ok: true };
   }
   function stop() {
