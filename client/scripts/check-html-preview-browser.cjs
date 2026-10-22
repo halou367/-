@@ -124,7 +124,7 @@ async function fixture({ platform = 'android', width = 390, mode = 'slow', cache
     // 代码 / 运行 切换
     await p.locator('#pv .pv-seg button', { hasText: '代码' }).click();
     assert.ok((await p.locator('#pv .pv-code').textContent()).includes('@keyframes go'));
-    await p.locator('#pv .pv-seg button', { hasText: '运行' }).click();
+    await p.locator('#pv .pv-seg button', { hasText: '预览' }).click();   // beta.1 起 html 页签也统一叫「预览」
     await p.waitForSelector('#pv iframe.pv-frame');
     // 记录：动画跑一会儿再截，红色小车应该已经离开起点
     await p.waitForTimeout(1500);
@@ -190,7 +190,8 @@ async function fixture({ platform = 'android', width = 390, mode = 'slow', cache
     assert.deepEqual(await p.locator('#pv .pv-seg button').allTextContents(), ['预览', '源码']);
     await p.locator('#pv .pv-seg button', { hasText: '源码' }).click(); assert.ok((await p.locator('#pv .pv-code').textContent()).includes('# 标题'));
     await p.evaluate(() => __anc.HtmlPreview.open({ sid: __anc.Tabs?.cur?.sid || null, path: 'src/app.js', get: () => 'const a = 1;\nconsole.log(a);' }));
-    assert.ok((await p.locator('#pv .pv-code').textContent()).includes('console.log')); assert.equal(await p.locator('#pv .pv-seg').count(), 0); assert.equal(await p.locator('#pv .pv-rec').count(), 0);
+    // beta.1 起：项目里有 html/svg 时，源码文件也保留「预览 / 代码」切换（预览渲染项目里的 html）；仍然不能记录鹈鹕测试图
+    assert.ok((await p.locator('#pv .pv-code').textContent()).includes('console.log')); assert.deepEqual(await p.locator('#pv .pv-seg button').allTextContents(), ['预览', '代码']); assert.equal(await p.locator('#pv .pv-rec').count(), 0);
     assert.equal(await p.evaluate(() => [__anc.HtmlPreview.kindOf('a.html'), __anc.HtmlPreview.kindOf('a.SVG'), __anc.HtmlPreview.kindOf('x/b.md'), __anc.HtmlPreview.kindOf('c.js'), __anc.HtmlPreview.kindOf('d.png')].join()), 'html,html,md,code,');
     // 关闭 → 完全恢复
     await p.locator('#pv .pv-x').click();
@@ -199,15 +200,18 @@ async function fixture({ platform = 'android', width = 390, mode = 'slow', cache
     // ---- 聊天里的小卡片 + 点开的预览（手机＝底部弹层）----
     await p.waitForSelector('.pvc iframe', { timeout: 4000 });
     await p.waitForTimeout(400);
-    const card = await p.evaluate(() => { const c = document.querySelector('.pvc'), b = c.querySelector('.pvc-box').getBoundingClientRect(), fr = c.querySelector('iframe'); fr.__keep = 1; return { t: c.querySelector('.pvc-t').textContent, badge: c.querySelector('.pvc-badge').textContent, ratio: b.width / b.height, sandbox: fr.getAttribute('sandbox'), hasBike: !!fr.contentDocument?.querySelector('.bike'), fit: fr.getBoundingClientRect().width <= b.width + 1 && fr.getBoundingClientRect().height <= b.height + 1 }; });
+    const card = await p.evaluate(() => { const c = document.querySelector('.pvc'), b = c.querySelector('.pvc-box').getBoundingClientRect(), fr = c.querySelector('iframe'); fr.__keep = 1; return { t: c.querySelector('.pvc-t').textContent, badge: c.querySelector('.pvc-badge').textContent, ratio: b.width / b.height, sandbox: fr.getAttribute('sandbox'), hasBike: /class="bike"/.test(fr.srcdoc || ''), probe: c.querySelectorAll('iframe.pv-probe').length, fit: fr.getBoundingClientRect().width <= b.width + 1 && fr.getBoundingClientRect().height <= b.height + 1 }; });
     assert.ok(card.t && card.badge === 'HTML' && Math.abs(card.ratio - 9 / 8) < 0.06 && card.hasBike && card.fit, platform + ' mini card ' + JSON.stringify(card));
-    assert.ok(!/allow-scripts/.test(card.sandbox || ''), platform + ' thumbnail never runs scripts: ' + card.sandbox);
+    // beta.1 起小窗在不透明源里跑脚本（活动画），但绝不 allow-same-origin（拿不到客户端数据），测完即拆同源测量 iframe
+    assert.equal(card.sandbox, 'allow-scripts', platform + ' thumbnail runs scripts only in an opaque origin: ' + card.sandbox);
+    assert.equal(card.probe, 0, platform + ' measurement probe removed after analyse');
     { // 回归：标题 + 大幅 svg 的页面（svg 约占半屏）—— 小窗按宽度铺满、从页面顶部开始，不能被当成「整页 svg」上下留白、裁掉标题
       const page = '<!doctype html><html><head><title>T</title><style>body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:40px 24px;box-sizing:border-box;background:#f5f0e6}main{width:100%;max-width:880px}h1{font-size:56px;margin:30px 0}</style></head><body><main><header id="top">PELICAN PEDAL CLUB</header><h1>Life in the slow lane.</h1><svg viewBox="0 0 800 440" width="100%"><rect width="800" height="440" fill="#9cf"/></svg><footer>EST.</footer></main></body></html>';
       await p.evaluate(pg => { const el = __anc.HtmlPreview.card('regress-thumb', { path: 'r.html', get: () => pg }); el.style.cssText = 'position:fixed;left:0;top:0;width:' + Math.min(560, innerWidth) + 'px;z-index:99'; document.body.append(el); }, page);
       await p.waitForTimeout(600);
-      const th = await p.evaluate(() => { const el = [...document.querySelectorAll('.pvc')].pop(), b = el.querySelector('.pvc-box').getBoundingClientRect(), f = el.querySelector('iframe'), r = f.getBoundingClientRect(), d = f.contentDocument; const top = d.getElementById('top').getBoundingClientRect(); const out = { bw: b.width, fw: r.width, fy: r.top - b.top, topY: top.top, bar: getComputedStyle(d.documentElement).scrollbarWidth }; el.remove(); return out; });
-      assert.ok(Math.abs(th.fw - th.bw) < 3 && Math.abs(th.fy) < 2 && th.topY >= 0 && th.bar === 'none', platform + ' thumbnail fills width from the top, no bands / inner scrollbar ' + JSON.stringify(th));
+      const th = await p.evaluate(() => { const el = [...document.querySelectorAll('.pvc')].pop(), b = el.querySelector('.pvc-box').getBoundingClientRect(), f = el.querySelector('iframe'), r = f.getBoundingClientRect(); const out = { bw: b.width, fw: r.width, fy: r.top - b.top, bar: /scrollbar-width:\s*none/.test(f.getAttribute('srcdoc') || ''), top: f.style.top, transform: f.style.transform }; el.remove(); return out; });
+      // 不透明源小窗不能再读 contentDocument：矩形铺满 + 顶部对齐（wfit 时 top=0、无缩放偏移）+ 页面自带 NOBAR 由 srcdoc 静态验证
+      assert.ok(Math.abs(th.fw - th.bw) < 3 && Math.abs(th.fy) < 2 && th.bar && (!/scale/.test(th.transform || '') || th.top === '0px'), platform + ' thumbnail fills width from the top, no bands / inner scrollbar ' + JSON.stringify(th));
     }
     await p.locator('.pvc').click(); await p.waitForSelector('#pv iframe.pv-frame'); await p.waitForTimeout(450);
     const sheet = await p.evaluate(() => { const s = document.querySelector('#pv .pv-sheet').getBoundingClientRect(), hd = document.querySelector('#pv .pv-handle'); return { top: s.top, bottom: s.bottom, vh: innerHeight, handle: !!hd && getComputedStyle(hd).display !== 'none', same: document.querySelector('.pvc iframe').__keep === 1 }; });

@@ -5,7 +5,7 @@ const nodes=['Current','Fast','Unavailable'].map((name,i)=>({...V.blank(),name,i
 const seed={nodes,links:nodes.map(V.toLink),outbound:JSON.stringify(V.outbound(nodes[0],'proxyip.one.invalid')),bareOutbound:JSON.stringify(V.outbound(nodes[0],''))};const results=[];let browser;
 async function fixture(platform='desktop',width=1100,extra={},opts={}){
  return harness.fixture({...opts,platform,width,mode:'ok',cached:false,setupData:{...seed,platform,...extra},setup:async data=>{
-  const H=window.BranaHost,a=(await H.info()).account,base=await H.info(),shared={nodes:data.nodes,nodesubs:[],pippool:{v:1,node:'node-0',rep:{'198.51.100.10':{pu:{fs:5}},'198.51.100.11':{pu:{fs:5}}},ips:{'proxyip.one.invalid':{loc:'JP',ok:true,ms:7,eg:'198.51.100.10'},'proxyip.two.invalid':{loc:'JP',ok:true,ms:9,eg:'198.51.100.11'}}}};
+  const H=window.BranaHost,a=(await H.info()).account,base=await H.info(),shared={nodes:data.nodes,nodesubs:[],pippool:{v:1,node:'node-0',rep:{'198.51.100.10':{pu:{fs:5}},'198.51.100.11':{pu:{fs:5}},'203.0.113.9':{pu:{fs:5}}},ips:{'proxyip.one.invalid':{loc:'JP',ok:true,ms:7,eg:'198.51.100.10'},'proxyip.two.invalid':{loc:'JP',ok:true,ms:9,eg:'198.51.100.11'}}}};
   Object.assign(a,{proxy:data.links[0],proxyIp:'proxyip.one.invalid',nodeId:'node-0',region:'JP',routeMode:'node',routeAuto:false,nodeFailover:true});
   if(data.platform==='android')a.xout=data.outbound;
   const f=window.__routeFixture={a,probes:[],writes:[],attempts:[],auth:[],messages:[],fail:false,hold:false,held:[],ip:'203.0.113.9'};
@@ -87,6 +87,8 @@ async function run(){browser=await chromium.launch({headless:true,args:['--no-sa
   assert.equal(await f.page.locator('.np-row:not(.np-auto)').first().locator('.dly').getAttribute('class'),'dly d-good');
   const tested=await f.page.evaluate(()=>({writes:__routeFixture.writes.length,probes:__routeFixture.probes.length,url:__routeFixture.urlTests}));assert.equal(tested.writes,0);assert.equal(tested.probes,0,'opening never probes Brana');assert.ok(tested.url.length>=1);
   const before=tested.url.length;await f.page.evaluate(()=>{__anc.RegionIP.close();__anc.RegionIP.open();});await f.page.clock.runFor(700);assert.equal((await f.page.evaluate(()=>__routeFixture.urlTests)).length,before,'reopening within 5 minutes does not retest');
+  // 退出列表自 beta.1 起改为「展开时才渲染行」（pipOpen 门控）：先展开再断言当前选中的行
+  await pipOpen(f);
   assert.equal(await f.page.locator('.region-ip .pip-row.on').getAttribute('data-k'),'proxyip.one.invalid');
   // 每个节点行有「测」：只单独连测这一个节点 3 次取中位数，不选中它、不切换
   {
@@ -153,6 +155,7 @@ async function run(){browser=await chromium.launch({headless:true,args:['--no-sa
 
   f=await fixture(platform);await open(f);
   assert.equal(await f.page.locator('.region-ip .rip-switch').count(),0,'one-click switch removed');assert.equal(await f.page.locator('.region-ip .rip-head .rip-x').count(),1,'close is the top-right X');
+  await pipOpen(f);
   assert.equal(await f.page.locator('.region-ip .pip-row').first().getAttribute('data-k'),'__auto');assert.equal(await f.page.locator('.region-ip .pip-refresh').isVisible(),true);
   await f.page.locator('.rip-mode button[data-k="auto"]').click();
   assert.equal(await f.page.locator('.region-ip .pip-list').isHidden(),true);assert.match(await f.page.locator('.region-ip .np-auto-exit').textContent(),/出口：自动/);
