@@ -184,3 +184,35 @@ const FPLibs = (() => {
   }
   return { rank, list, inspect, thought, isOpen, gate, addUrl, addText, update, toggle, remove, bankOf, compact, parseBank, IKALE_URL };
 })();
+try {
+  if (typeof globalThis !== 'undefined' && !globalThis.__AMC_FP_ENGINE__) {
+    globalThis.__AMC_FP_ENGINE__ = {
+      version: 6,
+      inputSchema: 'integer-list/v1',
+      source: 'Ikaleio/lm-detector (MIT)',
+      parseNumbers: text => (typeof ProbeLib !== 'undefined' && typeof ProbeLib.numbers === 'function') ? ProbeLib.numbers(String(text || '')) : [],
+      loadBank: async () => ({ ok: typeof IkaleBank !== 'undefined', models: typeof IkaleBank !== 'undefined' && Array.isArray(IkaleBank.models) ? IkaleBank.models.length : 0 }),
+      getBank: () => (typeof IkaleBank !== 'undefined' ? IkaleBank : null),
+      identify: async (texts, bank) => {
+        const b = bank || (typeof IkaleBank !== 'undefined' ? IkaleBank : null);
+        if (!b || typeof ProbeLib === 'undefined' || typeof ProbeLib.inspectAndIdentify !== 'function') return { ok: false, candidates: [] };
+        const arr = (Array.isArray(texts) ? texts : [texts]).filter(t => typeof t === 'string' && t.trim());
+        const outputs = arr.map((t, i) => ({
+          text: t,
+          challenge_id: 'probe-' + (i + 1),
+          expected_count: Math.max(80, Math.min(350, (ProbeLib.numbers?.(t) || []).length || 180)),
+        }));
+        const r = ProbeLib.inspectAndIdentify(outputs, b)?.result;
+        if (!r || !Array.isArray(r.candidates) || !r.candidates.length) return { ok: false, candidates: [] };
+        return {
+          ok: true,
+          verdict: (r.status === 'clear' || r.status === 'close') ? 'match' : 'insufficient',
+          confidence: r.status === 'clear' ? 'high' : (r.status === 'close' ? 'medium' : 'low'),
+          absoluteMatch: Number(r.signals?.fit) || 0,
+          probability: Number(r.signals?.relative_probability) || 0,
+          candidates: r.candidates.map(c => ({ id: c.id, score: Number(c.fit) || 0, prob: Number(c.probability) || 0 })),
+        };
+      },
+    };
+  }
+} catch {}

@@ -32,6 +32,8 @@
    * 其余型号一律从 0 开始。
    */
   const SEED_COUNTS = Object.freeze({
+    'contenders/barium-bb-v2-4xts-agent': 3,
+    'openai/gpt-6.1-sol': 2,
     'anthropic/claude-fable-5.1': 1,
     'anthropic/claude-opus-5': 3,
     'anthropic/claude-sonnet-5': 1,
@@ -46,6 +48,8 @@
 
   /** 残差 → 置信度百分比。残差 0 ⇒ 100。 */
   function residualToConfidence(residual) {
+    if (typeof residual !== 'number' && typeof residual !== 'string') return 0;
+    if (typeof residual === 'string' && !residual.trim()) return 0;
     const r = Number(residual);
     if (!Number.isFinite(r) || r < 0) return 0;
     return Math.max(0, Math.min(100, (1 - r) * 100));

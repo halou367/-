@@ -2073,6 +2073,176 @@ test('v0.13.172: Decouple Battle effort tier identification from model habit cal
   assert.ok(effOut && typeof effOut.tier === 'string');
 });
 
+test('v0.13.168-beta.2: Message ordering after user turn, extension-test-identity custom userData preservation, Battle prePct vs postPct separation, and 01a163f2/01a163f1/01a16431 recognition', () => {
+  // 1. extension-test-identity preserves custom --user-data-dir outside appData even on -beta versions
+  const { configure } = require('../src/extension-test-identity');
+  let curUserData = '/tmp/brana-auth-route-test-123';
+  const mockApp = {
+    getPath(k) {
+      if (k === 'appData') return '/home/runner/.config';
+      if (k === 'userData') return curUserData;
+      return '';
+    },
+    setPath(k, v) {
+      if (k === 'userData') curUserData = v;
+    },
+    setName() {},
+    setAppUserModelId() {},
+  };
+  const idRes = configure(mockApp);
+  assert.equal(idRes.testBuild, false);
+  assert.equal(curUserData, '/tmp/brana-auth-route-test-123');
 
+  // 2. ui/core.js and ui/eval-core.js enforce user-before-assistant message ordering
+  const coreSrc = read('ui/core.js');
+  const evalCoreSrc = read('ui/eval-core.js');
+  assert.ok(coreSrc.includes('slotAfter(uid'));
+  assert.ok(coreSrc.includes('const iaSelf = (!fg && this.awaitId)'));
+  assert.ok(evalCoreSrc.includes('function orderTurnMessages(mapped)'));
+  assert.ok(evalCoreSrc.includes('const mapped = orderTurnMessages(rawMapped)'));
 
+  // 3. Battle prePct vs postPct genuine blind separation and 01a163f2 / 01a16431 recognition
+  const vm = require('node:vm');
+  const bpUiSrc = read('ui/billing-probe-ui.js');
+  const chfSrc = bpUiSrc.split('const BillingProbe =')[0];
+  const storeMap = new Map();
+  const ctx = vm.createContext({
+    console, Math, Date, Number, String, Boolean, Array, Object, Set, Map, RegExp, JSON, Error,
+    setTimeout, clearTimeout,
+    Store: { get: k => storeMap.get(k), set: (k, v) => storeMap.set(k, v) },
+    BUILTIN_HABIT_BANK: require('../ui/habit-builtin-bank.js'),
+  });
+  vm.runInContext(chfSrc + '\nthis.FP = ChatHabitFingerprint;', ctx);
+  const FP = ctx.FP;
+
+  const html3f2 = `<!DOCTYPE html><html lang="am"><head><style>:root{--sky:#87ceeb;}@keyframes crank-spin{to{transform:rotate(360deg)}}@keyframes tailWag{50%{transform:rotate(8deg)}}</style></head><body><svg viewBox="0 0 800 500">${'x'.repeat(9600)}</svg></body></html>`;
+  const r3f2 = FP.analyze({
+    sid: '01a163f2-4cf2-7aca-a48a-a41eeda5a6b1',
+    messages: [
+      { id: 'u1', role: 'user', parts: [{ type: 'text', text: 'Pelican in Amharic' }] },
+      {
+        id: 'a1', role: 'assistant', createdAt: 1000, completedAt: 67132,
+        parts: [
+          { type: 'reasoning', text: '...', hidden: true },
+          { type: 'text', text: 'Here is a complete self-contained HTML/SVG file — with controls.' },
+          { type: 'tool-write_file', toolName: 'write_file', input: { path: 'pelican_riding_bicycle.html', content: html3f2 } },
+          { type: 'tool-present_file', toolName: 'present_file', input: { path: 'pelican_riding_bicycle.html' } },
+          { type: 'text', text: 'Created `pelican_riding_bicycle.html` — self-contained file — — —' },
+        ],
+      },
+    ],
+  });
+  assert.ok(/Claude Fable 5\.1/i.test(r3f2.best.label), `Expected Claude Fable 5.1 #1, got ${r3f2.best?.label}`);
+
+  const battleChat = {
+    sid: '01a16431-5f91-7769-a82d-1f1f69d62ff9',
+    mode: 'battle',
+    evalModality: 'webdev',
+    voteState: { modelAName: 'gemini-4-argon', modelBName: 'claude-opus-5-low' },
+    messages: [
+      { id: 'u1', role: 'user', parts: [{ type: 'text', text: '画一个骑自行车的鹈鹕HTML/SVG' }] },
+      {
+        id: 'a1', role: 'assistant', participantPosition: 'a', createdAt: 1000, completedAt: 211880,
+        parts: [{ type: 'text', text: '```html\n<!DOCTYPE html><html><head><style>:root{--bg:#0f172a;}</style></head><body><svg viewBox="0 0 800 600"><defs><filter id="glow"><feGaussianBlur stdDeviation="5"/></filter><linearGradient id="g"></linearGradient></defs><g><circle cx="400" cy="300" r="50"/><path d="M10 10 L100 100"/><ellipse cx="20" cy="20" rx="10" ry="5"/></g></svg><script>const pelicanBodyGroup=1, basketFish=2, cloudsLayer=3, wavesLayer=4; function loop(){requestAnimationFrame(loop);} loop();</script>' + 'x'.repeat(39000) + '</body></html>\n```' }],
+      },
+      {
+        id: 'b1', role: 'assistant', participantPosition: 'b', createdAt: 1000, completedAt: 136102,
+        parts: [
+          { type: 'reasoning', text: '...', hidden: true },
+          { type: 'text', text: '```html\n<!DOCTYPE html><html><head><style>@keyframes driftScenery{to{transform:translateX(-100px)}}@keyframes driftForeground{to{transform:translateX(-200px)}}</style></head><body><svg viewBox="0 0 800 500"><circle cx="100" cy="100" r="40"><animateTransform attributeName="transform" type="rotate" from="0" to="360" dur="2s" repeatCount="indefinite"/></circle></svg>' + 'x'.repeat(14000) + '</body></html>\n```' },
+        ],
+      },
+    ],
+  };
+  FP.learnBattleReveal(battleChat, 'gemini-4-argon', 'claude-opus-5-low');
+  const bSnap = FP.analyzeBattleChat(battleChat);
+  assert.ok(/Gemini 4 Argon/i.test(bSnap.a.candidates[0].label));
+  assert.equal(bSnap.a.candidates[0].isRevealed, true);
+  assert.ok(bSnap.a.candidates[0].prePct < 99.0, `Expected genuine prePct < 99.0, got ${bSnap.a.candidates[0].prePct}`);
+  assert.ok(bSnap.a.candidates[0].postPct >= 99.0, `Expected postPct >= 99.0, got ${bSnap.a.candidates[0].postPct}`);
+  assert.ok(/Claude Opus 5/i.test(bSnap.b.candidates[0].label));
+  assert.equal(bSnap.b.candidates[0].isRevealed, true);
+});
+
+test('v0.13.168-beta.3: Full 千面助手_v9.2 (v37.9.0+37.5.8-iter8-fusion) Probe & Recognition Engine Parity', async () => {
+  const vm = require('node:vm');
+  const { webcrypto } = require('node:crypto');
+  const C = require('../ui/arena-trace/confidence.js');
+  const P = require('../ui/arena-trace/pricing.js');
+
+  // 1. residualToConfidence rejects non-numeric/empty values and SEED_COUNTS has Gemini 4 Argon & GPT 6.1 Sol
+  assert.equal(C.residualToConfidence(null), 0);
+  assert.equal(C.residualToConfidence(''), 0);
+  assert.equal(C.residualToConfidence('  '), 0);
+  assert.equal(C.residualToConfidence(false), 0);
+  assert.equal(C.residualToConfidence([]), 0);
+  assert.equal(C.residualToConfidence(0), 100);
+  assert.equal(C.SEED_COUNTS['contenders/barium-bb-v2-4xts-agent'], 3);
+  assert.equal(C.SEED_COUNTS['openai/gpt-6.1-sol'], 2);
+
+  // 2. synthesizeZeroQuotaTokens, computeZeroQuotaAux, mapCandidateToFpId, and resolveCandidatesWithFingerprint
+  assert.equal(typeof P.synthesizeZeroQuotaTokens, 'function');
+  assert.equal(typeof P.computeZeroQuotaAux, 'function');
+  assert.equal(typeof P.mapCandidateToFpId, 'function');
+  assert.equal(typeof P.resolveCandidatesWithFingerprint, 'function');
+  assert.equal(P.mapCandidateToFpId({ id: 'openai/gpt-6-astra' }), 'gpt-6-astra');
+  assert.equal(P.mapCandidateToFpId({ id: 'openai/gpt-6.1-sol' }), 'gpt-6-sol');
+  assert.equal(P.mapCandidateToFpId({ id: 'anthropic/claude-haiku-5.5' }), 'claude-haiku-5.5');
+  assert.equal(P.mapCandidateToFpId({ id: 'contenders/paisley-n9x0' }), 'qwen3.8-max-0902');
+
+  const syn = P.synthesizeZeroQuotaTokens({ outputUsd: 0 }, { visTokens: 120, exactReasonTokens: 45, stepCount: 2, toolInputChars: 350 }, 1);
+  assert.equal(syn.uSumO, 165);
+  assert.equal(syn.uSumReason, 45);
+  assert.equal(syn.uSumVis, 120);
+  assert.ok(syn.uSumI >= 2200);
+
+  // 3. IkaleBank has 59 models including claude-haiku-5.5 and __AMC_FP_ENGINE__ is wired
+  const ikaleSrc = read('ui/probe-bank-ikale.js');
+  const fpLibsSrc = read('ui/fp-libs.js');
+  const pvSrc = read('ui/probe-vendor.js');
+  const storeMap = new Map();
+  const fpCtx = vm.createContext({
+    console, Math, Date, Number, String, Boolean, Array, Object, Set, Map, RegExp, JSON, Error,
+    Store: { get: k => storeMap.get(k), set: (k, v) => { storeMap.set(k, v); return true; }, del: k => storeMap.delete(k) },
+    Bus: { emit() {} },
+  });
+  vm.runInContext(pvSrc + '\n' + ikaleSrc + '\n' + fpLibsSrc + '\nthis.IkaleBank = IkaleBank;', fpCtx);
+  assert.equal(fpCtx.IkaleBank.models.length, 59);
+  assert.ok(fpCtx.IkaleBank.models.some(m => m.id === 'claude-haiku-5.5'));
+  assert.ok(fpCtx.__AMC_FP_ENGINE__ && typeof fpCtx.__AMC_FP_ENGINE__.identify === 'function');
+
+  // 4. GachaPrompts exposes PELICAN_I18N_POOL (24 langs), makePelicanSuffix11D6L (17 chars), PROBE_POOL (P01..P100), and DIVERSE_MICRO_PROBES_V13
+  const gpSrc = read('ui/gacha-prompts.js');
+  const gpCtx = vm.createContext({
+    console, Math, Date, Number, String, Boolean, Array, Object, Set, Map, RegExp, JSON, Error,
+    crypto: webcrypto,
+    Store: { get: (k, d) => storeMap.get(k) ?? d, set: (k, v) => { storeMap.set(k, v); return true; } },
+  });
+  vm.runInContext(gpSrc + '\nthis.GachaPrompts = GachaPrompts;', gpCtx);
+  const GP = gpCtx.GachaPrompts;
+  assert.equal(GP.PELICAN_I18N_POOL.length, 24);
+  const suf = GP.makePelicanSuffix11D6L();
+  assert.match(suf, /^[1-9]\d{10}[A-Za-z]{6}$/);
+  const pel = GP.buildRandomPelicanTestPrompt();
+  assert.ok(pel.prompt.endsWith(' ' + pel.suffix));
+  assert.equal(GP.PROBE_POOL.length, 100);
+  assert.equal(GP.DIVERSE_MICRO_PROBES_V13.length, 12);
+  const draw1 = GP.probePoolDraw();
+  const draw2 = GP.probePoolDraw();
+  assert.ok(draw1.id && draw2.id && draw1.id !== draw2.id);
+
+  // 5. HTML_SVG_CLASSIFIER_BANK restores full 45-token maps & facet source weight, and inferPlainModelByRAvg works
+  const bpUiSrc = read('ui/billing-probe-ui.js');
+  const chfSrc = bpUiSrc.split('const BillingProbe =')[0];
+  const chfCtx = vm.createContext({
+    console, Math, Date, Number, String, Boolean, Array, Object, Set, Map, RegExp, JSON, Error,
+    Store: { get: () => null, set: () => {} },
+  });
+  vm.runInContext(chfSrc + '\nthis.FP = ChatHabitFingerprint;', chfCtx);
+  assert.equal(chfCtx.FP.inferPlainModelByRAvg({ rAvgChunk: 120 }).id, 'contenders/caveman-agent');
+  assert.equal(chfCtx.FP.inferPlainModelByRAvg({ rAvgChunk: 2.8 }).id, 'deepseek/deepseek-v4.1-flash');
+  assert.equal(chfCtx.FP.inferPlainModelByRAvg({ rAvgChunk: 5.0 }).id, 'moonshotai/kimi-k3');
+  assert.equal(chfCtx.FP.inferPlainModelByRAvg({ rAvgChunk: 14.0 }).id, 'z-ai/glm-5.3');
+  assert.equal(chfCtx.FP.inferPlainModelByRAvg({ rAvgChunk: 28.0 }).id, 'nvidia/nemotron-3-ultra');
+});
 

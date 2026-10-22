@@ -1255,7 +1255,45 @@ const EvalEngine = (() => {
   }
 
   function orderTurnMessages(mapped) {
-    if (!Array.isArray(mapped) || mapped.length <= 2) return mapped;
+    if (!Array.isArray(mapped) || mapped.length <= 1) return mapped;
+    const users = mapped.filter(m => m && m.role === 'user');
+    const assts = mapped.filter(m => m && m.role === 'assistant');
+    if (users.length > 0 && assts.length > 0) {
+      const byParent = new Map();
+      const userIds = new Set(users.map(u => u.id).filter(Boolean));
+      const unassigned = [];
+      for (const a of assts) {
+        const pids = Array.isArray(a.parentMessageIds) ? a.parentMessageIds : [];
+        const matchedUid = pids.find(pid => userIds.has(pid));
+        if (matchedUid) {
+          let list = byParent.get(matchedUid);
+          if (!list) { list = []; byParent.set(matchedUid, list); }
+          list.push(a);
+        } else {
+          unassigned.push(a);
+        }
+      }
+      if (byParent.size > 0 || (mapped[0]?.role === 'assistant' && users.length > 0)) {
+        const out = [];
+        let uIdx = 0;
+        for (const u of users) {
+          out.push(u);
+          const bucket = (byParent.get(u.id) || []).slice();
+          if (!bucket.length && unassigned.length) {
+            const takeCount = (uIdx === users.length - 1) ? unassigned.length : Math.min(2, unassigned.length);
+            bucket.push(...unassigned.splice(0, takeCount));
+          }
+          bucket.sort((x, y) => (x.participantPosition === 'b' ? 1 : 0) - (y.participantPosition === 'b' ? 1 : 0));
+          out.push(...bucket);
+          uIdx++;
+        }
+        if (unassigned.length) {
+          unassigned.sort((x, y) => (x.participantPosition === 'b' ? 1 : 0) - (y.participantPosition === 'b' ? 1 : 0));
+          out.push(...unassigned);
+        }
+        return out;
+      }
+    }
     const out = [];
     let asstBucket = [];
     const flushBucket = () => {
@@ -1381,7 +1419,11 @@ const EvalEngine = (() => {
           }
         } catch {}
 
-        chat.messages = mapped;
+        const mappedIds = new Set(mapped.map(x => x?.id).filter(Boolean));
+        const inFlightTail = Array.isArray(chat.messages)
+          ? chat.messages.filter(m => m && !mappedIds.has(m.id) && (m._local || (chat._evalStreaming && m.role === 'assistant' && m.metadata?.pending)))
+          : [];
+        chat.messages = inFlightTail.length ? orderTurnMessages([...mapped, ...inFlightTail]) : mapped;
         chat.modelAId = detectedAId;
         chat.modelBId = detectedBId;
 
@@ -2177,8 +2219,18 @@ const EvalEngine = (() => {
       v: 0,
     } : null;
 
-    chat.messages.push(msgA);
-    if (msgB) chat.messages.push(msgB);
+    if (userMsg && !chat.messages.includes(userMsg)) {
+      chat.messages.push(userMsg);
+    }
+    const uIdx = userMsg ? chat.messages.indexOf(userMsg) : -1;
+    if (uIdx >= 0 && uIdx < chat.messages.length - 1) {
+      let insAt = uIdx + 1;
+      while (insAt < chat.messages.length && chat.messages[insAt]?.role === 'assistant') insAt++;
+      chat.messages.splice(insAt, 0, ...(msgB ? [msgA, msgB] : [msgA]));
+    } else {
+      chat.messages.push(msgA);
+      if (msgB) chat.messages.push(msgB);
+    }
     if (isBattle && chat.voteState) {
       chat.voteState.voted = false;
       chat.voteState.submitting = false;
@@ -2462,6 +2514,9 @@ const EvalEngine = (() => {
     if (!chat) return;
     if (chat.busy) throw new Error('上一轮还在进行中');
     initEvalFields(chat);
+    if (!chat.loaded && chat.loading) {
+      try { await Promise.race([chat.loading.catch(() => {}), new Promise(r => setTimeout(r, 6000))]); } catch {}
+    }
     const userMsgId = genUuid();
     const userMsg = {
       id: userMsgId,

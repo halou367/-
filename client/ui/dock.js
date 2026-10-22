@@ -1342,7 +1342,7 @@ const Dock = {
             h('span', { class: 'mc-fp-n' }, idx + 1),
             h('span', { class: 'mc-fp-src-ic ' + (isPreHit ? 'src-gold' : 'src-fp') }, icon(isPreHit ? 'check' : 'fingerprint')),
             h('span', { class: 'mc-fp-m' }, cLbl),
-            h('b', { class: 'mc-fp-p' }, prePct.toFixed(1) + '%')
+            h('b', { class: 'mc-fp-p', style: isRevRow ? { fontSize: '10.5px', whiteSpace: 'nowrap' } : null }, isRevRow ? (prePct.toFixed(1) + '% → ' + postPct.toFixed(1) + '%') : (prePct.toFixed(1) + '%'))
           ));
         });
         card.append(candBox);

@@ -2204,7 +2204,10 @@ class Chat {
           const firstSrvId = srv[0]?.id;
           const firstSrvIdx = firstSrvId ? this.messages.findIndex(m => m?.id === firstSrvId) : -1;
           const olderPrefix = firstSrvIdx > 0 ? this.messages.slice(0, firstSrvIdx).filter(m => m && !m._local && !ids.has(m.id)) : [];
-          this.messages = [...olderPrefix, ...srv.map(m => {
+          const normUText = m => (m?.parts || []).filter(p => p?.type === 'text').map(p => String(p.text || '')).join('').replace(/\s+/g, ' ').trim();
+          const srvUserNodes = new Set(srv.filter(m => m?.role === 'user').map(m => m.metadata?.nodeId).filter(Boolean));
+          const srvUserTexts = new Set(srv.filter(m => m?.role === 'user').map(normUText).filter(Boolean));
+          const mergedSrv = srv.map(m => {
             const curAsstIdx = m?.role === 'assistant' ? asstOrd++ : -1;
             const o = byOld.get(m.id) || (curAsstIdx >= 0 && oldAssts.length === srvAssts.length ? oldAssts[curAsstIdx] : null);
             if (!o) return m;
@@ -2223,7 +2226,31 @@ class Chat {
             if (!m.metadata?.pending && (o._finishedAt || m._finishedAt)) extra._finishedAt = o._finishedAt || m._finishedAt;
             if (o._turnModelLabel || m._turnModelLabel) extra._turnModelLabel = o._turnModelLabel || m._turnModelLabel;
             return (mergedParts !== m.parts || Object.keys(extra).length) ? { ...m, parts: mergedParts, ...extra } : m;
-          }), ...this.messages.filter(m => m._local && !ids.has(m.id))];
+          });
+          const localPending = this.messages.filter(m => {
+            if (!m || !m._local || ids.has(m.id)) return false;
+            if (m.role === 'user') {
+              if (m.metadata?.nodeId && (ids.has(m.metadata.nodeId) || srvUserNodes.has(m.metadata.nodeId))) return false;
+              if (srvUserNodes.has(m.id)) return false;
+              const ut = normUText(m);
+              if (ut && srvUserTexts.has(ut)) return false;
+            }
+            return true;
+          });
+          const nextMsgs = [...olderPrefix, ...mergedSrv];
+          for (const lm of localPending) {
+            if (lm.role === 'user' && !lm._held && nextMsgs.at(-1)?.role === 'assistant') {
+              const lastA = nextMsgs.at(-1);
+              const uTime = lm._sentAt || idTime(lm.id) || 0;
+              const aTime = idTime(lastA.id) || 0;
+              if (lastA.metadata?.pending && uTime && (!aTime || aTime >= uTime - 2000)) {
+                nextMsgs.splice(nextMsgs.length - 1, 0, lm);
+                continue;
+              }
+            }
+            nextMsgs.push(lm);
+          }
+          this.messages = nextMsgs;
         }
         this.hasMore = !!c.pagination?.hasMore; this.cursor = c.pagination?.cursor || null;
         if (c.triggerAddress || c.session?.triggerAddress) this.triggerAddress = c.triggerAddress || c.session.triggerAddress;
@@ -2524,7 +2551,16 @@ class Chat {
           if (sl && !(sl.role === 'user' && sl.id !== msg.id) && !sl.metadata?.pending) { if (c.lastEventId != null) { this.lastSeq = String(c.lastEventId); this.fence = +c.lastEventId; } this.live = null; this.turnInput = null; break; }
         }
       }
-    } finally { this.waitingForeign = false; if (msg._held) { delete msg._held; msg.v = (msg.v || 0) + 1; } }
+    } finally {
+      this.waitingForeign = false;
+      this.turnInput = null;
+      if (this.live) {
+        this.live.metadata = { ...(this.live.metadata || {}), pending: false };
+        this.live = null;
+        this.parts.clear();
+      }
+      if (msg._held) { delete msg._held; msg.v = (msg.v || 0) + 1; }
+    }
     this.phase = '发送中'; this.emit();
   }
   packCx(textLen = 8, kind = 'enter') {
@@ -2707,6 +2743,17 @@ class Chat {
         this._preSendNetErr = null;
       }
       this.preSend = false;
+      this.turnInput = null;
+      if (this.live) {
+        this.live.metadata = { ...(this.live.metadata || {}), pending: false };
+        this.live = null;
+        this.parts.clear();
+      }
+      const msgIdxBeforeAppend = this.messages.indexOf(msg);
+      if (msgIdxBeforeAppend >= 0 && msgIdxBeforeAppend < this.messages.length - 1) {
+        this.messages.splice(msgIdxBeforeAppend, 1);
+        this.messages.push(msg);
+      }
       appendAttempted = true;
       let ar;
       try { ar = await this.append(body(opt.v2, v3)); }
@@ -3433,14 +3480,16 @@ class Chat {
     const a = this.awaitId, t = this.turnInput;
     if (a && this.preSend) return true;   // 自己这条还没发出去：这时服务器上跑的任何一轮都是「之前的消息」
     if (!a || !t || t === a) return false;
-    const it = this.messages.findIndex(m => m.id === t && m.role === 'user'), ia = this.messages.findIndex(m => m.id === a);
-    // 本地没有的那条（别的设备发的 / 之前丢了的）也算「之前的消息」：它的回复不能当成自己这条的
-    if (it < 0) return ia >= 0;
+    const it = this.messages.findIndex(m => m && m.role === 'user' && (m.id === t || m.metadata?.nodeId === t));
+    const ia = this.messages.findIndex(m => m && (m.id === a || m.metadata?.nodeId === a));
+    if (ia >= 0 && it === ia) return false;
+    // 本地没有的那条：仅在明确等待外部轮次（waitingForeign）时才视为「之前的消息」，避免服务端改派新 inputId 把本轮回复插到发送消息之前
+    if (it < 0) return Boolean(this.waitingForeign && ia >= 0);
     return ia >= 0 && it < ia;
   }
   // 某条用户消息的回复应该插在哪：它后面、下一条用户消息之前
   slotAfter(uid) {
-    const i = this.messages.findIndex(m => m.id === uid); if (i < 0) return -1;
+    const i = this.messages.findIndex(m => m && (m.id === uid || m.metadata?.nodeId === uid)); if (i < 0) return -1;
     let j = i + 1; while (j < this.messages.length && this.messages[j].role !== 'user') j++;
     return j >= this.messages.length ? -1 : j;
   }
@@ -3581,7 +3630,7 @@ class Chat {
     if (this.live) return this.live;
     // 在补答之前的消息（自己这条已经在末尾）：接到自己这条前面那条进行中的回复上，没有就插在自己这条前面
     if (this.foreignTurn()) {
-      const ia = this.messages.findIndex(x => x.id === this.awaitId);
+      const ia = this.messages.findIndex(x => x && (x.id === this.awaitId || x.metadata?.nodeId === this.awaitId));
       if (ia > 0) {
         const pv = this.messages[ia - 1];
         if (pv.role === 'assistant' && pv.metadata?.pending) { this.live = pv; return pv; }
@@ -3591,23 +3640,60 @@ class Chat {
       }
     }
     const last = this.messages.at(-1);
-    if (last && last.role === 'assistant' && (last.metadata?.pending || this.busy)) { this.live = last; return last; }
+    const iaSelf = (!this.foreignTurn() && this.awaitId)
+      ? this.messages.findIndex(x => x && (x.id === this.awaitId || x.metadata?.nodeId === this.awaitId))
+      : -1;
+    if (last && last.role === 'assistant' && (last.metadata?.pending || this.busy)) {
+      const lastIdx = this.messages.length - 1;
+      if (iaSelf < 0 || lastIdx > iaSelf) { this.live = last; return last; }
+    }
     if (!create) return null;
     const m = { id: uuid7(), role: 'assistant', parts: [], metadata: { pending: true }, v: 0 };
-    this.messages.push(m); this.live = m; return m;
+    if (iaSelf >= 0) {
+      let insAt = iaSelf + 1;
+      while (insAt < this.messages.length && this.messages[insAt]?.role === 'assistant') insAt++;
+      this.messages.splice(insAt, 0, m);
+    } else {
+      this.messages.push(m);
+    }
+    this.live = m; return m;
   }
   apply(ch) {
     try { if (typeof BillingProbe !== 'undefined') BillingProbe.observe(this, ch); } catch {}
     const t = ch.type;
     if (t === 'start') {
       let m = ch.messageId ? this.messages.find(x => x.id === ch.messageId) : null;
+      const fg = this.foreignTurn();
+      const iaSelf = (!fg && this.awaitId)
+        ? this.messages.findIndex(x => x && (x.id === this.awaitId || x.metadata?.nodeId === this.awaitId))
+        : -1;
       // 重放正在进行的一轮：服务器快照里的那条 pending 回复和流里的 messageId 可能不一致，复用它，避免出现两条回复
-      if (!m && !this.foreignTurn()) { const lt = this.messages.at(-1); if (lt && lt.role === 'assistant' && lt.metadata?.pending && !lt._local) m = lt; }
-      if (m) { if (!Array.isArray(m.parts)) m.parts = []; } else {
+      if (!m && !fg) {
+        const lt = this.messages.at(-1);
+        const ltIdx = this.messages.length - 1;
+        if (lt && lt.role === 'assistant' && lt.metadata?.pending && !lt._local && (iaSelf < 0 || ltIdx > iaSelf)) m = lt;
+      }
+      if (m) {
+        if (!Array.isArray(m.parts)) m.parts = [];
+        if (!fg && iaSelf >= 0) {
+          const curMIdx = this.messages.indexOf(m);
+          if (curMIdx >= 0 && curMIdx < iaSelf) {
+            this.messages.splice(curMIdx, 1);
+            const newIa = this.messages.findIndex(x => x && (x.id === this.awaitId || x.metadata?.nodeId === this.awaitId));
+            if (newIa >= 0) this.messages.splice(newIa + 1, 0, m);
+            else this.messages.push(m);
+          }
+        }
+      } else {
         m = { id: ch.messageId || uuid7(), role: 'assistant', parts: [], metadata: {}, v: 0 };
         // 服务器在补答之前的某条消息：放到那条消息后面，而不是当成最新这条的回复
-        const fg = this.foreignTurn(); let at = fg ? this.slotAfter(this.turnInput) : -1;
-        if (fg && at < 0) at = this.messages.findIndex(x => x.id === this.awaitId);   // 本地没有的那条：回复放在自己这条前面
+        let at = fg ? this.slotAfter(this.turnInput) : -1;
+        if (fg && at < 0) at = this.messages.findIndex(x => x && (x.id === this.awaitId || x.metadata?.nodeId === this.awaitId));   // 本地没有的那条：回复放在自己这条前面
+        if (!fg && iaSelf >= 0) {
+          let insAt = iaSelf + 1;
+          while (insAt < this.messages.length && this.messages[insAt]?.role === 'assistant') insAt++;
+          at = insAt < this.messages.length ? insAt : -1;
+        }
         if (at >= 0) this.messages.splice(at, 0, m); else this.messages.push(m);
       }
       m.metadata = { ...(m.metadata || {}), ...(ch.messageMetadata || {}), pending: true };
@@ -4205,11 +4291,29 @@ Object.assign(Chat.prototype, {
     }, 0);
     let changed = false, lagged = false;
     const matchedLocal = new Set();
+    const normUText = m => (m?.parts || []).filter(p => p?.type === 'text').map(p => String(p.text || '')).join('').replace(/\s+/g, ' ').trim();
     const mid = srv.map((m, sIdx) => {
       let i = loc.get(m.id), o = i != null ? this.messages[i] : null;
+      if (!o && m.role === 'user') {
+        const mNodeId = m.metadata?.nodeId;
+        const mText = normUText(m);
+        const mTime = idTime(m.id) || 0;
+        const cand = this.messages.find(x => x && x.role === 'user' && !matchedLocal.has(x) && !srv.some(sx => sx.id === x.id) && (
+          (mNodeId && (x.id === mNodeId || x.metadata?.nodeId === mNodeId)) ||
+          (x.metadata?.nodeId && x.metadata.nodeId === m.id) ||
+          (x._local && mText && normUText(x) === mText && (!mTime || !idTime(x.id) || Math.abs(mTime - idTime(x.id)) < 120000))
+        ));
+        if (cand) {
+          o = cand;
+          if (this.awaitId && (this.awaitId === cand.id || this.awaitId === cand.metadata?.nodeId)) {
+            this.awaitId = m.id;
+          }
+        }
+      }
       if (!o && m.role === 'assistant' && sIdx > 0) {
-        const prevUi = loc.get(srv[sIdx - 1]?.id);
-        const cand = prevUi != null ? this.messages[prevUi + 1] : null;
+        const prevSrvU = srv[sIdx - 1];
+        const prevUi = prevSrvU ? this.messages.findIndex(x => x && (x.id === prevSrvU.id || (prevSrvU.metadata?.nodeId && x.id === prevSrvU.metadata.nodeId) || matchedLocal.has(x) && x.role === 'user' && normUText(x) === normUText(prevSrvU))) : -1;
+        const cand = prevUi >= 0 ? this.messages[prevUi + 1] : null;
         if (cand && cand.role === 'assistant' && !srv.some(x => x.id === cand.id)) {
           const mTools = new Set((m.parts || []).map(p => p?.toolCallId).filter(Boolean));
           const cTools = (cand.parts || []).map(p => p?.toolCallId).filter(Boolean);
@@ -4281,7 +4385,20 @@ Object.assign(Chat.prototype, {
       return false;
     });
     this._srvLagged = lagged;
-    const next = [...head, ...mid, ...tail];
+    const next = [...head, ...mid];
+    for (const tm of tail) {
+      if (tm && tm.role === 'user' && !tm._held && next.at(-1)?.role === 'assistant') {
+        const lastA = next.at(-1);
+        const uTime = tm._sentAt || idTime(tm.id) || 0;
+        const aTime = idTime(lastA.id) || 0;
+        if ((lastA.metadata?.pending || (keep && lastA === keep)) && (!uTime || !aTime || aTime >= uTime - 2000)) {
+          next.splice(next.length - 1, 0, tm);
+          changed = true;
+          continue;
+        }
+      }
+      next.push(tm);
+    }
     if (next.length !== this.messages.length) changed = true;
     this.messages = next; return changed;
   },
@@ -5045,7 +5162,8 @@ async function createChat0(text, opt = {}) {
   if (!res.ok) { let m = t; try { m = JSON.parse(t).error || t; } catch {} if (typeof m !== 'string') m = JSON.stringify(m); throw new HttpError(res.status, m, res); }
   const sid = JSON.parse(t).id; if (!sid) throw new Error('create-chat 没有返回对话 ID');
   const c = chatOf(sid);
-  c.messages = [{ ...msg, metadata: msg.metadata || {}, v: 0 }]; c.loaded = true; c.lastSeq = null; c.status = 'submitted'; c.phase = '等待回复'; c.sentAt = now(); c.title = text.slice(0, 60);
+  c.messages = [{ ...msg, metadata: msg.metadata || {}, v: 0 }]; c.loaded = true; c.lastSeq = null; c.status = 'submitted'; c.phase = '等待回复'; c.sentAt = now(); c.awaitId = msg.id; c.awaitFrom = c.sentAt; c.turnInput = msg.id; c.title = text.slice(0, 60);
+  if (!opt.gacha) c.armLost(c.messages[0]);
   if (opt.gacha) c.gacha = opt.gacha; else Bus.emit('sent', sid, now());
   if (!History.byId(sid)) { const ts = new Date().toISOString(), row = { type: 'agentic', id: sid, title: text.slice(0, 60), updatedAt: ts, createdAt: ts, _local: true }, pi = opt.placeholder ? History.items.indexOf(opt.placeholder) : -1; if (pi >= 0) History.items[pi] = row; else History.items.unshift(row); Bus.emit('history'); }
   c.emit();

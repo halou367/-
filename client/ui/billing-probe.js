@@ -242,6 +242,8 @@
       if (/pelican|pélican|pelícano|pelicano|pellicano|pelikan|pelikaan|pelecan|鹈鹕|鵜鶘|ペリカン|펠리컨|пеликан|بجع|پلیکان|שקנאי|mwari|ፔሊካን|पेलिकन|bồ nông|นกกระทุง|πελεκάν/i.test(uTxt)) sawPelicanWord = true;
     }
     const toolIds = [];
+    const allToolCalls = [];
+    let allVisText = '';
     const msgVisTokensById = {}, msgReasonTokensById = {}, msgStepCountById = {}, msgDurationMsById = {};
     for (const m of msgs) {
       let msgReason = 0, msgVisText = '', msgReasonText = '', msgTools = 0, bashCount = 0, preToolChars = 0, interToolChars = 0, pendingInter = 0, seenTool = false;
@@ -260,6 +262,7 @@
         } else if (pt === 'text') {
           const tStr = String(p.text || '');
           msgVisText += tStr;
+          allVisText += (allVisText ? '\n' : '') + tStr;
           if (/pelican|pélican|pelícano|pelicano|pellicano|pelikan|pelikaan|pelecan|鹈鹕|鵜鶘|ペリカン|펠리컨|пеликан|بجع|پلیکان|שקנאי|mwari|ፔሊካን|पेलिकन|bồ nông|นกกระทุง|πελεκάν/i.test(tStr)) sawPelicanWord = true;
           if (/<svg[\s>]/i.test(tStr)) sawSvgTag = true;
           const trimLen = tStr.trim().length;
@@ -276,6 +279,7 @@
           if (/ask_user|askuser/i.test(tn)) hasAskUserTool = true;
           if (/web_search|websearch/i.test(tn)) hasWebSearchTool = true;
           const pIn = p.input ?? p.args;
+          allToolCalls.push({ toolCallId: tid, toolName: tn, args: pIn });
           if (pIn) {
             try {
               const sIn = typeof pIn === 'string' ? pIn : JSON.stringify(pIn);
@@ -440,6 +444,17 @@
     const noReasoningParts = msgs.length > 0 && totalReasonParts === 0 && !visibleReasoning;
     const hiddenReasoning = totalReasonParts > 0 && !visibleReasoning;
     const hasPelicanSvg = Boolean(sawPelicanWord && sawSvgTag);
+    const stylometry = typeof P.extractStylometryAndToolHabits === 'function' ? P.extractStylometryAndToolHabits(allVisText, allToolCalls) : null;
+    const toolCallIdShape = toolIds.some(id => /^(?:toolu_|srvtoolu_)/i.test(id)) ? 'toolu'
+      : toolIds.some(id => /^call_[0-9a-f]{24,}/i.test(id)) ? 'call_hex'
+      : toolIds.some(id => /^call_[A-Za-z0-9_-]{20,}/.test(id)) ? 'call_b64'
+      : null;
+    const streamIdShape = (streamIdPrefix === 'claude-tc-empty' || hasSharedTcId) ? 'claude_tc'
+      : (streamIdPrefix === 'openai-rs' || streamIdPrefix === 'openai-tc-empty') ? 'openai_rs'
+      : (streamIdPrefix === 'numeric-only') ? 'numeric'
+      : null;
+    const fpRec = (typeof root.Models !== 'undefined' && chat?.sid ? root.Models.get?.(chat.sid)?.fingerprint : null);
+    const fpRes = (fpRec && !fpRec.skipped && fpRec.result) ? fpRec.result : null;
     return {
       assistantMsgCount: msgs.length,
       totalReasonParts,
@@ -449,6 +464,15 @@
       noReasoningParts,
       reasoningSignature,
       streamIdPrefix,
+      streamIdShape,
+      toolCallIdShape,
+      stylometry,
+      fpModel: fpRes?.nearest?.id || null,
+      fpFamily: fpRes?.nearest?.family || null,
+      fpConfidence: fpRes?.status === 'clear' ? 'high' : (fpRes?.status === 'close' ? 'medium' : null),
+      fpStatus: fpRes?.status === 'clear' || fpRes?.status === 'close' ? 'match' : null,
+      fpScore: Number(fpRes?.signals?.fit) || 0,
+      fpCandidates: Array.isArray(fpRes?.candidates) ? fpRes.candidates.slice(0, 8).map(c => ({ id: c.id, score: Number(c.fit) || 0, prob: Number(c.probability) || 0 })) : [],
       avgChunk,
       rAvgChunk: (rWireDeltas >= 2 && reasoningTextLength > 0) ? Number((reasoningTextLength / rWireDeltas).toFixed(2)) : 0,
       preToolChars: totalPreToolChars,
@@ -484,7 +508,7 @@
     if (!raw) return raw;
     return raw.replace(/(?:\s*\((None|Minimal|Low|Medium|High|xHigh|Max)\))+$/i, (_, lastTier) => ` (${lastTier})`);
   }
-  function analyze(chat, cost, doc, hints) {
+  function analyze(chat, cost, doc, hints, opts = {}) {
     const catalog = normalize(doc), rows = captures(chat, cost, hints);
     const family = F.classifyFamily(rows);
     // A routed conversation can contain conflicting families. Never silently pick the majority.
@@ -493,7 +517,7 @@
     const familyConflict = families.size > 1;
     const ch = (family.channels || [])[0];
     const routeSource = ch === 'vertex' ? 'google-vertex' : ch === 'bedrock' ? 'aws-bedrock' : ch === 'direct' ? 'anthropic-direct' : (family.routeSource || null);
-    const evidence = { ...extractChatEvidence(chat, family, hints), routeSource };
+    const evidence = { ...extractChatEvidence(chat, family, hints), routeSource, ...(opts?.allowZeroQuota ? { allowZeroQuota: true } : {}) };
     const vendors = familyConflict ? [] : (family.vendors || []);
     const narrow = vendors.filter(v => (!evidence.visibleReasoning || !['openai', 'anthropic', 'google', 'xai', 'x-ai'].includes(String(v).toLowerCase())) && catalog.some(c => c.vendor === v));
     let result = P.inferFromCaptures(rows, catalog, { sessionId: chat.sid, vendorHint: narrow, evidence });
@@ -796,6 +820,23 @@
           s.error = e.responseFormat ? '计费接口返回网页或验证页面（HTTP ' + e.status + '），请在官方页面完成验证后重试' : e.status === 401 ? '计费接口登录已失效（HTTP 401），请重新登录后重试' : e.status === 403 ? '计费接口拒绝读取（HTTP 403），请在官方页面检查费用显示与账号权限' : e.status === 429 ? '计费接口限流（HTTP 429），请等待服务端重试时间' : '计费读取失败：' + String(e.message || e).slice(0,160);
           if (s.ranked?.length) s.lastRanked = s.ranked;
           if (s.info && !s.info.reason) s.lastInfo = s.info;
+          if ([401, 403].includes(e.status) && snapshot?.messages?.length) {
+            try {
+              const zInfo = analyze(snapshot, { messages: {} }, catalog, hints.get(chat)?.messages, { allowZeroQuota: true });
+              const zCands = zInfo?.result?.baseMatch?.candidates || [];
+              if (zCands.length) {
+                s.zeroQuotaInfo = zInfo;
+                s.zeroQuotaRanked = zCands.slice(0, 6).map(c => ({
+                  id: c.effortProfile?.stealthModelId || c.id,
+                  label: cleanModelLabel(c.effortProfile?.stealthModelLabel || c.dynamicLabel || c.label || c.id),
+                  confidence: C.residualToConfidence(c.effectiveResidual ?? c.scoreResidual ?? c.residual ?? 1),
+                  zeroQuotaMode: true,
+                  matchedDims: c.matchedDims || [],
+                  inferredEffort: c.inferredEffort || null,
+                }));
+              }
+            } catch {}
+          }
           s.info = null; s.payments = []; s.ranked = []; s.ledger = C.emptyLedger();
           const delay = Math.max(e.status === 403 ? 120000 : e.status === 401 ? 15000 : e.status === 429 ? 60000 : 30000, Number(e.retryAfterMs) || 0);
           s.nextAt = clock() + delay; s.retryAt = s.nextAt;
