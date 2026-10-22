@@ -245,11 +245,26 @@ const TabSw = {
     else if (t.kind === 'gacha') { logo = icon('slot'); name = '抽卡'; }
     else if (!t.sid) { logo = stLogo(null, 16, ''); name = '新对话'; }
     else { const title = History.byId(t.sid)?.title || c?.title || t.title || '', v = Titles.view(t.sid, title); logo = stLogo(v.vid, 16, st); name = v.note || (v.model ? tabName(v.model) : '') || v.plain || '对话'; }
+    const delBtn = (t.sid && !t.kind)
+      ? h('button', { class: 'tsw-x tsw-del danger', type: 'button', title: '删除对话（含云端和本机记录）', 'aria-label': '删除对话' }, icon('trash'))
+      : null;
     const x = h('button', { class: 'tsw-x', type: 'button', title: '关闭窗口', 'aria-label': '关闭窗口' }, icon('x'));
     const card = h('div', { class: 'tsw-card' + (t.key === Tabs.active ? ' cur' : '') },
-      h('div', { class: 'tsw-ch' }, logo, h('span', { class: 'tsw-n' }, name), x),
+      h('div', { class: 'tsw-ch' }, logo, h('span', { class: 'tsw-n' }, name), delBtn, x),
       this.preview(t));
-    const slot = h('div', { class: 'tsw-slot', 'data-key': t.key }, card);
+    const slot = h('div', { class: 'tsw-slot', 'data-key': t.key, 'data-sid': t.sid || '' }, card);
+    if (delBtn) {
+      delBtn.onclick = async e => {
+        e.stopPropagation();
+        const entry = History.byId(t.sid) || (typeof ArchiveHistory !== 'undefined' && ArchiveHistory.byId?.(t.sid)) || { id: t.sid, title: c?.title || t.title || '' };
+        const ok = await deleteChat(entry);
+        if (ok && slot.isConnected) {
+          slot.remove();
+          if (Tabs.list.length <= 1 && !Tabs.cur?.sid) setTimeout(() => this.close(), 120);
+          else { this.count(); this.paint(); }
+        }
+      };
+    }
     x.onclick = e => { e.stopPropagation(); this.kill(slot, 'x'); };
     // 上滑关闭 / 点一下切换过去
     let s = null;

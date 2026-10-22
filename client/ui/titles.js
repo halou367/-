@@ -389,12 +389,29 @@ const Dialog = {
 
 // 删除对话：云端删除 + 清掉本机的模型信息 / 备注 / 运行记录 / 标签页
 async function deleteChat(e) {
+  if (!e?.id) return false;
   const v = Titles.view(e.id, e.title), name = v.note || v.model || e.title || '这个对话';
   const ok = await Dialog.confirm({ title: '删除对话', text: `删除「${name}」？\n会同时删除 Brana 上的对话和本机保存的模型信息、备注、运行记录，无法恢复。`, ok: '删除', danger: true });
   if (!ok) return false;
-  try { await History.remove(e.id); }
-  catch (err) { if (err?.status !== 404) { toast('删除失败：' + describe(err), 'err'); return false; } History.items = History.items.filter(x => x.id !== e.id); Bus.emit('history'); }
-  forget(e.id); toast('已删除');
+  let queuedBg = false;
+  try {
+    if (!String(e.id).startsWith('pending:')) await History.remove(e.id);
+  } catch (err) {
+    if (err?.status !== 404 && !e._localRecovered) {
+      try {
+        if (typeof Store !== 'undefined') {
+          const q = Store.get('archDelQ', []);
+          if (Array.isArray(q) && !q.includes(e.id)) Store.set('archDelQ', [...q, e.id]);
+          queuedBg = true;
+        }
+      } catch {}
+      if (!queuedBg) { toast('删除失败：' + describe(err), 'err'); return false; }
+    }
+    History.items = History.items.filter(x => x.id !== e.id);
+    Bus.emit('history');
+  }
+  forget(e.id);
+  toast(queuedBg ? '已从列表移除（云端删除将在网络恢复后自动完成）' : '已删除');
   return true;
 }
 /* 本机按对话保存的缓存，一个入口清：
@@ -429,7 +446,7 @@ function forget(sid) {
   LocalCache.drop([sid]);
   try { History.bury?.([sid]); } catch {}
   ArchiveHistory.drop([sid]);Fav.setQuiet(sid,false);
-  const t = Tabs.list.find(x => x.sid === sid); if (t) Tabs.close(t.key);
+  for (const t of Tabs.list.filter(x => x.sid === sid)) Tabs.close(t.key);
   const c = Chats.get(sid); if (c) { try { c.ctl?.abort(); } catch {} Chats.delete(sid); }
   if (Models.all[sid]) { delete Models.all[sid]; Store.set('models', Models.all); try { Bus.emit('models'); } catch {} }
   Notes.drop(sid); try { Trace.clear(sid); } catch {}

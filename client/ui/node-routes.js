@@ -453,13 +453,13 @@ const NodeRoutes = (() => {
     const testsLine=(g,r)=>(g==null?'':g.ok?'Google 连接正常 · ':'Google 不通（'+g.error+'；Google 登录可能受影响） · ')+'Brana 检测通过（建连 + 3 次请求共 '+(r.ms>=1000?(r.ms/1000).toFixed(1)+' s':r.ms+' ms')+'）'+(r.ip?' · 出口 '+r.ip:'')+(r.loc?' · '+regionLabel(r.loc):'');
     // 纯净度把关（零容忍）：经节点的出口（显式指定 proxyIp 时）一律先评估，高风险或非纯净直接拒绝；若无可用 ProxyIP 而走节点自身代理兜底则允许通过
     async function riskBad(c,x,say){
+      if(x?.ip&&(x.pure||x.ipa)&&typeof Pool!=='undefined'&&Pool.mutate){
+        try{await Pool.mutate(d=>{if(x.pure)IPRep.putPu?.(d,x.ip,x.pure);if(x.ipa)IPRep.putIpa?.(d,x.ip,x.ipa);});}catch{}
+      }
       if(c?.nativeFallback&&!c?.proxyIp)return '';
       if(!/^vless:/i.test(c?.proxy||'')||typeof IPRep==='undefined'||!IPRep.vet)return '';
       const targetPip=String(c?.proxyIp||'').trim()||(typeof Vless!=='undefined'&&Vless.proxyIpOf?String(Vless.proxyIpOf((()=>{try{return Vless.parse(c.proxy)?.path||'';}catch{return '';}})())||'').trim():'')||String(x?.ip||'').trim();
       if(!targetPip)return '';
-      if(x?.ip&&(x.pure||x.ipa)&&typeof Pool!=='undefined'&&Pool.mutate){
-        try{await Pool.mutate(d=>{if(x.pure)IPRep.putPu?.(d,x.ip,x.pure);if(x.ipa)IPRep.putIpa?.(d,x.ip,x.ipa);});}catch{}
-      }
       say?.('评估出口 IP 纯净度…');
       try{const v=await IPRep.vet(targetPip,x?.ip);if(!v.ok)return v.error;}catch{}
       return '';
@@ -675,7 +675,7 @@ const NodeRoutes = (() => {
           const authForm=wrap.closest('.auth-form');
           if(authForm){const d=UI.authDraft(a);Store.set('auth-route-draft',{accountId:a.id,email:d.email,name:d.name||'',mode:authForm.dataset.authMode||'login',at:Date.now()});}
           applying=true;paint();step(78,'检测通过，正在应用…');
-          if(candidate?.proxyIp&&P?.mutate){try{await P.mutate(d=>{d.ips||={};const it=d.ips[candidate.proxyIp]||={ip:String(candidate.proxyIp).split(':')[0]};it.ok=true;it.gone=false;it.banned=false;it.cool=0;if(r?.loc)it.loc=r.loc;if(r?.ip)it.eg=r.ip;if(r?.ms)it.ms=r.ms;if(d.ban)delete d.ban[String(candidate.proxyIp).toLowerCase()];});}catch{}}
+          if((candidate?.proxyIp||(r?.ip&&(r?.pure||r?.ipa)))&&P?.mutate){try{await P.mutate(d=>{if(r?.ip&&r?.pure&&typeof IPRep!=='undefined')IPRep.putPu?.(d,r.ip,r.pure);if(r?.ip&&r?.ipa&&typeof IPRep!=='undefined')IPRep.putIpa?.(d,r.ip,r.ipa);if(candidate?.proxyIp){d.ips||={};const it=d.ips[candidate.proxyIp]||={ip:String(candidate.proxyIp).split(':')[0]};it.ok=true;it.gone=false;it.banned=false;it.cool=0;if(r?.loc)it.loc=r.loc;if(r?.ip)it.eg=r.ip;if(r?.ms)it.ms=r.ms;if(d.ban)delete d.ban[String(candidate.proxyIp).toLowerCase()];}});}catch{}}
           const saved=await selector({...io,cancelled:stale}).apply(data.account,candidate,wanted,r);warm.delete(routeKey(candidate));cache.delete(routeKey(candidate));lastBrana=null;pre=null;
           Object.assign(a,saved);current=Policy.fields(saved);changed=false;if(P&&State.isNode(saved)&&saved.nodeId){if(P.d)P.d.node=saved.nodeId;if(!UI.host?.routeDraft)void P.setNode(saved.nodeId).catch(()=>{});}UI.host=await Host.info();UI.renderAcct?.();
           // 刚手动换好：记录手动选路锁定窗口（自动模式仅短暂防抖 15 秒，手动指定节点/IP 则锁定 10 分钟防止后台误切走）
@@ -685,7 +685,8 @@ const NodeRoutes = (() => {
           const effective=State.isNode(saved)?'节点 '+(nodes.find(n=>n.id===saved.nodeId)?.name||saved.nodeId||''):isDirectP(saved.proxy)?'直连':'本机代理 '+maskProxy(saved.proxy);
           // 出口 IP 就用刚才检测这条线路时测到的（同一条线路），不再等 /cdn-cgi/trace（最多 6 秒）；实时出口在后台刷新
           const exit=r.ip||(typeof IP!=='undefined'&&IP.ip&&!IP.err?IP.ip:'');
-          if(typeof IP!=='undefined'){IP.at=0;void Promise.resolve(IP.polling).then(()=>IP.poll()).catch(()=>{});}
+          if(typeof IP!=='undefined'){if(r.ip){IP.ip=r.ip;if(r.loc)IP.loc=r.loc;IP.err=null;IP.rttFail=0;IP.at=now();IP.checkedAt=now();}else{IP.ip='';IP.at=0;IP.checkedAt=0;}void Promise.resolve(IP.polling).then(()=>IP.poll()).catch(()=>{});}
+          try{if(typeof Chats!=='undefined'&&typeof Chats.onRouteSwitched==='function')Chats.onRouteSwitched();}catch{}
           say('已保存 · '+modeLabels[wanted]+' · '+effective+(saved.proxyIp?' · '+saved.proxyIp:'')+'\n'+testsLine(null,r)+(wanted==='auto'&&!State.isNode(saved)?'\n当前本机代理比节点更优':''));
           if(sw)sw.done((exit?'出口 '+exit+' · ':'')+(r.ms>=1000?(r.ms/1000).toFixed(1)+' s':r.ms+' ms'));
           else if(typeof toast==='function')toast('✓ 连接已更新 · '+modeLabels[wanted]+' · '+effective+(saved.proxyIp?' · '+saved.proxyIp:''));

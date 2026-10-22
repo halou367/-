@@ -298,10 +298,12 @@ Bus.on('chat', c => { try { Drafts.onChat(c); } catch (e) { console.warn(e); } i
 
 // 按顺序把 box 的子节点变成 nodes：相同节点原地保留，只插入 / 移动 / 删除差异部分（避免整块重建引起的重排和卡顿）
 const patchKids = (box, nodes) => {
-  const keep = new Set(nodes);
+  if (!box || typeof box.insertBefore !== 'function') return;
+  const list = Array.isArray(nodes) ? nodes.filter(n => n && typeof n === 'object' && typeof n.nodeType === 'number') : [];
+  const keep = new Set(list);
   for (const c of [...box.children]) if (!keep.has(c)) c.remove();
-  for (let i = 0; i < nodes.length; i++) { const cur = box.children[i]; if (cur !== nodes[i]) box.insertBefore(nodes[i], cur || null); }
-  while (box.children.length > nodes.length) box.lastElementChild.remove();
+  for (let i = 0; i < list.length; i++) { const cur = box.children[i]; if (cur !== list[i]) box.insertBefore(list[i], cur || null); }
+  while (box.children.length > list.length) box.lastElementChild.remove();
 };
 // 附件显示（输入框 / 对话里共用）：图片 = 缩略图（上传中叠加进度环），其他 = 文件名 chip；点图片看大图
 const attView = (u, mine, onDel) => {
@@ -785,11 +787,11 @@ const Tabs = {
 // 流式时只重画变了的那一段；消息外壳和 msg-body 也保持同一个节点，所以思考过程的展开状态、提问卡片里正在输入的文字都不会被重置。
 const Seg = {
   all: new Map(),
-  of(mid) { let s = this.all.get(mid); if (!s) { s = new Map(); this.all.set(mid, s); if (this.all.size > 600) this.all.delete(this.all.keys().next().value); } return s; },
+  of(mid) { let s = this.all.get(mid); if (!s) { s = new Map(); this.all.set(mid, s); if (this.all.size > 2400) this.all.delete(this.all.keys().next().value); } return s; },
   // off = 临时渲染（离屏预览等）：一律新建节点、不进缓存，绝不把正在界面上用的节点挪走
   off: false,
-  use(mid, key, sig, make) { if (this.off) return make(); const s = this.of(mid), c = s.get(key); if (c && c.sig === sig) return c.el; const el = make(c?.el); if (el) s.set(key, { sig, el }); else s.delete(key); return el; },
-  box(mid, key, make) { if (this.off) return make(); const s = this.of(mid); let c = s.get(key); if (!c) { c = { sig: 'box', el: make() }; s.set(key, c); } return c.el; },
+  use(mid, key, sig, make) { if (this.off) return make(); const s = this.of(mid), c = s.get(key); if (c && c.sig === sig && c.el && typeof c.el.nodeType === 'number') return c.el; const el = make(c?.el && typeof c.el.nodeType === 'number' ? c.el : null); if (el && typeof el.nodeType === 'number') s.set(key, { sig, el }); else s.delete(key); return el; },
+  box(mid, key, make) { if (this.off) return make(); const s = this.of(mid); let c = s.get(key); if (!c || !c.el || typeof c.el.nodeType !== 'number') { c = { sig: 'box', el: make() }; s.set(key, c); } return c.el; },
   clear() { this.all.clear(); },
 };
 // 长文本流式渲染：分成「已闭合的头部块」和「活动尾部」。头部每块只渲染一次、以后原样复用；每帧只重新渲染尾部那一小段。
@@ -1564,6 +1566,9 @@ const CmdTranslate = (() => {
 })();
 if (typeof globalThis !== 'undefined') globalThis.CmdTranslate = CmdTranslate;
 
+const _mdPartCache = typeof WeakMap !== 'undefined' ? new WeakMap() : null;
+const _toolInputCache = typeof WeakMap !== 'undefined' ? new WeakMap() : null;
+
 const R = {
   text(p, streaming, m = null, chat = null, keyPrefix = 'txt') {
     const htmlSegs = R.extractInlineHtmlSegments(p?.text, streaming);
@@ -1598,14 +1603,18 @@ const R = {
       const box = Seg.box(m?.id || 'eval', keyPrefix, () => h('div', { class: 'md prose', lang: '', translate: 'no' }));
       return StreamMD.paint(box, rawText, Boolean(streaming));
     }
-    if (!streaming && p && typeof p === 'object' && p._mdSrc === rawText && p._mdEl && !p._mdEl.isConnected) {
-      return p._mdEl;
+    if (p && typeof p === 'object') {
+      if (p._mdEl !== undefined) delete p._mdEl;
+      if (p._mdSrc !== undefined) delete p._mdSrc;
+    }
+    const cachedMd = (!streaming && p && typeof p === 'object' && _mdPartCache) ? _mdPartCache.get(p) : null;
+    if (cachedMd && cachedMd.src === rawText && cachedMd.el && cachedMd.el.nodeType === 1 && !cachedMd.el.isConnected) {
+      return cachedMd.el;
     }
     const d = h('div', { class: 'md prose' + (streaming ? ' streaming' : ''), lang: '', translate: 'no' });
     d.innerHTML = MD.render(rawText);
-    if (!streaming && p && typeof p === 'object') {
-      p._mdSrc = rawText;
-      p._mdEl = d;
+    if (!streaming && p && typeof p === 'object' && _mdPartCache) {
+      _mdPartCache.set(p, { src: rawText, el: d });
     }
     return d;
   },
@@ -1678,13 +1687,15 @@ const R = {
   },
   tinput(p) {
     if (!p) return undefined;
+    if (p._parsedInputRaw !== undefined) delete p._parsedInputRaw;
+    if (p._parsedInputVal !== undefined) delete p._parsedInputVal;
     if (p.input != null) return p.input;
     const raw = p.inputText;
     if (!raw) return undefined;
-    if (p._parsedInputRaw === raw) return p._parsedInputVal;
+    const cached = _toolInputCache ? _toolInputCache.get(p) : null;
+    if (cached && cached.raw === raw) return cached.val;
     const val = R.parsePartialInput(raw);
-    p._parsedInputRaw = raw;
-    p._parsedInputVal = val;
+    if (_toolInputCache) _toolInputCache.set(p, { raw, val });
     return val;
   },
   normPath(pth) { return String(pth || '').replace(/^\/home\/user\//, '').replace(/^~\//, '').replace(/^\.\//, ''); },
@@ -2849,7 +2860,7 @@ const UI = {
           return;
         }
       }
-      if (!e.target.closest('.menu, #gpop, .rv')) document.querySelectorAll('.menu:not(.anc-gh):not(.amenu)').forEach(m => m.remove());
+      if (!e.target.closest('.menu, #gpop, .rv') && now() - (this._menuOpenAt || 0) >= 450) document.querySelectorAll('.menu:not(.anc-gh):not(.amenu)').forEach(m => m.remove());
     });
     matchMedia('(prefers-color-scheme: dark)').addEventListener?.('change', () => this.applyTheme());
     addEventListener('resize', () => { clearTimeout(this.rsT); this.rsT = setTimeout(() => this.layout(), 100); });
@@ -3196,12 +3207,32 @@ const UI = {
     const battleSt = isBattleEntry ? (battleStatus === '生成中' ? 'run' : battleStatus === '已完成' ? 'ok' : 'wait') : st;
     return h('div', { 'data-sid':e.id, role:'option', 'aria-selected':String(CardSelect.ids.has(e.id)), tabindex:'0', class: 'card' + (CardSelect.ids.has(e.id)?' selected':'') + (CardSelect.mode?' selecting':'') + (on ? ' on' : '') + ((c?.busy || gstep?.active || st === 'run') ? ' busy' : '') + (gstep?.active ? ' gstep-card' : '') + (r.vip ? ' vip' : r.hit ? ' hit' : '') + (Fav.has(e.id) ? ' fv' : '') + (cm.conf != null ? ' cf' : ''), style: r.tint || cm.conf != null ? { ...(r.tint ? { '--tint': r.tint } : {}), ...(cm.conf != null ? { '--cp': cm.conf + '%' } : {}) } : null, title: [v.title, mi?.routed ? ('⚠️ 检测到中途路由：' + (mi.routeFrom ? mi.routeFrom + ' → ' : '') + (mi.routeTo || mi.name || '')) : '', mi?.fingerprint ? Fingerprint.details(mi) : '', mi?.name && mi.name !== v.model ? '型号：' + mi.name : '', note ? '备注：' + note : ''].filter(Boolean).join('\n'),
       onmousedown: ev=>{if(ev.ctrlKey||ev.metaKey||ev.shiftKey)ev.preventDefault();},
+      ontouchstart: ev => {
+        if (ev.touches?.length !== 1 || ev.target.closest('.more,.card-check')) return;
+        const t = ev.touches[0], el = ev.currentTarget;
+        clearTimeout(el._lpT);
+        el._lpPos = { x: t.clientX, y: t.clientY };
+        el._lpT = setTimeout(() => {
+          el._lpT = 0;
+          this._menuOpenAt = now();
+          try { navigator.vibrate?.(12); } catch {}
+          this.itemMenu({ type: 'contextmenu', clientX: el._lpPos.x, clientY: el._lpPos.y, currentTarget: el, stopPropagation() {} }, e);
+        }, 460);
+      },
+      ontouchmove: ev => {
+        const el = ev.currentTarget, t = ev.touches?.[0];
+        if (el._lpT && t && el._lpPos && Math.hypot(t.clientX - el._lpPos.x, t.clientY - el._lpPos.y) > 10) {
+          clearTimeout(el._lpT); el._lpT = 0;
+        }
+      },
+      ontouchend: ev => { const el = ev.currentTarget; if (el._lpT) { clearTimeout(el._lpT); el._lpT = 0; } },
+      ontouchcancel: ev => { const el = ev.currentTarget; if (el._lpT) { clearTimeout(el._lpT); el._lpT = 0; } },
       onkeydown:ev=>{if(ev.target!==ev.currentTarget)return;if(ev.key===' '){ev.preventDefault();CardSelect.toggle(e.id);this.renderList();}else if(ev.key==='Enter'){ev.preventDefault();ev.currentTarget.click();}},
-      onclick: ev => { if (ev.target.closest('.more,.card-check')) return; if(CardSelect.click(e.id,ev)){ev.preventDefault();this.renderList();return;} this.saveScroll(); Tabs.open(e.id, { title: e.title }); this.closeDrawer(); },
+      onclick: ev => { if (now() - (this._menuOpenAt || 0) < 500) { ev.preventDefault(); ev.stopPropagation(); return; } if (ev.target.closest('.more,.card-check')) return; if(CardSelect.click(e.id,ev)){ev.preventDefault();this.renderList();return;} this.saveScroll(); Tabs.open(e.id, { title: e.title }); this.closeDrawer(); },
       onmouseenter: () => { if(CardSelect.mode)return; clearTimeout(this._pfT); this._pfT = setTimeout(() => { try { chatOf(e.id).prefetch(); } catch {} }, 400); },
       onmouseleave: () => clearTimeout(this._pfT),
       onauxclick: ev => { if (ev.button === 1) Tabs.open(e.id, { focus: false, title: e.title }); },
-      oncontextmenu: ev => { ev.preventDefault(); this.itemMenu(ev, e); } },
+      oncontextmenu: ev => { ev.preventDefault(); const el = ev.currentTarget; if (el?._lpT) { clearTimeout(el._lpT); el._lpT = 0; } this._menuOpenAt = now(); this.itemMenu(ev, e); } },
       isBattleEntry && typeof EvalView !== 'undefined' && typeof EvalView.renderBattleLogo === 'function'
         ? EvalView.renderBattleLogo(16, battleSt)
         : (r.vid || v.vid ? stLogo(r.vid || v.vid, 16, st) : st === 'run' ? h('span', { class: 'vlogo busy' }, h('i', { class: 'spin' })) : h('span', { class: 'vlogo none' + (st ? ' st-' + st : '') }, (shown[0] || '?').toUpperCase())),
@@ -3223,7 +3254,8 @@ const UI = {
     const saved=Notes.set(e.id,t);toast(saved?(t.trim()?'备注已保存，后台加密同步到云端标题':'备注已清空，后台同步'):'备注仅在当前窗口，尚未写入本机，请勿关闭',saved?'':'err');
   },
   itemMenu(ev, e) {
-    ev.stopPropagation(); document.querySelectorAll('.menu:not(.anc-gh):not(.amenu)').forEach(m => m.remove());
+    this._menuOpenAt = now();
+    ev.stopPropagation?.(); document.querySelectorAll('.menu:not(.anc-gh):not(.amenu)').forEach(m => m.remove());
     const r = ev.type === 'contextmenu' ? { left: ev.clientX, bottom: ev.clientY } : ev.currentTarget.getBoundingClientRect();
     const isGoldLegend = typeof Gold !== 'undefined' && typeof Gold.hasChat === 'function' && Gold.hasChat(e.id);
     const m = h('div', { class: 'menu', style: { left: Math.min(r.left, innerWidth - 190) + 'px', top: Math.min(r.bottom + 4, innerHeight - 250) + 'px' } },
@@ -3341,6 +3373,19 @@ const UI = {
     if (Pager.on() && t && prevKey !== t.key) {
       if (Pager.adopt(t, kbWas)) return;
       view = Pager.shelve(t) || view;
+    }
+    if (t && prevKey === t.key && !t.kind && sidNow && view) {
+      const curChat = Chats.get(sidNow);
+      if (curChat && this.els && this.els.chat === curChat && this.els.scroller?.isConnected && this.els.thread?.isConnected && view.contains(this.els.scroller)) {
+        try { Palette.paintPage(view, t); } catch {}
+        try { curChat.hydrateSync?.(); } catch {}
+        this.renderChat(curChat, false);
+        if (!curChat.loaded && !curChat.loading) curChat.load().catch(() => {});
+        else if (curChat.loaded && !curChat.loading) curChat.quickSync?.();
+        if (kbWas) this.autoFocus(this.els.composer, kbWas);
+        Pager.ensureSoon();
+        return;
+      }
     }
     this.fillView(t, view, kbWas);
     Pager.ensureSoon();
@@ -3497,13 +3542,22 @@ const UI = {
     // 消息
     const T = E.thread, sc = E.scroller;
     const stick = this.stick !== false;
-    if (!chat.loaded && !chat.messages.length) {
+    const hasVisibleMsgs = chat.messages.some(m => m && !m._held && !(typeof isPhantomFinishStub === 'function' && isPhantomFinishStub(m)));
+    if (!chat.loaded && !hasVisibleMsgs) {
+      if (!chat.loading && !chat.error) { try { chat.load().catch(() => {}); } catch {} }
       const loadTxt = chat.loading
         ? ('加载中…' + (chat.loadBytes >= 65536 ? '（已接收 ' + (chat.loadBytes / 1048576).toFixed(2) + ' MB）' : ''))
         : (chat.error ? chat.error : '加载中…');
+      const showSlowRetry = Boolean(chat.loading && chat._loadStartedAt && now() - chat._loadStartedAt > 5000);
       const ld = T.querySelector('.loading');
-      if (!ld) T.replaceChildren(h('div', { class: 'loading' }, loadTxt));
-      else if (ld.textContent !== loadTxt) ld.textContent = loadTxt;
+      if (!ld || Boolean(ld.querySelector('button')) !== showSlowRetry) {
+        T.replaceChildren(h('div', { class: 'loading' },
+          h('span', { class: 'ld-txt' }, loadTxt),
+          showSlowRetry ? h('button', { class: 'btn ghost sm', style: { marginLeft: '10px' }, onclick: () => chat.load(true) }, '重新连接') : null));
+      } else {
+        const sp = ld.querySelector('.ld-txt') || ld;
+        if (sp.textContent !== loadTxt) sp.textContent = loadTxt;
+      }
     } else if (isBattleChat && typeof EvalView !== 'undefined' && typeof EvalView.renderBattleThread === 'function') {
       EvalView.renderBattleThread(chat, T, sc);
     } else {
@@ -3580,13 +3634,33 @@ const UI = {
         const isRunningTail = chat.live === m || !!(i === lastIdx && m.role === 'assistant' && chat.busy && !chat.waitingForeign);
         const key = (m.v || 0) + '|' + segKey + '|' + (i === lastIdx ? 'L' + chat.status + (chat.hitlStage?.size || 0) : '') + '|' + (m.failed ? 'f' : '') + '|' + (isRunningTail ? 'live' : '') + '|' + this.modelsV + ':' + modelVersion + '|' + ((m.parts||[]).some(p=>p.type==='reasoning')?ThinkingStatus.label(chat,m,isRunningTail):'');
         let c = this.cache.get(m.id);
-        if (!c || c.key !== key) { const el = R.message(m, chat, i === lastIdx, c?.el, seg); c = { key, el }; this.cache.set(m.id, c); }
-        els.push(c.el);
+        if (!c || c.key !== key || !c.el || typeof c.el.nodeType !== 'number') {
+          let el = null;
+          try {
+            el = R.message(m, chat, i === lastIdx, c?.el && typeof c.el.nodeType === 'number' ? c.el : null, seg);
+          } catch (err) {
+            console.warn('R.message error:', err);
+            el = (c?.el && typeof c.el.nodeType === 'number') ? c.el : h('div', { class: 'msg ' + (m.role || 'assistant'), 'data-id': m.id || null });
+          }
+          c = { key, el };
+          this.cache.set(m.id, c);
+        }
+        if (c?.el && typeof c.el.nodeType === 'number') els.push(c.el);
       });
       // 「正在输入」占位复用同一个节点：否则每帧都换新节点，整串消息被重新挂载、整页重排
       if (chat.busy && chat.messages[lastIdx]?.role === 'user' && !chat.waitingForeign) {
         const t = this.cache.get('__typing') || (() => { const t = h('div', { class: 'msg assistant' }, h('div', { class: 'msg-body typing-row' }, h('div', { class: 'typing' }, h('i'), h('i'), h('i')), h('span', { class: 'typing-st' }))); this.cache.set('__typing', t); return t; })();
         const st = t.querySelector('.typing-st'); if (st) st.textContent = chat.dlvText?.() || ''; els.push(t);
+      }
+      if (!els.length) {
+        if (!chat.loaded || chat.loading) {
+          const loadTxt = chat.loading
+            ? ('加载中…' + (chat.loadBytes >= 65536 ? '（已接收 ' + (chat.loadBytes / 1048576).toFixed(2) + ' MB）' : ''))
+            : (chat.error ? chat.error : '加载中…');
+          els.push(h('div', { class: 'loading' }, loadTxt));
+        } else if (!chat.error) {
+          els.push(h('div', { class: 'loading dim' }, '暂无消息记录 ', h('button', { class: 'btn ghost sm', style: { marginLeft: '8px' }, onclick: () => chat.load(true) }, '重新加载')));
+        }
       }
       // 前面插入了更早的消息：以当前看到的第一条消息为锚点保持位置，不跳动
       const structureChanged=els.length!==T.childElementCount||els.some((e,i)=>T.children[i]!==e);
@@ -3746,13 +3820,31 @@ const UI = {
   async confirmPureIpBeforeSend() {
     try {
       if (window.__fixture || window.__routeFixture) return true;
-      const a = this.host?.account || {};
-      const curIp = typeof IP !== 'undefined' ? (IP.ip || '') : '';
+      if (typeof Prefs !== 'undefined' && Prefs.preSendPurityCheck === false) return true;
+      let a = this.host?.account || {};
+      if (typeof IP !== 'undefined' && IP.polling && (!IP.ip || !IP.at)) {
+        await Promise.race([Promise.resolve(IP.polling), sleep(900)]).catch(() => {});
+      }
+      let curIp = typeof IP !== 'undefined' ? ((!IP.err && IP.ip) || a.status?.ip || '') : (a.status?.ip || '');
       if (!curIp && !a.proxyIp && !a.proxy && !(typeof IP !== 'undefined' && IP.err)) return true;
-      const ipRep = (typeof IPRep !== 'undefined' && IPRep.cur) ? IPRep.cur(a, curIp) : null;
+      let ipRep = (typeof IPRep !== 'undefined' && IPRep.cur) ? IPRep.cur(a, curIp) : null;
       const isTrusted = Boolean(typeof IPRep !== 'undefined' && IPRep.trusted && ((a.proxyIp && IPRep.trusted(a.proxyIp)) || (curIp && IPRep.trusted(curIp))));
-      const isPure = Boolean(isTrusted || (ipRep && ipRep.label === '纯净' && (ipRep.pct == null || ipRep.pct >= 75) && !(typeof IP !== 'undefined' && IP.err)));
+      let isPure = Boolean(isTrusted || (ipRep && ipRep.label === '纯净' && (ipRep.pct == null || ipRep.pct >= 75) && !(typeof IP !== 'undefined' && IP.err)));
       if (isPure) return true;
+
+      if (!(typeof IP !== 'undefined' && IP.err) && typeof IPRep !== 'undefined' && typeof IPRep.ensurePreSendPure === 'function') {
+        const pre = await IPRep.ensurePreSendPure({ timeoutMs: 1200 }).catch(() => null);
+        if (pre?.pure || pre?.switched) {
+          if (pre?.switched) { try { Recaptcha.clearCache?.(); } catch {} }
+          return true;
+        }
+        a = this.host?.account || a;
+        curIp = typeof IP !== 'undefined' ? ((!IP.err && IP.ip) || pre?.eg || a.status?.ip || curIp) : (pre?.eg || curIp);
+        ipRep = IPRep.cur ? IPRep.cur(a, curIp) : ipRep;
+        isPure = Boolean(isTrusted || (ipRep && ipRep.label === '纯净' && (ipRep.pct == null || ipRep.pct >= 75) && !(typeof IP !== 'undefined' && IP.err)));
+        if (isPure) return true;
+        if (ipRep?.label === '未评估' && (!ipRep?.sc || !ipRep.sc.known)) return true;
+      }
 
       const statusParts = [
         ipRep?.label || (typeof IP !== 'undefined' && IP.err ? '连接异常' : '未评估'),

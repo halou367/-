@@ -2246,3 +2246,51 @@ test('v0.13.168-beta.3: Full 千面助手_v9.2 (v37.9.0+37.5.8-iter8-fusion) Pro
   assert.equal(chfCtx.FP.inferPlainModelByRAvg({ rAvgChunk: 28.0 }).id, 'nvidia/nemotron-3-ultra');
 });
 
+test('large-context chat blank screen fix: R.text WeakMap cache, legacy _mdEl:{} cleanup, patchKids Node guard, and MsgCache slimForHot', () => {
+  const viewSrc = read('ui/view.js');
+  const coreSrc = read('ui/core.js');
+  const evalCoreSrc = read('ui/eval-core.js');
+  const evalViewSrc = read('ui/eval-view.js');
+  const nodeRoutesSrc = read('ui/node-routes.js');
+  const iprepSrc = read('ui/iprep.js');
+  const titlesSrc = read('ui/titles.js');
+  const mobileSrc = read('ui/mobile.js');
+  const appCss = read('ui/app.css');
+  const routeNativeSrc = read('src/route-native.js');
+
+  // 1. R.text uses _mdPartCache WeakMap and strips any legacy _mdEl/{} from deserialized IndexedDB parts
+  assert.match(viewSrc, /const _mdPartCache = typeof WeakMap !== 'undefined' \? new WeakMap\(\) : null;/);
+  assert.match(viewSrc, /if \(p\._mdEl !== undefined\) delete p\._mdEl;/);
+  assert.doesNotMatch(viewSrc, /p\._mdEl\s*=\s*d/);
+
+  // 2. patchKids filters non-Node items so deserialized {} objects can never throw insertBefore TypeError or empty live DOM
+  assert.match(viewSrc, /const list = Array\.isArray\(nodes\) \? nodes\.filter\(n => n && typeof n === 'object' && typeof n\.nodeType === 'number'\) : \[\];/);
+
+  // 3. MsgCache sanitizes _mdEl/_mdSrc on read/write and slims oversized large-context tails for 0ms hot cache + _hotOnly IndexedDB upgrade
+  assert.match(coreSrc, /function sanitizeCachedMsgs\(msgs\)/);
+  assert.match(coreSrc, /function slimForHot\(msgs,/);
+  assert.match(coreSrc, /this\._hotOnly = Boolean\(x\._hotSlice\);/);
+  assert.match(coreSrc, /if \(!this\.messages\.length \|\| this\._hotOnly\) MsgCache\.get\(this\.sid\)/);
+
+  // 4. Pre-send purity stability & reCAPTCHA v3 route-bound cache invalidation across node switches
+  assert.match(coreSrc, /function clearCache\(action = ''\)/);
+  assert.match(coreSrc, /Chats\.onRouteSwitched = \(\) =>/);
+  assert.match(nodeRoutesSrc, /IP\.ip=r\.ip;if\(r\.loc\)IP\.loc=r\.loc;IP\.err=null;IP\.rttFail=0;IP\.at=now\(\);IP\.checkedAt=now\(\);/);
+  assert.match(iprepSrc, /const minRequiredScore = isManuallyLocked \? this\.TH : this\.PURE;/);
+  assert.match(routeNativeSrc, /else if \(risk === 0 && subnetCnt <= 6\) fs = res \? 6 : \(dc \? 14 : 10\);/);
+
+  // 5. Blank / stuck-loading chat protection during send + node switch
+  assert.match(viewSrc, /const hasVisibleMsgs = chat\.messages\.some\(m => m && !m\._held/);
+  assert.match(evalCoreSrc, /const wasConfirmedEval = Boolean\(chat\.isEvaluation \|\| isEvalChat\(chat\)\);/);
+  assert.match(evalViewSrc, /if \(!turns\.length\) \{/);
+
+  // 6. Mobile chat deletion: visible .card .more, touch long-press + _menuOpenAt guard, dual-endpoint History.remove, and TabSw delete
+  assert.match(appCss, /body\.m \.card \.more\{display:grid;/);
+  assert.match(viewSrc, /this\._menuOpenAt = now\(\);/);
+  assert.match(coreSrc, /const altUrl = \(isEval \? '\/api\/chat\/' : '\/api\/history\/evaluation\/'\) \+ id;/);
+  assert.match(titlesSrc, /for \(const t of Tabs\.list\.filter\(x => x\.sid === sid\)\) Tabs\.close\(t\.key\);/);
+  assert.match(mobileSrc, /tsw-del danger/);
+});
+
+
+

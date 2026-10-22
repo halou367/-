@@ -322,7 +322,8 @@ const IPRep = {
       const k = a?.proxyIp || '', P = typeof Pool !== 'undefined' ? Pool : null;
       const nip = this.normIp(ip);
       let e = k && P ? P.d?.ips?.[k] : null;
-      if (e && nip && e.eg !== nip) e = { ...e, eg: nip };
+      const ipFresh = Boolean(nip && (typeof IP === 'undefined' || (!IP.err && (IP.at > 0 || !e?.eg))));
+      if (e && nip && ipFresh && e.eg !== nip) e = { ...e, eg: nip };
       if (!e && nip && P?.d?.rep?.[nip]) e = { eg: nip };
       if (!e && nip) { this.curEval(nip); return out; }
       if (!e) return out;
@@ -451,12 +452,12 @@ const IPRep = {
       const k = String(a.proxyIp || '').trim();
       if (!k || this.trusted(k)) return { ok: true, skipped: true };
       const timeoutMs = Math.max(400, Math.min(2000, Number(opt?.timeoutMs) || 1200));
-      const traceFresh = Boolean(typeof IP !== 'undefined' && IP.ip && !IP.err && (now() - Math.max(IP.checkedAt || 0, IP.at || 0) < 90000));
+      const traceFresh = Boolean(typeof IP !== 'undefined' && IP.ip && !IP.err && IP.at > 0 && (now() - Math.min(IP.checkedAt || IP.at || 0, IP.at || 0) < 90000));
       if (!traceFresh && typeof IP !== 'undefined' && typeof IP.ping === 'function' && typeof Host !== 'undefined' && Host.ippureDirect) {
         await Promise.race([IP.ping(true).catch(() => {}), sleep(Math.min(850, timeoutMs))]);
       }
       let e = Pool.d?.ips?.[k] || null;
-      const liveIp = this.normIp((typeof IP !== 'undefined' && !IP.err && IP.ip) || '');
+      const liveIp = this.normIp((typeof IP !== 'undefined' && !IP.err && IP.at > 0 && IP.ip) || '');
       if (e && liveIp && e.eg !== liveIp) {
         await Pool.mutate(d => { if (d.ips?.[k]) d.ips[k].eg = liveIp; }).catch(() => {});
         e = Pool.d?.ips?.[k] || { ...e, eg: liveIp };
@@ -494,7 +495,9 @@ const IPRep = {
       const liveEntry = liveIp ? { ...(e || {}), eg: liveIp } : e;
       const sc = this.score(k, liveEntry);
       const isBanned = Boolean(Pool.banned?.(k) || Pool.d?.banEg?.[eg.toLowerCase()]);
-      const isDirty = isBanned || Boolean(sc.known && sc.s < this.PURE);
+      const isManuallyLocked = Boolean(typeof AutoRoute !== 'undefined' && AutoRoute.manualLockUntil && now() < AutoRoute.manualLockUntil);
+      const minRequiredScore = isManuallyLocked ? this.TH : this.PURE;
+      const isDirty = isBanned || Boolean(sc.known && sc.s < minRequiredScore);
       if (!isDirty) return { ok: true, pure: true, score: sc.s, eg };
       await Pool.mutate(d => {
         if (!this.trusted(k) && typeof Pool.banForever === 'function') {

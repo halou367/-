@@ -1470,44 +1470,82 @@ const Recaptcha = (() => {
   const v2Close = () => { try { v2Cancel?.(); } catch {} };
   const v2Showing = () => !!v2Open;
   // 预取：开始打字时就先拿好一个 v3 令牌（2 分钟内有效、只能用一次），按发送时直接用，省掉发送时等 reCAPTCHA 的几秒
-  let cache = null, warming = null;
+  let cache = null, warming = null, routeEpoch = 0;
   const cachePool = {}, warmingPool = {};
+  const curRouteTag = () => {
+    try {
+      const a = typeof UI !== 'undefined' ? UI.host?.account : null;
+      const ip = (typeof IP !== 'undefined' && IP.ip) || a?.status?.ip || '';
+      const px = a?.proxy || '';
+      const pip = a?.proxyIp || a?.route?.proxyIp || '';
+      const nid = a?.nodeId || '';
+      return `${ip}|${px}|${pip}|${nid}`;
+    } catch { return ''; }
+  };
+  function clearCache(action = '') {
+    routeEpoch++;
+    if (action) {
+      delete cachePool[action];
+      delete warmingPool[action];
+      if (action === 'chat_submit') { cache = null; warming = null; }
+      return;
+    }
+    for (const k of Object.keys(cachePool)) delete cachePool[k];
+    for (const k of Object.keys(warmingPool)) delete warmingPool[k];
+    cache = null;
+    warming = null;
+  }
   function warm(action = 'chat_submit') {
     const slot = cachePool[action];
-    if (warmingPool[action] || (slot && now() - slot.at < 90000)) return;
+    const rTag = curRouteTag();
+    if (warmingPool[action] || (slot && now() - slot.at < 90000 && (!slot.rTag || !rTag || slot.rTag === rTag))) return;
+    const ep = routeEpoch;
+    const rTag0 = rTag;
     warmingPool[action] = v3(action).then(t => {
-      if (t) {
-        cachePool[action] = { t, at: now(), action };
-        if (action === 'chat_submit') cache = cachePool[action];
+      if (t && ep === routeEpoch) {
+        const rTagNow = curRouteTag() || rTag0;
+        if (!rTag0 || !rTagNow || rTag0 === rTagNow) {
+          cachePool[action] = { t, at: now(), action, rTag: rTagNow };
+          if (action === 'chat_submit') cache = cachePool[action];
+        }
       }
-    }).catch(() => {}).finally(() => { warmingPool[action] = null; if (action === 'chat_submit') warming = null; });
+    }).catch(() => {}).finally(() => { if (ep === routeEpoch) { warmingPool[action] = null; if (action === 'chat_submit') warming = null; } });
     if (action === 'chat_submit') warming = warmingPool[action];
   }
   async function take(action = 'chat_submit') {
+    const rTag = curRouteTag();
     const slot = cachePool[action];
-    if (slot && now() - slot.at < 100000) {
-      const t = slot.t;
+    if (slot) {
       delete cachePool[action];
       if (action === 'chat_submit') cache = null;
-      setTimeout(() => warm(action), 450);
+      if (now() - slot.at < 100000 && (!slot.rTag || !rTag || slot.rTag === rTag)) {
+        setTimeout(() => warm(action), 450);
+        return slot.t;
+      }
+    }
+    if (cache && now() - cache.at < 100000 && cache.action === action && (!cache.rTag || !rTag || cache.rTag === rTag)) {
+      const t = cache.t;
+      cache = null;
       return t;
     }
-    if (cache && now() - cache.at < 100000 && cache.action === action) { const t = cache.t; cache = null; return t; }
+    cache = null;
     if (warmingPool[action]) {
       await Promise.race([warmingPool[action], sleep(8000)]);
       const ready = cachePool[action];
-      if (ready && now() - ready.at < 100000) {
-        const t = ready.t;
+      const rTagAfter = curRouteTag();
+      if (ready) {
         delete cachePool[action];
         if (action === 'chat_submit') cache = null;
-        return t;
+        if (now() - ready.at < 100000 && (!ready.rTag || !rTagAfter || ready.rTag === rTagAfter)) {
+          return ready.t;
+        }
       }
     }
     const tok = await v3(action);
     setTimeout(() => warm(action), 650);
     return tok;
   }
-  return { load, protoV3, v3, v2, v2Close, v2Showing, warm, take, LANGS, hl };
+  return { load, protoV3, v3, v2, v2Close, v2Showing, warm, take, clearCache, LANGS, hl };
 })();
 
 // ---------- 限流记录 ----------
@@ -1751,14 +1789,69 @@ const MsgCache = (() => {
   let dbp = null; const timers = new Map(), memHot = new Map(), MAX = 5000, CAP = 20e6, HOT_MAX = 6, HOT_CAP = 160000;
   const db = () => dbp ||= new Promise(res => { try { const r = indexedDB.open('anc-msgs', 1); r.onupgradeneeded = () => r.result.createObjectStore('c'); r.onsuccess = () => res(r.result); r.onerror = () => res(null); } catch { res(null); } });
   const idx = () => Store.get('mc:idx', {}) || {};
+  function sanitizeCachedMsgs(msgs) {
+    if (!Array.isArray(msgs)) return msgs;
+    for (const m of msgs) {
+      if (!m || !Array.isArray(m.parts)) continue;
+      for (const p of m.parts) {
+        if (!p || typeof p !== 'object') continue;
+        if (p._mdEl !== undefined) delete p._mdEl;
+        if (p._mdSrc !== undefined) delete p._mdSrc;
+        if (p._parsedInputRaw !== undefined) delete p._parsedInputRaw;
+        if (p._parsedInputVal !== undefined) delete p._parsedInputVal;
+      }
+    }
+    return msgs;
+  }
+  function slimForHot(msgs, count = 20, strLim = 900) {
+    const tail = msgs.slice(-count);
+    const trunc = s => (typeof s === 'string' && s.length > strLim) ? s.slice(0, strLim) + '\n…[cached]' : s;
+    const slimObj = o => {
+      if (!o) return o;
+      if (typeof o === 'string') return trunc(o);
+      if (typeof o !== 'object' || Array.isArray(o)) return o;
+      const n = { ...o };
+      for (const k of Object.keys(n)) {
+        if (typeof n[k] === 'string' && n[k].length > strLim) n[k] = trunc(n[k]);
+        else if (n[k] && typeof n[k] === 'object' && !Array.isArray(n[k])) {
+          const sub = { ...n[k] };
+          for (const sk of Object.keys(sub)) if (typeof sub[sk] === 'string' && sub[sk].length > strLim) sub[sk] = trunc(sub[sk]);
+          n[k] = sub;
+        }
+      }
+      return n;
+    };
+    return tail.map(m => ({
+      ...m,
+      parts: Array.isArray(m?.parts) ? m.parts.map(p => {
+        if (!p || typeof p !== 'object') return p;
+        const { _mdEl, _mdSrc, _parsedInputRaw, _parsedInputVal, ...rest } = p;
+        if (typeof rest.inputText === 'string' && rest.inputText.length > strLim) rest.inputText = trunc(rest.inputText);
+        if (rest.input !== undefined) rest.input = slimObj(rest.input);
+        if (rest.output !== undefined) rest.output = slimObj(rest.output);
+        if (rest.type === 'reasoning' && typeof rest.text === 'string' && rest.text.length > strLim) rest.text = trunc(rest.text);
+        return rest;
+      }) : m?.parts
+    }));
+  }
   function putHot(sid, rec) {
     if (!sid || !rec || !Array.isArray(rec.messages) || !rec.messages.length) return;
+    sanitizeCachedMsgs(rec.messages);
     memHot.set(sid, rec);
     while (memHot.size > 24) memHot.delete(memHot.keys().next().value);
     try {
       const hotMsgs = rec.messages.slice(-40);
-      const hotRec = { ...rec, messages: hotMsgs, more: Boolean(rec.more || rec.messages.length > hotMsgs.length) };
-      const raw = JSON.stringify(hotRec);
+      const isSlice = rec.messages.length > hotMsgs.length;
+      let hotRec = { ...rec, messages: hotMsgs, more: Boolean(rec.more || isSlice), _hotSlice: isSlice };
+      let raw = JSON.stringify(hotRec);
+      if (raw.length > HOT_CAP) {
+        hotRec = { ...rec, messages: slimForHot(rec.messages, 16, 800), more: true, _hotSlice: true };
+        raw = JSON.stringify(hotRec);
+      }
+      if (raw.length > HOT_CAP) {
+        hotRec = { ...rec, messages: slimForHot(rec.messages, 6, 400), more: true, _hotSlice: true };
+        raw = JSON.stringify(hotRec);
+      }
       if (raw.length <= HOT_CAP) {
         Store.set('mc:hot:' + sid, hotRec);
         const lru = (Store.get('mc:hot:lru', []) || []).filter(k => k && k !== sid);
@@ -1773,10 +1866,15 @@ const MsgCache = (() => {
   }
   function getSync(sid) {
     if (!sid) return null;
-    if (memHot.has(sid)) return memHot.get(sid) || null;
+    if (memHot.has(sid)) {
+      const m = memHot.get(sid) || null;
+      if (m && Array.isArray(m.messages)) sanitizeCachedMsgs(m.messages);
+      return m;
+    }
     try {
       const hot = Store.get('mc:hot:' + sid, null);
       if (hot && Array.isArray(hot.messages) && hot.messages.length) {
+        sanitizeCachedMsgs(hot.messages);
         memHot.set(sid, hot);
         return hot;
       }
@@ -1790,7 +1888,10 @@ const MsgCache = (() => {
         const q = d.transaction('c').objectStore('c').get(sid);
         q.onsuccess = () => {
           const r = q.result || getSync(sid) || null;
-          if (r && Array.isArray(r.messages) && r.messages.length) memHot.set(sid, r);
+          if (r && Array.isArray(r.messages) && r.messages.length) {
+            sanitizeCachedMsgs(r.messages);
+            memHot.set(sid, r);
+          }
           res(r);
         };
         q.onerror = () => res(getSync(sid));
@@ -1828,7 +1929,15 @@ const MsgCache = (() => {
       }
       return oc ? next : o;
     };
-    let msgs = rawMsgs.filter(m => !m._local && !m.failed).slice(-200).map(({ v, ...m }) => m), js = JSON.stringify(msgs);
+    let msgs = rawMsgs.filter(m => !m._local && !m.failed).slice(-200).map(({ v, ...m }) => ({
+      ...m,
+      parts: Array.isArray(m.parts) ? m.parts.map(p => {
+        if (!p || typeof p !== 'object') return p;
+        if (p._mdEl === undefined && p._mdSrc === undefined && p._parsedInputRaw === undefined && p._parsedInputVal === undefined) return p;
+        const { _mdEl, _mdSrc, _parsedInputRaw, _parsedInputVal, ...rest } = p;
+        return rest;
+      }) : m.parts
+    })), js = JSON.stringify(msgs);
     if (js.length > 4e6) {
       msgs = msgs.map(m => ({ ...m, parts: (m.parts || []).map(p => {
         if (!p || !p.output) return p;
@@ -1936,6 +2045,30 @@ const chatOf = sid => {
   if (Chats.size > 40) pruneInactiveChats(28);
   return c;
 };
+Chats.onRouteSwitched = () => {
+  try {
+    if (typeof Recaptcha !== 'undefined' && typeof Recaptcha.clearCache === 'function') Recaptcha.clearCache();
+    const curSid = typeof Tabs !== 'undefined' ? Tabs.cur?.sid : null;
+    for (const c of Chats.values()) {
+      if (!c) continue;
+      c._pre = null;
+      c._preP = null;
+      c.tokenP = null;
+      if (c.loading) {
+        try { c._loadCtl?.abort(); } catch {}
+        c.loading = null;
+        if (c.sid === curSid || !c.loaded || c.busy) {
+          setTimeout(() => { try { c.load(true).catch(() => {}); } catch {} }, 60);
+        }
+      } else if (c.sid === curSid && !c.loaded) {
+        setTimeout(() => { try { c.load(true).catch(() => {}); } catch {} }, 60);
+      }
+      if ((c.streaming || c.busy) && !c.isEvaluation && typeof c.restream === 'function') {
+        setTimeout(() => { try { if (c.streaming || c.busy) c.restream(); } catch {} }, 120);
+      }
+    }
+  } catch {}
+};
 
 class Chat {
   constructor(sid) {
@@ -1951,6 +2084,7 @@ class Chat {
     if (x.isEvaluation) { this.isEvaluation = true; if (x.evalMode) this.evalMode = x.evalMode; }
     this.messages = x.messages.filter(m => !(typeof isPhantomFinishStub === 'function' && isPhantomFinishStub(m))).map(m => ({ ...m, v: 0 }));
     this.cached = true;
+    this._hotOnly = Boolean(x._hotSlice);
     this.hasMore = !!x.more;
     if (x.lastSeq && !this.lastSeq) this.lastSeq = String(x.lastSeq);
     if (x.token && !this.token && (x.tokenExp || 0) > now() + 30000) { this.token = x.token; this.tokenExp = x.tokenExp; this.tokenAt = 0; }
@@ -2059,10 +2193,15 @@ class Chat {
   }
   load(force) {
     if (this.loaded && !force) return Promise.resolve();
+    if (force && this.loading) {
+      try { this._loadCtl?.abort(); } catch {}
+      this.loading = null;
+    }
     // 秒开（含从浏览器模式切回 Scheme B 及常规点击）：先显示本地缓存并恢复 lastSeq；若历史 updatedAt 未变或刚缓存过，直接 0ms 完成加载并转后台静默对账
-    if (!this.messages.length) MsgCache.get(this.sid).then(x => {
+    if (!this.messages.length || this._hotOnly) MsgCache.get(this.sid).then(x => {
       if (x?.isEvaluation) { this.isEvaluation = true; if (x.evalMode) this.evalMode = x.evalMode; }
-      if (x?.messages?.length && !this.loaded && !this.messages.length) {
+      if (x?.messages?.length && !this.loaded && (!this.messages.length || (this._hotOnly && !x._hotSlice && x.messages.length >= this.messages.length))) {
+        this._hotOnly = false;
         this.messages = x.messages.filter(m => !(typeof isPhantomFinishStub === 'function' && isPhantomFinishStub(m))).map(m => {
           if (m?.role === 'assistant' && !m.metadata?.pending && Array.isArray(m.parts)) {
             for (const p of m.parts) {
@@ -2107,22 +2246,26 @@ class Chat {
     if (typeof window !== 'undefined' && window.__BRANA_BROWSE_MODE && !force) {
       return this.loading ||= (async () => {
         try {
-          if (!this.messages.length) {
+          if (!this.messages.length || this._hotOnly) {
             const x = await MsgCache.get(this.sid).catch(() => null);
             if (x?.isEvaluation) { this.isEvaluation = true; if (x.evalMode) this.evalMode = x.evalMode; }
-            if (x?.messages?.length) { this.messages = x.messages.filter(m => !(typeof isPhantomFinishStub === 'function' && isPhantomFinishStub(m))).map(m => ({ ...m, v: 0 })); this.hasMore = !!x.more; }
+            if (x?.messages?.length && (!this.messages.length || (this._hotOnly && !x._hotSlice && x.messages.length >= this.messages.length))) { this._hotOnly = false; this.messages = x.messages.filter(m => !(typeof isPhantomFinishStub === 'function' && isPhantomFinishStub(m))).map(m => ({ ...m, v: 0 })); this.hasMore = !!x.more; }
           }
           this.cached = false; this.loaded = true; this.error = this.messages.length ? null : '本地暂无该对话的正文缓存'; this.emit();
         } finally { this.loading = null; }
       })();
     }
+    const loadGen = (this._loadGen = (this._loadGen || 0) + 1);
+    const loadCtl = (this._loadCtl = typeof AbortController !== 'undefined' ? new AbortController() : null);
+    this._loadStartedAt = now();
     return this.loading ||= (async () => {
       try {
-        if (!this.messages.length) {
+        if (!this.messages.length || this._hotOnly) {
           const x = await MsgCache.get(this.sid).catch(() => null);
           if (x?.isEvaluation) { this.isEvaluation = true; if (x.evalMode) this.evalMode = x.evalMode; }
           if (this.loaded && !force) return;
-          if (x?.messages?.length && !this.messages.length) {
+          if (x?.messages?.length && (!this.messages.length || (this._hotOnly && !x._hotSlice && x.messages.length >= this.messages.length))) {
+            this._hotOnly = false;
             this.messages = x.messages.filter(m => !(typeof isPhantomFinishStub === 'function' && isPhantomFinishStub(m))).map(m => ({ ...m, v: 0 }));
             this.cached = true; this.hasMore = !!x.more;
             if (this.isEvaluation || (typeof EvalEngine !== 'undefined' && EvalEngine.isEvalChat?.(this))) {
@@ -2165,13 +2308,15 @@ class Chat {
         // 超长上下文对话支持：追加 ?includeStreamToken=false&recoverRun=false 跳过服务端同步恢复与令牌签发阻塞（对齐官网 Web 行为），
         // 首次连接超时给足 35 秒，重试 45 秒，且一旦响应头或数据分片到达即自动续期（流式空闲 45 秒），彻底根治超长上下文对话卡 20 秒超时。
         for (let waits = 0, netWaits = 0, fastRetried = false; !c;) {
+          if (loadCtl?.signal?.aborted || this._loadGen !== loadGen) throw Object.assign(new Error('加载已切换'), { name: 'AbortError' });
           try {
             const reqTimeout = (waits === 0 && netWaits === 0 && !fastRetried) ? 35000 : 45000;
             const chatQuery = (!this.busy && !this.streaming && !force && !window.__ANC_FAST_RETURN && fastRetried)
               ? '?includeStreamToken=false&recoverRun=false'
               : '?includeStreamToken=false';
-            c = await api('/api/chat/' + this.sid + chatQuery, { timeout: reqTimeout, noApiRetry: true, onProgress });
+            c = await api('/api/chat/' + this.sid + chatQuery, { timeout: reqTimeout, noApiRetry: true, onProgress, ...(loadCtl?.signal ? { signal: loadCtl.signal } : {}) });
           } catch (e) {
+            if (loadCtl?.signal?.aborted || this._loadGen !== loadGen) throw e;
             if (!fastRetried && waits === 0 && netWaits === 0 && !e?.status && (e?.routeTimeout || /超时|failed to fetch|fetch failed|network|ERR_|socket|eof|reset|closed/i.test(String(e?.message || e)))) {
               fastRetried = true;
               continue;
@@ -2304,12 +2449,13 @@ class Chat {
         // 更早的消息不再打开就全部拉下来（以前一个长对话会连发几十上百个请求）：滚动到顶部 / 点「加载更早的消息」时才加载，和网页一致
         if (!this.hasMore) setTimeout(() => { try { FingerprintReview?.auto?.(this); } catch {} }, 600);   // 没有指纹信息的对话：按历史里的指纹测试自动校准
       } catch (e) {
+        if (this._loadGen !== loadGen) return this.loading;
         if (e?.status === 404 && typeof EvalEngine !== 'undefined' && !this._evalFallbackTried) {
           this._evalFallbackTried = true;
           try {
             this.loading = null;
             await EvalEngine.loadChat(this, true);
-            if (this.isEvaluation) return;
+            if (this.isEvaluation && this.loaded) return;
           } catch {}
         }
         if (!this.messages.length && !this.gacha) {
@@ -2338,7 +2484,7 @@ class Chat {
         }
         this.error = e.status === 404 ? '对话不存在或已删除' : e.status === 429 ? '加载失败：请求过于频繁（429），已按服务器要求等待重试仍被限流' + ((e.retryAfterMs || 0) > 0 ? '，服务端要求等待约 ' + Math.ceil(e.retryAfterMs / 1000) + ' 秒' : '') + '；稍等一会儿点刷新' : '加载失败：' + e.message; this.emit(); throw e;
       }
-      finally { this.loading = null; }
+      finally { if (this._loadGen === loadGen) { this.loading = null; this._loadCtl = null; } }
     })();
   }
   // 增量查漏补缺（不清空本地数百个已加载工具和消息，只按游标和 toolCallId 补齐缺失输出并续接实时流）
@@ -2684,14 +2830,32 @@ class Chat {
       // 人机验证令牌（多半已在打字 / 选附件时预取好）和会话令牌同时拿，不再一个等一个
       // 同时把实时通道读到最新（drain）：之前没读完的旧记录（上一轮的尾巴、多出来的 turn-complete）不会被当成这一轮的回复
       // 对话还没载入完（手机上刚切过来、显示的是缓存）：先等载入，拿到最新位置和状态再发
-      if (!this.loaded && !this.gacha) { this.srvBusy = false; this.phase = '同步对话中'; msg._held = true; msg.v = (msg.v || 0) + 1; this.emit(); try { await Promise.race([(this.loading || this.load()).catch(() => {}), sleep(12000)]); } finally { delete msg._held; msg.v = (msg.v || 0) + 1; } this.phase = '发送中'; this.emit(); }
+      if (!this.loaded && !this.gacha) {
+        this.srvBusy = false; this.phase = '同步对话中'; msg._held = true; msg.v = (msg.v || 0) + 1; this.emit();
+        try {
+          if (this.loading && this._loadStartedAt && now() - this._loadStartedAt > 5000) {
+            try { this._loadCtl?.abort(); } catch {}
+            this.loading = null;
+          }
+          await Promise.race([(this.loading || this.load()).catch(() => {}), sleep(12000)]);
+        } finally {
+          delete msg._held; msg.v = (msg.v || 0) + 1;
+        }
+        this.phase = '发送中'; this.emit();
+      }
       const canSkipDrain = Boolean(this.loaded && this.lastSeq != null && !this.srvBusy && (this.gacha || opt.hitl || wasMidStall || ((this.tcAt || this.endAt || this.recAt) && now() - Math.max(this.tcAt || 0, this.endAt || 0, this.recAt || 0) < 180000)));
       const prePureTask = (!opt.autoContinue && typeof IPRep !== 'undefined' && typeof IPRep.ensurePreSendPure === 'function')
         ? IPRep.ensurePreSendPure({ timeoutMs: 1200 }).catch(() => null)
         : Promise.resolve(null);
+      const v3IpBefore = (typeof IP !== 'undefined' && IP.ip) || '';
       let [v3, di, prePure] = await Promise.all([opt.v2 ? null : Recaptcha.take('chat_submit').catch(() => null), (this.wakeSessionToken ? this.wakeSessionToken() : this.ensureToken()).catch(() => null).then(() => canSkipDrain ? { max: +this.lastSeq, run: false } : this.drain(900)), prePureTask]);
-      if (prePure?.switched) {
-        await this.ensureToken(true).catch(() => null);
+      if (prePure?.switched || (!opt.v2 && v3IpBefore && typeof IP !== 'undefined' && IP.ip && IP.ip !== v3IpBefore)) {
+        try { Recaptcha.clearCache?.(); } catch {}
+        const [freshV3] = await Promise.all([
+          opt.v2 ? Promise.resolve(null) : Recaptcha.v3('chat_submit').catch(() => v3),
+          this.ensureToken(true).catch(() => null),
+        ]);
+        if (!opt.v2 && freshV3) v3 = freshV3;
       }
       // 服务器上这个对话正有一轮在跑（网页 / 另一台设备 / 本机没在盯着的时候发起的）：先把那一轮接上显示出来，
       // 等它结束（再隔 2.5 秒）才发这条——回复中途插进去的消息服务器有时不会处理，一直显示「等待接单」
@@ -2737,7 +2901,14 @@ class Chat {
         this._preSendNetErr = null;
         this.phase = '当前线路超时，正在自动切换最优节点 / ProxyIP…'; this.emit();
         const sw = await AutoRoute.onErrorSwitch(preErr, 'pre-send').catch(() => null);
-        if (sw?.changed) await this.ensureToken(true).catch(() => null);
+        if (sw?.changed) {
+          try { Recaptcha.clearCache?.(); } catch {}
+          const [freshV3] = await Promise.all([
+            opt.v2 ? Promise.resolve(null) : Recaptcha.v3('chat_submit').catch(() => v3),
+            this.ensureToken(true).catch(() => null),
+          ]);
+          if (!opt.v2 && freshV3) v3 = freshV3;
+        }
         this.phase = '发送中'; this.emit();
       } else {
         this._preSendNetErr = null;
@@ -2768,7 +2939,12 @@ class Chat {
             if (got === true) {
               ar = { ok: true, recovered: true };
             } else {
-              await this.ensureToken().catch(() => null);
+              try { Recaptcha.clearCache?.(); } catch {}
+              const [freshV3] = await Promise.all([
+                opt.v2 ? Promise.resolve(null) : Recaptcha.v3('chat_submit').catch(() => v3),
+                this.ensureToken(true).catch(() => null),
+              ]);
+              if (!opt.v2 && freshV3) v3 = freshV3;
               this.phase = '已切换最优线路，正在自动重发…'; this.emit();
               ar = await this.append(body(opt.v2, v3));
             }
@@ -2776,15 +2952,34 @@ class Chat {
             throw e;
           }
         } else {
-          // 重复指令（429 prompt failed / verification required）或 v3 分数不足（403 recaptcha validation failed）：和网页 withRecaptchaV2Escalation 一致，弹人工验证后用 v2 令牌原样重发（同一条消息 id，不会重复）
-          const eBody = String(e?.body || e?.message || '');
-          const needV2 = promptFailed(e?.status, eBody) || (e?.status === 403 && /recaptcha|人机|验证失败/i.test(eBody)) || (e?.status === 429 && /verification required/i.test(eBody));
-          if (opt.v2 || !needV2) throw e;
-          if (this.rcV3 && e?.status === 403) { this.rcV3 = false; try { IPRep.note('rc'); } catch {} }
-          this.phase = promptFailed(e?.status, eBody) ? 'Brana 要求人工验证（重复指令）' : 'Brana 要求人工验证（reCAPTCHA）'; this.emit();
-          const tok = await Recaptcha.v2().catch(() => null);
-          if (!tok) throw Object.assign(new Error('已取消人机验证，这条没有发送，可以点重试'), { status: 0 });
-          this.phase = '发送中'; this.emit(); ar = await this.append(body(tok, null));
+          // 重复指令（429 prompt failed / verification required）或 v3 分数不足（403 recaptcha validation failed）：
+          // 切换节点后首次发送可能携带了旧节点预热的 v3 令牌，先用当前节点的新 v3 令牌静默重试一次，避免误判新节点纯净度不足
+          let errNow = e;
+          let eBody = String(errNow?.body || errNow?.message || '');
+          const isV3Fail = !opt.v2 && errNow?.status === 403 && /recaptcha|人机|验证失败/i.test(eBody);
+          if (isV3Fail) {
+            try { Recaptcha.clearCache?.(); } catch {}
+            const freshV3 = await Recaptcha.v3('chat_submit').catch(() => null);
+            if (freshV3 && freshV3 !== v3) {
+              v3 = freshV3;
+              try {
+                ar = await this.append(body(null, v3));
+                errNow = null;
+              } catch (eRetry) {
+                errNow = eRetry;
+                eBody = String(errNow?.body || errNow?.message || '');
+              }
+            }
+          }
+          if (errNow) {
+            const needV2 = promptFailed(errNow?.status, eBody) || (errNow?.status === 403 && /recaptcha|人机|验证失败/i.test(eBody)) || (errNow?.status === 429 && /verification required/i.test(eBody));
+            if (opt.v2 || !needV2) throw errNow;
+            if (this.rcV3 && errNow?.status === 403) { this.rcV3 = false; try { IPRep.note('rc'); } catch {} }
+            this.phase = promptFailed(errNow?.status, eBody) ? 'Brana 要求人工验证（重复指令）' : 'Brana 要求人工验证（reCAPTCHA）'; this.emit();
+            const tok = await Recaptcha.v2().catch(() => null);
+            if (!tok) throw Object.assign(new Error('已取消人机验证，这条没有发送，可以点重试'), { status: 0 });
+            this.phase = '发送中'; this.emit(); ar = await this.append(body(tok, null));
+          }
         }
       }
       this._pendingTimeoutMsg = null;
@@ -5096,18 +5291,24 @@ async function createChat0(text, opt = {}) {
   if (opt.v2) { body.recaptchaV2Token = opt.v2; body.recaptchaV3Token = null; }
   // 网页新建 agent 对话用的 reCAPTCHA action 是 agentic_chat_submit（不是 chat_submit）；action 不对会拉低验证分数
   else {
-    const [v3Tok] = await Promise.all([
+    const v3IpBefore = (typeof IP !== 'undefined' && IP.ip) || '';
+    const [v3Tok, prePure] = await Promise.all([
       (opt.gacha ? Recaptcha.v3(CREATE_ACTION) : Recaptcha.take(CREATE_ACTION)).catch(() => null),
       (typeof IPRep !== 'undefined' && typeof IPRep.ensurePreSendPure === 'function')
         ? IPRep.ensurePreSendPure({ timeoutMs: 1200 }).catch(() => null)
         : Promise.resolve(null),
     ]);
-    body.recaptchaV3Token = v3Tok;
+    if (prePure?.switched || (v3IpBefore && typeof IP !== 'undefined' && IP.ip && IP.ip !== v3IpBefore)) {
+      try { Recaptcha.clearCache?.(); } catch {}
+      body.recaptchaV3Token = await Recaptcha.v3(CREATE_ACTION).catch(() => v3Tok);
+    } else {
+      body.recaptchaV3Token = v3Tok;
+    }
   }
   // 同一个请求（同一条消息 id、同一个 attempt id）自动重发：
   //   409「This chat request is still in progress. Retry the same request.」= 服务器还在处理上一次的同一个请求 → 等一下原样重发，拿到的就是那次的结果；
   //   500 / 502 / 503 / 504、超时、网络断开 → 退避后原样重发（服务器按消息 id 去重，不会多建对话）
-  let res; let att = uuid7(); const t0 = now(); let relog = false, escalated = false, rotated429 = false, n409 = 0, n5xx = 0, nNet = 0;
+  let res; let att = uuid7(); const t0 = now(); let relog = false, escalated = false, retriedFreshV3 = false, rotated429 = false, n409 = 0, n5xx = 0, nNet = 0;
   for (;;) {
     const ctl = new AbortController(), tm = setTimeout(() => ctl.abort(), 45000);
     let err = null;
@@ -5117,7 +5318,13 @@ async function createChat0(text, opt = {}) {
     const left = 150000 - (now() - t0);
     if (err) {
       if (typeof AutoRoute !== 'undefined' && AutoRoute.onErrorSwitch) await AutoRoute.onErrorSwitch(err.name === 'AbortError' ? { routeTimeout: true, message: 'create-chat timeout' } : { net: true, message: String(err.message || err) }, 'create-chat').catch(() => null);
-      if (++nNet <= 2 && left > 20000) { opt.onRetry?.('创建对话' + (err.name === 'AbortError' ? '超时' : '网络错误') + '，已秒切备用线路并重发（第 ' + nNet + ' 次）'); await sleep(800 * nNet); continue; }
+      if (++nNet <= 2 && left > 20000) {
+        try { Recaptcha.clearCache?.(); } catch {}
+        if (!opt.v2 && !body.recaptchaV2Token) body.recaptchaV3Token = await Recaptcha.v3(CREATE_ACTION).catch(() => body.recaptchaV3Token);
+        opt.onRetry?.('创建对话' + (err.name === 'AbortError' ? '超时' : '网络错误') + '，已秒切备用线路并重发（第 ' + nNet + ' 次）');
+        await sleep(800 * nNet);
+        continue;
+      }
       throw new Error(err.name === 'AbortError' ? '创建对话超时（45 秒没有响应），请检查代理后重试' : '创建对话失败：' + (err.message || err));
     }
     if (res.status === 401 && !relog) { relog = true; if (await Auth.relogin()) continue; }
@@ -5128,6 +5335,15 @@ async function createChat0(text, opt = {}) {
       const isPf = promptFailed(res.status, tRc);
       const isRc = isPf || (res.status === 403 && /recaptcha|人机|验证失败/i.test(tRc)) || (res.status === 429 && /verification required/i.test(tRc));
       if (isRc) {
+        if (res.status === 403 && !isPf && !retriedFreshV3) {
+          retriedFreshV3 = true;
+          try { Recaptcha.clearCache?.(); } catch {}
+          const freshV3 = await Recaptcha.v3(CREATE_ACTION).catch(() => null);
+          if (freshV3 && freshV3 !== body.recaptchaV3Token) {
+            body.recaptchaV3Token = freshV3;
+            continue;
+          }
+        }
         if (res.status === 403 && !opt.v2) { try { IPRep.note('rc'); } catch {} }
         escalated = true; opt.onRetry?.(isPf ? 'Brana 要求人工验证（重复指令），请完成验证' : 'Brana 要求人工验证（reCAPTCHA），请完成验证');
         const tok = await Recaptcha.v2().catch(() => null);
@@ -5704,8 +5920,13 @@ const History = {
   },
   async remove(id) {
     if(typeof FingerprintBatch!=='undefined'&&FingerprintBatch.owns(id))throw Error('该对话在批量指纹队列中，请先停止测试');
-    const entry=this.byId(id),isEval=Boolean(entry?.type==='evaluation'||entry?.mode==='battle'||entry?.mode==='direct'||Chats.get(id)?.isEvaluation);
-    await api((isEval ? '/api/history/evaluation/' : '/api/chat/') + id, { method: 'DELETE' });
+    const entry=this.byId(id)||(typeof ArchiveHistory!=='undefined'&&ArchiveHistory.byId?.(id))||null;
+    const isEval=Boolean(entry?.type==='evaluation'||entry?.mode==='battle'||entry?.mode==='direct'||Chats.get(id)?.isEvaluation);
+    const delUrl = (isEval ? '/api/history/evaluation/' : '/api/chat/') + id;
+    const altUrl = (isEval ? '/api/chat/' : '/api/history/evaluation/') + id;
+    try { await api(delUrl, { method: 'DELETE' }); }
+    catch (e) { if (e?.status === 404 || e?.status === 400 || e?.status === 405 || e?.status === 422) await api(altUrl, { method: 'DELETE' }).catch(e2 => { if (e2?.status !== 404 && e?.status !== 404) throw e; }); else throw e; }
+    if (false) await api((isEval ? '/api/history/evaluation/' : '/api/chat/') + id, { method: 'DELETE' });
     try { LocalCache.drop([id]); } catch {}
     this.items = this.items.filter(e => e.id !== id); ArchiveHistory.drop([id]); this.bury([id]); this.saveSoon(); Bus.emit('history'); try { if (typeof AcctStats !== 'undefined') AcctStats.report?.(); } catch {}
   },

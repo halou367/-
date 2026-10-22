@@ -985,6 +985,8 @@ body.m.drawer #scrim,body.m:not(.dock-off) #scrim{display:block;position:fixed;i
 body.m.drawer #scrim{z-index:59}
 body.m #sbgrip{display:none}
 body.m .item{padding-top:9px;padding-bottom:9px}.m .item .more{opacity:1}
+body.m .card .more{display:grid;position:static;transform:none;flex:none;order:10;width:26px;height:26px;margin-left:2px;margin-right:-4px;opacity:.78;background:transparent}
+body.m .card:hover .ctime{visibility:visible}
 body.m .burger{display:inline-grid}
 body.m #sbbtn svg{opacity:0}
 body.m #sbbtn{position:relative}

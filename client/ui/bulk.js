@@ -25,11 +25,17 @@ const Bulk = {
     del: { name: '批量删除对话', verb: '删除', store: 'archDelQ', conc: 6, cls: 'del', ic: 'trash',
       req: async id => {
         const e = (typeof History !== 'undefined' && History.byId?.(id)) || (typeof ArchiveHistory !== 'undefined' && ArchiveHistory.byId?.(id));
-        if (e?.type === 'evaluation' || e?.mode === 'battle' || e?.mode === 'direct') {
+        const isEval = Boolean(e?.type === 'evaluation' || e?.mode === 'battle' || e?.mode === 'direct' || (typeof Chats !== 'undefined' && Chats.get?.(id)?.isEvaluation));
+        if (isEval) {
           const r = await rawFetch('/api/history/evaluation/' + encodeURIComponent(id), { method: 'DELETE', credentials: 'same-origin', cache: 'no-store' });
           if (r.ok || r.status === 401 || r.status === 429) return r;
         }
-        return rawFetch('/api/chat/' + encodeURIComponent(id), { method: 'DELETE', credentials: 'same-origin', cache: 'no-store' });
+        const rChat = await rawFetch('/api/chat/' + encodeURIComponent(id), { method: 'DELETE', credentials: 'same-origin', cache: 'no-store' });
+        if (!isEval && (rChat.status === 404 || rChat.status === 400 || rChat.status === 405)) {
+          const rEval = await rawFetch('/api/history/evaluation/' + encodeURIComponent(id), { method: 'DELETE', credentials: 'same-origin', cache: 'no-store' }).catch(() => null);
+          if (rEval && (rEval.ok || rEval.status === 401 || rEval.status === 429)) return rEval;
+        }
+        return rChat;
       } },
   },
   q: {},          // kind → 正在跑的任务
@@ -277,7 +283,7 @@ const Bulk = {
       const got = []; let cursor = '', other = 0;
       for (let i = 0; i < 400 && !sc.stop; i++) {
         const j = await api('/api/history/unified?limit=50&includeArchived=true&archivedOnly=true' + (cursor ? '&cursor=' + encodeURIComponent(cursor) : ''));
-        for (const e of j.entries || []) { if (!(e.archivedAt || e.isArchived)) continue; if (e.type === 'agentic' || e.productMode) got.push({ id: e.id, title: e.title || '' }); else other++; }
+        for (const e of j.entries || []) { if (!(e.archivedAt || e.isArchived)) continue; if (e.type === 'agentic' || e.type === 'evaluation' || e.productMode || e.mode) got.push({ id: e.id, title: e.title || '' }); else other++; }
         sc.set('正在统计已归档的对话… ' + got.length);
         cursor = j.pagination?.hasMore ? j.pagination.cursor : ''; if (!cursor) break;
       }

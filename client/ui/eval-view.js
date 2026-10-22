@@ -631,6 +631,16 @@ const EvalView = {
       els.push(turnEl);
     });
 
+    if (!turns.length) {
+      if (chat.error) {
+        els.push(h('div', { class: 'errbar' }, chat.error, h('span', { class: 'grow' }), h('button', { class: 'btn ghost sm', onclick: () => chat.load(true) }, '重试')));
+      } else if (!chat.loaded || chat.loading) {
+        els.push(h('div', { class: 'loading' }, '加载中…'));
+      } else {
+        els.push(h('div', { class: 'loading dim' }, '暂无消息记录 ', h('button', { class: 'btn ghost sm', onclick: () => chat.load(true) }, '重新加载')));
+      }
+    }
+
     const voteBar = this.renderVoteBar(chat);
     if (voteBar) els.push(voteBar);
 

@@ -109,6 +109,7 @@ const RegionIP = {
             }
           }
           const verified=!IP.err&&IP.at>=at&&IP.loc===a.region&&this.norm(IP.ip)!==oldExit&&this.norm(IP.ip)===this.norm(x.ip);
+          try{if(typeof Chats!=='undefined'&&typeof Chats.onRouteSwitched==='function')Chats.onRouteSwitched();}catch{}
           try{UI.renderAcct?.();Bar.render();}catch{}
           return {ok:true,verified,from:a.proxyIp||'',to:k,ip:IP.ip,region:a.region,message:verified?'已切换到 '+k+' · 出口 '+IP.ip:'新 IP 配置已应用，但实际出口尚未确认，请刷新检查'};
         }
@@ -163,6 +164,7 @@ const RegionIP = {
       if(AutoRoute.adapter&&(UI.host?.account?.routeAuto!==false)!==auto){const r=await AutoRoute.adapter.enabled(auto).catch(e=>({error:describe(e)}));if(!r?.ok)throw Error(r?.error||'自动选路设置未确认');}
       UI.host=await Host.info();v.account=UI.host?.account||v.account;
       await sleep(600);if(IP.polling)await IP.polling;await IP.poll().catch(()=>{});
+      try{if(typeof Chats!=='undefined'&&typeof Chats.onRouteSwitched==='function')Chats.onRouteSwitched();}catch{}
       v.message='已切换为「'+({auto:'自动',node:'节点',proxy:'代理',direct:'直连'}[k])+'」'+(IP.ip&&!IP.err?' · 出口 '+IP.ip:IP.err?' · 出口检测失败：'+IP.err:'');
       try{UI.renderAcct?.();Bar.render();}catch{}
       if(IP.ip&&!IP.err&&typeof UI!=='undefined'&&typeof UI.recoverFromBrowseMode==='function'){void UI.recoverFromBrowseMode();}

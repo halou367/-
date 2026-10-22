@@ -173,8 +173,9 @@ async function _fallbackDirectRisk(qIp, ms = 2800, signal, optV4Host = '') {
     const res = !dc && !isProxy && (/residential|wireless/i.test(String(x.type || '')) || /broadband|telecom|communications|cable|mobile|fpt|kt|korea telecom|ntt|softbank|kddi|gmo internet|comcast|verizon|charter/i.test(org));
     let fs;
     if (isProxy || risk >= 50) fs = Math.max(52, risk || 55);
-    else if (subnetCnt >= 15 || /akile|baxet|dromatics|hostkey|m247|datacamp|contabo/i.test(org)) fs = Math.max(42, Math.min(85, risk + Math.round(subnetCnt * 1.5)));
-    else if (risk === 0 && subnetCnt <= 6) fs = res ? 7 : (dc ? 26 : 14);
+    else if (subnetCnt >= 15 || ((subnetCnt >= 8 || risk >= 25) && /baxet|dromatics|hostkey|m247|datacamp|contabo/i.test(org))) fs = Math.max(42, Math.min(85, risk + Math.round(subnetCnt * 1.5)));
+    else if (risk === 0 && subnetCnt <= 6) fs = res ? 6 : (dc ? 14 : 10);
+    else if (risk < 20 && subnetCnt <= 6) fs = Math.max(16, risk);
     else fs = Math.max(26, risk);
     return { fs: Math.max(0, Math.min(100, Math.round(fs))), ip: qIp, res, bc: subnetCnt >= 12, dc: dc || isProxy, org, real: 1 };
   } catch {

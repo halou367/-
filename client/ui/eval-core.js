@@ -1321,12 +1321,19 @@ const EvalEngine = (() => {
   async function loadChat(chat, force = false) {
     if (!chat || !chat.sid) return;
     if (chat.loaded && !force) return;
+    if (force && chat.loading) {
+      try { chat._loadCtl?.abort(); } catch {}
+      chat.loading = null;
+    }
     if (chat.loading) return chat.loading;
-    initEvalFields(chat);
+    const wasConfirmedEval = Boolean(chat.isEvaluation || isEvalChat(chat));
+    const prevEvalMode = chat.evalMode;
+    if (wasConfirmedEval) initEvalFields(chat);
     chat.loading = (async () => {
       try {
         const data = await fetchEvalSessionData(chat.sid);
         if (!data || typeof data !== 'object') throw new Error('评测对话数据为空');
+        initEvalFields(chat);
         const evalObj = data.evaluation || data.session || data.data || data;
         const modeRaw = evalObj.mode || data.mode || chat.evalMode || 'battle';
         const isDirect = modeRaw === 'direct' || modeRaw === 'direct-battle' || modeRaw === 'side-by-side' || Boolean(evalObj.modelAId && !evalObj.modelBId && modeRaw !== 'battle');
@@ -1526,8 +1533,13 @@ const EvalEngine = (() => {
           void hydrateChatWebDev(chat);
         }
       } catch (e) {
-        chat.error = '加载评测对话失败：' + (e?.message || e);
-        chat.emit();
+        if (!wasConfirmedEval && !chat.loaded) {
+          chat.isEvaluation = false;
+          chat.evalMode = prevEvalMode || null;
+        } else {
+          chat.error = '加载评测对话失败：' + (e?.message || e);
+          chat.emit();
+        }
         throw e;
       } finally {
         chat.loading = null;
@@ -2258,11 +2270,17 @@ const EvalEngine = (() => {
         ? IPRep.ensurePreSendPure({ timeoutMs: 1200 }).catch(() => null)
         : Promise.resolve(null);
       if (!v2Token && typeof Recaptcha !== 'undefined') {
-        const [tok] = await Promise.all([
+        const v3IpBefore = (typeof IP !== 'undefined' && IP.ip) || '';
+        const [tok, prePure] = await Promise.all([
           (Recaptcha.take ? Recaptcha.take(rcAction) : Recaptcha.v3(rcAction)).catch(() => null),
           prePureTask,
         ]);
-        v3Token = tok;
+        if (prePure?.switched || (v3IpBefore && typeof IP !== 'undefined' && IP.ip && IP.ip !== v3IpBefore)) {
+          try { Recaptcha.clearCache?.(); } catch {}
+          v3Token = await Recaptcha.v3(rcAction).catch(() => tok);
+        } else {
+          v3Token = tok;
+        }
       } else {
         await prePureTask;
       }
@@ -2979,11 +2997,17 @@ const EvalEngine = (() => {
         ? IPRep.ensurePreSendPure({ timeoutMs: 1200 }).catch(() => null)
         : Promise.resolve(null);
       if (typeof Recaptcha !== 'undefined') {
-        const [tok] = await Promise.all([
+        const v3IpBefore = (typeof IP !== 'undefined' && IP.ip) || '';
+        const [tok, prePure] = await Promise.all([
           typeof Recaptcha.take === 'function' ? Recaptcha.take('chat_retry') : Recaptcha.v3('chat_retry'),
           prePureTask,
         ]);
-        v3Token = tok;
+        if (prePure?.switched || (v3IpBefore && typeof IP !== 'undefined' && IP.ip && IP.ip !== v3IpBefore)) {
+          try { Recaptcha.clearCache?.(); } catch {}
+          v3Token = await Recaptcha.v3('chat_retry').catch(() => tok);
+        } else {
+          v3Token = tok;
+        }
       } else {
         await prePureTask;
       }

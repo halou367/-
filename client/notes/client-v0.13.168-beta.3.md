@@ -1,0 +1,13 @@
+## Brana AI v0.13.168-beta.3
+
+- **修复切换节点后发送前显示「纯净」、一按发送立刻报「纯净度不足」并再次跳变的问题**：
+  - 根因 1（reCAPTCHA v3 预热令牌跨节点复用）：输入框打字时 `Recaptcha.warm('chat_submit')` 提前向旧节点出口 IP 申请并缓存了 v3 令牌（100 秒有效期）；当用户切换节点/ProxyIP 后立即发送，或 `ensurePreSendPure` / `AutoRoute.onErrorSwitch` 发生线路切换时，请求仍携带绑定旧出口 IP 的 v3 令牌提交，触发服务端 `403 recaptcha validation failed`，进而误触发 `IPRep.note('rc')`（扣减 30 分并拉黑刚换好的纯净节点）。
+  - 根因 2（切换节点后旧 `IP.ip` / `IP.checkedAt` 残留污染与配额兜底误判）：`NodeRoutes.check()` 切换成功后仅置 `IP.at = 0` 而未立即同步 `IP.ip = r.ip` 与 `r.pure`/`r.ipa`，导致 `ensurePreSendPure` 按 `Math.max(IP.checkedAt, IP.at)` 误把旧节点的脏出口 IP 写回新 ProxyIP（`d.ips[k].eg = liveIp`）；同时当 `api.123169.xyz` 满每日配额回退到 `_fallbackDirectRisk`（及安卓 `RouteSupport.purityDirect`）时，将 `risk === 0` 的零风险机房 IP 统一赋为 `fs = 26`（`99 - 26 = 73 < 75` 纯净线）并无条件重罚 `AkileCloud`，导致发送瞬间跌破 75 分触发自动拉黑换线。
+  - 修复：`Recaptcha` 缓存池绑定当前路由指纹（`ip|proxy|proxyIp|nodeId`）并提供 `Recaptcha.clearCache()`，在切换节点/ProxyIP、发送前预检换线、超时换线时自动清空并重签当前出口的新 v3 令牌，且首次遇到 `403 recaptcha` 时先用新 v3 令牌静默重试一次，不再误扣新节点纯净分；`NodeRoutes.check()` 立即同步 `IP.ip = r.ip`、`IP.checkedAt = now()` 并持久化 `r.pure`/`r.ipa`；`ensurePreSendPure` 尊重手动选路锁定窗口（`AutoRoute.manualLockUntil`）；`_fallbackDirectRisk` 与安卓 `RouteSupport.java` 对 `proxycheck.io` 实测 `risk === 0 && subnetCnt <= 6` 的零风险出口赋予准确风险值（`fs = 14`，85 分纯净）。
+- **修复大上下文对话及发消息中途切换节点时特定对话变空白或一直卡「加载中…」的问题（PC + 手机双端）**：
+  - 根因 1（`_mdEl: {}` DOM 序列化崩溃）：`R.text` 将 DOM 节点挂载到 `p._mdEl = d`，经 IndexedDB / `localStorage` 反序列化后变为 `{}`，触发 `patchKids` 抛出 `TypeError: Failed to execute 'insertBefore' on 'Node'`（PC 日志累计 1,946 次）。
+  - 根因 2（未加载完成时发送消息 `_held` 导致空白 & 旧代理挂起请求不中断）：对话未加载完即发送时 `msg._held = true` 使 `chat.messages.length === 1`，`UI.renderChat` 跳过 `!chat.loaded && !chat.messages.length` 分支但又过滤掉 `_held` 消息，渲染空数组 `els = []`（整页空白）；同时切换节点时挂在旧死节点上的 `chat.loading` 请求未中断（最长卡 35s+45s+90s），且 404 回退 `EvalEngine.loadChat` 在确认评测数据前提前将 `chat.isEvaluation = true` 置位导致普通对话误入空 Battle 视图。
+  - 修复：`R.text` / `R.tinput` 改用 `WeakMap` 缓存并自动清理残留 `_mdEl`/`_mdSrc`，`patchKids` 与 `Seg` 严格校验 `nodeType`；新增 `Chats.onRouteSwitched()` 在切换节点/IP 时立即 `abort()` 旧线路上挂起的 `chat._loadCtl` 请求并在新节点上重连加载与流式通道；`UI.renderChat` 与 `EvalView.renderBattleThread` 按可见消息（排除 `_held`）判定加载态并提供慢加载「重新连接」与空消息「重新加载」兜底；`EvalEngine.loadChat` 仅在确认返回有效评测数据后才置 `chat.isEvaluation = true`。
+- **修复手机端无法删除对话的问题**：
+  - 根因：移动端样式仅保留了旧类名 `.m .item .more{opacity:1}`，而卡片重构为 `.card` 后 `.card .more` 默认为 `display:none`，导致手机端侧栏所有对话卡片均不显示 `⋯` 更多菜单按钮；长按卡片弹出菜单时手指抬起合成的 `click` 事件会立即触发 `document` 点击外部关闭菜单并打开对话；同时 `History.remove` 未在 `/api/chat/:id` 与 `/api/history/evaluation/:id` 之间双向兜底。
+  - 修复：手机端（`body.m`）侧栏对话卡片常显右侧 `⋯` 按钮（`.card .more`），同时支持触摸长按（460ms 震动反馈 + `_menuOpenAt` 屏蔽抬手合成 `click`）与手机多窗口切换器（`TabSw`）卡片顶栏一键删除按钮；`History.remove`、单个删除 `deleteChat` 与批量删除 `Bulk` 支持普通对话与 Battle/Direct 评测对话双接口自动回退及离线后台删除队列兜底。
