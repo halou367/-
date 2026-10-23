@@ -486,7 +486,7 @@ test('v0.13.158: halou367 update worker repo, send-message timeout fix, >2 netwo
   assert.ok(coreSrc.includes("const j = await api('/api/chat/' + this.sid, { timeout: 6000, bg: true })"));
   assert.ok(!coreSrc.includes('this._preSendNetErr = e;'));
   assert.ok(coreSrc.includes('this.drain(900)'));
-  assert.ok(coreSrc.includes('}, 25000);'));
+  assert.ok(coreSrc.includes('}, 25000);') || coreSrc.includes('const minAge = msg?._queued ? 18000 : 25000;'));
 
   // 3) >2 network errors selects global lowest-latency available pure IP, and failed/impure IPs are permanently banned
   assert.ok(poolSrc.includes('banForever(d, k, why = \'\')'));

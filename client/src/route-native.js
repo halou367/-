@@ -17,7 +17,12 @@ function blocked(response) {
 // IPPure 官方直连 HTTP/2 接口（api.123169.xyz / api.ippure.com）：直接按目标出口 IP 查询纯净度与原生/广播/家宽属性（0 节点请求量）
 const _h2Sessions = new Map();
 const _inFlightPure = new Map();
-let _h2QuotaExhaustedUntil = 0;
+let _h2BasicExhaustedUntil = 0;
+let _h2RiskExhaustedUntil = 0;
+let _pcExhaustedUntil = 0;
+const HOSTING_ORG_RE = /akile|baxet|dromatics|hostkey|cloudflare|oracle|amazon|aws|google|microsoft|azure|linode|akamai|vultr|digitalocean|hetzner|ovh|choopa|constant company|datacamp|contabo|zenlayer|cogent|hurricane|m247|aceville|\bace\b|datawave|yeahtech|yeah\s*tech|ipxo|sondercloud|netcup|a2b|gcore|ufovps|packethub|psychz|sharktech|quadranet|colocrossing|frantech|buyvm|worldstream|cherry\s*servers|latitude|equinix|kamatera|upcloud|scaleway|leaseweb|ionos|fornex|kagoya|webhorizon|timeweb|racknerd|alphavps|gthost|365\.partners|global connectivity|nsc-solutions|ibcs|fbw networks|velia\.net|iphoster|cgi global|virtua systems|3nt solutions|bzsolutions|baykov|netrouting|alice networks|netranex|chsl one|beafort|hosting|hoster|datacenter|data\s*center|server|vps|cloud|colocation|dedicated/i;
+const TELECOM_ORG_RE = /\b(?:free sas|proxad|orange|wanadoo|sfr|bouygues|deutsche telekom|vodafone|british telecommunications|\bbt\b|virgin media|sky uk|talktalk|comcast|xfinity|verizon|at&t|charter|spectrum|cox communications|centurylink|lumen|frontier|bell canada|rogers|telus|shaw|ntt|ocn|kddi|au one|softbank|bbtec|nuro|so-net|korea telecom|\bkt\b|sk broadband|lg uplus|chunghwa|hinet|taiwan mobile|far easitone|pccw|hkt|hkbn|smartone|singtel|starhub|m1 limited|telstra|optus|tpg|spark nz|kpn|ziggo|proximus|telenet|swisscom|sunrise|a1 telekom|telia|telenor|elisa|dna oy|movistar|telefonica|masmovil|digi spain|telecom italia|\btim\b|fastweb|wind tre|meo|nos comunica|ote|cosmote|turk telekom|turkcell|beeline|mts|megafon|rostelecom|kyivstar|ukrtelecom|polkomtel|vectra|netia|upc|o2|three|ee limited)\b/i;
+
 function _getH2Session(host) {
   const http2 = require('node:http2');
   let entry = _h2Sessions.get(host);
@@ -30,8 +35,51 @@ function _getH2Session(host) {
   _h2Sessions.set(host, entry);
   return entry;
 }
+
+async function _scamalyticsDirect(qIp, ms = 2600, signal, optV4Host = '') {
+  if (typeof fetch !== 'function') return null;
+  const target = (qIp.includes(':') && optV4Host && /^\d{1,3}(?:\.\d{1,3}){3}$/.test(optV4Host)) ? optV4Host : qIp;
+  const ctl = new AbortController(), tm = setTimeout(() => ctl.abort(), Math.max(1200, ms));
+  const abort = () => ctl.abort(); if (signal?.aborted) abort(); else signal?.addEventListener('abort', abort, { once: true });
+  try {
+    const r = await fetch('https://scamalytics.com/ip/' + encodeURIComponent(target), {
+      method: 'GET',
+      signal: ctl.signal,
+      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36' },
+    });
+    if (!r.ok) return null;
+    const html = (await r.text()).slice(0, 48000);
+    const scoreM = /"score"\s*:\s*"(\d+)"/i.exec(html) || /Fraud Score:\s*(\d+)/i.exec(html);
+    if (!scoreM) return null;
+    const scScore = Math.max(0, Math.min(100, parseInt(scoreM[1], 10)));
+    const kv = {};
+    for (const m of html.matchAll(/<th[^>]*>([\s\S]*?)<\/th>\s*<td[^>]*>([\s\S]*?)<\/td>/gi)) {
+      const k = m[1].replace(/<div[^>]*>[\s\S]*?<\/div>/gi, '').replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim();
+      const v = m[2].replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim();
+      if (k && v) kv[k] = v;
+    }
+    const org = String(kv['ISP Name'] || kv['Organization Name'] || '').slice(0, 40);
+    const host = String(kv['Hostname'] || '').toLowerCase();
+    const isServer = /^yes$/i.test(kv['Server'] || '');
+    const isDc = /^yes$/i.test(kv['Datacenter'] || '') || isServer || HOSTING_ORG_RE.test(org) || /(?:\.vsys\.cloud|\.console\.lat|\.ip-ptr\.tech|\.ibcs|\.ovh\.|\.hetzner\.|\.vultr\.|\.linode\.|\.contabo\.|\.scaleway\.|\.gthost\.|\.leaseweb\.)/i.test(host);
+    const isVpn = /^yes$/i.test(kv['Anonymizing VPN'] || '') || /^yes$/i.test(kv['Tor Exit Node'] || '') || /^yes$/i.test(kv['Public Proxy'] || '') || /^yes$/i.test(kv['Web Proxy'] || '');
+    const isResProxy = /^yes$/i.test(kv['Residential Proxy'] || '');
+    const blCount = ['Firehol', 'IP2ProxyLite', 'IPsum', 'Spamhaus', 'X4Bnet Spambot'].filter(k => /^yes$/i.test(kv[k] || '')).length;
+    const isSubHost = /(?:\.subs\.proxad\.net|\.abo\.wanadoo\.fr|\.rev\.sfr\.net|\.bbox\.fr|\.t-ipconnect\.de|\.hsd1\.|\.cable\.|\.dsl\.|\.ftth\.|\.dynamic\.)/i.test(host);
+    const res = Boolean(!isDc && !isVpn && !isResProxy && (isSubHost || TELECOM_ORG_RE.test(org)));
+    return { scScore, org, host, isServer, isDc, isVpn, isResProxy, blCount, res };
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(tm);
+    signal?.removeEventListener('abort', abort);
+  }
+}
+
 async function _ippureH2Host(host, qIp, ms = 3200, signal, optV4Host = '') {
-  if (Date.now() < _h2QuotaExhaustedUntil) return null;
+  const skipBasic = Date.now() < _h2BasicExhaustedUntil;
+  const skipRisk = Date.now() < _h2RiskExhaustedUntil;
+  if (skipBasic && skipRisk) return null;
   const crypto = require('node:crypto');
   const entry = _getH2Session(host);
   const h2Get = (p, extra = {}) => new Promise((res, rej) => {
@@ -94,7 +142,7 @@ async function _ippureH2Host(host, qIp, ms = 3200, signal, optV4Host = '') {
       await entry.handshake;
     }
     if (!entry.xk) return null;
-    for (let attempt = 0; attempt < 2; attempt++) {
+    for (let attempt = 0; attempt < 3; attempt++) {
       const t = Date.now() - (entry.lt || Date.now()) + (entry.xt || Date.now());
       const sig = crypto.createHmac('sha256', entry.xk).update(['GET', 'https://' + host + p, '', t].join('-')).digest('hex');
       const r = await h2Get(p, { 'x-k': entry.xk, 'x-t': t + '-' + sig });
@@ -106,41 +154,69 @@ async function _ippureH2Host(host, qIp, ms = 3200, signal, optV4Host = '') {
   const encIp = encodeURIComponent(qIp);
   const isV4 = /^\d{1,3}(?:\.\d{1,3}){3}$/.test(qIp);
   const v4Fallback = (!isV4 && optV4Host && /^\d{1,3}(?:\.\d{1,3}){3}$/.test(optV4Host)) ? optV4Host : '';
+  const riskTarget = isV4 ? encIp : (v4Fallback ? encodeURIComponent(v4Fallback) : '');
   const [basicRes, riskRes] = await Promise.all([
-    callSigned('/api/info/ip-basic/' + encIp),
-    isV4
-      ? callSigned('/api/info/ip-risk/' + encIp).catch(() => null)
-      : (v4Fallback ? callSigned('/api/info/ip-risk/' + encodeURIComponent(v4Fallback)).catch(() => null) : Promise.resolve(null)),
+    skipBasic ? Promise.resolve(null) : callSigned('/api/info/ip-basic/' + encIp).catch(() => null),
+    (skipRisk || !riskTarget) ? Promise.resolve(null) : callSigned('/api/info/ip-risk/' + riskTarget).catch(() => null),
   ]);
-  if (!basicRes?.text) return null;
-  const bJson = JSON.parse(basicRes.text.slice(0, 20000));
+  const bJson = basicRes?.text ? (() => { try { return JSON.parse(basicRes.text.slice(0, 20000)); } catch { return null; } })() : null;
   const rJson = riskRes?.text ? (() => { try { return JSON.parse(riskRes.text.slice(0, 8000)); } catch { return null; } })() : null;
-  if (/quota is exhausted/i.test(String(bJson?.message || rJson?.message || ''))) {
-    _h2QuotaExhaustedUntil = Date.now() + 3600_000;
-    return null;
+  if (/quota is exhausted/i.test(String(bJson?.message || ''))) {
+    _h2BasicExhaustedUntil = Date.now() + 3600_000;
   }
-  if (!bJson?.ok || !bJson?.data) return null;
-  const d = bJson.data;
-  const ip = String(d.ip || qIp).slice(0, 64);
-  const org = String(d.asn?.organization || '').slice(0, 40);
-  const asnType = String(d.asn?.type || '').toLowerCase();
-  const dc = asnType ? /hosting|datacenter|cloud/i.test(asnType) : (d.asn?.is_residential === false && /akile|baxet|dromatics|cloudflare|oracle|amazon|google|microsoft|linode|akamai|vultr|digitalocean|hetzner|ovh|choopa|datacamp|contabo|zenlayer|cogent|hurricane|hosting|datacenter|cloud|vps|server/i.test(org));
-  const res = d.asn?.is_residential !== undefined ? !!d.asn.is_residential : (!dc && /broadband|telecom|communications|cable|mobile|fpt|kt|ntt|softbank|kddi|comcast|verizon|charter/i.test(org));
-  const bc = !!d.traits?.is_broadcast;
+  if (/quota is exhausted/i.test(String(rJson?.message || ''))) {
+    _h2RiskExhaustedUntil = Date.now() + 1800_000;
+  }
   let fs = Number(rJson?.data?.risk_score);
-  if ((isV4 || v4Fallback) && !Number.isFinite(fs)) {
-    const retryTarget = isV4 ? encIp : encodeURIComponent(v4Fallback);
-    const retryRisk = await callSigned('/api/info/ip-risk/' + retryTarget).catch(() => null);
-    const retryJson = retryRisk?.text ? (() => { try { return JSON.parse(retryRisk.text.slice(0, 8000)); } catch { return null; } })() : null;
-    fs = Number(retryJson?.data?.risk_score);
-    if (isV4 && !Number.isFinite(fs)) return null;
+  if (isV4 && !Number.isFinite(fs)) {
+    if (!skipRisk && !/quota is exhausted/i.test(String(rJson?.message || ''))) {
+      const retryRisk = await callSigned('/api/info/ip-risk/' + riskTarget).catch(() => null);
+      const retryJson = retryRisk?.text ? (() => { try { return JSON.parse(retryRisk.text.slice(0, 8000)); } catch { return null; } })() : null;
+      if (/quota is exhausted/i.test(String(retryJson?.message || ''))) _h2RiskExhaustedUntil = Date.now() + 1800_000;
+      fs = Number(retryJson?.data?.risk_score);
+    }
   }
+  const hasBasic = Boolean(bJson?.ok && bJson?.data);
   const hasRealRisk = Number.isFinite(fs);
-  if (!hasRealRisk) {
-    if (res && !dc && !bc) fs = 10;
-    else fs = (dc && bc) ? 35 : 28;
+  if (!hasBasic && !hasRealRisk) return null;
+
+  let ip = qIp, org = '', dc = false, res = false, bc = false;
+  if (hasBasic) {
+    const d = bJson.data;
+    ip = String(d.ip || qIp).slice(0, 64);
+    org = String(d.asn?.organization || '').slice(0, 40);
+    const asnType = String(d.asn?.type || '').toLowerCase();
+    dc = asnType ? /hosting|datacenter|cloud/i.test(asnType) : Boolean((d.asn?.is_residential === false && HOSTING_ORG_RE.test(org)) || HOSTING_ORG_RE.test(org));
+    res = d.asn?.is_residential !== undefined ? Boolean(d.asn.is_residential && !dc) : (!dc && TELECOM_ORG_RE.test(org));
+    bc = !!d.traits?.is_broadcast;
+  } else {
+    const sc = await _scamalyticsDirect(qIp, Math.min(2200, ms), signal, v4Fallback).catch(() => null);
+    if (sc) {
+      org = sc.org || '';
+      dc = Boolean(sc.isDc || sc.isServer || HOSTING_ORG_RE.test(org));
+      bc = Boolean(sc.isResProxy || sc.blCount > 0);
+      res = Boolean(sc.res && !dc && !bc && fs < 25);
+    } else {
+      dc = fs >= 25;
+      res = fs <= 12;
+    }
   }
-  return { fs: Math.max(0, Math.min(100, Math.round(fs))), ip, res, bc, dc, org, ...(hasRealRisk ? { real: 1 } : {}) };
+  if (hasRealRisk) {
+    return { fs: Math.max(0, Math.min(100, Math.round(fs))), ip, res: Boolean(res && !dc && !bc), bc, dc, org, real: 1, via: 'ippure' };
+  }
+  const fb = await _fallbackDirectRisk(qIp, Math.min(2400, ms), signal, v4Fallback).catch(() => null);
+  if (fb) {
+    return {
+      ...fb,
+      ip,
+      org: org || fb.org || '',
+      dc: Boolean(dc || fb.dc),
+      bc: Boolean(bc || fb.bc),
+      res: Boolean(res && fb.res && !dc && !fb.dc && !bc && !fb.bc),
+    };
+  }
+  fs = (dc && bc) ? 35 : dc ? 24 : res ? 8 : 18;
+  return { fs, ip, res: Boolean(res && !dc && !bc), bc, dc, org, basicOnly: 1 };
 }
 function isReservedOrFixtureTarget(s, allowTestNet = false) {
   const h = String(s || '').trim().replace(/^\[|\]$/g, '').replace(/:\d{1,5}$/, '');
@@ -153,37 +229,80 @@ function isReservedOrFixtureTarget(s, allowTestNet = false) {
 async function _fallbackDirectRisk(qIp, ms = 2800, signal, optV4Host = '') {
   if (typeof fetch !== 'function') return null;
   const target = (qIp.includes(':') && optV4Host && /^\d{1,3}(?:\.\d{1,3}){3}$/.test(optV4Host)) ? optV4Host : qIp;
-  const ctl = new AbortController(), tm = setTimeout(() => ctl.abort(), Math.max(1200, ms));
-  const abort = () => ctl.abort(); if (signal?.aborted) abort(); else signal?.addEventListener('abort', abort, { once: true });
-  try {
-    const r = await fetch('https://proxycheck.io/v2/' + encodeURIComponent(target) + '?vpn=1&asn=1&risk=1', {
-      method: 'GET',
-      signal: ctl.signal,
-      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
-    });
-    if (!r.ok) return null;
-    const j = JSON.parse((await r.text()).slice(0, 16000));
-    const x = j?.[target];
-    if (!x || typeof x !== 'object') return null;
-    const org = String(x.provider || x.organisation || '').slice(0, 40);
-    const risk = Math.max(0, Math.min(100, +x.risk || 0));
-    const isProxy = x.proxy === 'yes' || /vpn|tor|proxy/i.test(String(x.type || ''));
-    const subnetCnt = +x.devices?.subnet || 0;
-    const dc = /hosting|datacenter|cloud/i.test(String(x.type || '')) || /akile|baxet|dromatics|hostkey|cloudflare|oracle|amazon|google|microsoft|linode|akamai|vultr|digitalocean|hetzner|ovh|choopa|datacamp|contabo|zenlayer|cogent|hurricane|m247|server|vps|cloud/i.test(org);
-    const res = !dc && !isProxy && (/residential|wireless/i.test(String(x.type || '')) || /broadband|telecom|communications|cable|mobile|fpt|kt|korea telecom|ntt|softbank|kddi|gmo internet|comcast|verizon|charter/i.test(org));
-    let fs;
-    if (isProxy || risk >= 50) fs = Math.max(52, risk || 55);
-    else if (subnetCnt >= 15 || ((subnetCnt >= 8 || risk >= 25) && /baxet|dromatics|hostkey|m247|datacamp|contabo/i.test(org))) fs = Math.max(42, Math.min(85, risk + Math.round(subnetCnt * 1.5)));
+  const fetchPc = async () => {
+    if (Date.now() < _pcExhaustedUntil) return null;
+    const ctl = new AbortController(), tm = setTimeout(() => ctl.abort(), Math.max(1200, ms));
+    const abort = () => ctl.abort(); if (signal?.aborted) abort(); else signal?.addEventListener('abort', abort, { once: true });
+    try {
+      const r = await fetch('https://proxycheck.io/v2/' + encodeURIComponent(target) + '?vpn=1&asn=1&risk=1', {
+        method: 'GET',
+        signal: ctl.signal,
+        headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
+      });
+      if (!r.ok) return null;
+      const j = JSON.parse((await r.text()).slice(0, 16000));
+      if (j && (j.status === 'denied' || j.status === 'error')) {
+        _pcExhaustedUntil = Date.now() + 1800_000;
+        return null;
+      }
+      return j?.[target] && typeof j[target] === 'object' ? j[target] : null;
+    } catch {
+      return null;
+    } finally {
+      clearTimeout(tm);
+      signal?.removeEventListener('abort', abort);
+    }
+  };
+  const [sc, x] = await Promise.all([
+    _scamalyticsDirect(qIp, ms, signal, optV4Host).catch(() => null),
+    fetchPc(),
+  ]);
+  if (!sc && !x) return null;
+  const org = String(sc?.org || x?.provider || x?.organisation || '').slice(0, 40);
+  const pcRisk = x ? Math.max(0, Math.min(100, +x.risk || 0)) : 0;
+  const pcProxy = Boolean(x && (x.proxy === 'yes' || /vpn|tor|proxy/i.test(String(x.type || ''))));
+  const pcRes = Boolean(x && !pcProxy && /residential|wireless/i.test(String(x.type || '')));
+  const subnetCnt = +x?.devices?.subnet || 0;
+  const scScore = sc ? sc.scScore : 0;
+  const isVpn = Boolean(sc?.isVpn || pcProxy);
+  const isDc = Boolean(sc?.isDc || sc?.isServer || (x && /hosting|datacenter|cloud/i.test(String(x.type || ''))) || HOSTING_ORG_RE.test(org));
+  const isRes = Boolean(!isDc && !isVpn && !sc?.isResProxy && (sc?.res || pcRes || TELECOM_ORG_RE.test(org)));
+  const blCount = sc?.blCount || 0;
+  const bc = Boolean(sc?.isResProxy || blCount > 0 || (!isRes && isDc && subnetCnt >= 15));
+
+  // Stable 0..6 per-IP micro-offset so distinct datacenter IPs in the same ASN differentiate naturally when raw score is 0
+  const ipHash = target.split(/[.:]/).reduce((acc, part) => (acc * 31 + (parseInt(part, 10) || 0)) % 97, 0);
+  const dcSpread = ipHash % 7;
+
+  const risk = pcRisk, px = pcProxy, res = isRes, dc = isDc;
+  let fs;
+  if (!sc) {
+    if (risk > 0) fs = Math.max(risk, px ? 35 : 0);
+    else if (px) fs = 28;
     else if (risk === 0 && subnetCnt <= 6) fs = res ? 6 : (dc ? 14 : 10);
-    else if (risk < 20 && subnetCnt <= 6) fs = Math.max(16, risk);
-    else fs = Math.max(26, risk);
-    return { fs: Math.max(0, Math.min(100, Math.round(fs))), ip: qIp, res, bc: subnetCnt >= 12, dc: dc || isProxy, org, real: 1 };
-  } catch {
-    return null;
-  } finally {
-    clearTimeout(tm);
-    signal?.removeEventListener('abort', abort);
+    else fs = res ? 8 : (dc ? 16 : 12);
+  } else if (isVpn || scScore >= 50 || pcRisk >= 50 || blCount >= 2) {
+    fs = Math.max(52, scScore, pcRisk, 46 + blCount * 12);
+  } else if (isDc) {
+    const rawRisk = Math.max(scScore, Math.round(pcRisk * 0.8));
+    fs = Math.max(12 + dcSpread, Math.min(48, 12 + Math.round(rawRisk * 0.75) + blCount * 10 + (bc ? 6 : 0) + (rawRisk === 0 ? dcSpread : 0)));
+  } else if (isRes) {
+    const rawRisk = Math.max(scScore, Math.round(pcRisk * 0.5));
+    fs = Math.max(1, Math.min(18, rawRisk || (1 + (ipHash % 4))));
+  } else {
+    const rawRisk = Math.max(scScore, pcRisk);
+    fs = Math.max(8 + (ipHash % 5), Math.min(45, 10 + Math.round(rawRisk * 0.7)));
   }
+  return {
+    fs: Math.max(0, Math.min(100, Math.round(fs))),
+    ip: qIp,
+    res: isRes,
+    bc,
+    dc: isDc || isVpn,
+    org,
+    real: 1,
+    via: sc ? 'scamalytics' : 'proxycheck',
+  };
 }
 async function ippureDirect(targetIp, ms = 3200, signal, opt = null) {
   const qIp = String(targetIp || '').trim().replace(/^\[|\]$/g, '');
@@ -222,7 +341,7 @@ async function ippure(ses, ms=3200, signal) {
       if(!ip||!ip.includes(':'))return null;
       fs=(j?.isResidential===true&&!j?.isDataCenter&&!j?.isBroadcast)?10:28;
     }
-    return {fs:Math.max(0,Math.min(100,Math.round(fs))),ip,res:j?.isResidential!==undefined?!!j.isResidential:/broadband|telecom|communications|cable|mobile|fpt|kt|ntt|softbank|kddi|comcast|verizon|charter/i.test(org),bc:!!j?.isBroadcast,dc:!!j?.isDataCenter,org,...(hasReal?{real:1}:{})}; }
+    return {fs:Math.max(0,Math.min(100,Math.round(fs))),ip,res:j?.isResidential!==undefined?!!j.isResidential:/broadband|telecom|communications|cable|mobile|fpt|kt|ntt|softbank|kddi|comcast|verizon|charter/i.test(org),bc:!!j?.isBroadcast,dc:!!j?.isDataCenter,org,...(hasReal?{real:1,via:'ippure'}:{})}; }
   catch { return null; } finally { clearTimeout(t);signal?.removeEventListener('abort',abort); }
 }
 // ip-api（经隧道或按已实测出口 IP 查询）：是否代理 / 机房 / 移动网络，免费不限每日次数 —— 和 IPPure 一起测，保证测延迟时就评出纯净度
@@ -258,25 +377,34 @@ async function purity(ses, ms=3200, signal, targetIp='', opt=null) {
   const qIp=String(targetIp||'').trim();
   const rep=(typeof opt?.getCachedRep==='function'&&qIp)?opt.getCachedRep(qIp):(opt?.cachedRep||null);
   const nowMs=Date.now();
-  const isSuspectFallbackPu=Boolean(rep?.pu&&!rep.pu.real&&[8,12,15,16,22].includes(+rep.pu.fs)&&(qIp.includes(':')||rep.h||rep.px||rep.pu.dc));
-  const cachedPu=(qIp&&rep?.pu&&Number.isFinite(+rep.pu.fs)&&!isSuspectFallbackPu&&(nowMs-(+rep.pu.at||0)<7*86400e3))
-    ?{ip:qIp,fs:+rep.pu.fs,res:!!rep.pu.res,bc:!!rep.pu.bc,dc:!!rep.pu.dc,org:String(rep.pu.org||''),...(rep.pu.real?{real:1}:{})}
+  const isSuspectFallbackPu=Boolean(rep?.pu&&(rep.pu.basicOnly||!rep.pu.via||(!rep.pu.real&&[8,12,15,16,22,28,35].includes(+rep.pu.fs))||(rep.px&&+rep.pu.fs<35)||((+rep.r>=35)&&+rep.pu.fs<35)||(rep.pu.via==='scamalytics'&&rep.pu.res&&!TELECOM_ORG_RE.test((rep.pu.org||'')+' '+(rep.isp||'')))));
+  const cachedPu=(!opt?.forcePurity&&qIp&&rep?.pu&&Number.isFinite(+rep.pu.fs)&&!isSuspectFallbackPu&&(nowMs-(+rep.pu.at||0)<7*86400e3))
+    ?{ip:qIp,fs:+rep.pu.fs,res:!!rep.pu.res,bc:!!rep.pu.bc,dc:!!rep.pu.dc,org:String(rep.pu.org||''),...(rep.pu.real?{real:1}:{}),...(rep.pu.via?{via:rep.pu.via}:{})}
     :null;
   const cachedIpa=(qIp&&rep?.a&&(nowMs-(+rep.a||0)<7*86400e3))
     ?{ip:qIp,h:!!rep.h,px:!!rep.px,m:!!rep.m,isp:String(rep.isp||''),as:String(rep.as||'')}
     :null;
   const fetchPure=async()=>{
-    if(cachedPu)return cachedPu;
+    if(cachedPu&&(cachedPu.via==='ippure'||cachedPu.fs>=50||(!ses&&cachedPu.via==='scamalytics')))return cachedPu;
+    let dp=null;
     if(qIp&&(opt?.directIppure===true||!ses)){
-      const dp=await ippureDirect(qIp,ms,signal,opt);
-      if(dp)return dp;
+      dp=await ippureDirect(qIp,ms,signal,opt);
+      if(dp&&(dp.via==='ippure'||dp.fs>=50||!ses))return dp;
     }
-    return ses?await ippure(ses,ms,signal):null;
+    if(ses){
+      const tunPu=await ippure(ses,ms,signal);
+      if(tunPu)return tunPu;
+    }
+    return dp||cachedPu||null;
   };
   let [pure,ipa]=await Promise.all([
     fetchPure(),
     cachedIpa?Promise.resolve(cachedIpa):ipapi(ses,ms,signal,targetIp,opt?.directFetch||null),
   ]);
+  if(pure&&ipa&&pure.via!=='ippure'){
+    if(ipa.px){pure={...pure,dc:true,res:false,fs:Math.max(+pure.fs||0,42)};}
+    else if(ipa.h&&!pure.dc){pure={...pure,dc:true,res:false,fs:Math.max(+pure.fs||0,15)};}
+  }
   const cmExit=opt?.cmliuExit||null;
   if(!ipa&&qIp&&cmExit&&(cmExit.asOrganization||cmExit.org||cmExit.asn)){
     const orgStr=String(cmExit.asOrganization||cmExit.org||'').replace(/^AS\d+\s+/i,'').trim().slice(0,40);

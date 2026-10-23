@@ -19,7 +19,9 @@
     } catch { return null; }
   };
   if (typeof window === 'undefined') { if (typeof module === 'object' && module.exports) module.exports = { norm }; return; }
-  if (window.__ancWebbar || window.top !== window) return;
+  if (window.top !== window) return;
+  if (window.__ancWebbar && document.getElementById('__anc_webbar')) return;
+  document.getElementById('__anc_webbar')?.remove();
   window.__ancWebbar = true;
   const bottom = window.__ancBarPos === 'bottom';
   const pad = Array.isArray(window.__ancBarPad) ? window.__ancBarPad : [0, 0];
@@ -86,19 +88,20 @@
     for (const [d, tf] of LOGO) { const p = document.createElementNS(NS, 'path'); p.setAttribute('d', d); if (tf) p.setAttribute('transform', tf); p.setAttribute('fill', 'currentColor'); sv.append(p); }
     logo.append(sv); }
   const left=mk('div','bar-left'),right=mk('div','bar-right'),address=mk('div','address-wrap',{title:'空白区域可拖动窗口'});address.append(input);left.append(logo);
-  if(window.BranaBrowser?.bookmarks&&norm(location.href)){const bookmarks=btn('bookmarks','','收藏和书签');{const bsv=document.createElementNS('http://www.w3.org/2000/svg','svg'),bp=document.createElementNS('http://www.w3.org/2000/svg','path');bsv.setAttribute('viewBox','0 0 24 24');bsv.setAttribute('class','wb-ic');bsv.setAttribute('aria-hidden','true');bp.setAttribute('d','M12 2.5l2.9 5.88 6.5.95-4.7 4.58 1.1 6.47L12 17.32l-5.8 3.06 1.1-6.47-4.7-4.58 6.5-.95L12 2.5z');bsv.append(bp);bookmarks.append(bsv);}bookmarks.onclick=()=>void window.BranaBrowser.bookmarks().catch(()=>{});left.append(bookmarks);}
-  if(window.BranaBrowser?.bookmarkPins&&window.BranaBrowser?.bookmarkVisit){
-    const api=window.BranaBrowser,pins=mk('div','bookmark-pins');left.append(pins);
+  const hasDesktopBrowserUi = Boolean(window.BranaBrowser || (!window.BranaAndroid && window.BranaHost?.platform !== 'android'));
+  if((window.BranaBrowser?.bookmarks||hasDesktopBrowserUi)&&norm(location.href)){const bookmarks=btn('bookmarks','','收藏和书签');{const bsv=document.createElementNS('http://www.w3.org/2000/svg','svg'),bp=document.createElementNS('http://www.w3.org/2000/svg','path');bsv.setAttribute('viewBox','0 0 24 24');bsv.setAttribute('class','wb-ic');bsv.setAttribute('aria-hidden','true');bp.setAttribute('d','M12 2.5l2.9 5.88 6.5.95-4.7 4.58 1.1 6.47L12 17.32l-5.8 3.06 1.1-6.47-4.7-4.58 6.5-.95L12 2.5z');bsv.append(bp);bookmarks.append(bsv);}bookmarks.onclick=()=>{const fn=window.BranaBrowser?.bookmarks;if(fn)void fn().catch(()=>{});else location.reload();};left.append(bookmarks);}
+  if((window.BranaBrowser?.bookmarkPins&&window.BranaBrowser?.bookmarkVisit)||hasDesktopBrowserUi){
+    const pins=mk('div','bookmark-pins');left.append(pins);
     const pinStyle=new CSSStyleSheet();pinStyle.replaceSync(`.bookmark-pins{display:flex;align-items:center;gap:2px;min-width:0;max-width:160px;overflow-x:auto;flex:0 1 auto;-webkit-app-region:no-drag}.bookmark-pins:empty{display:none}.bookmark-pins button{display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:600}.bookmark-pins img{width:18px;height:18px;object-fit:contain}.bookmark-pins button:focus-visible{outline:2px solid #4c8bf5;outline-offset:-2px}@media(max-width:1050px){.bookmark-pins{max-width:clamp(26px,calc(100vw - 600px),96px)}}`);root.adoptedStyleSheets=[...root.adoptedStyleSheets,pinStyle];
     let loading=false,last='';
-    const refresh=async()=>{if(loading)return;loading=true;try{const rows=await api.bookmarkPins(),next=JSON.stringify(rows);if(next===last)return;last=next;pins.replaceChildren();for(const row of rows){const b=btn('bookmark-pinned',row.title.slice(0,1),row.title);if(/^data:image\/png;base64,/.test(row.icon||'')){const img=mk('img','',{src:row.icon,alt:''});img.onerror=()=>b.replaceChildren(document.createTextNode(row.title.slice(0,1)));b.replaceChildren(img);}b.onclick=async()=>{b.disabled=true;try{await api.bookmarkVisit(row.id);}catch(error){b.title=error.message||String(error);last='';void refresh();}finally{b.disabled=false;}};pins.append(b);}}catch{last='';}finally{loading=false;}};
+    const refresh=async()=>{const api=window.BranaBrowser;if(loading||!api?.bookmarkPins||!api?.bookmarkVisit)return;loading=true;try{const rows=await api.bookmarkPins(),next=JSON.stringify(rows);if(next===last)return;last=next;pins.replaceChildren();for(const row of rows){const b=btn('bookmark-pinned',row.title.slice(0,1),row.title);if(/^data:image\/png;base64,/.test(row.icon||'')){const img=mk('img','',{src:row.icon,alt:''});img.onerror=()=>b.replaceChildren(document.createTextNode(row.title.slice(0,1)));b.replaceChildren(img);}b.onclick=async()=>{b.disabled=true;try{await window.BranaBrowser?.bookmarkVisit?.(row.id);}catch(error){b.title=error.message||String(error);last='';void refresh();}finally{b.disabled=false;}};pins.append(b);}}catch{last='';}finally{loading=false;}};
     pins.addEventListener('wheel',e=>{if(pins.scrollWidth>pins.clientWidth){e.preventDefault();pins.scrollLeft+=e.deltaY||e.deltaX;}},{passive:false});
     window.addEventListener('focus',()=>void refresh());const timer=setInterval(()=>{if(document.visibilityState==='visible')void refresh();},2000);window.addEventListener('pagehide',()=>clearInterval(timer),{once:true});void refresh();
   }
   left.append(btn('back','←','后退'),btn('fwd','→','前进'),btn('rel','↻','刷新'));bar.append(left,address,right);
-  if (window.BranaBrowser?.extensions) {
+  if (window.BranaBrowser?.extensions || hasDesktopBrowserUi) {
     const PUZZLE_PATH = 'M12 2.2a2.1 2.1 0 0 1 2.1 2.1c0 .55-.2 1.05-.55 1.4H17.5a2 2 0 0 1 2 2v3.95c.35-.35.85-.55 1.4-.55a2.1 2.1 0 0 1 0 4.2c-.55 0-1.05-.2-1.4-.55V18.7a2 2 0 0 1-2 2h-3.95c.35-.35.55-.85.55-1.4a2.1 2.1 0 0 0-4.2 0c0 .55.2 1.05.55 1.4H6.5a2 2 0 0 1-2-2v-3.95c-.35.35-.85.55-1.4.55a2.1 2.1 0 0 1 0-4.2c.55 0 1.05.2 1.4.55V7.7a2 2 0 0 1 2-2h3.95c-.35-.35-.55-.85-.55-1.4A2.1 2.1 0 0 1 12 2.2z';
-    const api = window.BranaBrowser, pins = mk('div','ext-pins'), extensions = btn('extensions','','扩展程序');
+    const pins = mk('div','ext-pins'), extensions = btn('extensions','','扩展程序');
     { const esv = document.createElementNS('http://www.w3.org/2000/svg','svg'), ep = document.createElementNS('http://www.w3.org/2000/svg','path'); esv.setAttribute('viewBox','0 0 24 24'); esv.setAttribute('class','wb-ic'); esv.setAttribute('aria-hidden','true'); ep.setAttribute('d',PUZZLE_PATH); esv.append(ep); extensions.append(esv); }
     const menu = mk('section','ext-menu'), heading = mk('div','ext-heading'), list = mk('div','ext-list'), status = mk('p','ext-status');
     menu.hidden = true; menu.setAttribute('role','dialog'); menu.setAttribute('aria-label','扩展程序');
@@ -107,7 +110,7 @@
     const closeButton=btn('','×','关闭扩展列表');closeButton.onclick=()=>{close();extensions.focus();};
     heading.append(mk('strong','',{textContent:'扩展程序'}),closeButton);
     const manage=btn('ext-manage','⚙  管理扩展程序','管理扩展程序');
-    manage.onclick=()=>{close();void api.extensions().catch(error=>showError(error));};
+    manage.onclick=()=>{close();const fn=window.BranaBrowser?.extensions;if(fn)void fn().catch(error=>showError(error));else location.reload();};
     menu.append(heading,status,list,manage);right.append(pins,extensions);root.append(menu);
     const extSheet=new CSSStyleSheet();extSheet.replaceSync(`
       .ext-pins{display:flex;gap:2px;max-width:30vw;overflow:auto;-webkit-app-region:no-drag;scrollbar-width:none}
@@ -127,7 +130,7 @@
     let busy=false,refreshing=false,last='';
     const showError=error=>{menu.hidden=false;extensions.setAttribute('aria-expanded','true');status.textContent=error.message||String(error);};
     const icon=e=>{const wrap=mk('span','ext-icon',{textContent:e.name.slice(0,1)});if(/^data:image\/(png|jpeg|webp);base64,/.test(e.icon||'')){const img=mk('img','',{src:e.icon,alt:''});img.onerror=()=>{wrap.textContent=e.name.slice(0,1);};wrap.replaceChildren(img);}return wrap;};
-    const activate=async e=>{if(busy)return;busy=true;try{await api.extensionActivate(e.key);close();}catch(error){showError(error);}finally{busy=false;}};
+    const activate=async e=>{const api=window.BranaBrowser;if(busy||!api?.extensionActivate)return;busy=true;try{await api.extensionActivate(e.key);close();}catch(error){showError(error);}finally{busy=false;}};
     const render=data=>{
       pins.replaceChildren();list.replaceChildren();status.textContent=data.error||(!data.entries.length?'尚未安装扩展':'点击扩展打开；图钉可固定到顶部');
       for(const e of data.entries){
@@ -137,13 +140,13 @@
         const pinSvg=document.createElementNS('http://www.w3.org/2000/svg','svg'),pinPath=document.createElementNS('http://www.w3.org/2000/svg','path');
         pinSvg.setAttribute('viewBox','0 0 24 24');pinSvg.setAttribute('width','18');pinSvg.setAttribute('height','18');pinSvg.setAttribute('aria-hidden','true');
         pinPath.setAttribute('d','M8 3h8l-1 7 3 3v2h-5v6l-1 2-1-2v-6H6v-2l3-3z');pinPath.setAttribute('fill',e.pinned?'currentColor':'none');pinPath.setAttribute('stroke','currentColor');pinPath.setAttribute('stroke-width','1.5');pinSvg.append(pinPath);pin.append(pinSvg);
-        pin.onclick=async()=>{if(busy)return;busy=true;pin.disabled=true;try{const data=await api.extensionPin(e.key,!e.pinned);last=JSON.stringify(data);render(data);}catch(error){showError(error);}finally{busy=false;pin.disabled=false;}};
+        pin.onclick=async()=>{const api=window.BranaBrowser;if(busy||!api?.extensionPin)return;busy=true;pin.disabled=true;try{const data=await api.extensionPin(e.key,!e.pinned);last=JSON.stringify(data);render(data);}catch(error){showError(error);}finally{busy=false;pin.disabled=false;}};
         row.append(launch,pin);list.append(row);
         if(e.pinned&&e.loaded){const b=btn('ext-pinned','',e.name);b.append(icon(e));b.onclick=()=>void activate(e);pins.append(b);}
       }
     };
-    const refresh=async()=>{if(refreshing||busy||!api.extensionList)return;refreshing=true;try{const data=await api.extensionList(),next=JSON.stringify(data);if(next!==last){last=next;render(data);}}catch(error){if(!menu.hidden)showError(error);}finally{refreshing=false;}};
-    extensions.onclick=()=>{if(!api.extensionList){void api.extensions().catch(showError);return;}menu.hidden=!menu.hidden;extensions.setAttribute('aria-expanded',String(!menu.hidden));if(!menu.hidden){last='';void refresh();closeButton.focus();}};
+    const refresh=async()=>{const api=window.BranaBrowser;if(refreshing||busy||!api?.extensionList)return;refreshing=true;try{const data=await api.extensionList(),next=JSON.stringify(data);if(next!==last){last=next;render(data);}}catch(error){if(!menu.hidden)showError(error);}finally{refreshing=false;}};
+    extensions.onclick=()=>{const api=window.BranaBrowser;if(!api){location.reload();return;}if(!api.extensionList){void api.extensions?.().catch(showError);return;}menu.hidden=!menu.hidden;extensions.setAttribute('aria-expanded',String(!menu.hidden));if(!menu.hidden){last='';void refresh();closeButton.focus();}};
     document.addEventListener('pointerdown',event=>{if(!event.composedPath().includes(host))close();});
     root.addEventListener('keydown',event=>{if(!menu.hidden&&event.key==='Escape'){event.stopPropagation();close();extensions.focus();}});
     window.addEventListener('focus',()=>void refresh());
@@ -185,10 +188,15 @@
   $('.rel').onclick = () => location.reload();
   $('.home').onclick = () => {
     try {
-      const m = /^\/(agent|c|chat)\/([\w-]{4,64})/i.exec(location.pathname || '');
-      const curSid = m ? m[2] : '';
+      let m = /^\/(agent|c|chat)\/([\w-]{4,64})/i.exec(location.pathname || '');
+      if (!m) {
+        const activeLink = document.querySelector(':is([data-sidebar],aside,nav) :is(a[href^="/agent/"],a[href^="/c/"])[aria-current="page"], :is([data-sidebar],aside,nav) a.anc-on');
+        const href = activeLink?.getAttribute?.('href') || '';
+        m = /^\/(agent|c|chat)\/([\w-]{4,64})/i.exec(href);
+      }
+      const curSid = m && m[2] !== 'new' ? m[2] : '';
       const evalUrl = Boolean(m && m[1].toLowerCase() !== 'agent');
-      if (curSid) sessionStorage.setItem('anc:fast-return', JSON.stringify({ at: Date.now(), sid: curSid, evalUrl }));
+      sessionStorage.setItem('anc:fast-return', JSON.stringify({ at: Date.now(), sid: curSid, evalUrl }));
     } catch {}
     showLoader('正在切换回客户端模式…', '正在同步会话与本地状态，请稍候', 4000);
     if(window.BranaBrowser?.back)void window.BranaBrowser.back().catch(()=>{hideLoader();location.href = HOME;});else location.href = HOME;

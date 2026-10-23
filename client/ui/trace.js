@@ -447,7 +447,7 @@ const Workspace = {
     if (c && !force && now() - c.at < 20000) return c;
     const rev = (this.revisions.get(sid) || 0) + 1; this.revisions.set(sid,rev);
     const job = (async () => {
-      const j = await api('/api/chat/' + encodeURIComponent(sid) + '/workspace/latest?includeManifest=true');
+      const j = await api('/api/chat/' + encodeURIComponent(sid) + '/workspace/latest?includeManifest=true', { bg: !force, noApiRetry: true });
       const v = { at: now(), node: j?.manifestNodeId || null, leaf: j?.leafMessageId || null, manifest: j?.manifest || null };
       if (this.revisions.get(sid) !== rev) return this.pending.get(sid) || this.cache.get(sid) || v;
       this.cache.set(sid, v); Bus.emit('workspace', sid); return v;
@@ -465,7 +465,13 @@ const Workspace = {
     return res.blob();
   },
 };
-Bus.on('turn', c => { setTimeout(() => { if (Workspace.cache.has(c.sid) || UI.els?.chat === c) Workspace.latest(c.sid, true).catch(() => {}); }, 3000); });
+Bus.on('turn', c => {
+  setTimeout(() => {
+    if (!c?.sid || c.gacha || (typeof ReadLimit !== 'undefined' && ReadLimit.active?.())) return;
+    const hasTools = Workspace.cache.has(c.sid) || (c.messages || []).some(m => (m?.parts || []).some(p => p?.type && p.type !== 'text' && p.type !== 'reasoning' && p.type !== 'step-start'));
+    if (hasTools && (Workspace.cache.has(c.sid) || UI.els?.chat === c)) Workspace.latest(c.sid, false).catch(() => {});
+  }, 3000);
+});
 
 // ---------- 官方 BotService 与模拟官方四维号池分（Cloudflare/ASN + reCAPTCHA v3 + 近期出货后验 + Pulse 额度 → 1–99） ----------
 const BotService = (() => {
@@ -865,11 +871,34 @@ const BotService = (() => {
 
   async function refreshPulse(force = false) {
     if (typeof UI === 'undefined' || !UI.me) return state();
+    if (typeof Pulse !== 'undefined' && Pulse.v && Number.isFinite(+Pulse.v.pulse)) {
+      const pVal = Math.max(0, Math.min(100, Math.round(+Pulse.v.pulse)));
+      if (cur.pulse !== pVal) {
+        cur = { ...cur, pulse: pVal, pulseRefreshedAt: Pulse.v.refreshedAt || cur.pulseRefreshedAt || new Date().toISOString(), updatedAt: now() };
+        save();
+      }
+      if (!force || now() - (Pulse.at || 0) < 25000 || (Pulse.nextAt || 0) > now()) return state();
+    }
+    if (typeof Pulse !== 'undefined' && (Pulse.nextAt || 0) > now()) return state();
     if (!force && now() - lastPulseAt < 25000 && cur.pulse != null) return state();
     if (inflightPulse) return inflightPulse;
     inflightPulse = (async () => {
       try {
-        const res = await api('/api/me/pulse');
+        if (typeof Pulse !== 'undefined' && typeof Pulse.pollNow === 'function') {
+          await Pulse.pollNow();
+          if (Pulse.v && Number.isFinite(+Pulse.v.pulse)) {
+            lastPulseAt = now();
+            cur = {
+              ...cur,
+              pulse: Math.max(0, Math.min(100, Math.round(+Pulse.v.pulse))),
+              pulseRefreshedAt: Pulse.v.refreshedAt || new Date().toISOString(),
+              updatedAt: now(),
+            };
+            save();
+          }
+          return state();
+        }
+        const res = await api('/api/me/pulse', { noRelogin: true, bg: true });
         if (res && Number.isFinite(+res.pulse)) {
           lastPulseAt = now();
           cur = {
@@ -940,8 +969,14 @@ const BotService = (() => {
   for (const evt of ['ip', 'rtt', 'models', 'model', 'billing', 'pulse', 'history', 'captcha']) {
     try { Bus.on(evt, () => { invalidate(); }); } catch {}
   }
-  Bus.on('turn', () => { invalidate(); setTimeout(() => { void refreshPulse(true); }, 1800); });
-  setTimeout(() => { if (typeof UI !== 'undefined' && UI.me) void refreshPulse(false); }, 2500);
+  Bus.on('pulse', v => {
+    if (v && Number.isFinite(+v.pulse)) {
+      lastPulseAt = now();
+      cur = { ...cur, pulse: Math.max(0, Math.min(100, Math.round(+v.pulse))), pulseRefreshedAt: v.refreshedAt || cur.pulseRefreshedAt || new Date().toISOString(), updatedAt: now() };
+      save();
+    } else invalidate();
+  });
+  Bus.on('turn', () => { invalidate(); });
 
   return { state, noteCloudflare, noteBattleVote, notePromptReplay, banWaveStatus, computeTideWindow, gittinsIndex, refreshPulse, levelOf, calcPoolScore };
 })();

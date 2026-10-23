@@ -15,7 +15,7 @@ test('scheduled refresh protects focused editors and clears stale timers when un
  let id=0;const timers=new Map(),editor={tagName:'INPUT'};
  const c=vm.createContext({setTimeout:(fn,ms)=>{timers.set(++id,{fn,ms});return id;},clearTimeout:id=>timers.delete(id),document:{activeElement:editor},isMob:()=>false});
  const method=source.slice(source.indexOf('  soon()'),source.indexOf('  turnsOf('));
- const render=source.slice(source.indexOf('  render()'),source.indexOf('    this.force = false;'))+'  }';
+ const renderStart=source.indexOf('  render(force = false)')>=0?source.indexOf('  render(force = false)'):source.indexOf('  render()');const render=source.slice(renderStart,source.indexOf('    this.force = false;',renderStart))+'  }';
  const d=vm.runInContext('({t:0,open:true,el:{isConnected:true,contains:()=>true},'+method+render+'})',c);
  d.soon();const first=[...timers.values()][0];timers.clear();first.fn();assert.equal(timers.size,1);assert.equal([...timers.values()][0].ms,1500);
  for(let i=0;i<100;i++)d.soon();assert.equal(timers.size,1,'focused input retry must not accumulate timers');

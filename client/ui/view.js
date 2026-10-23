@@ -112,27 +112,81 @@ const Drafts = {
     return d;
   },
   /* 对话被删除 / 归档：它的待发送队列不再保留 */
-  dropChats(sids) { const d = this.load(); let n = 0; for (const k of sids) if (d.q[k]) { delete d.q[k]; n++; } if (n) this.write(false); return n; },
+  dropChats(sids) {
+    const d = this.load(); let n = 0;
+    const dropped = new Set(Array.isArray(d.droppedSids) ? d.droppedSids : []);
+    for (const k of sids) {
+      if (k) dropped.add(k);
+      if (d.q[k]) { delete d.q[k]; n++; }
+    }
+    d.droppedSids = [...dropped].slice(-64);
+    if (n) this.write(true);
+    return n;
+  },
   write(push, requireLocal = false) { const d = this.load(), ok = Store.set('drafts@' + this.scope, d) !== false; if (!ok && requireLocal) return false; clearTimeout(this.pt); if (push) this.push(); else this.pt = setTimeout(() => this.push(), 300); return ok; },
   push() { clearTimeout(this.pt); this.pt = 0; const id = this.acct(); if (!id || !Host.shared) return; const value = JSON.parse(JSON.stringify(this.load())); return this.pushTail = (this.pushTail || Promise.resolve()).catch(() => {}).then(() => Host.shared('draft@' + id, value)).catch(e => { console.warn('draft backup', e); }); },
   attOut(a) { return a?.res && a.res.key ? { key: a.res.key, filename: a.res.filename || a.name || 'file', mediaType: a.res.mediaType || a.type || '', size: a.res.size || a.size || 0, hash: a.res.hash || '', url: a.res.url || '' } : null; },
   attIn(r) { return { name: r.filename || 'file', size: r.size || 0, type: r.mediaType || '', state: 'ok', stage: '', pct: 1, res: r, p: Promise.resolve(r), url: /^image\//.test(r.mediaType || '') && r.hash ? Uploads.webPath(r.hash) : null, subs: new Set() }; },
   missing(atts) { return (atts || []).filter(a => !this.attOut(a)).map(a => ({ name: a.name, size: a.size, type: a.type })); },
   entryAtts(e) { return [...(e?.atts || []).map(a => this.attIn(a)), ...(e?.missing || []).map(a => ({ ...a, state: 'bad', err: '附件未上传完成即退出，请重新添加', p: Promise.resolve(null), subs: new Set() }))]; },
-  // 启动：宿主那份和本机那份合并（每个标签 / 每个对话的队列按修改时间取新的；未确认的消息取并集，反正都会再向服务器核对）
+  // 启动：宿主那份和本机那份合并（每个标签 / 每个对话的队列按修改时间与移除记录合并；未确认的消息取并集，反正都会再向服务器核对）
   async pull() {
     const d = this.load(), id = this.acct(); let r = null;
     if (id && Host.shared) try { r = await Host.shared('draft@' + id); } catch {}
     if (r && typeof r === 'object') {
-      for (const [k, v] of Object.entries(r.t || {})) if (v && (!d.t[k] || (v.at || 0) > (d.t[k].at || 0))) d.t[k] = v;
-      for (const [k, v] of Object.entries(r.q || {})) if (v && (!d.q[k] || (v.at || 0) > (d.q[k].at || 0))) d.q[k] = v;
       const ids = new Set(d.o.map(x => x.id)); for (const x of Array.isArray(r.o) ? r.o : []) if (x?.id && !ids.has(x.id)) d.o.push(x);
+      for (const [k, v] of Object.entries(r.t || {})) if (v && (!d.t[k] || (v.at || 0) > (d.t[k].at || 0))) d.t[k] = v;
+      for (const [k, v] of Object.entries(r.q || {})) {
+        if (!v) continue;
+        const lq = d.q[k];
+        if (!lq) { d.q[k] = v; continue; }
+        const vNewer = (v.at || 0) > (lq.at || 0);
+        if (vNewer && (!Array.isArray(v.items) || !v.items.length)) {
+          d.q[k] = v;
+          continue;
+        }
+        if (!vNewer && (!Array.isArray(lq.items) || !lq.items.length) && (lq.clearedAt || 0) >= (v.at || 0)) {
+          continue;
+        }
+        const clearedAt = Math.max(lq.clearedAt || 0, v.clearedAt || 0);
+        const removedIds = [...new Set([...(lq.removedIds || []), ...(v.removedIds || [])])].slice(-32);
+        const removedSet = new Set(removedIds);
+        const claimed = new Set(d.o.filter(o => o && o.sid === k).flatMap(o => o.queueIds || []));
+        const mergedMap = new Map();
+        const firstList = vNewer ? (lq.items || []) : (v.items || []);
+        const secondList = vNewer ? (v.items || []) : (lq.items || []);
+        for (const it of [...firstList, ...secondList]) {
+          if (!it || !it.id) continue;
+          if (removedSet.has(it.id) || claimed.has(it.id)) continue;
+          if (clearedAt && (it.at || 0) > 0 && (it.at || 0) <= clearedAt) continue;
+          mergedMap.set(it.id, it);
+        }
+        const mergedItems = [...mergedMap.values()].sort((a, b) => (a.at || 0) - (b.at || 0));
+        d.q[k] = {
+          ...(vNewer ? lq : v),
+          ...(vNewer ? v : lq),
+          at: Math.max(lq.at || 0, v.at || 0),
+          paused: (vNewer ? v.paused : lq.paused) || '',
+          ...(clearedAt ? { clearedAt } : {}),
+          ...(removedIds.length ? { removedIds } : {}),
+          items: mergedItems,
+        };
+      }
     }
     const keys = new Set(Tabs.list.map(t => t.key));
     for (const t of Tabs.list) { const e = d.t[t.key]; if (e && typeof e.v === 'string' && e.v !== (t.draft || '')) t.draft = e.v; }
     for (const k of Object.keys(d.t)) if (!k.startsWith('sid:') && !keys.has(k)) delete d.t[k];
     for (const [k, v] of Object.entries(d.q)) if (!v?.items?.length && now() - (v?.at || 0) > 7 * 864e5) delete d.q[k];
-    this.ready = true; Tabs.save(); this.write(true);
+    this.ready = true;
+    try {
+      if (typeof Chats !== 'undefined' && Chats && typeof Chats.values === 'function') {
+        for (const c of Chats.values()) {
+          if (c && c.sid && !c.gacha) this.hydrateQ(c, true);
+        }
+      }
+      if (typeof UI !== 'undefined') UI.paintQ?.();
+    } catch {}
+    Tabs.save(); this.write(true);
   },
   // 输入框：打字立即记下；附件只记已经上传完的
   setTab(tab, atts) {
@@ -152,18 +206,40 @@ const Drafts = {
   },
   // 队列
   qsig(chat) { return JSON.stringify([chat._qPaused || '', (chat.queue || []).map(i => [i.id, i.text, (i.atts || []).map(a => [a.name, a.state, a.res?.key])])]); },
-  queueRecord(chat, items = chat.queue || []) {
-    return { at: Math.max(now(), (+this.load().q[chat.sid]?.at || 0) + 1), paused: chat._qPaused || '', items: items.map(i => ({ id: i.id, text: i.text || '', at: i.at || now(),
+  queueRecord(chat, items = chat.queue || [], extra = {}) {
+    const prev = this.load().q[chat.sid];
+    const activeIds = new Set((items || []).map(i => i?.id).filter(Boolean));
+    const removedIds = [...new Set([...(prev?.removedIds || []), ...(chat._qRemovedIds || []), ...(extra.removedIds || [])])].filter(id => id && !activeIds.has(id)).slice(-32);
+    const clearedAt = Math.max(prev?.clearedAt || 0, chat._qClearedAt || 0, extra.clearedAt || 0);
+    return { at: Math.max(now(), (+prev?.at || 0) + 1), paused: chat._qPaused || '', ...(clearedAt ? { clearedAt } : {}), ...(removedIds.length ? { removedIds } : {}), items: items.map(i => ({ id: i.id, text: i.text || '', at: i.at || now(),
       atts: (i.atts || []).map(a => this.attOut(a)).filter(Boolean),
       missing: this.missing(i.atts) })) };
   },
-  hydrateQ(chat) {
-    if (chat._qh || !chat.sid || chat.gacha) return; chat._qh = 1;
-    const d = this.load(), e = d.q[chat.sid], q = (chat.queue ||= []);
-    const claimed = new Set(d.o.filter(o => o.sid === chat.sid).flatMap(o => o.queueIds || []));
-    if (e?.items?.length && !q.length) for (const i of e.items) if (!i.id || !claimed.has(i.id)) q.push({ id: i.id || uuid7(), text: i.text || '', at: i.at || now(),
-      atts: this.entryAtts(i) });
-    chat._qPaused = e?.paused || ''; chat._qsig = this.qsig(chat);
+  hydrateQ(chat, force = false) {
+    if (!chat?.sid || chat.gacha) return;
+    const d = this.load();
+    if (chat._qh && !force && chat._qhScope === this.scope && (chat._qhReady || !this.ready)) return;
+    chat._qh = 1; chat._qhScope = this.scope; chat._qhReady = this.ready;
+    const e = d.q[chat.sid], q = (chat.queue ||= []);
+    if (e?.clearedAt && (!chat._qClearedAt || e.clearedAt > chat._qClearedAt)) chat._qClearedAt = e.clearedAt;
+    if (Array.isArray(e?.removedIds) && e.removedIds.length) {
+      chat._qRemovedIds = [...new Set([...(chat._qRemovedIds || []), ...e.removedIds])].slice(-32);
+    }
+    const removedSet = new Set(chat._qRemovedIds || []);
+    const claimed = new Set(d.o.filter(o => o && o.sid === chat.sid).flatMap(o => o.queueIds || []));
+    const existingIds = new Set(q.map(x => x?.id).filter(Boolean));
+    if (e?.items?.length) {
+      for (const i of e.items) {
+        if (!i) continue;
+        const iid = i.id || uuid7();
+        if (claimed.has(iid) || removedSet.has(iid) || existingIds.has(iid)) continue;
+        if ((i.at || 0) > 0 && (chat._qClearedAt || 0) >= (i.at || 0)) continue;
+        q.push({ id: iid, text: i.text || '', at: i.at || now(), atts: this.entryAtts(i) });
+        existingIds.add(iid);
+      }
+    }
+    if (!chat._qPaused && e?.paused) chat._qPaused = e.paused;
+    chat._qsig = this.qsig(chat);
   },
   setQ(chat, requireLocal = false) {
     if (!chat?.sid || chat.gacha) return;
@@ -175,11 +251,16 @@ const Drafts = {
   },
   // 发出的消息：服务器确认收到之前一直留着
   out(chat, msg, text, opt = {}) {
-    if (!chat?.sid || chat.gacha || opt.parts || !msg?.id) return;
+    const hasHitlText = Boolean((text && String(text).trim()) || (Array.isArray(opt.parts) && opt.parts.some(p => p?.type === 'text' && String(p.text || '').trim())));
+    if (!chat?.sid || chat.gacha || (opt.parts && !opt.queueIds?.length && !hasHitlText) || !msg?.id) return;
     const d = this.load(), previous = d.o.find(x => x.id === msg.id); this.sess.add(msg.id);
     const previews = opt.previews || (opt.files || msg.metadata?.uploads || []).map(res => ({ res }));
     const atts = previews.map(a => this.attOut(a)).filter(Boolean), missing = this.missing(previews), queueIds = opt.queueIds || previous?.queueIds;
-    d.o = d.o.filter(x => x.id !== msg.id); d.o.push({ id: msg.id, sid: chat.sid, text: text || '', at: now(), atts, missing, ...(queueIds ? { queueIds: queueIds.slice() } : {}) });
+    const prevAsst = Array.isArray(chat?.messages) ? [...chat.messages].reverse().find(x => x && x !== msg && x.role === 'assistant' && x.id) : null;
+    const prevAsstWeight = msg._prevAsstWeight ?? ((prevAsst && typeof SentUserLog !== 'undefined' && SentUserLog.measureAsstWeight) ? SentUserLog.measureAsstWeight(prevAsst) : null);
+    if (prevAsstWeight != null && msg._prevAsstWeight == null) msg._prevAsstWeight = prevAsstWeight;
+    const effText = text || (Array.isArray(opt.parts) ? opt.parts.filter(p => p?.type === 'text').map(p => p.text || '').join('\n') : '') || '';
+    d.o = d.o.filter(x => x.id !== msg.id); d.o.push({ id: msg.id, sid: chat.sid, text: effText, at: now(), prevAsstId: msg._prevAsstId || prevAsst?.id || null, prevAsstWeight, atts, missing, ...(queueIds ? { queueIds: queueIds.slice(), fromQueue: true } : {}), ...(msg._held || chat.waitingForeign ? { held: true } : {}) });
     if (opt.queueIds) { const ids = new Set(opt.queueIds); d.q[chat.sid] = this.queueRecord(chat, (chat.queue || []).filter(i => !ids.has(i.id))); }
     if (!this.write(true, true)) { d.o = d.o.filter(x => x.id !== msg.id); if (previous) d.o.push(previous); if (opt.queueIds) d.q[chat.sid] = this.queueRecord(chat); this.sess.delete(msg.id); this.push(); return false; }
     for (const a of opt.previews || []) if (!a.res && a.p) a.p.then(() => { const e = this.load().o.find(x => x.id === msg.id); if (e) { e.atts = opt.previews.map(x => this.attOut(x)).filter(Boolean); e.missing = this.missing(opt.previews); this.write(); } }, () => {});
@@ -197,18 +278,36 @@ const Drafts = {
   },
   check(chat) {
     const d = this.load(); if (!d.o.length || !chat?.sid || chat.gacha) return;
-    const doneAt = Math.max(chat.tcAt || 0, chat.endAt || 0, chat.finAt || 0);
+    const tailAsst = !chat.busy ? (chat.messages || []).filter(x => x && x.role === 'assistant' && !x._local && !x.metadata?.pending).at(-1) : null;
+    const tailAsstAt = tailAsst ? (Date.parse(tailAsst.metadata?.timing?.completedAt || tailAsst.createdAt || '') || (typeof idTime === 'function' ? idTime(tailAsst.id) : 0) || tailAsst._finishedAt || 0) : 0;
+    const doneAt = Math.max(chat.tcAt || 0, chat.endAt || 0, chat.finAt || 0, tailAsstAt);
     for (const e of d.o.filter(x => x.sid === chat.sid)) {
+      const prevAIdx = e.prevAsstId ? (chat.messages || []).findIndex(x => x && x.id === e.prevAsstId) : -1;
       // 服务器已收下（POST 成功）且之后有一轮已经结束：输入已被处理，不管服务器用什么 id / 正文怎么存，都算送达
-      const hasFinishedReplyAfter = !chat.busy && doneAt > (e.at || 0) && (chat.messages || []).some(x => x.role === 'assistant' && !x._local && !x.metadata?.pending && ((typeof idTime === 'function' ? idTime(x.id) : 0) || doneAt) >= (e.at || 0) - 5000);
-      if (!chat.busy && ((e.acc && doneAt > e.acc) || hasFinishedReplyAfter)) { const mm = chat.messages?.find(x => x.id === e.id); if (mm?.deliveryUnknown) { mm.deliveryUnknown = false; mm.failed = false; } if (mm) mm._local = false; this.ack(e.id); continue; }
+      const hasFinishedReplyAfter = !chat.busy && doneAt > (e.at || 0) && (chat.messages || []).some((x, idx) => x && x.role === 'assistant' && !x._local && !x.metadata?.pending && idx > prevAIdx && x.id !== e.prevAsstId && ((typeof idTime === 'function' ? idTime(x.id) : 0) || Date.parse(x.metadata?.timing?.completedAt || x.createdAt || '') || doneAt) >= (e.at || 0) - 5000);
+      if (!chat.busy && ((e.acc && doneAt > e.acc) || hasFinishedReplyAfter)) {
+        try { if (typeof SentUserLog !== 'undefined' && typeof SentUserLog.restoreInto === 'function') SentUserLog.restoreInto(chat); } catch {}
+        const mm = chat.messages?.find(x => x.id === e.id);
+        if (mm?.deliveryUnknown) { mm.deliveryUnknown = false; mm.failed = false; }
+        if (mm) mm._local = false;
+        this.ack(e.id);
+        continue;
+      }
       if (chat.awaitId === e.id && (chat.busy || chat.live)) { if (chat.dlv === 'taken' && chat.turnInput === e.id) this.ack(e.id); continue; }   // 一轮结束后不再因旧 awaitId 跳过核对
-      const m = chat.messages?.find(x => x.id === e.id);
+      const eTxtNorm = String(e.text || '').trim();
+      const m = chat.messages?.find((x, idx) => x && (x.id === e.id || x.metadata?.nodeId === e.id || (x.role === 'user' && eTxtNorm && (x._local || (idx > prevAIdx && (!e.at || !(typeof idTime === 'function' && idTime(x.id)) || idTime(x.id) >= e.at - 15000))) && ((x.parts || []).filter(p => p?.type === 'text').map(p => p.text).join('\n').trim() || String(x.text || '').trim()) === eTxtNorm)));
       if (m && !m._local) { this.ack(e.id); continue; }                  // 服务器的对话记录里已经有这条
       if (!chat.loaded || chat.busy || this.chk.has(e.id)) continue;
-      if (m && m.failed && !m.deliveryUnknown) continue;                                      // 这次打开时发送失败：消息上有「重试」，先不动
+      if (m && m.failed && !m.deliveryUnknown && !this.sess.has(e.id)) {
+        if ((e.fromQueue || (Array.isArray(e.queueIds) && e.queueIds.length > 0) || e.held) && !e.acc && typeof SendQ !== 'undefined' && typeof SendQ.demoteToQueue === 'function') {
+          if (SendQ.demoteToQueue(chat, m, { fromDraft: e, silent: true })) continue;
+        }
+        this.ack(e.id);
+        continue;
+      }
+      const isCurSess = this.sess.has(e.id);
       const age = now() - (e.at || 0);
-      if (age < 30000 && !(doneAt > (e.at || 0))) { if (!this.wait.has(e.id)) { this.wait.add(e.id); setTimeout(() => { this.wait.delete(e.id); this.check(chat); }, 30500 - age); } continue; }
+      if (isCurSess && age < 30000 && !(doneAt > (e.at || 0))) { if (!this.wait.has(e.id)) { this.wait.add(e.id); setTimeout(() => { this.wait.delete(e.id); this.check(chat); }, 30500 - age); } continue; }
       this.chk.add(e.id);
       chat.inDb(e.id, e.text, e.at).then(r => this.settle(chat, e, m, r));
     }
@@ -216,11 +315,49 @@ const Drafts = {
   settle(chat, e, m, r) {
     this.chk.delete(e.id);
     if (!this.load().o.some(x => x.id === e.id)) return 'done';   // 另一路核对已处理（避免重复放回队列）
-    if (r === true) { this.ack(e.id); if (m?.deliveryUnknown) { m.deliveryUnknown = false; m.failed = false; m._local = false; chat.emit(); } return 'ok'; }
-    if (r === false && !m) { this.restore(e); return 'restored'; }   // 服务器确实没有，而且不是这次打开时发的 → 放回输入框
+    const eTxtNorm = String(e?.text || '').trim();
+    const liveM = chat?.messages?.find(x => x && (x.id === e.id || (x.role === 'user' && x._local && eTxtNorm && ((x.parts || []).filter(p => p?.type === 'text').map(p => p.text).join('\n').trim() || String(x.text || '').trim()) === eTxtNorm))) || (m && chat?.messages?.includes(m) ? m : null);
+    if (r === true) {
+      this.ack(e.id);
+      if (liveM) { liveM.deliveryUnknown = false; liveM.failed = false; liveM._local = false; liveM.v = (liveM.v || 0) + 1; chat.emit(); }
+      return 'ok';
+    }
+    if (r === false) {
+      const prevA = (e.prevAsstId && chat?.messages?.find(x => x && x.id === e.prevAsstId)) || [...(chat?.messages || [])].reverse().find(x => x && x.role === 'assistant');
+      const prevAW = (prevA && typeof SentUserLog !== 'undefined' && SentUserLog.measureAsstWeight) ? SentUserLog.measureAsstWeight(prevA) : 0;
+      const prevACompRaw = prevA?.metadata?.timing?.completedAt;
+      const prevACompMs = typeof prevACompRaw === 'number' ? prevACompRaw : (typeof prevACompRaw === 'string' ? Date.parse(prevACompRaw) : 0);
+      const prevASupplemented = Boolean(prevA && (prevA.metadata?.pending || prevA._incomplete || (e.prevAsstWeight != null && prevAW > e.prevAsstWeight) || (prevACompMs > 0 && (e.at || 0) > 0 && prevACompMs >= (e.at || 0) + 1000 && (typeof idTime === 'function' ? idTime(prevA.id) || 0 : 0) <= (e.at || 0) + 5000)));
+      const isPrevSessUnacceptedQueue = Boolean(!this.sess.has(e.id) && !e.acc && (e.fromQueue || (Array.isArray(e.queueIds) && e.queueIds.length > 0) || e.held) && liveM);
+      const shouldDemoteToQueue = Boolean(chat && (chat.busy || chat.streaming || chat.live || chat._inDbPrevTurnActive || prevASupplemented || isPrevSessUnacceptedQueue));
+      if (shouldDemoteToQueue && typeof SendQ !== 'undefined' && typeof SendQ.demoteToQueue === 'function') {
+        if (SendQ.demoteToQueue(chat, liveM || m || e, { fromDraft: e, running: Boolean(chat.busy || chat.streaming || chat.live || prevA?.metadata?.pending) })) {
+          return 'queued';
+        }
+      }
+    }
+    if (r === false && !liveM) {
+      if (m) { m.failed = true; m.deliveryUnknown = false; }
+      try { if (typeof SentUserLog !== 'undefined' && SentUserLog.remove) SentUserLog.remove(e.sid, e.id, e.text); } catch {}
+      this.restore(e);
+      return 'restored';
+    }
     // 服务器确实没有、本地还留着这条：标成发送失败（消息上有「重试」）并清掉待确认记录。
-    // 以前这里什么都不做，队列会一直卡在「上一条输入尚未确认」，每次刷新还会再读一次整个对话
-    if (r === false && m) { m.deliveryUnknown = false; m.failed = true; this.ack(e.id); chat.emit(); toast('有一条消息服务器没有收到：已标为发送失败，可点「重试」；队列继续'); return 'failed'; }
+    if (r === false && liveM) {
+      liveM.deliveryUnknown = false;
+      liveM.failed = true;
+      delete liveM._appendAccepted;
+      liveM.v = (liveM.v || 0) + 1;
+      try { if (typeof SentUserLog !== 'undefined' && SentUserLog.markFailed) SentUserLog.markFailed(chat.sid, liveM.id, e.text); } catch {}
+      if (!chat.busy) {
+        chat.status = 'error';
+        if (!chat.error) chat.error = '上一条消息未发出（服务器未收到），请点击重试';
+      }
+      this.ack(e.id);
+      chat.emit();
+      toast('有一条消息服务器没有收到：已标为发送失败，可点「重试」');
+      return 'failed';
+    }
     setTimeout(() => this.check(chat), 20000); return 'unknown';      // 查不到（网络）：稍后再查
   },
   // 立即核对这个对话所有待确认的消息（「立即发送」被挡住时用，不等 30 秒）
@@ -233,10 +370,18 @@ const Drafts = {
     return !restored && !this.load().o.some(x => x.sid === chat.sid);
   },
   restore(e) {
+    try { if (typeof SentUserLog !== 'undefined' && SentUserLog.remove) SentUserLog.remove(e.sid, e.id, e.text); } catch {}
     const chat = Chats.get(e.sid);
-    if (chat?.queue?.length) {
-      chat.queue.unshift({ id: uuid7(), text: e.text || '', at: e.at || now(), atts: this.entryAtts(e) });
-      chat._qPaused = '已恢复上一条未送达消息，请核对后手动继续';
+    if (chat && (chat.queue?.length || e?.fromQueue || (Array.isArray(e?.queueIds) && e.queueIds.length > 0) || e?.held)) {
+      const q = (chat.queue ||= []);
+      const qid = e.queueIds?.[0] || uuid7();
+      if (!q.some(x => x && (x.id === qid || (e.text && String(x.text || '').trim() === String(e.text || '').trim())))) {
+        q.unshift({ id: qid, text: e.text || '', at: e.at || now(), atts: this.entryAtts(e) });
+      }
+      if (Array.isArray(chat._qRemovedIds) && chat._qRemovedIds.includes(qid)) {
+        chat._qRemovedIds = chat._qRemovedIds.filter(x => x !== qid);
+      }
+      chat._qPaused = (e?.fromQueue || (Array.isArray(e?.queueIds) && e.queueIds.length > 0)) && !chat.queue.slice(1).length ? '' : '已恢复上一条未送达消息，请核对后手动继续';
       this.load().o = this.load().o.filter(x => x.id !== e.id); this.setQ(chat); chat.emit(); toast('未送达消息已放回队首，请核对后继续'); return;
     }
     this.ack(e.id);
@@ -252,13 +397,23 @@ const Drafts = {
   },
   onChat(chat) {
     if (!chat?.sid || chat.gacha) return;
-    if (!chat._qh) this.hydrateQ(chat);
-    const sig = this.qsig(chat); if (sig !== chat._qsig) { chat._qsig = sig; this.setQ(chat); }
+    if (!chat._qh || chat._qhScope !== this.scope || (!chat._qhReady && this.ready)) this.hydrateQ(chat);
+    const sig = this.qsig(chat);
+    if (sig !== chat._qsig) {
+      const existingQ = this.load().q?.[chat.sid];
+      if (!(chat.queue || []).length && existingQ?.items?.length && !chat._qClearedAt && !(chat._qRemovedIds && chat._qRemovedIds.length) && (!this.ready || chat._qhScope !== this.scope)) {
+        this.hydrateQ(chat, true);
+      } else {
+        chat._qsig = sig;
+        this.setQ(chat);
+      }
+    }
     this.check(chat);
   },
 };
 addEventListener('visibilitychange', () => { if (document.hidden && Drafts.d) Drafts.write(true); });
 addEventListener('pagehide', () => { if (Drafts.d) Drafts.write(true); });
+addEventListener('beforeunload', () => { try { Drafts.syncTabs(); if (Drafts.d) Drafts.write(true); } catch {} });
 Object.assign(SendQ, {
   // 查看窗口：完整显示每条排队内容（换行保留），可以逐条移出 / 清空 / 立即发送
   view(chat) {
@@ -294,7 +449,7 @@ Object.assign(SendQ, {
     const off = Bus.on('chat', c => { if (c !== chat) return; if (!back.isConnected) { off(); return; } const k = sig(); if (k !== last) { last = k; paint(); } });
   }
 });
-Bus.on('chat', c => { try { Drafts.onChat(c); } catch (e) { console.warn(e); } if (c?.queue?.length) SendQ.check(c); });
+Bus.on('chat', c => { try { Drafts.onChat(c); } catch (e) { console.warn(e); } if (c && (c.queue?.length || (typeof SendQ !== 'undefined' && SendQ.of?.(c)?.length))) SendQ.check(c); });
 
 // 按顺序把 box 的子节点变成 nodes：相同节点原地保留，只插入 / 移动 / 删除差异部分（避免整块重建引起的重排和卡顿）
 const patchKids = (box, nodes) => {
@@ -525,7 +680,7 @@ document.addEventListener('contextmenu', e => {
 });
 const copyText = async t => { try { await navigator.clipboard.writeText(t); toast('已复制'); } catch { const ta = h('textarea', {}, t); document.body.append(ta); ta.select(); document.execCommand('copy'); ta.remove(); toast('已复制'); } };
 // 对话状态：run 进行中（图标顺时针转）/ bad 出错（红）/ ok 正常完成（绿）/ '' 未知
-const chatState = c => { if (!c) return ''; if (c.busy) return 'run'; const last = c.messages?.at(-1); if (c.error || last?.failed || (last?.parts || []).some(p => p.type === 'error')) return 'bad'; return c.loaded && last?.role === 'assistant' ? 'ok' : ''; };
+const chatState = c => { if (!c) return ''; if (typeof Hitl !== 'undefined' ? Hitl.blocked(c) : c.busy) return 'run'; const last = c.messages?.at(-1); const hasFailedMsg = Boolean(last?.failed || (c.messages || []).some(m => m?.role === 'user' && m.failed) || (typeof SentUserLog !== 'undefined' && SentUserLog.hasFailed?.(c.sid))); if (c.error || hasFailedMsg || (last?.parts || []).some(p => p.type === 'error')) return 'bad'; return c.loaded && last?.role === 'assistant' ? 'ok' : ''; };
 const stLogo = (vid, size, st) => { const l = vid ? vlogo(vid, size) : h('span', { class: 'vlogo none', style: { width: size + 'px', height: size + 'px' } }, st === 'run' ? '' : '·'); if (st) { l.classList.add('st-' + st); if (st === 'run') l.style.animationDelay = '-' + (Math.floor(typeof performance !== 'undefined' ? performance.now() : Date.now()) % 1100) + 'ms'; } return l; };
 const tabName = m => { m = Strength.canon(m); return Brand.of(m) ? dotVer(Brand.short(m)) : m; };
 // 名称里的「置信度 / 推理分 / 平均用时」拆成小号彩色片段：和型号名分开，三者同一色系、深浅不同
@@ -745,7 +900,10 @@ const Tabs = {
     } else {
       t.touchedAt = Math.max(t.touchedAt || 0, now());
     }
-    if (focus) this.active = t.key;
+    if (focus) {
+      this.active = t.key;
+      if (sid && typeof RunningTracker !== 'undefined') RunningTracker.markViewed(sid);
+    }
     this.enforceLimit(t.key);
     this.save(); UI.renderTabs(); if (focus) UI.showTab();
     return t;
@@ -792,6 +950,7 @@ const Seg = {
   off: false,
   use(mid, key, sig, make) { if (this.off) return make(); const s = this.of(mid), c = s.get(key); if (c && c.sig === sig && c.el && typeof c.el.nodeType === 'number') return c.el; const el = make(c?.el && typeof c.el.nodeType === 'number' ? c.el : null); if (el && typeof el.nodeType === 'number') s.set(key, { sig, el }); else s.delete(key); return el; },
   box(mid, key, make) { if (this.off) return make(); const s = this.of(mid); let c = s.get(key); if (!c || !c.el || typeof c.el.nodeType !== 'number') { c = { sig: 'box', el: make() }; s.set(key, c); } return c.el; },
+  drop(mid) { if (mid) this.all.delete(mid); },
   clear() { this.all.clear(); },
 };
 // 长文本流式渲染：分成「已闭合的头部块」和「活动尾部」。头部每块只渲染一次、以后原样复用；每帧只重新渲染尾部那一小段。
@@ -1101,10 +1260,21 @@ const CmdTranslate = (() => {
     return !!b && !/^\d+$/.test(b) && !/[(){};'"`|<>,$]/.test(b) && !NOT_FILE[b];
   }
   function filterFiles(list) { return (list || []).filter(looksLikeFile); }
+  function compactFile(p, maxLen = 18) {
+    let b = shortName(p);
+    if (!b) return '';
+    b = b.replace(/([0-9a-f]{6,8})-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/ig, '$1');
+    if (b.length <= maxLen) return b;
+    const dot = b.lastIndexOf('.');
+    const ext = (dot > 0 && b.length - dot <= 7) ? b.slice(dot) : '';
+    const stem = ext ? b.slice(0, dot) : b;
+    const keep = Math.max(4, maxLen - ext.length - 1);
+    return stem.slice(0, keep) + '…' + ext;
+  }
   function disp(p) {
     const b = shortName(p);
     if (/[*?]/.test(b)) { const sg = String(p).replace(/\/+$/, '').split('/'); return sg.slice(-2).join('/'); }
-    return b;
+    return compactFile(b, 18);
   }
   function names(list, max) {
     const n = list.map(disp);
@@ -1283,7 +1453,7 @@ const CmdTranslate = (() => {
           }
           if (a.indexOf('-m') >= 0) { const mod = a[a.indexOf('-m') + 1] || ''; if (mod === 'py_compile' || mod === 'compileall') { act('语法检查 ' + a.slice(a.indexOf('-m') + 2).filter(x => x.charAt(0) !== '-').map(shortName).join('、'), 6); return; } act(/^(pytest|unittest)$/.test(mod) ? '跑测试' : mod === 'pip' ? (/install/.test(joined) ? '安装依赖' : 'pip') : '运行 ' + mod, 7); return; }
           if (/\/api\/handoff\/notes/.test(cmd) && /payload|notes_set/.test(cmd)) { act('更新交接笔记', 9, true); card({ k: 'notes', label: '交接笔记' }); return; }
-          if (a.indexOf('-c') >= 0 || script === '-' || !script || /<</.test(ln)) { act('运行 Python 脚本', 4); return; }
+          if (a.indexOf('-c') >= 0 || script === '-' || !script || /<</.test(ln)) { act('py脚本', 4); return; }
           if (/(^|\/)(pull|push)file\.py$/.test(script)) { act(/pull/.test(script) ? '从本机拉取' : '写回本机', 9, true); return; }
           if (/\$/.test(script)) { act('运行脚本', 6); return; }
           if (/(^|[\/_.-])(tests?|e2e|spec)([\/_.-]|$)|run-tests/i.test(script)) { act('跑测试', 8); return; }
@@ -1292,7 +1462,7 @@ const CmdTranslate = (() => {
         if (name === 'node') {
           if (a.indexOf('--test') >= 0) { act('跑测试', 8); return; }
           if (a.indexOf('--check') >= 0) { act('语法检查 ' + plain.map(shortName).join('、'), 6); return; }
-          if (a.indexOf('-e') >= 0 || a.indexOf('-p') >= 0) { act('运行 JS 片段', 4); return; }
+          if (a.indexOf('-e') >= 0 || a.indexOf('-p') >= 0 || sub === '-' || !sub || /<</.test(ln)) { act('js片段', 4); return; }
           if (/\$/.test(sub)) { act('运行脚本', 6); return; }
           if (/(^|[\/_.-])(tests?|e2e|spec)([\/_.-]|$)|run-tests/i.test(sub)) { act('跑测试', 8); return; }
           act(/build/i.test(sub) ? '构建' : '运行 ' + shortName(sub || 'node'), 6); return;
@@ -1394,9 +1564,23 @@ const CmdTranslate = (() => {
     if (!m) return false;
     return (ec === 2 && m[1] === 'wait') || (ec === 5 && /^(say|note|call)$/.test(m[1]));
   }
+  function isTimeout(p) {
+    if (!p) return false;
+    if (p._superseded) return true;
+    const o = p.output && typeof p.output === 'object' ? p.output : {};
+    if (o.status === 'timeout' || o.timed_out || o.exit_code === 124) return true;
+    const cmd = String((p.input || {}).command || p.inputText || '');
+    if (o.exit_code === 137 && /\btimeout\b/.test(cmd)) return true;
+    if (o.exit_code === 28 && /\bcurl\b/.test(cmd)) return true;
+    if (/\b(?:chatroom\.py|qj\.py|bridge_sync\.py)\b.*\b(?:wait|ask-wait|say)\b/.test(cmd) && typeof o.exit_code === 'number' && o.exit_code !== 0) return true;
+    const errStr = String(p.errorText || o.error || o.stderr || '');
+    if (p.state === 'output-error' && /timeout|timed?\s*out|etimedout|超时/i.test(errStr)) return true;
+    if (typeof o.exit_code === 'number' && o.exit_code !== 0 && /(?:TimeoutError|ReadTimeout|ConnectTimeout|SocketTimeout|timed?\s*out|ETIMEDOUT|ECONNABORTED|请求超时|连接超时|等待超时|执行超时|响应超时)/i.test(errStr)) return true;
+    return false;
+  }
   function failed(p) {
     const o = p?.output;
-    if (benignExit(p)) return false;
+    if (benignExit(p) || isTimeout(p)) return false;
     return p?.state === 'output-error' || p?.state === 'output-denied' || (o && typeof o === 'object' && typeof o.exit_code === 'number' && o.exit_code !== 0);
   }
   function endState(p) {
@@ -1404,6 +1588,7 @@ const CmdTranslate = (() => {
     if (o.status === 'timeout' || o.timed_out) return { k: 'timeout', t: '超时（可能还在跑）' };
     if (p?.state === 'output-error' && /abort|cancel|interrupt|stop/i.test(String(p.errorText || o.error || ''))) return { k: 'stop', t: '已中断' };
     if (o.exit_code === 124) return { k: 'timeout', t: '超时（退出码 124）' };
+    if (isTimeout(p)) return { k: 'timeout', t: '注意（超时' + (typeof o.exit_code === 'number' ? ' · 退出码 ' + o.exit_code : '') + '）' };
     if (failed(p)) return { k: 'fail', t: '失败' + (typeof o.exit_code === 'number' ? '（退出码 ' + o.exit_code + '）' : '') };
     return null;
   }
@@ -1436,21 +1621,21 @@ const CmdTranslate = (() => {
         ? lineDiff(inp.old_text ?? inp.old_string ?? inp.old_str, inp.new_text ?? inp.new_string ?? inp.new_str)
         : (!isRd && typeof (inp.content ?? inp.text) === 'string' ? { add: countLines(inp.content ?? inp.text), del: 0 } : null);
       r = {
-        text: verb + shortName(pth),
-        segs: [{ k: isRd ? 'read' : 'edit', t: verb + shortName(pth) }],
+        text: verb + compactFile(pth, 18),
+        segs: [{ k: isRd ? 'read' : 'edit', t: verb + compactFile(pth, 16) }],
         stat: st,
         ops: isRd ? { read: [pth] } : { edit: [pth] },
         acts: [],
       };
     } else if (n === 'present_file' && (inp.path || inp.file_path)) {
       const pth = inp.path || inp.file_path;
-      r = { text: '展示 ' + shortName(pth), segs: [{ k: 'read', t: '展示 ' + shortName(pth) }], ops: { read: [pth] }, acts: [] };
+      r = { text: '展示 ' + compactFile(pth, 18), segs: [{ k: 'read', t: '展示 ' + compactFile(pth, 16) }], ops: { read: [pth] }, acts: [] };
     } else if (/^(web_search|search|image_search)$/.test(n) && inp.query) {
-      const q = String(inp.query).trim().slice(0, 24);
+      const q = String(inp.query).trim().slice(0, 16);
       const lbl = (n === 'image_search' ? '搜图 ' : '搜索 ') + q;
       r = { text: lbl, segs: [{ k: 'search', t: lbl }], ops: { search: 1 }, acts: [] };
     } else if (/^(fetch_page|fetch)$/.test(n) && inp.url) {
-      const u = host(inp.url) || String(inp.url).slice(0, 24);
+      const u = host(inp.url) || String(inp.url).slice(0, 18);
       r = { text: '抓取 ' + u, segs: [{ k: 'web', t: '抓取 ' + u }], ops: {}, acts: [] };
     } else {
       r = { text: '', segs: [], ops: {}, acts: [] };
@@ -1466,12 +1651,42 @@ const CmdTranslate = (() => {
     return typeof Prefs === 'undefined' || Prefs.cmdTranslate !== false;
   }
 
+  function compactChipText(raw) {
+    let s = String(raw || '').trim();
+    s = s
+      .replace(/^(?:运行 Python 脚本|Python|py脚本)$/i, 'py脚本')
+      .replace(/^(?:运行 JS 片段|运行 node|Node|js片段)$/i, 'js片段')
+      .replace(/^运行脚本$/, '脚本')
+      .replace(/^编译 TypeScript$/, '编译 TS')
+      .replace(/^压缩\/打包文件$/, '打包')
+      .replace(/^处理媒体文件$/, '处理媒体')
+      .replace(/^检查进程还在不在$/, '查进程')
+      .replace(/^查看进程$/, '查进程')
+      .replace(/^查看端口$/, '查端口')
+      .replace(/^查看磁盘$/, '查磁盘')
+      .replace(/^停止后台进程$/, '停进程')
+      .replace(/^读进程日志(?:\s*·\s*等待\s*\S+)?$/, '进程日志')
+      .replace(/^(?:超时|注意)（[^）]*）$/, '注意')
+      .replace(/^超时$/, '注意')
+      .replace(/^(\d+)条超时$/, '$1条注意')
+      .replace(/^失败（[^）]*）$/, '失败')
+      .replace(/^网络请求\s+/, '请求 ')
+      .replace(/^语法检查\s+(.+)$/, (_, f) => '检查 ' + compactFile(f.split('、')[0], 12))
+      .replace(/^(改|读|写|展示|删除)\s+([^、]+)、.+?\s+等\s+(\d+)\s+个$/, (_, v, f1, cnt) => `${v} ${compactFile(f1, 14)} 等${cnt}个`)
+      .replace(/^(改|读|写|展示|删除)\s+([^、]+)、([^、]+)$/, (_, v, f1) => `${v} ${compactFile(f1, 14)} +1`)
+      .replace(/^(改|读|写|展示|删除)\s+(\S+)$/, (_, v, f1) => `${v} ${compactFile(f1, 16)}`);
+    if (s.length > 20) s = s.slice(0, 19) + '…';
+    return s;
+  }
+
   function makeChipEl(seg) {
-    const sp = seg.t.indexOf(' ');
-    const verb = /^(改|读|写|搜索|搜图|抓取|展示|删除) /.test(seg.t) && sp > 0 ? seg.t.slice(0, sp) : '';
-    return h('span', { class: 'ct-c ct-' + (seg.k || 'act') + (seg.sub ? ' ct-sub' : '') },
+    const raw = String(seg.t || '');
+    const txt = compactChipText(raw);
+    const sp = txt.indexOf(' ');
+    const verb = /^(改|读|写|搜索|搜图|抓取|展示|删除) /.test(txt) && sp > 0 ? txt.slice(0, sp) : '';
+    return h('span', { class: 'ct-c ct-' + (seg.k || 'act') + (seg.sub ? ' ct-sub' : ''), title: raw !== txt ? raw : null },
       verb ? h('b', {}, verb) : null,
-      verb ? seg.t.slice(sp) : seg.t);
+      verb ? txt.slice(sp) : txt);
   }
 
   function makeStatEl(stat) {
@@ -1484,9 +1699,9 @@ const CmdTranslate = (() => {
   function renderRowChips(p, st) {
     if (!isEnabled()) return null;
     const r = partInfo(p);
-    let segs = (r.segs || []).slice();
+    let segs = (r.segs || []).slice(0, 2);
     if (!segs.length && r.cards?.length) {
-      segs = r.cards.map(c => ({ k: c.k === 'push' || c.k === 'pull' || c.k === 'notes' ? 'sync' : c.k === 'web' ? 'web' : 'chat', t: c.label + (c.meta ? ' · ' + c.meta : '') }));
+      segs = r.cards.slice(0, 2).map(c => ({ k: c.k === 'push' || c.k === 'pull' || c.k === 'notes' ? 'sync' : c.k === 'web' ? 'web' : 'chat', t: c.label + (c.meta ? ' · ' + c.meta : '') }));
     }
     const e = st === 'run' ? null : endState(p);
     if (e && (e.k === 'timeout' || e.k === 'stop' || (e.k === 'fail' && p?.output && typeof p.output === 'object' && typeof p.output.exit_code === 'number'))) {
@@ -1496,7 +1711,7 @@ const CmdTranslate = (() => {
     if (!segs.length && !statEl) return null;
     return h('span', { class: 'ct-x', 'data-ct': r.text || '' },
       ...segs.map(makeChipEl),
-      r.more ? h('span', { class: 'ct-more' }, '…') : null,
+      (r.more || (r.segs && r.segs.length > 2)) ? h('span', { class: 'ct-more' }, '…') : null,
       statEl);
   }
 
@@ -1518,8 +1733,8 @@ const CmdTranslate = (() => {
     const feN = Object.keys(fe).map(shortName);
     Object.keys(fr).forEach(x => { if (fe[x] || feN.indexOf(shortName(x)) >= 0) delete fr[x]; });
     const nR = Object.keys(fr).length, nE = Object.keys(fe).length;
-    const few = (o, n) => n <= 2 ? names(Object.keys(o), 2) : n + ' 个文件';
-    const times = n => n > 1 ? ' ' + n + ' 次' : '';
+    const few = (o, n) => n === 1 ? compactFile(Object.keys(o)[0], 14) : n + '个文件';
+    const times = n => n > 1 ? ' ' + n + '次' : '';
     const segs = [];
     if (nP) segs.push({ k: 'sync', t: '写回本机' + times(nP) });
     if (nL) segs.push({ k: 'sync', t: '拉取' + times(nL) });
@@ -1527,12 +1742,12 @@ const CmdTranslate = (() => {
     const nMain = segs.length;
     if (nE) segs.push({ k: 'edit', t: '改 ' + few(fe, nE) });
     if (nR) segs.push({ k: 'read', t: '读 ' + few(fr, nR) });
-    if (nS) segs.push({ k: 'search', t: '搜索 ' + nS + ' 次' });
-    if (nT) segs.push({ k: 'test', t: '测试 ' + nT + ' 次' });
-    if (nB) segs.push({ k: 'build', t: '构建 ' + nB + ' 次' });
+    if (nS) segs.push({ k: 'search', t: '搜索 ' + nS + '次' });
+    if (nT) segs.push({ k: 'test', t: '测试 ' + nT + '次' });
+    if (nB) segs.push({ k: 'build', t: '构建 ' + nB + '次' });
     if (nMain) { for (let si = nMain; si < segs.length; si++) segs[si].sub = 1; }
-    if (nTo) segs.push({ k: 'timeout', t: nTo + ' 条超时' });
-    if (nSt) segs.push({ k: 'stop', t: nSt + ' 条中断' });
+    if (nTo) segs.push({ k: 'timeout', t: nTo + '条注意' });
+    if (nSt) segs.push({ k: 'stop', t: nSt + '条中断' });
     const stat = (add || del) ? { add, del } : null;
     return { segs, stat, fails, nTo, nSt, nR, nE, nS, nT, nB, add, del };
   }
@@ -1542,8 +1757,10 @@ const CmdTranslate = (() => {
     const g = groupSummary(doneTools);
     const statEl = makeStatEl(g.stat);
     if (!g.segs.length && !statEl) return null;
+    const topSegs = g.segs.slice(0, 2);
     return h('span', { class: 'ct-x ct-grp' },
-      ...g.segs.map(makeChipEl),
+      ...topSegs.map(makeChipEl),
+      g.segs.length > 2 ? h('span', { class: 'ct-more' }, '…') : null,
       statEl);
   }
 
@@ -1556,6 +1773,7 @@ const CmdTranslate = (() => {
     looksLikeFile,
     kindOf,
     endState,
+    isTimeout,
     benignExit,
     partInfo,
     groupSummary,
@@ -1632,8 +1850,8 @@ const R = {
   tool(p) {
     const name = p.toolName || String(p.type).replace(/^tool-/, '');
     const inp = R.tinput(p);
-    const st = p.state === 'output-available' ? (p.preliminary ? 'run' : (p.output?.exit_code != null && p.output.exit_code !== 0 ? 'bad' : 'ok')) : p.state === 'output-error' || p.state === 'output-denied' ? 'bad' : 'run';
-    const lab = { ok: '完成', bad: '失败', run: p.state === 'input-streaming' ? '准备中' : '执行中' }[st];
+    const st = R.tstate(p);
+    const lab = { ok: '完成', warn: '注意', bad: '失败', run: p.state === 'input-streaming' ? '准备中' : '执行中' }[st] || '完成';
     const sum = typeof inp === 'object' && inp ? (inp.command || inp.path || inp.url || inp.query || inp.file_path || Object.values(inp).find(v => typeof v === 'string') || '') : String(inp || '');
     const d = h('details', { class: 'tool ' + st }, h('summary', {}, icon('tool'), h('b', {}, name), h('code', { class: 'tool-sum' }, String(sum).split('\n')[0].slice(0, 140)), h('span', { class: 'tool-st' }, st === 'run' ? h('i', { class: 'spin' }) : null, lab)));
     const body = h('div', { class: 'tool-b' });
@@ -1762,12 +1980,27 @@ const R = {
     }
     return text;
   },
-  tstate(p) { return p.state === 'output-available' ? (p.preliminary ? 'run' : (p.output?.exit_code != null && p.output.exit_code !== 0 ? 'bad' : 'ok')) : p.state === 'output-error' || p.state === 'output-denied' ? 'bad' : 'run'; },
+  tstate(p) {
+    if (p?.state === 'output-available') {
+      if (p.preliminary) return p._superseded ? 'warn' : 'run';
+      if (CmdTranslate.isTimeout(p)) return 'warn';
+      if (CmdTranslate.benignExit(p)) return 'ok';
+      return (p.output?.exit_code != null && p.output.exit_code !== 0) ? 'bad' : 'ok';
+    }
+    if (p?._superseded || CmdTranslate.isTimeout(p)) return 'warn';
+    return (p?.state === 'output-error' || p?.state === 'output-denied') ? 'bad' : 'run';
+  },
   isWrite(p) { const n = R.tname(p).toLowerCase(), i = R.tinput(p); return /^(write_?file|create_?file|write)$/.test(n) && i && typeof i === 'object' && (i.path || i.file_path); },
   tlabel(n) { const m = { bash: 'Bash', shell: 'Bash', run_command: 'Bash', read_file: 'Read', edit_file: 'Edit', str_replace: 'Edit', write_file: 'Write', web_search: 'Search', fetch_page: 'Fetch', fetch: 'Fetch', list_files: 'List', glob: 'Glob', grep: 'Grep', image_search: 'Image search', generate_image: 'Generate image', generate_speech: 'Speech', add_voice: 'Voice', present_file: 'Present', start_process: 'Start process', stop_process: 'Stop process', get_process_output: 'Process output', ask_user: 'Ask', propose_plan: 'Plan', python: 'Python', code_interpreter: 'Python' }; return m[n.toLowerCase()] || n.replace(/[_-]+/g, ' ').replace(/^\w/, c => c.toUpperCase()); },
   toolStarts: new Map(),
   toolDurs: new Map(),
+  toolEnds: new Map(),
   nudgedTools: new Set(),
+  fmtClockSec(ts) {
+    const dt = new Date(Number(ts) || Date.now());
+    const p2 = v => String(v).padStart(2, '0');
+    return p2(dt.getHours()) + ':' + p2(dt.getMinutes()) + ':' + p2(dt.getSeconds());
+  },
   fmtDurMs(ms, live = false) {
     if (ms == null || !Number.isFinite(+ms) || +ms < 0) return '';
     ms = +ms;
@@ -1784,8 +2017,17 @@ const R = {
     if (ms == null && tid && R.toolDurs.has(tid)) ms = R.toolDurs.get(tid);
     return R.fmtDurMs(ms, false);
   },
+  chatOfEl(el) {
+    const sid = el?.closest?.('[data-wsid]')?.getAttribute('data-wsid') || (typeof UI !== 'undefined' && UI.els?.chat?.sid) || (typeof Tabs !== 'undefined' && Tabs.cur?.sid) || null;
+    if (sid && typeof Chats !== 'undefined' && typeof Chats.get === 'function') {
+      const ch = Chats.get(sid);
+      if (ch) return ch;
+    }
+    if (typeof UI !== 'undefined' && UI.els?.chat) return UI.els.chat;
+    return (typeof Tabs !== 'undefined' && Tabs.cur && ('busy' in Tabs.cur || 'live' in Tabs.cur || 'streaming' in Tabs.cur)) ? Tabs.cur : null;
+  },
   async nudgeBash(el, p, tid, why = 'manual') {
-    const c = (typeof Tabs !== 'undefined' && Tabs.cur) ? Tabs.cur : null;
+    const c = R.chatOfEl(el);
     const curP = el?.__curPart || p;
     if (!c) return;
     if (why === 'timeout' && (!c.busy || !c.live || R.tstate(curP) !== 'run' || R.nudgedTools.has(tid))) return;
@@ -1797,11 +2039,11 @@ const R = {
     setTimeout(() => {
       try {
         if (why === 'timeout') {
-          if (typeof c.send === 'function' && !c.busy) void c.send('继续', [], null, { autoContinue: true });
+          if (typeof c.send === 'function' && !c.busy) void c.send('继续', { autoContinue: true });
         } else if (typeof Drafts !== 'undefined' && typeof Drafts.sendNow === 'function') {
           void Drafts.sendNow(c, '继续', []);
         } else if (typeof c.send === 'function') {
-          void c.send('继续', []);
+          void c.send('继续', {});
         }
       } catch {}
     }, 650);
@@ -1879,20 +2121,23 @@ const R = {
     if (p.errorText) body.append(h('pre', { class: 'err' }, p.errorText));
     return body;
   },
-  toolRow(p, key) {
+  toolRow(p, key, opts = null) {
     const rawSt = R.tstate(p), n = R.tname(p), inp = R.tinput(p);
-    const chatCur = (typeof Tabs !== 'undefined' && Tabs.cur) ? Tabs.cur : null;
-    const isStaleToolRun = rawSt === 'run' && !Hitl.name(p) && chatCur && (!chatCur.busy || (chatCur.live && Array.isArray(chatCur.live.parts) && !chatCur.live.parts.includes(p)));
-    const st = isStaleToolRun ? 'bad' : rawSt;
+    const chatCur = R.chatOfEl(null);
+    const chatCurActive = Boolean(chatCur && (typeof Hitl !== 'undefined' && typeof Hitl.blocked === 'function' ? Hitl.blocked(chatCur) : (chatCur.busy || chatCur.live)));
+    const isStaleToolRun = rawSt === 'run' && !Hitl.name(p) && chatCur && (!chatCurActive || (chatCur.live && Array.isArray(chatCur.live.parts) && !chatCur.live.parts.includes(p)));
+    const st = isStaleToolRun ? 'warn' : rawSt;
     const tid = String(p?.toolCallId || p?.id || key || ''), isBash = /^(bash|shell|run_command)$/i.test(n);
-    if (st === 'run') {
+    if (st === 'run' || opts?.showAppearTime) {
       if (!R.toolStarts.has(tid)) R.toolStarts.set(tid, Number(p?._startAt) > 0 ? Number(p._startAt) : Date.now());
       if (R.toolStarts.size > 600) R.toolStarts.delete(R.toolStarts.keys().next().value);
-    } else if (R.toolStarts.has(tid) && !R.toolDurs.has(tid)) {
+    }
+    if (st !== 'run' && R.toolStarts.has(tid) && !R.toolDurs.has(tid)) {
       R.toolDurs.set(tid, Math.max(0, Date.now() - R.toolStarts.get(tid)));
       if (R.toolDurs.size > 600) R.toolDurs.delete(R.toolDurs.keys().next().value);
     }
-    const startAt = R.toolStarts.get(tid) || Number(p?._startAt) || Date.now();
+    const startAt = Number(p?._startAt) > 0 ? Number(p._startAt) : (R.toolStarts.get(tid) || Date.now());
+    if (opts?.showAppearTime && p && typeof p === 'object' && !p._startAt) p._startAt = startAt;
     const durSpan = h('span', { class: 'tr-dur' + (st === 'run' ? ' is-live' : '') }, st === 'run' ? R.fmtDurMs(Date.now() - startAt, true) : R.tdur(p, tid));
     let d = null;
     const nudgeBtn = (st === 'run' && isBash) ? h('button', {
@@ -1907,32 +2152,102 @@ const R = {
           title: p._routeStart.title || (p._routeStart.fromLabel ? `路由切换：${p._routeStart.fromLabel} → ${p._routeStart.toLabel}` : `路由提示：对话疑似 ${p._routeStart.toLabel}`),
         }, p._routeStart.fromLabel ? `⚠️ 路由切换：${p._routeStart.fromLabel} → ${p._routeStart.toLabel}` : `⚠️ 路由提示：对话疑似 ${p._routeStart.toLabel}`)
       : null;
-    const stIcon = st === 'run' ? h('i', { class: 'spin' }) : h('span', { class: 'tr-st' }, st === 'ok' ? '✓' : '✗');
+    if (st !== 'run' && opts?.showAppearTime) {
+      if (!R.toolEnds.has(tid)) {
+        const initEnd = Number(p?._endAt) > 0 ? Number(p._endAt) : Date.now();
+        R.toolEnds.set(tid, initEnd);
+        if (R.toolEnds.size > 600) R.toolEnds.delete(R.toolEnds.keys().next().value);
+      }
+      if (p && typeof p === 'object' && !p._endAt) p._endAt = R.toolEnds.get(tid);
+    }
+    const isTurnActive = Boolean(opts?.live || st === 'run' || chatCurActive);
+    const fmtSec = ms => {
+      const v = Math.max(0, Math.floor((Number(ms) || 0) / 1000));
+      if (v < 60) return v + 's';
+      const m = Math.floor(v / 60), sc = v % 60, hr = Math.floor(m / 60), mm = m % 60;
+      return hr > 0 ? (hr + 'h ' + mm + 'm ' + sc + 's') : (m + 'm ' + sc + 's');
+    };
+    const computePhaseInfo = (curPart) => {
+      const curSt = R.tstate(curPart);
+      if (curSt === 'run') {
+        const elap = Math.max(0, Date.now() - startAt);
+        return {
+          text: '运行 ' + fmtSec(elap),
+          tip: '当前命令正在运行中（已运行 ' + fmtSec(elap) + '）',
+          mode: 'run',
+          elap,
+        };
+      }
+      if (!R.toolEnds.has(tid)) {
+        const eTs = Number(curPart?._endAt) > 0 ? Number(curPart._endAt) : Date.now();
+        R.toolEnds.set(tid, eTs);
+        if (curPart && typeof curPart === 'object' && !curPart._endAt) curPart._endAt = eTs;
+      }
+      const endAt = Number(curPart?._endAt) > 0 ? Number(curPart._endAt) : (R.toolEnds.get(tid) || Date.now());
+      const waitMs = Math.max(0, Date.now() - endAt);
+      return {
+        text: '等待 ' + fmtSec(waitMs),
+        tip: '本条命令已结束，正在等待下一条步骤或回复输出（已等待 ' + fmtSec(waitMs) + '）',
+        mode: 'wait',
+        elap: waitMs,
+      };
+    };
+    const initPhase = (opts?.showAppearTime && isTurnActive) ? computePhaseInfo(p) : null;
+    const appearSpan = initPhase
+      ? h('span', {
+          class: 'tr-appear-time is-active is-' + initPhase.mode + (initPhase.elap >= 300000 ? ' is-stuck' : initPhase.elap >= 120000 ? ' is-warn' : ''),
+          title: initPhase.tip,
+        }, initPhase.text)
+      : null;
+    const stIcon = st === 'run' ? h('i', { class: 'spin' }) : h('span', { class: 'tr-st' + (st === 'warn' ? ' warn' : st === 'bad' ? ' bad' : ''), title: st === 'warn' ? '注意' : null }, st === 'ok' ? '✓' : st === 'warn' ? '!' : '✗');
     const ctChips = CmdTranslate.renderRowChips(p, st);
     const rawCmdTip = (inp && typeof inp === 'object' && (inp.command || inp.path || inp.file_path)) ? String(inp.command || inp.path || inp.file_path) : '';
     const smTitle = rawCmdTip ? ((inp?.cwd ? '（' + inp.cwd + '）\n' : '') + (rawCmdTip.length > 800 ? rawCmdTip.slice(0, 800) + '…' : rawCmdTip)) : null;
     const sm = h('summary', smTitle ? { title: smTitle } : {}, icon('term', 'ti'), h('span', { class: 'min-w-0 tr-main' }, h('span', { class: 'tr-used' }, 'used'), h('b', {}, R.tlabel(n)),
       stIcon,
-      durSpan, ctChips, h('code', { class: 'tr-sum' }, String(R.tsum(inp)).split('\n')[0].slice(0, 160))), routeStartTag, nudgeBtn, icon('chev', 'tr-chev'));
+      durSpan, ctChips, h('code', { class: 'tr-sum' }, String(R.tsum(inp)).split('\n')[0].slice(0, 160))), routeStartTag, nudgeBtn, appearSpan, icon('chev', 'tr-chev'));
     sm.__reactFiber = { memoizedProps: { part: R.extPart(p, key) }, return: null };
     const isOpen = !!R.openOf(key, false);
     d = R.keep(h('details', { class: 'trow ' + st + (isBash ? ' is-bash' : '') + (p?._routeStart ? ' is-route-start' : ''), open: isOpen || null }, sm), key);
     if (d.__durTm) { clearInterval(d.__durTm); d.__durTm = null; }
+    if (d.__appearTm) { clearInterval(d.__appearTm); d.__appearTm = null; }
     d.__curPart = p;
+    if (appearSpan && isTurnActive) {
+      const mountAppearAt = Date.now();
+      const tickAppear = () => {
+        if (!d.isConnected && Date.now() - mountAppearAt > 3000) { if (d.__appearTm) { clearInterval(d.__appearTm); d.__appearTm = null; } return; }
+        const curP = d.__curPart || p;
+        const cNow = R.chatOfEl(d);
+        const cNowActive = Boolean(cNow && (typeof Hitl !== 'undefined' && typeof Hitl.blocked === 'function' ? Hitl.blocked(cNow) : (cNow.busy || cNow.live)));
+        const stillActive = Boolean(cNow ? cNowActive : R.tstate(curP) === 'run');
+        if (!stillActive) {
+          appearSpan.remove();
+          if (d.__appearTm) { clearInterval(d.__appearTm); d.__appearTm = null; }
+          return;
+        }
+        const ph = computePhaseInfo(curP);
+        appearSpan.textContent = ph.text;
+        appearSpan.title = ph.tip;
+        appearSpan.className = 'tr-appear-time is-active is-' + ph.mode + (ph.elap >= 300000 ? ' is-stuck' : ph.elap >= 120000 ? ' is-warn' : '');
+      };
+      d.__appearTm = setInterval(tickAppear, 1000);
+    }
     if (st === 'run') {
       const mountAt = Date.now();
       const timeoutMs = ((typeof Prefs !== 'undefined' && Number(Prefs.bashTimeoutMin) > 0) ? Number(Prefs.bashTimeoutMin) : 60) * 60000;
       const tickDur = () => {
         const curP = d.__curPart || p;
-        const chat = (typeof Tabs !== 'undefined' && Tabs.cur) ? Tabs.cur : null;
+        const chat = R.chatOfEl(d);
+        const chatActive = Boolean(chat && (typeof Hitl !== 'undefined' && typeof Hitl.blocked === 'function' ? Hitl.blocked(chat) : (chat.busy || chat.live)));
         if (!d.isConnected && Date.now() - mountAt > 3000) { if (d.__durTm) { clearInterval(d.__durTm); d.__durTm = null; } return; }
-        if (R.tstate(curP) !== 'run' || (chat && !chat.busy && !chat.live)) {
+        if (R.tstate(curP, chat ? chatActive : true) !== 'run' || (chat && !chatActive)) {
           if (d.__durTm) { clearInterval(d.__durTm); d.__durTm = null; }
-          const endSt = R.tstate(curP) === 'ok' ? 'ok' : 'bad';
+          const rawEnd = R.tstate(curP);
+          const endSt = rawEnd === 'ok' ? 'ok' : (rawEnd === 'warn' || rawEnd === 'run') ? 'warn' : 'bad';
           d.classList.remove('run', 'is-stuck');
           d.classList.add(endSt);
           const spinEl = sm.querySelector('i.spin');
-          if (spinEl) spinEl.replaceWith(h('span', { class: 'tr-st' }, endSt === 'ok' ? '✓' : '✗'));
+          if (spinEl) spinEl.replaceWith(h('span', { class: 'tr-st' + (endSt === 'warn' ? ' warn' : endSt === 'bad' ? ' bad' : ''), title: endSt === 'warn' ? '注意' : null }, endSt === 'ok' ? '✓' : endSt === 'warn' ? '!' : '✗'));
           durSpan.className = 'tr-dur';
           durSpan.textContent = R.tdur(curP, tid);
           const oldCt = sm.querySelector('.ct-x');
@@ -1968,43 +2283,85 @@ const R = {
   // 工具组：前序已经跑完的收在折叠组里（默认收起）；始终把最新的一条工具/命令单行露在折叠组下面（不展开具体内容）
   group(g, key, live, labels) {
     const items = g.items, tools = items.filter(p => p.type !== 'reasoning');
-    let cut = items.length;
-    if (live) { const i = items.findIndex(p => p.type !== 'reasoning' && R.tstate(p) === 'run'); if (i >= 0) cut = i; }
     let lastToolIdx = -1;
     for (let k = items.length - 1; k >= 0; k--) { if (items[k]?.type !== 'reasoning') { lastToolIdx = k; break; } }
+    for (let k = 0; k < lastToolIdx; k++) {
+      const it = items[k];
+      if (it && it.type !== 'reasoning' && R.tstate(it) === 'run') it._superseded = true;
+    }
+    let cut = items.length;
+    if (live) { const i = items.findIndex((p, idx) => idx >= lastToolIdx && p.type !== 'reasoning' && R.tstate(p) === 'run'); if (i >= 0) cut = i; }
     if (lastToolIdx >= 0 && cut > lastToolIdx) cut = lastToolIdx;
     const doneItems = items.slice(0, cut), doneTools = doneItems.filter(p => p.type !== 'reasoning'), n = doneTools.length;
-    const bad = doneTools.filter(p => R.tstate(p) === 'bad').length;
-    const hasRouteStart = doneTools.some(p => p?._routeStart);
     const allBash = tools.every(p => /^(bash|shell|run_command)$/i.test(R.tname(p)));
     const what = allBash ? '命令' : '工具';
     const wrap = h('div', { class: 'tg-wrap' });
-    if (n) {
-      const grpChips = CmdTranslate.renderGroupChips(doneTools);
-      const gsm = h('summary', {}, icon('chevr', 'tg-chev'), icon('term', 'ti'), h('span', {}, '已运行' + what), h('span', { class: 'tg-n' }, String(n)), grpChips, bad ? h('span', { class: 'tg-bad' }, bad + ' 个失败') : null, hasRouteStart ? h('span', { class: 'tg-bad tg-route' }, '⚠️ 含路由转折') : null);
-      gsm.__reactFiber$extcompat = { memoizedProps: { parts: doneTools.map((x, j) => R.extPart(x, key + ':' + j)), isActive: cut < items.length }, return: null };
-      const isOpen = !!R.openOf(key, false);
-      const d = R.keep(h('details', { class: 'tgroup', open: isOpen || null }, gsm), key);
+    const appendFoldedSegment = (segEntries, segKey) => {
+      const segTools = segEntries.filter(e => e.p.type !== 'reasoning').map(e => e.p);
+      const segN = segTools.length;
+      if (!segN) {
+        segEntries.forEach(({ p, j }) => { const r = R.reasoning(p, false, key + ':r' + j, labels, live); if (r) wrap.append(r); });
+        return;
+      }
+      const bad = segTools.filter(p => R.tstate(p) === 'bad').length;
+      const warn = segTools.filter(p => R.tstate(p) === 'warn').length;
+      const hasRouteStart = segTools.some(p => p?._routeStart);
+      const grpChips = CmdTranslate.renderGroupChips(segTools);
+      const gsm = h('summary', {}, icon('chevr', 'tg-chev'), icon('term', 'ti'), h('span', { class: 'tg-lbl' }, '已运行' + what), h('span', { class: 'tg-n' }, String(segN)), grpChips, bad ? h('span', { class: 'tg-bad' }, bad + ' 个失败') : null, (!grpChips && warn) ? h('span', { class: 'tg-warn' }, warn + ' 个注意') : null, hasRouteStart ? h('span', { class: 'tg-bad tg-route' }, '⚠️ 含路由转折') : null);
+      gsm.__reactFiber$extcompat = { memoizedProps: { parts: segTools.map((x, j) => R.extPart(x, segKey + ':' + j)), isActive: cut < items.length }, return: null };
+      const isOpen = !!R.openOf(segKey, false);
+      const d = R.keep(h('details', { class: 'tgroup', open: isOpen || null }, gsm), segKey);
       const box = h('div', { class: 'tg-list' });
       const buildRows = () => {
-        if (box.__builtCount === doneItems.length) return;
+        if (box.__builtCount === segEntries.length) return;
         box.replaceChildren();
-        doneItems.forEach((p, j) => {
+        segEntries.forEach(({ p, j }) => {
           if (p.type === 'reasoning') { const r = R.reasoning(p, false, key + ':r' + j, labels, live); if (r) box.append(r); }
           else {
             const rowKey = key + ':' + j, rowSig = R.tstate(p) + ':' + (p.errorText ? 1 : 0) + ':' + (R.openOf(rowKey, false) ? 1 : 0) + ':' + (p._routeStart ? 'R' : '') + ':' + (CmdTranslate.isEnabled() ? 1 : 0);
             box.append(Seg.use(key, 'tr:' + j, rowSig, () => R.toolRow(p, rowKey)));
           }
         });
-        box.__builtCount = doneItems.length;
+        box.__builtCount = segEntries.length;
       };
-      if (isOpen || doneItems.length <= 8) buildRows();
+      if (isOpen || segEntries.length <= 8) buildRows();
       else d.addEventListener('toggle', () => { if (d.open) buildRows(); });
       d.append(box); wrap.append(d);
+    };
+    if (n) {
+      let curSeg = [];
+      let segIdx = 0;
+      const flushSeg = () => {
+        if (!curSeg.length) return;
+        const sKey = segIdx === 0 ? key : (key + ':s' + segIdx);
+        segIdx++;
+        appendFoldedSegment(curSeg, sKey);
+        curSeg = [];
+      };
+      doneItems.forEach((p, j) => {
+        if (p.type !== 'reasoning' && R.tstate(p) === 'bad') {
+          flushSeg();
+          const rowKey = key + ':' + j, rowSig = R.tstate(p) + ':' + (p.errorText ? 1 : 0) + ':' + (R.openOf(rowKey, false) ? 1 : 0) + ':' + (p._routeStart ? 'R' : '') + ':' + (CmdTranslate.isEnabled() ? 1 : 0);
+          wrap.append(h('div', { class: 'tg-live tg-fail-out' }, Seg.use(key, 'tr:' + j, rowSig, () => R.toolRow(p, rowKey))));
+        } else {
+          curSeg.push({ p, j });
+        }
+      });
+      flushSeg();
     } else doneItems.forEach((p, j) => { const r = R.reasoning(p, false, key + ':r' + j, labels, live); if (r) wrap.append(r); });
     if (cut < items.length) {
       const tail = h('div', { class: 'tg-live' });
-      items.slice(cut).forEach((p, k) => { if (p.type === 'reasoning') { const r = R.reasoning(p, false, key + ':r' + (cut + k), labels, live); if (r) tail.append(r); } else tail.append(R.toolRow(p, key + ':' + (cut + k))); });
+      const tailSlice = items.slice(cut);
+      let lastTailToolIdx = -1;
+      for (let tIdx = tailSlice.length - 1; tIdx >= 0; tIdx--) { if (tailSlice[tIdx]?.type !== 'reasoning') { lastTailToolIdx = tIdx; break; } }
+      tailSlice.forEach((p, k) => {
+        if (p.type === 'reasoning') {
+          const r = R.reasoning(p, false, key + ':r' + (cut + k), labels, live);
+          if (r) tail.append(r);
+        } else {
+          tail.append(R.toolRow(p, key + ':' + (cut + k), k === lastTailToolIdx ? { showAppearTime: true, live } : null));
+        }
+      });
       wrap.append(tail);
     }
     return wrap;
@@ -2044,7 +2401,9 @@ const R = {
   extractInlineHtmlSegments(text, streaming = false) {
     const raw = String(text || '');
     if (raw.length < 100) return null;
-    const memoKey = (streaming ? '1:' : '0:') + raw.length + ':' + raw.slice(0, 48) + ':' + raw.slice(-48);
+    let rawHash = 2166136261;
+    for (let hi = 0; hi < raw.length; hi += Math.max(1, raw.length > 8192 ? 4 : 1)) { rawHash ^= raw.charCodeAt(hi); rawHash = Math.imul(rawHash, 16777619) >>> 0; }
+    const memoKey = (streaming ? '1:' : '0:') + raw.length + ':' + rawHash.toString(36) + ':' + raw.slice(0, 48) + ':' + raw.slice(-48);
     if (this._inlineHtmlMemoKey === memoKey) return this._inlineHtmlMemoVal;
     if (this._inlineHtmlMemoMap.has(memoKey)) {
       const hit = this._inlineHtmlMemoMap.get(memoKey);
@@ -2201,7 +2560,7 @@ const R = {
       ev.stopPropagation();
       openPv('run');
     });
-    let bodyBuilt = false, preEl = null;
+    let bodyBuilt = false, preEl = null, wrap = null;
     const ensureBody = () => {
       if (bodyBuilt) return;
       bodyBuilt = true;
@@ -2220,7 +2579,7 @@ const R = {
     const getWsidFn = () => sidOf(d);
     const onOpenFn = mode => openPv(mode || 'run');
     const card = HtmlPreview.card(key, { path: vpath, running, get: getTxt, getWsid: getWsidFn, onOpen: onOpenFn });
-    let wrap = h('div', { class: 'wc-wrap inline-html-wrap' }, d, card);
+    wrap = h('div', { class: 'wc-wrap inline-html-wrap' }, d, card);
     wrap._detailsEl = d;
     wrap._titleEl = titleEl;
     wrap._linesEl = linesEl;
@@ -2247,7 +2606,7 @@ const R = {
       if ((String(p.type || '').startsWith('tool-') || p.type === 'dynamic-tool') && R.isWrite(p)) {
         const inp = R.tinput(p) || {}, path = R.normPath(inp.path || inp.file_path || '');
         if (!path || !HtmlPreview.previewable(path)) continue;
-        seen.set(path, { path, running: R.tstate(p) === 'run', get: () => R.latestFileText(sid, path, p) });
+        seen.set(path, { path, running: Boolean(Hitl.blocked(chat) && R.tstate(p, true) === 'run'), get: () => R.latestFileText(sid, path, p) });
       } else if (m.role === 'assistant' && p.type === 'text' && p.text) {
         const segs = R.extractInlineHtmlSegments(p.text, false);
         if (segs) {
@@ -2264,12 +2623,12 @@ const R = {
     R._writesCache.set(sid, { stamp, list });
     return list;
   },
-  writeCard(p, key) {
+  writeCard(p, key, live = false) {
     const inp = R.tinput(p) || {}, path = String(inp.path || inp.file_path || ''), short = R.normPath(path);
     const sidOf = el => el?.closest?.('[data-wsid]')?.getAttribute('data-wsid') || (typeof Tabs !== 'undefined' ? Tabs.cur?.sid : null) || null;
     const getTxt = () => R.latestFileText(sidOf(d), short, p);
     const text = (typeof inp.content === 'string' ? inp.content : typeof inp.text === 'string' ? inp.text : '') || R.latestFileText(null, short, p);
-    const lines = R.countLinesFast(text), st = R.tstate(p), name = path.split('/').pop() || path;
+    const lines = R.countLinesFast(text), st = R.tstate(p, live), name = path.split('/').pop() || path;
     const ext = (/\.([\w]+)$/.exec(name)?.[1] || 'plain').toUpperCase();
     const pv = HtmlPreview.previewable(path);   // html / svg：点这一行在右侧内嵌预览（箭头仍是展开代码）
     const wsm = h('summary', {}, h('span', { class: 'wc-w' }, 'Write'), pv ? h('code', { class: 'wc-p', title: '点击在右侧预览' }, short) : h('code', { class: 'wc-p fpath', 'data-fpath': short, title: '在工作区打开' }, short), h('span', { class: 'dim' }, lines ? lines + ' 行' : ''), st === 'run' ? h('i', { class: 'spin' }) : st === 'bad' ? h('span', { class: 'tr-st bad' }, '✗') : null, h('span', { class: 'grow' }), icon('chevr', 'tg-chev'));
@@ -2534,13 +2893,32 @@ const R = {
     const out = {}, el = R.message0(m, chat, isLast, out, seg);
     if (!out.kids) return el;
     prev.className = out.cls;
-    const liveNow = chat.live === m || !!(isLast && m.role === 'assistant' && chat?.busy && !chat?.waitingForeign);
+    const isSettledAsst0 = m.role === 'assistant' && !m.metadata?.pending && !m._incomplete && Boolean(m._finishedAt || m.metadata?.timing?.completedAt || m.metadata?.aborted || m.metadata?.error || m.metadata?.finishReason === 'stop' || m.metadata?.finishReason === 'end-turn');
+    const liveNow = !m.failed && !Hitl.idleWait(chat) && !(isSettledAsst0 && !chat?.streaming) && (chat.live === m || !!(isLast && m.role === 'assistant' && !isSettledAsst0 && Hitl.blocked(chat) && !chat?.waitingForeign));
     if (liveNow) prev.setAttribute('data-streaming', 'true'); else prev.removeAttribute('data-streaming');
     patchKids(prev, out.kids);
     return prev;
   },
   message0(m, chat, isLast, out, seg) {
-    const live = chat.live === m || !!(isLast && m.role === 'assistant' && chat?.busy && !chat?.waitingForeign);
+    const isUnverifiedCache = Boolean((chat?.cached && !chat?.loaded) || chat?._recoveringIncomplete);
+    const isIncTail = Boolean(isLast && m.role === 'assistant' && !m._userStopped && isUnverifiedCache && (
+      m.metadata?.pending ||
+      m._incomplete ||
+      m.status === 'pending' ||
+      m.status === 'streaming' ||
+      (typeof isIncompleteAssistantMsg === 'function' && isIncompleteAssistantMsg(m))
+    ));
+    if (isIncTail && chat && !chat.busy && !chat.loading && !chat._incSyncing && !(typeof window !== 'undefined' && window.__BRANA_BROWSE_MODE)) {
+      chat._incSyncing = true;
+      setTimeout(() => {
+        const p = (chat.isEvaluation && typeof EvalEngine !== 'undefined' && typeof EvalEngine.loadChat === 'function')
+          ? EvalEngine.loadChat(chat, true)
+          : (typeof chat.load === 'function' ? chat.load(true) : null);
+        Promise.resolve(p).catch(() => {}).finally(() => { chat._incSyncing = false; });
+      }, 30);
+    }
+    const isSettledAsst = m.role === 'assistant' && !m.metadata?.pending && !m._incomplete && Boolean(m._finishedAt || m.metadata?.timing?.completedAt || m.metadata?.aborted || m.metadata?.error || m.metadata?.finishReason === 'stop' || m.metadata?.finishReason === 'end-turn');
+    const live = !m.failed && !Hitl.idleWait(chat) && !(isSettledAsst && !chat?.streaming) && (chat.live === m || !!(isLast && m.role === 'assistant' && !isSettledAsst && ((Hitl.blocked(chat) && !chat?.waitingForeign) || isIncTail)));
     const segCls = m.role === 'assistant' && seg ? (seg.head ? ' seg-head' : seg.mid ? ' seg-mid' : seg.tail ? ' seg-tail' : '') : '';
     const isAutoCont = m.role === 'user' && !!(m._autoContinue || m.metadata?.autoContinue);
     const el = h('div', {
@@ -2561,15 +2939,19 @@ const R = {
         el.append(h('span', { class: 'auto-cont-pill', title: '检测到官方工具链中途停顿，已自动无感续接' }, h('i', { class: 'auto-cont-dot' }), h('span', {}, '⚡ 自动续接')));
         return el;
       }
-      const txt = (m.parts || []).filter(p => p.type === 'text').map(p => p.text).join('\n');
+      const txt = (m.parts || []).filter(p => p.type === 'text').map(p => p.text).join('\n') || String(m.text || '');
       const ups = userAtts(m);
       if (ups.length) el.append(h('div', { class: 'att-row mine' }, ups.map(u => attView(u, true))));
       const tr = (m.parts || []).filter(p => p.type === 'data-tool-results' && Array.isArray(p.data)).flatMap(p => p.data);
       if (tr.length) el.append(h('div', { class: 'hitl-chip' }, icon('check'), tr.map(r => R.hitlBrief(r, chat)).join('；')));
-      if (txt) el.append(h('div', { class: 'bubble prose', lang: '', translate: 'no', 'data-user-message-body-row': 'true' }, txt));
+      if (txt) el.append(h('div', { class: 'bubble prose' + (m.failed ? ' is-unsent' : ''), lang: '', translate: 'no', 'data-user-message-body-row': 'true' }, txt));
       if (!txt && tr.length) return el;
       const st = m._sentAt || idTime(m.id);
-      el.append(h('div', { class: 'msg-act', 'data-user-message-action': 'true' }, h('button', { class: 'ib', type: 'button', title: '复制', 'aria-label': 'Copy', onclick: () => copyText(txt) }, icon('copy')), st ? h('span', { class: 'mtime', title: '发送时间 ' + clockFull(st) }, clock(st)) : null));
+      el.append(h('div', { class: 'msg-act' + (m.failed ? ' is-failed' : ''), 'data-user-message-action': 'true' },
+        m.failed ? h('span', { class: 'msg-fail-tag', title: '该消息未发出（服务器未收到），点击右侧「重试」重新发送' }, '⚠ 未发出') : null,
+        m.failed ? h('button', { class: 'btn sm msg-retry-btn', type: 'button', title: '重新发送这条未发出的消息', onclick: ev => { ev.stopPropagation(); UI.retry(chat, m, false); } }, '↻ 重试') : null,
+        h('button', { class: 'ib', type: 'button', title: '复制', 'aria-label': 'Copy', onclick: () => copyText(txt) }, icon('copy')),
+        st ? h('span', { class: 'mtime', title: '发送时间 ' + clockFull(st) }, clock(st)) : null));
       return el;
     }
     // 正文区域保持同一个节点，段落按指纹复用（见 Seg）
@@ -2600,7 +2982,7 @@ const R = {
       // 开源思考（有可见思考文字）绝不能像 bash 一样被折叠进「已运行工具」中：先 flush 工具组，再独立标红展示
       if (p.type === 'reasoning' && !ThinkingStatus.visible(p) && grp && !isEvalMsg) return;
       flush();
-      if (isTool) { segs.push(Seg.use(mid, 'w:' + i, pSig(p), () => R.writeCard(p, mid + ':' + i))); return; }
+      if (isTool) { segs.push(Seg.use(mid, 'w:' + i, pSig(p) + (live ? ':L' : ''), () => R.writeCard(p, mid + ':' + i, live))); return; }
       if (p.type === 'text') {
         const streaming = live && p.state === 'streaming';
         const htmlSegs = R.extractInlineHtmlSegments(p.text, streaming);
@@ -2821,6 +3203,7 @@ const UI = {
             // 手机：账号旁边放调色板和设置
             h('button', { class: 'ib sbf-m sbf-thm', title: '切换主题（自动 / 浅色 / 深色）', 'aria-label': '切换主题', onclick: () => { const order = ['auto', 'light', 'dark']; Prefs.theme = order[(order.indexOf(Prefs.theme || 'auto') + 1) % order.length]; savePrefs(); this.applyTheme(); } }, icon('sun')),
             h('button', { class: 'ib sbf-m sbf-pal', title: '调色板：给窗口染色（按对话保存）', 'aria-label': '调色板', onclick: e => Palette.open(e.currentTarget) }, icon('palette')),
+            h('button', { class: 'ib sbf-m sbf-ext', title: '扩展程序（客户端与浏览器模式通用）', 'aria-label': '扩展程序', onclick: e => ExtPop.open(e.currentTarget) }, icon('ext')),
             h('button', { class: 'ib sbf-m sbf-set', title: '设置', 'aria-label': '设置', onclick: () => { this.closeDrawer(); this.settings(); } }, icon('gear')))),   // 刷新在底部栏（额度旁）
         h('div', { id: 'scrim', onclick: () => this.closeDrawer() }),
         h('main', { id: 'main' },
@@ -2882,7 +3265,7 @@ const UI = {
     document.documentElement.style.setProperty('--sbw', Math.max(200, Math.min(520, Prefs.sbW || 252)) + 'px');
     document.documentElement.style.setProperty('--dockw', Math.max(260, Math.min(520, Prefs.dockW || 300)) + 'px');
     $('#dockbtn')?.classList.toggle('on', wide ? Dock.open : !!Dock.mOpen);
-    Dock.render(); WS.render();
+    try { Dock.render(); } catch (e) { console.error(e); } try { WS.render(); } catch (e) { console.error(e); }
   },
   sbGrip() {
     const g = $('#sbgrip'); if (!g) return;
@@ -3128,7 +3511,9 @@ const UI = {
   },
   // 切换窗口时立刻把侧栏「当前对话」高亮挪过去：真正的重绘（renderList）手机上要等抽屉打开才画，这一步不依赖它
   markCur() {
-    const box = $('#list'); if (!box) return; const sid = Tabs.cur?.kind ? null : Tabs.cur?.sid;
+    const box = $('#list'); const sid = Tabs.cur?.kind ? null : Tabs.cur?.sid;
+    if (sid && typeof RunningTracker !== 'undefined') RunningTracker.markViewed(sid);
+    if (!box) return;
     for (const c of box.children) if (c.dataset?.sid !== undefined) c.classList.toggle('on', !!sid && c.dataset.sid === sid);
   },
   // 侧栏卡片（油猴格式）：logo 圆 · 型号短名 + 备注（小字、不加粗）· 右侧 MM-DD HH:MM；进行中 logo 顺时针转，出错红、完成绿
@@ -3157,15 +3542,19 @@ const UI = {
     const hasKnownModel = !!(isEvalEntry || r.vid || v.vid || (v.model && !/^(未识别|未知型号|待定)$/.test(String(v.model).trim())) || (mi?.name && !/^(未识别|未知型号|待定)$/.test(String(mi.name).trim()) && !mi?.pendingConfirm));
     const identSt = (!isEvalEntry && !gstep0 && !hasKnownModel && typeof BillingProbe !== 'undefined' && BillingProbe.identStatus) ? BillingProbe.identStatus(e.id, mi) : null;
     const gstep = gstep0 || identSt;
-    const isRunStep = !!(c?.busy || gstep0?.active || identSt?.status === 'running');
+    const isChatSettledIdle = Boolean(c?.loaded && !c?.cached && !c?.loading && !c?.busy && !(c?.streaming && !c?.peeking) && !c?._evalStreaming && !c?.cloudRunning && !c?.midTurnStall && !c?.fakeEnd && !c?._ka?.plan);
+    const isTrackedRun = !isChatSettledIdle && Boolean(typeof RunningTracker !== 'undefined' && RunningTracker.isTrackedRunning?.(e.id));
+    const isChatBusy = Boolean(c && (typeof Hitl !== 'undefined' ? Hitl.blocked(c) : c.busy));
+    const isRunStep = !!(isChatBusy || (c?.streaming && !c?.peeking && !(typeof Hitl !== 'undefined' && Hitl.idleWait(c))) || c?._evalStreaming || c?.cloudRunning || (!isChatSettledIdle && c?._startupResuming) || c?.midTurnStall || c?.fakeEnd || c?._ka?.plan || isTrackedRun || gstep0?.active);
     const on = e.id === cur, st = isRunStep ? 'run' : c && chatState(c) === 'bad' ? 'bad' : '';
     const topConfSig = !isEvalEntry && typeof BillingProbe !== 'undefined' && BillingProbe.topConfidence ? BillingProbe.topConfidence(e.id, mi) : null;
     const goldChat = typeof Gold !== 'undefined' && typeof Gold.hasChat === 'function' ? Gold.hasChat(e.id) : false;
-    const sig = [CardSelect.mode,CardSelect.ids.has(e.id),SideTools.scope,on, !!c?.busy, st, gstep?.text || '', gstep?.pct || 0, gstep?.status || '', r.vip, r.hit, r.tint, isBattleEntry ? 'battle' : (r.vid || v.vid), shown, note, tm, v.title, mi?.name, mi?.routed, mi?.reverseMatch, mi?.reverseScore, mi?.confidence, topConfSig, e.title, e.updatedAt, Fav.has(e.id), goldChat, mi?.fingerprint?.thinkSec, mi?.fingerprint?.reasoning?.score, isEvalEntry, isBattleEntry, battleStatus, e.mode, e.modality, e.modelAId, e.modelBId, c?.voteState?.voted, c?.voteState?.modelAName, c?.voteState?.modelBName].join('\u0001');
-    if (this._cards?.has(e.id)) return this.cardEl(r, cur, { e, c, v, mi, shown, note, tm, on, st, gstep, isBattleEntry, battleStatus });   // 同一会话出现两次（分页重叠）：第二个单独建
+    const hasDoneDot = Boolean(!on && !isRunStep && typeof RunningTracker !== 'undefined' && RunningTracker.isUnread(e.id));
+    const sig = [CardSelect.mode,CardSelect.ids.has(e.id),SideTools.scope,on, !!c?.busy, st, hasDoneDot ? 1 : 0, gstep?.text || '', gstep?.pct || 0, gstep?.status || '', r.vip, r.hit, r.tint, isBattleEntry ? 'battle' : (r.vid || v.vid), shown, note, tm, v.title, mi?.name, mi?.reverseLabel, mi?.reverseEffort, mi?.tier, mi?.routed, mi?.reverseMatch, mi?.reverseScore, mi?.confidence, topConfSig, e.title, e.updatedAt, Fav.has(e.id), goldChat, mi?.fingerprint?.thinkSec, mi?.fingerprint?.reasoning?.score, isEvalEntry, isBattleEntry, battleStatus, e.mode, e.modality, e.modelAId, e.modelBId, c?.voteState?.voted, c?.voteState?.modelAName, c?.voteState?.modelBName].join('\u0001');
+    if (this._cards?.has(e.id)) return this.cardEl(r, cur, { e, c, v, mi, shown, note, tm, on, st, gstep, isBattleEntry, battleStatus, hasDoneDot });   // 同一会话出现两次（分页重叠）：第二个单独建
     const prev = this._cardOld?.get(e.id);
     if (prev && prev.sig === sig) { this._cards?.set(e.id, prev); return prev.el; }
-    const el = this.cardEl(r, cur, { e, c, v, mi, shown, note, tm, on, st, gstep, isBattleEntry, battleStatus });
+    const el = this.cardEl(r, cur, { e, c, v, mi, shown, note, tm, on, st, gstep, isBattleEntry, battleStatus, hasDoneDot });
     this._cards?.set(e.id, { sig, el });
     return el;
   },
@@ -3202,10 +3591,10 @@ const UI = {
     if (think != null) bits.push('思考 ' + think + 's');
     return { conf, tip: bits.join(' · ') };
   },
-  cardEl(r, cur, { e, c, v, mi, shown, note, tm, on, st, gstep, isBattleEntry, battleStatus }) {
+  cardEl(r, cur, { e, c, v, mi, shown, note, tm, on, st, gstep, isBattleEntry, battleStatus, hasDoneDot }) {
     const cm = isBattleEntry ? { conf: null, tip: '' } : this.cardMetrics(shown, mi, e.id);
     const battleSt = isBattleEntry ? (battleStatus === '生成中' ? 'run' : battleStatus === '已完成' ? 'ok' : 'wait') : st;
-    return h('div', { 'data-sid':e.id, role:'option', 'aria-selected':String(CardSelect.ids.has(e.id)), tabindex:'0', class: 'card' + (CardSelect.ids.has(e.id)?' selected':'') + (CardSelect.mode?' selecting':'') + (on ? ' on' : '') + ((c?.busy || gstep?.active || st === 'run') ? ' busy' : '') + (gstep?.active ? ' gstep-card' : '') + (r.vip ? ' vip' : r.hit ? ' hit' : '') + (Fav.has(e.id) ? ' fv' : '') + (cm.conf != null ? ' cf' : ''), style: r.tint || cm.conf != null ? { ...(r.tint ? { '--tint': r.tint } : {}), ...(cm.conf != null ? { '--cp': cm.conf + '%' } : {}) } : null, title: [v.title, mi?.routed ? ('⚠️ 检测到中途路由：' + (mi.routeFrom ? mi.routeFrom + ' → ' : '') + (mi.routeTo || mi.name || '')) : '', mi?.fingerprint ? Fingerprint.details(mi) : '', mi?.name && mi.name !== v.model ? '型号：' + mi.name : '', note ? '备注：' + note : ''].filter(Boolean).join('\n'),
+    return h('div', { 'data-sid':e.id, role:'option', 'aria-selected':String(CardSelect.ids.has(e.id)), tabindex:'0', class: 'card' + (CardSelect.ids.has(e.id)?' selected':'') + (CardSelect.mode?' selecting':'') + (on ? ' on' : '') + (st === 'run' ? ' busy' : '') + (hasDoneDot ? ' has-done-dot' : '') + (gstep?.active ? ' gstep-card' : '') + (r.vip ? ' vip' : r.hit ? ' hit' : '') + (Fav.has(e.id) ? ' fv' : '') + (cm.conf != null ? ' cf' : ''), style: r.tint || cm.conf != null ? { ...(r.tint ? { '--tint': r.tint } : {}), ...(cm.conf != null ? { '--cp': cm.conf + '%' } : {}) } : null, title: [v.title, mi?.routed ? ('⚠️ 检测到中途路由：' + (mi.routeFrom ? mi.routeFrom + ' → ' : '') + (mi.routeTo || mi.name || '')) : '', mi?.fingerprint ? Fingerprint.details(mi) : '', mi?.name && mi.name !== v.model ? '型号：' + mi.name : '', note ? '备注：' + note : ''].filter(Boolean).join('\n'),
       onmousedown: ev=>{if(ev.ctrlKey||ev.metaKey||ev.shiftKey)ev.preventDefault();},
       ontouchstart: ev => {
         if (ev.touches?.length !== 1 || ev.target.closest('.more,.card-check')) return;
@@ -3228,7 +3617,7 @@ const UI = {
       ontouchend: ev => { const el = ev.currentTarget; if (el._lpT) { clearTimeout(el._lpT); el._lpT = 0; } },
       ontouchcancel: ev => { const el = ev.currentTarget; if (el._lpT) { clearTimeout(el._lpT); el._lpT = 0; } },
       onkeydown:ev=>{if(ev.target!==ev.currentTarget)return;if(ev.key===' '){ev.preventDefault();CardSelect.toggle(e.id);this.renderList();}else if(ev.key==='Enter'){ev.preventDefault();ev.currentTarget.click();}},
-      onclick: ev => { if (now() - (this._menuOpenAt || 0) < 500) { ev.preventDefault(); ev.stopPropagation(); return; } if (ev.target.closest('.more,.card-check')) return; if(CardSelect.click(e.id,ev)){ev.preventDefault();this.renderList();return;} this.saveScroll(); Tabs.open(e.id, { title: e.title }); this.closeDrawer(); },
+      onclick: ev => { if (now() - (this._menuOpenAt || 0) < 500) { ev.preventDefault(); ev.stopPropagation(); return; } if (ev.target.closest('.more,.card-check')) return; if(CardSelect.click(e.id,ev)){ev.preventDefault();this.renderList();return;} this.saveScroll(); const tHit = Tabs.list.find(x => x.sid === e.id); if (tHit) this.scrolls.delete(tHit.key); Tabs.open(e.id, { title: e.title }); const cTarget = Chats.get(e.id); if (cTarget?.loaded && !cTarget.loading) cTarget.quickSync?.(true); this.closeDrawer(); },
       onmouseenter: () => { if(CardSelect.mode)return; clearTimeout(this._pfT); this._pfT = setTimeout(() => { try { chatOf(e.id).prefetch(); } catch {} }, 400); },
       onmouseleave: () => clearTimeout(this._pfT),
       onauxclick: ev => { if (ev.button === 1) Tabs.open(e.id, { focus: false, title: e.title }); },
@@ -3243,6 +3632,7 @@ const UI = {
       h('span', { class: 'cside' }, note ? h('span', { class: 'cnote' }, note) : null, h('span', { class: 'ctime' }, tm)),
       h('a', { href: '/agent/' + e.id, 'data-sidebar': 'menu-button', class: 'ext-sb-link', tabindex: '-1', onclick: ev => { ev.preventDefault(); } }, h('span', { class: 'truncate' }, e.title || shown)),
       h('button', { class: 'more', onclick: ev => { ev.stopPropagation(); this.itemMenu(ev, e); } }, icon('dots')),
+      hasDoneDot ? h('i', { class: 'card-done-dot', title: '后台对话已完成（点击查看后消失）' }) : null,
       gstep?.active ? h('i', { class: 'gstep-bar', 'aria-hidden': 'true' }, h('b', { style: { width: gstep.pct + '%' } })) : null,
       h('i', { class: 'pulse-wave', 'aria-hidden': 'true' }));
   },
@@ -3341,7 +3731,7 @@ const UI = {
   },
 
   // ----- 对话视图 -----
-  saveScroll() { const sc = $('#view .scroller'), t = Tabs.cur; if (sc && t) this.scrolls.set(t.key, { top: sc.scrollTop, stick: sc.scrollTop + sc.clientHeight > sc.scrollHeight - 40 }); const ta = $('#view textarea'); if (ta && t) { t.draft = ta.value; Tabs.save(); } },
+  saveScroll() { const sc = $('#view .scroller'), t = Tabs.cur; if (sc && t) { const cCur = t.sid ? Chats.get(t.sid) : null; this.scrolls.set(t.key, { top: sc.scrollTop, stick: Boolean(cCur?._hotOnly || sc.scrollTop + sc.clientHeight > sc.scrollHeight - 40), lastMsgId: cCur?.messages?.at(-1)?.id || '' }); } const ta = $('#view textarea'); if (ta && t) { t.draft = ta.value; Tabs.save(); } },
   showTab() {
     const t = Tabs.cur, prevKey = this.pane.key; let view = $('#view');
     // 手机：切换窗口不影响输入法。原来在打字（输入框有焦点）→ 焦点先交给一个看不见的占位输入框，换完页面再交回新输入框，
@@ -3371,7 +3761,7 @@ const UI = {
     setTimeout(() => { this.layout(); Bar.render(); }, 0);
     // 手机：目标窗口已经有搭好的页 → 只换角色（那一页拿走 id="view"，当前页退到旁边），不重建、不挪任何节点
     if (Pager.on() && t && prevKey !== t.key) {
-      if (Pager.adopt(t, kbWas)) return;
+      if (Pager.adopt(t, kbWas)) { try { if (typeof Dock !== 'undefined' && Dock.render) Dock.render(true); } catch (e) { console.error(e); } return; }
       view = Pager.shelve(t) || view;
     }
     if (t && prevKey === t.key && !t.kind && sidNow && view) {
@@ -3383,11 +3773,13 @@ const UI = {
         if (!curChat.loaded && !curChat.loading) curChat.load().catch(() => {});
         else if (curChat.loaded && !curChat.loading) curChat.quickSync?.();
         if (kbWas) this.autoFocus(this.els.composer, kbWas);
+        try { if (typeof Dock !== 'undefined' && Dock.render) Dock.render(true); } catch (e) { console.error(e); }
         Pager.ensureSoon();
         return;
       }
     }
     this.fillView(t, view, kbWas);
+    try { if (typeof Dock !== 'undefined' && Dock.render) Dock.render(true); } catch (e) { console.error(e); }
     Pager.ensureSoon();
   },
   // 把窗口 t 的完整页面搭进 view（当前页，或 side = 相邻的预搭页：由 withPane 切好 this.pane）
@@ -3434,10 +3826,13 @@ const UI = {
     }
     // 可视高度变了（手机弹出输入法把输入框顶上去、输入框变高）：聊天内容跟着一起往上顶，保持底部对齐，不是原地不动被盖住
     { let lastH = 0; const ro = new ResizeObserver(() => { if (!scroller.isConnected) { ro.disconnect(); return; } const hh = scroller.clientHeight; if (lastH && hh && hh !== lastH) { if (P.stick !== false) scroller.scrollTop = scroller.scrollHeight; else scroller.scrollTop += lastH - hh; } if (hh) lastH = hh; }); ro.observe(scroller); P.resizeObserver=ro; }
-    const sv = this.scrolls.get(t.key); P.stick = sv ? sv.stick : true;
+    const sv = this.scrolls.get(t.key);
     try { chat.hydrateSync?.(); } catch {}
+    const tailIdNow = chat.messages?.at(-1)?.id || '';
+    const hasNewTailSinceSave = Boolean(sv && sv.lastMsgId && tailIdNow && sv.lastMsgId !== tailIdNow);
+    P.stick = (!sv || chat._hotOnly || !chat.loaded || hasNewTailSinceSave) ? true : sv.stick;
     this.renderChat(chat, true);
-    if (sv && !sv.stick) scroller.scrollTop = sv.top;
+    if (sv && !P.stick) scroller.scrollTop = sv.top;
     if (!chat.loaded && !chat.loading) chat.load().catch(() => {}); else if (chat.loaded && !chat.loading) chat.quickSync?.();
     if (!side) this.autoFocus(composer, kbWas);
   },
@@ -3466,6 +3861,18 @@ const UI = {
         Models.set(chat.sid, { name: directName, sure: true, directMode: true, provider: 'Direct 直连锁定' });
       }
     }
+    if ((chat._startupResuming || chat._recoveringIncomplete) && chat.loaded && !chat.cached && !chat.loading && chat.status === 'streaming' && !chat.live && !chat.awaitId && !chat.preSend && !chat.sending) {
+      const lastVis = (chat.messages || []).filter(m => m && !m._held && !(typeof isPhantomFinishStub === 'function' && isPhantomFinishStub(m))).at(-1);
+      const isTailSettled = lastVis && lastVis.role === 'assistant' && !lastVis.metadata?.pending && !lastVis._incomplete && Boolean(lastVis._finishedAt || lastVis.metadata?.timing?.completedAt || lastVis.metadata?.aborted || lastVis.metadata?.error || lastVis.metadata?.finishReason === 'stop' || lastVis.metadata?.finishReason === 'end-turn');
+      if (isTailSettled && !(typeof Hitl !== 'undefined' && Hitl.idleWait(chat))) {
+        chat.status = 'idle';
+        chat.phase = '';
+        chat._startupResuming = false;
+        chat._recoveringIncomplete = false;
+        if (typeof RunningTracker !== 'undefined') { try { RunningTracker.onChatUpdate(chat); } catch {} }
+        if (typeof SendQ !== 'undefined' && (chat.queue || []).length) setTimeout(() => { try { SendQ.check(chat); } catch {} }, 50);
+      }
+    }
     const mi = Models.get(chat.sid), v = Titles.view(chat.sid, chat.title), st = chatState(chat);
     const modelVersion=this.modelStamp(mi);
     const tip = [v.title, mi && [mi.internal && '内部：' + mi.internal, mi.request && '请求：' + mi.request, mi.provider && '提供方：' + mi.provider, mi.routed && 'Brana 已改派'].filter(Boolean).join('\n')].filter(Boolean).join('\n');
@@ -3491,7 +3898,7 @@ const UI = {
           h('span', { class: 'grow' }),
           this.renderPelicanMenuBtn(Tabs.cur, chat, 'battle'),
           h('button', { class: 'ib mdbtn', title: '导出这个对话的全部内容为 Markdown', onclick: () => void ChatExport.run(chat) }, icon('doc')),
-          chat.busy ? h('span', { class: 'phase' }, h('i', { class: 'spin' }), h('span', { class: 'ph-t' }, phase), chat.sentAt ? h('span', { class: 'dim anc-since', 'data-since': chat.sentAt }, '') : null) : null
+          Hitl.blocked(chat) ? h('span', { class: 'phase' }, h('i', { class: 'spin' }), h('span', { class: 'ph-t' }, phase), chat.sentAt ? h('span', { class: 'dim anc-since', 'data-since': chat.sentAt }, '') : null) : null
         ));
       } else {
         E.head.replaceChildren(...K(h('div', { class: 'chead-t', title: tip, 'aria-label': 'Session cumulative cost' }, stLogo(v.vid || Brand.of(mi?.name), 18, st), h('span', { class: 'chead-n' }, ...[].concat(v.note || metricName(mi?.name || v.model, cardName) || v.plain || '对话')), v.note && (mi?.name || v.model) ? h('span', { class: 'chead-md' }, '-', ...[].concat(metricName(mi?.name || v.model, cardName))) : null),
@@ -3536,7 +3943,7 @@ const UI = {
           !isEvalChat ? h('button', { class: 'ib pelbtn' + (PelicanTest.isRunning(chat) ? ' run' : ''), 'aria-label': PelicanTest.isRunning(chat) ? '停止鹈鹕' : '鹈鹕测试', disabled: (chat.busy && !PelicanTest.isRunning(chat)), title: PelicanTest.isRunning(chat) ? '停止鹈鹕测试' + (chat.probeProgress ? '（' + chat.probeProgress + '）' : '') : '鹈鹕测试：点一下直接发送 2D 鹈鹕骑车动态 SVG 标准测试题', onclick: e => { e.stopPropagation(); void PelicanTest.start(chat); } }, icon('pelican')) : isDirectChat ? this.renderPelicanMenuBtn(Tabs.cur, chat, 'direct') : null,
           h('button', { class: 'ib mdbtn', title: '导出这个对话的全部内容（正文、思考、bash 命令和输出、工具调用）为 Markdown，自己选保存位置', onclick: () => void ChatExport.run(chat) }, icon('doc')),
           !isEvalChat ? h('button', { class: 'ib wsbtn', title: WS.shown ? '收起工作区' : '显示工作区（沙盒文件）', onclick: () => { WS.set(!WS.shown); scheduleChat(chat); } }, icon('folder')) : null,
-          chat.busy ? h('span', { class: 'phase' }, h('i', { class: 'spin' }), h('span', { class: 'ph-t' }, phase), chat.sentAt ? h('span', { class: 'dim anc-since', 'data-since': chat.sentAt }, '') : null) : null));
+          Hitl.blocked(chat) ? h('span', { class: 'phase' }, h('i', { class: 'spin' }), h('span', { class: 'ph-t' }, phase), chat.sentAt ? h('span', { class: 'dim anc-since', 'data-since': chat.sentAt }, '') : null) : null));
       }
     }
     // 消息
@@ -3631,8 +4038,19 @@ const UI = {
         const isLast = i === lastIdx || (i === lastIdx - 1 && chat.messages[lastIdx]?.role === 'user' && false);
         const seg = segMeta[i] || null;
         const segKey = seg ? (seg.head ? 'H' : seg.mid ? 'M' : seg.tail ? 'T' : '') + (seg.hideFoot ? '0' : '1') + ':' + (seg.turnStartAt || 0) : '';
-        const isRunningTail = chat.live === m || !!(i === lastIdx && m.role === 'assistant' && chat.busy && !chat.waitingForeign);
-        const key = (m.v || 0) + '|' + segKey + '|' + (i === lastIdx ? 'L' + chat.status + (chat.hitlStage?.size || 0) : '') + '|' + (m.failed ? 'f' : '') + '|' + (isRunningTail ? 'live' : '') + '|' + this.modelsV + ':' + modelVersion + '|' + ((m.parts||[]).some(p=>p.type==='reasoning')?ThinkingStatus.label(chat,m,isRunningTail):'');
+        const isUnverifiedCache = Boolean((chat.cached && !chat.loaded) || chat._recoveringIncomplete);
+        const isIncTail = Boolean(i === lastIdx && m.role === 'assistant' && !m._userStopped && isUnverifiedCache && (
+          m.metadata?.pending ||
+          m._incomplete ||
+          m.status === 'pending' ||
+          m.status === 'streaming' ||
+          (typeof isIncompleteAssistantMsg === 'function' && isIncompleteAssistantMsg(m))
+        ));
+        const isSettledTailAsst = m.role === 'assistant' && !m.metadata?.pending && !m._incomplete && Boolean(m._finishedAt || m.metadata?.timing?.completedAt || m.metadata?.aborted || m.metadata?.error || m.metadata?.finishReason === 'stop' || m.metadata?.finishReason === 'end-turn');
+        const isRunningTail = !m.failed && !Hitl.idleWait(chat) && !(isSettledTailAsst && !chat?.streaming) && (chat.live === m || !!(i === lastIdx && m.role === 'assistant' && !isSettledTailAsst && ((Hitl.blocked(chat) && !chat.waitingForeign) || isIncTail)));
+        const pArr = m.parts || [], pLen = pArr.length, lastP = pLen ? pArr[pLen - 1] : null;
+        const cSig = pLen + ':' + (lastP?.type || '') + ':' + (lastP?.text?.length || 0) + ':' + (lastP?.state || '') + ':' + (m.text?.length || 0);
+        const key = (m.v || 0) + '|' + cSig + '|' + segKey + '|' + (i === lastIdx ? 'L' + chat.status + (chat.hitlStage?.size || 0) : '') + '|' + (m.failed ? 'f' : '') + '|' + (isRunningTail ? 'live' : '') + '|' + this.modelsV + ':' + modelVersion + '|' + (pArr.some(p=>p.type==='reasoning')?ThinkingStatus.label(chat,m,isRunningTail):'');
         let c = this.cache.get(m.id);
         if (!c || c.key !== key || !c.el || typeof c.el.nodeType !== 'number') {
           let el = null;
@@ -3648,7 +4066,7 @@ const UI = {
         if (c?.el && typeof c.el.nodeType === 'number') els.push(c.el);
       });
       // 「正在输入」占位复用同一个节点：否则每帧都换新节点，整串消息被重新挂载、整页重排
-      if (chat.busy && chat.messages[lastIdx]?.role === 'user' && !chat.waitingForeign) {
+      if (Hitl.blocked(chat) && chat.messages[lastIdx]?.role === 'user' && !chat.waitingForeign) {
         const t = this.cache.get('__typing') || (() => { const t = h('div', { class: 'msg assistant' }, h('div', { class: 'msg-body typing-row' }, h('div', { class: 'typing' }, h('i'), h('i'), h('i')), h('span', { class: 'typing-st' }))); this.cache.set('__typing', t); return t; })();
         const st = t.querySelector('.typing-st'); if (st) st.textContent = chat.dlvText?.() || ''; els.push(t);
       }
@@ -3663,32 +4081,53 @@ const UI = {
         }
       }
       // 前面插入了更早的消息：以当前看到的第一条消息为锚点保持位置，不跳动
+      const wasHotUpgrade = Boolean(E.wasHotOnly && !chat._hotOnly);
+      E.wasHotOnly = Boolean(chat._hotOnly);
+      const curTailMsg = chat.messages.at(-1);
+      const curTailSig = curTailMsg ? (curTailMsg.id + ':' + (curTailMsg.parts?.length || 0) + ':' + (curTailMsg.parts?.at(-1)?.text?.length || 0)) : '';
+      const tailGrewFresh = Boolean(E.lastTailSig && curTailSig && E.lastTailSig !== curTailSig && (!window.__ancLastScrollAt || Date.now() - window.__ancLastScrollAt > 1500));
+      E.lastTailSig = curTailSig;
+      const effStick = stick || wasHotUpgrade || tailGrewFresh;
+      if (wasHotUpgrade || tailGrewFresh) this.pane.stick = true;
       const structureChanged=els.length!==T.childElementCount||els.some((e,i)=>T.children[i]!==e);
-      const prevTop=structureChanged&&!stick?sc.scrollTop:0;let anchor=null,anchorOff=0;
-      if (structureChanged&&!stick) for (const c of T.children) { if (c.offsetTop + c.offsetHeight > prevTop) { anchor = c; anchorOff = c.offsetTop - prevTop; break; } }
+      const prevTop=structureChanged&&!effStick?sc.scrollTop:0;let anchor=null,anchorOff=0;
+      if (structureChanged&&!effStick) for (const c of T.children) { if (c.offsetTop + c.offsetHeight > prevTop) { anchor = c; anchorOff = c.offsetTop - prevTop; break; } }
       if (structureChanged) {
         patchKids(T, els);
         const ids=new Set(chat.messages.map(m=>m.id));for(const id of this.cache.keys())if(id!=='__older'&&id!=='__typing'&&!ids.has(id))this.cache.delete(id);
-        if (!stick && anchor && anchor.isConnected) { const d = anchor.offsetTop - prevTop - anchorOff; if (d) sc.scrollTop = prevTop + d; }
+        if (!effStick && anchor && anchor.isConnected) { const d = anchor.offsetTop - prevTop - anchorOff; if (d) sc.scrollTop = prevTop + d; }
       }
       if (fk && document.activeElement !== ae) { const n = [...T.querySelectorAll('[data-fk]')].find(x => x.dataset.fk === fk); if (n && !n.disabled) { try { n.focus({ preventScroll: true }); if (fsel && n.setSelectionRange) n.setSelectionRange(fsel[0], fsel[1]); } catch {} } }
       if (isEvalChat && typeof HtmlPreview !== 'undefined' && typeof HtmlPreview.syncEval === 'function') {
         try { HtmlPreview.syncEval(chat); } catch {}
       }
     }
-    if (stick || full) sc.scrollTop = sc.scrollHeight;
+    if (stick || full || E.wasHotOnly === false && E._forceBotOnce) { E._forceBotOnce = false; sc.scrollTop = sc.scrollHeight; }
+    else if (this.pane.stick !== false) sc.scrollTop = sc.scrollHeight;
     { const hh = sc.scrollHeight, grew = !!E.lastSH && hh > E.lastSH + 4; E.lastSH = hh; this.paintToBot(grew && !stick); }
     // 错误条
     E.errbar.replaceChildren();
-    if (chat.error && !chat.busy) {
-      const cap = /recaptcha|captcha|人机验证/i.test(chat.error), lastUser = chat.messages.at(-1)?.role === 'user' ? chat.messages.at(-1) : null;
-      const isRejected = /rejected this request|拒绝请求|死节点|超限/i.test(chat.error || '');
-      E.errbar.append(...K(h('span', {}, '⚠ ' + chat.error), h('span', { class: 'grow' }),
+    if ((chat.busy || chat.streaming || chat.live) && Array.isArray(chat.messages) && typeof SendQ !== 'undefined' && typeof SendQ.demoteToQueue === 'function') {
+      for (let i = chat.messages.length - 1; i >= 0; i--) {
+        if (chat.messages[i]?.role === 'user' && chat.messages[i]?.failed) {
+          SendQ.demoteToQueue(chat, chat.messages[i], { silent: true, running: true });
+        }
+      }
+    }
+    const failedUserMsg = !chat.busy ? ([...(chat.messages || [])].reverse().find(m => m?.role === 'user' && m.failed) || null) : null;
+    if ((chat.error || failedUserMsg) && !chat.busy) {
+      const errText = chat.error || '上一条消息未发出（服务器未收到），请点击重试';
+      const cap = /recaptcha|captcha|人机验证/i.test(errText);
+      const lastUser = failedUserMsg || (chat.messages.at(-1)?.role === 'user' ? chat.messages.at(-1) : null);
+      const isRejected = /rejected this request|拒绝请求|死节点|超限/i.test(errText);
+      const isBattleMode = Boolean(chat.evalMode === 'battle' || (typeof EvalView !== 'undefined' && EvalView.isBattleChat?.(chat)));
+      const isUnsentOnly = Boolean(failedUserMsg && !cap && !isRejected);
+      E.errbar.append(...K(h('span', {}, '⚠ ' + errText), h('span', { class: 'grow' }),
         cap ? h('button', { class: 'btn sm', onclick: () => this.retry(chat, lastUser, true) }, '人机验证后重试') : null,
-        !cap && !isRejected ? h('button', { class: 'btn sm', title: '保留当前轮次已有进度，直接发送新消息「继续」推进流程（不回退、不重发长文）', onclick: () => this.continueFlow(chat) }, '⚡ 继续推进') : null,
+        !cap && !isRejected && !isBattleMode && !isUnsentOnly ? h('button', { class: 'btn sm', title: '保留当前轮次已有进度，直接发送新消息「继续」推进流程（不回退、不重发长文）', onclick: () => this.continueFlow(chat) }, '⚡ 继续推进') : null,
         isRejected ? h('button', { class: 'btn sm ghost', title: '跳过导致超限或死锁的上一轮，回退到再上一轮正常节点重发', onclick: () => this.rewindAndRetry(chat, lastUser) }, '⏪ 回退上一节点') : null,
         isRejected ? h('button', { class: 'btn sm ghost', title: '在当前对话内开启全新空工作区分支（清空沙盒与报错历史，保留当前模型）', onclick: () => this.resetWsBranch(chat, lastUser) }, '🧹 重置工作区救活') : null,
-        h('button', { class: 'btn sm ghost', onclick: () => this.retry(chat, lastUser, false) }, '重试'),
+        h('button', { class: 'btn sm' + (isUnsentOnly ? '' : ' ghost'), onclick: () => this.retry(chat, lastUser, false) }, '↻ 重试'),
         h('button', { class: 'ib', onclick: () => { chat.error = null; chat.emit(); } }, icon('x'))));
     }
     // 输入框按钮状态
@@ -3900,7 +4339,7 @@ const UI = {
       else if (!lastUser && chat.messages.at(-1)?.role === 'user') lastUser = chat.messages.at(-1);
       if (lastUser && removedErrTail) lastUser._streamRejected = true;
       const capFail = /recaptcha|captcha|人机验证|prompt failed/i.test(chat.error || '');
-      if (lastUser && (lastUser.failed || capFail || removedErrTail)) { await chat.send(lastUser.parts.filter(p => p.type === 'text').map(p => p.text).join('\n'), { v2, files: lastUser.metadata?.uploads, retryOf: lastUser }); }
+      if (lastUser && (lastUser.failed || capFail || removedErrTail)) { const retryTxt = (lastUser.parts || []).filter(p => p.type === 'text').map(p => p.text).join('\n') || String(lastUser.text || ''); await chat.send(retryTxt, { v2, files: lastUser.metadata?.uploads, retryOf: lastUser }); }
       else await chat.regenerate({ v2 });
     } catch (e) { if (!/取消/.test(e.message)) toast(describe(e), 'err'); }
   },
@@ -3981,7 +4420,7 @@ const UI = {
     // 排队中的消息（对话进行中时按「队列」加入；本轮结束后合并自动发出）
     const qrow = h('div', { class: 'q-row' });
     const paintQ = () => {
-      const c = tab.sid ? Chats.get(tab.sid) : null, q = c?.queue || [], held = (c?.messages || []).filter(m => m._held);
+      const c = tab.sid ? Chats.get(tab.sid) : null, q = (c && typeof SendQ !== 'undefined' && typeof SendQ.of === 'function' ? SendQ.of(c) : c?.queue) || [], held = (c?.messages || []).filter(m => m._held);
       const qMode = SendQ.mode(c);
       const sig = q.map(i => i.id || i.at).join(',') + '|' + qMode + '|' + SendQ.status(c) + '|' + held.map(m => m.id).join(',');
       if (qrow._sig === sig) return; qrow._sig = sig;
@@ -4074,7 +4513,7 @@ const UI = {
         return;
       }
       // 空闲但还有排队的（比如上一轮出错暂停了）：和这次输入合并一起发
-      if (c?.queue?.length) {
+      if (c && SendQ.of(c).length) {
         if (atts.some(a => a.state === 'bad')) { toast('有附件上传失败，请先移除', 'err'); return; }
         if (!(await this.confirmPureIpBeforeSend())) return;
         if (ta.value.trim() || atts.length) { if (ta.value.trim()) this.inputHistory.push(ta.value); if (!SendQ.add(c, ta.value.trim(), atts.slice())) return; histIdx = -1; histSavedDraft = ''; ta.value = ''; tab.draft = ''; atts.length = 0; autosize(); Tabs.save(); paintAtt(); }

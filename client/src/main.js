@@ -1925,7 +1925,7 @@ ipcMain.handle('host:protoFetch', async (e, u, opt = {}) => {
         ? curPath.replace(/([?&])dpl=dpl_[A-Za-z0-9]{16,48}(?:&|$)/gi, (m, p1) => (m.endsWith('&') ? p1 : '')).replace(/[?&]$/, '')
         : curPath;
       const curUrl = 'https://arena.ai' + baseCostPath;
-      const r = await ses.fetch(curUrl, {
+      let r = await ses.fetch(curUrl, {
         method,
         headers,
         body: opt?.body !== undefined ? String(opt.body) : undefined,
@@ -1938,16 +1938,33 @@ ipcMain.handle('host:protoFetch', async (e, u, opt = {}) => {
       if (apiDpl && r.status === 403 && !CORE_COST_DPLS.has(apiDpl)) EXPIRED_COST_DPLS.add(apiDpl);
       if (r.status === 429 && opt?.costShown === true) {
         try {
+          const freshVisitId = crypto.randomUUID();
           await ses.cookies.set({
             url: 'https://arena.ai',
             name: 'arena_visit_id',
-            value: crypto.randomUUID(),
+            value: freshVisitId,
             path: '/',
             secure: true,
             sameSite: 'lax',
             expirationDate: Math.floor(Date.now() / 1000) + 86400 * 30,
           }).catch(() => {});
           ses.__cookieCacheAt = 0;
+          await new Promise(resWait => setTimeout(resWait, 1100));
+          const retryCookieParts = filteredCookies.filter(c => c.name !== 'arena_visit_id').map(c => c.name + '=' + c.value);
+          retryCookieParts.push('arena_visit_id=' + freshVisitId);
+          retryCookieParts.push('arena_build_bucket=stable');
+          retryCookieParts.push('ph-toolbar-overrides=' + costValue);
+          if (skewDpl) retryCookieParts.push('__vdpl=' + skewDpl);
+          const altCostUrl = (pathCandidates[1] && pathCandidates[1] !== curPath) ? ('https://arena.ai' + pathCandidates[1]) : curUrl;
+          r = await ses.fetch(altCostUrl, {
+            method,
+            headers: { ...headers, Cookie: retryCookieParts.join('; ') },
+            body: opt?.body !== undefined ? String(opt.body) : undefined,
+            credentials: 'include',
+            redirect: opt?.redirect || 'error',
+            cache: 'no-store',
+            signal: ctl.signal,
+          });
         } catch {}
       }
       if (r.headers.get('set-cookie')) {
@@ -2125,7 +2142,40 @@ ipcMain.handle('host:saveAs', async (e, name, mime, text) => {
   } catch (err) { return { error: String(err.message || err) }; }
 });
 ipcMain.handle('host:showFile', (e, fp) => { try { const f = String(fp || ''); if (f && require('fs').existsSync(f)) { shell.showItemInFolder(f); return true; } } catch {} return false; });
-ipcMain.handle('host:openExternal', (e, u) => { if (/^(https?:\/\/|mailto:)/i.test(String(u))) shell.openExternal(String(u)); return true; });
+ipcMain.handle('host:openExternal', async (e, u) => {
+  if (u && typeof u === 'object' && typeof u.html === 'string') {
+    try {
+      const dir = path.join(app.getPath('temp'), 'brana-preview-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 6));
+      fs.mkdirSync(dir, { recursive: true });
+      if (Array.isArray(u.files)) {
+        for (const f of u.files) {
+          if (!f || typeof f.path !== 'string' || typeof f.content !== 'string') continue;
+          const rel = f.path.replace(/^\/home\/user\//, '').replace(/^[\/\\]+/, '');
+          const dest = path.resolve(dir, rel);
+          if (!dest.startsWith(path.resolve(dir) + path.sep)) continue;
+          fs.mkdirSync(path.dirname(dest), { recursive: true });
+          fs.writeFileSync(dest, f.content, 'utf8');
+        }
+      }
+      let safeName = path.basename(String(u.name || u.path || 'preview.html')).replace(/[\\/:*?"<>|\r\n\t]+/g, '_') || 'preview.html';
+      if (!/\.(?:html?|svg)$/i.test(safeName)) safeName += '.html';
+      const target = path.join(dir, safeName);
+      fs.writeFileSync(target, u.html, 'utf8');
+      const fileUrl = require('url').pathToFileURL(target).href;
+      try {
+        await shell.openExternal(fileUrl);
+      } catch {
+        const err = await shell.openPath(target);
+        if (err) return { ok: false, error: err };
+      }
+      return { ok: true, path: target };
+    } catch (err) {
+      return { ok: false, error: String(err.message || err) };
+    }
+  }
+  if (/^(https?:\/\/|mailto:)/i.test(String(u))) await shell.openExternal(String(u));
+  return true;
+});
 ipcMain.handle('host:ready', e => {
   const w = BrowserWindow.fromWebContents(e.sender);
   if (w && w.__reveal) w.__reveal();
@@ -2164,8 +2214,8 @@ function purityCacheOpt(ds) {
       const rep = (DB.shared.pippool.rep ||= {});
       const entry = (rep[ip] ||= {});
       const at = Date.now();
-      if (pure && Number.isFinite(+pure.fs) && (!entry.pu || !entry.pu.real || pure.real)) {
-        entry.pu = { fs: +pure.fs, res: !!pure.res, bc: !!pure.bc, dc: !!pure.dc, org: String(pure.org || '').slice(0, 40), at, ...(pure.real ? { real: 1 } : {}) };
+      if (pure && Number.isFinite(+pure.fs) && (!entry.pu || !entry.pu.real || pure.real || pure.via === 'ippure')) {
+        entry.pu = { fs: +pure.fs, res: !!pure.res, bc: !!pure.bc, dc: !!pure.dc, org: String(pure.org || '').slice(0, 40), at, ...(pure.real ? { real: 1 } : {}), ...(pure.via ? { via: pure.via } : {}), ...(pure.basicOnly ? { basicOnly: 1 } : {}) };
       }
       if (ipa && !entry.a) {
         Object.assign(entry, { a: at, h: !!ipa.h, px: !!ipa.px, m: !!ipa.m, isp: String(ipa.isp || '').slice(0, 40), as: String(ipa.as || '').split(' ')[0].slice(0, 12) });
@@ -2178,14 +2228,14 @@ ipcMain.handle('host:ippureDirect', async (_e, ip) => {
     const qIp = String(ip || '').trim();
     if (!qIp) return null;
     const ds = await directSession().catch(() => null);
-    const pOpt = purityCacheOpt(ds);
+    const pOpt = { ...purityCacheOpt(ds), forcePurity: true };
     const cached = pOpt.getCachedRep(qIp);
-    const isSuspect = Boolean(cached?.pu && !cached.pu.real && [8, 12, 15, 16, 22].includes(+cached.pu.fs));
+    const isSuspect = Boolean(cached?.pu && (cached.pu.basicOnly || (!cached.pu.real && [8, 12, 15, 16, 22, 28, 35].includes(+cached.pu.fs)) || (cached.pu.real && !cached.pu.via && !cached.pu.res && [6, 10, 14, 15, 16].includes(+cached.pu.fs))));
     if (cached?.pu && !isSuspect && Number.isFinite(+cached.pu.fs) && (Date.now() - (+cached.pu.at || 0) < 7 * 86400e3)) {
-      return { ip: qIp, fs: +cached.pu.fs, res: !!cached.pu.res, bc: !!cached.pu.bc, dc: !!cached.pu.dc, org: String(cached.pu.org || ''), ...(cached.pu.real ? { real: 1 } : {}) };
+      return { ip: qIp, fs: +cached.pu.fs, res: !!cached.pu.res, bc: !!cached.pu.bc, dc: !!cached.pu.dc, org: String(cached.pu.org || ''), ...(cached.pu.real ? { real: 1 } : {}), ...(cached.pu.via ? { via: cached.pu.via } : {}) };
     }
     let r = await RouteNative.ippureDirect(qIp, 3500);
-    if ((!r || !r.real) && _e?.sender?.session) {
+    if ((!r || !r.real || r.basicOnly || (r.via !== 'ippure' && !r.res && r.fs < 50)) && _e?.sender?.session) {
       const sesR = await RouteNative.ippure(_e.sender.session, 2800).catch(() => null);
       if (sesR && Number.isFinite(+sesR.fs) && (!sesR.ip || sesR.ip.toLowerCase() === qIp.toLowerCase())) {
         r = sesR;
@@ -2508,6 +2558,11 @@ function syncSiblingInstallDirs() {
           const tmpAsar = dstAsar + '.upd-' + process.pid;
           fs.copyFileSync(curAsar, tmpAsar);
           fs.renameSync(tmpAsar, dstAsar);
+          const curUnpacked = curAsar + '.unpacked';
+          const dstUnpacked = dstAsar + '.unpacked';
+          if (fs.existsSync(curUnpacked) && typeof fs.cpSync === 'function') {
+            try { fs.cpSync(curUnpacked, dstUnpacked, { recursive: true, force: true }); } catch {}
+          }
           updLog('已同步多路径安装目录 app.asar → ' + dir);
         }
       } catch {}
@@ -3125,7 +3180,7 @@ const poolProbes=createPoolProbeRunner(async (e, o, job) => {
     job.stage('probing');
     const ds = await directSession().catch(() => null);
     const dsFetch = (u, op) => nodeOrDirectFetch(u, op, ds);
-    const pOpt = purityCacheOpt(ds);
+    const pOpt = { ...purityCacheOpt(ds), forcePurity: pips.length <= 48 };
     const queue = [...directCands];
     const runDirectWorker = async () => {
       while (queue.length && !job.signal.aborted) {
@@ -4247,6 +4302,28 @@ ipcMain.handle('host:shared', (e, k, v) => {
   const prevPrefs = DB.shared.prefs;
   if (k === 'prefs' && v && typeof v === 'object' && prevPrefs && typeof prevPrefs === 'object' && (prevPrefs.goldAt || 0) > (v.goldAt || 0)) {
     v = { ...v, goldMode: prevPrefs.goldMode, goldSet: prevPrefs.goldSet, goldChats: prevPrefs.goldChats, goldAt: prevPrefs.goldAt };
+  }
+  if (/^draft@[\w-]{1,64}$/.test(String(k)) && v && typeof v === 'object') {
+    const prevDraft = DB.shared[k];
+    if (prevDraft && typeof prevDraft === 'object') {
+      const dropped = new Set(Array.isArray(v.droppedSids) ? v.droppedSids : []);
+      if (prevDraft.q && typeof prevDraft.q === 'object') {
+        v.q = (v.q && typeof v.q === 'object') ? v.q : {};
+        for (const [sid, pq] of Object.entries(prevDraft.q)) {
+          if (!pq?.items?.length || dropped.has(sid)) continue;
+          const nq = v.q[sid];
+          if (!nq) {
+            v.q[sid] = pq;
+          } else if (!nq.items?.length && !nq.clearedAt && !(Array.isArray(nq.removedIds) && nq.removedIds.length) && (pq.at || 0) >= (nq.at || 0)) {
+            v.q[sid] = pq;
+          }
+        }
+      }
+    }
+    DB.shared[k] = v;
+    if (saveT) { clearTimeout(saveT); saveT = 0; }
+    try { saveDB(true); } catch { saveDB(); }
+    return true;
   }
   DB.shared[k] = v;
   if (k === 'pippool') healBannedAccountProxyIps();

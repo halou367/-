@@ -223,6 +223,8 @@ const Titles = {
       try { UI.renderChat(UI.els.chat, false); } catch {}
     }
   },
+  raw(sid) { return (sid && typeof History !== 'undefined' && History.byId?.(sid)?.title) || (sid && Notes.all?.[sid]?.c) || ''; },
+  soon(ms = 500) { this.kick(ms); },
   kick(ms = 6500) { if (ms === true) ms = 400; clearTimeout(this.t); this.t = setTimeout(() => this.tick(), ms); },   // kick(true) = 尽快（以前 true 被当成 1ms 且必须等 6 秒全局空闲，导致校准后名称迟迟不更新）
   idle() {
     const busy = [...Chats.values()].some(c => c.busy) || Gacha.busy?.() || !!document.querySelector('.dlg input:focus');
@@ -241,6 +243,7 @@ const Titles = {
     }
     const rateUntil=Object.values(Notes.all).reduce((t,n)=>n.lastStatus===429?Math.max(t,n.nx||0):t,this.retryAt||0);
     if(now()<rateUntil)return;
+    if(!force && typeof ReadLimit!=='undefined' && ReadLimit.active?.())return;
     const globallyIdle=force||this.idle();
     const order=Object.entries(Notes.all).reverse();
     if(this.prio.size)order.sort((a,b)=>Number(this.prio.has(b[0]))-Number(this.prio.has(a[0])));
@@ -469,11 +472,20 @@ const AutoId = {
     }
     const at = Date.parse(String(e?.updatedAt || '').replace(' ', 'T').replace(/\+00$/, 'Z'));
     if (Number.isFinite(at) && now() - at > 65 * 60000 && !chat.busy) return;   // 运行令牌 1 小时后失效，读不到
+    if (typeof ReadLimit !== 'undefined' && ReadLimit.active?.() && !chat.token) return;
     const needTrace = !Trace.turns(sid).length || (Trace.latest(sid)?.at || 0) < at - 60000;
     const needModel = !Models.get(sid) || Models.get(sid).partial;
+    let discoveredZero = false;
     try {
-      if (needTrace && Prefs.traceAuto !== false) { const n = Trace.validRuns(sid).length || await Trace.discover(chat); if (n) await Trace.sync(sid, { deep: true }); }
+      if (needTrace && Prefs.traceAuto !== false) {
+        let n = Trace.validRuns(sid).length;
+        if (!n) {
+          n = await Trace.discover(chat);
+          if (!n) discoveredZero = true;
+        }
+        if (n) await Trace.sync(sid, { deep: true });
+      }
     } catch {}
-    if ((!Models.get(sid) || Models.get(sid).partial) && needModel && !chat.identifying && !chat.busy) chat.identifyOld();
+    if (!discoveredZero && (!Models.get(sid) || Models.get(sid).partial) && needModel && !chat.identifying && !chat.busy) chat.identifyOld();
   },
 };

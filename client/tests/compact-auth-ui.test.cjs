@@ -47,3 +47,26 @@ test('logo 切换浏览器模式：当前在哪个对话就直接打开官网的
 test('网页里登录后账号还没有邮箱，回到客户端自动补上', () => {
   assert.match(boot, /!c\.email && UI\.me\?\.email/); assert.match(boot, /glogin=1/);
 });
+
+test('节点 / 出口 IP / 地区下拉：移除标题栏闪电测速按钮，点开列表即自动测速', () => {
+  assert.ok(!/np-retest|rsel-refresh|pip-all/.test(nr));
+  assert.match(nr, /function toggleList\(force\)[\s\S]*?S\.test\(nodes,\{force:true\}\)/);
+  assert.match(nr, /function pipToggle\(open\)[\s\S]*?testPips\(listKeys\)/);
+  assert.match(nr, /function regionToggle\(open\)[\s\S]*?probeDomains\(true\)/);
+});
+
+test('点击应用更改后：成功切换且切后节点无异常自动关闭窗口，有异常则提示异常', () => {
+  assert.match(nr, /postNodeErr/);
+  assert.match(nr, /RegionIP\.close\(\)/);
+  assert.match(nr, /sw\.fail\(postNodeErr\)/);
+});
+
+test('出口 IP 下拉测速实时更新纯净度并校验，杜绝未测欺诈分显示 100% 选中后报错高风险', () => {
+  const iprep = fs.readFileSync(path.join(__dirname, '..', 'ui/iprep.js'), 'utf8');
+  const mainJs = fs.readFileSync(path.join(__dirname, '..', 'src/main.js'), 'utf8');
+  assert.match(nr, /const visKeys=pipRows\(\)\.map\(\(\[k\]\)=>k\),candKeys=candidateRows\(\)\.map\(\(\[k\]\)=>k\)/);
+  assert.match(nr, /needsLiveRate/);
+  assert.match(iprep, /尚未获取 IPPure 欺诈分/);
+  assert.match(iprep, /this\.invalidate\(\)/);
+  assert.match(mainJs, /ipcMain\.handle\('host:ippureDirect'[\s\S]*?forcePurity: true/);
+});

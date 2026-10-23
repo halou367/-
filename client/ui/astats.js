@@ -21,11 +21,20 @@ const AcctStats = {
     for (const sid of sids) {
       if (Chats.get(sid)?.loaded && !Chats.get(sid).hasMore) { this.noteChat(Chats.get(sid)); continue; }
       try {
-        const c = await api('/api/chat/' + sid, { timeout: 30000 });
+        if (typeof MsgCache !== 'undefined' && MsgCache.get) {
+          const mc = await MsgCache.get(sid).catch(() => null);
+          if (mc?.messages?.length && !mc.more) {
+            this.turns[sid] = [this.count(mc.messages), 1];
+            onStep?.(++i, sids.length);
+            continue;
+          }
+        }
+        if (typeof ReadLimit !== 'undefined' && ReadLimit.active?.()) await sleep(Math.min(15000, Math.max(2000, (ReadLimit.until || 0) - now())));
+        const c = await api('/api/chat/' + sid + '?includeStreamToken=false&recoverRun=false', { timeout: 30000, bg: true });
         let n = this.count(c.messages), more = !!c.pagination?.hasMore, cur = c.pagination?.cursor;
-        for (let p = 0; more && cur && p < 15; p++) { await sleep(250); const j = await api(`/api/chat/${sid}/messages?cursor=${encodeURIComponent(cur)}&limit=20`); n += this.count(j.messages); more = !!j.pagination?.hasMore; cur = j.pagination?.cursor; }
+        for (let p = 0; more && cur && p < 15; p++) { await sleep(500); const j = await api(`/api/chat/${sid}/messages?cursor=${encodeURIComponent(cur)}&limit=20`, { bg: true }); n += this.count(j.messages); more = !!j.pagination?.hasMore; cur = j.pagination?.cursor; }
         this.turns[sid] = [n, more ? 0 : 1];
-      } catch (e) { if (e.status === 429) await sleep(8000); }
+      } catch (e) { if (e.status === 429) await sleep(12000); }
       onStep?.(++i, sids.length); await sleep(400);
     }
     this.save();

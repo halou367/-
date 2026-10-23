@@ -69,11 +69,19 @@ jobs:
             ];
             let idx = 0, failed = false;
             const runOne = ([name, cmd, args]) => new Promise(res => {
-              const t0 = Date.now(), p = spawn(cmd, args, { stdio: ["ignore", "pipe", "pipe"], env: process.env });
-              let out = "";
+              const t0 = Date.now(), p = spawn(cmd, args, { stdio: ["ignore", "pipe", "pipe"], env: process.env, detached: true });
+              let out = "", settled = false;
+              const timer = setTimeout(() => {
+                if (settled) return;
+                out += "\n[TIMEOUT after 180s]";
+                try { process.kill(-p.pid, "SIGKILL"); } catch {}
+                try { p.kill("SIGKILL"); } catch {}
+              }, 180000);
               p.stdout.on("data", d => out += d);
               p.stderr.on("data", d => out += d);
               p.on("close", code => {
+                if (settled) return;
+                settled = true; clearTimeout(timer);
                 const s = ((Date.now() - t0) / 1000).toFixed(1) + "s";
                 if (code === 0) { console.log("PASS [" + s + "] " + name); res(true); }
                 else { console.error("FAIL [" + s + "] " + name + " (exit " + code + ")\n" + out.slice(-4000)); failed = true; res(false); }

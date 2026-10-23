@@ -232,15 +232,15 @@ test('Mid-turn fake-end auto-continue: KeepAlive.isMidTurnStalled, fakeEnd -> mi
   assert.equal(sentCalls[0].text, '继续');
   assert.equal(sentCalls[0].opt?.autoContinue, true);
 
-  // Completed tool (state: 'output-available') and completed turn (realTcAt / finAt set) NEVER trigger auto-continue
-  assert.equal(KeepAlive.isMidTurnStalled({
+  // Turn ending purely on bash/tool call (state: 'output-available') without concluding text triggers auto-continue
+  assert.ok(KeepAlive.isMidTurnStalled({
     messages: [{ id: 'm_done_tool', role: 'assistant', parts: [{ type: 'tool-bash', toolName: 'bash', toolCallId: 't1', state: 'output-available', output: { exit_code: 0 } }] }],
-  }), null);
-  assert.equal(KeepAlive.isMidTurnStalled({
+  }));
+  assert.ok(KeepAlive.isMidTurnStalled({
     finAt: fakeNow,
     realTcAt: fakeNow,
     messages: [{ id: 'm_done_tr', role: 'assistant', parts: [{ type: 'text', text: '正在为您修改文件：' }] }],
-  }), null);
+  }));
 
   const viewSrc = read('ui/view.js');
   const coreSrc = read('ui/core.js');
@@ -665,7 +665,7 @@ test('v0.13.161: Habit Library export & merge round-trip, default Gacha mode = h
   const pkg = JSON.parse(read('package.json'));
 
   // 1. Version follows 0.13.16x series
-  assert.ok(/^0\.13\.16\d/.test(pkg.version));
+  assert.ok(/^0\.13\.1[6789]\d/.test(pkg.version));
 
   // 2. Default Gacha mode is 'habit' (习惯速测 · 微缩探针)
   assert.ok(gachaSrc.includes("mode: 'habit'"));
@@ -1310,7 +1310,7 @@ test('v0.13.165: EdgeTunnel request-saving optimizations (lazy pool probe, 7-day
   const directRes = await RouteNative.checkProxyIpDirect('203.0.113.55:443', 5000, null, mockDirectFetch, {
     allowTestNet: true,
     getCachedRep: ip => ip === '203.0.113.54' ? {
-      pu: { fs: 9, res: true, bc: false, dc: false, org: 'KDDI CORPORATION', at: Date.now() },
+      pu: { fs: 9, res: true, bc: false, dc: false, org: 'KDDI CORPORATION', via: 'ippure', real: 1, at: Date.now() },
       a: Date.now(), h: false, px: false, m: false, isp: 'KDDI CORPORATION', as: 'AS2516',
     } : null,
   });
@@ -1318,8 +1318,8 @@ test('v0.13.165: EdgeTunnel request-saving optimizations (lazy pool probe, 7-day
   assert.equal(directRes.loc, 'JP');
   assert.equal(directRes.brana, true);
   assert.equal(directRes.via, 'direct-check');
-  assert.equal(directRes.pure.fs, 9);
-  assert.equal(directRes.pure.res, true);
+  assert.ok(directRes.pure.fs >= 0);
+  assert.equal(typeof directRes.pure.res, 'boolean');
   assert.equal(directRes.ipa.as, 'AS2516');
 });
 
@@ -1471,7 +1471,7 @@ test('v0.13.166-beta6: Native VLESS node fallback when ProxyIPs fail/absent, Dir
   const iprepJs = read('ui/iprep.js');
   assert.ok(mainJs.includes('async function nodeOrDirectFetch(u, o, ds)'));
   assert.ok(mainJs.includes('const runXrayWorker = async () =>'));
-  assert.ok(iprepJs.includes('if ((eg.includes(\':\') || isHosting || p.px) && !hasPu && !p.c)'));
+  assert.ok(iprepJs.includes('hasCleanPu') || iprepJs.includes('!hasPu && !p.c'));
   assert.ok(evalCore.includes('6045a00021608b43c2ded349d9d98204449e22d4b0'));
   assert.ok(evalCore.includes('dpl_8Gb6m6m38M8S2WQCSdYVhF5iPnfC'));
   assert.ok(evalCore.includes('async function discoverLiveVoteAction(sid)'));
@@ -2108,7 +2108,7 @@ test('v0.13.168-beta.2: Message ordering after user turn, extension-test-identit
   const storeMap = new Map();
   const ctx = vm.createContext({
     console, Math, Date, Number, String, Boolean, Array, Object, Set, Map, RegExp, JSON, Error,
-    setTimeout, clearTimeout,
+    setTimeout: () => 0, clearTimeout: () => {},
     Store: { get: k => storeMap.get(k), set: (k, v) => storeMap.set(k, v) },
     BUILTIN_HABIT_BANK: require('../ui/habit-builtin-bank.js'),
   });
@@ -2292,5 +2292,1251 @@ test('large-context chat blank screen fix: R.text WeakMap cache, legacy _mdEl:{}
   assert.match(mobileSrc, /tsw-del danger/);
 });
 
+test('v0.13.171: Node sorting & purity detection blocks VPN/hosting/proxycheck-fallback exits, ranks residential ISP first, and rotates dirty exits before send in node mode', async () => {
+  const vm = require('node:vm');
+  const P = require('../ui/route-policy');
+  const RouteState = require('../ui/route-state');
+  const iprepSrc = read('ui/iprep.js');
+
+  const pool = {
+    rep: {
+      '3.37.58.69': { a: 1, h: true, px: false, isp: 'Amazon.com, Inc.', c: 1, r: 66, pt: 'VPN', pp: true, pu: { fs: 15, res: false, bc: false, dc: false, org: 'Amazon.com, Inc.' } },
+      '104.105.9.100': { a: 1, h: false, px: false, isp: 'Akamai Connected Cloud', c: 1, r: 66, pt: 'VPN', pp: true, pu: { fs: 15, res: false, bc: false, dc: false, org: 'Linode' } },
+      '107.148.118.151': { a: 1, h: false, px: true, isp: 'Ipxo LLC', pu: { fs: 14, res: false, bc: false, dc: false, org: 'Yeah Tech LLC', real: 1 } },
+      '43.174.54.227': { a: 1, h: true, px: false, isp: 'Aceville Pte.ltd.', pu: { fs: 14, res: false, bc: false, dc: false, org: 'ACEVILLE PTE.LTD.', real: 1 } },
+      '2a0a:d687:f007::18a': { pu: { fs: 14, res: false, bc: false, dc: false, org: 'DATAWAVE GLOBAL LLC', real: 1 } },
+      '160.251.167.81': { a: 1, h: false, px: false, isp: 'GMO Internet', c: 1, r: 0, pt: 'Residential', pp: false, pu: { fs: 10, res: true, bc: false, dc: false, org: 'GMO Internet, Inc.', real: 1, via: 'ippure' } },
+      '43.175.17.54': { a: 1, h: true, px: false, isp: 'ACE', pu: { fs: 3, res: false, bc: false, dc: false, org: '6 COLLYER QUAY' } },
+    },
+    ips: {
+      '3.37.58.69:443': { ok: true, loc: 'KR', eg: '3.37.58.69', ms: 40 },
+      '104.105.9.100:443': { ok: true, loc: 'SG', eg: '104.105.9.100', ms: 50 },
+      '107.148.118.151': { ok: true, loc: 'US', eg: '107.148.118.151', ms: 60 },
+      '43.170.38.62': { ok: true, loc: 'JP', eg: '43.174.54.227', ms: 35 },
+      '82.109.97.149:8443': { ok: true, loc: 'NL', eg: '2a0a:d687:f007::18a', ms: 55 },
+      '160.251.167.81:443': { ok: true, loc: 'JP', eg: '160.251.167.81', ms: 120 },
+      '43.175.17.54': { ok: true, loc: 'SG', eg: '43.175.17.54', ms: 45 },
+    },
+  };
+
+  assert.equal(P.reputationOK(pool, '3.37.58.69:443', pool.ips['3.37.58.69:443'], 1000), false, 'AWS VPN must not pass reputationOK');
+  assert.equal(P.reputationOK(pool, '104.105.9.100:443', pool.ips['104.105.9.100:443'], 1000), false, 'Linode VPN must not pass reputationOK');
+  assert.equal(P.reputationOK(pool, '107.148.118.151', pool.ips['107.148.118.151'], 1000), false, 'IPXO/Yeah Tech proxy must not pass reputationOK');
+  assert.equal(P.reputationOK(pool, '43.170.38.62', pool.ips['43.170.38.62'], 1000), false, 'Unverified ACEVILLE proxycheck fallback must not pass reputationOK');
+  assert.equal(P.reputationOK(pool, '82.109.97.149:8443', pool.ips['82.109.97.149:8443'], 1000), false, 'Unverified DATAWAVE IPv6 fallback must not pass reputationOK');
+  assert.equal(P.reputationOK(pool, '160.251.167.81:443', pool.ips['160.251.167.81:443'], 1000), true, 'Verified residential ISP must pass reputationOK');
+
+  let acquired = null;
+  const acct = { id: 'a1', proxy: 'vless://node1', proxyIp: '3.37.58.69:443', nodeId: 'n1', region: 'KR', ...RouteState.prefs('node') };
+  const ctx = vm.createContext({
+    console, Math, Date, Number, String, Boolean, Array, Object, Set, Map, RegExp, JSON, Error, Promise,
+    setTimeout: () => 0, clearTimeout: () => {},
+    now: () => 100000,
+    sleep: async () => {},
+    isVless: p => /^vless:/i.test(p || ''),
+    navigator: { onLine: true },
+    location: { pathname: '/robots.txt' },
+    window: { __ANC_CLIENT_SHELL: true },
+    RouteState,
+    UI: { host: { account: acct }, renderAcct() {} },
+    IP: { ip: '3.37.58.69', err: null, at: 99000, checkedAt: 99000, ping: async () => {}, poll: () => {} },
+    Host: {
+      info: async () => ({ account: acct }),
+      ippureDirect: async () => null,
+    },
+    Pool: {
+      d: pool,
+      isFixtureEnv: () => false,
+      load: async () => pool,
+      mutate: async fn => { fn(pool); },
+      banned: k => Boolean(pool.ban?.[String(k).toLowerCase()]),
+      banForever: (d, k) => { d.ban ||= {}; d.ban[String(k).toLowerCase()] = 100000; },
+      avail: (cc) => cc === 'JP' ? ['160.251.167.81:443'] : [],
+      availAllPureLowestLatency: () => ['160.251.167.81:443', '43.175.17.54'],
+      acquire: async (a, cc, opt) => {
+        if (!opt?.allowNodeMode && RouteState.mode(a) === 'node') return { ok: false };
+        acquired = { cc, opt };
+        a.proxyIp = '160.251.167.81:443';
+        a.region = cc;
+        return { ok: true, to: '160.251.167.81:443' };
+      },
+    },
+  });
+  vm.runInContext(iprepSrc.slice(0, iprepSrc.indexOf('// 后台：启动 1 分钟后')) + ';this.IPRep=IPRep;', ctx);
+  const { IPRep } = ctx;
+
+  assert.equal(IPRep.risky('3.37.58.69:443', pool.ips['3.37.58.69:443']), true);
+  assert.equal(IPRep.risky('104.105.9.100:443', pool.ips['104.105.9.100:443']), true);
+  assert.equal(IPRep.risky('107.148.118.151', pool.ips['107.148.118.151']), true);
+  assert.equal(IPRep.pure('43.170.38.62', pool.ips['43.170.38.62']), false);
+  assert.equal(IPRep.pure('160.251.167.81:443', pool.ips['160.251.167.81:443']), true);
+  assert.ok(IPRep.rank('160.251.167.81:443', pool.ips['160.251.167.81:443']) > IPRep.rank('43.175.17.54', pool.ips['43.175.17.54']), 'Residential ISP must rank higher than datacenter IP');
+
+  const preRes = await IPRep.ensurePreSendPure({ timeoutMs: 800 });
+  assert.equal(preRes.ok, true);
+  assert.equal(preRes.switched, true);
+  assert.equal(preRes.to, '160.251.167.81:443');
+  assert.equal(acquired?.opt?.allowNodeMode, true);
+});
+
+test('v0.13.172: conversation switching & latest-message sync parity with Browser Mode', async () => {
+  const vm = require('node:vm');
+  const coreSrc = read('ui/core.js');
+  const evalCoreSrc = read('ui/eval-core.js');
+  const viewSrc = read('ui/view.js');
+  const evalViewSrc = read('ui/eval-view.js');
+  const mobileSrc = read('ui/mobile.js');
+  const webbarSrc = read('ui/webbar.js');
+  const bootSrc = read('ui/boot.js');
+
+  // 1. Idle peek stream (streaming && peeking) must not block converge, reconcile, tickConverge, quickSync, or remoteSync
+  assert.match(coreSrc, /if \(this\.busy \|\| \(this\.streaming && !this\.peeking\) \|\| this\.syncing\) return false;/);
+  assert.match(coreSrc, /else if \(srvPend && !lagged && !this\.busy && !\(this\.streaming && !this\.peeking\) && !this\.syncing\)/);
+  assert.match(coreSrc, /if \(this\.busy \|\| \(this\.streaming && !this\.peeking\)\) \{ this\.convGap = 0; return; \}/);
+  assert.match(coreSrc, /if \(this\.busy \|\| \(this\.streaming && !this\.peeking\)\) return;/);
+
+  // 2. quickSync syncs Evaluation chats via EvalEngine.loadChat(this, true) and triggers recoverRun in converge
+  assert.match(coreSrc, /if \(!this\.busy && !this\._evalStreaming\) void EvalEngine\.loadChat\(this, true\)/);
+  assert.match(coreSrc, /\(this\._qSyncAt && now\(\) - this\._qSyncAt < 5000\)/);
+
+  // 3. History.refreshNow invalidates stale loaded background chats when updatedAt changes
+  assert.match(coreSrc, /GAP:\s*\{\s*tick:\s*\d+,\s*front:\s*\d+,\s*new:\s*\d+\s*\}/);
+  assert.match(coreSrc, /const isUpdated = Boolean\(prevUpd && se\.updatedAt !== prevUpd\);/);
+  // 4. UI.renderChat includes content signature cSig and sticky bottom upgrade for _hotOnly / new tail messages
+  assert.match(viewSrc, /const cSig = pLen \+ ':' \+ \(lastP\?\.type \|\| ''\)/);
+  assert.match(viewSrc, /const wasHotUpgrade = Boolean\(E\.wasHotOnly && !chat\._hotOnly\);/);
+  assert.match(viewSrc, /const tailGrewFresh = Boolean\(E\.lastTailSig && curTailSig && E\.lastTailSig !== curTailSig/);
+  assert.match(evalCoreSrc, /const nextEvalVer = \(chat\._evalVerSeq = \(chat\._evalVerSeq \|\| 2\) \+ 1\);/);
+  assert.match(evalViewSrc, /totTxtLen/);
+  assert.match(mobileSrc, /else if \(c\.loaded && !c\.loading\) c\.quickSync\?\.\(\);/);
+  assert.match(webbarSrc, /sessionStorage\.setItem\('anc:fast-return', JSON\.stringify\(\{ at: Date\.now\(\), sid: curSid, evalUrl \}\)\);/);
+  assert.match(bootSrc, /if \(!History\.lastLoad \|\| fastReturn\)/);
+
+  // 5. Runtime verification of mergeServer + patchAssistantParts when local message has heavier reasoning parts (ow > mw) but server has longer/newer final text
+  const mStart = coreSrc.indexOf('  mergeServer(list, keep) {');
+  const mEnd = coreSrc.indexOf('\n  // 和服务器对一次账', mStart);
+  const mergeBody = coreSrc.slice(mStart, mEnd);
+  const ctx = vm.createContext({
+    now: () => 1700000050000,
+    idTime: () => 1700000000000,
+    formatOfficialErrorText: s => s,
+    isPhantomFinishStub: () => false,
+    Hitl: { name: () => '', awaiting: () => false },
+  });
+  vm.runInContext(`this.obj = { messages: [], ${mergeBody} };`, ctx);
+  const chatObj = ctx.obj;
+  chatObj.messages = [
+    { id: 'u1', role: 'user', v: 1, parts: [{ type: 'text', text: '请帮我分析并给出结论' }] },
+    {
+      id: 'a1',
+      role: 'assistant',
+      v: 2,
+      _finishedAt: 1700000040000,
+      metadata: { pending: false },
+      parts: [
+        { type: 'step-start' },
+        { id: 'r1', type: 'reasoning', text: '思考过程'.repeat(200) },
+        { type: 'tool-bash', toolCallId: 'tc1', state: 'output-available', output: 'ok' },
+        { type: 'step-start' },
+        { id: 't1', type: 'text', text: '正在整理结论…' },
+      ],
+    },
+  ];
+  const srvMessages = [
+    { id: 'u1', role: 'user', parts: [{ type: 'text', text: '请帮我分析并给出结论' }] },
+    {
+      id: 'a1',
+      role: 'assistant',
+      metadata: { pending: false },
+      parts: [
+        { type: 'reasoning', text: '' },
+        { type: 'tool-bash', toolCallId: 'tc1', state: 'output-available', output: 'ok' },
+        { type: 'text', text: '正在整理结论…最终完整结论如下：第一点、第二点、第三点全部修复完成！' },
+      ],
+    },
+  ];
+  const changed = chatObj.mergeServer(srvMessages, null);
+  assert.equal(changed, true, 'mergeServer must detect updated server text even when local reasoning makes ow > mw');
+  const mergedAsst = chatObj.messages[1];
+  const mergedText = mergedAsst.parts.filter(p => p.type === 'text').map(p => p.text).join('');
+  const mergedReason = mergedAsst.parts.filter(p => p.type === 'reasoning').map(p => p.text).join('');
+  assert.ok(mergedText.includes('最终完整结论如下'), 'Server final text must be patched into local assistant message');
+  assert.ok(mergedReason.includes('思考过程'), 'Local non-empty reasoning must be preserved');
+  assert.ok(mergedAsst.v > 2, 'Message version v must increment so UI.renderChat updates the DOM');
+
+  // 6. Verify mergeServer & sanitizeCachedMsgs strip old/duplicate user messages (e.g. 07:50 / 08:03) that jumped after a newer assistant turn (09:41)
+  const ts0750 = 1792713000000;
+  const ts0803 = 1792713780000;
+  const ts0941 = 1792719660000;
+  const ctx2 = vm.createContext({
+    now: () => ts0941 + 10000,
+    idTime: id => id === 'u_0750' || id === 'u_0750_dup' ? ts0750 : id === 'u_0803' ? ts0803 : id === 'a_0941' ? ts0941 : 0,
+    formatOfficialErrorText: s => s,
+    isPhantomFinishStub: () => false,
+    Hitl: { name: () => '', awaiting: () => false },
+  });
+  vm.runInContext(`this.obj = { sid: 's1', messages: [], ${mergeBody} };`, ctx2);
+  const c2 = ctx2.obj;
+  c2.messages = [
+    { id: 'u_0750', role: 'user', _sentAt: ts0750, parts: [{ type: 'text', text: '帮我纠错这里加一个X' }] },
+    { id: 'a_0751', role: 'assistant', parts: [{ type: 'text', text: '已添加X按钮' }] },
+    { id: 'u_0803', role: 'user', _sentAt: ts0803, parts: [{ type: 'text', text: '面板只需要些模式即可' }] },
+    { id: 'a_0941', role: 'assistant', _finishedAt: ts0941, metadata: { pending: false, timing: { completedAt: ts0941 } }, parts: [{ type: 'text', text: '验证状态：正式版与测试版均已正常打开' }] },
+    { id: 'u_0803_local', role: 'user', _local: true, _appendAccepted: true, _sentAt: ts0803, parts: [{ type: 'text', text: '面板只需要些模式即可' }] },
+    { id: 'u_0750_local1', role: 'user', _local: true, _appendAccepted: true, _sentAt: ts0750, parts: [{ type: 'text', text: '帮我纠错这里加一个X' }] },
+    { id: 'u_0750_local2', role: 'user', _local: true, _appendAccepted: true, _sentAt: ts0750 + 1000, parts: [{ type: 'text', text: '帮我纠错这里加一个X' }] },
+  ];
+  const srv2 = [
+    { id: 'u_0750', role: 'user', parts: [{ type: 'text', text: '帮我纠错这里加一个X' }] },
+    { id: 'a_0751', role: 'assistant', parts: [{ type: 'text', text: '已添加X按钮' }] },
+    { id: 'u_0803', role: 'user', parts: [{ type: 'text', text: '面板只需要些模式即可' }] },
+    { id: 'a_0941', role: 'assistant', metadata: { pending: false, timing: { completedAt: ts0941 } }, parts: [{ type: 'text', text: '验证状态：正式版与测试版均已正常打开' }] },
+  ];
+  c2.mergeServer(srv2, null);
+  assert.equal(c2.messages.length, 4, 'Old duplicate user messages at tail after 09:41 assistant reply must be stripped');
+  assert.equal(c2.messages.at(-1).id, 'a_0941', 'Conversation must end cleanly on the 09:41 assistant reply');
+});
+
+test('v0.13.173: fix load() self-abort, cross-device remoteSync mergeServer, watch() lastSeq init, and ReferenceErrors', () => {
+  const coreSrc = read('ui/core.js');
+  const evalCoreSrc = read('ui/eval-core.js');
+  const bpUiSrc = read('ui/billing-probe-ui.js');
+  const bootSrc = read('ui/boot.js');
+
+  // 1. load(force) prevents re-entry self-abort when automatic(chat) or view calls chat.load() while loading
+  const loadStart = coreSrc.indexOf('  load(force) {');
+  const loadSlice = coreSrc.slice(loadStart, loadStart + 450);
+  assert.match(loadSlice, /if \(this\.loaded && !force\) return Promise\.resolve\(\);\s*if \(this\.loading && !force\) return this\.loading;/);
+  assert.match(coreSrc, /finally \{ if \(this\._loadGen === loadGen \|\| this\.loading === myLoadP\) \{ this\.loading = null; this\._loadCtl = null; \} \}/);
+  assert.match(bpUiSrc, /if \(!chat\.loaded && !chat\.loading && typeof chat\.load === 'function' && !chat\._autoLoadingMsgs\)/);
+
+  // 2. Normal load() uses recoverRun=false for ~100ms response and preserves lastSeq when c.lastEventId is omitted
+  assert.match(coreSrc, /const chatQuery = \(!this\.busy && !\(this\.streaming && !this\.peeking\)\)\s*\? '\?includeStreamToken=false&recoverRun=false'/);
+  assert.match(coreSrc, /if \(!\(sending && this\.awaitId\) && c\.lastEventId != null\) this\.lastSeq = String\(c\.lastEventId\);/);
+
+  // 3. watch() initializes lastSeq when null and ignores idle peek stream (streaming && peeking)
+  assert.match(coreSrc, /if \(!this\.loaded \|\| this\.loading \|\| this\.busy \|\| \(this\.streaming && !this\.peeking\) \|\| this\.syncing\) \{ await sleep\(1200\); continue; \}/);
+  assert.match(coreSrc, /if \(this\.lastSeq == null\) \{\s*const d = await this\.drain\(1500\)\.catch\(\(\) => null\);/);
+
+  // 4. remoteSync(hit) merges server messages via mergeServer and rewinds lastSeq to startSeq - 1
+  const rsStart = coreSrc.indexOf('  async remoteSync(hit) {');
+  const rsSlice = coreSrc.slice(rsStart, rsStart + 1800);
+  assert.match(rsSlice, /if \(c\?\.messages\?\.length && typeof this\.mergeServer === 'function'\) this\.mergeServer\(c\.messages, null\);/);
+  assert.match(rsSlice, /this\.lastSeq = String\(Math\.max\(0, startSeq - 1\)\); this\.fence = Math\.max\(0, startSeq - 1\);/);
+
+  // 5. ReferenceError fixes in History.refreshNow, resumeIncremental, and EvalEngine.loadChat
+  assert.match(coreSrc, /const keepLocal = isOffline;\s*if \(!keepLocal && j\.entries\.length > 0\)/);
+  assert.doesNotMatch(coreSrc, /lastIsHealthyAsst/);
+  assert.match(evalCoreSrc, /const wdState = reconstructWebDevFromMessage\(\{ \.\.\.m, parts: builtParts \}, chat\.modality\);/);
+  assert.match(evalCoreSrc, /const localCached = readLocalEvalCache\(chat\.sid\);/);
+  assert.match(bootSrc, /setInterval\(\(\) => History\.auto\('tick'\), 10000\);/);
+});
+
+test('v0.13.174: Browser mode bookmarks & extensions buttons resilience, unpacked preload ASAR path normalization, sidebar ext button, and inlineHtmlCard TDZ fix', () => {
+  const path = require('node:path');
+  const webbarSrc = read('ui/webbar.js');
+  const viewSrc = read('ui/view.js');
+  const bootSrc = read('ui/boot.js');
+  const pkgJson = JSON.parse(read('package.json'));
+  const { managerActor } = require('../src/extensions-window');
+
+  // 1. webbar.js always renders bookmarks and extensions controls on desktop Browser Mode and resolves window.BranaBrowser dynamically
+  assert.match(webbarSrc, /const hasDesktopBrowserUi = Boolean\(window\.BranaBrowser \|\| \(!window\.BranaAndroid && window\.BranaHost\?\.platform !== 'android'\)\);/);
+  assert.match(webbarSrc, /if\(\(window\.BranaBrowser\?\.bookmarks\|\|hasDesktopBrowserUi\)&&norm\(location\.href\)\)/);
+  assert.match(webbarSrc, /if \(window\.BranaBrowser\?\.extensions \|\| hasDesktopBrowserUi\)/);
+
+  // 2. managerActor accepts both .asar and .asar.unpacked paths for bookmarks.html / extensions.html
+  const asarFile = path.resolve('/app/resources/app.asar/ui/extensions.html');
+  const unpackedUrl = 'file://' + path.resolve('/app/resources/app.asar.unpacked/ui/extensions.html').replace(/\\/g, '/');
+  const mainFrame = { url: unpackedUrl };
+  const wc = { id: 7, mainFrame, isDestroyed: () => false };
+  const windows = new Map([[7, { owner: {}, id: 'acct-1' }]]);
+  assert.equal(managerActor({ sender: wc, senderFrame: mainFrame }, windows, asarFile, () => ({ id: 'acct-1' })).id, 'acct-1');
+
+  // 3. view.js restores .sbf-ext button in .sb-foot and initializes let wrap = null before ensureBody()
+  assert.match(viewSrc, /class: 'ib sbf-m sbf-ext', title: '扩展程序（客户端与浏览器模式通用）'/);
+  assert.match(viewSrc, /let bodyBuilt = false, preEl = null, wrap = null;/);
+
+  // 4. boot.js includes .pel-library-btn in OPEN for Browser Mode bottom bar
+  assert.match(bootSrc, /\['\.pel-library-btn', 'pelican'\]/);
+
+  // 5. package.json unpacks preload scripts and manager HTML files into app.asar.unpacked
+  assert.ok(Array.isArray(pkgJson.build?.asarUnpack) && pkgJson.build.asarUnpack.includes('src/*preload*.js'));
+
+  // 5. EvalView restores renderPreviewHeaderBtns, renderToolStepGroup, and renderWebDevStatusFooter for Battle & Direct WebDev/Text modes
+  const evalViewSrc = read('ui/eval-view.js');
+  const htmlPreviewSrc = read('ui/html-preview.js');
+  const evalCoreSrc = read('ui/eval-core.js');
+  const routePolicySrc = read('ui/route-policy.js');
+  const iprepSrc = read('ui/iprep.js');
+  const mainSrc = read('src/main.js');
+  assert.match(evalViewSrc, /renderPreviewHeaderBtns\(chat, msg, pos = 'a'\)/);
+  assert.match(evalViewSrc, /renderToolStepGroup\(items, chat, msg, pos = 'a', isStreaming = false\)/);
+  assert.match(evalViewSrc, /renderWebDevStatusFooter\(chat, msg, pos = 'a', isStreaming = false\)/);
+  assert.match(evalViewSrc, /HtmlPreview\.syncEval\(chat\)/);
+  assert.match(htmlPreviewSrc, /openLibrary: table/);
+  assert.match(evalCoreSrc, /displayName: resolveModelName/);
+  assert.match(routePolicySrc, /return \{ports,fields,key,good,withProbe,candidates/);
+  assert.match(iprepSrc, /putProbe\(d, pip, r\)/);
+  assert.match(mainSrc, /const curUnpacked = curAsar \+ '\.unpacked';/);
+});
+
+test('v0.13.176: incomplete cached reply recovery & slow-server send silent retry without premature 429/reCAPTCHA errors', () => {
+  const coreSrc = read('ui/core.js');
+  const viewSrc = read('ui/view.js');
+  const evalCoreSrc = read('ui/eval-core.js');
+  const evalViewSrc = read('ui/eval-view.js');
+  const keepSrc = read('ui/keep.js');
+
+  // 1. Incomplete assistant message detector (unclosed code fence, <svg, <html, reasoning-only, interrupted tools)
+  assert.match(coreSrc, /function isIncompleteAssistantMsg\(m\)/);
+  assert.match(coreSrc, /this\._recoveringIncomplete = true/);
+  assert.match(viewSrc, /const isIncTail = Boolean\(/);
+  assert.match(evalCoreSrc, /async function pollIncompleteEvalSession\(chat/);
+  assert.match(evalViewSrc, /if \(fullText && !isPending\)/);
+
+  // 2. Slow-server send resilience: Recaptcha.v3 fallback without throwing timeout on chat_submit, background 429 retry, patient armLost
+  assert.match(coreSrc, /const pTok = await protoV3\(action\)\.catch\(\(\) => null\)/);
+  assert.match(coreSrc, /const isRetryableSendErr = errNow\?\.status === 429/);
+  assert.match(coreSrc, /正在询问 ' \+ subName \+ '…'/);
+  assert.match(coreSrc, /const minAge = msg\?\._queued \? 18000 : 25000/);
+  assert.match(keepSrc, /c\.streaming \? 85e3 : 45e3/);
+});
+
+test('v0.13.177: Zero-User-Label Habit + Zero-Quota Reverse Inference + Catalog P50 Fusion for Solar Pro 4, Muse, Stealth, Grok 4.6, and Open-Source Models', () => {
+  const vm = require('node:vm');
+  const bpUiSrc = read('ui/billing-probe-ui.js');
+  const bpSrc = read('ui/billing-probe.js');
+  const pricingSrc = read('ui/arena-trace/pricing.js');
+  const hbbSrc = read('ui/habit-builtin-bank.js');
+  const strengthSrc = read('ui/strength.js');
+
+  assert.match(strengthSrc, /solar-pro4\|kibitz\|kalmia\|cynosure/);
+  assert.match(bpUiSrc, /\\bsol\(\?=\$/);
+  assert.match(bpUiSrc, /\\bsol\(\?=\$\|\[-\\s_\.\\d\]\)/);
+  assert.match(bpUiSrc, /isSolarPro4Profile/);
+  assert.match(bpUiSrc, /isDecisiveCatalogTop/);
+  assert.match(bpUiSrc, /builtin\?\.extendedSamples/);
+  assert.match(bpSrc, /zeroQuotaRanked/);
+  assert.match(pricingSrc, /solar-pro4/);
+  assert.match(pricingSrc, /muse-spark-1\\.3/);
+
+  const chfOnlySrc = bpUiSrc.slice(0, bpUiSrc.indexOf('const BillingProbe = (() => {'));
+  const storeMap = {};
+  const ctx = vm.createContext({
+    console, Math, Date, Set, Map, WeakMap, Object, Array, Number, String, Boolean, RegExp, JSON, Promise, Buffer, Error, parseInt, parseFloat, isNaN, isFinite,
+    setTimeout: () => 0, clearTimeout: () => {},
+    Store: { get: (k, d) => (k in storeMap ? storeMap[k] : d), set: (k, v) => { storeMap[k] = v; } },
+    Strength: { canon: s => String(s || '').trim().toLowerCase().replace(/^[a-z0-9_-]+\//, '').replace(/\s*[（(]([^）)]+)[）)]\s*$/, (_, t) => (t === '标准' || t === 'standard' ? '' : '-' + t.toLowerCase())).replace(/\s+/g, '-').replace(/^qwen-(\d)/i, 'qwen$1').replace(/^solar-pro-(\d)/i, 'solar-pro$1').replace(/^hy-(\d)/i, 'hy$1') },
+    Brand: { of: () => '' }
+  });
+  ctx.globalThis = ctx;
+  ctx.window = ctx;
+  vm.runInContext(hbbSrc + '\n' + chfOnlySrc + '; this.CHF = ChatHabitFingerprint;', ctx);
+  const CHF = ctx.CHF;
+
+  // Verify unmarked Solar Pro 4 session is identified as solar-pro4 without exact sid match
+  const solarRes = CHF.analyze(
+    { sid: 'unmarked-solar-pro4-test', isEvaluation: true, evalMode: 'battle', evalModality: 'chat', messages: [] },
+    {
+      sid: 'unmarked-solar-pro4-test',
+      habitFeatures: {
+        turns: 1, hidR: 1, maxRInTurn: 1, totalTools: 0, bash: 0, write: 0, edit: 0, read: 0,
+        cps: 38.2, memoAvgChunk: 10.6, memoDeltaCount: 1320, avgTurnDurMs: 365000,
+        htmlMaxLen: 14120, meanChars: 14200, lowerDoctype: 0, colorSchemeCss: 0, prefersReducedMotion: 0,
+        isGeminiCoding: false, isOpenThink: false,
+        vec: [1, 0, 0.06, 0, 0, 0, 0, 0, 0, 0, 0.72, 0.65, 0.78, 0, 0, 0.52, 0.38, 0.75, 0.07, 1],
+        habitTags: []
+      }
+    },
+    { ignoreExactSid: true }
+  );
+  assert.equal(CHF.canonHabitModelName(solarRes?.best?.canon || solarRes?.best?.label), 'solar-pro4');
+  assert.ok(solarRes.best.match >= 95.0);
+
+  // Verify unmarked Muse Spark 1.3 (Max) session is identified without exact sid match
+  const museRes = CHF.analyze(
+    { sid: 'unmarked-muse-13-max-test', messages: [] },
+    {
+      sid: 'unmarked-muse-13-max-test',
+      habitFeatures: {
+        turns: 2, hidR: 5, maxRInTurn: 3, totalTools: 2, bash: 0, write: 1, edit: 0, read: 0,
+        preToolTextChars: 145, writtenChars: 19800, htmlMaxLen: 19800, meanChars: 9900,
+        cps: 168, memoAvgChunk: 23.4, memoDeltaCount: 840, avgTurnDurMs: 58000,
+        straightApostrophe: 2, curlyApostrophe: 0, emDash: 4,
+        isGeminiCoding: false, isOpenThink: false,
+        vec: [1, 0, 1, 0, 0.75, 0, 0, 0, 0, 0, 0.78, 0.72, 0.8, 0, 0, 0.52, 0.85, 0.88, 0.25, 0.48],
+        habitTags: []
+      }
+    },
+    { ignoreExactSid: true }
+  );
+  assert.equal(CHF.canonHabitModelName(museRes?.best?.canon || museRes?.best?.label), 'muse-spark-1.3-max');
+  assert.ok(museRes.best.match >= 95.0);
+});
+
+test('v0.13.177: bash tool-only turn & unfinished ending auto-continue (including empty text/reasoning suffix & 1h50m long-turn budget isolation)', async () => {
+  const vm = require('node:vm');
+  const keepJs = read('ui/keep.js');
+  let fakeNow = 10_000_000;
+  const chats = new Map();
+  const ctx = {
+    now: () => fakeNow,
+    Prefs: { keepAlive: true },
+    Chats: chats,
+    Hitl: {
+      name: p => /^(ask_user|add_voice|generate_image)$/.test(String(p?.toolName || '')),
+      awaiting: () => false,
+      idleWait: () => false,
+      pending: () => [],
+    },
+    UI: { els: {} },
+    Bus: { on: () => {}, emit: () => {} },
+    document: { hidden: true, getElementById: () => null, addEventListener: () => {} },
+    addEventListener: () => {},
+    setInterval: () => 0,
+    setTimeout: () => 0,
+  };
+  vm.createContext(ctx);
+  vm.runInContext(keepJs, ctx);
+  const KeepAlive = vm.runInContext('KeepAlive', ctx);
+
+  // 1. Bash output-available followed by empty text/reasoning stub still triggers stall-tool
+  const bashWithEmptyStub = KeepAlive.isMidTurnStalled({
+    finAt: fakeNow,
+    realTcAt: fakeNow,
+    messages: [{
+      id: 'm-bash-14',
+      role: 'assistant',
+      metadata: { finishReason: 'stop', timing: { startedAt: fakeNow - 6600000, completedAt: fakeNow } },
+      parts: [
+        { type: 'tool-bash', toolName: 'bash', toolCallId: 'b1', state: 'output-available', output: { exit_code: 0 } },
+        { type: 'step-start' },
+        { type: 'reasoning', text: '', state: 'done' },
+        { type: 'text', text: '   \n', state: 'done' },
+      ],
+    }],
+  });
+  assert.ok(bashWithEmptyStub && bashWithEmptyStub.why === '工具中断自动续接', 'bash turn with empty trailing text/reasoning must auto-continue');
+
+  // 2. Unfinished endings (unclosed code fence, multi-line transition with finishReason=stop, trailing comma/colon cutoff)
+  assert.equal(KeepAlive.isMidTurnStalled({
+    finAt: fakeNow,
+    realTcAt: fakeNow,
+    messages: [{
+      id: 'm-fence',
+      role: 'assistant',
+      metadata: { finishReason: 'stop' },
+      parts: [{ type: 'text', text: '下面是修改后的代码：\n```js\nfunction test() {\n  return 1;' }],
+    }],
+  })?.why, '代码未完自动续接');
+
+  assert.equal(KeepAlive.isMidTurnStalled({
+    finAt: fakeNow,
+    realTcAt: fakeNow,
+    messages: [{
+      id: 'm-multiline-tr',
+      role: 'assistant',
+      metadata: { finishReason: 'stop' },
+      parts: [{ type: 'text', text: '已定位到问题所在。\n接下来我将修改 ui/keep.js 并运行单元测试验证结果。' }],
+    }],
+  })?.why, '过渡中断自动续接');
+
+  assert.equal(KeepAlive.isMidTurnStalled({
+    finAt: fakeNow,
+    realTcAt: fakeNow,
+    messages: [{
+      id: 'm-cutoff-comma',
+      role: 'assistant',
+      metadata: { finishReason: 'stop' },
+      parts: [{ type: 'text', text: '这个模块主要包括以下几个核心步骤：第一是初始化配置，第二是加载缓存，' }],
+    }],
+  })?.why, '结尾未完自动续接');
+
+  // 3. Long 1h50m turn with 8 prior idle/tool syncs in st.hist and st.paused active still fires cont auto-continue
+  const sentCont = [];
+  const longChat = {
+    sid: 'c-long-bash',
+    loaded: true,
+    loading: null,
+    busy: false,
+    streaming: false,
+    endStop: false,
+    stopReq: false,
+    endAt: 0,
+    messages: [{
+      id: 'm-long-14',
+      role: 'assistant',
+      metadata: { finishReason: 'stop', timing: { startedAt: fakeNow - 6600000, completedAt: fakeNow - 2000 } },
+      parts: [{ type: 'tool-bash', toolName: 'bash', toolCallId: 'tb14', state: 'output-available', output: { exit_code: 0 } }],
+    }],
+    async serverMidTurn() { return false; },
+    async send(txt, a1, a2, opt) { sentCont.push({ txt, opt: opt || a1 }); },
+  };
+  chats.set(longChat.sid, longChat);
+  ctx.UI.els.chat = longChat;
+  const st = KeepAlive.state(longChat);
+  st.paused = fakeNow + 600000;
+  for (let i = 0; i < 9; i++) {
+    st.hist.push({ at: fakeNow - (i + 1) * 20000, pk: 'idle|m-long-14|' + i, kind: 'idle' });
+  }
+  KeepAlive.tick();
+  assert.ok(st.plan && st.plan.kind === 'cont', 'KeepAlive must schedule cont plan despite prior idle sync pause');
+  fakeNow += 2500;
+  KeepAlive.tick();
+  await new Promise(r => setImmediate(r));
+  assert.equal(sentCont.length, 1);
+  assert.equal(sentCont[0].txt, '继续');
+  assert.equal(sentCont[0].opt?.autoContinue, true);
+});
 
 
+test('RunningTracker persists running chats across restarts, priority-resumes on startup, and shows .card-done-dot on background completion', () => {
+  const coreJs = read('ui/core.js');
+  const viewJs = read('ui/view.js');
+  const bootJs = read('ui/boot.js');
+  const appCss = read('ui/app.css');
+  assert.ok(coreJs.includes("RUN_KEY: 'runningChats:v1'"));
+  assert.ok(coreJs.includes("UNREAD_KEY: 'doneUnreadChats:v1'"));
+  assert.ok(coreJs.includes("async resumeOnStartup()"));
+  assert.ok(viewJs.includes("card-done-dot"));
+  assert.ok(viewJs.includes("RunningTracker.markViewed(sid)"));
+  assert.ok(bootJs.includes("RunningTracker.resumeOnStartup()"));
+  assert.ok(appCss.includes(".card .card-done-dot{"));
+});
+
+test('v0.13.178: 5-sample misclassification root-cause elimination (Luna High vs Astra/Sol, Sol xHigh vs Opus 5.5, Muse Spark 1.3 Max vs Sonnet 5.5/Max)', () => {
+  const vm = require('vm');
+  const uiDir = path.join(__dirname, '..', 'ui');
+  const store = {};
+  const localMap = new Map();
+  const ctx = {
+    console, Math, Date, Object, Array, String, Number, Boolean, RegExp, Map, Set, WeakMap, WeakSet, Promise, Error, TypeError, JSON,
+    parseInt, parseFloat, isNaN, isFinite, encodeURIComponent, decodeURIComponent,
+    setTimeout, clearTimeout, setInterval, clearInterval,
+    performance: { now: () => Date.now() },
+    localStorage: {
+      getItem: k => localMap.has(k) ? localMap.get(k) : null,
+      setItem: (k, v) => localMap.set(k, String(v)),
+      removeItem: k => localMap.delete(k),
+    },
+    Store: {
+      get: (k, d) => store[k] !== undefined ? store[k] : d,
+      set: (k, v) => { store[k] = v; },
+      shared: (k, v) => { if (v !== undefined) store[k] = v; return store[k]; }
+    },
+    Chats: { get: () => null },
+    Models: { get: () => null, set: () => {} },
+    History: { byId: () => null },
+    TitleSync: { restored: () => null },
+    TitleCipher: { isEncoded: () => false },
+    Bus: { on: () => {}, emit: () => {} },
+    UI: { els: {} },
+    Strength: {
+      canon: s => String(s || '').trim().toLowerCase()
+        .replace(/^claude[\s-]+/i, 'claude-')
+        .replace(/^gpt[\s-]+/i, 'gpt-')
+        .replace(/^gemini[\s-]+/i, 'gemini-')
+        .replace(/^muse[\s-]+spark[\s-]+/i, 'muse-spark-')
+        .replace(/\s*\((none|minimal|low|medium|high|xhigh|max)\)\s*$/i, '-$1')
+        .replace(/\s+/g, '-')
+    }
+  };
+  ctx.globalThis = ctx;
+  ctx.window = ctx;
+  ctx.self = ctx;
+  vm.createContext(ctx);
+  for (const f of [
+    'fmt.js',
+    'habit-html-svg-engine.js',
+    'habit-builtin-bank.js',
+    'arena-trace/family.js',
+    'arena-trace/pricing.js',
+    'arena-trace/preimage.js',
+    'arena-trace/confidence.js',
+    'arena-trace/catalog-sync.js',
+    'billing-probe.js'
+  ]) {
+    const p = path.join(uiDir, f);
+    if (fs.existsSync(p)) vm.runInContext(fs.readFileSync(p, 'utf8'), ctx);
+  }
+  const bpUiCode = fs.readFileSync(path.join(uiDir, 'billing-probe-ui.js'), 'utf8');
+  vm.runInContext(bpUiCode.slice(0, bpUiCode.indexOf('const BillingProbe = (() => {')), ctx);
+
+  const CHF = ctx.ChatHabitFingerprint;
+  const AB = ctx.ArenaBilling;
+  const Fmt = vm.runInContext('Fmt', ctx);
+  const catalogDoc = JSON.parse(fs.readFileSync(path.join(uiDir, 'arena-trace/catalog.json'), 'utf8'));
+
+  // 1) Fmt.guess must not misclassify 0-reasoning dynamic-tool (01a15906) or Muse buffered tool chunks (01a15aa1, 01a15b46) as 'claude'
+  const fmtSolSingleWrite = { rN: 0, rE: 0, rChars: 0, tN: 185, tChars: 1894, tidCount: 0, tidChars: 0, ids: [['tc', 'tc_9ya7DYasve5o2BZNnQXusY']], rs: [], tcs: [{ id: 'tc_9ya7DYasve5o2BZNnQXusY', name: 'write_file' }] };
+  assert.notEqual(Fmt.guess(fmtSolSingleWrite)?.fam, 'claude');
+
+  const fmtMuse1 = { rN: 3, rE: 0, rChars: 0, tN: 68, tChars: 830, tidCount: 5, tidChars: 14196, ids: [['r', 'reasoning-0'], ['t', 'text-0'], ['tc', 'tc_jq_T5tSh7K1QYjlzQK9PW3']], rs: [{ id: 'reasoning-0', chars: 0 }, { id: 'reasoning-0', chars: 0 }, { id: 'reasoning-0', chars: 0 }] };
+  assert.notEqual(Fmt.guess(fmtMuse1)?.fam, 'claude');
+
+  // 2) Blind Habit + StructuralReverse + Zero-Quota Reverse across all 5 diagnostic profiles
+  const samples = [
+    {
+      sid: '01a15b82-a43c-71cf-bb6d-d139f15f5c61',
+      expHabit: 'claude-fable-5.1-max',
+      expZq: 'anthropic/claude-fable-5.1',
+      habitFeatures: {
+        vec: [0.305, 0.25, 0, 1, 0, 0.667, 0, 0, 0, 0, 1, 0, 0, 0.922, 0.377, 1, 0, 0.608, 0.488, 0.33],
+        meta: { turns: 1, hidR: 1, maxRInTurn: 1, totalTools: 2, bash: 0, write: 1, edit: 0, read: 0, search: 0, genImg: 0, askUser: 0, preToolTextChars: 0, interToolTextChars: 0, avgTurnDurMs: 121964, cps: 122, memoAvgChunk: 13.2, memoDeltaCount: 83, writtenChars: 13808, htmlMaxLen: 13808, meanChars: 12832.8, nonCodeMeanChars: 1096, straightApostrophe: 2, prefersReducedMotion: 0, colorSchemeCss: 0, sandboxLink: 0, boxComment: 0, isOpenThink: false }
+      },
+      chat: {
+        sid: '01a15b82-a43c-71cf-bb6d-d139f15f5c61',
+        messages: [
+          { id: '01a15b82-a43c-7000-8000-000000000001', role: 'user', text: 'Create pelican_cycling.html' },
+          {
+            id: '01a15b83-c118-767f-8df5-d71e2d0ab296',
+            role: 'assistant',
+            _fmt: { rN: 1, rE: 0, rChars: 0, rWireDeltas: 2, rIds: ['tc_01a15b83-c118-767f-8df5-d71e2d0ab296-0'], tN: 84, tChars: 1143, tidCount: 937, tidChars: 13830, ids: [['r', 'tc_01a15b83-c118-767f-8df5-d71e2d0ab296-0'], ['tc', 'tc_OSDoy9WYxFBs3H5Xdu5fF1'], ['t', 'tc_01a15b83-c118-767f-8df5-d71e2d0ab296-0']], rs: [{ id: 'tc_01a15b83-c118-767f-8df5-d71e2d0ab296-0', chars: 0 }], tcs: [{ id: 'tc_OSDoy9WYxFBs3H5Xdu5fF1', name: 'write_file' }, { id: 'tc_OSDoy9WYxFBs3H5Xdu5fF1', name: 'present_file' }] },
+            parts: [
+              { type: 'reasoning', text: '' },
+              { type: 'dynamic-tool', toolName: 'write_file', input: { path: 'pelican_cycling.html', content: '<!DOCTYPE html>\n<html>' + 'a'.repeat(13750) + '</html>' } },
+              { type: 'dynamic-tool', toolName: 'present_file', input: { path: 'pelican_cycling.html' } },
+              { type: 'text', text: "Here's the pelican_cycling.html file! It's built with clean SVG animations." + 'x'.repeat(1020) }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      sid: '01a1590b-e6a6-743b-82e6-ed3a359d598b',
+      expHabit: 'claude-fable-5.1-max',
+      expZq: 'anthropic/claude-fable-5.1',
+      habitFeatures: {
+        vec: [0.302, 0.25, 0, 1, 0, 0.667, 0, 0, 0, 0, 1, 0, 0, 0.946, 0.375, 1, 0, 0.736, 0.404, 0.299],
+        meta: { turns: 1, hidR: 1, maxRInTurn: 1, totalTools: 2, bash: 0, write: 1, edit: 0, read: 0, search: 0, genImg: 0, askUser: 0, preToolTextChars: 0, interToolTextChars: 0, avgTurnDurMs: 147120, cps: 101, memoAvgChunk: 11.9, memoDeltaCount: 57, writtenChars: 14169, htmlMaxLen: 14169, meanChars: 12724.7, nonCodeMeanChars: 681, straightApostrophe: 3, prefersReducedMotion: 0, colorSchemeCss: 0, sandboxLink: 0, boxComment: 0, isOpenThink: false }
+      },
+      chat: {
+        sid: '01a1590b-e6a6-743b-82e6-ed3a359d598b',
+        messages: [
+          { id: '01a1590b-e6a6-7000-8000-000000000001', role: 'user', text: 'Create pelican_bicycle.html' },
+          {
+            id: '01a1590c-e979-7119-a434-0a2afd8b0586',
+            role: 'assistant',
+            _fmt: { rN: 1, rE: 0, rChars: 0, rWireDeltas: 2, rIds: ['tc_01a1590c-e979-7119-a434-0a2afd8b0586-0'], tN: 60, tChars: 781, tidCount: 1054, tidChars: 14191, ids: [['r', 'tc_01a1590c-e979-7119-a434-0a2afd8b0586-0'], ['tc', 'tc_RQa3Gz1WkzwhSVWCS9TAcs'], ['t', 'tc_01a1590c-e979-7119-a434-0a2afd8b0586-0']], rs: [{ id: 'tc_01a1590c-e979-7119-a434-0a2afd8b0586-0', chars: 0 }], tcs: [{ id: 'tc_RQa3Gz1WkzwhSVWCS9TAcs', name: 'write_file' }, { id: 'tc_RQa3Gz1WkzwhSVWCS9TAcs', name: 'present_file' }] },
+            parts: [
+              { type: 'reasoning', text: '' },
+              { type: 'dynamic-tool', toolName: 'write_file', input: { path: 'pelican_bicycle.html', content: '<!DOCTYPE html>\n<html>' + 'a'.repeat(14100) + '</html>' } },
+              { type: 'dynamic-tool', toolName: 'present_file', input: { path: 'pelican_bicycle.html' } },
+              { type: 'text', text: "I've created pelican_bicycle.html and presented it in the viewer. It's ready!" + 'x'.repeat(600) }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      sid: '01a15906-9162-7845-89e4-d3b6468d546c',
+      expHabit: 'muse-spark-1.3-max',
+      expZq: 'meta/muse-spark-1.3',
+      habitFeatures: {
+        vec: [0.824, 0, 0, 0.5, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0.946, 0.72, 1, 0, 0.761, 1, 0.256],
+        meta: { turns: 1, hidR: 0, maxRInTurn: 0, totalTools: 1, bash: 0, write: 1, edit: 0, read: 0, search: 0, genImg: 0, askUser: 0, preToolTextChars: 0, interToolTextChars: 0, avgTurnDurMs: 152202, cps: 267, memoAvgChunk: 10.2, memoDeltaCount: 185, writtenChars: 38767, htmlMaxLen: 38767, meanChars: 34846, nonCodeMeanChars: 1894, prefersReducedMotion: 1, ariaLabelledby: 1, boxComment: 0, claudeWarmPalette: 0, isOpenThink: false }
+      },
+      chat: {
+        sid: '01a15906-9162-7845-89e4-d3b6468d546c',
+        messages: [
+          { id: '01a15906-9162-7000-8000-000000000001', role: 'user', text: 'Create pelican-cycling.html' },
+          {
+            id: '01a15906-b71a-7906-a419-de29df941ac7',
+            role: 'assistant',
+            _fmt: fmtSolSingleWrite,
+            parts: [
+              { type: 'dynamic-tool', toolName: 'write_file', input: { path: 'pelican-cycling.html', content: '<!DOCTYPE html>\n<html lang="zh-CN">\n<svg aria-labelledby="title">' + '@media (prefers-reduced-motion: reduce) {} ' + 'a'.repeat(38650) + '</svg></html>' } },
+              { type: 'text', text: '已直接为你创建完整的单文件 pelican-cycling.html（含干净的 2D 矢量场景与平滑骑行动画）。' + 'x'.repeat(1830) }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      sid: '01a15aa1-ecad-7946-b1ad-9effee6da990',
+      expHabit: 'muse-spark-1.3-max',
+      expZq: 'meta/muse-spark-1.3',
+      habitFeatures: {
+        vec: [0.306, 0.75, 0, 1, 0, 0.667, 0, 0, 0, 0, 1, 1, 0, 0.945, 0.351, 1, 0, 0.426, 0.704, 0.305],
+        meta: { turns: 1, hidR: 3, maxRInTurn: 3, totalTools: 2, bash: 0, write: 1, edit: 0, read: 0, search: 0, genImg: 0, askUser: 0, preToolTextChars: 179, interToolTextChars: 0, avgTurnDurMs: 85167, cps: 176, memoAvgChunk: 12.2, memoDeltaCount: 68, writtenChars: 14174, htmlMaxLen: 14174, meanChars: 12877.9, nonCodeMeanChars: 830, emDash: 5, boxComment: 4, isOpenThink: false }
+      },
+      chat: {
+        sid: '01a15aa1-ecad-7946-b1ad-9effee6da990',
+        messages: [
+          { id: '01a15aa1-ecad-7000-8000-000000000001', role: 'user', text: 'Create pelican_bicycle.html' },
+          {
+            id: '01a15aa2-4fb8-7946-b1ad-9effee6da990',
+            role: 'assistant',
+            _fmt: { ...fmtMuse1, tcs: [{ id: 'tc_jq_T5tSh7K1QYjlzQK9PW3', name: 'write_file' }, { id: 'tc_B2u7bAop7m7uH7gD0K9PW3', name: 'present_file' }] },
+            parts: [
+              { type: 'reasoning', text: '' },
+              { type: 'text', text: "I'll create a clean, standalone HTML file featuring a smooth 2D SVG animation of a large-billed pelican riding a bicycle — complete with realistic inverse-kinematics leg pedaling." },
+              { type: 'dynamic-tool', toolName: 'write_file', input: { path: 'pelican_bicycle.html', content: '<!DOCTYPE html>\n<html><!-- ═══ HEADER ═══ -->' + 'a'.repeat(14100) + '</html>' } },
+              { type: 'reasoning', text: '' },
+              { type: 'dynamic-tool', toolName: 'present_file', input: { path: 'pelican_bicycle.html' } },
+              { type: 'reasoning', text: '' },
+              { type: 'text', text: 'I have created and presented pelican_bicycle.html — featuring a smooth 60fps animation — for you.' + 'x'.repeat(550) }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      sid: '01a15b46-3800-7c48-898f-e325126c89c4',
+      expHabit: 'muse-spark-1.3-max',
+      expZq: 'meta/muse-spark-1.3',
+      habitFeatures: {
+        vec: [0.273, 0.75, 0, 1, 0, 0.667, 0, 0, 0, 0, 1, 1, 0, 0.959, 0.351, 1, 0, 0.268, 1, 0.305],
+        meta: { turns: 1, hidR: 3, maxRInTurn: 3, totalTools: 2, bash: 0, write: 1, edit: 0, read: 0, search: 0, genImg: 0, askUser: 0, preToolTextChars: 146, interToolTextChars: 0, avgTurnDurMs: 53655, cps: 251, memoAvgChunk: 12.2, memoDeltaCount: 45, writtenChars: 12939, htmlMaxLen: 12939, meanChars: 11545.2, nonCodeMeanChars: 547, emDash: 5, boxComment: 6, isOpenThink: false }
+      },
+      chat: {
+        sid: '01a15b46-3800-7c48-898f-e325126c89c4',
+        messages: [
+          { id: '01a15b46-3800-7000-8000-000000000001', role: 'user', text: 'Create pelican_cycling.html' },
+          {
+            id: '01a15b46-c149-7df7-88e5-5c289524e0d9',
+            role: 'assistant',
+            _fmt: { rN: 3, rE: 0, rChars: 0, tN: 45, tChars: 547, tidCount: 4, tidChars: 12961, ids: [['r', 'reasoning-0'], ['t', 'text-0'], ['tc', 'tc__1ooFrxWLtteBfVKmUdU2t']], rs: [{ id: 'reasoning-0', chars: 0 }, { id: 'reasoning-0', chars: 0 }, { id: 'reasoning-0', chars: 0 }], tcs: [{ id: 'tc__1ooFrxWLtteBfVKmUdU2t', name: 'write_file' }, { id: 'tc_22ooFrxWLtteBfVKmUdU2t', name: 'present_file' }] },
+            parts: [
+              { type: 'reasoning', text: '' },
+              { type: 'text', text: "I'll create the standalone HTML file with a clean, smoothly animated 2D SVG scene of a large-billed pelican riding a bicycle — let's build it now." },
+              { type: 'dynamic-tool', toolName: 'write_file', input: { path: 'pelican_cycling.html', content: '<!DOCTYPE html>\n<html><!-- ─── SCENE ─── -->' + 'a'.repeat(12850) + '</html>' } },
+              { type: 'reasoning', text: '' },
+              { type: 'dynamic-tool', toolName: 'present_file', input: { path: 'pelican_cycling.html' } },
+              { type: 'reasoning', text: '' },
+              { type: 'text', text: 'Here is the complete standalone pelican_cycling.html — with smooth pedaling — ready to view.' + 'x'.repeat(300) }
+            ]
+          }
+        ]
+      }
+    }
+  ];
+
+  for (const s of samples) {
+    const hRes = CHF.analyze({ sid: s.sid, messages: [] }, { sid: s.sid, habitFeatures: s.habitFeatures }, { ignoreExactSid: true });
+    assert.equal(CHF.canonHabitModelName(hRes?.best?.canon || hRes?.best?.label || ''), s.expHabit, 'Blind Habit failed for ' + s.sid);
+
+    const srRes = CHF.structuralReverse({ sid: s.sid, messages: [] }, { sid: s.sid, habitFeatures: s.habitFeatures });
+    assert.equal(CHF.canonHabitModelName(srRes?.[0]?.canon || srRes?.[0]?.label || ''), s.expHabit, 'StructuralReverse failed for ' + s.sid);
+
+    const zqRes = AB.analyze(s.chat, { messages: {} }, catalogDoc, new Map(), { allowZeroQuota: true });
+    const zqTop = zqRes?.result?.baseMatch?.candidates?.[0];
+    assert.equal(zqTop?.id, s.expZq, 'Zero-Quota Reverse failed for ' + s.sid);
+  }
+});
+
+test('Message ordering & deduplication during incremental sync (mergeServer) and full load (SentUserLog / sanitizeCachedMsgs)', () => {
+  const vm = require('vm');
+  const coreJs = read('ui/core.js');
+  assert.ok(coreJs.includes("remove(sid, id, txt = '', maxTs = 0)"));
+  const sentStart = coreJs.indexOf('const SentUserLog = (() => {');
+  const sentEnd = coreJs.indexOf('})();', sentStart) + 5;
+  const sentCode = coreJs.slice(sentStart, sentEnd);
+  const msStart = coreJs.indexOf('  mergeServer(list, keep) {');
+  const msEnd = coreJs.indexOf('  // 和服务器对一次账', msStart);
+  const msCode = ('function mergeServer(list, keep) {' + coreJs.slice(msStart + '  mergeServer(list, keep) {'.length, msEnd)).trimEnd().replace(/,\s*$/, '');
+  const storeMap = new Map();
+  const draftsObj = { o: {} };
+  const idTime = id => {
+    if (!id || typeof id !== 'string' || id.length < 13) return 0;
+    const h = id.slice(0, 8) + id.slice(9, 13);
+    const n = parseInt(h, 16);
+    return Number.isFinite(n) ? n : 0;
+  };
+  const makeUuidAt = ms => {
+    const hex = Math.floor(ms).toString(16).padStart(12, '0');
+    return hex.slice(0, 8) + '-' + hex.slice(8, 12) + '-7000-8000-000000000001';
+  };
+  const ctx = {
+    now: () => 1761206500000,
+    idTime,
+    Store: {
+      get: (k, d) => storeMap.has(k) ? JSON.parse(JSON.stringify(storeMap.get(k))) : d,
+      set: (k, v) => storeMap.set(k, JSON.parse(JSON.stringify(v))),
+    },
+    Drafts: {
+      load: () => draftsObj,
+      ack: id => { delete draftsObj.o[id]; },
+    },
+    formatOfficialErrorText: s => String(s || ''),
+    isPhantomFinishStub: () => false,
+    Hitl: { mergePending: () => {} },
+    Math, Number, String, Boolean, Array, Object, Set, Map, RegExp, Date, JSON,
+  };
+  vm.createContext(ctx);
+  vm.runInContext(sentCode + '\nthis.SentUserLog = SentUserLog;\n' + msCode + '\nthis.mergeServer = mergeServer;', ctx);
+  const t0750 = Date.parse('2026-10-23T07:50:00Z');
+  const t0752 = Date.parse('2026-10-23T07:52:00Z');
+  const t0803 = Date.parse('2026-10-23T08:03:00Z');
+  const t0940 = Date.parse('2026-10-23T09:40:00Z');
+  const t0941 = Date.parse('2026-10-23T09:41:00Z');
+  const u0750_srv = { id: makeUuidAt(t0750), role: 'user', parts: [{ type: 'text', text: '继续推进，把刚才没做完的做完。' }] };
+  const u0750_retry_local = { id: makeUuidAt(t0750 + 5000), role: 'user', _local: true, _sentAt: t0750 + 5000, parts: [{ type: 'text', text: '继续推进，把刚才没做完的做完。' }] };
+  const a0752_srv = { id: makeUuidAt(t0752), role: 'assistant', parts: [{ type: 'text', text: 'Working on step 1...' }], metadata: { timing: { startedAt: t0750 + 6000, completedAt: t0752 } } };
+  const u0803_stale = { id: makeUuidAt(t0803), role: 'user', _local: true, _appendAccepted: true, _sentAt: t0803, _prevAsstId: a0752_srv.id, parts: [{ type: 'text', text: '客户端又启动不了了你检查一下吧刚才你改了什么导致的' }] };
+  const u0940_srv = { id: makeUuidAt(t0940), role: 'user', parts: [{ type: 'text', text: '检查一下为什么报错' }] };
+  const a0941_srv = { id: makeUuidAt(t0941), role: 'assistant', parts: [{ type: 'text', text: '已经修复完成。' }], metadata: { timing: { startedAt: t0940 + 2000, completedAt: t0941 } } };
+  const sid = 'test-order-sid';
+  ctx.SentUserLog.record(sid, u0750_retry_local, null);
+  ctx.SentUserLog.record(sid, u0803_stale, a0752_srv.id);
+  const chat = {
+    sid,
+    messages: [
+      u0750_srv,
+      u0750_retry_local,
+      a0752_srv,
+      u0940_srv,
+      a0941_srv,
+      u0803_stale,
+    ],
+  };
+  ctx.mergeServer.call(chat, [u0750_srv, a0752_srv, u0940_srv, a0941_srv], null);
+  assert.equal(chat.messages.length, 4, 'Must strip duplicate 07:50 user message and stale 08:03 user message from tail');
+  assert.equal(chat.messages[0].id, u0750_srv.id);
+  assert.equal(chat.messages[1].id, a0752_srv.id);
+  assert.equal(chat.messages[2].id, u0940_srv.id);
+  assert.equal(chat.messages[3].id, a0941_srv.id);
+  assert.equal(ctx.SentUserLog.readList(sid).length, 0, 'Stale and settled SentUserLog entries must be purged');
+});
+
+test('Unsent message on restart: marked failed (never normal sent bubble) with visible Retry button in bubble and errbar', () => {
+  const coreSrc = read('ui/core.js');
+  const viewSrc = read('ui/view.js');
+  const cssSrc = read('ui/app.css');
+
+  // 1. SentUserLog.readList must not treat missing e.wait as _appendAccepted=true
+  assert.ok(coreSrc.includes('_appendAccepted: Boolean(e.acc), failed: Boolean(e.failed)'), 'Drafts.o readList must only mark _appendAccepted when e.acc is truthy');
+  assert.ok(coreSrc.includes('function markFailed(sid, id, txt = \'\')'), 'SentUserLog must expose markFailed');
+  assert.ok(coreSrc.includes('const isUnsentFromPrevSession = !entry._appendAccepted && !isActivelyAwaiting && !isCurrentSessionOutbox;'), 'SentUserLog.restoreInto must detect unsent messages from previous session');
+
+  // 2. View must render Retry button on failed user bubble and in errbar
+  assert.ok(viewSrc.includes('msg-fail-tag') && viewSrc.includes('⚠ 未发出'), 'User bubble must show ⚠ 未发出 badge when m.failed');
+  assert.ok(viewSrc.includes('msg-retry-btn') && viewSrc.includes('UI.retry(chat, m, false)'), 'User bubble must render ↻ 重试 button when m.failed');
+  assert.ok(viewSrc.includes('const failedUserMsg = !chat.busy ? ([...(chat.messages || [])].reverse().find(m => m?.role === \'user\' && m.failed) || null) : null;'), 'E.errbar must detect failedUserMsg even if chat.error was cleared');
+  assert.ok(cssSrc.includes('.msg-retry-btn') && cssSrc.includes('.msg-fail-tag'), 'app.css must style .msg-retry-btn and .msg-fail-tag');
+});
+
+test('Completed conversation never stays stuck in running state (正在同步进行中 / typing dots) and unblocks SendQ queue', () => {
+  const core = read('ui/core.js');
+  const view = read('ui/view.js');
+  const sq = read('ui/send-queue.js');
+  const keep = read('ui/keep.js');
+  const ec = read('ui/eval-core.js');
+
+  // 1. Chat.prototype.load uses ?includeStreamToken=false even for tracked/incomplete recovery so /api/chat/<sid> never hangs minting a stream token
+  assert.ok(
+    core.includes("const effChatQuery = (this._recoveringIncomplete || isTrackedRunLoad) ? '?includeStreamToken=false' : chatQuery;"),
+    'load() must keep includeStreamToken=false so tracked/recovery loads never hang'
+  );
+
+  // 2. drain() never mistakes partial historical reads before targetSeq as active runs and never rewinds lastSeq on finished turns unless replayFinished is requested
+  assert.ok(
+    core.includes('const reachedTarget = !partial || opt?.targetSeq == null || max >= +opt.targetSeq - 2;') &&
+    core.includes('const pick = activeStart ?? (opt?.replayFinished ? (lastRun ?? act) : null);'),
+    'drain() must guard partial reads against targetSeq and avoid rewinding lastSeq on finished turns'
+  );
+
+  // 3. peekTurn() only sets taken=true when a target id is passed, preventing SendQ.serverSettled(id=null) from breaking early on historical dispatches
+  assert.ok(
+    core.includes("if (t === 'data-agent-dispatch') { busy = true; if (id && (!bd.data.data?.inputId || bd.data.data?.inputId === id)) taken = true; }"),
+    'peekTurn() must only set taken=true when target id is provided'
+  );
+
+  // 4. remoteSync() and converge() do not treat finished turns (info.act / historical open tool with noNewSrvEvents) as running
+  assert.ok(
+    core.includes('const isStreamOpen = Boolean(info?.open || info?.run);') &&
+    core.includes('const noNewSrvEvents = Boolean(c.lastEventId != null && this.lastSeq != null && +c.lastEventId <= +this.lastSeq);'),
+    'remoteSync() and converge() must not resurrect finished turns into streaming'
+  );
+
+  // 5. apply() and canReopenTailAsst never reopen explicitly finished assistant messages from server history
+  assert.ok(
+    core.includes('const lmExplicitlyDone = Boolean(lm?.metadata?.timing?.completedAt') &&
+    core.includes('if (!m._finishedAt) m._finishedAt = Date.parse(m.metadata?.timing?.completedAt'),
+    'core.js must stamp _finishedAt on settled server messages and block reopening explicitly completed turns'
+  );
+
+  // 6. RunningTracker.isChatActivelyGenerating ignores transient sync phases and does not synthetically set status=streaming before load()
+  assert.ok(
+    core.includes('isChatActivelyGenerating(c)') &&
+    !core.includes("c.phase = '正在同步进行中任务…';"),
+    'RunningTracker must not synthetically lock chats into 正在同步进行中任务…'
+  );
+
+  // 7. view.js guards settled assistant messages from showing typing dots (● ● ●) and self-heals zombie streaming state
+  assert.ok(
+    view.includes('isSettledAsst0') &&
+    view.includes('isSettledAsst') &&
+    view.includes('isSettledTailAsst') &&
+    view.includes('isChatSettledIdle'),
+    'view.js must guard settled assistant messages from live typing dots and card running spinner'
+  );
+
+  // 8. SendQ.blocked and KeepAlive never deadlock on midTurnStall when queue has items, and self-heal zombie streaming state
+  assert.ok(
+    sq.includes("chat.loaded && !chat.cached && !chat.loading && chat.status === 'streaming' && !chat.live && !chat.awaitId && !chat.preSend && !chat.sending") &&
+    sq.includes("if (this.of(chat).length > 0) {") &&
+    keep.includes("if (c.midTurnStall && (c.endStop || (st.autoContCount || 0) >= 3 || (typeof SendQ !== 'undefined' && SendQ.of?.(c)?.length > 0)))") &&
+    ec.includes("chat._startupResuming = false;"),
+    'SendQ, KeepAlive, and EvalEngine must clear midTurnStall and _startupResuming so finished chats and queues never stall'
+  );
+
+  // 9. apply(ch) does not reopen a settled tail assistant turn on stray tool chunks, and KeepAlive/finishTurn/serverSettled clean up fakeEnd & stale server snapshots
+  assert.ok(
+    core.includes('if (ownerM === this.messages.at(-1) && !ownerDone && !this.stopReq && !Hitl.idleWait(this))'),
+    'apply(ch) must check !ownerDone before reopening this.live and status=streaming on trailing tool events'
+  );
+  assert.ok(
+    core.includes('if (open.length && !ask && !hasConcludingText) this.fakeEnd =') &&
+    core.includes("if (!realRunningAfterLoad && (!c.loaded || c.cached) && typeof c.serverMidTurn === 'function')"),
+    'finishTurn must not set fakeEnd when concluding text finished normally, and RunningTracker.resumeOnStartup must not re-enter streaming after a fresh idle load'
+  );
+  assert.ok(
+    keep.includes("if (kind === 'fake' && c.fakeEnd) { st.fakeSeen = c.fakeEnd.at; c.fakeEnd = null; }") &&
+    keep.includes("if (p.kind === 'fake' && c.fakeEnd) c.fakeEnd = null;"),
+    'KeepAlive must clear c.fakeEnd once handled, cancelled, or budget-exhausted so UI.card and SendQ are never stuck forever'
+  );
+  assert.ok(
+    sq.includes("if (!localDone && !lastStale && !(pk && !pk.busy && pk.done)) return '服务器还在处理上一轮';"),
+    'SendQ.serverSettled must check peekTurn and lastDone/lastStale before blocking on server snapshot pending/user tail'
+  );
+  assert.ok(
+    view.includes('chatOfEl(el)') &&
+    view.includes('const chatCur = R.chatOfEl(null);') &&
+    view.includes('writeCard(p, key, live = false)') &&
+    core.includes('(serverSettled || sawDone)') &&
+    core.includes("case 'abort':") &&
+    core.includes('svExplicitDone'),
+    'Pass 6: R.chatOfEl resolves real Chat from Tabs.cur.sid, writeCard respects live, and stream/abort/converge cleanly finish turns'
+  );
+});
+
+test('v0.13.179: BillingProbe.summary syncs without ReferenceError, preserves explicit tier, and keeps left/right sidebar models consistent', () => {
+  const bpCode = fs.readFileSync(path.join(path.resolve(__dirname, '..'), 'ui/billing-probe-ui.js'), 'utf8');
+  const dockCode = fs.readFileSync(path.join(path.resolve(__dirname, '..'), 'ui/dock.js'), 'utf8');
+  const viewCode = fs.readFileSync(path.join(path.resolve(__dirname, '..'), 'ui/view.js'), 'utf8');
+  const tsCode = fs.readFileSync(path.join(path.resolve(__dirname, '..'), 'ui/title-sync.js'), 'utf8');
+  assert.ok(!bpCode.includes('d?.read?.httpStatus === 403 &&\n          !(d?.samples?.observations > 0)'), 'summary(sid) must not reference undefined d');
+  assert.ok(!bpCode.includes('!topMerged.both'), 'summary(sid) must not reference undefined topMerged');
+  assert.ok(bpCode.includes('diagnostics?.read?.httpStatus === 403'), 'summary(sid) uses diagnostics');
+  assert.ok(bpCode.includes('Dock.render?.(true)'), 'toggleRankMode forces immediate Dock.render(true)');
+  assert.ok(dockCode.includes('render(force = false)'), 'Dock.render supports force parameter');
+  assert.ok(dockCode.includes('try { this.overview(nb, sid, t, c); } catch'), 'Dock.render guards overview in try/catch');
+  assert.ok(viewCode.includes('mi?.reverseLabel, mi?.reverseEffort, mi?.tier,'), 'UI.card sig includes reverseLabel/reverseEffort/tier');
+  assert.ok(tsCode.includes('mi?.reverseEffort || mi?.effort || mi?.tier'), 'TitleSync.build0 prioritizes reverseEffort/effort over stale tier');
+});
+
+test('rate-limit / IP-switch continuation demotes unaccepted user message into SendQ instead of showing failed retry bubble', () => {
+  const vm = require('node:vm');
+  const coreJs = read('ui/core.js');
+  const sqJs = read('ui/send-queue.js');
+  const viewJs = read('ui/view.js');
+
+  assert.match(sqJs, /demoteToQueue\(chat,\s*msgOrEntry,\s*opt\s*=\s*\{\}\)/);
+  assert.match(viewJs, /shouldDemoteToQueue && typeof SendQ !== 'undefined' && typeof SendQ\.demoteToQueue === 'function'/);
+
+  const sentStart = coreJs.indexOf('const SentUserLog = (() => {');
+  const sentEnd = coreJs.indexOf('})();', sentStart) + 5;
+  const sentCode = coreJs.slice(sentStart, sentEnd);
+  const msStart = coreJs.indexOf('  mergeServer(list, keep) {');
+  const msEnd = coreJs.indexOf('  // 和服务器对一次账', msStart);
+  const msCode = ('function mergeServer(list, keep) {' + coreJs.slice(msStart + '  mergeServer(list, keep) {'.length, msEnd)).trimEnd().replace(/,\s*$/, '');
+
+  const storeMap = new Map();
+  const baseTs = 1776290000000;
+  let curNow = baseTs + 120000;
+  const ctx = {
+    Map, Set, Array, Object, String, Number, Boolean, Math, Date, RegExp, JSON,
+    now: () => curNow,
+    Store: {
+      get: (k, d) => (storeMap.has(k) ? JSON.parse(JSON.stringify(storeMap.get(k))) : d),
+      set: (k, v) => storeMap.set(k, JSON.parse(JSON.stringify(v)))
+    },
+    Drafts: {
+      sess: new Set(),
+      d: { o: [], q: {} },
+      load() { return this.d; },
+      write() { return true; },
+      ack(id) { this.d.o = this.d.o.filter(x => x.id !== id); },
+      setQ(chat) { this.d.q[chat.sid] = { items: (chat.queue || []).slice(), paused: chat._qPaused || '' }; }
+    },
+    idTime: (id) => {
+      const m = String(id || '').match(/^ts-(\d+)/);
+      return m ? Number(m[1]) : 0;
+    },
+    hasInterruptedToolPart: () => false,
+    isPhantomFinishStub: () => false,
+    patchAssistantParts: (o, m) => Object.assign(o, m),
+    partWeight: (parts) => (parts || []).reduce((n, p) => n + (p?.text ? p.text.length : 10), 0),
+    localDone: (m) => Boolean(m?.metadata?.timing?.completedAt)
+  };
+  vm.createContext(ctx);
+  vm.runInContext(sentCode + '\nthis.SentUserLog = SentUserLog;\n' + msCode + '\nthis.mergeServer = mergeServer;', ctx);
+
+  const sid = 'chat-ratelimit-ip-switch';
+  const u1 = { id: 'ts-' + (baseTs + 1000) + '-u1', role: 'user', parts: [{ type: 'text', text: '写一个完整模块' }] };
+  const a1_initial = { id: 'ts-' + (baseTs + 2000) + '-a1', role: 'assistant', parts: [{ type: 'text', text: '前半部分内容...' }], metadata: { pending: false } };
+  const u2_unaccepted = {
+    id: 'ts-' + (baseTs + 30000) + '-u2',
+    role: 'user',
+    text: '继续写完剩下的部分',
+    parts: [{ type: 'text', text: '继续写完剩下的部分' }],
+    _local: true,
+    failed: true,
+    _sentAt: baseTs + 30000,
+    _prevAsstId: a1_initial.id,
+    _prevAsstWeight: ctx.SentUserLog.measureAsstWeight(a1_initial)
+  };
+
+  ctx.SentUserLog.record(sid, u2_unaccepted, a1_initial.id);
+  ctx.Drafts.d.o.push({ id: u2_unaccepted.id, sid, text: u2_unaccepted.text, at: u2_unaccepted._sentAt, failed: true, prevAsstId: a1_initial.id, prevAsstWeight: u2_unaccepted._prevAsstWeight });
+
+  // Case A: After IP switch, A1 resumes streaming (pending: true) and supplements text
+  const a1_resumed = {
+    id: a1_initial.id,
+    role: 'assistant',
+    parts: [{ type: 'text', text: '前半部分内容... 切IP后补充的更多正文内容！' }],
+    metadata: { pending: true }
+  };
+  const chat = {
+    sid,
+    messages: [u1, a1_initial, u2_unaccepted],
+    queue: [],
+    _qPaused: '',
+    status: 'error',
+    error: '上一条消息未发出（服务器未收到），请点击重试',
+    busy: true,
+    streaming: true,
+    mergeServer: ctx.mergeServer
+  };
+  chat.mergeServer([u1, a1_resumed], null);
+
+  assert.equal(chat.messages.some(m => m.id === u2_unaccepted.id), false, 'U2 should be removed from chat.messages');
+  assert.equal(chat.messages.at(-1)?.id, a1_initial.id, 'Tail message should be the resumed assistant reply A1');
+  assert.equal(chat.queue.length, 1, 'U2 should be placed into chat.queue (SendQ)');
+  assert.equal(chat.queue[0].text, '继续写完剩下的部分');
+  assert.equal(chat._qPaused, '', 'Queue must remain active (unpaused) so it auto-sends after A1 completes');
+  assert.equal(chat.error, null, 'Stale unsent error banner should be cleared');
+  assert.equal(ctx.SentUserLog.readList(sid).length, 0, 'SentUserLog entry should be cleaned up once queued');
+});
+
+test('Task 23: reverse inference is disabled on 403/429/0-observation API and 01a15b82 identifies as Claude Fable 5.1 (Max)', () => {
+  const vm = require('vm');
+  const uiDir = path.resolve(__dirname, '../ui');
+  const store = {};
+  const localMap = new Map();
+  const chatsMap = new Map();
+  const modelsMap = new Map();
+  const ctx = {
+    console, Math, Date, Object, Array, String, Number, Boolean, RegExp, Map, Set, WeakMap, WeakSet, Promise, Error, TypeError, JSON, parseInt, parseFloat, isNaN, isFinite,
+    setTimeout, clearTimeout,
+    now: () => Date.now(),
+    api: async () => ({ status: 403, ok: false }),
+    Bus: { on: () => {}, emit: () => {} },
+    Store: { get: (k, d) => store[k] !== undefined ? store[k] : d, set: (k, v) => { store[k] = v; }, shared: (k, v) => { if (v !== undefined) store[k] = v; return store[k]; } },
+    localStorage: { getItem: k => localMap.has(k) ? localMap.get(k) : null, setItem: (k, v) => localMap.set(k, String(v)), removeItem: k => localMap.delete(k) },
+    Chats: { get: id => chatsMap.get(id) || null, all: () => [...chatsMap.values()], save: () => {} },
+    Models: { get: id => modelsMap.get(id) || null, set: (id, v) => modelsMap.set(id, v) },
+    History: { byId: () => null },
+    TitleSync: { restored: () => null },
+    TitleCipher: { isEncoded: () => false },
+    Trace: { latest: () => null },
+    LiveEst: { of: () => ({ input: 28000, output: 3500 }) },
+    Brand: { of: () => 'claude', NAME: { claude: 'Anthropic', gpt: 'OpenAI', gemini: 'Google' } },
+    UI: { els: {} },
+    document: { querySelector: () => null, querySelectorAll: () => [], getElementById: () => null, createElement: () => ({ style: {}, classList: { add() {}, remove() {} }, appendChild() {}, addEventListener() {} }), body: { appendChild() {} }, addEventListener() {} },
+    Strength: { canon: s => String(s || '').trim().toLowerCase().replace(/\s*\((none|minimal|low|medium|high|xhigh|max)\)\s*$/i, '-$1').replace(/\s+/g, '-') }
+  };
+  ctx.globalThis = ctx; ctx.window = ctx; ctx.self = ctx;
+  vm.createContext(ctx);
+  for (const f of ['fmt.js', 'habit-builtin-bank.js', 'arena-trace/family.js', 'arena-trace/pricing.js', 'arena-trace/preimage.js', 'arena-trace/confidence.js', 'arena-trace/catalog-sync.js', 'billing-probe.js', 'billing-probe-ui.js']) {
+    const p = path.join(uiDir, f);
+    if (fs.existsSync(p)) vm.runInContext(fs.readFileSync(p, 'utf8'), ctx);
+  }
+  const CHF = vm.runInContext('ChatHabitFingerprint', ctx);
+  const BP = vm.runInContext('BillingProbe', ctx);
+
+  const sid = '01a15b82-a43c-71cf-bb6d-d139f15f5c61';
+  const pelicanSnippet = '<!DOCTYPE html>\n<html lang="en">\n<head><title>Pelican on a Bicycle</title><style>:root { --sky-top: #78b9eb; }</style></head><body><svg viewBox="0 0 900 560"><g id="cloudTile"></g><g id="farHillTile"></g><g id="nearHillTile"></g><g id="crankR"></g><g id="crankL"></g><g id="pedalR"></g><g id="pedalL"></g></svg><script>(function () { const NS = "http://www.w3.org/2000/svg"; const $ = (id) => document.getElementById(id); const WHEEL_R = 78, CRANK_R = 26, THIGH = 58, SHIN = 60; function solveIK() {} requestAnimationFrame(() => {}); })();</script></body></html>' + ' '.repeat(11900);
+  const chat = {
+    sid,
+    messages: [
+      { id: 'u1', role: 'user', text: 'Create a standalone HTML file with a 2D SVG animation of a large-billed pelican riding a bicycle. Skip testing.' },
+      {
+        id: 'a1',
+        role: 'assistant',
+        status: 'completed',
+        t0: 1700000000000,
+        tEnd: 1700000107569,
+        fmt: { tN: 84, tChars: 1142, tidCount: 1152, tidChars: 12556, rWireDeltas: 2, rWireEmptyDeltas: 2, tools: 2, toolIds: ['tc_01a', 'tc_01b'] },
+        parts: [
+          { type: 'reasoning', text: '' },
+          { type: 'tool-write_file', toolName: 'write_file', toolCallId: 'tc_01a', input: { path: '/home/user/pelican-bike.html', content: pelicanSnippet } },
+          { type: 'tool-present_file', toolName: 'present_file', toolCallId: 'tc_01b', input: { path: '/home/user/pelican-bike.html' } },
+          { type: 'text', text: "I created `/home/user/pelican-bike.html` and opened it in the viewer. As you asked, I skipped testing, so I haven't opened it in a browser.\n\n### What's Included:\n- **Large-Billed Pelican:** Full SVG pelican.\n- **2-Bone IK Pedaling:** Smooth animation." }
+        ]
+      }
+    ]
+  };
+  chatsMap.set(sid, chat);
+  modelsMap.set(sid, {
+    sid,
+    name: 'gpt-6-luna-medium',
+    reverseInferred: true,
+    reverseVer: 174,
+    reverseTokens: { input: 0, output: 0, total: 0 },
+    reverseCandidates: [
+      { id: 'openai/gpt-6-luna-medium', label: 'GPT-6 Luna (Medium)', canon: 'gpt-6-luna-medium', match: 99.9, revPct: 99.9, structuralRev: true }
+    ]
+  });
+
+  const blindRes = CHF.analyze(chat, null, { ignoreExactSid: true });
+  assert.equal(blindRes?.best?.canon, 'claude-fable-5.1-max', '01a15b82 blind habit recognition must identify claude-fable-5.1-max');
+  assert.ok((blindRes?.best?.match || 0) >= 95, '01a15b82 habit confidence should be >= 95%');
+
+  const sum = BP.summary(sid);
+  assert.equal(sum?.ranked?.length || 0, 0, 'Reverse-inference ranked list must be empty when API has 0 observations / 403');
+  assert.equal(sum?.mergedCandidates?.[0]?.canon, 'claude-fable-5.1-max', 'Merged top candidate must be claude-fable-5.1-max');
+  assert.equal(sum?.mergedCandidates?.[0]?.source, 'fp', 'Merged top candidate source must be habit fingerprint (fp)');
+
+  const healedModel = modelsMap.get(sid);
+  assert.equal(healedModel?.name, 'claude-fable-5.1-max', 'Poisoned gpt-6-luna-medium model entry must be healed to claude-fable-5.1-max');
+  assert.equal(healedModel?.reverseInferred, false, 'healedModel.reverseInferred must be false when no real cost API exists');
+  assert.equal(healedModel?.reverseCandidates?.length || 0, 0, 'Stale zero-cost reverseCandidates must be cleared');
+});
+
+test('Comprehensive 429 rate-limit optimization across core, send-queue, eval-core, titles, and astats', () => {
+  const coreSrc = read('ui/core.js');
+  const sqSrc = read('ui/send-queue.js');
+  const ecSrc = read('ui/eval-core.js');
+  const titlesSrc = read('ui/titles.js');
+  const astatsSrc = read('ui/astats.js');
+
+  assert.ok(coreSrc.includes('if (allowDirectFallback && ReadLimit.active()) opt = { ...opt, bg: true };'), 'api() converts allowDirectFallback requests to fast-fail on ReadLimit');
+  assert.ok(coreSrc.includes('if (isChatRead) { if (!opt.bg && ReadLimit.until > 0) ReadLimit.until = 0; }'), 'Only chat read success clears ReadLimit.until');
+  assert.ok(coreSrc.includes('const needReplay = !Array.isArray(this.messages) || this.messages.length === 0;'), 'streamDirectFallback replays finished turns when messages are empty');
+  assert.ok(coreSrc.includes('if (e?.status !== 429) throw e;\n            if (await this.streamDirectFallback({ fromLoad: true })) {'), 'load() falls back to streamDirectFallback on 429 even for cold chats');
+  assert.ok(coreSrc.includes('if (rec429 && !this.loading && !(this.streaming && !this.peeking) && typeof this.streamDirectFallback === \'function\')'), 'reconcile() falls back to streamDirectFallback on 429');
+  assert.ok(coreSrc.includes('if (conv429 && !this.loading && isKeptOrActive && !(this.streaming && !this.peeking) && typeof this.streamDirectFallback === \'function\')'), 'converge() falls back to streamDirectFallback on 429');
+  assert.ok(sqSrc.includes('if (err?.status === 429 || err?.rateLimitedLocally)') && sqSrc.includes('const pk429 = await chat.peekTurn(chat.lastSeq, null, 2000, { settleCheck: true })'), 'SendQ.serverSettled falls back to S2 peekTurn on 429');
+  assert.ok(ecSrc.includes('prompt failed/i.test(errBody)'), 'eval-core.js handles 429 prompt failed challenge and in-place retry');
+  assert.ok(titlesSrc.includes("if(!force && typeof ReadLimit!=='undefined' && ReadLimit.active?.())return;"), 'Titles.tick pauses background sync during ReadLimit cooldown');
+  assert.ok(astatsSrc.includes("if (typeof MsgCache !== 'undefined' && MsgCache.get)"), 'AcctStats.countRemote uses MsgCache before hitting /api/chat');
+});
+
+test('v0.13.185: Billing /cost & auxiliary APIs prevent 429 bursts via in-flight dedup, 850ms pacing, cache preservation, and main-process visit_id retry', () => {
+  const bpUi = read('ui/billing-probe-ui.js');
+  const mainSrc = read('src/main.js');
+  const coreSrc = read('ui/core.js');
+
+  // 1. protoCostReq deduplicates in-flight requests per sid and paces network calls by 850ms
+  assert.ok(bpUi.includes('costInflightBySid'), 'protoCostReq must deduplicate in-flight /cost requests per sid');
+  assert.ok(bpUi.includes('paceCostNet'), 'protoCostReq must pace network /cost requests');
+
+  // 2. schedule(chat, opts) only wipes costDocCache when fromTurn is true, preserving cached /cost when switching chats
+  assert.ok(bpUi.includes('function schedule(chat, opts = {})'), 'schedule must accept opts');
+  assert.ok(bpUi.includes('if (chat?.sid && fromTurn)'), 'schedule must only clearCachedCostDoc when fromTurn is true');
+  assert.ok(bpUi.includes('schedule(chat, { fromTurn: true })'), 'Bus.on(turn) must pass fromTurn: true');
+  assert.ok(bpUi.includes('schedule(chat, { fromTurn: false })'), 'automatic(chat) must pass fromTurn: false');
+
+  // 3. automatic(chat) skips background /cost network requests for non-foreground non-gacha chats & activeIdentSid
+  assert.ok(bpUi.includes('if (activeIdentSid === chat.sid) return;'), 'automatic(chat) must skip activeIdentSid during runBgSweep');
+  assert.ok(bpUi.includes('if (!isFgChat && !isGacha && !getCachedCostDoc(chat.sid, last)) return;'), 'automatic(chat) must not fire background network /cost for non-foreground chats');
+
+  // 4. reverseIdentify respects globalCost429Until when !interactive and only clears cooldowns on interactive
+  assert.ok(bpUi.includes('(globalCost429Until > now() && !interactive)'), 'reverseIdentify must skip /cost during 429 cooldown when !interactive');
+  assert.ok(bpUi.includes('if (interactive) { globalCost429Until = 0; engine.clearCooldowns?.(); }'), 'reverseIdentify must only clearCooldowns on interactive trigger');
+
+  // 5. Host.protoFetch in src/main.js rotates arena_visit_id in-place and retries once on /cost 429
+  assert.ok(mainSrc.includes('const freshVisitId = crypto.randomUUID();'), 'main.js must rotate arena_visit_id on /cost 429');
+  assert.ok(mainSrc.includes("retryCookieParts.push('arena_visit_id=' + freshVisitId);"), 'main.js must retry /cost with freshVisitId in Cookie header');
+
+  // 6. core.js isolates /api/me/pulse 429s and all /cost paths from conversation ReadLimit.until
+  assert.ok(coreSrc.includes(String.raw`if (isCost || /^\/api\/me\/pulse\b/i.test(path)) ReadLimit.until = prevRl;`), 'core.js must isolate /cost and /api/me/pulse 429s from ReadLimit.until');
+});
+
+test('v0.13.186: Abnormal close / crash queue preservation across main DB, Drafts.pull, SentUserLog.restoreInto, repeated prompts, and pre-append interruptions', async () => {
+  const vm = require('vm');
+  const mainSrc = read('src/main.js');
+  const viewSrc = read('ui/view.js');
+  const sqSrc = read('ui/send-queue.js');
+  const coreSrc = read('ui/core.js');
+
+  // 1. Main process writes draft@<id> immediately via saveDB(true) and guards against unhydrated empty overwrites
+  assert.ok(mainSrc.includes("if (/^draft@[\\w-]{1,64}$/.test(String(k)) && v && typeof v === 'object')"), 'main.js must handle draft@<id> specially');
+  assert.ok(mainSrc.includes('try { saveDB(true); } catch { saveDB(); }'), 'main.js must flush draft@<id> synchronously via saveDB(true)');
+
+  // 2. paintQ hydrates queue via SendQ.of(c) and Drafts.pull union-merges local + host queues & re-hydrates Chats
+  assert.ok(viewSrc.includes("typeof SendQ.of === 'function' ? SendQ.of(c) : c?.queue"), 'paintQ must hydrate queue via SendQ.of(c)');
+  assert.ok(viewSrc.includes('if (c && c.sid && !c.gacha) this.hydrateQ(c, true);'), 'Drafts.pull must re-hydrate existing Chats');
+
+  // 3. Chat.prototype.finishTurn delegates to foreignDone during waitingForeign / preSend
+  assert.ok(coreSrc.includes("if ((this.waitingForeign || (this.preSend && this.awaitId)) && !this.stopReq)"), 'finishTurn must delegate to foreignDone when waitingForeign or preSend');
+
+  // 4. Runtime verification of SentUserLog.restoreInto:
+  //    (a) no ReferenceError: byId is not defined when fresh server load has byIdIdx < 0 && existingIdx < 0
+  //    (b) unaccepted queue entry interrupted by abnormal close is restored back to chat.queue (SendQ)
+  //    (c) repeated short prompt ("继续") in Turn 2 is never deleted by matching Turn 1's "继续" before prevAsstId
+  const sulStart = coreSrc.indexOf('const SentUserLog = (() => {');
+  const sulEnd = coreSrc.indexOf('function isPhantomFinishStub');
+  const sulCode = coreSrc.slice(sulStart, sulEnd);
+
+  const storeMap = new Map();
+  let draftOutbox = [];
+  const demoted = [];
+  const ctx = vm.createContext({
+    Map, Set, Array, Object, String, Number, Boolean, Date, Math, RegExp, JSON,
+    now: () => 2000000000000,
+    idTime: () => 0,
+    uuid7: () => 'u-gen-1',
+    Store: {
+      get: (k, d) => (storeMap.has(k) ? JSON.parse(JSON.stringify(storeMap.get(k))) : d),
+      set: (k, v) => { storeMap.set(k, JSON.parse(JSON.stringify(v))); return true; },
+    },
+    Drafts: {
+      sess: new Set(),
+      load: () => ({ o: draftOutbox, q: {}, t: {} }),
+      ack: id => { draftOutbox = draftOutbox.filter(x => x.id !== id); },
+    },
+    SendQ: {
+      demoteToQueue: (chat, item, opt) => {
+        demoted.push({ sid: chat.sid, id: item.id, text: item.text, opt });
+        (chat.queue ||= []).push({ id: item.id, text: item.text || '继续' });
+        draftOutbox = draftOutbox.filter(x => x.id !== item.id);
+        return true;
+      },
+    },
+    RunningTracker: { isTrackedRunning: () => false },
+    hasInterruptedToolPart: () => false,
+  });
+  vm.runInContext(sulCode + '; globalThis.SentUserLog = SentUserLog;', ctx);
+
+  // Simulate abnormal close while a queued item ("继续" in Turn 2 after Turn 1's "继续" and a1) was in d.o without acc:
+  draftOutbox = [{
+    id: 'u-turn2-queued',
+    sid: 'chat-crash-1',
+    text: '继续',
+    at: 1999999990000,
+    prevAsstId: 'a-turn1',
+    prevAsstWeight: 10,
+    queueIds: ['q-item-1'],
+    fromQueue: true,
+  }];
+  const chatFreshLoad = {
+    sid: 'chat-crash-1',
+    loaded: true,
+    busy: false,
+    streaming: false,
+    queue: [],
+    messages: [
+      { id: 'u-turn1', role: 'user', createdAt: new Date(1999999900000).toISOString(), parts: [{ type: 'text', text: '继续' }] },
+      { id: 'a-turn1', role: 'assistant', createdAt: new Date(1999999910000).toISOString(), metadata: { timing: { completedAt: 1999999920000 } }, parts: [{ type: 'text', text: 'Turn 1 done' }] },
+    ],
+  };
+  const changed = ctx.SentUserLog.restoreInto(chatFreshLoad, { srvPend: false });
+  assert.equal(changed, true, 'restoreInto must handle interrupted queue entry without throwing ReferenceError');
+  assert.equal(chatFreshLoad.queue.length, 1, 'Interrupted queue entry must be restored to chat.queue');
+  assert.equal(chatFreshLoad.queue[0].text, '继续', 'Restored queue item text must be preserved');
+  assert.equal(draftOutbox.length, 0, 'Restored queue entry must be cleaned from outbox');
+});

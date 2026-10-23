@@ -126,7 +126,8 @@ const TitleSync = (() => {
     const sane = n => ConversationLabels.sane(numeric(n));
     const score = (mi?.routed ? sane(mi?.reverseScore) : null) ?? (hasReidMi ? sane(mi?.reverseScore ?? mi?.habitScore) : null) ?? sane(fp?.reasoning?.score) ?? sane(mi?.reverseScore ?? mi?.habitScore) ?? sane(mi?.est?.score) ?? (samePrior?sane(prior?.score):null) ?? (sameParsed?sane(parsed.score):null);
     const average = numeric(fp?.avgProbeSec) ?? (samePrior?prior?.average:null) ?? (sameParsed?numeric(parsed.average):null);
-    const base = {model,confidence:confidence !== null ? Math.min(1,confidence) : null,score,average,tier:String((mi?.routed && mi?.reverseEffort) || mi?.tier || fp?.reasoning?.tier || (samePrior?prior?.tier:'') || ''),source:fp&&!hasReidMi?'fingerprint':mi&&(!mi.guess||hasReidMi)?'api':(samePrior?prior?.source:'')||'local'};
+    const origin = mi?.userCorrected ? 'user' : mi?.habitInferred ? 'habit' : mi?.reverseInferred ? 'reverse' : mi?.fromTitle ? (mi?.origin || 'title') : (mi && !mi.guess ? 'api' : (samePrior ? prior?.origin : '') || 'local');
+    const base = {model,confidence:confidence !== null ? Math.min(1,confidence) : null,score,average,tier:String(mi?.reverseEffort || mi?.effort || mi?.tier || fp?.reasoning?.tier || (samePrior?prior?.tier:'') || ''),source:fp&&!hasReidMi?'fingerprint':mi&&(!mi.guess||hasReidMi)?'api':(samePrior?prior?.source:'')||'local',origin};
     if (buildMemo.size >= 2000) buildMemo.clear();
     buildMemo.set(sid, { key: memoKey, base });
     return {...base,time:Number(n.t)||prior?.time||now(),note:String(n.n||''),revision:Number(n.modifiedAt)||now()};
@@ -195,6 +196,8 @@ const TitleSync = (() => {
             habitScore: cur?.habitScore ?? gp.score ?? undefined,
             est: cur?.est || (gp.score != null ? { score: gp.score, source: 'prefix' } : undefined),
             fromTitle: !cur?.habitInferred && !cur?.reverseInferred && !cur?.billingProbe && !cur?.userCorrected,
+            origin: cur?.origin || 'title',
+            authentication: cur?.authentication || 'restored-title',
             sure: true,
             guess: false,
             pendingConfirm: false,

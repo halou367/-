@@ -207,11 +207,11 @@ const ModeState = {
   },
 };
 
-let cachedWebDeploymentId = 'dpl_8Gb6m6m38M8S2WQCSdYVhF5iPnfC';
+let cachedWebDeploymentId = '';
 try {
   if (typeof Store !== 'undefined' && Store.get) {
     const savedDpl = Store.get('eval:webDplId', '');
-    if (savedDpl && /^dpl_[A-Za-z0-9]+$/.test(savedDpl) && savedDpl !== 'dpl_6nPiGVx1iAXDm3emfbFNUFD8Zy1E') {
+    if (savedDpl && /^dpl_[A-Za-z0-9]+$/.test(savedDpl) && savedDpl !== 'dpl_6nPiGVx1iAXDm3emfbFNUFD8Zy1E' && savedDpl !== 'dpl_8Gb6m6m38M8S2WQCSdYVhF5iPnfC') {
       cachedWebDeploymentId = savedDpl;
     }
   }
@@ -659,6 +659,7 @@ const ModelCatalog = (() => {
     getModelById,
     resolveModelUuid,
     resolveModelName,
+    displayName: resolveModelName,
     get all() { return models; },
   };
 })();
@@ -755,7 +756,68 @@ const EvalEngine = (() => {
     return src;
   }
 
+  function parseStreamingToolArgs(rawText, existingArgs = {}) {
+    const base = (existingArgs && typeof existingArgs === 'object') ? { ...existingArgs } : {};
+    const s = String(rawText || '').trim();
+    if (!s) return base;
+    try {
+      const parsed = JSON.parse(s);
+      if (parsed && typeof parsed === 'object') return { ...base, ...parsed };
+    } catch {}
+    const unesc = str => String(str || '')
+      .replace(/\\n/g, '\n')
+      .replace(/\\r/g, '\r')
+      .replace(/\\t/g, '\t')
+      .replace(/\\"/g, '"')
+      .replace(/\\\\/g, '\\');
+    const pathM = s.match(/"(?:path|file_path|target_file)"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"/);
+    if (pathM && !base.path) base.path = unesc(pathM[1]);
+    const cmdM = s.match(/"(?:command|cmd)"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)/);
+    if (cmdM && !base.command) base.command = unesc(cmdM[1]);
+    const contentM = s.match(/"(?:content|text|replacement|new_text|new_str|patch|input)"\s*:\s*"([\s\S]*)$/);
+    if (contentM) {
+      let rawVal = contentM[1];
+      rawVal = rawVal.replace(/"\s*\}?\s*$/, '');
+      const val = unesc(rawVal);
+      if (/"(?:patch|input)"/.test(contentM[0])) base.patch = val;
+      else if (/"(?:replacement|new_text|new_str)"/.test(contentM[0])) base.replacement = val;
+      else base.content = val;
+    }
+    return base;
+  }
+
+  function extractPatchFiles(patchStr) {
+    const src = String(patchStr || '');
+    if (!src) return [];
+    const out = [];
+    const rx = /\*\*\*\s+(?:Add|Update)\s+File:\s*([^\r\n]+)|\+\+\+\s+b\/([^\r\n]+)/g;
+    let m;
+    const matches = [];
+    while ((m = rx.exec(src)) !== null) {
+      const fPath = String(m[1] || m[2] || '').trim().replace(/^\/home\/user\//, '').replace(/^~\//, '').replace(/^\.\//, '').replace(/^\/+/, '');
+      if (fPath) matches.push({ path: fPath, idx: m.index + m[0].length });
+    }
+    for (let i = 0; i < matches.length; i++) {
+      const cur = matches[i];
+      const nextIdx = i + 1 < matches.length ? matches[i + 1].idx : src.length;
+      const body = src.slice(cur.idx, nextIdx);
+      const lines = body.split(/\r?\n/);
+      const contentLines = [];
+      let addN = 0, delN = 0;
+      for (const ln of lines) {
+        if (ln.startsWith('*** ') || ln.startsWith('@@') || ln.startsWith('--- ') || ln.startsWith('+++ ')) continue;
+        if (ln.startsWith('+')) { addN++; contentLines.push(ln.slice(1)); }
+        else if (ln.startsWith('-')) { delN++; }
+        else if (ln.startsWith(' ')) { contentLines.push(ln.slice(1)); }
+        else { contentLines.push(ln); }
+      }
+      out.push({ path: cur.path, content: contentLines.join('\n'), addN, delN });
+    }
+    return out;
+  }
+
   function applyWebDevToolToState(webdev, toolName, args, result) {
+    if (!webdev && !isWriteOrPatchToolName(toolName)) return null;
     const state = webdev && typeof webdev === 'object'
       ? {
           status: webdev.status || 'pending',
@@ -769,7 +831,22 @@ const EvalEngine = (() => {
     if (result && typeof result === 'object' && result.status === 'error') return state;
     const inp = args && typeof args === 'object' ? args : {};
     const tName = String(toolName || '').toLowerCase();
-    const normP = String(inp.path || inp.file_path || '').replace(/^\/home\/user\//, '').replace(/^~\//, '').replace(/^\.\//, '').replace(/^\/+/, '');
+    const normP = String(inp.path || inp.file_path || inp.target_file || '').replace(/^\/home\/user\//, '').replace(/^~\//, '').replace(/^\.\//, '').replace(/^\/+/, '');
+    if (tName === 'apply_patch' || tName === 'patch') {
+      const pTxt = String(inp.patch ?? inp.input ?? inp.diff ?? inp.content ?? '');
+      const pFiles = extractPatchFiles(pTxt);
+      for (const pf of pFiles) {
+        if (!pf.path) continue;
+        const fType = inferWebDevContentType(pf.path);
+        const idx = state.files.findIndex(f => f && f.path === pf.path);
+        if (idx >= 0) {
+          if (pf.content.trim()) state.files[idx] = { ...state.files[idx], path: pf.path, content: pf.content, contentType: fType };
+        } else {
+          state.files.push({ path: pf.path, content: pf.content, contentType: fType });
+        }
+      }
+      return state;
+    }
     if ((tName === 'create_file' || tName === 'write_file' || tName === 'write') && normP) {
       const fContent = String(inp.content ?? inp.text ?? '');
       const fType = inferWebDevContentType(normP);
@@ -804,7 +881,7 @@ const EvalEngine = (() => {
       || Boolean(m.webdev)
       || Boolean(m.webdevTemplate || m.metadata?.webdevTemplate)
       || Boolean(m.activeWorkflowRunId || m.metadata?.workflowRunId)
-      || (Array.isArray(m.parts) && m.parts.some(p => p && String(p.type || '').startsWith('tool-')));
+      || (Array.isArray(m.parts) && m.parts.some(p => p && isWriteOrPatchToolName(p.toolName || String(p.type || '').replace(/^tool-/, ''))));
     if (!isWebDev) return null;
     let state = m.webdev && typeof m.webdev === 'object'
       ? {
@@ -1091,6 +1168,22 @@ const EvalEngine = (() => {
     return false;
   }
 
+  function rawEvalTextLen(m) {
+    if (!m || typeof m !== 'object') return 0;
+    let len = 0;
+    if (typeof m.content === 'string') len += m.content.length;
+    else if (Array.isArray(m.content)) {
+      for (const c of m.content) if (c && typeof c.text === 'string') len += c.text.length;
+    }
+    if (typeof m.text === 'string') len = Math.max(len, m.text.length);
+    if (Array.isArray(m.parts)) {
+      let pLen = 0;
+      for (const p of m.parts) if (p && typeof p.text === 'string') pLen += p.text.length;
+      len = Math.max(len, pLen);
+    }
+    return len;
+  }
+
   function mergeEvalObjects(primary, secondary) {
     if (!primary) return secondary || null;
     if (!secondary) return primary;
@@ -1107,18 +1200,33 @@ const EvalEngine = (() => {
           secByPos.set(sm.participantPosition, sm);
         }
       }
-      out.messages = primary.messages.map(pm => {
+      const primaryIds = new Set();
+      const mergedList = primary.messages.map(pm => {
+        if (pm?.id) primaryIds.add(pm.id);
         if (!pm || typeof pm !== 'object' || pm.role !== 'assistant') return pm;
         const sm = (pm.id && secById.get(pm.id))
-          || ((pm.participantPosition === 'a' || pm.participantPosition === 'b') ? secByPos.get(pm.participantPosition) : null);
+          || (primary.messages.filter(x => x?.role === 'user').length <= 1 && (pm.participantPosition === 'a' || pm.participantPosition === 'b') ? secByPos.get(pm.participantPosition) : null);
         if (!sm) return pm;
         const pHas = hasRawEvalMsgContent(pm) && pm.status !== 'failed';
         const sHas = hasRawEvalMsgContent(sm) && sm.status !== 'failed';
+        const pServerDone = pHas && pm.status !== 'pending' && pm.status !== 'streaming' && !pm.metadata?.pending;
+        if (pServerDone && (sm.status === 'pending' || sm.status === 'streaming' || sm.metadata?.pending)) {
+          return { ...sm, ...pm, id: pm.id || sm.id, _versionArchive: sm._versionArchive || pm._versionArchive };
+        }
         if (!pHas && sHas) {
+          return { ...pm, ...sm, id: pm.id || sm.id };
+        }
+        if (pHas && sHas && (rawEvalTextLen(sm) > rawEvalTextLen(pm) || ((pm.status === 'pending' || pm.status === 'streaming') && sm.status === 'success'))) {
           return { ...pm, ...sm, id: pm.id || sm.id };
         }
         return pm;
       });
+      for (const sm of secondary.messages) {
+        if (sm && sm.id && !primaryIds.has(sm.id)) {
+          mergedList.push(sm);
+        }
+      }
+      out.messages = mergedList;
     }
     if ((!Array.isArray(out.revealedModels) || !out.revealedModels.length) && Array.isArray(secondary.revealedModels)) {
       out.revealedModels = secondary.revealedModels;
@@ -1206,12 +1314,15 @@ const EvalEngine = (() => {
     const fetchFn = typeof rawFetch === 'function' ? rawFetch : fetch;
     let fromFlight = null;
     try {
+      const fCtl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+      const fTm = fCtl ? setTimeout(() => { try { fCtl.abort(); } catch {} }, 12000) : 0;
       const res = await fetchFn('/c/' + encodeURIComponent(sid), {
         method: 'GET',
         cache: 'no-store',
         credentials: 'same-origin',
         headers: { Accept: 'text/html,application/xhtml+xml,application/json' },
-      });
+        ...(fCtl ? { signal: fCtl.signal } : {}),
+      }).finally(() => { if (fTm) clearTimeout(fTm); });
       if (res && res.ok) {
         const ct = String(res.headers?.get?.('content-type') || '').toLowerCase();
         const text = await res.text();
@@ -1233,13 +1344,26 @@ const EvalEngine = (() => {
     } catch {}
 
     if (fromFlight) {
+      const flightMsgs = Array.isArray(fromFlight.messages) ? fromFlight.messages : [];
+      const flightIncomplete = !flightMsgs.length
+        || (Array.isArray(lsCached?.messages) && lsCached.messages.length > flightMsgs.length)
+        || flightMsgs.some(m => m && m.role === 'assistant' && (m.status === 'pending' || m.status === 'streaming' || !hasRawEvalMsgContent(m)));
+      if (flightIncomplete) {
+        try {
+          const apiData = (typeof ReadLimit !== 'undefined' && ReadLimit.active?.()) ? null : await api('/api/evaluation/' + encodeURIComponent(sid), { timeout: 12000, bg: true, noApiRetry: true });
+          if (apiData && typeof apiData === 'object') {
+            const apiEvalObj = apiData.evaluation || apiData.session || apiData.data || apiData;
+            fromFlight = mergeEvalObjects(apiEvalObj, fromFlight);
+          }
+        } catch {}
+      }
       const merged = mergeEvalObjects(fromFlight, lsCached);
       writeLocalEvalCache(sid, merged);
       return merged;
     }
 
     try {
-      const data = await api('/api/evaluation/' + encodeURIComponent(sid), { timeout: 20000 });
+      const data = (typeof ReadLimit !== 'undefined' && ReadLimit.active?.() && lsCached?.messages?.length) ? null : await api('/api/evaluation/' + encodeURIComponent(sid), { timeout: 20000, bg: Boolean(lsCached?.messages?.length), noApiRetry: true });
       if (data && typeof data === 'object') {
         const evalObj = data.evaluation || data.session || data.data || data;
         const merged = mergeEvalObjects(evalObj, lsCached);
@@ -1247,11 +1371,40 @@ const EvalEngine = (() => {
         return merged;
       }
     } catch {}
-
     if (lsCached && Array.isArray(lsCached.messages) && lsCached.messages.length) {
       return lsCached;
     }
     return null;
+  }
+
+  function rebuildTurns(chat) {
+    if (!chat) return [];
+    const list = Array.isArray(chat.messages) ? chat.messages : [];
+    const turns = [];
+    let cur = null;
+    for (let i = 0; i < list.length; i++) {
+      const m = list[i];
+      if (!m || m._held) continue;
+      if (m.role === 'user') {
+        cur = { id: m.id || ('turn-' + (turns.length + 1)), user: m, msgA: null, msgB: null, a: null, b: null };
+        turns.push(cur);
+      } else if (m.role === 'assistant') {
+        if (!cur) {
+          cur = { id: m.id || ('turn-' + (turns.length + 1)), user: null, msgA: null, msgB: null, a: null, b: null };
+          turns.push(cur);
+        }
+        const pos = String(m.participantPosition || '').toLowerCase();
+        if (pos === 'b') { cur.msgB = m; cur.b = m; }
+        else if (pos === 'a' || !cur.msgA) { cur.msgA = m; cur.a = m; }
+        else if (!cur.msgB) { cur.msgB = m; cur.b = m; }
+      }
+    }
+    chat.turns = turns;
+    return turns;
+  }
+
+  function isWriteOrPatchToolName(name) {
+    return /^(?:create_?file|write_?file|write|edit_?file|str_?replace|replace_?in_?file|edit|apply_?patch|patch|delete_?file|generate_?image)$/i.test(String(name || ''));
   }
 
   function orderTurnMessages(mapped) {
@@ -1329,6 +1482,50 @@ const EvalEngine = (() => {
     const wasConfirmedEval = Boolean(chat.isEvaluation || isEvalChat(chat));
     const prevEvalMode = chat.evalMode;
     if (wasConfirmedEval) initEvalFields(chat);
+    if (!chat.messages?.length) {
+      const localCached = readLocalEvalCache(chat.sid);
+      if (localCached?.messages?.length) {
+        initEvalFields(chat);
+        if (localCached.evalMode) chat.evalMode = localCached.evalMode;
+        if (localCached.modality) chat.modality = localCached.modality;
+        if (localCached.title && (!chat.title || chat.title === '新对话')) chat.title = localCached.title;
+        if (localCached.modelAId) chat.modelAId = localCached.modelAId;
+        if (localCached.modelBId) chat.modelBId = localCached.modelBId;
+        if (Array.isArray(localCached.revealedModels)) chat.revealedModels = localCached.revealedModels;
+        if (Array.isArray(localCached.pairwiseFeedbacks)) chat.pairwiseFeedbacks = localCached.pairwiseFeedbacks;
+        if (localCached.votedAt) chat.votedAt = localCached.votedAt;
+        if (localCached.voteChoice) chat.voteChoice = localCached.voteChoice;
+        const hydratedMsgs = orderTurnMessages(localCached.messages).map(m => {
+          if (!m || typeof m !== 'object') return m;
+          const cp = { ...m, v: (m.v || 0) + 1 };
+          if (cp.role === 'assistant' && (!Array.isArray(cp.parts) || !cp.parts.length)) {
+            cp.parts = buildAssistantParts(cp.content || '', cp.experimental_attachments, cp.reasoning || '', cp.toolCalls || null);
+          }
+          return cp;
+        });
+        const tailAsst = [...hydratedMsgs].reverse().find(m => m && m.role === 'assistant');
+        const tailMsg = hydratedMsgs.at(-1);
+        const isTailInc = Boolean(
+          (tailMsg && tailMsg.role === 'user') ||
+          (tailAsst && (
+            tailAsst.metadata?.pending ||
+            tailAsst.status === 'pending' ||
+            tailAsst.status === 'streaming' ||
+            (typeof isIncompleteAssistantMsg === 'function' && isIncompleteAssistantMsg(tailAsst))
+          ))
+        );
+        if (isTailInc && tailAsst) {
+          tailAsst._incomplete = true;
+        }
+        if (isTailInc) {
+          chat._recoveringIncomplete = true;
+        }
+        chat.messages = hydratedMsgs;
+        rebuildTurns(chat);
+        chat.cached = true;
+        chat.emit();
+      }
+    }
     chat.loading = (async () => {
       try {
         const data = await fetchEvalSessionData(chat.sid);
@@ -1357,6 +1554,7 @@ const EvalEngine = (() => {
         let detectedAId = evalObj.modelAId || data.modelAId || chat.modelAId || null;
         let detectedBId = evalObj.modelBId || data.modelBId || chat.modelBId || null;
 
+        const nextEvalVer = (chat._evalVerSeq = (chat._evalVerSeq || 2) + 1);
         const rawMapped = [];
         for (const m of rawMsgs) {
           if (!m || typeof m !== 'object') continue;
@@ -1370,16 +1568,31 @@ const EvalEngine = (() => {
               createdAt: m.createdAt || new Date().toISOString(),
               experimental_attachments: Array.isArray(m.experimental_attachments) ? m.experimental_attachments : [],
               metadata: m.metadata || {},
-              v: 2,
+              v: nextEvalVer,
             });
           } else if (m.role === 'assistant') {
             const pos = m.participantPosition === 'b' ? 'b' : 'a';
             const mId = m.modelId || m.model || null;
             if (pos === 'a' && mId) detectedAId = mId;
             if (pos === 'b' && mId) detectedBId = mId;
-            const st = String(m.status || 'success').toLowerCase();
+            const rawSt = String(m.status || 'success').toLowerCase();
             const restoredFmt = m._fmt || m.metadata?._fmt || null;
             const builtParts = buildAssistantParts(m);
+            const wdState = reconstructWebDevFromMessage({ ...m, parts: builtParts }, chat.modality);
+            const hasPartErr = builtParts.some(p => p && p.type === 'error');
+            const isAbortedWebDev = Boolean(
+              chat.modality === 'webdev' &&
+              rawSt !== 'pending' && rawSt !== 'streaming' &&
+              (!wdState || (!wdState.previewUrl && !(wdState.files && wdState.files.length))) &&
+              !builtParts.some(p => p && p.type === 'text' && /<html|<svg|<!doctype/i.test(String(p.text || ''))) &&
+              builtParts.some(p => p && String(p.type || '').startsWith('tool-')) &&
+              !builtParts.some(p => p && isWriteOrPatchToolName(p.toolName || String(p.type || '').replace(/^tool-/, '')))
+            );
+            const isFailedSt = rawSt === 'failed' || rawSt === 'error' || rawSt === 'cancelled' || rawSt === 'canceled'
+              || Boolean(m.failureReason || m.error || m.errorMessage || wdState?.status === 'build-error' || hasPartErr || isAbortedWebDev);
+            const st = isFailedSt ? 'failed' : rawSt;
+            const failReason = m.failureReason || m.error || m.errorMessage || wdState?.message
+              || (isAbortedWebDev ? '模型构建中断（未生成代码文件），请点击重试重新生成' : (isFailedSt ? '官方生成报错，请点击重试重新生成' : null));
             const msgObj = {
               id: m.id || genUuid(),
               role: 'assistant',
@@ -1387,7 +1600,8 @@ const EvalEngine = (() => {
               parentMessageIds: Array.isArray(m.parentMessageIds) ? m.parentMessageIds : [],
               modelId: mId,
               status: st,
-              failureReason: m.failureReason || null,
+              failed: isFailedSt,
+              failureReason: failReason,
               createdAt: m.createdAt || new Date().toISOString(),
               parts: builtParts,
               activeWorkflowRunId: m.activeWorkflowRunId || m.metadata?.workflowRunId || null,
@@ -1396,12 +1610,14 @@ const EvalEngine = (() => {
               ...(restoredFmt ? { _fmt: restoredFmt } : {}),
               metadata: {
                 ...(m.metadata || {}),
-                pending: st === 'pending' || st === 'streaming',
+                pending: !isFailedSt && (st === 'pending' || st === 'streaming'),
               },
-              v: 2,
+              v: nextEvalVer,
             };
-            const wdState = reconstructWebDevFromMessage(msgObj, chat.modality);
-            if (wdState) msgObj.webdev = wdState;
+            if (wdState) {
+              if (isFailedSt && wdState.status === 'pending') wdState.status = 'build-error';
+              msgObj.webdev = wdState;
+            }
             rawMapped.push(msgObj);
           }
         }
@@ -1426,11 +1642,43 @@ const EvalEngine = (() => {
           }
         } catch {}
 
+        if (Array.isArray(chat.messages) && chat.messages.length) {
+          const prevById = new Map(chat.messages.filter(x => x?.id).map(x => [x.id, x]));
+          for (let i = 0; i < mapped.length; i++) {
+            const mm = mapped[i];
+            const prev = mm?.id ? prevById.get(mm.id) : null;
+            if (!prev || mm.role !== 'assistant') continue;
+            const prevPartsLen = Array.isArray(prev.parts) ? prev.parts.length : 0;
+            const newPartsLen = Array.isArray(mm.parts) ? mm.parts.length : 0;
+            const prevTxtLen = Array.isArray(prev.parts) ? prev.parts.reduce((acc, p) => acc + (p?.text?.length || 0) + (p?.inputText?.length || 0), 0) : 0;
+            const newTxtLen = Array.isArray(mm.parts) ? mm.parts.reduce((acc, p) => acc + (p?.text?.length || 0) + (p?.inputText?.length || 0), 0) : 0;
+            if ((mm.status === 'pending' || mm.status === 'streaming' || prevPartsLen > newPartsLen || prevTxtLen > newTxtLen)) {
+              if (prevPartsLen > newPartsLen || prevTxtLen > newTxtLen) mm.parts = prev.parts;
+            }
+            if (mm.status === 'failed' || mm.failed) {
+              for (const pt of mm.parts || []) {
+                if (pt && pt.state === 'streaming') pt.state = 'done';
+              }
+            }
+            if (prev.webdev && ((Array.isArray(prev.webdev.files) && prev.webdev.files.length > (mm.webdev?.files?.length || 0)) || (prev.webdev.previewUrl && !mm.webdev?.previewUrl))) {
+              mm.webdev = { ...prev.webdev };
+              if (mm.status === 'failed' || mm.failed) mm.webdev.status = 'build-error';
+            }
+            if (prev.activeWorkflowRunId && !mm.activeWorkflowRunId) mm.activeWorkflowRunId = prev.activeWorkflowRunId;
+            if (prev._fmt && !mm._fmt) mm._fmt = prev._fmt;
+            if (prev.metadata?.timing && (!mm.metadata?.timing?.firstTokenAt && prev.metadata.timing.firstTokenAt)) {
+              mm.metadata = mm.metadata || {};
+              mm.metadata.timing = { ...prev.metadata.timing, ...(mm.metadata.timing || {}) };
+            }
+          }
+        }
         const mappedIds = new Set(mapped.map(x => x?.id).filter(Boolean));
         const inFlightTail = Array.isArray(chat.messages)
-          ? chat.messages.filter(m => m && !mappedIds.has(m.id) && (m._local || (chat._evalStreaming && m.role === 'assistant' && m.metadata?.pending)))
+          ? chat.messages.filter(m => m && !mappedIds.has(m.id) && (m._local || m.role === 'user' || (chat._evalStreaming && m.role === 'assistant' && m.metadata?.pending)))
           : [];
         chat.messages = inFlightTail.length ? orderTurnMessages([...mapped, ...inFlightTail]) : mapped;
+        try { if (typeof SentUserLog !== 'undefined' && typeof SentUserLog.restoreInto === 'function') SentUserLog.restoreInto(chat); } catch {}
+        rebuildTurns(chat);
         chat.modelAId = detectedAId;
         chat.modelBId = detectedBId;
 
@@ -1515,7 +1763,47 @@ const EvalEngine = (() => {
         chat.loaded = true;
         chat.cached = false;
         chat.error = null;
-        chat.status = 'idle';
+        chat._recoveringIncomplete = false;
+        chat._startupResuming = false;
+        const lastTurn = Array.isArray(chat.turns) && chat.turns.length ? chat.turns[chat.turns.length - 1] : null;
+        const turnAssts = [lastTurn?.msgA, lastTurn?.msgB, chat.messages.at(-1)].filter(m => m && m.role === 'assistant');
+        const tailEvalMsg = chat.messages.at(-1);
+        const tailUserRecent = Boolean(tailEvalMsg?.role === 'user' && !tailEvalMsg.failed && !chat._evalPollExhausted && ((Date.now() - (tailEvalMsg._sentAt || (typeof idTime === 'function' ? idTime(tailEvalMsg.id) : 0) || 0)) < 180000));
+        const hasPendingEvalTail = Boolean(
+          tailUserRecent ||
+          turnAssts.some(m => {
+            if (!m || m._userStopped || m.status === 'failed' || m.status === 'error') return false;
+            const inc = Boolean(m.metadata?.pending || m.status === 'pending' || m.status === 'streaming');
+            if (inc) {
+              m._incomplete = true;
+              m.metadata = { ...(m.metadata || {}), pending: true };
+              m.status = 'streaming';
+            } else {
+              delete m._incomplete;
+              if (m.metadata) m.metadata.pending = false;
+            }
+            return inc;
+          })
+        );
+        if (hasPendingEvalTail) {
+          chat.status = 'streaming';
+          chat._evalStreaming = true;
+          chat.phase = '正在继续接收回复…';
+          if (chat.evalMode === 'direct') {
+            chat.live = turnAssts.find(m => m._incomplete || m.metadata?.pending) || null;
+          }
+          void pollIncompleteEvalSession(chat);
+        } else {
+          chat._evalStreaming = false;
+          if (chat.live) {
+            delete chat.live._incomplete;
+            if (chat.live.metadata) chat.live.metadata.pending = false;
+            chat.live = null;
+          }
+          chat.status = 'idle';
+          chat.phase = '';
+          if (typeof SendQ !== 'undefined' && SendQ.of?.(chat)?.length) setTimeout(() => { try { SendQ.check(chat); } catch {} }, 50);
+        }
         try {
           if (typeof MsgCache !== 'undefined' && typeof MsgCache.put === 'function' && chat.messages.length) {
             void MsgCache.put(chat.sid, { messages: chat.messages, at: Date.now() });
@@ -1609,15 +1897,48 @@ const EvalEngine = (() => {
           const bStatus = mf.buildResult?.status || 'success';
           const tplKind = mf.template?.kind || msg.webdev?.templateKind || msg.webdevTemplate || null;
           const pvUrl = data.previewUrl || (bStatus === 'success' ? `https://${msg.id}.arena.site` : null);
+          const mergedFiles = Array.isArray(mf.files) && mf.files.length ? mf.files : (msg.webdev?.files || []);
           msg.webdev = {
             status: bStatus === 'success' ? 'success' : bStatus === 'no-artifact' ? 'no-artifact' : 'build-error',
-            files: Array.isArray(mf.files) && mf.files.length ? mf.files : (msg.webdev?.files || []),
+            files: mergedFiles,
             binaryFiles: Array.isArray(mf.binaryFiles) ? mf.binaryFiles : (msg.webdev?.binaryFiles || []),
             previewUrl: pvUrl,
             templateKind: tplKind,
             message: mf.buildResult?.message || null,
             _fetchedMeta: true,
           };
+          if (bStatus === 'build-error' || bStatus === 'error' || bStatus === 'failed') {
+            msg.status = 'failed';
+            msg.failed = true;
+            msg.failureReason = mf.buildResult?.message || msg.failureReason || '构建预览失败，请点击重试重新生成';
+            if (msg.metadata) msg.metadata.pending = false;
+            delete msg._incomplete;
+          } else if (bStatus === 'success') {
+            if (msg.status === 'pending' || msg.status === 'streaming') msg.status = 'success';
+            if (msg.metadata) msg.metadata.pending = false;
+            delete msg._incomplete;
+          } else if (bStatus === 'no-artifact' && !mergedFiles.length && !(chat.streaming && chat._evalStreaming)) {
+            const hasInlineHtml = Array.isArray(msg.parts) && msg.parts.some(p => p && p.type === 'text' && /<html|<svg|<!doctype/i.test(String(p.text || '')));
+            if (!hasInlineHtml) {
+              msg.status = 'failed';
+              msg.failed = true;
+              msg.failureReason = mf.buildResult?.message || msg.failureReason || '官方构建未生成预览产物，请点击重试重新生成';
+              if (msg.metadata) msg.metadata.pending = false;
+              delete msg._incomplete;
+            }
+          }
+        } else if (data.status === 'failed' || data.status === 'error' || data.status === 'build-error' || data.error) {
+          msg.webdev = {
+            ...(msg.webdev || {}),
+            status: 'build-error',
+            message: data.message || data.error || '构建失败',
+            _fetchedMeta: true,
+          };
+          msg.status = 'failed';
+          msg.failed = true;
+          msg.failureReason = data.message || data.error || msg.failureReason || '官方构建报错，请点击重试重新生成';
+          if (msg.metadata) msg.metadata.pending = false;
+          delete msg._incomplete;
         }
         msg.v = (msg.v || 0) + 1;
         try {
@@ -1650,6 +1971,7 @@ const EvalEngine = (() => {
       templateKind: targetMsg.webdevTemplate || null,
     };
     if (ev.type === 'init') {
+      targetMsg._hasWebDevInit = true;
       targetMsg.webdev = {
         status: 'pending',
         files: Array.isArray(ev.files) ? ev.files.map(f => ({ ...f })) : (targetMsg.webdev.files || []),
@@ -1757,64 +2079,91 @@ const EvalEngine = (() => {
 
   async function streamWebDevMessageSSE(chat, targetMsg, signal) {
     if (!chat || !targetMsg || !targetMsg.id) return false;
-    const key = `${chat.sid || ''}:${targetMsg.id}`;
+    const msgId = targetMsg.id;
+    const key = `${chat.sid || ''}:${msgId}`;
     if (_webdevStreamInFlight.has(key)) return _webdevStreamInFlight.get(key);
     const p = (async () => {
       const fetchFn = typeof rawFetch === 'function' ? rawFetch : fetch;
+      const getLiveMsg = () => (Array.isArray(chat.messages) && chat.messages.find(x => x && x.id === msgId)) || targetMsg;
       let runId = targetMsg.activeWorkflowRunId || targetMsg.metadata?.workflowRunId || null;
       const pos = targetMsg.participantPosition || 'a';
-      const ensureStreamPart = (type) => {
-        if (!Array.isArray(targetMsg.parts)) targetMsg.parts = [];
-        const hasTools = targetMsg.parts.some(x => x && String(x.type || '').startsWith('tool-'));
+      const ensureStreamPart = (m, type) => {
+        if (!Array.isArray(m.parts)) m.parts = [];
+        const hasTools = m.parts.some(x => x && String(x.type || '').startsWith('tool-'));
         if (!hasTools) {
-          let found = targetMsg.parts.find(x => x && x.type === type);
+          let found = m.parts.find(x => x && x.type === type);
           if (!found) {
             found = { type, text: '', state: 'streaming' };
-            if (type === 'reasoning') targetMsg.parts.unshift(found);
-            else targetMsg.parts.push(found);
+            if (type === 'reasoning') m.parts.unshift(found);
+            else m.parts.push(found);
           }
           return found;
         }
-        const last = targetMsg.parts[targetMsg.parts.length - 1];
+        const last = m.parts[m.parts.length - 1];
         if (last && last.type === type) return last;
         const created = { type, text: '', state: 'streaming' };
-        targetMsg.parts.push(created);
+        m.parts.push(created);
         return created;
       };
 
       const handleEventPayload = (evData) => {
         if (!evData || typeof evData !== 'object') return false;
+        const m = getLiveMsg();
         const tNow = Date.now();
-        targetMsg.metadata = targetMsg.metadata || {};
-        targetMsg.metadata.timing = targetMsg.metadata.timing || { startedAt: tNow };
-        if (evData.type === 'text-delta' && typeof evData.delta === 'string') {
-          const tp = ensureStreamPart('text');
-          tp.text = (tp.text || '') + evData.delta;
-          targetMsg.v = (targetMsg.v || 0) + 1;
-        } else if (evData.type === 'reasoning' && typeof evData.delta === 'string') {
-          const rp = ensureStreamPart('reasoning');
-          rp.text = (rp.text || '') + evData.delta;
-          targetMsg.v = (targetMsg.v || 0) + 1;
-        } else if (evData.type === 'tool-call') {
-          upsertToolCallPart(chat, targetMsg, evData);
-        } else if (evData.type === 'tool-result') {
-          applyToolResultPart(chat, targetMsg, evData);
-        } else if (evData.type === 'webdev' && evData.event) {
-          applyWebDevChunkEvent(chat, targetMsg, evData.event);
-        } else if (evData.type === 'finish') {
-          targetMsg.status = 'success';
-          if (targetMsg.metadata) targetMsg.metadata.pending = false;
-          for (const pt of targetMsg.parts || []) {
+        m.metadata = m.metadata || {};
+        m.metadata.timing = m.metadata.timing || { startedAt: tNow };
+        const evType = String(evData.type || '');
+        const txtDelta = typeof evData.delta === 'string' ? evData.delta : (typeof evData.textDelta === 'string' ? evData.textDelta : (typeof evData.text === 'string' ? evData.text : null));
+        if ((evType === 'text-delta' || evType === 'text') && txtDelta != null) {
+          if (!m.metadata.timing.firstTokenAt) m.metadata.timing.firstTokenAt = tNow;
+          const tp = ensureStreamPart(m, 'text');
+          tp.text = (tp.text || '') + txtDelta;
+          m.v = (m.v || 0) + 1;
+        } else if ((evType === 'reasoning' || evType === 'reasoning-delta') && txtDelta != null) {
+          if (!m.metadata.timing.firstTokenAt) m.metadata.timing.firstTokenAt = tNow;
+          if (!m.metadata.timing.reasoningStartedAt) m.metadata.timing.reasoningStartedAt = tNow;
+          const rp = ensureStreamPart(m, 'reasoning');
+          rp.text = (rp.text || '') + txtDelta;
+          m.v = (m.v || 0) + 1;
+        } else if (evType === 'tool-call' || evType === 'tool-input-start' || evType === 'tool-input-available') {
+          upsertToolCallPart(chat, m, evData);
+        } else if (evType === 'tool-input-delta') {
+          const tcId = String(evData.toolCallId || evData.id || '');
+          const deltaStr = String(evData.inputTextDelta ?? evData.argsTextDelta ?? evData.delta ?? '');
+          if (tcId && deltaStr) {
+            if (!Array.isArray(m.parts)) m.parts = [];
+            let tp = m.parts.find(x => x && x.toolCallId === tcId);
+            if (!tp) {
+              tp = { type: 'tool-' + (evData.toolName || 'tool'), toolCallId: tcId, toolName: evData.toolName || 'tool', input: {}, inputText: '', state: 'input-streaming' };
+              m.parts.push(tp);
+            }
+            tp.inputText = (tp.inputText || '') + deltaStr;
+            tp.state = 'input-streaming';
+            tp.input = parseStreamingToolArgs(tp.inputText, tp.input);
+            const tName = tp.toolName || String(tp.type || '').replace(/^tool-/, '');
+            m.webdev = applyWebDevToolToState(m.webdev, tName, tp.input, null);
+            m.v = (m.v || 0) + 1;
+          }
+        } else if (evType === 'tool-result' || evType === 'tool-output-available') {
+          applyToolResultPart(chat, m, evData);
+        } else if (evType === 'webdev' && evData.event) {
+          applyWebDevChunkEvent(chat, m, evData.event);
+          if (evData.event.type === 'preview-ready') return true;
+        } else if (evType === 'finish' || evType === 'message-finish') {
+          if (evData.finishReason === 'tool-calls') return false;
+          m.status = 'success';
+          if (m.metadata) m.metadata.pending = false;
+          for (const pt of m.parts || []) {
             if (pt && pt.state === 'streaming') pt.state = 'done';
           }
-          targetMsg.v = (targetMsg.v || 0) + 1;
-          void fetchWebDevMetadata(chat, targetMsg, true);
+          m.v = (m.v || 0) + 1;
+          void fetchWebDevMetadata(chat, m, true);
           return true;
-        } else if (evData.type === 'error') {
-          targetMsg.status = 'failed';
-          targetMsg.failureReason = evData.error || evData.message || 'WebDev build failed';
-          if (targetMsg.metadata) targetMsg.metadata.pending = false;
-          targetMsg.v = (targetMsg.v || 0) + 1;
+        } else if (evType === 'error') {
+          m.status = 'failed';
+          m.failureReason = evData.error || evData.message || 'WebDev build failed';
+          if (m.metadata) m.metadata.pending = false;
+          m.v = (m.v || 0) + 1;
           return true;
         }
         chat.lastActivity = tNow;
@@ -1828,65 +2177,88 @@ const EvalEngine = (() => {
       };
 
       try {
-        const url = `/api/evaluation/webdev/${encodeURIComponent(targetMsg.id)}/trigger-stream${runId ? `?runId=${encodeURIComponent(runId)}` : ''}`;
-        const res = await fetchFn(url, {
-          method: 'GET',
-          headers: { Accept: 'text/event-stream' },
-          credentials: 'same-origin',
-          cache: 'no-store',
-          signal,
-        });
-        if (!res || !res.ok || !res.body) return false;
-        const hdrRunId = res.headers?.get?.('X-Webdev-Run-Id');
-        if (hdrRunId) {
-          runId = hdrRunId;
-          targetMsg.activeWorkflowRunId = hdrRunId;
-        }
-        const reader = res.body.getReader();
-        const decoder = new TextDecoder();
-        let buf = '';
-        let curEvent = '';
-        let finished = false;
-        while (!finished) {
-          const { value, done } = await reader.read();
-          if (done) break;
-          buf += decoder.decode(value, { stream: true });
-          let nl;
-          while ((nl = buf.indexOf('\n')) >= 0) {
-            const rawLine = buf.slice(0, nl).replace(/\r$/, '');
-            buf = buf.slice(nl + 1);
-            if (!rawLine) {
-              curEvent = '';
-              continue;
-            }
-            if (rawLine.startsWith('event:')) {
-              curEvent = rawLine.slice(6).trim();
-              continue;
-            }
-            if (rawLine.startsWith('data:')) {
-              const dataStr = rawLine.slice(5).trim();
-              if (!dataStr) continue;
-              try {
-                const parsed = JSON.parse(dataStr);
-                if (curEvent === 'batch' && Array.isArray(parsed.records)) {
-                  for (const rec of parsed.records) {
-                    if (!rec || !rec.body) continue;
-                    const bodyObj = typeof rec.body === 'string' ? JSON.parse(rec.body) : rec.body;
-                    if (bodyObj?.data && handleEventPayload(bodyObj.data)) {
-                      finished = true;
-                      break;
+        for (let attempt = 0; attempt < 4; attempt++) {
+          if (signal?.aborted) break;
+          const m = getLiveMsg();
+          runId = runId || m.activeWorkflowRunId || m.metadata?.workflowRunId || null;
+          const url = `/api/evaluation/webdev/${encodeURIComponent(msgId)}/trigger-stream${runId ? `?runId=${encodeURIComponent(runId)}` : ''}`;
+          const res = await fetchFn(url, {
+            method: 'GET',
+            headers: { Accept: 'text/event-stream' },
+            credentials: 'same-origin',
+            cache: 'no-store',
+            signal,
+          }).catch(() => null);
+          if (!res || !res.ok || !res.body) {
+            await fetchWebDevMetadata(chat, m, true).catch(() => null);
+            if (m.webdev?.previewUrl || m.status === 'failed' || m.status === 'success') break;
+            await new Promise(r => setTimeout(r, 1200 * (attempt + 1)));
+            continue;
+          }
+          const hdrRunId = res.headers?.get?.('X-Webdev-Run-Id');
+          if (hdrRunId) {
+            runId = hdrRunId;
+            m.activeWorkflowRunId = hdrRunId;
+          }
+          const reader = res.body.getReader();
+          const decoder = new TextDecoder();
+          let buf = '';
+          let curEvent = '';
+          let finished = false;
+          while (!finished) {
+            const { value, done } = await reader.read();
+            if (done) break;
+            buf += decoder.decode(value, { stream: true });
+            let nl;
+            while ((nl = buf.indexOf('\n')) >= 0) {
+              const rawLine = buf.slice(0, nl).replace(/\r$/, '');
+              buf = buf.slice(nl + 1);
+              if (!rawLine) {
+                curEvent = '';
+                continue;
+              }
+              if (rawLine.startsWith('event:')) {
+                curEvent = rawLine.slice(6).trim();
+                continue;
+              }
+              if (rawLine.startsWith('data:')) {
+                const dataStr = rawLine.slice(5).trim();
+                if (!dataStr || dataStr === '[DONE]') continue;
+                try {
+                  const parsed = JSON.parse(dataStr);
+                  if (curEvent === 'batch' && Array.isArray(parsed.records)) {
+                    for (const rec of parsed.records) {
+                      if (!rec || !rec.body) continue;
+                      const bodyObj = typeof rec.body === 'string' ? JSON.parse(rec.body) : rec.body;
+                      const payloadObj = bodyObj?.data || bodyObj;
+                      if (payloadObj && handleEventPayload(payloadObj)) {
+                        finished = true;
+                        break;
+                      }
                     }
+                  } else if (Array.isArray(parsed.records)) {
+                    for (const rec of parsed.records) {
+                      if (!rec || !rec.body) continue;
+                      const bodyObj = typeof rec.body === 'string' ? JSON.parse(rec.body) : rec.body;
+                      const payloadObj = bodyObj?.data || bodyObj;
+                      if (payloadObj && handleEventPayload(payloadObj)) {
+                        finished = true;
+                        break;
+                      }
+                    }
+                  } else if (parsed.type) {
+                    if (handleEventPayload(parsed)) finished = true;
+                  } else if (parsed.data && parsed.data.type) {
+                    if (handleEventPayload(parsed.data)) finished = true;
                   }
-                } else if (parsed.type) {
-                  if (handleEventPayload(parsed)) finished = true;
-                } else if (parsed.data && parsed.data.type) {
-                  if (handleEventPayload(parsed.data)) finished = true;
-                }
-              } catch {}
+                } catch {}
+              }
             }
           }
+          await fetchWebDevMetadata(chat, getLiveMsg(), true).catch(() => null);
+          if (finished || getLiveMsg().webdev?.previewUrl) break;
+          await new Promise(r => setTimeout(r, 1000));
         }
-        await fetchWebDevMetadata(chat, targetMsg, true);
         return true;
       } catch {
         return false;
@@ -1900,10 +2272,12 @@ const EvalEngine = (() => {
 
   async function hydrateChatWebDev(chat) {
     if (!chat || !Array.isArray(chat.messages)) return;
+    const isWebDevChat = chat.modality === 'webdev' || chat.evalModality === 'webdev' || chat.resolvedModality === 'webdev';
     const assts = chat.messages.filter(m => m && m.role === 'assistant' && m.id);
     await Promise.all(assts.map(async m => {
       const wfId = m.activeWorkflowRunId || m.metadata?.workflowRunId || null;
-      if ((m.status === 'pending' || m.status === 'streaming') && wfId) {
+      const isPend = m.status === 'pending' || m.status === 'streaming' || m.metadata?.pending || m.webdev?.status === 'pending';
+      if (isPend && (wfId || isWebDevChat || m.webdev)) {
         await streamWebDevMessageSSE(chat, m, chat.ctl?.signal);
       } else {
         await fetchWebDevMetadata(chat, m, false);
@@ -2018,12 +2392,19 @@ const EvalEngine = (() => {
             }
           } catch {}
         } else if (val.toolCallId && typeof val.argsTextDelta === 'string') {
-          const tp = (targetMsg.parts || []).find(p => p && p.toolCallId === val.toolCallId);
-          if (tp) {
-            tp.inputText = (tp.inputText || '') + val.argsTextDelta;
-            tp.state = 'input-streaming';
-            targetMsg.v = (targetMsg.v || 0) + 1;
+          let tp = (targetMsg.parts || []).find(p => p && p.toolCallId === val.toolCallId);
+          if (!tp) {
+            tp = { type: 'tool-' + (val.toolName || 'tool'), toolCallId: val.toolCallId, toolName: val.toolName || 'tool', input: {}, inputText: '', state: 'input-streaming' };
+            targetMsg.parts = targetMsg.parts || [];
+            targetMsg.parts.push(tp);
           }
+          tp.inputText = (tp.inputText || '') + val.argsTextDelta;
+          tp.state = 'input-streaming';
+          tp.input = parseStreamingToolArgs(tp.inputText, tp.input);
+          const tName = tp.toolName || String(tp.type || '').replace(/^tool-/, '');
+          targetMsg.webdev = applyWebDevToolToState(targetMsg.webdev, tName, tp.input, null);
+          targetMsg.v = (targetMsg.v || 0) + 1;
+          try { if (typeof HtmlPreview !== 'undefined' && typeof HtmlPreview.syncEval === 'function') HtmlPreview.syncEval(chat); } catch {}
         }
       } else if (code === 'h' && val && typeof val === 'object') {
         let sp = (targetMsg.parts || []).find(p => p && p.type === 'sources');
@@ -2048,7 +2429,11 @@ const EvalEngine = (() => {
             targetMsg.metadata.routedOrganization = item.organization;
           } else if (item.type === 'webdev' && item.event) {
             applyWebDevChunkEvent(chat, targetMsg, item.event);
-            if (item.event.type === 'preview-ready') finishedSlots.add(pos);
+            if (item.event.type === 'init') {
+              void streamWebDevMessageSSE(chat, targetMsg, chat.ctl?.signal).catch(() => false);
+            } else if (item.event.type === 'preview-ready') {
+              finishedSlots.add(pos);
+            }
           }
         }
         targetMsg.v = (targetMsg.v || 0) + 1;
@@ -2061,14 +2446,28 @@ const EvalEngine = (() => {
           targetMsg.v = (targetMsg.v || 0) + 1;
         }
       } else if (code === 'e' || code === 'd') {
-        if (code === 'd') finishedSlots.add(pos);
-        targetMsg.metadata.pending = false;
-        const isErrFinish = Boolean(val && typeof val === 'object' && val.finishReason === 'error');
+        const isErrFinish = Boolean(val && typeof val === 'object' && (val.finishReason === 'error' || val.finishReason === 'failed' || val.error));
+        const isToolStepEnd = Boolean(!isErrFinish && val && typeof val === 'object' && val.finishReason === 'tool-calls');
+        const hasActiveWf = Boolean(targetMsg._hasWebDevInit || targetMsg.activeWorkflowRunId || targetMsg.metadata?.workflowRunId || (targetMsg.webdev?.files?.length > 0 && targetMsg.webdev?.status === 'pending' && !targetMsg.webdev?.previewUrl));
         if (isErrFinish) {
+          finishedSlots.add(pos);
+          targetMsg.metadata.pending = false;
+          delete targetMsg._incomplete;
           targetMsg.status = 'failed';
-          targetMsg.failureReason = targetMsg.failureReason || val.message || val.error || 'The generation failed';
-        } else if (targetMsg.status !== 'failed') {
-          targetMsg.status = 'success';
+          targetMsg.failed = true;
+          targetMsg.failureReason = targetMsg.failureReason || val.message || val.error || '官方模型生成报错，请点击重试重新生成';
+          if (targetMsg.webdev) {
+            targetMsg.webdev.status = 'build-error';
+            targetMsg.webdev.message = targetMsg.failureReason;
+          }
+        } else if (!isToolStepEnd) {
+          if (code === 'd' && !hasActiveWf) {
+            finishedSlots.add(pos);
+            targetMsg.metadata.pending = false;
+          }
+          if (targetMsg.status !== 'failed' && !hasActiveWf) {
+            targetMsg.status = 'success';
+          }
         }
         for (const p of targetMsg.parts || []) {
           if (p && p.state === 'streaming') p.state = 'done';
@@ -2128,10 +2527,18 @@ const EvalEngine = (() => {
     }
 
     const endNow = Date.now();
-    for (const m of new Set([msgA, msgB].filter(Boolean))) {
+    for (const [posKey, m] of [['a', msgA], ['b', msgB]]) {
       if (!m) continue;
+      const slotFinished = finishedSlots.has(posKey);
+      const hasAnyOut = Boolean(String(m.content || '').trim() || String(m.reasoning || '').trim() || (Array.isArray(m.parts) && m.parts.length > 0));
+      const slotIncomplete = !slotFinished && !chat.ctl?.signal?.aborted && !hasAnyOut;
+      if (slotIncomplete) {
+        m._incomplete = true;
+      } else {
+        delete m._incomplete;
+      }
       if (m.metadata) {
-        m.metadata.pending = false;
+        m.metadata.pending = Boolean(slotIncomplete);
         if (m.metadata.timing) {
           if (m.metadata.timing.reasoningStartedAt && !m.metadata.timing.reasoningCompletedAt) {
             m.metadata.timing.reasoningCompletedAt = endNow;
@@ -2144,14 +2551,24 @@ const EvalEngine = (() => {
         }
         if (m._fmt) m.metadata._fmt = m._fmt;
       }
-      if (!m.status || m.status === 'pending' || m.status === 'streaming') m.status = 'success';
+      if (!m.status || m.status === 'pending' || m.status === 'streaming') m.status = m._incomplete ? 'streaming' : 'success';
       for (const p of m.parts || []) {
         if (p && p.state === 'streaming') p.state = 'done';
       }
       if (isWebDevTurn) {
         const wd = reconstructWebDevFromMessage(m, 'webdev');
         if (wd) m.webdev = wd;
-        void fetchWebDevMetadata(chat, m, true);
+        await fetchWebDevMetadata(chat, m, true).catch(() => null);
+        const hasFiles = Boolean(m.webdev?.files?.length > 0 || m.webdev?.previewUrl);
+        const hasHtmlText = Array.isArray(m.parts) && m.parts.some(p => p && p.type === 'text' && /<html|<svg|<!doctype/i.test(String(p.text || '')));
+        if (!hasFiles && !hasHtmlText && m.status !== 'failed') {
+          m.status = 'failed';
+          m.failed = true;
+          m.failureReason = m.webdev?.message || m.failureReason || '模型构建中断（未生成预览文件），请点击重试重新生成';
+          if (m.metadata) m.metadata.pending = false;
+          delete m._incomplete;
+          if (m.webdev) m.webdev.status = 'build-error';
+        }
       }
       m.v = (m.v || 0) + 1;
     }
@@ -2250,6 +2667,8 @@ const EvalEngine = (() => {
     }
 
     const startNow = Date.now();
+    chat._evalPollExhausted = false;
+    chat._evalPollExhausted = false;
     chat.status = 'streaming';
     chat.streaming = true;
     chat._evalStreaming = true;
@@ -2343,12 +2762,54 @@ const EvalEngine = (() => {
       });
 
       let usedV2 = Boolean(v2Token);
-      if ((res.status === 403 || res.status === 429) && !v2Token && typeof Recaptcha !== 'undefined' && typeof Recaptcha.v2 === 'function') {
-        const errBody = await res.clone().text().catch(() => '');
-        if (/recaptcha|verification required|人机/i.test(errBody)) {
-          if (res.status === 403 && v3Token && typeof IPRep !== 'undefined' && typeof IPRep.note === 'function') {
-            try { IPRep.note('rc'); } catch {}
+      if ((res.status === 403 || res.status === 429) && !v2Token && typeof Recaptcha !== 'undefined') {
+        let errBody = await res.clone().text().catch(() => '');
+        const isRcOrLimit = res.status === 429 || /recaptcha|verification required|人机|验证失败|challenge|prompt failed/i.test(errBody);
+        if (res.status === 429 && !/recaptcha|verification required|人机|验证失败|challenge|prompt failed/i.test(errBody)) {
+          try { if (typeof rotateVisitId === 'function') rotateVisitId(); } catch {}
+          try { if (typeof Recaptcha !== 'undefined' && Recaptcha.clearCache) Recaptcha.clearCache(); } catch {}
+          const freshInPlaceV3 = typeof Recaptcha.v3 === 'function' ? await Recaptcha.v3(rcAction).catch(() => null) : null;
+          if (freshInPlaceV3) {
+            v3Token = freshInPlaceV3;
+            payload.recaptchaV3Token = freshInPlaceV3;
           }
+          await new Promise(r => setTimeout(r, 1800));
+          res = await fetchFn(endpoint, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', Accept: '*/*' },
+            body: JSON.stringify(payload),
+            credentials: 'same-origin',
+            cache: 'no-store',
+            signal: ctl.signal,
+          });
+          errBody = !res.ok ? await res.clone().text().catch(() => '') : '';
+        }
+        if (!res.ok && isRcOrLimit && typeof IPRep !== 'undefined' && typeof IPRep.rotateOnVerificationOrLimit === 'function') {
+          chat.phase = res.status === 429
+            ? '当前出口触发 429 限流，正在自动切换备用出口重发…'
+            : '当前出口触发人机拦截，正在自动切换纯净出口重发…';
+          chat.emit();
+          const rot = await IPRep.rotateOnVerificationOrLimit(res.status === 429 ? '429' : 'rc', { action: rcAction }).catch(() => { try { if (res.status !== 429) IPRep.note('rc'); } catch {} return null; });
+          const freshV3 = rot?.token || (typeof Recaptcha.v3 === 'function' ? await Recaptcha.v3(rcAction).catch(() => null) : null);
+          if (rot?.switched || (freshV3 && freshV3 !== v3Token)) {
+            if (freshV3) {
+              v3Token = freshV3;
+              payload.recaptchaV3Token = freshV3;
+            }
+            chat.phase = '已切换备用出口，正在自动重发…';
+            chat.emit();
+            res = await fetchFn(endpoint, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', Accept: '*/*' },
+              body: JSON.stringify(payload),
+              credentials: 'same-origin',
+              cache: 'no-store',
+              signal: ctl.signal,
+            });
+            errBody = !res.ok ? await res.clone().text().catch(() => '') : '';
+          }
+        }
+        if ((res.status === 403 || res.status === 429) && typeof Recaptcha.v2 === 'function' && /recaptcha|verification required|人机|验证失败|challenge|prompt failed/i.test(errBody)) {
           const tok = await Recaptcha.v2().catch(() => null);
           if (tok) {
             usedV2 = true;
@@ -2366,6 +2827,35 @@ const EvalEngine = (() => {
         }
       }
 
+      if (!res.ok && !ctl.signal.aborted) {
+        let retryBody = await res.clone().text().catch(() => '');
+        const isChallenge = /recaptcha|verification required|人机|验证失败|challenge|prompt failed/i.test(retryBody);
+        if (!isChallenge && (res.status === 429 || (res.status >= 500 && res.status <= 524) || res.status === 408)) {
+          for (let bgTry = 1; bgTry <= 3 && !res.ok && !ctl.signal.aborted; bgTry++) {
+            chat.status = 'streaming';
+            chat.phase = res.status === 429 ? '服务器繁忙，正在后台排队等待响应…' : '正在等待模型响应…';
+            chat.emit();
+            await new Promise(r => setTimeout(r, 2500 * bgTry));
+            if (ctl.signal.aborted) break;
+            try { if (typeof Recaptcha !== 'undefined' && Recaptcha.clearCache) Recaptcha.clearCache(); } catch {}
+            const retryV3 = (!usedV2 && typeof Recaptcha !== 'undefined' && typeof Recaptcha.v3 === 'function')
+              ? await Recaptcha.v3('chat_submit').catch(() => v3Token)
+              : null;
+            if (retryV3) {
+              v3Token = retryV3;
+              payload.recaptchaV3Token = retryV3;
+            }
+            res = await fetchFn(endpoint, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', Accept: '*/*' },
+              body: JSON.stringify(payload),
+              credentials: 'same-origin',
+              cache: 'no-store',
+              signal: ctl.signal,
+            });
+          }
+        }
+      }
       if (!res.ok) {
         const errTxt = await res.text().catch(() => `HTTP ${res.status}`);
         throw new Error(errTxt || `HTTP ${res.status}`);
@@ -2395,6 +2885,17 @@ const EvalEngine = (() => {
         await parseStream(fakeReader, chat, msgA, msgB);
       }
 
+      const anyIncAfterStream = [msgA, msgB].some(m => m && (m._incomplete || m.metadata?.pending));
+      if (anyIncAfterStream && !ctl.signal.aborted) {
+        chat.status = 'streaming';
+        chat.phase = '正在后台同步剩余回复内容…';
+        chat.error = null;
+        if (chat.evalMode === 'direct' && msgA) chat.live = msgA;
+        chat.emit();
+        void pollIncompleteEvalSession(chat);
+        return;
+      }
+      if (chat.live) chat.live = null;
       chat.status = 'idle';
       chat.streaming = false;
       chat._evalStreaming = false;
@@ -2431,15 +2932,33 @@ const EvalEngine = (() => {
         chat._evalStreaming = false;
         chat.phase = '已停止';
       } else {
+        const errMsg = String(e?.message || e || '');
+        const isTransientOrSlow = /429|rate limit|timeout|超时|network|failed to fetch|fetch failed|502|503|504|520|522|524|socket|reset|closed|eof/i.test(errMsg);
+        if (isTransientOrSlow && chat.sid) {
+          chat.status = 'streaming';
+          chat.phase = '服务器响应较慢，正在后台同步最新状态…';
+          chat.error = null;
+          for (const m of [msgA, msgB]) {
+            if (!m) continue;
+            m._incomplete = true;
+            m.status = 'streaming';
+            if (m.metadata) m.metadata.pending = true;
+          }
+          if (chat.evalMode === 'direct' && msgA) chat.live = msgA;
+          chat.emit();
+          void pollIncompleteEvalSession(chat, { fallbackError: errMsg, msgA, msgB });
+          return;
+        }
+        if (chat.live) chat.live = null;
         chat.status = 'idle';
         chat.streaming = false;
         chat._evalStreaming = false;
-        chat.error = '生成失败：' + (e?.message || e);
+        chat.error = '生成失败：' + errMsg;
         msgA.status = 'failed';
-        msgA.failureReason = e?.message || String(e);
+        msgA.failureReason = errMsg;
         if (msgB) {
           msgB.status = 'failed';
-          msgB.failureReason = e?.message || String(e);
+          msgB.failureReason = errMsg;
         }
       }
       for (const m of [msgA, msgB]) {
@@ -2450,6 +2969,61 @@ const EvalEngine = (() => {
       chat.ctl = null;
       chat.streaming = false;
       chat._evalStreaming = false;
+      if (!chat._evalPollingInc && typeof SendQ !== 'undefined' && SendQ.of?.(chat)?.length) {
+        setTimeout(() => { try { SendQ.check(chat); } catch {} }, 50);
+      }
+    }
+  }
+
+  function extractMessagesFromData(data) {
+    if (!data || typeof data !== 'object') return [];
+    const evalObj = data.evaluation || data.session || data.data || data;
+    if (Array.isArray(evalObj?.messages)) return evalObj.messages;
+    if (Array.isArray(data.messages)) return data.messages;
+    return [];
+  }
+
+  async function pollIncompleteEvalSession(chat, opts = {}) {
+    if (!chat?.sid || chat._evalPollingInc) return;
+    chat._evalPollingInc = true;
+    try {
+      for (let step = 1; step <= 18; step++) {
+        await new Promise(r => setTimeout(r, Math.min(5000, 2000 + step * 300)));
+        if (!chat || chat.ctl?.signal?.aborted) break;
+        const data = await fetchEvalSessionData(chat.sid).catch(() => null);
+        if (!data || typeof data !== 'object') continue;
+        const rawMessages = extractMessagesFromData(data);
+        if (Array.isArray(rawMessages) && rawMessages.length) {
+          await loadChat(chat, true);
+          if (chat.status === 'idle') return;
+        }
+      }
+      // 轮询结束：若仍未拿到任何有效回复且存在 fallbackError，则回退展示错误；若已有部分或完整正文则正常收敛结束
+      for (const m of chat.messages || []) {
+        if (m && m.role === 'assistant') {
+          delete m._incomplete;
+          if (m.metadata) m.metadata.pending = false;
+          if (m.status === 'streaming' || m.status === 'pending') m.status = 'success';
+        }
+      }
+      if (chat.live) chat.live = null;
+      const tailA = opts.msgA || [...(chat.messages || [])].reverse().find(m => m && m.role === 'assistant');
+      const hasAnyContent = Boolean(tailA && (String(tailA.content || '').trim() || (Array.isArray(tailA.parts) && tailA.parts.some(p => p && (p.text || p.toolCallId)))));
+      chat._evalPollExhausted = true;
+      chat._evalStreaming = false;
+      chat._startupResuming = false;
+      chat._recoveringIncomplete = false;
+      chat.status = 'idle';
+      chat.phase = '';
+      if (typeof SendQ !== 'undefined' && SendQ.of?.(chat)?.length) setTimeout(() => { try { SendQ.check(chat); } catch {} }, 50);
+      if (!hasAnyContent && opts.fallbackError) {
+        chat.error = '生成失败：' + opts.fallbackError;
+        if (opts.msgA) { opts.msgA.status = 'failed'; opts.msgA.failureReason = opts.fallbackError; }
+        if (opts.msgB) { opts.msgB.status = 'failed'; opts.msgB.failureReason = opts.fallbackError; }
+      }
+      chat.emit();
+    } finally {
+      chat._evalPollingInc = false;
     }
   }
 
@@ -2547,8 +3121,12 @@ const EvalEngine = (() => {
       _local: true,
       v: 0,
     };
+    const prevEvalAsst = [...(chat.messages || [])].reverse().find(m => m && m.role === 'assistant' && m.id);
+    if (prevEvalAsst?.id) userMsg._prevAsstId = prevEvalAsst.id;
     chat.messages.push(userMsg);
     chat.sentAt = Date.now();
+    try { if (typeof SentUserLog !== 'undefined' && typeof SentUserLog.record === 'function') SentUserLog.record(chat.sid, userMsg, prevEvalAsst?.id || null); } catch {}
+    try { syncChatToLocalEvalCache(chat); } catch {}
     chat.emit();
     if (typeof Bus !== 'undefined' && typeof Bus.emit === 'function') {
       try { Bus.emit('sent', chat.sid, Date.now()); } catch {}
@@ -2674,16 +3252,29 @@ const EvalEngine = (() => {
     return cachedVoteActionId;
   }
 
-  async function submitVote(sid, voteValue = 'tie') {
+  async function submitVote(sid, voteValue = 'tie', opts = {}) {
     const chat = typeof Chats !== 'undefined' ? Chats.get(sid) : null;
     if (!chat) throw new Error('未找到当前对战会话');
     initEvalFields(chat);
     if (chat.voteState?.submitting) return chat.voteState;
 
-    const assts = (chat.messages || []).filter(m => m && m.role === 'assistant');
-    const msgA = [...assts].reverse().find(m => m.participantPosition === 'a') || assts[0];
-    const msgB = [...assts].reverse().find(m => m.participantPosition === 'b') || assts[1];
-    if (!msgA || !msgB) throw new Error('当前轮次尚未生成完整的 A/B 双侧回复');
+    const allMsgs = Array.isArray(chat.messages) ? chat.messages : [];
+    const assts = allMsgs.filter(m => m && m.role === 'assistant');
+    let msgA = opts?.messageAId ? assts.find(m => m.id === opts.messageAId) : null;
+    let msgB = opts?.messageBId ? assts.find(m => m.id === opts.messageBId) : null;
+    if (!msgA || !msgB) {
+      let lastUserIdx = -1;
+      for (let i = allMsgs.length - 1; i >= 0; i--) {
+        if (allMsgs[i]?.role === 'user') { lastUserIdx = i; break; }
+      }
+      const turnSlice = lastUserIdx >= 0 ? allMsgs.slice(lastUserIdx + 1).filter(m => m && m.role === 'assistant') : assts;
+      msgA = msgA || [...turnSlice].reverse().find(m => m.participantPosition === 'a') || [...assts].reverse().find(m => m.participantPosition === 'a') || assts[0];
+      msgB = msgB || [...turnSlice].reverse().find(m => m.participantPosition === 'b' && m !== msgA) || [...assts].reverse().find(m => m.participantPosition === 'b' && m !== msgA) || assts.find(m => m !== msgA);
+    }
+    if (!msgA || !msgB || msgA === msgB) throw new Error('当前轮次尚未生成完整的 A/B 双侧回复');
+    if (msgA.status === 'streaming' || msgB.status === 'streaming' || msgA.metadata?.pending || msgB.metadata?.pending) {
+      throw new Error('当前轮次仍有模型正在生成中，请等待双侧完成后再投票');
+    }
 
     chat.voteState = { ...(chat.voteState || {}), submitting: true, value: voteValue };
     chat.emit();
@@ -2695,7 +3286,10 @@ const EvalEngine = (() => {
 
     try {
       const recaptchaV3Token = (typeof Recaptcha !== 'undefined' && Recaptcha.v3)
-        ? await Recaptcha.v3('pairwise_feedback').catch(() => null)
+        ? await Promise.race([
+            (Recaptcha.take ? Recaptcha.take('pairwise_feedback') : Recaptcha.v3('pairwise_feedback')).catch(() => null),
+            new Promise(r => setTimeout(() => r(null), 2200)),
+          ])
         : null;
 
       const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -2918,21 +3512,47 @@ const EvalEngine = (() => {
         if (hRow.localTitle && !/vs|⚔️/i.test(String(hRow.localTitle))) delete hRow.localTitle;
         try { History.saveSoon?.(); } catch {}
       }
-
-      if (typeof Bus !== 'undefined' && typeof Bus.emit === 'function') {
-        try {
-          Bus.emit('eval:vote-revealed', {
-            sid,
-            chat,
-            modelA: { id: modelAId, name: modelAName },
-            modelB: { id: modelBId, name: modelBName },
-            value: voteValue,
-            fromHistory: false,
+      try {
+        if (typeof Models !== 'undefined' && typeof Models.set === 'function') {
+          Models.set(sid, {
+            name: `${modelAName || 'Model A'} vs ${modelBName || 'Model B'}`,
+            modelA: modelAName || '',
+            modelB: modelBName || '',
+            modelAId,
+            modelBId,
+            battleRevealed: true,
+            sure: true,
+            provider: 'Battle 投票揭晓',
           });
-        } catch {}
-        try { Bus.emit('history'); } catch {}
-      }
+        }
+        if (typeof EvalView !== 'undefined' && typeof EvalView.invalidateBattleRevealCache === 'function') {
+          EvalView.invalidateBattleRevealCache(sid);
+        }
+      } catch {}
+
       chat.emit();
+      try {
+        if (typeof UI !== 'undefined') {
+          UI.renderChat?.(chat);
+          UI.renderTabs?.();
+          UI.renderList?.();
+        }
+      } catch {}
+      if (typeof Bus !== 'undefined' && typeof Bus.emit === 'function') {
+        try { Bus.emit('history'); } catch {}
+        setTimeout(() => {
+          try {
+            Bus.emit('eval:vote-revealed', {
+              sid,
+              chat,
+              modelA: { id: modelAId, name: modelAName },
+              modelB: { id: modelBId, name: modelBName },
+              value: voteValue,
+              fromHistory: false,
+            });
+          } catch {}
+        }, 16);
+      }
       return chat.voteState;
     } catch (e) {
       chat.voteState = { ...(chat.voteState || {}), submitting: false };
@@ -2953,6 +3573,19 @@ const EvalEngine = (() => {
 
     const pos = opts.pos || targetMsg.participantPosition || 'a';
     const startNow = Date.now();
+    if (!Array.isArray(targetMsg._versionArchive)) targetMsg._versionArchive = [];
+    if ((Array.isArray(targetMsg.parts) && targetMsg.parts.length) || targetMsg.content || targetMsg.webdev?.files?.length) {
+      targetMsg._versionArchive.push({
+        v: targetMsg.v || 0,
+        at: startNow,
+        status: targetMsg.status || 'ready',
+        parts: Array.isArray(targetMsg.parts) ? targetMsg.parts.map(p => ({ ...p })) : [],
+        content: targetMsg.content || '',
+        reasoning: targetMsg.reasoning || '',
+        webdev: targetMsg.webdev ? JSON.parse(JSON.stringify(targetMsg.webdev)) : undefined,
+      });
+    }
+    targetMsg.retryRegenerationCount = (targetMsg.retryRegenerationCount || 0) + 1;
     targetMsg.parts = [];
     targetMsg.content = '';
     targetMsg.reasoning = '';
@@ -3032,10 +3665,19 @@ const EvalEngine = (() => {
 
     try {
       let res = await doPutRetry(targetMsg.id);
-      if ((res.status === 403 || res.status === 429) && typeof Recaptcha !== 'undefined' && typeof Recaptcha.v2 === 'function') {
+      if ((res.status === 403 || res.status === 429) && typeof Recaptcha !== 'undefined') {
         let errText = '';
         try { errText = await res.clone().text(); } catch {}
-        if (/recaptcha|verification required|人机|challenge|rate limit/i.test(errText) || res.status === 403) {
+        if (typeof IPRep !== 'undefined' && typeof IPRep.rotateOnVerificationOrLimit === 'function') {
+          const rot = await IPRep.rotateOnVerificationOrLimit(res.status === 429 ? '429' : 'rc', { action: 'chat_retry' }).catch(() => null);
+          const freshV3 = rot?.token || (typeof Recaptcha.v3 === 'function' ? await Recaptcha.v3('chat_retry').catch(() => null) : null);
+          if (rot?.switched || (freshV3 && freshV3 !== v3Token)) {
+            if (freshV3) v3Token = freshV3;
+            res = await doPutRetry(targetMsg.id, null, v3Token);
+            errText = !res.ok ? await res.clone().text().catch(() => '') : '';
+          }
+        }
+        if ((res.status === 403 || res.status === 429) && typeof Recaptcha.v2 === 'function' && (/recaptcha|verification required|人机|challenge/i.test(errText) || res.status === 403)) {
           const tok = await Recaptcha.v2().catch(() => null);
           if (tok) {
             res = await doPutRetry(targetMsg.id, tok);
@@ -3125,11 +3767,11 @@ const EvalEngine = (() => {
       try {
         if (chat.evalMode === 'battle' && typeof ChatHabitFingerprint !== 'undefined' && typeof ChatHabitFingerprint.analyzeBattleChat === 'function') {
           ChatHabitFingerprint.analyzeBattleChat(chat);
-          if (chat.voteState?.voted && chat.voteState.modelAName && chat.voteState.modelBName && typeof ChatHabitFingerprint.learnBattleReveal === 'function') {
-            ChatHabitFingerprint.learnBattleReveal(chat, { modelA: { name: chat.voteState.modelAName }, modelB: { name: chat.voteState.modelBName }, vote: chat.voteState.value || 'tie' });
+          if (hasValidOutput && targetMsg.status !== 'failed' && !opts?.skipAutoLearn && chat.voteState?.voted && chat.voteState.modelAName && chat.voteState.modelBName && typeof ChatHabitFingerprint.learnBattleReveal === 'function') {
+            ChatHabitFingerprint.learnBattleReveal(chat, { modelA: { name: chat.voteState.modelAName }, modelB: { name: chat.voteState.modelBName }, vote: chat.voteState.value || 'tie', forceResync: true });
           }
         } else if (chat.evalMode === 'direct' && chat.modelAId && typeof ChatHabitFingerprint !== 'undefined' && typeof ChatHabitFingerprint.learnDirectSession === 'function') {
-          const mName = ModelCatalog.displayName(chat.modelAId);
+          const mName = chat.directModelName || ModelCatalog.resolveModelName(chat.modelAId, chat.revealedModels || []);
           ChatHabitFingerprint.learnDirectSession(chat, mName);
         }
       } catch {}
@@ -3166,6 +3808,10 @@ const EvalEngine = (() => {
       chat.ctl = null;
       chat.emit();
       throw e;
+    } finally {
+      if (typeof SendQ !== 'undefined' && SendQ.of?.(chat)?.length) {
+        setTimeout(() => { try { SendQ.check(chat); } catch {} }, 50);
+      }
     }
   }
 
@@ -3309,6 +3955,17 @@ const EvalEngine = (() => {
           return sendFollowUp(this, text, opt);
         }
         return origSend.call(this, text, opt, _a2, _a3);
+      };
+    }
+
+    const origRegenerate = Chat.prototype.regenerate;
+    if (typeof origRegenerate === 'function') {
+      Chat.prototype.regenerate = function (opt = {}) {
+        if (isEvalChat(this)) {
+          this.error = null;
+          return regenerateTurn(this, opt);
+        }
+        return origRegenerate.call(this, opt);
       };
     }
 

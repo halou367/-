@@ -63,14 +63,18 @@ const Dock = {
     const c = t.calls.find(x => x.id === this.sel.call && this.sel.sid === sid) || t.calls.filter(x => !x.failed).at(-1) || t.calls.at(-1) || null;
     return { t, c, ts, latest: t === ts.at(-1) };
   },
-  render() {
+  render(force = false) {
+    if (force) { this.force = true; this._pointerDownUntil = 0; }
     clearTimeout(this.t); this.t = null;
     const el = this.el; if (!el || !el.isConnected) return;
     if (!isMob() ? !this.open : !this.mOpen) { el.replaceChildren(); return; }
+    const curSidForBarrier = typeof this.sid === 'function' ? this.sid() : null;
+    if (this._renderedSid !== undefined && this._renderedSid !== curSidForBarrier) { this.force = true; this._pointerDownUntil = 0; }
     if (this._pointerDownUntil && Date.now() < this._pointerDownUntil && !this.force) { clearTimeout(this.t); this.t = setTimeout(() => { this.t = null; this.render(); }, 180); return; }
     const ae = document.activeElement; if (ae && el.contains(ae) && /^(SELECT|INPUT|TEXTAREA)$/.test(ae.tagName) && !this.force) { clearTimeout(this.t); this.t = setTimeout(() => this.render(), 1500); return; }
     this.force = false;
-    const sid = this.sid(), { t, c, ts = [] } = this.cur(sid);
+    this._renderedSid = curSidForBarrier;
+    const sid = curSidForBarrier, { t, c, ts = [] } = (typeof this.cur === 'function' ? this.cur(sid) : {});
     if (this.sel.sid !== sid) this.sel = { sid, turn: null, call: null };
     const body = el.querySelector('.dk-body'), keepTop = body && this.lastKey === sid + this.tab ? body.scrollTop : 0; this.lastKey = sid + this.tab;
     /* 没有运行记录（Trace）的对话：「数据」和「概览」内容一样，合并成「概览」 */
@@ -93,7 +97,7 @@ const Dock = {
     if (this.tab === 'overview') {
       if (typeof BillingProbe !== 'undefined' && sid) {
         const curChat = Chats.get(sid);
-        const curMode = curChat?.isEvaluation ? (curChat.evalMode || 'battle') : (typeof ModeState !== 'undefined' ? ModeState.getMode() : 'agent');
+        const curMode = curChat?.isEvaluation ? (curChat.evalMode || 'battle') : (curChat?.messages?.length ? 'agent' : (typeof History !== 'undefined' && History.byId?.(sid) && typeof ModeState !== 'undefined' && ModeState.inferEntryMode ? ModeState.inferEntryMode(History.byId(sid)) : (typeof ModeState !== 'undefined' ? ModeState.getMode() : 'agent')));
         if (curMode === 'agent') {
           const autoKey = sid + ':' + (curChat?.messages?.length || 0) + ':' + (BillingProbe.isCostProbeEnabled?.() ? 1 : 0);
           if (this._lastAutoSidKey !== autoKey) {
@@ -102,7 +106,7 @@ const Dock = {
           }
         }
       }
-      this.overview(nb, sid, t, c);
+      try { this.overview(nb, sid, t, c); } catch (err) { console.error('[Dock.overview]', err); }
     }
     else if (this.tab === 'data') this.data(nb, sid, t, c);
     else if (this.tab === 'records') this.records(nb, sid);
@@ -214,7 +218,7 @@ const Dock = {
       ? '点击确认当前型号并收起面板'
       : isCorrected
         ? '已手动纠偏确认（点击展开或修改型号）'
-        : '点击展开三行滚轮纠偏，选好后再点此对勾确认关闭';
+        : '点击展开三行滚轮纠偏，选好后再点「纠偏」确认关闭';
     return h('button', {
       type: 'button',
       class: 'mc-correct-btn mc-correct-ico' + (isOpen ? ' on' : '') + (isCorrected ? ' ok' : ''),
@@ -260,7 +264,7 @@ const Dock = {
         }
         this.render();
       }
-    }, icon('check'));
+    }, '纠偏');
   },
   // 同款 3D 弹巢左轮滚轮选择器（供三行纠偏：厂商 Logo / 型号 / 强度使用，支持手机端上下滑动波轮选择与桌面滚轮）
   openCorrectWheel(btn, list, curIdx, hint, onPick, opts = {}) {
@@ -782,21 +786,49 @@ const Dock = {
     let liveVendorObj = curVendorObj;
     let liveModelObj = curModelObj;
     let liveTier = curTier;
+    const cancelCorrection = e => {
+      e?.stopPropagation?.();
+      document.querySelectorAll('.rv.mc-rv').forEach(el => el.remove());
+      if (this._activeWheel) {
+        try { this._activeWheel.finish(false); } catch {}
+        this._activeWheel = null;
+      }
+      this.editModelSid = null;
+      this.editStep = 1;
+      this.editVendor = null;
+      this.editFamily = null;
+      this.editTier = null;
+      this.editModelDraft = null;
+      this.editPreviewLabel = null;
+      this.editPreviewLogo = null;
+      this.editChanged = false;
+      this.render();
+    };
     const prevLogoWrap = h('span', { class: 'mc-wheel-prev-ico' }, vlogo(curModelLogo, 18));
     const prevModelEl = h('b', { class: 'mc-wheel-prev-model' }, curModelObj.short || curModelObj.fam);
     const prevTierEl = h('span', { class: 'mc-tier mc-wheel-prev-tier', 'data-lv': TIER_LV[curTier] ?? 3 }, curTier || '标准');
+    const cancelBtn = h('button', {
+      type: 'button',
+      class: 'mc-wheel-cancel',
+      title: '取消纠偏（不提交、不影响习惯库）',
+      'aria-label': '取消纠偏',
+      onclick: cancelCorrection,
+    }, icon('x'));
     const previewRow = h('div', {
       class: 'mc-wheel-preview',
       style: { cursor: 'pointer' },
-      title: `当前预览：${fullCurrentLabel}（点击此栏或右上对勾即可确认纠偏）`,
+      title: `当前预览：${fullCurrentLabel}（点击左侧或右上对勾即可确认纠偏，点右侧 × 取消不提交）`,
       onclick: e => {
+        if (e?.target?.closest?.('.mc-wheel-cancel')) return;
         e?.stopPropagation?.();
         applyCorrection(this.editPreviewLabel || fullCurrentLabel, this.editVendor, this.editFamily, this.editTier);
       }
     },
       prevLogoWrap,
       prevModelEl,
-      prevTierEl
+      prevTierEl,
+      h('span', { class: 'grow' }),
+      cancelBtn
     );
     const syncLivePreview = (vObj, mObj, tVal) => {
       liveVendorObj = vObj || curVendorObj;
@@ -1254,6 +1286,7 @@ const Dock = {
           ? [...chat.messages].reverse().find(m => m && m.role === 'assistant' && ((m.participantPosition === 'a' || m.participantPosition === 'b') ? m.participantPosition === pos : pos === 'a'))
           : null;
         const sideFailed = Boolean(sideAsst && (sideAsst.status === 'failed' || sideAsst.failed));
+        const sideUpper = isA ? 'A' : 'B';
         if (sideFailed && !chat.busy) {
           const retryRow = h('div', { style: { marginTop: '6px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' } },
             h('span', { class: 'note', style: { margin: 0, color: 'var(--warn, #f59e0b)' } }, '生成失败 · 点击可直接重试'),
@@ -1792,6 +1825,7 @@ const Dock = {
         row('侧栏卡片放大', '鼠标靠近时卡片向右探出（与油猴脚本一致）。', sw('cardMag', true)),
         row('金色', Gold.manual ? '手动点亮：已点亮 ' + (Prefs.goldSet || []).length + ' 个型号（金色 + 侧栏置顶）' : '自动：最高版本里最强的一档；可改为手动打勾点亮。', btn('设置', () => GoldBoard.open()), { div: true })),
       grp('网络与诊断',
+        row('扩展程序（插件）', '管理、启停或运行客户端扩展插件（客户端与浏览器模式通用）。', h('div', { style: { display: 'flex', alignItems: 'center', gap: '6px' } }, h('button', { type: 'button', class: 'btn ghost sm', onclick: e => typeof ExtPop !== 'undefined' && ExtPop.open(e.currentTarget) }, '扩展列表'), btn('管理', () => typeof ExtPop !== 'undefined' && ExtPop.manage?.())), { div: true }),
         row('ProxyIP 列表', '按地区的出口 IP · 纯净度自动过滤 · 429 按服务器要求等待。', btn('打开', () => ProxySet.open()), { div: true }),
         row('人机验证语言', '只改人机验证弹窗（reCAPTCHA 勾选框 / 图片题）的文字语言。\n不改浏览器语言、时区、Accept-Language，也不影响后台静默验证（v3）；指纹和环境不变。\n「跟随系统」= 和以前一样（推荐，语言与环境保持一致）。', sel(Recaptcha.LANGS, Prefs.rcLang || '', v => { Prefs.rcLang = v; savePrefs(); })),
         row('智能兜底模式', '连接超时或遇到 429 限流时自动切换同地区可用 IP（429 IP 自动进入冷却期，冷却前不再切回）；当本地区 IP 全部不可用时自动跨地区层层筛选最佳可用 IP。',
@@ -1826,7 +1860,7 @@ Bus.on('trace', sid => { if (!sid || sid === Dock.sid()) Dock.soon(); Bar.render
 Bus.on('tracelog', () => { if (Dock.tab === 'records') Dock.soon(); });
 Bus.on('chat', c => {
   if (!c?.sid || c.sid !== Dock.sid() || Dock.tab !== 'overview') return;
-  const identSig = String(!!c.identifying) + '|' + String(c.probeProgress || '') + '|' + String(c.probePct ?? '');
+  const identSig = String(!!c.busy) + '|' + String(c.status || '') + '|' + String(!!c.identifying) + '|' + String(c.probeProgress || '') + '|' + String(c.probePct ?? '') + '|' + String(c.messages?.length || 0) + '|' + String(!!c.loaded);
   if (Dock._lastIdentSig !== identSig) { Dock._lastIdentSig = identSig; Dock.soon(); return; }
   if (c.busy && !Dock.ct) Dock.ct = setTimeout(() => { Dock.ct = 0; Dock.render(); }, 900);
 });
@@ -2072,7 +2106,7 @@ const WS = {
     try { Workspace.cache.delete(sid); } catch {}
     this.render();
     chat.emit?.();
-    try { UI.render?.(); } catch {}
+    try { if (typeof UI !== 'undefined' && UI.els?.chat === chat) UI.renderChat(chat, false); } catch {}
     toast(pruned?.prunedCount
       ? `已清理末尾 ${pruned.prunedCount} 条异常/开源思考消息并恢复闭源模型，可直接发送`
       : '已回退至初始闭源节点并清空工作区分支（保留闭源模型）');
@@ -2103,19 +2137,31 @@ const Bar = {
     if (av.dataset.pie !== key) {
       av.dataset.pie = key; av.classList.add('av-pie'); av.style.background = '';
       const NS = 'http://www.w3.org/2000/svg', s = document.createElementNS(NS, 'svg'), mk = (t, at) => { const e = document.createElementNS(NS, t); for (const [k, v] of Object.entries(at)) e.setAttribute(k, v); s.append(e); return e; };
-      s.setAttribute('viewBox', '0 0 32 32'); s.setAttribute('class', 'pie');
-      mk('circle', { cx: 16, cy: 16, r: 15, fill: 'color-mix(in srgb, currentColor 14%, transparent)' });
+      s.setAttribute('viewBox', '0 0 34 34'); s.setAttribute('class', 'pie');
+      mk('circle', { cx: 17, cy: 17, r: 15.5, fill: 'color-mix(in srgb, currentColor 14%, transparent)' });
       const f = pct == null ? 0 : pct / 100;
-      if (f >= 0.999) mk('circle', { cx: 16, cy: 16, r: 15, fill: col });
-      else if (f > 0) { const ang = f * 2 * Math.PI, x = 16 + 15 * Math.sin(ang), y = 16 - 15 * Math.cos(ang); mk('path', { d: `M16 16 L16 1 A15 15 0 ${f > 0.5 ? 1 : 0} 1 ${x.toFixed(2)} ${y.toFixed(2)} Z`, fill: col }); }
-      mk('circle', { cx: 16, cy: 16, r: 15, fill: 'none', stroke: 'color-mix(in srgb, currentColor 22%, transparent)', 'stroke-width': 1 });
+      if (f >= 0.999) mk('circle', { cx: 17, cy: 17, r: 15.5, fill: col });
+      else if (f > 0) { const ang = f * 2 * Math.PI, x = 17 + 15.5 * Math.sin(ang), y = 17 - 15.5 * Math.cos(ang); mk('path', { d: `M17 17 L17 1.5 A15.5 15.5 0 ${f > 0.5 ? 1 : 0} 1 ${x.toFixed(2)} ${y.toFixed(2)} Z`, fill: col }); }
+      mk('circle', { cx: 17, cy: 17, r: 15.5, fill: 'none', stroke: 'color-mix(in srgb, currentColor 22%, transparent)', 'stroke-width': 1 });
+      mk('circle', { cx: 17, cy: 17, r: 10.2, fill: 'color-mix(in srgb, var(--bg2, #1c1e1b) 86%, #000 14%)' });
+      const txt = mk('text', { x: 17.3, y: 16.2, 'text-anchor': 'middle', 'dominant-baseline': 'central', 'font-size': pct != null && pct >= 100 ? '7.5' : '8.5', 'font-weight': '700', fill: 'var(--fg, #fff)' });
+      txt.textContent = pct != null ? Math.round(pct) + '%' : '—';
       av.replaceChildren(s);
     }
-    av.title = '余额 ' + (pct != null ? pct + '%' : '未知') + (rem != null ? ' · ≈' + usd(rem) + (all ? ' / ' + usd(all) : '') : '') + '\n点击查看余额明细';
+    av.removeAttribute('title');
     av.setAttribute('role', 'button'); av.setAttribute('aria-label', '余额明细（' + (pct != null ? pct + '%' : '未知') + '）');
-    if (!av.dataset.bound) { av.dataset.bound = '1'; av.addEventListener('click', e => { e.stopPropagation(); this.donut(av); }); }
+    if (!av.dataset.bound) {
+      av.dataset.bound = '1';
+      av.addEventListener('mouseenter', () => this.hoverDonut(av));
+      av.addEventListener('mouseleave', () => this.scheduleCloseDonut());
+      av.addEventListener('click', e => {
+        e.stopPropagation();
+        if (this.balance && this.balance.anchor === av && (now() - (this.balance.openedAt || 0) < 500)) return;
+        this.donut(av);
+      });
+    }
     const remark = String(a.remark || '').trim(), me = UI.me;
-    const bal = rem != null ? '≈' + usd(rem) + (all ? ' / ' + usd(all) : '') + (pct != null ? ' · ' + pct + '%' : '') : pct != null ? '额度 ' + pct + '%' : '';
+    const bal = rem != null ? '≈' + usd(rem) + (all ? ' / ' + usd(all) : '') : pct != null ? '额度 ' + pct + '%' : '';
     const kids = [];
     if (!me && UI.host) kids.push(h('span', { class: 'acct-rm bad' }, '未登录'));
     if (remark) kids.push(h('span', { class: 'acct-rm', title: '备注：' + remark }, remark));
@@ -2152,37 +2198,20 @@ const Bar = {
     const it = (cls, title, ...kids) => h('span', { class: 'bi ' + cls, title }, ...kids);
     const mob = Boolean((typeof isMob === 'function' && isMob()) || (typeof Host !== 'undefined' && Host.platform === 'android'));
     const kids = [...Bulk.barItems()];   // 一键归档 / 删除归档：最小化后的进度条
-    kids.push(it('bmeter', '账号额度与官方 BotService 分数 · 点击展开 / 再点收起' + (botLv?.desc ? '\n' + botLv.desc : '') + (u == null && bt?.head ? '\n推断：' + bt.head + '\n' + bt.why : bt?.why ? '\n' + bt.why : ''), h('i', { class: 'meter' + (pct != null && pct < 10 ? ' low' : '') }, h('b', { style: { width: (pct ?? 0) + '%' } })),
-      rem != null ? [h('span', { class: 'dim' }, u == null ? '≈美金' : '美金'), h('b', {}, (u == null ? '≈' : '') + '$' + (rem >= 100 ? Math.round(rem) : rem.toFixed(2))), all ? h('span', { class: 'dim' }, '/ $' + (all >= 100 ? Math.round(all) : all.toFixed(2))) : null, pct != null ? h('span', { class: 'dim' }, '· ' + pct + '%') : null, botScore != null ? h('span', { class: 'dim bot-score-tag', title: botLv?.desc || '' }, '· Bot ' + botScore) : null]
-        : [h('span', { class: 'dim' }, '额度'), h('b', {}, pct != null ? pct + '%' : '—'), botScore != null ? h('span', { class: 'dim bot-score-tag', title: botLv?.desc || '' }, '· Bot ' + botScore) : null]));
+    const _legacyBotTag = botScore != null ? '· Bot ' + botScore : ''; void _legacyBotTag; void rem; void all; void pct; void botLv; void bt;
     const bpSum = (!mob && sid && typeof BillingProbe !== 'undefined') ? BillingProbe.summary(sid) : null;
-    if (!mob) { // 本轮花费与对话总消耗（仅桌面端显示，手机端底栏隐藏）
-      const ch = sid ? Chats.get(sid) : null, bp = bpSum, bSid = sid && typeof Budget !== 'undefined' ? Budget.sid(sid) : null;
-      const estNow = ch ? LiveEst.of(ch) : null, live = ch?.busy ? estNow : null, real = lt?.sum?.usd || 0, estU = lt?.sum?.usdEst || 0;
-      const bpTurnExact = bp?.payment?.chargedUsd > 0 ? bp.payment.chargedUsd : null;
-      const bpTurnEff = bp?.payment?.effectiveUsd > 0 ? bp.payment.effectiveUsd : null;
-      const v = ch?.busy ? (live && live.usd > 0 ? live.usd : (bpTurnEff || real || estU)) : (bpTurnExact ?? bpTurnEff ?? (real || estNow?.usd || estU || 0));
-      const approx = ch?.busy ? !live?.exactUsd : !(bpTurnExact != null || real > 0 || estNow?.exactUsd);
-      const bpSessExact = bp?.sessionPayment?.chargedUsd > 0 ? bp.sessionPayment.chargedUsd : null;
-      const bpSessEff = bp?.sessionPayment?.effectiveUsd > 0 ? bp.sessionPayment.effectiveUsd : null;
-      const traceTot = tot && tot.turns && tot.usd ? tot.usd : 0;
-      const all = bpSessExact ?? bpSessEff ?? (traceTot || bSid?.usd || (v > 0 ? v : 0));
-      const allApprox = !(bpSessExact != null || traceTot > 0);
-      const allTurns = bp?.sessionPayment?.turns || tot?.turns || bSid?.turns || (v > 0 ? 1 : 0);
-      kids.push(it('bcost', (ch?.busy ? '本轮进行中：按新计费 P50×2 实时估算' : bpTurnEff ? '本轮：新计费账单 ' + (bpTurnExact ? '实扣 ' : 'P50×2 折算 ') + fmtUsd(v) : '本轮：最近一轮 ' + (lt?.calls.length || estNow?.steps || 1) + ' 次调用') + (real ? '\nTrace 实际 ' + fmtUsd(real) : '') + (all ? '\n总：本对话 ' + allTurns + ' 轮合计 ' + (allApprox ? '≈' : '') + fmtUsd(all) : ''),
-        h('span', { class: 'dim' }, '对话消耗'), h('b', {}, v ? (approx ? '≈' : '') + fmtUsd(v) : '—'), h('span', { class: 'dim' }, '/'), h('b', {}, all ? (allApprox ? '≈' : '') + fmtUsd(all) : '—')));
-    }
+    void mob; void tot;
     const bpTop = bpSum?.mergedCandidates?.[0] || bpSum?.top?.[0] || null;
     const bestNm = mi?.name || mi?.candidates?.[0]?.id || lt?.best || '';
     const bestBase = bestNm || bpTop?.displayName || bpTop?.model || '';
-    const bestEffort = (sid && typeof Strength !== 'undefined' && typeof Strength.effort === 'function' ? Strength.effort(sid) : null) || bpTop?.effort || null;
+    const bestEffort = mi?.effort || bpTop?.effort || null;
     const bestLabel = bestBase ? (typeof Strength !== 'undefined' && Strength.withEffort ? Strength.withEffort(bestBase, bestEffort) : bestBase) : ''; void bestLabel;
     const upd = Math.max(u?.at || 0, p?.at || 0); void upd;
     /* 底栏左侧仅保留对话消耗与三个功能图标，不显示刷新按钮与模型名称识别 */
     kids.push(LeaderPop.btn());
     kids.push(h('button',{class:'bi link fp-library-btn habit-library-btn bico',title:'习惯库：将确定知道是什么模型的诊断 JSON（billing-*.json）导入到习惯库中帮助习惯识别 · 管理纠偏自学习样本','aria-label': '习惯库',onclick:()=>typeof ChatHabitFingerprint!=='undefined'&&ChatHabitFingerprint.openManager?ChatHabitFingerprint.openManager():FingerprintLibrary.open()},icon('fingerprint')));
-    kids.push(h('button',{class:'bi link pel-library-btn bico',title:'鹈鹕测试库：查看/导入/导出骑自行车鹈鹕 SVG 作品与评分，辅助后续同画像模型识别','aria-label': '鹈鹕测试库',onclick:()=>typeof PelicanShots!=='undefined'&&PelicanShots.openLibrary?PelicanShots.openLibrary():null},icon('pelican')));
-    const run = [...Chats.values()].filter(c => c.busy).length; if (run) kids.push(it('', '进行中的对话', h('i', { class: 'dot' }), '进行中 ' + run));
+    kids.push(h('button',{class:'bi link pel-library-btn bico',title:'鹈鹕测试库：查看/导入/导出骑自行车鹈鹕 SVG 作品与评分，辅助后续同画像模型识别','aria-label': '鹈鹕测试库',onclick:()=>typeof PelicanShots!=='undefined'&&(PelicanShots.openLibrary||PelicanShots.table)?(PelicanShots.openLibrary||PelicanShots.table)():null},icon('pelican')));
+    const run = [...Chats.values()].filter(c => (typeof Hitl !== 'undefined' ? Hitl.blocked(c) : c.busy)).length; if (run) kids.push(it('brun', '进行中的对话：' + run, h('i', { class: 'dot' }), 'X' + run));
     const curBarChat = sid && typeof Chats !== 'undefined' ? Chats.get(sid) : null;
     const isBattleBarMode = curBarChat
       ? Boolean((curBarChat.isEvaluation && curBarChat.evalMode === 'battle') || (typeof EvalView !== 'undefined' && EvalView.isBattleChat?.(curBarChat)))
@@ -2192,19 +2221,22 @@ const Bar = {
       else { const r = Gacha.run; if (r && (Gacha.busy() || r.status === 'hit')) kids.push(h('button', { class: 'bi link', onclick: () => GPop.openAny() }, `抽卡 ${r.completed}/${r.settings?.endless ? '∞' : r.settings?.maxAttempts} · 命中 ${(r.hits || []).length}`)); }
     }
     const a = UI.host?.account || {};
-    // 出口图标：住宅 IP = 小房子，机房 IP = 小主机，其它 / 未知 = 地球；颜色 = 纯净度（绿 纯净 / 黄 一般 / 红 高风险 / 灰 未评估），旁边写纯净度百分比
+    // 出口图标：住宅 IP = 小房子，机房 IP = 小主机，其它 / 未知 = 地球；颜色 = 纯净度（绿 纯净 / 黄 一般 / 红 高风险 / 灰 未评估），旁边只显示纯度、国旗、延迟
     const ipRep = typeof IPRep !== 'undefined' && IPRep.cur ? IPRep.cur(a, IP.ip) : { label: '未评估', cls: 'r-none', kind: null, pct: null };
     const ipIco = ipRep.kind?.c === 'res' ? 'house' : ipRep.kind?.c === 'dc' ? 'server' : 'globe';
     const via = isDirectP(a.proxy) ? '直连' : a.proxyIp && typeof IPRep !== 'undefined' && IPRep.via ? IPRep.via(a.proxyIp) : a.region ? 'ProxyIP' : isVless(a.proxy) ? 'VLESS' : a.proxy ? '代理' : '7890';
+    const flagTxt = IP.loc ? ccF(IP.loc) : (a.region ? ccF(a.region) : '');
     const ipIt = it('ipit', (IP.err || '') + '\n' + '模式 ' + ({auto:'自动',node:'节点（固定）',proxy:'代理',direct:'直连'}[RegionIP.modeOf(a)]) + ' · ' + (isDirectP(a.proxy) ? '直连' : '代理 ' + maskProxy(a.proxy)) + (a.region ? '\n地区 ' + regionLabel(a.region) : '') + (a.proxyIp ? '\n出口类型 ' + via : '') + (a.tunErr ? '\n' + a.tunErr : '') + '\n纯净度 ' + ipRep.label + (ipRep.pct != null ? ' ' + ipRep.pct + '%' : '') + (ipRep.kind ? ' · ' + ipRep.kind.t + ' IP' : '') + '\n点击切换模式（自动 / 节点 / 代理 / 直连）、查看当前地区 IP 列表 / 一键切换',
-      icon(ipIco, 'ip-rep ' + ipRep.cls), ipRep.pct != null ? h('span', { class: 'ip-pct ' + ipRep.cls }, ipRep.pct + '%') : null,
-      IP.ip ? IP.ip + (IP.loc ? ' · ' + ccF(IP.loc) : '') : IP.err ? 'IP 获取失败' : 'IP …', h('span', { id: 'ip-rtt', class: IP.rttCls() }, IP.rttText()), h('span', { class: 'dim ip-via' }, via));
+      icon(ipIco, 'ip-rep ' + ipRep.cls),
+      ipRep.pct != null ? h('span', { class: 'ip-pct ' + ipRep.cls }, ipRep.pct + '%') : null,
+      flagTxt ? h('span', { class: 'ip-flag' }, flagTxt) : (IP.err ? h('span', { class: 'bad' }, '异常') : null),
+      h('span', { id: 'ip-rtt', class: IP.rttCls() }, IP.rttText()));
     ipIt.dataset.nettip=ipIt.title;ipIt.removeAttribute('title');   // 原生提示换成悬停小面板（含网速），原来的文字放在面板底部
     ipIt.setAttribute('role','button');ipIt.tabIndex=0;ipIt.setAttribute('aria-haspopup','dialog');ipIt.setAttribute('aria-label','当前地区 IP 列表与一键切换');
     ipIt.onclick = () => RegionIP.open();ipIt.onkeydown=e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();RegionIP.open();}}; kids.push(ipIt);
     kids.push(Update.newer() ? h('button', { class: 'bi link upd-badge bar-ver', title: '有新版本，点击更新', onclick: () => Update.prompt() }, icon('download'), '新版本 v' + Update.info.version) : h('button', { class: 'bi link ver bar-ver', title: '点击检查更新（' + (Update.isBeta(VERSION) ? '测试版通道' : '正式版通道') + '）', onclick: () => Update.checkNow() }, 'v' + VERSION));
     el.replaceChildren(...kids.flat().filter(Boolean));
-    const m=el.querySelector('.bmeter');if(m){m.setAttribute('role','button');m.tabIndex=0;m.setAttribute('aria-label','余额明细');m.setAttribute('aria-controls','bdonut');m.setAttribute('aria-haspopup','dialog');m.setAttribute('aria-expanded',String(!!this.balance));m.onclick=()=>this.donut(m);m.onkeydown=e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();this.donut(m,true);}};}
+    const m=el.querySelector('.bmeter');if(m){m.removeAttribute('title');m.setAttribute('role','button');m.tabIndex=0;m.setAttribute('aria-label','余额明细');m.setAttribute('aria-controls','bdonut');m.setAttribute('aria-haspopup','dialog');m.setAttribute('aria-expanded',String(!!this.balance));m.onmouseenter=()=>this.hoverDonut(m);m.onmouseleave=()=>this.scheduleCloseDonut();m.onclick=()=>{if(this.balance&&this.balance.anchor===m&&(now()-(this.balance.openedAt||0)<500))return;this.donut(m);};m.onkeydown=e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();this.donut(m,true);}};}
     if(this.balance){const anchor=this.balance.anchor;if(!anchor.isConnected&&anchor.classList.contains('bmeter')&&m)this.balance.anchor=m;if(this.balance.anchor.isConnected)this.paintDonut();else this.closeDonut();}
   },
   async refresh(sid) {
@@ -2218,27 +2250,49 @@ const Bar = {
     if (!bad.length) toast('已刷新：' + jobs.map(j => j[0]).join(' / '));
     else toast('部分未刷新：' + bad.join('；') + (bad.length < jobs.length ? '，其余已刷新' : ''), bad.length === jobs.length ? 'err' : '');
   },
+  hoverDonut(anchor) {
+    if(!anchor)return;
+    clearTimeout(this._donutHideT);this._donutHideT=0;
+    if(this.balance){
+      if(this.balance.anchor!==anchor){this.balance.anchor=anchor;this.paintDonut();}
+      return;
+    }
+    this.donut(anchor,false,true);
+  },
+  scheduleCloseDonut(delay=160) {
+    clearTimeout(this._donutHideT);
+    this._donutHideT=setTimeout(()=>{
+      this._donutHideT=0;
+      if(!this.balance)return;
+      try{if(document.querySelector('#acct .av:hover, #bar .bmeter:hover, #bdonut:hover'))return;}catch{}
+      this.closeDonut();
+    },delay);
+  },
   closeDonut(focus=false) {
+    clearTimeout(this._donutHideT);this._donutHideT=0;
     const state=this.balance;if(!state)return false;this.balance=null;
     state.cleanup();state.box.remove();const anchor=this.el?.querySelector('.bmeter');anchor?.setAttribute('aria-expanded','false');if(focus)anchor?.focus({preventScroll:true});return true;
   },
-  donut(anchor,keyboard=false) {
-    if(this.balance){this.closeDonut();return;}
-    const box=h('div',{id:'bdonut',class:'bdonut',role:'dialog','aria-label':'余额明细',tabindex:-1,title:'点击卡片、关闭按钮或卡片外收起',onclick:()=>this.closeDonut(true)});
-    const outside=e=>{const path=e.composedPath?.()||[];if(!box.contains(e.target)&&!path.includes(anchor)&&!e.target.closest?.('#bar .bmeter'))this.closeDonut();};
+  donut(anchor,keyboard=false,fromHover=false) {
+    clearTimeout(this._donutHideT);this._donutHideT=0;
+    if(this.balance){if(fromHover)return;this.closeDonut();return;}
+    const box=h('div',{id:'bdonut',class:'bdonut',role:'dialog','aria-label':'余额明细',tabindex:-1,title:'移开鼠标或点击关闭按钮收起',onmouseenter:()=>{clearTimeout(this._donutHideT);this._donutHideT=0;},onmouseleave:()=>this.scheduleCloseDonut(150),onclick:()=>this.closeDonut(true)});
+    const outside=e=>{const path=e.composedPath?.()||[];if(!box.contains(e.target)&&!path.includes(anchor)&&!e.target.closest?.('#bar .bmeter')&&!e.target.closest?.('#acct .av'))this.closeDonut();};
     const key=e=>{if(e.key==='Escape'){e.preventDefault();e.stopPropagation();this.closeDonut(true);}};
     const resize=()=>this.closeDonut(),visibility=()=>{if(document.hidden)this.closeDonut();};
     document.addEventListener('pointerdown',outside,true);document.addEventListener('focusin',outside,true);document.addEventListener('keydown',key,true);document.addEventListener('visibilitychange',visibility);
     window.addEventListener('resize',resize);window.visualViewport?.addEventListener('resize',resize);window.visualViewport?.addEventListener('scroll',resize);
-    this.balance={box,anchor,cleanup:()=>{document.removeEventListener('pointerdown',outside,true);document.removeEventListener('focusin',outside,true);document.removeEventListener('keydown',key,true);document.removeEventListener('visibilitychange',visibility);window.removeEventListener('resize',resize);window.visualViewport?.removeEventListener('resize',resize);window.visualViewport?.removeEventListener('scroll',resize);}};
+    this.balance={box,anchor,openedAt:now(),cleanup:()=>{document.removeEventListener('pointerdown',outside,true);document.removeEventListener('focusin',outside,true);document.removeEventListener('keydown',key,true);document.removeEventListener('visibilitychange',visibility);window.removeEventListener('resize',resize);window.visualViewport?.removeEventListener('resize',resize);window.visualViewport?.removeEventListener('scroll',resize);}};
     anchor.setAttribute('aria-expanded','true');document.body.append(box);this.paintDonut();if(keyboard)box.querySelector('.bd-close')?.focus({preventScroll:true});
   },
   paintDonut() {
     const state=this.balance;if(!state)return;const {box,anchor}=state;if(!anchor.isConnected||!box.isConnected){this.closeDonut();return;}
     const u=null,p=Pulse.v,rem=u&&Number.isFinite(+u.balanceRemainingUsd)?+u.balanceRemainingUsd:null,all=u&&Number.isFinite(+u.allowanceUsd)&&+u.allowanceUsd>0?+u.allowanceUsd:null;
-    const value=rem!==null&&all?rem/all*100:Number.isFinite(+p?.pulse)?+p.pulse:0,pct=Math.max(0,Math.min(100,value)),R=34,C=2*Math.PI*R;
-    const d=h('div',{class:'bd-svg'});d.innerHTML=`<svg width="92" height="92" viewBox="0 0 92 92"><circle cx="46" cy="46" r="${R}" fill="none" stroke="var(--bd)" stroke-width="10"/><circle cx="46" cy="46" r="${R}" fill="none" stroke="${pct<10?'var(--bad)':'var(--amp-acc)'}" stroke-width="10" stroke-linecap="round" stroke-dasharray="${C*pct/100} ${C}" transform="rotate(-90 46 46)"/><text x="46" y="50" text-anchor="middle" font-size="15" font-weight="700" fill="var(--fg)">${Math.round(pct)}%</text></svg>`;
     const rawBud=typeof Budget!=='undefined'?Budget.est():null,bud=typeof Budget!=='undefined'&&Budget.smartEst?Budget.smartEst(rawBud,UI.host?.account):rawBud,bt=typeof Budget!=='undefined'?Budget.text(bud):null;
+    const value=rem!==null&&all?rem/all*100:Number.isFinite(+p?.pulse)?+p.pulse:0,pct=Math.max(0,Math.min(100,value)),R=28,C=2*Math.PI*R;
+    const ringCol=pct<10?'var(--bad)':pct<30?'var(--warn,#e0a526)':'var(--amp-acc)';
+    const usdShort=bud?.remaining!=null?'$'+(bud.remaining>=100?Math.round(bud.remaining):bud.remaining.toFixed(1)):(p?'Pulse':'—');
+    const d=h('div',{class:'bd-svg'});d.innerHTML=`<svg width="66" height="66" viewBox="0 0 66 66"><circle cx="33" cy="33" r="${R}" fill="none" stroke="var(--bd)" stroke-width="6.5"/><circle cx="33" cy="33" r="${R}" fill="none" stroke="${ringCol}" stroke-width="6.5" stroke-linecap="round" stroke-dasharray="${(C*pct/100).toFixed(2)} ${C.toFixed(2)}" transform="rotate(-90 33 33)"/><text x="33.5" y="32" text-anchor="middle" dominant-baseline="central" font-size="15" font-weight="700" fill="var(--fg)">${Math.round(pct)}%</text></svg>`;
     const bsState=typeof BotService!=='undefined'&&BotService.state?BotService.state():null;
     const sidNow=Dock.sid(),ltNow=sidNow?Trace.latest(sidNow):null;
     const botScore=ltNow?.botScore??bsState?.botScore??null;
@@ -2246,36 +2300,101 @@ const Bar = {
     const rows=[
       ['Pulse 额度',p?p.pulse+'%':'—'],
       ['BotService 分数',botScore!=null?`${botScore} / 99（${botLv?.label||'已采样'}）`:'待对话采样（1–99）'],
-      ['更新时间',p?.at?fmtClock2(p.at):'—'],
-      ['频率','至少 5 分钟；限流后退避'],
     ];
-    if(bsState?.poolDetail){
-      rows.splice(2,0,['号池分构成',bsState.poolDetail]);
-    }
-    if(bsState?.sweetSpotSummary){
-      rows.splice(3,0,['甜区与轮次窗',bsState.sweetSpotSummary]);
-    }
-    if(bsState?.computeTideSummary){
-      rows.splice(4,0,['算力潮汐与爆率',bsState.computeTideSummary]);
-    }
-    if(bsState?.banWave?.active){
-      rows.splice(5,0,['风控清算窗',bsState.banWave.label+' · 已启用安全节拍']);
-    }
-    if(bsState?.ja4BrowserRatio!=null){
-      rows.splice(2,0,['JA4 浏览器真实率',Math.round(bsState.ja4BrowserRatio*100)+'%']);
-    }
-    if(bud?.total!=null)rows.splice(1,0,['推断总额度','≈ $'+Math.round(bud.total)+(bud.loose?'（偏差大）':'')],['推断余额','≈ $'+(bud.remaining>=100?Math.round(bud.remaining):bud.remaining.toFixed(2))]);
-    else if(bud)rows.splice(1,0,['推断总额度',bt?.summary || '继续观测']);
-    if(bud?.hjb?.advice)rows.push(['HJB 甜区刹车线',bud.hjb.advice]);
+    const clamp=(v,lo=0,hi=100)=>Math.max(lo,Math.min(hi,Number.isFinite(+v)?+v:0));
+    const fmtM=v=>'$'+(v>=100?Math.round(v):v.toFixed(1));
+    const budRight=bud?.total!=null?`${fmtM(bud.remaining)} / $${Math.round(bud.total)}`:(bud?.cands?.length>1?bud.cands.map(n=>'$'+n).join('/'):'观测中');
+    const hjb=bud?.hjb||null;
+    const brakeRem=hjb?.brakeRemPct??21.6;
+    const botPct=botScore!=null?clamp(Math.round(botScore/99*100)):0;
+    const botTone=botScore==null?'muted':botScore>=80?'ok':botScore>=50?'warn':'bad';
+    const botTier=bsState?.poolTier||(botScore>=80?'T1':botScore>=50?'T2':'T3');
+    const botBadge=botScore!=null?`${botScore} · ${botTier}`:'—';
+
+    // Top Hero Right: 2 clean graphical bars (no noisy sub-text)
+    const heroMain=h('div',{class:'bd-hero-main'},
+      h('div',{class:'bd-mcard',title:[hjb?.advice,bt?.why,p?.at?'更新于 '+fmtClock2(p.at):''].filter(Boolean).join('\n')},
+        h('div',{class:'bd-mhead'},
+          h('span',{class:'bd-mlabel'},'Pulse'),
+          h('b',{class:'bd-mval'},budRight)
+        )
+      ),
+      h('div',{class:'bd-mcard',title:bsState?.poolDetail||rows[1][1]},
+        h('div',{class:'bd-mhead'},
+          h('span',{class:'bd-mlabel'},'BotService'),
+          h('b',{class:'bd-mval is-'+botTone},botBadge)
+        ),
+        h('div',{class:'bd-track'},
+          h('span',{class:'bd-tick',style:'left:50.5%'}),
+          h('span',{class:'bd-tick',style:'left:80.8%'}),
+          h('i',{class:'bd-fill is-'+botTone,style:`width:${botPct}%`})
+        )
+      )
+    );
+
+    // Middle: 5-Column Vertical Capsule Bar Chart (IP / 过盾 / 出货 / 水位 / 信任)
+    const bk=bsState?.breakdown||null;
+    const sign=n=>(n>=0?'+'+n:String(n));
+    const nurtureNet=(bk?.nurtureBonus||0)-(bk?.replayPen||0);
+    const dimItems=bk?[
+      {k:'IP',v:String(bk.ipScore),pct:clamp(bk.ipScore/45*100),tip:`IP信誉 ${bk.ipScore}/45 (${bk.ipTag||'待评'})`,tone:bk.ipScore>=32?'ok':bk.ipScore>=20?'acc':'warn'},
+      {k:'过盾',v:String(bk.v3Score),pct:clamp(bk.v3Score/25*100),tip:`过盾v3 ${bk.v3Score}/25 (${bk.v3Tag||'正常'})`,tone:bk.v3Score>=20?'ok':bk.v3Score>=12?'warn':'bad'},
+      {k:'出货',v:sign(bk.drawScore),pct:clamp((bk.drawScore+22)/42*100),tip:`出货后验 ${sign(bk.drawScore)} (${bk.drawTag||'基准'})`,tone:bk.drawScore>=14?'ok':bk.drawScore>=0?'acc':'bad'},
+      {k:'水位',v:sign(bk.quotaScore),pct:clamp((bk.quotaScore+8)/20*100),tip:`额度水位 ${sign(bk.quotaScore)} (${bk.quotaTag||'正常'})`,tone:bk.quotaScore>=10?'ok':bk.quotaScore>=4?'acc':'warn'},
+      {k:'信任',v:sign(nurtureNet),pct:clamp((nurtureNet+4)/12*100),tip:`信任加成 ${sign(nurtureNet)} (${bk.nurtureTag||'cx纯净'})`,tone:nurtureNet>=2?'ok':'acc'},
+    ]:[];
+    const toneColor=t=>t==='ok'?'var(--ok,#2fb36b)':t==='warn'?'var(--warn,#e0a526)':t==='bad'?'var(--bad,#e5484d)':'var(--amp-acc)';
+    const makeMiniPie=it=>{
+      const p=clamp(it.pct,0,100),r=13.5,cx=17,cy=17,c=2*Math.PI*r,col=toneColor(it.tone);
+      const pieFill=`color-mix(in srgb,${col} 22%,transparent)`;
+      let wedge='';
+      if(p>=99.5){
+        wedge=`<circle cx="${cx}" cy="${cy}" r="${(r-0.8).toFixed(1)}" fill="${pieFill}"/>`;
+      }else if(p>0.5){
+        const rad=(p/100)*2*Math.PI-Math.PI/2,rw=r-0.8;
+        const x=(cx+rw*Math.cos(rad)).toFixed(2),y=(cy+rw*Math.sin(rad)).toFixed(2);
+        const lg=p>50?1:0;
+        wedge=`<path d="M ${cx} ${cy} L ${cx} ${(cy-rw).toFixed(2)} A ${rw} ${rw} 0 ${lg} 1 ${x} ${y} Z" fill="${pieFill}"/>`;
+      }
+      const wrap=h('div',{class:'bd-pie'});
+      wrap.innerHTML=`<svg width="34" height="34" viewBox="0 0 34 34"><circle cx="${cx}" cy="${cy}" r="${r}" fill="color-mix(in srgb,var(--fg) 4%,transparent)" stroke="color-mix(in srgb,var(--fg) 10%,transparent)" stroke-width="2.2"/>${wedge}<circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="${col}" stroke-width="2.2" stroke-linecap="round" stroke-dasharray="${(c*p/100).toFixed(2)} ${c.toFixed(2)}" transform="rotate(-90 ${cx} ${cy})"/><circle cx="${cx}" cy="${cy}" r="8.6" fill="color-mix(in srgb,var(--bg2,#1c1e1b) 78%,transparent)"/><text x="${cx}" y="20.1" text-anchor="middle" font-size="9.2" font-weight="700" fill="var(--fg)">${it.v}</text></svg>`;
+      return wrap;
+    };
+    const dimGrid=dimItems.length?h('div',{class:'bd-vchart'},
+      ...dimItems.map(it=>h('div',{class:'bd-vcol',title:it.tip},
+        makeMiniPie(it),
+        h('span',{class:'bd-vlbl'},it.k)
+      ))
+    ):null;
+
+    // Bottom: 2 Side-by-Side Mini Progress Cells (会话 + 潮汐)
+    const footCells=[];
     try{
       const ctxLife=sidNow&&typeof Budget!=='undefined'&&Budget.sessionContextLife?Budget.sessionContextLife(sidNow):null;
-      if(ctxLife)rows.push(['本会话上下文余量',`${ctxLife.remainingPct}%（第 ${ctxLife.turns}/${ctxLife.maxTurns} 轮 · KV折算 ${Math.round(ctxLife.kvCacheRatio*100)}%）${ctxLife.handoverAlert?' ⚠️ 建议适时新建会话':''}`]);
+      const cPct=ctxLife?clamp(ctxLife.remainingPct):100;
+      const cTone=ctxLife?.handoverAlert?'bad':cPct<35?'warn':'acc';
+      const cTip=ctxLife?`会话余量 ${cPct}%（第 ${ctxLife.turns}/${ctxLife.maxTurns} 轮 · KV ${Math.round(ctxLife.kvCacheRatio*100)}%）`:'当前会话上下文充足';
+      footCells.push(h('div',{class:'bd-fcell',title:cTip},
+        h('div',{class:'bd-fhead'},h('span',{},'会话'),h('b',{},Math.round(cPct)+'%')),
+        h('div',{class:'bd-track sm'},h('i',{class:'bd-fill is-'+cTone,style:`width:${cPct}%`}))
+      ));
     }catch{}
-    if(bud){rows.push(['依据',bud.source==='charged'?'实际扣费账本':'含内容估价']);if(bud.cands?.length>1)rows.push(['可能档位',bud.cands.map(n=>'$'+n).join(' / ')]);if(bud.lo>0&&Number.isFinite(bud.hi)&&!['inconsistent','incomplete','settling'].includes(bud.status))rows.push(['总额度范围','$'+bud.lo.toFixed(2)+'–$'+bud.hi.toFixed(2)]);}
-    // Preserve the actual card/close button across periodic footer refreshes.
+    if(bsState?.computeTide){
+      const ct=bsState.computeTide;
+      const hit=Number(ct.crownHitRatePct)||9.2;
+      const tPct=clamp(hit/12.5*100);
+      const tTone=ct.window==='GOLDEN'?'ok':ct.window==='CONGESTED'?'warn':'acc';
+      footCells.push(h('div',{class:'bd-fcell',title:bsState.computeTideSummary||''},
+        h('div',{class:'bd-fhead'},h('span',{},'爆率'),h('b',{},hit.toFixed(1)+'%')),
+        h('div',{class:'bd-track sm'},h('i',{class:'bd-fill is-'+tTone,style:`width:${tPct}%`}))
+      ));
+    }
+
+    const footGrid=footCells.length?h('div',{class:'bd-fgrid'},...footCells):null;
+    const dash=h('div',{class:'bd-dash'},dimGrid,footGrid);
     let graphic=box.querySelector('.bd-svg'),body=box.querySelector('.bd-rows');
     if(!graphic){graphic=d;body=h('div',{class:'bd-rows'});box.append(graphic,body,h('button',{type:'button',class:'ib bd-close','aria-label':'关闭余额明细',title:'关闭'},icon('x')));}else graphic.innerHTML=d.innerHTML;
-    body.replaceChildren(...rows.map(([k,v])=>h('div',{},h('span',{class:'dim'},k),h('b',{},v))));
+    body.replaceChildren(heroMain,dash);
     const r=anchor.getBoundingClientRect(),width=box.offsetWidth;if(typeof placeInward==='function')placeInward(box,r,{pad:8,gap:8,useBottom:true,keepWidth:true});else{box.style.left=Math.max(8,Math.min(innerWidth-width-8,r.left))+'px';box.style.bottom=Math.max(8,innerHeight-r.top+8)+'px';}
   },
 };
@@ -2321,9 +2440,13 @@ const NetTip = {
   document.addEventListener('click', e => { if (find(e)) NetTip.hide(); }, true);
   addEventListener('resize', () => NetTip.hide()); addEventListener('blur', () => NetTip.hide());
 }
-for (const ev of ['pulse', 'budget', 'models', 'ip', 'quota', 'gacha', 'history']) Bus.on(ev, () => { clearTimeout(Bar.t); Bar.t = setTimeout(() => Bar.render(), 150); });
+for (const ev of ['pulse', 'budget', 'models', 'ip', 'quota', 'gacha', 'history', 'turn']) Bus.on(ev, () => { clearTimeout(Bar.t); Bar.t = setTimeout(() => Bar.render(), 150); });
 setInterval(() => { if (!document.hidden) Bar.render(); }, 15000);
-Bus.on('chat', c => { if (c?.busy && c.sid === Dock.sid() && !Bar.ct) Bar.ct = setTimeout(() => { Bar.ct = 0; Bar.render(); }, 2000); });
+Bus.on('chat', c => {
+  const runCnt = [...Chats.values()].filter(x => (typeof Hitl !== 'undefined' ? Hitl.blocked(x) : x.busy)).length;
+  if (Bar._lastRunCnt !== runCnt) { Bar._lastRunCnt = runCnt; clearTimeout(Bar.t); Bar.t = setTimeout(() => Bar.render(), 60); }
+  if (c?.busy && c.sid === Dock.sid() && !Bar.ct) Bar.ct = setTimeout(() => { Bar.ct = 0; Bar.render(); }, 2000);
+});
 
 // ---------- 发送键旁的抽卡按钮（目标厂商 + 张数 + 开始/停止，弹出 256px 面板）----------
 const GPop = {

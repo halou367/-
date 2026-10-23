@@ -508,6 +508,7 @@ Object.assign(UI, {
   },
   // 注册时发现邮箱已注册：有固定 / 令牌密码就自动改走登录；密码不对再让用户选——改成固定密码（走找回密码）或自己登录
   async existingAccount(a, em, form, msg, current) {
+    const fail = (box, err) => { const m = box?.querySelector?.('.lmsg') || msg; if (m) { m.className = 'lmsg bad'; m.textContent = typeof cleanErr === 'function' ? cleanErr(err) : String(err?.message || err || ''); } };
     const pv = await this.regPassword(a, em);
     if (!current()) return;
     if (pv) {

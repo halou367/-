@@ -4,6 +4,7 @@
 // 不给 allow-popups / allow-forms / allow-top-navigation，CSP 断网（脚本只允许页面自带的内联脚本）。对话里的小窗和「记录」用的副本不跑脚本。
 // 「记录」：把此刻看到的画面（含 CSS 动画的当前帧）画成一张小图，存到模型信息 · 概览 · 鹈鹕测试图，攒成能力表（SVG）。
 ICON.pvcode = ICON.pvcode || '<path d="M8 8l-4 4 4 4M16 8l4 4-4 4M13.5 5l-3 14"/>';
+ICON.code = ICON.code || ICON.pvcode;
 ICON.pvplay = ICON.pvplay || '<path d="M7 5l12 7-12 7z"/>';
 ICON.pvcam = ICON.pvcam || '<path d="M4 8h3l1.5-2h7L17 8h3v11H4z"/><circle cx="12" cy="13" r="3.5"/>';
 ICON.pvwin = ICON.pvwin || '<rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M3 9h18M7 6.5h.01M10 6.5h.01"/>';
@@ -14,6 +15,7 @@ ICON.pvunfull = ICON.pvunfull || '<path d="M20 10h-6V4M4 14h6v6M14 10l7-7M10 14l
 ICON.pvfull = ICON.pvfull || '<path d="M14 4h6v6M10 20H4v-6M20 4l-7 7M4 20l7-7"/>';
 ICON.check = ICON.check || '<path d="M5 12.5l4.5 4.5L19 7.5"/>';
 ICON.pvtable = ICON.pvtable || '<rect x="4" y="4" width="16" height="16" rx="2"/><path d="M4 10h16M4 15h16M10 4v16"/>';
+ICON.pvsize = ICON.pvsize || '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="M7.5 9.5L5 12l2.5 2.5M16.5 9.5L19 12l-2.5 2.5M8.5 12h7"/>';
 const HtmlPreview = (() => {
   const CSP = "default-src 'none'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; media-src data:; base-uri 'none'; form-action 'none'";
   const CSP_RUN = "default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; media-src data: blob:; base-uri 'none'; form-action 'none'";
@@ -247,22 +249,23 @@ const HtmlPreview = (() => {
     };
     c.renderNow = (text, name) => {
       c.pending = false;
-      const olds = [...c.stage.querySelectorAll('iframe')];
+      if (c.shown === text && c.stage.querySelector('iframe.pvc-frame')) {
+        c.ph.hidden = true;
+        return;
+      }
+      const old = c.stage.querySelector('iframe.pvc-frame');
+      const probe = h('iframe', { class: 'pv-probe', tabindex: '-1', 'aria-hidden': 'true', referrerpolicy: 'no-referrer' });
+      probe.setAttribute('sandbox', 'allow-same-origin'); probe.setAttribute('csp', CSP);
+      Object.assign(probe.style, { position: 'absolute', left: '-99999px', top: '0', visibility: 'hidden', pointerEvents: 'none', border: '0' });
       const f = h('iframe', { class: 'pvc-frame', title: name, tabindex: '-1', 'aria-hidden': 'true', referrerpolicy: 'no-referrer' });
       f.setAttribute('sandbox', 'allow-scripts'); f.setAttribute('csp', CSP_RUN); f.style.visibility = 'hidden';
-      const metaKey = 't:' + textSig(String(text || ''), name);
-      const p = stageMetaCache.has(metaKey) ? null : h('iframe', { class: 'pv-probe', tabindex: '-1', 'aria-hidden': 'true', referrerpolicy: 'no-referrer' });
-      if (p) {
-        p.setAttribute('sandbox', 'allow-same-origin'); p.setAttribute('csp', CSP);
-        p.srcdoc = docOf(text, name, { run: false, thumb: true });
-        c.stage.append(p);
-      }
-      const prev = c.mount; c.mount = mountStage(c.stage, f, text, name, { thumb: true, probe: p });
+      const prev = c.mount; c.mount = mountStage(c.stage, f, text, name, { thumb: true, probe });
       f.addEventListener('load', () => {
-        olds.forEach(el => { try { el.remove(); } catch {} });
-        prev?.destroy(); f.style.visibility = ''; c.shown = text; c.ph.hidden = true;
+        old?.remove(); prev?.destroy(); f.style.visibility = ''; c.shown = text; c.ph.hidden = true;
       }, { once: true });
-      f.srcdoc = docOf(text, name, { run: true, thumb: true }); c.stage.append(f);
+      probe.srcdoc = docOf(text, name, { run: false, thumb: true });
+      f.srcdoc = docOf(text, name, { run: true, thumb: true });
+      c.stage.append(probe, f);
     };
     c.render = (text, name) => {
       c.pending = false;
@@ -443,15 +446,18 @@ const HtmlPreview = (() => {
 
     const fileList = [...fileMap.values()];
     const localHtmlFile = fileList.find(f => /\.(?:html?|svg)$/i.test(f.path)) || null;
-    let previewUrl = wd?.previewUrl || msg.metadata?.previewUrl || null;
-    if (!previewUrl && isWebDevChat && msg.id && msg.status === 'success' && wd?.status !== 'build-error' && wd?.status !== 'no-artifact') {
+    const isFailedMsg = Boolean(msg.status === 'failed' || msg.status === 'error' || msg.failed || wd?.status === 'build-error' || wd?.status === 'error' || wd?.status === 'failed');
+    let previewUrl = !isFailedMsg ? (wd?.previewUrl || msg.metadata?.previewUrl || null) : null;
+    if (!previewUrl && !isFailedMsg && isWebDevChat && msg.id && msg.status === 'success' && wd?.status === 'success') {
       previewUrl = `https://${msg.id}.arena.site`;
     }
     const isPendingBuild = Boolean(
+      !isFailedMsg &&
       isWebDevChat &&
-      (msg.status === 'pending' || msg.status === 'streaming' || wd?.status === 'pending') &&
+      (msg.status === 'pending' || msg.status === 'streaming' || (msg.metadata?.pending && wd?.status === 'pending')) &&
       !previewUrl
     );
+    const buildError = isFailedMsg ? (wd?.message || msg.failureReason || msg.errorText || '构建或生成失败') : null;
     const hasAnyPreview = Boolean(previewUrl || localHtmlFile || fileList.length > 0 || isPendingBuild);
     return {
       previewUrl,
@@ -460,7 +466,7 @@ const HtmlPreview = (() => {
       isPendingBuild,
       hasAnyPreview,
       templateKind: wd?.templateKind || msg.webdevTemplate || msg.metadata?.webdevTemplate || null,
-      buildError: wd?.status === 'build-error' ? (wd.message || msg.failureReason || 'Build failed') : null,
+      buildError,
     };
   }
 
@@ -516,6 +522,8 @@ const HtmlPreview = (() => {
       buildError: o.buildError || null,
       templateKind: o.templateKind || null,
       viewport: o.viewport || prev?.viewport || 'desktop',
+      vpW: Number.isFinite(+o.vpW) ? +o.vpW : (prev?.vpW || 0),
+      vpH: Number.isFinite(+o.vpH) ? +o.vpH : (prev?.vpH || 0),
       routePath: o.routePath || '/',
       highlightStart: o.highlightStart || 0,
       highlightEnd: o.highlightEnd || 0,
@@ -526,8 +534,9 @@ const HtmlPreview = (() => {
     render(); if (!wasOpen) try { UI.layout(); } catch {}
   }
 
-  function openEvalMessage(chat, msg, opts = {}) {
+  function openEvalMessage(chat, msg, posOrOpts = {}, maybeOpts = null) {
     if (!chat || !msg) return;
+    const opts = typeof posOrOpts === 'string' ? { ...(maybeOpts && typeof maybeOpts === 'object' ? maybeOpts : {}), pos: posOrOpts } : (posOrOpts || {});
     if (chat.sid && !opts.autoSync) userClosedSids.delete(chat.sid);
     const pos = opts.pos || (msg.participantPosition === 'b' ? 'b' : 'a');
     if (chat.modality === 'webdev' || chat.evalModality === 'webdev' || msg.webdev || msg.activeWorkflowRunId || msg.metadata?.workflowRunId) {
@@ -604,8 +613,12 @@ const HtmlPreview = (() => {
           const hit = curBundle.files.find(f => f.path === st.path);
           if (hit) st.get = hit.get;
         }
+        let nextDigest = 2166136261;
+        for (const f of (curBundle.files || [])) { const s = (f.path || '') + ':' + (typeof f.get === 'function' ? f.get() : (f.content || '')); for (let i = 0; i < s.length; i += Math.max(1, s.length > 4096 ? 4 : 1)) { nextDigest ^= s.charCodeAt(i); nextDigest = Math.imul(nextDigest, 16777619) >>> 0; } }
+        const digestChanged = st._lastFilesDigest !== undefined && st._lastFilesDigest !== nextDigest;
+        st._lastFilesDigest = nextDigest;
         st._lastFileCount = nextCount;
-        if (urlChanged || buildChanged || (prevCount === 0 && nextCount > 0)) {
+        if (urlChanged || buildChanged || digestChanged || (prevCount === 0 && nextCount > 0)) {
           render();
           return;
         }
@@ -631,7 +644,58 @@ const HtmlPreview = (() => {
   // 图片：右侧窗格里看（跟官方一样：右边收起成预览器，适应窗格 / 点一下原始大小，顶上有下拉 · 下载 · 全屏 · 关闭）
   function image(o) { open({ sid: o.sid ?? (typeof Tabs !== 'undefined' ? Tabs.cur?.sid : null) ?? null, path: o.path || o.name || 'image', img: { src: o.src, revoke: o.revoke || null, sub: o.sub || '', thumb: o.thumb || '' }, list: o.list || null }); }
   function setMode(m) { if (!st || st.mode === m) return; st.mode = m; render(); }
-  function setViewport(vp) { if (!st || st.viewport === vp) return; st.viewport = vp; render(); }
+  function setViewportSize(w, h) {
+    if (!st) return;
+    const nw = Math.max(0, Math.min(3840, Math.round(+w || 0)));
+    const nh = Math.max(0, Math.min(3840, Math.round(+h || 0)));
+    st.vpW = nw > 0 ? Math.max(160, nw) : 0;
+    st.vpH = nh > 0 ? Math.max(120, nh) : 0;
+    st.viewport = (st.vpW > 0 || st.vpH > 0) ? 'custom' : 'desktop';
+    render();
+  }
+  function toggleVpPopover(anchor, sheet) {
+    const existing = sheet.querySelector('.pv-vp-pop');
+    if (existing) { existing.remove(); return; }
+    sheet.querySelector('.pv-menu')?.remove();
+    const wIn = h('input', { type: 'number', class: 'pv-vp-in', min: '160', max: '3840', step: '10', placeholder: '自适应', value: st?.vpW > 0 ? String(st.vpW) : '' });
+    const hIn = h('input', { type: 'number', class: 'pv-vp-in', min: '120', max: '3840', step: '10', placeholder: '自适应', value: st?.vpH > 0 ? String(st.vpH) : '' });
+    const apply = () => { pop.remove(); setViewportSize(wIn.value, hIn.value); };
+    const onKey = e => { if (e.key === 'Enter') { e.preventDefault(); apply(); } };
+    wIn.addEventListener('keydown', onKey);
+    hIn.addEventListener('keydown', onKey);
+    const presets = [
+      { l: '自适应', w: 0, h: 0 },
+      { l: '390×844', w: 390, h: 844 },
+      { l: '768×1024', w: 768, h: 1024 },
+      { l: '1024×768', w: 1024, h: 768 },
+      { l: '1280×720', w: 1280, h: 720 },
+    ];
+    const pop = h('div', { class: 'pv-vp-pop', onclick: e => e.stopPropagation() },
+      h('div', { class: 'pv-vp-row' },
+        h('label', { class: 'pv-vp-field' }, h('span', {}, '宽'), wIn, h('small', {}, 'px')),
+        h('span', { class: 'pv-vp-x' }, '×'),
+        h('label', { class: 'pv-vp-field' }, h('span', {}, '高'), hIn, h('small', {}, 'px')),
+        h('button', { type: 'button', class: 'btn sm pv-vp-apply', onclick: apply }, '应用')
+      ),
+      h('div', { class: 'pv-vp-presets' },
+        ...presets.map(p => {
+          const active = (st?.vpW || 0) === p.w && (st?.vpH || 0) === p.h;
+          return h('button', {
+            type: 'button',
+            class: 'pv-vp-chip' + (active ? ' on' : ''),
+            onclick: () => { pop.remove(); setViewportSize(p.w, p.h); }
+          }, p.l);
+        })
+      )
+    );
+    sheet.append(pop);
+    setTimeout(() => wIn.focus(), 10);
+    const off = e => {
+      if (!pop.isConnected) { document.removeEventListener('pointerdown', off, true); return; }
+      if (!pop.contains(e.target) && !anchor.contains(e.target)) { pop.remove(); document.removeEventListener('pointerdown', off, true); }
+    };
+    setTimeout(() => document.addEventListener('pointerdown', off, true), 0);
+  }
   function btn(ic, title, fn, cls = '') { return h('button', { type: 'button', class: 'ib sm pv-b ' + cls, title, 'aria-label': title, onclick: fn }, icon(ic)); }
   // 文件下拉：这个对话里 Write 出来的所有可预览文件（同一路径只留最新一次），点一个就切换
   function files() {
@@ -657,6 +721,8 @@ const HtmlPreview = (() => {
       buildError: st.buildError,
       templateKind: st.templateKind,
       viewport: st.viewport,
+      vpW: st.vpW || 0,
+      vpH: st.vpH || 0,
       routePath: st.routePath,
       mode: keepMode ? st.mode : (/\.(?:html?|svg)$/i.test(x.path) && !st.previewUrl ? 'run' : 'code'),
       keepMode,
@@ -739,38 +805,11 @@ const HtmlPreview = (() => {
       );
     };
 
-    const canVoteNow = isBattle && !voted && !chat.voteState?.submitting && msgA && msgB
-      && msgA.status !== 'pending' && msgB.status !== 'pending';
-
-    const voteQuickBar = canVoteNow && typeof EvalEngine !== 'undefined'
-      ? h('div', { class: 'pv-inline-vote' },
-          h('button', {
-            type: 'button',
-            class: 'pv-vbtn va',
-            title: '投给 Option A',
-            onclick: () => void EvalEngine.submitVote(chat.sid, 'model_a'),
-          }, '👈 A好'),
-          h('button', {
-            type: 'button',
-            class: 'pv-vbtn vtie',
-            title: '平局',
-            onclick: () => void EvalEngine.submitVote(chat.sid, 'tie'),
-          }, '🤝 平'),
-          h('button', {
-            type: 'button',
-            class: 'pv-vbtn vb',
-            title: '投给 Option B',
-            onclick: () => void EvalEngine.submitVote(chat.sid, 'model_b'),
-          }, '👉 B好')
-        )
-      : null;
-
     return h('div', { class: 'pv-eval-bar' },
       h('div', { class: 'pv-opt-tabs' },
         renderOptTab('a', msgA),
         isBattle && msgB ? renderOptTab('b', msgB) : null
-      ),
-      voteQuickBar
+      )
     );
   }
 
@@ -821,12 +860,16 @@ const HtmlPreview = (() => {
     const filePills = (st.mode === 'code' || allFiles.length > 1) ? buildFilePillsBar(allFiles) : null;
     const fileBtn = h('button', { type: 'button', class: 'pv-file' + (many ? ' many' : ''), title: st.path, 'aria-haspopup': many ? 'listbox' : null, onclick: () => { if (many) menu(fileBtn, sheet); } },
       icon('pvfolder'), h('b', { class: 'pv-n', title: st.path }, st.name), many ? icon('pvdown', 'pv-caret') : null);
+    const hasCustomVp = Boolean((st.vpW > 0 || st.vpH > 0) && st.mode === 'run');
+    const vpText = hasCustomVp ? `${st.vpW || '自动'}×${st.vpH || '自动'}` : '';
     const vpBar = (!isImg && st.mode === 'run' && (hasRemotePv || kind === 'html') && !mobile())
-      ? h('div', { class: 'pv-vp-seg', title: '切换预览视口尺寸' },
-          h('button', { type: 'button', class: 'pv-vp-btn' + ((st.viewport || 'desktop') === 'desktop' ? ' on' : ''), title: '桌面端宽度 (100%)', onclick: () => setViewport('desktop') }, '🖥'),
-          h('button', { type: 'button', class: 'pv-vp-btn' + (st.viewport === 'tablet' ? ' on' : ''), title: '平板宽度 (768px)', onclick: () => setViewport('tablet') }, '📱'),
-          h('button', { type: 'button', class: 'pv-vp-btn' + (st.viewport === 'mobile' ? ' on' : ''), title: '手机宽度 (390px)', onclick: () => setViewport('mobile') }, '📲')
-        )
+      ? h('button', {
+          type: 'button',
+          class: 'ib sm pv-b pv-vp-one' + (hasCustomVp ? ' on' : ''),
+          title: hasCustomVp ? `预览尺寸: ${vpText} px（点击调整长宽 px）` : '调整预览长宽尺寸 (px)',
+          'aria-label': '调整预览长宽尺寸 (px)',
+          onclick: e => toggleVpPopover(e.currentTarget, sheet)
+        }, icon('pvsize'), vpText ? h('span', { class: 'pv-vp-lbl' }, vpText) : null)
       : null;
     const head = h('div', { class: 'pv-h' },
       !canRunPreview ? null : h('div', { class: 'pv-seg', role: 'tablist' }, kind === 'md' ? seg('run', 'pvplay', '预览') : seg('run', 'pvplay', '预览'), seg('code', 'pvcode', kind === 'md' ? '源码' : '代码')),
@@ -835,8 +878,7 @@ const HtmlPreview = (() => {
       isImg ? null : btn('refresh', '重新读取并刷新', () => { render(); }),
       st.previewUrl ? h('button', { type: 'button', class: 'ib sm pv-b', title: '在独立浏览器标签页打开实时预览 (' + st.previewUrl + ')', onclick: () => window.open(st.previewUrl, '_blank', 'noopener,noreferrer') }, '↗') : null,
       isImg && typeof ImgAct !== 'undefined' && ImgAct.canCopy() ? btn('copy', '复制图片', () => ImgAct.copy(st.img.src)) : null,
-      kind !== 'html' || hasRemotePv ? null : h('button', { type: 'button', class: 'ib sm pv-b pv-rec', title: '把现在看到的画面记录为「鹈鹕测试图」（全客户端共享 · 存到模型信息 · 概览）', 'aria-label': '记录为鹈鹕测试图', onclick: () => void record() }, icon('pvcam'), h('span', {}, '记录')),
-      kind !== 'html' || hasRemotePv ? null : h('button', { type: 'button', class: 'ib sm pv-b pv-tbl', title: '打开全客户端鹈鹕测试库（查看 / 多模型并排对比 / 导入合并 / 导出分享）', 'aria-label': '鹈鹕测试库', onclick: () => PelicanShots.table({ compareModel: PelicanShots.modelOf(st.sid || Tabs.cur?.sid || null).model }) }, icon('pvtable'), h('span', {}, '测试库')),
+      kind !== 'html' || (hasRemotePv && !kindOf(st.path)) ? null : h('button', { type: 'button', class: 'ib sm pv-b pv-rec', title: '把现在看到的画面记录为「鹈鹕测试图」（全客户端共享 · 存到模型信息 · 概览）', 'aria-label': '记录为鹈鹕测试图', onclick: () => void record() }, icon('pvcam'), h('span', {}, '记录')),
       isImg ? btn('pvdl', '下载图片', () => typeof ImgAct !== 'undefined' ? ImgAct.save(st.img.src, st.name) : null, 'pv-dl') : btn('pvdl', '下载文件', () => download(text), 'pv-dl'),
       mobile() ? null : (root.classList.contains('pv-full') ? btn('pvunfull', '退出全屏', () => full(false), 'pv-fs') : btn('pvfull', '全屏显示', () => full(true), 'pv-fs')),
       btn('x', '关闭预览（恢复原来的面板）', () => dismiss(), 'pv-x'));
@@ -849,7 +891,13 @@ const HtmlPreview = (() => {
       const up = () => { grip.removeEventListener('pointermove', mv); grip.removeEventListener('pointerup', up); document.body.classList.remove('resizing'); savePrefs(); };
       grip.addEventListener('pointermove', mv); grip.addEventListener('pointerup', up);
     });
-    const body = h('div', { class: 'pv-body' + (isImg ? ' pv-imgb' : '') + (st.viewport && st.viewport !== 'desktop' && st.mode === 'run' ? ' pv-vp-' + st.viewport : '') });
+    const body = h('div', { class: 'pv-body' + (isImg ? ' pv-imgb' : '') + (hasCustomVp ? ' pv-vp-custom' : '') });
+    const applyStageVp = stageEl => {
+      if (!stageEl || !hasCustomVp) return;
+      stageEl.style.width = st.vpW > 0 ? st.vpW + 'px' : '100%';
+      stageEl.style.height = st.vpH > 0 ? st.vpH + 'px' : '100%';
+      stageEl.style.flex = 'none';
+    };
     let dim = null, stageToMount = null;
     if (isImg) {
       dim = h('span', { class: 'grow' }, '载入中…');
@@ -893,6 +941,7 @@ const HtmlPreview = (() => {
         sandbox: 'allow-forms allow-modals allow-popups allow-popups-to-escape-sandbox allow-presentation allow-same-origin allow-scripts allow-downloads',
       });
       const stage = h('div', { class: 'pv-stage pv-remote-stage' }, f);
+      applyStageVp(stage);
       frame = f;
       st.probe = null;
       st.frameAt = now();
@@ -921,6 +970,7 @@ const HtmlPreview = (() => {
       const f = h('iframe', { class: 'pv-frame', title: st.name, referrerpolicy: 'no-referrer' });
       const p = h('iframe', { class: 'pv-probe', tabindex: '-1', 'aria-hidden': 'true', referrerpolicy: 'no-referrer' });
       const stage = h('div', { class: 'pv-stage' }, f, p);
+      applyStageVp(stage);
       // 展示用 f：跑页面自己的脚本（不同源，脚本拿不到外面的客户端数据；断网，打不出去）
       // 测量 / 记录用 p：同源、不跑脚本，排版尺寸和样式动画从这里读
       f.setAttribute('sandbox', 'allow-scripts'); f.setAttribute('csp', CSP_RUN);
@@ -1032,7 +1082,10 @@ const HtmlPreview = (() => {
     try {
       if (st.mode !== 'run') { setMode('run'); await sleep(350); }
       await sleep(60);
-      const sid = st.sid || Tabs.cur?.sid || null, shot = await shoot();
+      const baseSid = st.sid || Tabs.cur?.sid || null;
+      const curChat = baseSid && typeof Chats !== 'undefined' ? Chats.get(baseSid) : null;
+      const sid = (baseSid && st.evalPos && curChat?.evalMode === 'battle') ? `${baseSid}#${st.evalPos}` : baseSid;
+      const shot = (st.previewUrl && textOf().trim()) ? await shootText(textOf(), st.name) : await shoot();
       const r = PelicanShots.add({ sid, ...shot, file: st.name });
       toast('已记录 · ' + r.model + (r.score != null ? ' · 推理分 ' + Strength.fmtScore(r.score) : '') + '（模型信息 · 概览 · 鹈鹕测试图）');
       try { Dock.render(); } catch {}
@@ -1067,7 +1120,8 @@ const HtmlPreview = (() => {
       open({ sid: getWsid?.() || Tabs.cur?.sid || null, path, get, wsid: getWsid?.() || null });
     });
   }
-  return { previewable, kindOf, inlineAssets, open, openEvalMessage, selectEvalOption, syncEval, extractEvalBundle, activeEvalPos: () => st?.evalPos || null, activeEvalMsgId: () => st?.evalMsgId || null, image, isFull: () => !!root?.classList.contains('pv-full'), close, dismiss, on, mount, bindRow, render, syncLive, record, shoot, shootText, card, titleOf, sid: () => st?.sid || null, docOf };
+  return { previewable, kindOf, inlineAssets, open, openEvalMessage, selectEvalOption, syncEval, extractEvalBundle, activeEvalPos: () => st?.evalPos || null,
+    activeMode: () => st?.mode || '', activeEvalMsgId: () => st?.evalMsgId || null, image, isFull: () => !!root?.classList.contains('pv-full'), close, dismiss, on, mount, bindRow, render, syncLive, record, shoot, shootText, card, titleOf, sid: () => st?.sid || null, docOf };
 })();
 
 // ---------- 鹈鹕测试库（全客户端共享）：记录 / 概览卡片 / 导出与导入合并 / 多模型并排对比 / 能力表（SVG） ----------
@@ -1115,13 +1169,29 @@ const PelicanShots = (() => {
     while (r.length && !Store.set(KEY, r)) r = r.slice(Math.max(1, Math.ceil(r.length * 0.2)));
     return full;
   };
-  function modelOf(sid) {
+  function modelOf(rawSid) {
     let name = '', score = null, think = null;
+    const [sid, evalSide] = String(rawSid || '').split('#');
     try {
+      const cObj = sid && typeof Chats !== 'undefined' ? Chats.get(sid) : null;
+      if (cObj) {
+        if (evalSide === 'a' || evalSide === 'b') {
+          const vs = cObj.voteState || null;
+          const revName = evalSide === 'b' ? vs?.modelBName : vs?.modelAName;
+          if (revName && revName !== '未识别') name = Strength.canon(revName);
+          if (!name && typeof ChatHabitFingerprint !== 'undefined' && typeof ChatHabitFingerprint.analyzeBattleChat === 'function') {
+            const bSnap = ChatHabitFingerprint.analyzeBattleChat(cObj);
+            const topCand = bSnap?.[evalSide]?.candidates?.[0];
+            if (topCand?.label && topCand.label !== '未识别') name = Strength.canon(topCand.label);
+          }
+        } else if (cObj.evalMode === 'direct' && cObj.directModelName) {
+          name = Strength.canon(cObj.directModelName);
+        }
+      }
       const mi = sid ? Models.get(sid) : null;
       const hRow = sid && typeof History !== 'undefined' ? History.byId?.(sid) : null;
       const hasReidMi = Boolean(mi && !mi.pendingConfirm && (!mi.guess || mi.userCorrected || mi.habitInferred || mi.reverseInferred || mi.billingProbe));
-      if (mi && mi.name && hasReidMi) name = Strength.canon(mi.name);
+      if (!name && mi && mi.name && hasReidMi) name = Strength.canon(mi.name);
       if (!name && mi && mi.reverseCandidateId && mi.sure) name = Strength.canon(mi.name || mi.reverseLabel || mi.reverseCandidateId);
       if (!name) { const t = Titles.view(sid, hRow?.title || '', hRow?.localTitle).model; if (t && Brand.of(t)) name = Strength.canon(t); }
     } catch {}
@@ -1141,6 +1211,9 @@ const PelicanShots = (() => {
     if (!r.sid) {
       const sc = r.score ?? (r.model && r.model !== '未识别' && typeof Strength !== 'undefined' ? Strength.board?.()?.find?.(b => key(b.name) === key(r.model))?.score ?? null : null);
       return { ...r, model: cleanName(r.model) || '未识别', score: sc ?? null };
+    }
+    if (r.lockedModel || r.messageId || r.artifactDigest) {
+      return { ...r, model: cleanName(r.model) || '未识别', score: r.score ?? null, think: r.think ?? null };
     }
     const m = modelOf(r.sid);
     const nextModel = isBetterModel(m.model, r.model) ? m.model : (cleanName(r.model) || m.model || '未识别');
@@ -1303,9 +1376,10 @@ const PelicanShots = (() => {
     save(updated);
     push();
   }
-  function add({ sid, url, w, h: hh, file, auto, acct }) {
+  function add({ sid, url, w, h: hh, file, auto, acct, messageId, artifactDigest, lockedModel, model: explicitModel }) {
     const m = modelOf(sid), aLabel = acct || curAcct();
-    const rec = { id: uuid7(), at: now(), sid, model: m.model, score: m.score, ...(m.think != null ? { think: m.think } : {}), url, w, h: hh, file: file || '', ...(auto ? { auto: true } : {}), ...(aLabel ? { acct: aLabel } : {}) };
+    const finalModel = (explicitModel && explicitModel !== '未识别') ? cleanName(explicitModel) : m.model;
+    const rec = { id: uuid7(), at: now(), sid, model: finalModel, score: m.score, ...(m.think != null ? { think: m.think } : {}), url, w, h: hh, file: file || '', ...(auto ? { auto: true } : {}), ...(aLabel ? { acct: aLabel } : {}), ...(messageId ? { messageId } : {}), ...(artifactDigest ? { artifactDigest } : {}), ...(lockedModel ? { lockedModel: true } : {}) };
     let a = all(); a.push(rec);
     const mine = rec.sid ? a.filter(x => x.sid === rec.sid) : a.filter(x => !x.sid && key(x.model) === key(rec.model));
     if (mine.length > PER) { const drop = new Set(mine.slice(0, mine.length - PER).map(x => x.id)); a = a.filter(x => !drop.has(x.id)); }
@@ -1914,5 +1988,5 @@ const PelicanShots = (() => {
     }
   } catch {}
   setTimeout(() => { void pull(true, true); }, 650);
-  return { add, auto, all, del, latest, forModel, forSid, card, entryCard, table, tableSvg, modelOf, pull, push, syncSid, exportData, exportLibrary, importData, openImport };
+  return { add, auto, all, del, latest, forModel, forSid, card, entryCard, table, openLibrary: table, tableSvg, modelOf, pull, push, syncSid, exportData, exportLibrary, importData, openImport };
 })();

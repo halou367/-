@@ -474,7 +474,7 @@ const Pager = {
     if (P.ph) { P.ph = false; UI.fillView(t, P.el, kbWas); }
     else {
       const c = P.els?.chat;
-      if (c) { UI.renderChat(c); if (!c.loaded && !c.loading) c.load().catch(() => {}); }
+      if (c) { UI.renderChat(c); if (!c.loaded && !c.loading) c.load().catch(() => {}); else if (c.loaded && !c.loading) c.quickSync?.(); }
       else if (P.els) UI.syncComposer(null);
       P.dirty = false;
       if (P.els?.composer) UI.autoFocus(P.els.composer, kbWas);

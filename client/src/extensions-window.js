@@ -5,7 +5,7 @@ function managerActor(event, windows, file, accountFor) {
   const wc=event?.sender, frame=event?.senderFrame, entry=wc&&windows.get(wc.id);
   if(!entry||wc.isDestroyed()||frame!==wc.mainFrame)throw Error('扩展操作只允许管理窗口主框架');
   let valid=false;
-  try{const url=new URL(frame.url);valid=url.protocol==='file:'&&path.resolve(fileURLToPath(url))===path.resolve(file);}catch{}
+  try{const url=new URL(frame.url),normAsar=p=>path.resolve(p).replace(/\.asar\.unpacked([\\/])/i,'.asar$1');valid=url.protocol==='file:'&&normAsar(fileURLToPath(url))===normAsar(file);}catch{}
   if(!valid||!accountFor(entry.owner))throw Error('扩展管理窗口或账号已关闭');
   return entry;
 }

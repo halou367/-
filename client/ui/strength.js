@@ -17,7 +17,7 @@ const Strength = (() => {
   /* 版本号写法统一：opus-5-5 / opus-5.5、gpt-5-1 / gpt-5.1 是同一个型号，统一写成点号形式；日期（20250219、06-17）、5-72b 这类不动 */
   const foldVer = n => String(n ?? '').replace(/(?<![\d.])(?<!\d-)([1-9]\d?)-(0|[1-9]\d?)(?=$|[^a-z\d])/gi, '$1.$2');
   const MODEL_MAX_NAME_RE = /^(?:qwen[\d.]*|qwen-\d[\d.]*|glm-[\d.]+|kimi-k\d[\d.]*|gpt-[\d.]+-codex)-max(?:-0\d{3}|-\d{4,8})?$/i;
-  const TIERLESS_BASE_RE = /^(?:(?:qwen[\d.]*|qwen-\d[\d.]*|glm-[\d.]+)-max(?:-0\d{3}|-\d{4,8})?|kimi-k\d[\d.]*|deepseek-v[\d.]+-flash(?:-\d+)?|mimo-v[\d.]+-flash|qwen[\d.]*-flash(?:-next)?|glm-[\d.]+-flash|muse-wonder|muse-spark-open|beam-[\d.]+-\d+b-a\d+b)$/i;
+  const TIERLESS_BASE_RE = /^(?:(?:qwen[\d.]*|qwen-\d[\d.]*|glm-[\d.]+)-max(?:-0\d{3}|-\d{4,8})?|kimi-k\d[\d.]*|deepseek-v[\d.]+-flash(?:-\d+)?|mimo-v[\d.]+-flash|qwen[\d.]*-flash(?:-next)?|glm-[\d.]+-flash|muse-wonder|muse-spark-open|beam-[\d.]+-\d+b-a\d+b|solar-pro4|kibitz|kalmia|cynosure|horizon-[\d.]+|inkling-small|hy4-preview|step-[\d.]+-preview|qwen[\d.]*-\d+b(?:-a\d+b)?|minimax-m[\d.]+)$/i;
   function canon(n) { const k = String(n ?? ''); return memo(canonMemo, k, () => canon0(k)); }
   function canon0(n) {
     const rawStr = String(n || '');
@@ -26,22 +26,23 @@ const Strength = (() => {
     const parenTier = /\s*\((none|minimal|low|medium|high|xhigh|max)(?:\/(?:none|minimal|low|medium|high|xhigh|max))?\)\s*$/i.exec(n);
     if (parenTier) {
       const tr = parenTier[1].toLowerCase();
-      const rawStem = n.slice(0, parenTier.index).trim().replace(/\s+/g, '-').toLowerCase().replace(/^qwen-(\d)/i, 'qwen$1');
-      const isNoTier = MODEL_MAX_NAME_RE.test(rawStem) || TIERLESS_BASE_RE.test(rawStem);
+      const rawStem = n.slice(0, parenTier.index).trim().replace(/\s+/g, '-').toLowerCase().replace(/^qwen-(\d)/i, 'qwen$1').replace(/^solar-pro-(\d)/i, 'solar-pro$1').replace(/^hy-(\d)/i, 'hy$1');
+      const isNoTier = MODEL_MAX_NAME_RE.test(rawStem) || (TIERLESS_BASE_RE.test(rawStem) && !(tr === "max" && /^glm-[\d.]+$/i.test(rawStem)));
       const stem = isNoTier ? rawStem : rawStem.replace(/-(none|minimal|low|medium|high|xhigh|max)$/i, '');
       n = isNoTier ? rawStem : (stem.endsWith('-' + tr) ? stem : (stem + '-' + tr));
-    } else if (/\s/.test(n) && /^(?:claude|opus|sonnet|haiku|fable|gpt|chatgpt|o[134]|gemini|grok|kimi|qwen|deepseek|beam|glm|minimax|mimo|llama|muse|mistral|solar)\b/i.test(n)) {
-      n = n.trim().replace(/\s+/g, '-').toLowerCase();
+    } else if (/\s/.test(n) && /^(?:claude|opus|sonnet|haiku|fable|gpt|chatgpt|o[134]|gemini|grok|kimi|qwen|deepseek|beam|glm|minimax|mimo|llama|muse|mistral|solar|horizon|step|hy|inkling|nemotron)(?:[\d.]|\b)/i.test(n)) {
+      n = n.trim().replace(/\s+/g, '-').toLowerCase().replace(/^qwen-(\d)/i, 'qwen$1').replace(/^solar-pro-(\d)/i, 'solar-pro$1').replace(/^hy-(\d)/i, 'hy$1');
     }
     n = n.replace(/(\d)(none|minimal|low|medium|high|xhigh|max)\b/gi, '$1-$2');
     n = foldVer(n); n = n.replace(/^muse(?:-(low|medium|high|xhigh|max))?$/i, (_, t) => 'muse-spark-1.3-' + String(t || 'max').toLowerCase()).replace(/gpt-5\.6-luna/ig, 'gpt-6-luna').replace(/\bbarium-bb-v2-4xts(?:-(?:agent|public|vertex))?(?:-(low|medium|high|max))?\b/ig, (_, t) => 'gemini-4-argon-' + String(t || 'high').toLowerCase()); n = n.replace(/\s*[·•・#]\s*\d{1,4}\s*$/, '').replace(/[-_]0\d{2}$/, '').trim(); if (!n) return '';   // 旧版序号后缀：opus-5.5 · 001 / -002 → 同一个型号
     n = n.replace(/^((?:qwen[\d.]*|qwen-\d[\d.]*|glm-[\d.]+)-max(?:-0\d{3}|-\d{4,8})?)-(?:none|minimal|low|medium|high|xhigh|max)$/i, '$1');
-    n = n.replace(/^(kimi-k\d[\d.]*|deepseek-v[\d.]+-flash(?:-\d+)?|mimo-v[\d.]+-flash|qwen[\d.]*-flash(?:-next)?|muse-wonder|muse-spark-open)-(?:none|minimal|low|medium|high|xhigh|max)$/i, '$1');
+    n = n.replace(/^(kimi-k\d[\d.]*|deepseek-v[\d.]+-flash(?:-\d+)?|mimo-v[\d.]+-flash|qwen[\d.]*-flash(?:-next)?|muse-wonder|muse-spark-open|solar-pro4|kibitz|kalmia|cynosure|horizon-[\d.]+|inkling-small|hy4-preview|step-[\d.]+-preview)-(?:none|minimal|low|medium|high|xhigh|max)$/i, '$1');
     n = n.replace(/-(none|minimal|low|medium|high|xhigh|max)(?:-\1)+$/i, '-$1');   // opus-5-high-high → opus-5-high（档位重复）
     n = n.replace(/-(none|minimal|low|medium|high|xhigh|max)-(none|minimal|low|medium|high|xhigh|max)$/i, '-$1');
     n = n.replace(/-([a-z][a-z0-9]{0,14})(?:-\1)+$/i, '-$1');   // fable-5-v2-v2 → fable-5-v2（后缀重复；只处理字母开头的，5-5 这种版本号不动）
     const m = /^[\w.\/:@+-]{3,90}$/.test(n) && /^([a-z][a-z0-9]{2,15})[-_]+(.+)$/i.exec(n);   // 只处理像型号 ID 的名字（不含空格）
     if (m && !Brand.of(m[1]) && !TIER_RE.test(m[1]) && vendorFirst(m[2])) { addCode(m[1]); return m[2] + '-' + m[1].toLowerCase() + (qm ? '?' : ''); }
+    if (TIERLESS_BASE_RE.test(n)) n = n.toLowerCase();
     return n + (qm ? '?' : '');
   }
   // 请求 / 响应 / 内部三个来源合成最终名称。以响应型号为基准（最可靠），内部名带厂商和档位时直接用内部名
@@ -115,6 +116,7 @@ const Strength = (() => {
     for (const [sid, m] of Object.entries(Models.all || {})) {
       const n = m?.name && !m.guess && !m.pendingConfirm ? canon(m.name) : '';
       if (!n || !Brand.of(n) || /\s/.test(n)) continue;
+      const k = sid;
       if (!S[n]) { S[n] = []; add.add(n); }
       const saneSc = v => okScore(v) ? v : null;
       const fastSc = (m.routed && okScore(m.reverseScore))

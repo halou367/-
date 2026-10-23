@@ -112,23 +112,27 @@ const Fmt = {
     const avgChunk = tN >= 3 ? tChars / tN : 0;
     const tidCnt = Number(f.tidCount || 0), tidChars = Number(f.tidChars || 0);
     const tidAvg = tidCnt > 0 ? tidChars / tidCnt : 0;
-    const isOpenAiChunk = (tN >= 15 && avgChunk > 0 && avgChunk <= 3.8) || (tidCnt >= 18 && tidAvg > 0 && tidAvg <= 22);
+    const isOpenAiChunk = (tN >= 15 && avgChunk > 0 && avgChunk <= 3.8) || (tN < 6 && tidCnt >= 18 && tidAvg > 0 && tidAvg <= 4.2);
     const isGeminiChunk = !isOpenAiChunk && tN >= 3 && tN <= 28 && avgChunk >= 28.0;
-    const isClaudeChunk = !isOpenAiChunk && !isGeminiChunk && ((tN >= 15 && avgChunk >= 4.0 && avgChunk <= 25.0) || (tN >= 6 && avgChunk >= 4.0 && avgChunk <= 25.0 && rs.length > 0) || (tidCnt > 0 && tidCnt <= 8 && (f.tools || 0) > 0 && !(tN >= 3 && avgChunk >= 28.0) && !isOpenAiChunk));
+    const isMuseBufferedTool = tidCnt > 0 && tidCnt <= 6 && tidAvg >= 2000 && (f.rE || 0) === 0 && (f.rWireEmptyDeltas || 0) === 0 && rs.length >= 2;
+    const isClaudeChunk = !isOpenAiChunk && !isGeminiChunk && !isMuseBufferedTool && ((tN >= 15 && avgChunk >= 4.0 && avgChunk <= 25.0 && (rs.length > 0 || (f.rE || 0) > 0 || (f.rWireEmptyDeltas || 0) > 0 || tidCnt > 0)) || (tN >= 6 && avgChunk >= 4.0 && avgChunk <= 25.0 && rs.length > 0) || (tidCnt > 0 && tidCnt <= 8 && tidAvg < 2000 && (f.tools || 0) > 0 && !(tN >= 3 && avgChunk >= 28.0) && !isOpenAiChunk));
     const isTc = i => /^tc_[A-Za-z0-9_-]{8,}$/.test(i);
     if (all.every(i => isTc(i) || num(i))) {
       const hasSharedTc = rs.some(id => isTc(id) && tx.includes(id));
-      if (isOpenAiChunk || (rs.length > 0 && rs.some(isTc) && tN < 6 && tx.length > 0 && tx.every(num) && (f.rE || 0) === 0 && (f.rWireEmptyDeltas || 0) === 0)) {
+      if (isOpenAiChunk) {
         return ret('gpt', true, `极碎流块(${avgChunk ? avgChunk.toFixed(1) + '字/块' : '细粒度工具流'}·OpenAI 闭源特征)`);
       }
       if (isGeminiChunk) {
         return ret('gemini', true, `大块文本流(${avgChunk.toFixed(1)}字/块·Google Gemini 特征)`);
       }
-      if (isClaudeChunk || (rs.length > 0 && ((f.rWireEmptyDeltas || 0) > 0 || (f.rE || 0) > 0 || hasSharedTc))) {
+      if (!isOpenAiChunk && !isMuseBufferedTool && (isClaudeChunk || ((tN > 0 || tidCnt > 0) && rs.length > 0 && ((f.rWireEmptyDeltas || 0) > 0 || (f.rE || 0) > 0 || hasSharedTc)))) {
         return ret('claude', true, `中等词块流(${avgChunk ? avgChunk.toFixed(1) + '字/块' : '整块工具流'}·Anthropic Claude 闭源特征)`);
       }
       if (!rs.length && ((f.tools || 0) > 0 || (tN > 0 && tN <= 22 && tChars >= 320)) && (tN === 0 || avgChunk >= 25.0)) {
         return ret('gemini', true, '编码零思考块 + 大块文本流（Google Gemini 特征）');
+      }
+      if (rs.length >= 6 && rs.every(isTc) && (f.rN || 0) === 0 && (f.rE || 0) === 0 && !(f.tools > 0)) {
+        return ret('gpt', false, '多段 tc_ 空思考块且无工具调用（OpenAI 网关特征）');
       }
       return null;
     }

@@ -53,7 +53,7 @@
     const comp = completed(chat);
     for (const m of comp) {
       push({ type: 'start', messageId: m.id });
-      const meta = m._sseMeta || hints.get(m.id) || (m === comp.at(-1) ? (hints.get('_active') || hints.get('_last')) : null);
+      const meta = m._sseMeta || hints?.get?.(m.id) || (m === comp.at(-1) ? (hints?.get?.('_active') || hints?.get?.('_last')) : null);
       const mFmt = m._fmt || (m === comp.at(-1) ? chat?.fmt : null);
       let pushedReasonStart = false, pushedTextStart = false;
       for (const e of meta?.ids || []) {
@@ -244,6 +244,8 @@
     const toolIds = [];
     const allToolCalls = [];
     let allVisText = '';
+    let allReasonText = '';
+    let totalBashCount = 0;
     const msgVisTokensById = {}, msgReasonTokensById = {}, msgStepCountById = {}, msgDurationMsById = {};
     for (const m of msgs) {
       let msgReason = 0, msgVisText = '', msgReasonText = '', msgTools = 0, bashCount = 0, preToolChars = 0, interToolChars = 0, pendingInter = 0, seenTool = false;
@@ -256,6 +258,7 @@
           if (hasVisibleReasoningText(rTxt)) {
             visibleReasoning = true;
             msgReasonText += rTxt;
+            allReasonText += (allReasonText ? String.fromCharCode(10) : '') + rTxt;
             reasoningTextLength += rTxt.length;
             exactReasonTokens += (typeof P.estimateTokens === 'function' ? P.estimateTokens(rTxt) : Math.round(rTxt.length / 3.5));
           }
@@ -275,7 +278,7 @@
           const tid = String(p.toolCallId || p.id || '');
           if (tid && !toolIds.includes(tid)) toolIds.push(tid);
           const tn = String(p.toolName || p.name || pt || '');
-          if (/bash|shell|exec|run_command/i.test(tn)) bashCount += 1;
+          if (/bash|shell|exec|run_command/i.test(tn)) { bashCount += 1; totalBashCount += 1; }
           if (/ask_user|askuser/i.test(tn)) hasAskUserTool = true;
           if (/web_search|websearch/i.test(tn)) hasWebSearchTool = true;
           const pIn = p.input ?? p.args;
@@ -307,18 +310,52 @@
         const mt0 = Number(mf?.t0 || mf?.tStart) || 0;
         const tm = m.metadata?.timing;
         const metaDur = (tm?.startedAt && tm?.completedAt && tm.completedAt > tm.startedAt) ? Math.round(tm.completedAt - tm.startedAt) : 0;
-        const mDur = mf && mf.tEnd > mt0 ? Math.round(mf.tEnd - mt0) : (mf?.gen > 0 ? Math.round(mf.gen) : metaDur);
+        const mDur = (mf && mf.tEnd > mt0 && (mf.tEnd - mt0) < 3600000) ? Math.round(mf.tEnd - mt0) : ((mf?.gen > 0 && mf.gen < 3600000) ? Math.round(mf.gen) : metaDur);
         if (mDur >= 50) msgDurationMsById[m.id] = mDur;
       }
       visChars += msgVisText.length;
       visTokens += mVisTok;
     }
     const fmt = chat?.fmt || msgs.at(-1)?._fmt || msgs.at(-1)?.fmt;
+    if (Array.isArray(fmt?.tcs)) {
+      for (const tc of fmt.tcs) {
+        const tid = String(tc?.id || '');
+        if (tid && !toolIds.includes(tid)) toolIds.push(tid);
+      }
+    }
+    for (const m of msgs) {
+      const mTcs = m?._fmt?.tcs || m?.fmt?.tcs;
+      if (Array.isArray(mTcs)) {
+        for (const tc of mTcs) {
+          const tid = String(tc?.id || '');
+          if (tid && !toolIds.includes(tid)) toolIds.push(tid);
+        }
+      }
+    }
+    const uuidV7Ms = id => {
+      const hex = String(id || '').replace(/-/g, '');
+      if (hex.length !== 32 || !/^[0-9a-f]{32}$/i.test(hex)) return 0;
+      const ms = parseInt(hex.slice(0, 12), 16);
+      return (ms > 1700000000000 && ms < 2100000000000) ? ms : 0;
+    };
+    let uuidDurMs = 0;
+    const allChatMsgs = Array.isArray(chat?.messages) ? chat.messages : [];
+    for (let mi = 0; mi < allChatMsgs.length; mi++) {
+      const cm = allChatMsgs[mi];
+      if (!cm || cm.role !== 'assistant') continue;
+      const prevU = mi > 0 && allChatMsgs[mi - 1]?.role === 'user' ? allChatMsgs[mi - 1] : null;
+      const uMs = uuidV7Ms(prevU?.id) || uuidV7Ms(chat?.sid);
+      const aMs = uuidV7Ms(cm.id);
+      if (uMs > 0 && aMs > uMs + 250 && aMs - uMs < 3600000) {
+        uuidDurMs = aMs - uMs;
+      }
+    }
     const tStart = Number(fmt?.t0 || fmt?.tStart) || 0;
     const lastIdForDur = msgs.at(-1)?.id;
-    const fallbackDurMs = (lastIdForDur && msgDurationMsById[lastIdForDur]) || Object.values(msgDurationMsById).reduce((mx, v) => Math.max(mx, Number(v) || 0), 0);
-    const durSec = fmt && fmt.tEnd > tStart ? (fmt.tEnd - tStart) / 1000 : (fmt?.gen > 0 ? fmt.gen / 1000 : (fallbackDurMs >= 50 ? fallbackDurMs / 1000 : 0));
-    const turnDurationMs = durSec >= 0.05 ? Math.round(durSec * 1000) : 0;
+    const fallbackDurMs = (lastIdForDur && msgDurationMsById[lastIdForDur]) || Object.values(msgDurationMsById).reduce((mx, v) => Math.max(mx, Number(v) || 0), 0) || uuidDurMs;
+    const hasValidFmtDur = Boolean(fmt && tStart > 0 && fmt.tEnd > tStart && (fmt.tEnd - tStart) < 3600000);
+    const durSec = hasValidFmtDur ? (fmt.tEnd - tStart) / 1000 : ((fmt?.gen > 0 && fmt.gen < 3600000) ? fmt.gen / 1000 : (fallbackDurMs >= 50 ? fallbackDurMs / 1000 : 0));
+    const turnDurationMs = durSec >= 0.05 && durSec < 3600 ? Math.round(durSec * 1000) : (fallbackDurMs >= 50 && fallbackDurMs < 3600000 ? Math.round(fallbackDurMs) : 0);
     let fmtTN = Number(fmt?.tN) || 0;
     let fmtChars = Number(fmt?.tChars) || 0;
     let fmtTidCount = Number(fmt?.tidCount) || 0;
@@ -375,8 +412,21 @@
       }
     }
     if (!fmtChars) fmtChars = visChars;
-    let avgChunk = fmtTN >= 4 && fmtChars > 0 ? Number((fmtChars / fmtTN).toFixed(2)) : 0;
-    const cps = durSec >= 0.5 && fmtChars >= 60 ? Math.round(fmtChars / durSec) : null;
+    const prevEvEarly = chat?._streamEvidence || (typeof root.Models !== 'undefined' && chat?.sid ? root.Models.get?.(chat.sid)?.streamEvidence : null);
+    let sseMemoEarly = null;
+    try {
+      if (chat?.sid && typeof localStorage !== 'undefined') {
+        const rawMemo = localStorage.getItem('ati.v4.sseMemo.' + chat.sid);
+        if (rawMemo) sseMemoEarly = JSON.parse(rawMemo);
+      }
+    } catch {}
+    if (fmtTN < 4 && (Number(sseMemoEarly?.deltaCount || sseMemoEarly?.textDeltaCount) || 0) >= 4) {
+      fmtTN = Number(sseMemoEarly.deltaCount || sseMemoEarly.textDeltaCount);
+      if ((Number(sseMemoEarly.totalChars || sseMemoEarly.textDeltaChars) || 0) > 0) fmtChars = Number(sseMemoEarly.totalChars || sseMemoEarly.textDeltaChars);
+    }
+    let avgChunk = fmtTN >= 4 && fmtChars > 0 ? Number((fmtChars / fmtTN).toFixed(2)) : (Number(prevEvEarly?.avgChunk) || Number(sseMemoEarly?.avgChunk) || 0);
+    const cpsChars = (uuidDurMs >= 50 && !hasValidFmtDur && !(fmt?.gen > 0 && fmt.gen < 3600000)) ? (fmtChars + Math.max(fmtTidChars, toolInputChars)) : fmtChars;
+    const cps = (durSec >= 0.5 && durSec < 3600 && cpsChars >= 60) ? Math.round(cpsChars / durSec) : ((Number(sseMemoEarly?.cps) || 0) > 0 ? Number(sseMemoEarly.cps) : null);
     if (fmtReasonBlocks > 0 && totalReasonParts === 0) {
       totalReasonParts = fmtReasonBlocks;
       if (fmtReasonBlocks > maxReason) maxReason = fmtReasonBlocks;
@@ -387,9 +437,28 @@
     const hasCompatStreamId = allIds.some(i => /^(?:txt|reasoning)-\d+$/i.test(i) || /^[0-9a-z]{9}$/.test(i));
     const hasSharedTcId = rIds.some(i => /^tc_[A-Za-z0-9_-]{8,}$/.test(i) && tIds.includes(i));
     const fmtTidAvg = fmtTidCount > 0 ? fmtTidChars / fmtTidCount : 0;
-    const isOpenAiTcChunk = Boolean((fmtTN >= 15 && avgChunk > 0 && avgChunk <= 3.8) || (fmtTidCount >= 18 && fmtTidAvg > 0 && fmtTidAvg <= 22) || (rIds.length > 0 && fmtTN < 6 && tIds.length > 0 && tIds.every(i => /^\d+$/.test(i)) && rWireDeltas === 0));
+    const combinedCodeAndText = allVisText + ' ' + allToolCalls.map(tc => typeof tc?.args === 'string' ? tc.args : JSON.stringify(tc?.args || '')).join(' ');
+    const prefersReducedMotion = /prefers-reduced-motion/i.test(combinedCodeAndText) ? 1 : 0;
+    const boxCommentCount = (combinedCodeAndText.match(/[═─━]{4,}/g) || []).length;
+    const emDashCount = (allVisText.match(/—/g) || []).length;
+    const isOpenAiTcChunk = Boolean((fmtTN >= 15 && avgChunk > 0 && avgChunk <= 3.8) || (fmtTN < 6 && fmtTidCount >= 18 && fmtTidAvg > 0 && fmtTidAvg <= 4.2));
+    const effToolCount = Math.max(toolIds.length, allToolCalls.length);
+    const isMuseBufferedToolChunk = Boolean(
+      !isOpenAiTcChunk && rWireDeltas === 0 && !hasSharedTcId &&
+      totalReasonParts >= 3 && msgs.length <= 2 && effToolCount >= 2 &&
+      ((fmtTidCount > 0 && fmtTidCount <= 6 && fmtTidAvg >= 1800) || (totalPreToolChars >= 55 && (emDashCount >= 2 || boxCommentCount >= 1)))
+    );
+    const isSingleWriteNoReason = Boolean(
+      !isOpenAiTcChunk && totalReasonParts === 0 && rWireDeltas === 0 && fmtTidCount === 0 &&
+      msgs.length === 1 && effToolCount === 1 && toolInputChars >= 35000 && prefersReducedMotion >= 1 && boxCommentCount === 0
+    );
     const isGeminiTcChunk = Boolean(!isOpenAiTcChunk && fmtTN >= 3 && (fmtTN / Math.max(1, msgs.length)) <= 28 && avgChunk >= 28.0);
-    const isClaudeTcChunk = Boolean(!isOpenAiTcChunk && !isGeminiTcChunk && ((fmtTN >= 6 && avgChunk >= 4.0 && avgChunk <= 25.0) || (fmtTidCount > 0 && fmtTidCount <= 8 && toolIds.length > 0 && !(fmtTN >= 3 && avgChunk >= 28.0)) || rWireDeltas > 0 || hasSharedTcId));
+    const isClaudeTcChunk = Boolean(
+      !isOpenAiTcChunk && !isGeminiTcChunk && !isMuseBufferedToolChunk && !isSingleWriteNoReason &&
+      (((fmtTN >= 6 || avgChunk >= 4.0) && avgChunk >= 4.0 && avgChunk <= 25.0 && (totalReasonParts > 0 || rWireDeltas > 0 || fmtTidCount > 0 || rIds.some(i => /^tc_[A-Za-z0-9_-]{8,}$/.test(i)))) ||
+       (fmtTidCount > 0 && fmtTidCount <= 8 && fmtTidAvg < 1800 && toolIds.length > 0 && !(fmtTN >= 3 && avgChunk >= 28.0)) ||
+       rWireDeltas > 0 || hasSharedTcId)
+    );
     if (isGeminiTcChunk && !visibleReasoning) {
       totalReasonParts = 0;
       maxReason = 0;
@@ -398,7 +467,8 @@
     if (allIds.some(i => /^(?:msg|rs)_[0-9a-fA-Z_-]{10,}/i.test(i))) streamIdPrefix = 'openai-rs';
     else if (isGeminiTcChunk && !visibleReasoning) streamIdPrefix = 'numeric-only';
     else if (rIds.length > 0 && rIds.some(i => /^tc_[A-Za-z0-9_-]{8,}$/.test(i)) && !visibleReasoning && (Number(fmt?.rChars) || 0) === 0) {
-      streamIdPrefix = isClaudeTcChunk ? 'claude-tc-empty' : isOpenAiTcChunk ? 'openai-tc-empty' : null;
+      const isMultiTcNoTools = rIds.length >= 6 && rIds.every(i => /^tc_[A-Za-z0-9_-]{8,}$/.test(i)) && rWireDeltas === 0 && effToolCount === 0 && !isClaudeTcChunk;
+      streamIdPrefix = (isOpenAiTcChunk || isMultiTcNoTools) ? 'openai-tc-empty' : isClaudeTcChunk ? 'claude-tc-empty' : null;
     }
     else if (allIds.length > 0 && allIds.every(i => /^\d+$/.test(i))) streamIdPrefix = 'numeric-only';
     const isGeminiSummary = streamIdPrefix === 'numeric-only' && /^\s*\*\*[^\n*]{2,80}\*\*/.test(String(fmt?.rHead || ''));
@@ -409,8 +479,8 @@
     const isOpenAiWireId = streamIdPrefix === 'openai-rs' || streamIdPrefix === 'openai-tc-empty';
     let reasoningSignature = null;
     if (visibleReasoning) reasoningSignature = 'visible-text';
+    else if (totalReasonParts > 0 && (isOpenAiWireId || isOpenAiTcChunk || isMuseBufferedToolChunk)) reasoningSignature = 'markers-only';
     else if (totalReasonParts > 0 && (rWireDeltas > 0 || streamIdPrefix === 'claude-tc-empty' || isClaudeTcChunk)) reasoningSignature = 'empty-deltas';
-    else if (totalReasonParts > 0 && (isOpenAiWireId || isOpenAiTcChunk)) reasoningSignature = 'markers-only';
     const prevEv = chat?._streamEvidence || (typeof root.Models !== 'undefined' && chat?.sid ? root.Models.get?.(chat.sid)?.streamEvidence : null);
     if (prevEv && !visibleReasoning && !prevEv.visibleReasoning) {
       if (!streamIdPrefix && prevEv.streamIdPrefix && (prevEv.streamIdPrefix !== 'openai-tc-empty' || isOpenAiTcChunk)) streamIdPrefix = prevEv.streamIdPrefix;
@@ -444,13 +514,22 @@
     const noReasoningParts = msgs.length > 0 && totalReasonParts === 0 && !visibleReasoning;
     const hiddenReasoning = totalReasonParts > 0 && !visibleReasoning;
     const hasPelicanSvg = Boolean(sawPelicanWord && sawSvgTag);
-    const stylometry = typeof P.extractStylometryAndToolHabits === 'function' ? P.extractStylometryAndToolHabits(allVisText, allToolCalls) : null;
+    const stylometry = typeof P.extractStylometryAndToolHabits === 'function'
+      ? P.extractStylometryAndToolHabits(allVisText, allReasonText, {
+          totalToolCalls: effToolCount,
+          totalSteps: totalStepCount,
+          preToolChars: totalPreToolChars,
+          interToolChars: totalInterToolChars,
+          bashCount: totalBashCount,
+          toolNames: allToolCalls.map(t => t.toolName).filter(Boolean),
+        })
+      : null;
     const toolCallIdShape = toolIds.some(id => /^(?:toolu_|srvtoolu_)/i.test(id)) ? 'toolu'
       : toolIds.some(id => /^call_[0-9a-f]{24,}/i.test(id)) ? 'call_hex'
       : toolIds.some(id => /^call_[A-Za-z0-9_-]{20,}/.test(id)) ? 'call_b64'
       : null;
-    const streamIdShape = (streamIdPrefix === 'claude-tc-empty' || hasSharedTcId) ? 'claude_tc'
-      : (streamIdPrefix === 'openai-rs' || streamIdPrefix === 'openai-tc-empty') ? 'openai_rs'
+    const streamIdShape = (streamIdPrefix === 'openai-rs' || streamIdPrefix === 'openai-tc-empty' || isOpenAiTcChunk) ? 'openai_rs'
+      : (streamIdPrefix === 'claude-tc-empty' || (!isMuseBufferedToolChunk && hasSharedTcId)) ? 'claude_tc'
       : (streamIdPrefix === 'numeric-only') ? 'numeric'
       : null;
     const fpRec = (typeof root.Models !== 'undefined' && chat?.sid ? root.Models.get?.(chat.sid)?.fingerprint : null);
@@ -501,6 +580,13 @@
       hasWebSearchTool,
       toolIds,
       toolFamily,
+      isOpenAiTcChunk,
+      isClaudeTcChunk,
+      hasSharedTcId,
+      rWireDeltas,
+      prefersReducedMotion,
+      boxCommentCount,
+      emDashCount,
     };
   }
   function cleanModelLabel(s) {
@@ -596,7 +682,8 @@
     const observations = state.ledger?.observations || 0;
     const effResOf = row => Number.isFinite(row.effectiveResidual) ? row.effectiveResidual : (Number.isFinite(row.scoreResidual) ? row.scoreResidual : row.residual);
     const isRoutedOrWeak = Boolean(b?.routeSwitched || b?.effortDowngraded);
-    const candidates = (b?.candidates || []).slice(0,24).map(row => {
+    const hasValidCostObs = Boolean((observations > 0 || (Number(b?.observedBase) || 0) > 0) && state.status !== 'forbidden' && state.status !== 'error');
+    const candidates = (hasValidCostObs ? (b?.candidates || []) : []).slice(0,48).map(row => {
       const er = effResOf(row);
       const m = C.residualToConfidence(er);
       const candId = row.effortProfile?.stealthModelId || row.id;
@@ -608,7 +695,7 @@
         match:m,
         predictedBaseUsd:amount(row.predictedBase), averageMatch:state.ledger?.models?.[row.id]?.confidence ?? m,
         observations:state.ledger?.models?.[row.id]?.observations || 0, cacheRateSource:row.cacheRateSource || null,
-        diophantinePassed:row.diophantinePassed !== false,
+        diophantinePassed: row.diophantinePassed === true ? true : (row.diophantinePassed === false ? false : null),
         matchedVariant:row.matchedVariant || '2026-10-15',
         priceTier:row.priceTier || 1,
         solverTier:row.solverTier || 1,
@@ -648,6 +735,8 @@
     if (i?.cacheApprox) missing.push('缓存单价为历史近似值，100%吻合也不代表身份确认');
     return {
       format:'brana-billing-diagnostics/v1',
+      zeroQuotaRanked: state.zeroQuotaRanked || [],
+      zeroQuotaInfo: state.zeroQuotaInfo || null,
       read:{status:state.status,httpStatus:state.httpStatus ?? null,at:state.at || null,retryAt:state.retryAt || null},
       samples:{pairedMessages:used.length,observations,latestCovered,activeChannels:b?.activeChannels || []},
       family:i ? {label:i.family.label,kind:i.family.evidenceKind,strength:i.family.evidenceStrength,count:i.family.evidenceCount || 0,
@@ -776,14 +865,23 @@
       const pendMsgs = opts?.allowPending ? (chat?.messages || []).filter(m => m?.role === 'assistant' && m.id && !(m.parts || []).some(p => p.type === 'error')).slice(-MAX_MESSAGES) : [];
       const activeMsgs = compMsgs.length ? compMsgs : pendMsgs;
       if ((chat.busy && !opts?.allowPending) || !activeMsgs.length) { s.status = 'waiting'; changed(chat.sid); return Promise.resolve(s); }
+      const snapHints = hints.get(chat)?.messages ? new Map(Array.from(hints.get(chat).messages.entries(), ([k, v]) => [k, v ? { ...v, toolIds: Array.isArray(v.toolIds) ? v.toolIds.slice() : [], textIds: Array.isArray(v.textIds) ? v.textIds.slice() : [] } : v])) : undefined;
+      const snapshot = { sid: chat.sid, _streamEvidence: chat._streamEvidence ? { ...chat._streamEvidence } : null, fmt: chat.fmt ? { ...chat.fmt, ids: Array.isArray(chat.fmt.ids) ? chat.fmt.ids.slice() : [] } : null, fmtGuess: chat.fmtGuess || null, messages: activeMsgs.map(m => ({ ...m, webdev: m.webdev ? JSON.parse(JSON.stringify(m.webdev)) : undefined, metadata: { ...(m.metadata ? JSON.parse(JSON.stringify(m.metadata)) : {}), pending: false }, parts: (m.parts || []).map(p => ({ ...p, input: p?.input && typeof p.input === 'object' ? JSON.parse(JSON.stringify(p.input)) : p?.input })) })) };
       const blocked = opts?.bypassCooldown ? null : cooldowns.get(owner);
       const until = Math.max(opts?.force ? 0 : s.nextAt, blocked?.until || 0);
-      if (clock() < until) { if (blocked && blocked.until > clock()) { s.status = blocked.status; s.error = blocked.error; s.httpStatus = blocked.httpStatus; } s.retryAt = until; changed(chat.sid); return Promise.resolve(s); }
-      const snapshot = { sid: chat.sid, _streamEvidence: chat._streamEvidence ? { ...chat._streamEvidence } : null, fmt: chat.fmt ? { ...chat.fmt, ids: Array.isArray(chat.fmt.ids) ? chat.fmt.ids.slice() : [] } : null, fmtGuess: chat.fmtGuess || null, messages: activeMsgs.map(m => ({ ...m, metadata: { ...m.metadata, pending: false }, parts: (m.parts || []).map(p => ({ ...p })) })) };
+      if (clock() < until) {
+        if (blocked && blocked.until > clock()) { s.status = blocked.status; s.error = blocked.error; s.httpStatus = blocked.httpStatus; }
+        s.zeroQuotaInfo = null;
+        s.zeroQuotaRanked = [];
+        s.retryAt = until;
+        changed(chat.sid);
+        return Promise.resolve(s);
+      }
+      const reqSeq = (s._reqSeq = (s._reqSeq || 0) + 1);
       s.status = 'loading'; s.error = ''; s.httpStatus = null; s.retryAt = 0; s.nextAt = clock() + 15000; changed(chat.sid);
       const work = Promise.resolve().then(() => request('/api/chat/' + encodeURIComponent(chat.sid) + '/cost?includeSession=true', { bg: true, noRelogin: true, timeout: 15000 }))
         .then(cost => {
-          if (account() !== owner || states.get(JSON.stringify([owner, chat.sid])) !== s) return;
+          if (s._reqSeq !== reqSeq || account() !== owner || states.get(JSON.stringify([owner, chat.sid])) !== s) return;
           cooldowns.delete(owner);
           if (!validCost(cost)) throw Error('计费返回格式或计价策略不支持');
           const compIds = new Set(snapshot.messages.map(m => m.id));
@@ -793,7 +891,7 @@
           }
           const mergedMessages = { ...s.costLedger, ...(cost.messages || {}) };
           const mergedCost = { ...cost, messages: mergedMessages };
-          const info = analyze(snapshot, mergedCost, catalog, hints.get(chat)?.messages);
+          const info = analyze(snapshot, mergedCost, catalog, snapHints || hints.get(chat)?.messages);
           if (snapshot._streamEvidence) chat._streamEvidence = { ...(chat._streamEvidence || {}), ...snapshot._streamEvidence };
           if (s.generation !== revision) { s.ledger = C.emptyLedger(); s.generation = revision; }
           s.coveredIds = Object.keys(cost.messages || {}); if (Object.keys(mergedMessages).length > s.coveredIds.length) s.coveredIds = Object.keys(mergedMessages);
@@ -813,35 +911,20 @@
             s.nextAt = clock() + 350;
           }
         }).catch(e => {
-          if (account() !== owner) return;
+          if (s._reqSeq !== reqSeq || account() !== owner) return;
           if (e?.rateLimitedLocally) { s.nextAt = clock() + 3000; return; }
           s.httpStatus = Number.isInteger(e.status) ? e.status : null;
           s.status = [401,403].includes(e.status) ? 'forbidden' : 'error';
           s.error = e.responseFormat ? '计费接口返回网页或验证页面（HTTP ' + e.status + '），请在官方页面完成验证后重试' : e.status === 401 ? '计费接口登录已失效（HTTP 401），请重新登录后重试' : e.status === 403 ? '计费接口拒绝读取（HTTP 403），请在官方页面检查费用显示与账号权限' : e.status === 429 ? '计费接口限流（HTTP 429），请等待服务端重试时间' : '计费读取失败：' + String(e.message || e).slice(0,160);
           if (s.ranked?.length) s.lastRanked = s.ranked;
           if (s.info && !s.info.reason) s.lastInfo = s.info;
-          if ([401, 403].includes(e.status) && snapshot?.messages?.length) {
-            try {
-              const zInfo = analyze(snapshot, { messages: {} }, catalog, hints.get(chat)?.messages, { allowZeroQuota: true });
-              const zCands = zInfo?.result?.baseMatch?.candidates || [];
-              if (zCands.length) {
-                s.zeroQuotaInfo = zInfo;
-                s.zeroQuotaRanked = zCands.slice(0, 6).map(c => ({
-                  id: c.effortProfile?.stealthModelId || c.id,
-                  label: cleanModelLabel(c.effortProfile?.stealthModelLabel || c.dynamicLabel || c.label || c.id),
-                  confidence: C.residualToConfidence(c.effectiveResidual ?? c.scoreResidual ?? c.residual ?? 1),
-                  zeroQuotaMode: true,
-                  matchedDims: c.matchedDims || [],
-                  inferredEffort: c.inferredEffort || null,
-                }));
-              }
-            } catch {}
-          }
+          s.zeroQuotaInfo = null;
+          s.zeroQuotaRanked = [];
           s.info = null; s.payments = []; s.ranked = []; s.ledger = C.emptyLedger();
           const delay = Math.max(e.status === 403 ? 120000 : e.status === 401 ? 15000 : e.status === 429 ? 60000 : 30000, Number(e.retryAfterMs) || 0);
           s.nextAt = clock() + delay; s.retryAt = s.nextAt;
           if (e.status === 403 || e.status === 429) cooldowns.set(owner, { until:s.nextAt, status:s.status, error:s.error, httpStatus:s.httpStatus });
-        }).finally(() => { s.pending = null; if (account() === owner) changed(chat.sid); });
+        }).finally(() => { if (s._reqSeq === reqSeq) s.pending = null; if (account() === owner) changed(chat.sid); });
       s.pending = work.then(() => s); return s.pending;
     }
     function exportSummary(sid) {

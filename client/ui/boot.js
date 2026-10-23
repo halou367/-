@@ -14,15 +14,18 @@ function overlay() {
     if (/(^|\.)arena\.ai$/i.test(location.hostname) && typeof MsgCache !== 'undefined' && typeof chatOf === 'function') {
       let seededSid = '';
       const syncBrowserChatToCache = () => {
-        const m = /^\/agent\/([0-9a-f-]{36})\b/i.exec(location.pathname || '');
-        const sid = m ? m[1] : '';
+        const m = /^\/(agent|c|chat)\/([0-9a-f-]{36})\b/i.exec(location.pathname || '');
+        const sid = m ? m[2] : '';
         if (!sid || sid === seededSid) return;
         seededSid = sid;
         setTimeout(async () => {
           try {
             const existing = await MsgCache.get(sid).catch(() => null);
-            if (existing?.messages?.length && Date.now() - (existing.at || 0) < 60000) return;
+            if (existing?.messages?.length) return;
             const c = chatOf(sid);
+            if (m && m[1].toLowerCase() !== 'agent' && typeof EvalEngine !== 'undefined' && EvalEngine.initEvalFields) {
+              EvalEngine.initEvalFields(c);
+            }
             if (!c.loaded && !c.loading) await c.load().catch(() => {});
           } catch {}
         }, 1200);
@@ -156,7 +159,7 @@ const WebBar = (() => {
       .replace(/(^|[\s,}>(~+])body(?=[.\[:#\s{,>)~+])/g, '$1.anc-r');
     return { c, faces };
   }
-  const OPEN = [['.bmeter', 'quota'], ['.lpbtn', 'leader'], ['.fp-library-btn', 'fplib'], ['.ipit', 'region'], ['.bar-ver', 'update'], ['.bcap', 'gacha']];
+  const OPEN = [['.bmeter', 'quota'], ['.lpbtn', 'leader'], ['.fp-library-btn', 'fplib'], ['.pel-library-btn', 'pelican'], ['.ipit', 'region'], ['.bar-ver', 'update'], ['.bcap', 'gacha']];
   function mount() {
     if (wrap?.isConnected) return true;
     if (typeof Bar === 'undefined' || typeof CSS !== 'string' || !CSS) return false;
@@ -575,6 +578,7 @@ async function init() {
       UI.me = cmFast;
       try {
         History.warm('fast');
+        try { if (typeof RunningTracker !== 'undefined') RunningTracker.prewarmTrackedChats(); } catch {}
         if (fastReturn.sid && /^[\w-]{4,64}$/.test(fastReturn.sid)) {
           const cFast = typeof chatOf === 'function' ? chatOf(fastReturn.sid) : null;
           const isEvalFast = Boolean(fastReturn.evalUrl || (cFast && typeof EvalEngine !== 'undefined' && EvalEngine.isEvalChat?.(cFast)));
@@ -598,6 +602,7 @@ async function init() {
     try {
       const cmCold = Store.get('me:u', null);
       History.warm('fast');
+      try { if (typeof RunningTracker !== 'undefined') RunningTracker.prewarmTrackedChats(); } catch {}
       const hasColdCache = Boolean((cmCold && cmCold.id && !/@example\.invalid$/i.test(String(cmCold.email || ''))) || (History.items && History.items.length > 0));
       if (hasColdCache) {
         UI.me = (cmCold && cmCold.id) ? cmCold : { id: 'local', email: '' };
@@ -940,12 +945,31 @@ async function init() {
     return UI.loginGate(gfail != null ? 'Google 登录页打不开：' + (gfail || '连接失败') + '。已自动重试 3 次，一般是当前线路（节点 / ProxyIP）偶发不稳定：再点一次「使用 Google 登录」通常就好，不行就换个地区再试。' : gback ? 'Google 登录没有完成（中途取消了，或 Google 拒绝了这次登录）。可以再试一次，或用邮箱密码登录。' : undefined); }
   Acct.report();
 
+  try { if (typeof RunningTracker !== 'undefined') RunningTracker.prewarmTrackedChats(); } catch {}
   if (needShell) shell(); else { UI.renderTabs(); }
   UI.shown();
   // 只取第一页（最近 50 条），更早的在侧栏滚到底时再加载（和网页一致）；不再启动时 + 每 4 分钟把全部历史翻一遍
   if (History.err) { History.err = null; History.blocked = false; }
-  if (!History.lastLoad) void History.refresh();
-  setInterval(() => History.auto('tick'), 60000);   // 每分钟看一眼，距上次请求满 3 分钟才真的拉
+  setTimeout(() => { try { if (typeof RunningTracker !== 'undefined') void RunningTracker.resumeOnStartup(); } catch {} }, 600);
+  if (!History.lastLoad || fastReturn) {
+    void History.refresh().then(() => {
+      try { if (typeof RunningTracker !== 'undefined') void RunningTracker.resumeOnStartup(); } catch {}
+      if (!fastReturn) return;
+      try {
+        const topE = History.items?.[0];
+        if (!fastReturn.sid && topE?.id && Date.now() - (typeof entAt === 'function' ? entAt(topE) : 0) < 10 * 60e3 && Tabs.cur?.sid !== topE.id) {
+          Tabs.open(topE.id, { title: topE.title });
+        }
+        const curSid = Tabs.cur?.sid;
+        const curC = curSid ? Chats.get(curSid) : null;
+        if (curC) {
+          if (curC.loaded && !curC.loading) curC.quickSync?.(true);
+          else if (!curC.loading) curC.load(true).catch(() => {});
+        }
+      } catch {}
+    });
+  }
+  setInterval(() => History.auto('tick'), 10000);   // 每 10 秒看一眼，按 GAP 节奏后台同步列表
   ProbeArchive.start();
   KeepAlive.start();
   // 启动就加载 reCAPTCHA（让它从一开始就观察页面上的正常操作），但不在启动瞬间取令牌：

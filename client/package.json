@@ -1,7 +1,7 @@
 {
   "name": "brana-client",
   "productName": "Brana AI",
-  "version": "0.13.168-beta.3",
+  "version": "0.13.176",
   "description": "Cross-platform workspace client with multi-tab markdown rendering and session telemetry",
   "main": "src/main.js",
   "author": "755287249",
@@ -21,6 +21,10 @@
   "build": {
     "appId": "ai.arena.client.desktop",
     "productName": "Brana AI",
+    "asarUnpack": [
+      "src/*preload*.js",
+      "gen/**/*"
+    ],
     "files": [
       "src/**/*",
       "ui/**/*",

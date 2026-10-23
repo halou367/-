@@ -34,20 +34,20 @@ function ensureModeSwitcherStyle() {
 .cbtn.direct-model-pill .vlogo,.cbtn.direct-model-pill .vi{flex:none;opacity:.85;filter:grayscale(1) contrast(1.05)}
 .cbtn.direct-model-pill:hover .vlogo,.cbtn.direct-model-pill:hover .vi,.cbtn.direct-model-pill.is-open .vlogo,.cbtn.direct-model-pill.is-open .vi{opacity:1}
 body.m .cbtn.mode-pill,body.m .cbtn.modality-pill,body.m .cbtn.direct-model-pill{width:32px;height:32px;min-width:32px;max-width:32px;border-radius:50%}
-.mode-pop{position:fixed;z-index:95;min-width:256px;max-width:320px;background:var(--card,var(--bg));border:1px solid var(--bd2,var(--bd));border-radius:14px;box-shadow:var(--sh,0 10px 32px rgba(0,0,0,.22));padding:6px;display:flex;flex-direction:column;gap:2px;backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);animation:modePopIn .14s cubic-bezier(.2,.8,.2,1)}
-.mode-pop.direct-model-pop{width:316px;max-width:calc(100vw - 20px);padding:8px}
+.mode-pop{position:fixed;z-index:95;width:max-content;min-width:124px;max-width:176px;background:var(--card,var(--bg));border:1px solid var(--bd2,var(--bd));border-radius:12px;box-shadow:var(--sh,0 10px 32px rgba(0,0,0,.22));padding:5px;display:flex;flex-direction:column;gap:2px;backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);animation:modePopIn .14s cubic-bezier(.2,.8,.2,1)}
+.mode-pop.direct-model-pop{width:316px;min-width:280px;max-width:calc(100vw - 20px);padding:8px}
 @keyframes modePopIn{from{opacity:0;transform:translateY(5px) scale(.985)}to{opacity:1;transform:translateY(0) scale(1)}}
-.mode-pop-item{display:flex;align-items:center;gap:10px;width:100%;padding:8px 10px;border-radius:10px;text-align:left;background:transparent;border:0;color:var(--fg);cursor:pointer;transition:background .12s ease}
+.mode-pop-item{display:flex;align-items:center;gap:8px;width:100%;padding:5px 8px;border-radius:8px;text-align:left;background:transparent;border:0;color:var(--fg);cursor:pointer;transition:background .12s ease}
 .mode-pop-item:hover:not(.is-disabled){background:var(--hl,var(--bg2))}
 .mode-pop-item.is-active{background:var(--on,var(--bg3))}
 .mode-pop-item.is-disabled{opacity:.42;cursor:not-allowed}
-.mode-pop-ico{width:28px;height:28px;border-radius:8px;background:var(--bg2,var(--bg3));border:1px solid var(--bd);display:inline-grid;place-items:center;flex:none;color:var(--fg2)}
+.mode-pop-ico{width:26px;height:26px;border-radius:7px;background:var(--bg2,var(--bg3));border:1px solid var(--bd);display:inline-grid;place-items:center;flex:none;color:var(--fg2)}
 .mode-pop-item.is-active .mode-pop-ico{border-color:var(--bd2);background:var(--card,var(--bg));color:var(--fg)}
-.mode-pop-ico .ic{width:15px;height:15px}
+.mode-pop-ico .ic{width:14px;height:14px}
 .mode-pop-txt{display:flex;flex-direction:column;gap:1px;min-width:0;flex:1}
-.mode-pop-title{font-size:12.5px;font-weight:600;color:var(--fg);display:flex;align-items:center;gap:6px;line-height:1.25}
-.mode-pop-sub{font-size:11px;color:var(--fg3);line-height:1.3;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.mode-pop-check{font-size:13px;font-weight:700;color:var(--fg);margin-left:auto;padding-left:4px;flex:none}
+.mode-pop-title{font-size:12.5px;font-weight:600;color:var(--fg);display:flex;align-items:center;gap:6px;line-height:1.18}
+.mode-pop-sub{font-size:10.5px;color:var(--fg3);line-height:1.18;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mode-pop-check{font-size:12.5px;font-weight:700;color:var(--fg);margin-left:6px;padding-left:2px;flex:none}
 .mode-pop-sep{height:1px;background:var(--bd);margin:4px 6px}
 .mode-pop-search-wrap{display:flex;align-items:center;gap:6px;padding:6px 9px;margin-bottom:5px;border-radius:9px;border:1px solid var(--bd);background:var(--bg2,var(--bg))}
 .mode-pop-search-wrap:focus-within{border-color:var(--fg3)}
@@ -64,23 +64,23 @@ body.m .cbtn.mode-pill,body.m .cbtn.modality-pill,body.m .cbtn.direct-model-pill
 const MODE_META_MAP = {
   agent: {
     id: 'agent',
-    label: 'Max (Agent)',
-    shortLabel: 'Max (Agent)',
-    desc: '多步工具调用 · 计费反推与习惯识别',
+    label: 'Agent',
+    shortLabel: 'Agent',
+    desc: '随机模型',
     icon: 'agentBot',
   },
   battle: {
     id: 'battle',
     label: 'Battle',
     shortLabel: 'Battle',
-    desc: '匿名双模型盲测对比 · 投票揭晓自动入库',
+    desc: '盲测对战',
     icon: 'swords',
   },
   direct: {
     id: 'direct',
     label: 'Direct',
     shortLabel: 'Direct',
-    desc: '指定单模型直连对话 · 实时统计',
+    desc: '指定模型',
     icon: 'directTarget',
   },
 };
@@ -91,37 +91,37 @@ const MODALITY_META_MAP = {
   video: {
     id: 'video',
     label: 'Video',
-    desc: 'Generate and edit videos',
+    desc: '视频生成',
     icon: 'modVideo',
   },
   image: {
     id: 'image',
     label: 'Image',
-    desc: 'Generate and edit images',
+    desc: '图片生成',
     icon: 'modImage',
   },
   search: {
     id: 'search',
-    label: 'Web Search',
-    desc: 'Search the web',
+    label: 'Search',
+    desc: '联网搜索',
     icon: 'modSearch',
   },
   webdev: {
     id: 'webdev',
     label: 'Code',
-    desc: 'Generate websites and apps',
+    desc: '网页应用',
     icon: 'modCode',
   },
   chat: {
     id: 'chat',
     label: 'Text',
-    desc: 'Text to text chat with models',
+    desc: '文本对话',
     icon: 'modText',
   },
   auto: {
     id: 'auto',
     label: 'Auto',
-    desc: 'Auto-routes you to the right modality',
+    desc: '自动匹配',
     icon: 'modAuto',
   },
 };
@@ -432,9 +432,7 @@ const ModeSwitcher = {
       const meta = this.getModalityMeta(modId);
       const active = curMod === modId;
       const disabledInDirect = curMode === 'direct' && (modId === 'video' || modId === 'auto');
-      const subText = disabledInDirect
-        ? (modId === 'video' ? '仅 Battle 模式支持视频盲测' : '仅 Battle 模式支持 Auto 路由')
-        : meta.desc;
+      const subText = disabledInDirect ? '仅限 Battle' : meta.desc;
 
       return h('button', {
         type: 'button',
@@ -667,7 +665,7 @@ const ModeSwitcher = {
         type: 'button',
         class: 'ib cbtn mode-pill mode-icon-only',
         'data-mode': curMode,
-        title: `当前模式：${modeMeta.label}（${modeMeta.desc}）· 点击切换`,
+        title: `${modeMeta.label} · ${modeMeta.desc}`,
         'aria-label': `切换对话模式（当前：${modeMeta.label}）`,
         onclick: e => {
           e.stopPropagation();
@@ -682,7 +680,7 @@ const ModeSwitcher = {
           type: 'button',
           class: 'ib cbtn modality-pill mode-icon-only',
           'data-modality': curMod,
-          title: `当前测试模态：${modMeta.label}（${modMeta.desc}）· 点击切换`,
+          title: `${modMeta.label} · ${modMeta.desc}`,
           'aria-label': `切换测试模态（当前：${modMeta.label}）`,
           onclick: e => {
             e.stopPropagation();

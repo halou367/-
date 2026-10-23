@@ -209,8 +209,11 @@ const StandbyPool = {
                   const e = d.ips?.[c.proxyIp];
                   if (!e) return;
                   if (typeof IPRep !== 'undefined' && IPRep.putProbe && r?.ip) IPRep.putProbe(d, c.proxyIp, r);
-                  if (!pureOk && r?.pure && +r.pure.fs >= 25) {
-                    Pool.banForever?.(d, c.proxyIp, '热备检测 IPPure 风险值 ' + (+r.pure.fs) + ' · 已永久拉黑');
+                  if (!pureOk && r?.pure && +r.pure.fs >= 80) {
+                    Pool.banForever?.(d, c.proxyIp, '热备检测 IPPure 极高风险值 ' + (+r.pure.fs) + ' · 已永久拉黑');
+                    return;
+                  } else if (!pureOk) {
+                    e.cool = Math.max(e.cool || 0, now() + 30 * 60000);
                     return;
                   }
                   e.fc = (e.fc || 0) + 1;

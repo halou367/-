@@ -667,7 +667,7 @@ const Gacha = (() => {
     }
     const f = { a, ctl: new AbortController() }; flights.add(f);
     phase('已发出第 ' + a.no + ' 轮 · 后台识别 ' + flights.size + ' 路'); changed();
-    void track(a, c, f.ctl.signal).then(r => land(my, a, r)).catch(e => missed(my, a, e)).finally(() => { if (c.gacha?.fingerprint || c.gacha?.mode === 'autoqa' || c.gacha?.mode === 'habit' || c.gacha?.skipCompatThinking) { c.gacha = null; c.emit(); } flights.delete(f); changed(); });
+    void track(a, c, f.ctl.signal).then(r => land(my, a, r)).catch(e => missed(my, a, e)).finally(() => { if (a && !a.done) { a.done = true; a.status = a.status === 'failed' ? 'failed' : 'stopped'; } if (c) { const hadG = Boolean(c.gacha); c.gacha = null; if (hadG) c.emit(); if (typeof SendQ !== 'undefined' && SendQ.of?.(c)?.length) setTimeout(() => { try { SendQ.check(c); } catch {} }, 50); } flights.delete(f); changed(); });
   }
   const gachaCreatedSet = new Set();
   try { Store.set('gacha-sids', []); } catch {}
@@ -894,9 +894,9 @@ const Gacha = (() => {
         sum = typeof BillingProbe !== 'undefined' && BillingProbe.summary ? BillingProbe.summary(c.sid) : null;
       } else if (typeof BillingProbe !== 'undefined' && BillingProbe.refresh) {
         const latestAsst = (typeof ArenaBilling !== 'undefined' && ArenaBilling.completed) ? ArenaBilling.completed(c).at(-1) : null;
-        for (let retry = 0; retry < 3; retry++) {
+        for (let retry = 0; retry < 2; retry++) {
           if (signal?.aborted) throw new Stop('CANCEL', '', 'cancel');
-          await sleep(retry === 0 ? (750 + Math.floor(Math.random() * 250)) : (1250 + Math.floor(Math.random() * 350)));
+          await sleep(retry === 0 ? (750 + Math.floor(Math.random() * 250)) : (1350 + Math.floor(Math.random() * 350)));
           try { await BillingProbe.refresh(c, { force: true }); } catch {}
           const stNow = BillingProbe.state?.(c.sid);
           sum = BillingProbe.summary(c.sid);
@@ -1125,7 +1125,7 @@ const Gacha = (() => {
     } finally { clearInterval(tick); }
   }
   function land(my, a, r) {
-    if (!alive(my) || a.done) return;
+    if (!alive(my) || a.done) { if (a) a.done = true; return; }
     const s = run.settings, id = { name: Strength.canon(r.name), internal: r.internal, request: r.request, response: r.response, tier: r.tier, routed: r.routed, partial: r.partial, guess: !!r.guess, fingerprint: r.fingerprint || null, cs: !r.fingerprint && r.guess ? Calib.last.get(a.sid) : null };
     const verdict = classify(id, s); if (r.fingerprint?.skipped) log('第 ' + a.no + ' 轮：' + Fingerprint.details(id) + (verdict==='archive'?'；已确认停止，排队归档，继续下一抽':'；已确认结束，保留对话，继续下一抽')); const cs = id.cs?.ok ? id.cs.s : null;
     Object.assign(a, { note: id.fingerprint?.skipped ? id.fingerprint.skipDetail : a.note, fingerprint: id.fingerprint, guess: !!r.guess, model: id.name, tier: id.tier, verdict, done: true, idMs: now() - a.sentAt, partial: !!id.partial, phase: '', power: cs, csWhy: id.csv ? id.csv.why + (id.csv.top ? ' · 最像 ' + id.csv.top.label + ' ' + id.csv.top.p + '%' : '') : null });
@@ -1275,13 +1275,16 @@ const Gacha = (() => {
         try { if (typeof Pager !== 'undefined') Pager.drop?.(sid); } catch {}
         try { if (typeof TabSw !== 'undefined' && TabSw.isOpen?.() && TabSw.el) { TabSw.el.querySelector(`.tsw-slot[data-sid="${sid}"]`)?.remove(); } } catch {}
         try { if (typeof Bus !== 'undefined' && Bus?.emit) Bus.emit('history', History.items); } catch {}
-        const fire = () => {
-          try { History.archive?.(sid)?.catch?.(() => {}); } catch {}
-          try { History.remove?.(sid)?.catch?.(() => {}); } catch {}
-        };
-        fire();
-        setTimeout(fire, 1200);
-        setTimeout(fire, 3500);
+        Promise.resolve(History.remove?.(sid)).catch(err => {
+          if (err?.status === 404 || err?.status === 429) return;
+          setTimeout(() => {
+            Promise.resolve(History.remove?.(sid)).catch(e2 => {
+              if (e2?.status !== 404 && e2?.status !== 429) {
+                try { History.archive?.(sid)?.catch?.(() => {}); } catch {}
+              }
+            });
+          }, 1800);
+        });
       }
     } catch {}
   }

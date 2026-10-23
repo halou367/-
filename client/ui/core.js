@@ -852,6 +852,24 @@ const Models = {
     return raw;
   })(),
   get map() { return this.all; },
+  save() {
+    clearTimeout(this._saveSoonT); this._saveSoonT = 0;
+    Store.set('models', this.all);
+    try { if (typeof MsgCache !== 'undefined' && MsgCache.putMeta) void MsgCache.putMeta('models', this.all); } catch {}
+    return true;
+  },
+  saveSoon(ms = 400) {
+    if (this._saveSoonT) return true;
+    this._saveSoonT = setTimeout(() => { this._saveSoonT = 0; this.save(); }, ms);
+    return true;
+  },
+  del(sid) {
+    if (!sid || !this.all[sid]) return false;
+    delete this.all[sid];
+    this.saveSoon();
+    Bus.emit('models', sid);
+    return true;
+  },
   get(sid) { return this.all[sid] || null; },
   set(sid, v) { if (v && typeof v.name === 'string' && typeof Strength !== 'undefined' && Strength.foldVer) {
       v = { ...v, name: Strength.canon ? Strength.canon(v.name) : Strength.foldVer(v.name) };
@@ -890,7 +908,7 @@ const ReadLimit = {
   until: 0, inflight: 0, lastAt: 0,
   hit(ms) { this.until = Math.max(this.until, now() + Math.max(30000, Math.min(ms || 0, 600000))); },
   active() { return now() < this.until; },
-  canPrefetch() { return !this.active() && this.inflight < 1 && now() - this.lastAt >= 700; },
+  canPrefetch() { return !this.active() && this.inflight < 1 && now() - this.lastAt >= 5000; },
   // 后台 /api/ 读请求（预读、定时刷新）排队：相邻两条至少隔 GAP 毫秒，不和前台抢、不连发。
   // 限流冷却期间：后台读（预读、定时刷新）直接放弃；前台读（点开对话）等到冷却结束再发，冷却超过 60 秒就直接报错，不硬等也不换 IP。
   GAP: 250, readAt: 0, q: Promise.resolve(),
@@ -912,10 +930,12 @@ async function api(path, opt = {}) {
   const retryCnt = Number(opt._retryCount) || (opt._retried ? 1 : 0);
   const onProgress = typeof opt.onProgress === 'function' ? opt.onProgress : null;
   const noApiRetry = !!opt.noApiRetry;
+  const allowDirectFallback = !!opt.allowDirectFallback;
+  if (allowDirectFallback && ReadLimit.active()) opt = { ...opt, bg: true };
   const isBg = !!opt.bg;
-  delete init.noRelogin; delete init.timeout; delete init.bg; delete init._retried; delete init._retryCount; delete init._retried409; delete init.onProgress; delete init.noApiRetry;
+  delete init.noRelogin; delete init.timeout; delete init.bg; delete init._retried; delete init._retryCount; delete init._retried409; delete init.onProgress; delete init.noApiRetry; delete init.allowDirectFallback;
   const mark = NetHealth.mark(), read = /^(GET|HEAD)$/i.test(init.method || 'GET');
-  const isCost = /\/api\/chat\/[^/]+\/cost\b/i.test(path);
+  const isCost = /\/(?:api|nextjs-api)\/(?:chat|evaluation)\/[^/]+\/cost\b/i.test(path);
   const isChatRead = read && !isCost && /^\/api\/chat\/[^/?#]+(?:\/messages)?(?:\?|$)/i.test(path);
   if (!isCost && typeof Pin !== 'undefined' && typeof Pin.drop === 'function' && typeof document !== 'undefined' && String(document.cookie || '').includes('__vdpl=') && (!Pin.on?.() || (!Pin.lockedDpl?.() && Prefs.pinOn !== true))) {
     try { Pin.drop(); } catch {}
@@ -1002,7 +1022,7 @@ async function api(path, opt = {}) {
     // 429 / 404 不触发自动换 IP（防止把用户手动选择的未限流 IP 误切换走）；仅网关/传输故障才交由 AutoRoute
     const ipLimited = !isCost && res.status === 429 && (read || /^\/(?:api|nextjs-api)\//.test(path));
     if (ipLimited) error.ipLimited = true;
-    const prevRl = ReadLimit.until; if (res.status === 429 && (read || /^\/api\/chat\//.test(path))) ReadLimit.hit(error.retryAfterMs); if (isCost) ReadLimit.until = prevRl;
+    const prevRl = ReadLimit.until; if (res.status === 429 && (read || /^\/api\/chat\//.test(path))) ReadLimit.hit(error.retryAfterMs); if (isCost || /^\/api\/me\/pulse\b/i.test(path)) ReadLimit.until = prevRl;
     if (!isBg && !isCost && typeof AutoRoute !== 'undefined' && AutoRoute.onErrorSwitch && [408, 502, 503, 504, 520, 522, 524].includes(res.status)) void AutoRoute.onErrorSwitch(error, path);
     throw error;
   }
@@ -1011,7 +1031,7 @@ async function api(path, opt = {}) {
   // Only completed first-party API responses count; static pages and IP probes do not.
   if (/^\/(?:api|nextjs-api)\//.test(path) && (value === null || typeof value === 'object')) {
     NetHealth.good('api');
-    if (!opt.bg && ReadLimit.until > 0) ReadLimit.until = 0;
+    if (isChatRead) { if (!opt.bg && ReadLimit.until > 0) ReadLimit.until = 0; }
   }
   // A slow but successful response is proof the route works: never a reason to switch node/IP.
   return value;
@@ -1311,12 +1331,20 @@ const Recaptcha = (() => {
       }
       try {
         await load();
-        const domTok = await Promise.race([grecaptcha.enterprise.execute(RC_V3, { action }), sleep(12000).then(() => { throw new Error('reCAPTCHA 超时'); })]);
+        const domTok = await Promise.race([grecaptcha.enterprise.execute(RC_V3, { action }), sleep(9000).then(() => { throw new Error('reCAPTCHA 超时'); })]);
         if (domTok) return domTok;
       } catch (err) {
-        const pTok = await protoV3(action);
+        // 切线后旧 anchor 连接可能断开：先重置并重载一次真实 DOM 脚本以保留完整 bg 遥测高分，避免退回 0.1 分的 protoV3
+        try {
+          loading = null;
+          await load();
+          const retryDomTok = await Promise.race([grecaptcha.enterprise.execute(RC_V3, { action }), sleep(7000).then(() => { throw new Error('reCAPTCHA 重试超时'); })]);
+          if (retryDomTok) return retryDomTok;
+        } catch {}
+        const pTok = await protoV3(action).catch(() => null);
         if (pTok) return pTok;
-        throw err;
+        if (action === 'sign_up') throw err;
+        return null;
       }
       return await protoV3(action);
     } finally {
@@ -1545,7 +1573,8 @@ const Recaptcha = (() => {
     setTimeout(() => warm(action), 650);
     return tok;
   }
-  return { load, protoV3, v3, v2, v2Close, v2Showing, warm, take, clearCache, LANGS, hl };
+  function resetSession() { clearCache(); lastV3At = 0; }
+  return { load, protoV3, v3, v2, v2Close, v2Showing, warm, take, clearCache, resetSession, LANGS, hl };
 })();
 
 // ---------- 限流记录 ----------
@@ -1801,6 +1830,60 @@ const MsgCache = (() => {
         if (p._parsedInputVal !== undefined) delete p._parsedInputVal;
       }
     }
+    const tsOf = m => {
+      if (!m || typeof m !== 'object') return 0;
+      const idAt = typeof idTime === 'function' ? idTime(m.id) : 0;
+      if (m._sentAt && m._sentAt > 1.6e12) return m._sentAt;
+      const tStart = m.metadata?.timing?.startedAt;
+      const sMs = typeof tStart === 'number' ? tStart : (typeof tStart === 'string' ? Date.parse(tStart) : 0);
+      if (sMs && sMs > 1.6e12) return sMs;
+      if (idAt && idAt > 1.6e12) return idAt;
+      const tComp = m.metadata?.timing?.completedAt;
+      const cMs = typeof tComp === 'number' ? tComp : (typeof tComp === 'string' ? Date.parse(tComp) : 0);
+      return (cMs && cMs > 1.6e12) ? cMs : (m._finishedAt || 0);
+    };
+    const endTsOf = m => {
+      if (!m || typeof m !== 'object') return 0;
+      const tComp = m.metadata?.timing?.completedAt;
+      const cMs = typeof tComp === 'number' ? tComp : (typeof tComp === 'string' ? Date.parse(tComp) : 0);
+      return Math.max(tsOf(m), (cMs && cMs > 1.6e12) ? cMs : 0, m._finishedAt || 0);
+    };
+    const uTxtOf = m => m?.role === 'user' ? (m.parts || []).filter(p => p?.type === 'text').map(p => String(p.text || '')).join('').replace(/\s+/g, ' ').trim() : '';
+    for (let i = msgs.length - 1; i >= 1; i--) {
+      const cur = msgs[i], prev = msgs[i - 1];
+      if (cur?.role === 'user' && prev?.role === 'user' && !cur.failed && !prev.failed) {
+        const ct = uTxtOf(cur), pt = uTxtOf(prev);
+        if (cur.id === prev.id || (ct && ct === pt)) {
+          msgs.splice(cur._local && !prev._local ? i : (prev._local && !cur._local ? i - 1 : i), 1);
+        }
+      }
+    }
+    let lastAIdx = -1;
+    for (let i = msgs.length - 1; i >= 0; i--) {
+      if (msgs[i]?.role === 'assistant') { lastAIdx = i; break; }
+    }
+    if (lastAIdx > 0) {
+      for (let i = lastAIdx - 1; i >= 0; i--) {
+        if (msgs[i]?.role === 'user' && msgs[i]?.failed) {
+          msgs.splice(i, 1);
+          lastAIdx--;
+        }
+      }
+    }
+    if (lastAIdx >= 0 && lastAIdx < msgs.length - 1) {
+      const lastAEnd = endTsOf(msgs[lastAIdx]);
+      const earlierUsers = msgs.slice(0, lastAIdx).filter(x => x && x.role === 'user');
+      for (let i = msgs.length - 1; i > lastAIdx; i--) {
+        const tm = msgs[i];
+        if (!tm || tm.role !== 'user') continue;
+        const uTs = tsOf(tm), uTxt = uTxtOf(tm), lastA = msgs[lastAIdx], lastAStart = tsOf(lastA);
+        const isOlderThanLastAsst = lastAEnd > 0 && uTs > 0 && uTs < lastAEnd - 30000 && tm._prevAsstId !== lastA?.id && (!lastAStart || lastAStart > uTs + 2000);
+        const isDupOfEarlier = earlierUsers.some(x => x.id === tm.id || (tm._prevAsstId && x._prevAsstId && tm._prevAsstId === x._prevAsstId && uTxt && uTxtOf(x) === uTxt) || (uTxt && uTxtOf(x) === uTxt && uTs > 0 && tsOf(x) > 0 && Math.abs(uTs - tsOf(x)) < 5000));
+        if (isOlderThanLastAsst || isDupOfEarlier) {
+          msgs.splice(i, 1);
+        }
+      }
+    }
     return msgs;
   }
   function slimForHot(msgs, count = 20, strLim = 900) {
@@ -1887,7 +1970,19 @@ const MsgCache = (() => {
       try {
         const q = d.transaction('c').objectStore('c').get(sid);
         q.onsuccess = () => {
-          const r = q.result || getSync(sid) || null;
+          const hot = getSync(sid);
+          let r = q.result || hot || null;
+          if (q.result && hot && ((hot.at || 0) > (q.result.at || 0) || +(hot.lastSeq || 0) > +(q.result.lastSeq || 0))) {
+            if (!hot._hotSlice && Array.isArray(hot.messages) && hot.messages.length >= (q.result.messages?.length || 0)) {
+              r = hot;
+            } else if (Array.isArray(q.result.messages) && Array.isArray(hot.messages) && hot.messages.length) {
+              const hotById = new Map(hot.messages.filter(m => m?.id).map(m => [m.id, m]));
+              const merged = q.result.messages.map(m => (m?.id && hotById.has(m.id)) ? hotById.get(m.id) : m);
+              const knownIds = new Set(merged.map(m => m?.id).filter(Boolean));
+              for (const hm of hot.messages) if (hm?.id && !knownIds.has(hm.id)) merged.push(hm);
+              r = { ...q.result, ...hot, messages: merged, more: Boolean(q.result.more), _hotSlice: false };
+            }
+          }
           if (r && Array.isArray(r.messages) && r.messages.length) {
             sanitizeCachedMsgs(r.messages);
             memHot.set(sid, r);
@@ -1929,7 +2024,7 @@ const MsgCache = (() => {
       }
       return oc ? next : o;
     };
-    let msgs = rawMsgs.filter(m => !m._local && !m.failed).slice(-200).map(({ v, ...m }) => ({
+    let msgs = rawMsgs.filter((m, idx) => (!m._local || m._appendAccepted || m?.role === 'user') && (!m.failed || (idx === rawMsgs.length - 1 && m?.role === 'user'))).slice(-200).map(({ v, ...m }) => ({
       ...m,
       parts: Array.isArray(m.parts) ? m.parts.map(p => {
         if (!p || typeof p !== 'object') return p;
@@ -1959,12 +2054,12 @@ const MsgCache = (() => {
   }
   async function writeNow(chat, allowBusy = false) {
     const hasMsgs = Array.isArray(chat?.messages) && chat.messages.length > 0;
-    if (!chat || (!chat.loaded && !hasMsgs) || (chat.busy && !allowBusy)) return;
+    if (!chat || (!chat.loaded && !hasMsgs)) return;
     try { if (History.goneMap().has(chat.sid)) return; if (typeof Arch !== 'undefined' && Arch.has?.(chat.sid)) return; } catch {}
     const { msgs, js } = compactMsgs(chat.messages || []);
     if (js.length > CAP || !msgs.length) return;
     const histUpdatedAt = (typeof History !== 'undefined' && History.byId?.(chat.sid)?.updatedAt) || null;
-    const rec = { at: now(), histUpdatedAt, messages: JSON.parse(js), more: chat.hasMore || msgs.length < chat.messages.length, lastSeq: chat.lastSeq || null, token: chat.token || null, tokenExp: chat.tokenExp || 0, isEvaluation: !!chat.isEvaluation, evalMode: chat.evalMode || null };
+    const rec = { at: now(), histUpdatedAt, messages: JSON.parse(js), more: chat.hasMore || msgs.length < chat.messages.length, lastSeq: chat.lastSeq || null, token: chat.token || null, tokenExp: chat.tokenExp || 0, triggerAddress: chat.triggerAddress || null, isEvaluation: !!chat.isEvaluation, evalMode: chat.evalMode || null };
     putHot(chat.sid, rec);
     const ix = idx(); ix[chat.sid] = now(); const ks = Object.keys(ix);
     if (ks.length > MAX) { const old = ks.sort((a, b) => ix[a] - ix[b]).slice(0, ks.length - MAX); for (const k of old) delete ix[k]; del(old); }
@@ -1981,8 +2076,10 @@ const MsgCache = (() => {
       chat = (typeof Chats !== 'undefined' && Chats.get(chat)) || (doc && typeof doc === 'object' ? { sid: chat, loaded: true, ...doc } : null);
     }
     if (!chat || (typeof Arch !== 'undefined' && Arch.has?.(chat.sid))) return;
+    if ((chat.busy || chat.live) && timers.has(chat.sid)) return;
     clearTimeout(timers.get(chat.sid));
-    timers.set(chat.sid, setTimeout(() => { timers.delete(chat.sid); void writeNow(chat, false); }, 2000));
+    const waitMs = (chat.busy || chat.live) ? 1000 : 2000;
+    timers.set(chat.sid, setTimeout(() => { timers.delete(chat.sid); void writeNow(chat, true); }, waitMs));
   }
   async function getMeta(key) {
     const d = await db(); if (!d) return null;
@@ -2015,8 +2112,372 @@ const MsgCache = (() => {
       } catch { res(memKeys); }
     });
   }
-  return { get, getSync, put, putNow: chat => writeNow(chat, true), keys: () => Object.keys(idx()), allKeys, getMeta, putMeta, del: sid => { clearTimeout(timers.get(sid)); timers.delete(sid); const ix = idx(); delete ix[sid]; Store.set('mc:idx', ix); del([sid]); } };
+  if (typeof window !== 'undefined' && typeof window.addEventListener === 'function' && !window.__ancMsgCacheUnloadHook) {
+    window.__ancMsgCacheUnloadHook = true;
+    const flushActiveChats = () => {
+      try {
+        if (typeof Chats === 'undefined') return;
+        for (const c of Chats.values()) {
+          if (c && Array.isArray(c.messages) && c.messages.length > 0 && (c.busy || c.live || c.streaming || timers.has(c.sid))) {
+            void writeNow(c, true);
+          }
+        }
+      } catch {}
+    };
+    window.addEventListener('beforeunload', flushActiveChats);
+    window.addEventListener('pagehide', flushActiveChats);
+  }
+  return { get, getSync, put, sanitize: sanitizeCachedMsgs, putNow: chat => { clearTimeout(timers.get(chat?.sid)); timers.delete(chat?.sid); return writeNow(chat, true); }, keys: () => Object.keys(idx()), allKeys, getMeta, putMeta, del: sid => { clearTimeout(timers.get(sid)); timers.delete(sid); const ix = idx(); delete ix[sid]; Store.set('mc:idx', ix); del([sid]); } };
 })();
+
+const SentUserLog = (() => {
+  const MAX_PER_CHAT = 12, TTL_MS = 7 * 86400000;
+  const normTxt = s => String(s || '').replace(/\r\n/g, '\n').replace(/\s+/g, ' ').trim();
+  const extractMsgText = m => {
+    if (!m || typeof m !== 'object') return '';
+    const fp = Array.isArray(m.parts) ? m.parts.filter(p => p && p.type === 'text' && typeof p.text === 'string').map(p => p.text).join('\n') : '';
+    return normTxt(fp || m.text || m.content || '');
+  };
+  const keyOf = sid => 'sent:u:' + String(sid || '');
+  const getMsgTs = m => {
+    if (!m || typeof m !== 'object') return 0;
+    const idAt = typeof idTime === 'function' ? idTime(m.id) : 0;
+    if (m._sentAt && m._sentAt > 1.6e12) return m._sentAt;
+    const tStart = m.metadata?.timing?.startedAt;
+    const sMs = typeof tStart === 'number' ? tStart : (typeof tStart === 'string' ? Date.parse(tStart) : 0);
+    if (sMs && sMs > 1.6e12) return sMs;
+    if (idAt && idAt > 1.6e12) return idAt;
+    const tComp = m.metadata?.timing?.completedAt;
+    const cMs = typeof tComp === 'number' ? tComp : (typeof tComp === 'string' ? Date.parse(tComp) : 0);
+    return (cMs && cMs > 1.6e12) ? cMs : (m._finishedAt || 0);
+  };
+  const getMsgEndTs = m => {
+    if (!m || typeof m !== 'object') return 0;
+    const tComp = m.metadata?.timing?.completedAt;
+    const cMs = typeof tComp === 'number' ? tComp : (typeof tComp === 'string' ? Date.parse(tComp) : 0);
+    return Math.max(getMsgTs(m), (cMs && cMs > 1.6e12) ? cMs : 0, m._finishedAt || 0);
+  };
+  function remove(sid, id, txt = '', maxTs = 0) {
+    if (!sid) return;
+    try {
+      const k = keyOf(sid), raw = Store.get(k, []);
+      if (!Array.isArray(raw) || !raw.length) return;
+      const tNorm = txt ? normTxt(txt) : '';
+      const next = raw.filter(x => {
+        if (!x) return false;
+        if (id && x.id === id) return false;
+        if (tNorm && normTxt(x.text || extractMsgText(x)) === tNorm && (!maxTs || !x._sentAt || x._sentAt <= maxTs + 60000)) return false;
+        return true;
+      });
+      if (next.length !== raw.length) Store.set(k, next);
+    } catch {}
+  }
+  function markFailed(sid, id, txt = '') {
+    if (!sid) return;
+    try {
+      const k = keyOf(sid), raw = Store.get(k, []);
+      if (!Array.isArray(raw) || !raw.length) return;
+      const tNorm = txt ? normTxt(txt) : '';
+      let changed = false;
+      for (const x of raw) {
+        if (!x) continue;
+        if ((id && x.id === id) || (tNorm && normTxt(x.text || extractMsgText(x)) === tNorm && !x._appendAccepted)) {
+          x.failed = true;
+          x._appendAccepted = false;
+          changed = true;
+        }
+      }
+      if (changed) Store.set(k, raw);
+    } catch {}
+  }
+  function hasFailed(sid) {
+    if (!sid) return false;
+    try {
+      const raw = Store.get(keyOf(sid), []);
+      return Array.isArray(raw) && raw.some(x => x && x.failed);
+    } catch { return false; }
+  }
+  function readList(sid) {
+    if (!sid) return [];
+    const tNow = now();
+    let arr = [];
+    try {
+      const raw = Store.get(keyOf(sid), []);
+      if (Array.isArray(raw)) arr = raw.filter(x => x && x.id && (tNow - (x._sentAt || 0) < TTL_MS));
+    } catch {}
+    try {
+      if (typeof Drafts !== 'undefined' && typeof Drafts.load === 'function') {
+        const d = Drafts.load();
+        const out = d?.o && typeof d.o === 'object' ? Object.values(d.o) : [];
+        for (const e of out) {
+          if (!e || e.sid !== sid || e.err) continue;
+          const txt = normTxt(e.text);
+          if (!txt && !(Array.isArray(e.atts) && e.atts.length)) continue;
+          if (arr.some(x => x.id === e.id || (txt && normTxt(x.text) === txt && Math.abs((x._sentAt || 0) - (e.at || 0)) < 600000))) continue;
+          const parts = [
+            ...(Array.isArray(e.atts) ? e.atts.map(a => ({ type: 'file', url: a.url, mediaType: a.mediaType, filename: a.name })) : []),
+            ...(txt ? [{ type: 'text', text: e.text }] : []),
+          ];
+          arr.push({ id: e.id, role: 'user', text: e.text || txt, parts, _sentAt: e.at || tNow, _appendAccepted: Boolean(e.acc), failed: Boolean(e.failed), prevAsstId: e.prevAsstId || null, prevAsstWeight: e.prevAsstWeight ?? null, ...(Array.isArray(e.queueIds) && e.queueIds.length ? { queueIds: e.queueIds.slice(), fromQueue: true } : (e.fromQueue ? { fromQueue: true } : {})), ...(e.held ? { held: true } : {}) });
+        }
+      }
+    } catch {}
+    arr.sort((a, b) => (a._sentAt || 0) - (b._sentAt || 0));
+    const dedup = [];
+    for (const item of arr) {
+      const itTxt = normTxt(item.text || extractMsgText(item));
+      const dupIdx = itTxt ? dedup.findIndex(x => normTxt(x.text || extractMsgText(x)) === itTxt && ((item.prevAsstId && x.prevAsstId === item.prevAsstId) || (!item.prevAsstId && !x.prevAsstId && Math.abs((item._sentAt || 0) - (x._sentAt || 0)) < 600000))) : -1;
+      if (dupIdx >= 0) {
+        if (dedup[dupIdx].failed && !item._appendAccepted) item.failed = true;
+        if (dedup[dupIdx].fromQueue && !item.fromQueue) { item.fromQueue = true; if (dedup[dupIdx].queueIds) item.queueIds = dedup[dupIdx].queueIds; }
+        if (dedup[dupIdx].held && !item.held) item.held = true;
+        dedup[dupIdx] = item;
+      } else dedup.push(item);
+    }
+    return dedup;
+  }
+  function record(sid, msg, prevAsstId = null) {
+    if (!sid || !msg || !msg.id) return;
+    try {
+      const txt = extractMsgText(msg), tNow = msg._sentAt || now();
+      if (!prevAsstId && msg._prevAsstId) prevAsstId = msg._prevAsstId;
+      msg._sentAt = tNow;
+      if (prevAsstId) msg._prevAsstId = prevAsstId;
+      const raw = Store.get(keyOf(sid), []);
+      const list = Array.isArray(raw) ? raw.filter(x => {
+        if (!x || !x.id || x.id === msg.id || (tNow - (x._sentAt || 0) >= TTL_MS)) return false;
+        if (txt && normTxt(x.text || extractMsgText(x)) === txt && ((prevAsstId && x.prevAsstId === prevAsstId) || (!prevAsstId && !x.prevAsstId && Math.abs(tNow - (x._sentAt || 0)) < 600000))) return false;
+        return true;
+      }) : [];
+      const cleanParts = Array.isArray(msg.parts) ? msg.parts.map(p => { if (!p || typeof p !== 'object') return p; const { _mdEl, _mdSrc, _parsedInputRaw, _parsedInputVal, ...rest } = p; return rest; }) : (txt ? [{ type: 'text', text: txt }] : []);
+      list.push({ id: msg.id, role: 'user', text: txt, parts: cleanParts, _sentAt: tNow, _appendAccepted: Boolean(msg._appendAccepted), failed: Boolean(msg.failed), prevAsstId: prevAsstId || null, prevAsstWeight: msg._prevAsstWeight ?? null, ...(Array.isArray(msg._queueIds) && msg._queueIds.length ? { queueIds: msg._queueIds.slice(), fromQueue: true } : (msg._queued || msg._fromQueue ? { fromQueue: true } : {})), ...(msg._held ? { held: true } : {}) });
+      while (list.length > MAX_PER_CHAT) list.shift();
+      Store.set(keyOf(sid), list);
+    } catch {}
+  }
+  function hasAdjacentAsstGap(msgs) {
+    if (!Array.isArray(msgs) || msgs.length < 2) return false;
+    for (let i = 1; i < msgs.length; i++) {
+      const prev = msgs[i - 1], cur = msgs[i];
+      if (prev?.role === 'assistant' && cur?.role === 'assistant') {
+        if (prev.participantPosition && cur.participantPosition && prev.participantPosition !== cur.participantPosition) continue;
+        return true;
+      }
+    }
+    return false;
+  }
+  function measureAsstWeight(m) {
+    if (!m || !Array.isArray(m.parts)) return 0;
+    let w = 0;
+    for (const p of m.parts) {
+      if (!p) continue;
+      if (p.type === 'text' || p.type === 'reasoning') w += (p.text || '').length + 1;
+      else if (p.toolCallId || String(p.type || '').startsWith('tool-') || p.type === 'dynamic-tool') w += 50 + (p.state === 'output-available' ? 50 : 0) + (typeof p.output === 'string' ? p.output.length : 0);
+      else if (p.type !== 'step-start') w += 10;
+    }
+    return w;
+  }
+  function demoteToQueue(chat, msgOrEntry, opt = {}) {
+    if (!chat || !chat.sid || chat.gacha || !msgOrEntry) return false;
+    if (typeof SendQ !== 'undefined' && typeof SendQ.demoteToQueue === 'function') {
+      return SendQ.demoteToQueue(chat, msgOrEntry, opt);
+    }
+    if (msgOrEntry._autoContinue || msgOrEntry.metadata?.autoContinue) return false;
+    const parts = Array.isArray(msgOrEntry.parts) ? msgOrEntry.parts : [];
+    if (parts.length > 0 && parts.every(p => p?.type === 'data-tool-results')) return false;
+    const q = (chat.queue ||= []);
+    const id = msgOrEntry.id || ('q-' + now());
+    const text = extractMsgText(msgOrEntry) || normTxt(msgOrEntry.text || '');
+    const at = msgOrEntry._sentAt || msgOrEntry.at || getMsgTs(msgOrEntry) || now();
+    const atts = Array.isArray(msgOrEntry._prev) ? msgOrEntry._prev.slice() : [];
+    if (!text && !atts.length) return false;
+    if (!q.some(it => it && (it.id === id || (text && normTxt(it.text) === text)))) {
+      const item = { id, text, at, atts };
+      const insIdx = q.findIndex(it => it && (it.at || 0) > at);
+      if (insIdx >= 0) q.splice(insIdx, 0, item);
+      else q.push(item);
+    }
+    chat._qPaused = '';
+    chat._qHoldUntil = 0;
+    if (Array.isArray(chat.messages)) {
+      for (let i = chat.messages.length - 1; i >= 0; i--) {
+        const m = chat.messages[i];
+        if (m && m.role === 'user' && (m === msgOrEntry || m.id === id || ((m._local || m.failed) && text && extractMsgText(m) === text))) {
+          chat.messages.splice(i, 1);
+        }
+      }
+    }
+    remove(chat.sid, id, text, at);
+    try {
+      if (typeof Drafts !== 'undefined' && typeof Drafts.load === 'function') {
+        const d = Drafts.load();
+        if (Array.isArray(d?.o)) {
+          d.o = d.o.filter(x => x && x.id !== id && !(x.sid === chat.sid && text && normTxt(x.text) === text));
+          Drafts.write?.(true);
+        }
+        Drafts.setQ?.(chat);
+      }
+    } catch {}
+    if (chat.awaitId === id) { chat.awaitId = null; chat.awaitFrom = 0; chat.preSend = false; }
+    if (chat.error && /未发出|未收到|没有收到|可以点重试|响应超时|未接收/.test(String(chat.error))) chat.error = null;
+    if (chat.status === 'error') chat.status = opt?.running ? 'streaming' : 'idle';
+    return true;
+  }
+  function restoreInto(chat, opt = {}) {
+    if (!chat || !chat.sid || !Array.isArray(chat.messages)) return false;
+    const entries = readList(chat.sid);
+    if (!entries.length) return false;
+    let changed = false;
+    let lastAsstIdx = -1;
+    for (let i = chat.messages.length - 1; i >= 0; i--) {
+      if (chat.messages[i]?.role === 'assistant') { lastAsstIdx = i; break; }
+    }
+    const lastAsst = lastAsstIdx >= 0 ? chat.messages[lastAsstIdx] : null;
+    const lastAsstEndTs = getMsgEndTs(lastAsst);
+    for (const entry of entries) {
+      if (!entry || !entry.id) continue;
+      const entryTxt = normTxt(entry.text || extractMsgText(entry));
+      const entryTime = entry._sentAt || (typeof idTime === 'function' ? idTime(entry.id) : 0) || 0;
+      const isPureHitl = Array.isArray(entry.parts) && entry.parts.length > 0 && entry.parts.every(p => p?.type === 'data-tool-results');
+      const isCurrentSessionOutbox = Boolean(typeof Drafts !== 'undefined' && Drafts.sess?.has?.(entry.id));
+      const isActivelyAwaiting = Boolean(chat.awaitId && chat.awaitId === entry.id && (chat.busy || chat.sending || chat.preSend));
+      const isUnsentFromPrevSession = !entry._appendAccepted && !isActivelyAwaiting && !isCurrentSessionOutbox;
+      const isEntryFailed = Boolean(entry.failed || isUnsentFromPrevSession);
+      if (isPureHitl && isEntryFailed) {
+        remove(chat.sid, entry.id);
+        try { if (typeof Drafts !== 'undefined' && Drafts.ack) Drafts.ack(entry.id); } catch {}
+        continue;
+      }
+      const prevIdx = entry.prevAsstId ? chat.messages.findIndex(m => m && m.id === entry.prevAsstId) : -1;
+      const lastAsstStartTs = getMsgTs(lastAsst);
+      const isSupersededByNewerAsst = prevIdx >= 0
+        ? (lastAsstIdx > prevIdx)
+        : (lastAsstEndTs > 0 && entryTime > 0 && entryTime < lastAsstEndTs - 30000 && (!lastAsstStartTs || lastAsstStartTs > entryTime + 2000));
+      if (isEntryFailed && isSupersededByNewerAsst) {
+        remove(chat.sid, entry.id, entryTxt, entryTime);
+        try { if (typeof Drafts !== 'undefined' && Drafts.ack) Drafts.ack(entry.id); } catch {}
+        continue;
+      }
+      const byIdIdx = chat.messages.findIndex(m => m && (m.id === entry.id || (m.metadata?.nodeId && m.metadata.nodeId === entry.id)));
+      const byId = byIdIdx >= 0 ? chat.messages[byIdIdx] : null;
+      const existingIdx = byIdIdx >= 0 ? -1 : chat.messages.findIndex((m, idx) => {
+        if (!m || m.role !== 'user') return false;
+        if (prevIdx >= 0 && idx <= prevIdx) return false;
+        if (entryTxt && extractMsgText(m) === entryTxt) {
+          const mTs = getMsgTs(m);
+          if (!entryTime || !mTs || (mTs >= entryTime - 15000 && Math.abs(entryTime - mTs) < 3600000)) return true;
+        }
+        return false;
+      });
+      const existingSameUser = existingIdx >= 0 ? chat.messages[existingIdx] : null;
+      const prevAsstForEntry = prevIdx >= 0 ? chat.messages[prevIdx] : lastAsst;
+      const hasSrvUserAfterPrev = prevIdx >= 0 && chat.messages.slice(prevIdx + 1).some(m => m && m.role === 'user' && !m._local && !m.failed && m.id !== entry.id && (!entryTxt || extractMsgText(m) !== entryTxt));
+      const isChatRunningNow = Boolean(opt?.srvPend || chat.busy || chat.streaming || chat.live || lastAsst?.metadata?.pending || lastAsst?._incomplete || (typeof hasInterruptedToolPart === 'function' && hasInterruptedToolPart(lastAsst)) || (typeof RunningTracker !== 'undefined' && RunningTracker.isTrackedRunning?.(chat.sid)));
+      const prevEndTs = getMsgEndTs(prevAsstForEntry);
+      const prevStartTs = getMsgTs(prevAsstForEntry);
+      const prevAsstSupplemented = !hasSrvUserAfterPrev && Boolean(prevAsstForEntry && (prevAsstForEntry.metadata?.pending || prevAsstForEntry._incomplete || (entry.prevAsstWeight != null && measureAsstWeight(prevAsstForEntry) > entry.prevAsstWeight) || (prevEndTs > 0 && entryTime > 0 && prevEndTs >= entryTime + 1000 && (!prevStartTs || prevStartTs <= entryTime + 5000))));
+      const isInterruptedQueueEntry = Boolean(isUnsentFromPrevSession && !entry.failed && (entry.fromQueue || (Array.isArray(entry.queueIds) && entry.queueIds.length > 0) || entry.held));
+      const isConfirmedServerCopy = Boolean((byId && !byId._local) || (existingSameUser && !existingSameUser._local));
+      if (!isConfirmedServerCopy && !isActivelyAwaiting && !hasSrvUserAfterPrev && (isInterruptedQueueEntry || (isEntryFailed ? (isChatRunningNow || prevAsstSupplemented) : (prevAsstSupplemented || (isChatRunningNow && !isCurrentSessionOutbox))))) {
+        if (demoteToQueue(chat, byId || existingSameUser || entry, { silent: true, running: isChatRunningNow })) {
+          changed = true;
+        }
+        continue;
+      }
+      if (byIdIdx >= 0) {
+        if (isEntryFailed && byId._local) {
+          byId.failed = true;
+          delete byId._appendAccepted;
+          byId.v = (byId.v || 0) + 1;
+          if (!chat.busy && !chat.error) chat.error = '上一条消息未发出（服务器未收到），请点击重试';
+          changed = true;
+        } else if (entry._appendAccepted && !isEntryFailed) {
+          byId._appendAccepted = true;
+        }
+        if (entry._sentAt && !byId._sentAt) byId._sentAt = entry._sentAt;
+        if (entry.prevAsstId && !byId._prevAsstId) byId._prevAsstId = entry.prevAsstId;
+        if (!byId._local && byIdIdx < chat.messages.length - 1) {
+          remove(chat.sid, entry.id);
+          try { if (typeof Drafts !== 'undefined' && Drafts.ack) Drafts.ack(entry.id); } catch {}
+        }
+        continue;
+      }
+      if (existingIdx >= 0) {
+        if (isEntryFailed && existingSameUser._local) {
+          existingSameUser.failed = true;
+          delete existingSameUser._appendAccepted;
+          existingSameUser.v = (existingSameUser.v || 0) + 1;
+          if (!chat.busy && !chat.error) chat.error = '上一条消息未发出（服务器未收到），请点击重试';
+          changed = true;
+        } else if (entry._appendAccepted && !isEntryFailed) {
+          existingSameUser._appendAccepted = true;
+        }
+        if (!existingSameUser._local && existingIdx < chat.messages.length - 1) {
+          remove(chat.sid, entry.id, entryTxt, entryTime);
+          try { if (typeof Drafts !== 'undefined' && Drafts.ack) Drafts.ack(entry.id); } catch {}
+        }
+        continue;
+      }
+      if (prevIdx >= 0) {
+        const rightAfter = chat.messages[prevIdx + 1];
+        if (rightAfter?.role === 'user') {
+          if (entry._appendAccepted && !isEntryFailed && (!entryTxt || extractMsgText(rightAfter) === entryTxt)) rightAfter._appendAccepted = true;
+          if (!rightAfter._local && prevIdx + 1 < chat.messages.length - 1) {
+            remove(chat.sid, entry.id, entryTxt, entryTime);
+            try { if (typeof Drafts !== 'undefined' && Drafts.ack) Drafts.ack(entry.id); } catch {}
+          }
+          continue;
+        }
+      }
+      const userObj = {
+        id: entry.id, role: 'user', text: entry.text || entryTxt,
+        parts: Array.isArray(entry.parts) && entry.parts.length ? entry.parts.map(p => ({ ...p })) : [{ type: 'text', text: entry.text || entryTxt }],
+        _local: true, _appendAccepted: !isEntryFailed && Boolean(entry._appendAccepted), failed: isEntryFailed, _sentAt: entryTime || now(), _prevAsstId: entry.prevAsstId || null, _prevAsstWeight: entry.prevAsstWeight ?? null, v: 2
+      };
+      if (isEntryFailed) {
+        const lastM = chat.messages.at(-1);
+        if (!lastM || lastM.role === 'assistant') {
+          chat.messages.push(userObj);
+          if (!chat.busy && !chat.error) chat.error = '上一条消息未发出（服务器未收到），请点击重试';
+          changed = true;
+        }
+        continue;
+      }
+      if (prevIdx >= 0) { chat.messages.splice(prevIdx + 1, 0, userObj); changed = true; continue; }
+      let gapIdx = -1;
+      for (let i = chat.messages.length - 1; i >= 1; i--) {
+        const p = chat.messages[i - 1], c = chat.messages[i];
+        if (p?.role === 'assistant' && c?.role === 'assistant') {
+          if (p.participantPosition && c.participantPosition && p.participantPosition !== c.participantPosition) continue;
+          const pEnd = getMsgEndTs(p), cStart = getMsgTs(c);
+          if ((!pEnd || !entryTime || entryTime >= pEnd - 60000) && (!cStart || !entryTime || entryTime <= cStart + 60000)) {
+            gapIdx = i; break;
+          }
+        }
+      }
+      if (gapIdx >= 1) { userObj._prevAsstId = chat.messages[gapIdx - 1]?.id || null; chat.messages.splice(gapIdx, 0, userObj); changed = true; continue; }
+      if (!isActivelyAwaiting && lastAsstEndTs > 0 && entryTime > 0 && entryTime < lastAsstEndTs - 30000) {
+        remove(chat.sid, entry.id, entryTxt, entryTime);
+        try { if (typeof Drafts !== 'undefined' && Drafts.ack) Drafts.ack(entry.id); } catch {}
+        continue;
+      }
+      const lastM = chat.messages.at(-1);
+      const isTailAsstActive = lastM?.role === 'assistant' && Boolean(lastM.metadata?.pending || lastM._incomplete || lastM === chat.live || (typeof isIncompleteAssistantMsg === 'function' && isIncompleteAssistantMsg(lastM)));
+      if (isTailAsstActive && chat.messages.length >= 1 && chat.messages.at(-2)?.role !== 'user') {
+        const tailAsstStart = getMsgTs(lastM);
+        if (isActivelyAwaiting || !tailAsstStart || !entryTime || (entryTime >= tailAsstStart - 60000 && now() - entryTime < 600000)) {
+          chat.messages.splice(chat.messages.length - 1, 0, userObj); changed = true; continue;
+        }
+      }
+      if ((!lastM || lastM.role === 'assistant') && (isActivelyAwaiting || (entryTime > 0 && (!lastAsstEndTs || entryTime >= lastAsstEndTs - 15000) && now() - entryTime < 300000))) {
+        chat.messages.push(userObj); changed = true;
+      }
+    }
+    return changed;
+  }
+  return { record, remove, markFailed, hasFailed, readList, restoreInto, hasAdjacentAsstGap, extractMsgText, measureAsstWeight, demoteToQueue };
+})();
+try { if (typeof window !== 'undefined') window.SentUserLog = SentUserLog; } catch {}
 
 const Chats = new Map();
 function pruneInactiveChats(maxIdle = 28) {
@@ -2062,6 +2523,8 @@ Chats.onRouteSwitched = () => {
         }
       } else if (c.sid === curSid && !c.loaded) {
         setTimeout(() => { try { c.load(true).catch(() => {}); } catch {} }, 60);
+      } else if (c.loaded && !c.isEvaluation && typeof c.resumeIncremental === 'function' && (c.sid === curSid || (Array.isArray(c.messages) && c.messages.some(m => m?.role === 'user' && (m._local || m.failed))))) {
+        setTimeout(() => { try { c.resumeIncremental().catch(() => {}); } catch {} }, 80);
       }
       if ((c.streaming || c.busy) && !c.isEvaluation && typeof c.restream === 'function') {
         setTimeout(() => { try { if (c.streaming || c.busy) c.restream(); } catch {} }, 120);
@@ -2083,21 +2546,33 @@ class Chat {
     if (!x || !Array.isArray(x.messages) || !x.messages.length) return false;
     if (x.isEvaluation) { this.isEvaluation = true; if (x.evalMode) this.evalMode = x.evalMode; }
     this.messages = x.messages.filter(m => !(typeof isPhantomFinishStub === 'function' && isPhantomFinishStub(m))).map(m => ({ ...m, v: 0 }));
+    try { SentUserLog.restoreInto(this); } catch {}
     this.cached = true;
     this._hotOnly = Boolean(x._hotSlice);
     this.hasMore = !!x.more;
     if (x.lastSeq && !this.lastSeq) this.lastSeq = String(x.lastSeq);
-    if (x.token && !this.token && (x.tokenExp || 0) > now() + 30000) { this.token = x.token; this.tokenExp = x.tokenExp; this.tokenAt = 0; }
+    if (x.triggerAddress && !this.triggerAddress) this.triggerAddress = x.triggerAddress;
+    if (x.token && !this.token && (x.tokenExp || 0) > now() + 30000) { this.token = x.token; this.tokenExp = x.tokenExp; this.tokenAt = now(); }
+    const tailM = this.messages.at(-1);
+    if (tailM?.role === 'user' && tailM._local && !tailM._appendAccepted && !(typeof Drafts !== 'undefined' && Drafts.sess?.has?.(tailM.id))) {
+      tailM.failed = true;
+      if (!this.error) this.error = '上一条消息未发出（服务器未收到），请点击重试';
+    }
+    if (tailM && ((tailM.role === 'user' && !tailM.failed && (!tailM._local || tailM._appendAccepted)) || (tailM.role === 'assistant' && typeof isIncompleteAssistantMsg === 'function' && isIncompleteAssistantMsg(tailM)))) {
+      this._recoveringIncomplete = true;
+      if (tailM.role === 'assistant') tailM._incomplete = true;
+    }
     return true;
   }
   get busy() { return this.status === 'submitted' || this.status === 'streaming' || this.status === 'stopping'; }
-  emit() { if (this._emitT) { clearTimeout(this._emitT); this._emitT = 0; } this._lastEmitAt = now(); this.v++; if (this.wCtl && (this.busy || this.streaming)) { try { this.wCtl.abort(); } catch {} this.wCtl = null; } Bus.emit('chat', this); if ((this.loaded || (Array.isArray(this.messages) && this.messages.length > 0)) && !this.busy) MsgCache.put(this); }
+  emit() { if (this._emitT) { clearTimeout(this._emitT); this._emitT = 0; } this._lastEmitAt = now(); this.v++; if (this.wCtl && (this.busy || this.streaming)) { try { this.wCtl.abort(); } catch {} this.wCtl = null; } try { if (typeof RunningTracker !== 'undefined') RunningTracker.onChatUpdate(this); } catch {} Bus.emit('chat', this); if (this.loaded || (Array.isArray(this.messages) && this.messages.length > 0)) MsgCache.put(this); }
   emitStreamSoon(delay = 20) { if (this._emitT) return; const el = now() - (this._lastEmitAt || 0); if (el >= delay) { this.emit(); return; } this._emitT = setTimeout(() => { this._emitT = 0; this.emit(); }, Math.max(12, delay - el)); }
   // 鼠标移到侧栏卡片上就先把对话内容拉下来，点开时直接用（30 秒内有效）
   prefetch() {
-    if (this.loaded || this.loading || this._preP || (this._pre && now() - this._pre.at < 30000) || now() - (this._preAt || 0) < 180000) return;   // 同一个对话 3 分钟内只预读一次（鼠标反复划过不重复下载）
+    if (this.loaded || this.loading || this.messages?.length > 0 || (typeof MsgCache !== 'undefined' && MsgCache.mem?.has?.(this.sid)) || this._preP || (this._pre && now() - this._pre.at < 30000) || now() - (this._preAt || 0) < 180000) return;   // 同一个对话 3 分钟内只预读一次（鼠标反复划过不重复下载）
     const curSid = typeof Tabs !== 'undefined' ? Tabs.cur?.sid : null;
     if (curSid && curSid !== this.sid && Chats.get(curSid)?.loading) return;   // 当前正点开的对话在加载中：暂停预读让路
+    if (typeof Chats !== 'undefined' && [...Chats.values()].some(ch => ch && (ch.busy || ch.streaming))) return;
     if (!ReadLimit.canPrefetch()) return;   // 限流中 / 已有一条预读在途 / 离上一条太近：跳过，点开时再正常加载
     ReadLimit.inflight++; ReadLimit.lastAt = now(); this._preAt = now();
     this._preP = api('/api/chat/' + this.sid, { timeout: 30000, bg: true }).then(c => { this._pre = { c, at: now() }; return c; }).finally(() => { this._preP = null; ReadLimit.inflight = Math.max(0, ReadLimit.inflight - 1); });
@@ -2137,8 +2612,7 @@ class Chat {
   async wakeSessionToken(force = false) {
     if (this.isEvaluation || (typeof EvalEngine !== 'undefined' && EvalEngine.isEvalChat?.(this))) return null;
     const prevTok = this.token, prevExp = this.tokenExp;
-    const stale = !this.token || !this.tokenAt || (now() - this.tokenAt > 90000);
-    if (!force && !stale && (this.tokenExp || 0) - 120000 > now()) return this.token;
+    if (!force && this.token && !this._badToks?.has(this.token) && (this.tokenExp || 0) - 180000 > now()) return this.token;
     try {
       const j = await api('/api/chat/trigger-token', { json: { sessionId: this.sid }, timeout: 10000 });
       if (j?.triggerAddress) this.triggerAddress = j.triggerAddress;
@@ -2191,8 +2665,50 @@ class Chat {
     })().finally(() => { this.tokenP = null; });
     return this.tokenP;
   }
+  async streamDirectFallback(opt = {}) {
+    if (this.isEvaluation || (typeof EvalEngine !== 'undefined' && EvalEngine.isEvalChat?.(this))) return false;
+    try {
+      const tok = await this.ensureToken().catch(() => this.token);
+      if (!tok) return false;
+      this.loaded = true;
+      this.cached = false;
+      this.error = null;
+      const tailM = this.messages.at(-1);
+      const tailPend = Boolean(tailM?.role === 'assistant' && (tailM.metadata?.pending || tailM._incomplete || (typeof hasInterruptedToolPart === 'function' && hasInterruptedToolPart(tailM))));
+      const needReplay = !Array.isArray(this.messages) || this.messages.length === 0;
+      const d = await this.drain(needReplay ? 3000 : 1500, { keepIfFinished: true, replayFinished: needReplay }).catch(() => null);
+      if (d?.open || d?.run || tailPend) {
+        if (d?.runSeq != null && (this.lastSeq == null || +this.lastSeq >= d.runSeq)) {
+          this.lastSeq = String(Math.max(0, d.runSeq - 1));
+          this.fence = Math.max(0, d.runSeq - 1);
+        }
+        const curTail = this.messages.at(-1);
+        if (curTail?.role === 'assistant') {
+          curTail.metadata = { ...(curTail.metadata || {}), pending: true };
+          delete curTail._finishedAt;
+          this.live = curTail;
+          this.parts.clear();
+          for (const p of curTail.parts || []) {
+            if (p?.toolCallId) this.parts.set('tool:' + p.toolCallId, p);
+            else if ((p?.type === 'text' || p?.type === 'reasoning') && p.id) this.parts.set(p.type[0] + ':' + p.id, p);
+          }
+        }
+        this.status = 'streaming';
+        this.phase = '接收回复中';
+        this.emit();
+        this.stream({ peek: false });
+        return true;
+      }
+      if (!this.streaming) this.stream({ peek: !this.busy });
+      this.emit();
+      return true;
+    } catch {
+      return false;
+    }
+  }
   load(force) {
     if (this.loaded && !force) return Promise.resolve();
+    if (this.loading && !force) return this.loading;
     if (force && this.loading) {
       try { this._loadCtl?.abort(); } catch {}
       this.loading = null;
@@ -2202,8 +2718,11 @@ class Chat {
       if (x?.isEvaluation) { this.isEvaluation = true; if (x.evalMode) this.evalMode = x.evalMode; }
       if (x?.messages?.length && !this.loaded && (!this.messages.length || (this._hotOnly && !x._hotSlice && x.messages.length >= this.messages.length))) {
         this._hotOnly = false;
-        this.messages = x.messages.filter(m => !(typeof isPhantomFinishStub === 'function' && isPhantomFinishStub(m))).map(m => {
-          if (m?.role === 'assistant' && !m.metadata?.pending && Array.isArray(m.parts)) {
+        const filteredCached = x.messages.filter(m => !(typeof isPhantomFinishStub === 'function' && isPhantomFinishStub(m)));
+        this.messages = filteredCached.map((m, idx) => {
+          const isTailAsst = idx === filteredCached.length - 1 && m?.role === 'assistant';
+          const isInc = isTailAsst && typeof isIncompleteAssistantMsg === 'function' && isIncompleteAssistantMsg(m);
+          if (m?.role === 'assistant' && !m.metadata?.pending && !isInc && Array.isArray(m.parts)) {
             for (const p of m.parts) {
               if (p?.toolCallId && !Hitl.name(p) && /^(input-streaming|input-available)$/.test(p.state || '')) {
                 p.state = 'output-error';
@@ -2211,34 +2730,33 @@ class Chat {
               }
             }
           }
+          if (isInc) {
+            m._incomplete = true;
+            m.metadata = { ...(m.metadata || {}), pending: true };
+          }
           return { ...m, v: 0 };
         });
+        try { SentUserLog.restoreInto(this); } catch {}
         this.cached = true; this.hasMore = !!x.more;
+        const tailCached = this.messages.at(-1);
+        if (tailCached?.role === 'user' && tailCached._local && !tailCached._appendAccepted && !(typeof Drafts !== 'undefined' && Drafts.sess?.has?.(tailCached.id))) {
+          tailCached.failed = true;
+          if (!this.error) this.error = '上一条消息未发出（服务器未收到），请点击重试';
+        }
+        if (tailCached && ((tailCached.role === 'user' && !tailCached.failed && (!tailCached._local || tailCached._appendAccepted)) || (tailCached.role === 'assistant' && tailCached._incomplete))) {
+          this._recoveringIncomplete = true;
+        }
         if (this.isEvaluation || (typeof EvalEngine !== 'undefined' && EvalEngine.isEvalChat?.(this))) {
           this.emit();
           return;
         }
-        if (x.lastSeq && !this.lastSeq) this.lastSeq = String(x.lastSeq);
+        if (x.lastSeq) { this._cachedLastSeq = String(x.lastSeq); if (!this.lastSeq) this.lastSeq = String(x.lastSeq); }
         if (x.token && !this.token && (x.tokenExp || 0) > now() + 30000) { this.token = x.token; this.tokenExp = x.tokenExp; this.tokenAt = 0; }
-        const histRow = typeof History !== 'undefined' ? History.byId?.(this.sid) : null;
-        const lastCached = this.messages.at(-1);
         const isFastRet = Boolean(window.__ANC_FAST_RETURN);
-        const hasInterruptedTail = typeof hasInterruptedToolPart === 'function' && hasInterruptedToolPart(lastCached);
-        const isIdleComplete = lastCached?.role === 'assistant' && !lastCached?.metadata?.pending && !hasInterruptedTail && !(typeof isDeadAssistantMsg === 'function' && isDeadAssistantMsg(lastCached)) && !this.busy;
-        const isUnchangedByHist = Boolean(!isFastRet && isIdleComplete && histRow?.updatedAt && x.histUpdatedAt && histRow.updatedAt === x.histUpdatedAt);
-        if (!force && !hasInterruptedTail && (isUnchangedByHist || (isFastRet && now() - (x.at || 0) < 30 * 60e3))) {
-          this.cached = false; this.loaded = true; this.error = null; this._lastSyncedHistAt = histRow?.updatedAt || x.histUpdatedAt || null; this.emit();
-          if (isFastRet) {
-            setTimeout(() => {
-              try { if (typeof History !== 'undefined' && History.refresh) void History.refresh(); } catch {}
-              if (this.loaded && !this.busy) void (this.resumeIncremental ? this.resumeIncremental('fast-return') : this.quickSync(true));
-            }, 30);
-          } else if (isUnchangedByHist) {
-            setTimeout(() => { if (this.loaded && !this.busy && typeof this.reconcile === 'function') void this.reconcile(0).catch(() => {}); }, 80);
-          } else {
-            setTimeout(() => { if (this.loaded) this.quickSync(true); }, 20);
-          }
-          return;
+        if (isFastRet) {
+          setTimeout(() => {
+            try { if (typeof History !== 'undefined' && History.refresh) void History.refresh(); } catch {}
+          }, 20);
         }
         this.emit();
       }
@@ -2258,7 +2776,8 @@ class Chat {
     const loadGen = (this._loadGen = (this._loadGen || 0) + 1);
     const loadCtl = (this._loadCtl = typeof AbortController !== 'undefined' ? new AbortController() : null);
     this._loadStartedAt = now();
-    return this.loading ||= (async () => {
+    let myLoadP = null;
+    return this.loading ||= (myLoadP = (async () => {
       try {
         if (!this.messages.length || this._hotOnly) {
           const x = await MsgCache.get(this.sid).catch(() => null);
@@ -2266,23 +2785,34 @@ class Chat {
           if (this.loaded && !force) return;
           if (x?.messages?.length && (!this.messages.length || (this._hotOnly && !x._hotSlice && x.messages.length >= this.messages.length))) {
             this._hotOnly = false;
-            this.messages = x.messages.filter(m => !(typeof isPhantomFinishStub === 'function' && isPhantomFinishStub(m))).map(m => ({ ...m, v: 0 }));
+            const filteredCached = x.messages.filter(m => !(typeof isPhantomFinishStub === 'function' && isPhantomFinishStub(m)));
+            this.messages = filteredCached.map((m, idx) => {
+              const isTailAsst = idx === filteredCached.length - 1 && m?.role === 'assistant';
+              const isInc = isTailAsst && typeof isIncompleteAssistantMsg === 'function' && isIncompleteAssistantMsg(m);
+              if (isInc) { m._incomplete = true; m.metadata = { ...(m.metadata || {}), pending: true }; }
+              return { ...m, v: 0 };
+            });
+            try { SentUserLog.restoreInto(this); } catch {}
             this.cached = true; this.hasMore = !!x.more;
+            const tailCached = this.messages.at(-1);
+            if (tailCached?.role === 'user' && tailCached._local && !tailCached._appendAccepted && !(typeof Drafts !== 'undefined' && Drafts.sess?.has?.(tailCached.id))) {
+              tailCached.failed = true;
+              if (!this.error) this.error = '上一条消息未发出（服务器未收到），请点击重试';
+            }
+            if (tailCached && ((tailCached.role === 'user' && !tailCached.failed && (!tailCached._local || tailCached._appendAccepted)) || (tailCached.role === 'assistant' && tailCached._incomplete))) {
+              this._recoveringIncomplete = true;
+            }
             if (this.isEvaluation || (typeof EvalEngine !== 'undefined' && EvalEngine.isEvalChat?.(this))) {
               this.loading = null;
               return EvalEngine.loadChat(this, force);
             }
+            if (x.lastSeq) { this._cachedLastSeq = String(x.lastSeq); if (!this.lastSeq) this.lastSeq = String(x.lastSeq); }
             if (x.token && !this.token && (x.tokenExp || 0) > now() + 30000) { this.token = x.token; this.tokenExp = x.tokenExp; }
-            const histRow = typeof History !== 'undefined' ? History.byId?.(this.sid) : null;
-            const lastCached = this.messages.at(-1);
             const isFastRet = Boolean(window.__ANC_FAST_RETURN);
-            const hasInterruptedTail = typeof hasInterruptedToolPart === 'function' && hasInterruptedToolPart(lastCached);
-            const isIdleComplete = lastCached?.role === 'assistant' && !lastCached?.metadata?.pending && !hasInterruptedTail && !(typeof isDeadAssistantMsg === 'function' && isDeadAssistantMsg(lastCached)) && !this.busy;
-            const isUnchangedByHist = Boolean(!force && !isFastRet && isIdleComplete && histRow?.updatedAt && x.histUpdatedAt && histRow.updatedAt === x.histUpdatedAt);
-            if (isUnchangedByHist) {
-              this.cached = false; this.loaded = true; this.error = null; this._lastSyncedHistAt = histRow.updatedAt; this.emit();
-              setTimeout(() => { if (this.loaded && !this.busy && typeof this.reconcile === 'function') void this.reconcile(0).catch(() => {}); }, 80);
-              return;
+            if (isFastRet) {
+              setTimeout(() => {
+                try { if (typeof History !== 'undefined' && History.refresh) void History.refresh(); } catch {}
+              }, 20);
             }
             this.emit();
           }
@@ -2311,10 +2841,12 @@ class Chat {
           if (loadCtl?.signal?.aborted || this._loadGen !== loadGen) throw Object.assign(new Error('加载已切换'), { name: 'AbortError' });
           try {
             const reqTimeout = (waits === 0 && netWaits === 0 && !fastRetried) ? 35000 : 45000;
-            const chatQuery = (!this.busy && !this.streaming && !force && !window.__ANC_FAST_RETURN && fastRetried)
+            const isTrackedRunLoad = Boolean(this._startupResuming || this._wasTrackedRunning || (typeof RunningTracker !== 'undefined' && RunningTracker.isTrackedRunning?.(this.sid)));
+            const chatQuery = (!this.busy && !(this.streaming && !this.peeking))
               ? '?includeStreamToken=false&recoverRun=false'
               : '?includeStreamToken=false';
-            c = await api('/api/chat/' + this.sid + chatQuery, { timeout: reqTimeout, noApiRetry: true, onProgress, ...(loadCtl?.signal ? { signal: loadCtl.signal } : {}) });
+            const effChatQuery = (this._recoveringIncomplete || isTrackedRunLoad) ? '?includeStreamToken=false' : chatQuery;
+            c = await api('/api/chat/' + this.sid + effChatQuery, { timeout: reqTimeout, noApiRetry: true, allowDirectFallback: true, onProgress, ...(loadCtl?.signal ? { signal: loadCtl.signal } : {}) });
           } catch (e) {
             if (loadCtl?.signal?.aborted || this._loadGen !== loadGen) throw e;
             if (!fastRetried && waits === 0 && netWaits === 0 && !e?.status && (e?.routeTimeout || /超时|failed to fetch|fetch failed|network|ERR_|socket|eof|reset|closed/i.test(String(e?.message || e)))) {
@@ -2327,6 +2859,10 @@ class Chat {
               continue;
             }
             if (e?.status !== 429) throw e;
+            if (await this.streamDirectFallback({ fromLoad: true })) {
+              this.loadBytes = 0;
+              return;
+            }
             if (waits >= 3 || (e.retryAfterMs || 0) > 60000) throw e;
             const wait = Math.round(Math.max(e.retryAfterMs || 0, 3000 * 2 ** waits) * (0.9 + Math.random() * 0.2)); waits++;
             this.error = '请求过于频繁（429），' + Math.ceil(wait / 1000) + ' 秒后自动重试…'; this.emit(); await sleep(wait);
@@ -2337,7 +2873,8 @@ class Chat {
         // 打开对话时顺便同步列表里的名称（别的设备改名 / 校准后，不用来回切换多次才更新）
         { const t = c?.title ?? c?.chat?.title, row = typeof History !== 'undefined' ? History.byId(this.sid) : null; if (typeof t === 'string' && t && row && row.title !== t) { row.title = t; const miNow = typeof Models !== 'undefined' ? Models.get(this.sid) : null; if (miNow?.name && !miNow.pendingConfirm && (!miNow.guess || miNow.userCorrected || miNow.habitInferred || miNow.reverseInferred || miNow.billingProbe) && typeof Titles !== 'undefined' && Titles.local) Titles.local(this.sid); else delete row.localTitle; History.saveSoon(); Bus.emit('history'); } }
         // 加载期间自己刚发出的消息（服务端还没有）保留在末尾，不被覆盖；替换掉缓存内容时强制重绘
-        const srv = (c.messages || []).filter(m => !this._prunedDeadMsgIds?.has?.(m?.id)).map(m => ({ ...m, v: wasCached ? 1 : 0 })), ids = new Set(srv.map(m => m.id));
+        const nextVer = (this._msgVerSeq = (this._msgVerSeq || 1) + 1);
+        const srv = (c.messages || []).filter(m => !this._prunedDeadMsgIds?.has?.(m?.id)).map(m => ({ ...m, v: wasCached ? nextVer : (nextVer - 1) })), ids = new Set(srv.map(m => m.id));
         if (!srv.length && this.messages.length) {
           // 服务端未返回有效消息时保留本地已缓存的正文，绝不清空
         } else if (this.messages.length && !wasCached && typeof this.mergeServer === 'function') this.mergeServer(srv, this.live);
@@ -2352,43 +2889,144 @@ class Chat {
           const normUText = m => (m?.parts || []).filter(p => p?.type === 'text').map(p => String(p.text || '')).join('').replace(/\s+/g, ' ').trim();
           const srvUserNodes = new Set(srv.filter(m => m?.role === 'user').map(m => m.metadata?.nodeId).filter(Boolean));
           const srvUserTexts = new Set(srv.filter(m => m?.role === 'user').map(normUText).filter(Boolean));
+          const oldAsstWeightsForLoad = new Map();
+          for (const om of this.messages) if (om?.role === 'assistant' && om.id && typeof SentUserLog !== 'undefined' && SentUserLog.measureAsstWeight) oldAsstWeightsForLoad.set(om.id, SentUserLog.measureAsstWeight(om));
+          const srvLastMsgForLoad = srv.at(-1);
+          const srvLastExplicitDoneForLoad = Boolean(srvLastMsgForLoad?.metadata?.timing?.completedAt || srvLastMsgForLoad?.metadata?.finishReason === 'stop' || srvLastMsgForLoad?.metadata?.finishReason === 'end-turn' || srvLastMsgForLoad?.metadata?.aborted || srvLastMsgForLoad?.metadata?.error);
+          const srvLastIsRunningForLoad = Boolean(srvLastMsgForLoad?.role === 'assistant' && !srvLastExplicitDoneForLoad && (srvLastMsgForLoad.metadata?.pending || (typeof hasInterruptedToolPart === 'function' && hasInterruptedToolPart(srvLastMsgForLoad))));
+          const srvLastCompForLoad = srvLastMsgForLoad?.metadata?.timing?.completedAt || srvLastMsgForLoad?.metadata?.timing?.startedAt;
+          const srvLastCompMsForLoad = typeof srvLastCompForLoad === 'number' ? srvLastCompForLoad : (typeof srvLastCompForLoad === 'string' ? Date.parse(srvLastCompForLoad) : 0);
+          const srvLastTimeForLoad = Math.max(idTime(srvLastMsgForLoad?.id) || 0, Number.isFinite(srvLastCompMsForLoad) ? srvLastCompMsForLoad : 0);
           const mergedSrv = srv.map(m => {
             const curAsstIdx = m?.role === 'assistant' ? asstOrd++ : -1;
             const o = byOld.get(m.id) || (curAsstIdx >= 0 && oldAssts.length === srvAssts.length ? oldAssts[curAsstIdx] : null);
-            if (!o) return m;
+            const msgVer = Math.max(nextVer, (o?.v || 0) + 1);
+            if (!o) return { ...m, v: msgVer };
             let mergedParts = m.parts;
             if (o.role === 'assistant' && Array.isArray(o.parts) && Array.isArray(m.parts)) {
-              const localReason = o.parts.filter(p => p && p.type === 'reasoning');
-              const srvHasReason = m.parts.some(p => p && p.type === 'reasoning');
-              if (localReason.length && !srvHasReason) mergedParts = [...localReason, ...m.parts];
-              const lIds = { reasoning: o.parts.filter(p => p?.type === 'reasoning' && p.id), text: o.parts.filter(p => p?.type === 'text' && p.id) }, idxMap = { reasoning: 0, text: 0 };
-              mergedParts = mergedParts.map(sp => (sp && (sp.type === 'reasoning' || sp.type === 'text') && !sp.id && lIds[sp.type]?.[idxMap[sp.type]]?.id) ? { ...sp, id: lIds[sp.type][idxMap[sp.type]++].id } : sp);
+              const oToolCnt = o.parts.filter(p => p && (p.toolCallId || String(p.type || '').startsWith('tool-'))).length;
+              const mToolCnt = m.parts.filter(p => p && (p.toolCallId || String(p.type || '').startsWith('tool-'))).length;
+              if (oToolCnt > mToolCnt || (o.parts.length > m.parts.length && (m.metadata?.pending || o.metadata?.pending || o._incomplete))) {
+                const srvByTool = new Map();
+                for (const sp of m.parts) if (sp?.toolCallId) srvByTool.set(sp.toolCallId, sp);
+                mergedParts = o.parts.map(lp => {
+                  if (!lp) return lp;
+                  if (lp.toolCallId && srvByTool.has(lp.toolCallId)) {
+                    const sp = srvByTool.get(lp.toolCallId);
+                    srvByTool.delete(lp.toolCallId);
+                    if (sp.output !== undefined && lp.output === undefined) return { ...lp, ...sp, state: sp.state || 'output-available' };
+                    return { ...sp, ...lp, output: lp.output !== undefined ? lp.output : sp.output, state: lp.state === 'output-available' ? 'output-available' : (sp.state || lp.state) };
+                  }
+                  return lp;
+                });
+                for (const sp of srvByTool.values()) mergedParts.push(sp);
+              } else {
+                const localReason = o.parts.filter(p => p && p.type === 'reasoning');
+                const srvHasReason = m.parts.some(p => p && p.type === 'reasoning');
+                if (localReason.length && !srvHasReason) mergedParts = [...localReason, ...m.parts];
+                const localNonEmptyReason = localReason.filter(p => p.text);
+                const localTools = new Map(o.parts.filter(p => p?.toolCallId).map(p => [p.toolCallId, p]));
+                let rTextIdx = 0;
+                const lIds = { reasoning: o.parts.filter(p => p?.type === 'reasoning' && p.id), text: o.parts.filter(p => p?.type === 'text' && p.id) }, idxMap = { reasoning: 0, text: 0 };
+                mergedParts = mergedParts.map(sp => {
+                  if (!sp) return sp;
+                  if (sp.toolCallId && localTools.has(sp.toolCallId)) {
+                    const lt = localTools.get(sp.toolCallId);
+                    return { ...lt, ...sp, output: sp.output !== undefined ? sp.output : lt.output, state: sp.output !== undefined ? (sp.state || 'output-available') : (lt.state === 'output-available' ? 'output-available' : (sp.state || lt.state)) };
+                  }
+                  let outP = (sp.type === 'reasoning' || sp.type === 'text') && !sp.id && lIds[sp.type]?.[idxMap[sp.type]]?.id ? { ...sp, id: lIds[sp.type][idxMap[sp.type]++].id } : sp;
+                  if (outP.type === 'reasoning' && !outP.text && localNonEmptyReason[rTextIdx]?.text) {
+                    const lr = localNonEmptyReason[rTextIdx++];
+                    outP = { ...outP, text: lr.text, id: outP.id || lr.id };
+                  }
+                  return outP;
+                });
+              }
             }
-            const extra = {};
+            const extra = { v: msgVer };
             if (o._fmt || m._fmt) extra._fmt = o._fmt || m._fmt;
             if (o._sseMeta || m._sseMeta) extra._sseMeta = o._sseMeta || m._sseMeta;
             if (o._sentAt || m._sentAt) extra._sentAt = o._sentAt || m._sentAt;
             if (!m.metadata?.pending && (o._finishedAt || m._finishedAt)) extra._finishedAt = o._finishedAt || m._finishedAt;
             if (o._turnModelLabel || m._turnModelLabel) extra._turnModelLabel = o._turnModelLabel || m._turnModelLabel;
-            return (mergedParts !== m.parts || Object.keys(extra).length) ? { ...m, parts: mergedParts, ...extra } : m;
+            if (o._incomplete && (m === srv.at(-1) || m.metadata?.pending)) extra._incomplete = true;
+            if (o._appendAccepted || m._appendAccepted) extra._appendAccepted = true;
+            if (o._prevAsstId || m._prevAsstId) extra._prevAsstId = o._prevAsstId || m._prevAsstId;
+            return { ...m, parts: mergedParts, ...extra };
           });
-          const localPending = this.messages.filter(m => {
-            if (!m || !m._local || ids.has(m.id)) return false;
+          let lastSrvInOldIdx = -1;
+          for (let i = this.messages.length - 1; i >= 0; i--) {
+            if (this.messages[i]?.id && ids.has(this.messages[i].id)) { lastSrvInOldIdx = i; break; }
+          }
+          const localPending = this.messages.filter((m, idx) => {
+            if (!m || ids.has(m.id)) return false;
+            if (m.failed) {
+              if (m.role === 'user') {
+                const uTime = m._sentAt || idTime(m.id) || 0;
+                const ut = normUText(m);
+                const inSrv = ut && srvUserTexts.has(ut);
+                const pIdx = m._prevAsstId ? srv.findIndex(x => x && x.id === m._prevAsstId) : (srvLastMsgForLoad?.role === 'assistant' ? srv.length - 1 : -1);
+                const hasSrvUserAfterP = pIdx >= 0 && srv.slice(pIdx + 1).some(x => x && x.role === 'user');
+                const targetAsst = pIdx >= 0 ? srv[pIdx] : null;
+                const oldW = targetAsst ? (m._prevAsstWeight ?? oldAsstWeightsForLoad.get(targetAsst.id) ?? null) : null;
+                const newW = (targetAsst && typeof SentUserLog !== 'undefined' && SentUserLog.measureAsstWeight) ? SentUserLog.measureAsstWeight(targetAsst) : 0;
+                const targetSupplemented = Boolean(targetAsst && !hasSrvUserAfterP && ((oldW != null && newW > oldW) || (srvLastTimeForLoad > 0 && uTime > 0 && srvLastTimeForLoad >= uTime + 1000 && (idTime(targetAsst.id) || 0) <= uTime + 5000)));
+                if (!inSrv && !hasSrvUserAfterP && (srvLastIsRunningForLoad || this.busy || this.streaming || this.live || targetSupplemented)) {
+                  try { SentUserLog.demoteToQueue?.(this, m, { silent: true, running: srvLastIsRunningForLoad }); } catch {}
+                  return false;
+                }
+                if (!inSrv && idx === this.messages.length - 1 && (!srvLastTimeForLoad || !uTime || uTime >= srvLastTimeForLoad - 30000)) return true;
+              }
+              try { SentUserLog.remove?.(this.sid, m.id); } catch {}
+              return false;
+            }
+            const isAheadOfSrv = idx > lastSrvInOldIdx;
+            const prevInOld = idx > 0 ? this.messages[idx - 1] : null;
+            const isCachedActiveTailAsst = m.role === 'assistant' && idx === this.messages.length - 1 && (mergedSrv.at(-1)?.role === 'user' || prevInOld?.role === 'user' || isAheadOfSrv) && (m.metadata?.pending || m._incomplete || (Array.isArray(m.parts) && m.parts.some(p => p && (p.toolCallId || p.text))));
+            const isRecentTailUser = m.role === 'user' && (idx > lastSrvInOldIdx || idx >= this.messages.length - 2) && (m._appendAccepted || isAheadOfSrv || (this.messages[idx + 1]?.role === 'assistant' && (ids.has(this.messages[idx + 1]?.id) || this.messages[idx + 1]?._incomplete || this.messages[idx + 1]?.metadata?.pending)));
+            if (!m._local && !m._appendAccepted && !isRecentTailUser && !isCachedActiveTailAsst) return false;
             if (m.role === 'user') {
               if (m.metadata?.nodeId && (ids.has(m.metadata.nodeId) || srvUserNodes.has(m.metadata.nodeId))) return false;
               if (srvUserNodes.has(m.id)) return false;
               const ut = normUText(m);
               if (ut && srvUserTexts.has(ut)) return false;
+              const isAwaitingThis = Boolean(this.awaitId && (this.awaitId === m.id || this.awaitId === m.metadata?.nodeId) && (this.busy || this.sending || this.preSend));
+              const uTime = m._sentAt || idTime(m.id) || 0;
+              const pIdxInSrv = m._prevAsstId ? mergedSrv.findIndex(x => x && x.id === m._prevAsstId) : (srvLastMsgForLoad?.role === 'assistant' ? mergedSrv.length - 1 : -1);
+              const hasSrvUserAfterP = pIdxInSrv >= 0 && mergedSrv.slice(pIdxInSrv + 1).some(x => x && x.role === 'user');
+              const targetAsst = pIdxInSrv >= 0 ? mergedSrv[pIdxInSrv] : null;
+              const oldW = targetAsst ? (m._prevAsstWeight ?? oldAsstWeightsForLoad.get(targetAsst.id) ?? null) : null;
+              const newW = (targetAsst && typeof SentUserLog !== 'undefined' && SentUserLog.measureAsstWeight) ? SentUserLog.measureAsstWeight(targetAsst) : 0;
+              const targetSupplemented = Boolean(targetAsst && !hasSrvUserAfterP && ((oldW != null && newW > oldW) || (srvLastTimeForLoad > 0 && uTime > 0 && srvLastTimeForLoad >= uTime + 1000 && (idTime(targetAsst.id) || 0) <= uTime + 5000)));
+              if (!hasSrvUserAfterP && !(isAwaitingThis && (this.preSend || this.sending)) && (targetSupplemented || (srvLastIsRunningForLoad && (!isAwaitingThis || !this.oursAt)))) {
+                try { SentUserLog.demoteToQueue?.(this, m, { silent: true, running: srvLastIsRunningForLoad }); } catch {}
+                return false;
+              }
+              if (!isAwaitingThis && srvLastTimeForLoad > 0 && uTime > 0 && uTime < srvLastTimeForLoad - 30000) {
+                if (!(pIdxInSrv >= 0 && mergedSrv[pIdxInSrv + 1]?.role === 'assistant')) return false;
+              }
             }
             return true;
           });
           const nextMsgs = [...olderPrefix, ...mergedSrv];
-          for (const lm of localPending) {
-            if (lm.role === 'user' && !lm._held && nextMsgs.at(-1)?.role === 'assistant') {
+          for (let lIdx = 0; lIdx < localPending.length; lIdx++) {
+            const lm = localPending[lIdx];
+            if (lm.role === 'user' && lm._prevAsstId) {
+              const pIdx = nextMsgs.findIndex(x => x && x.id === lm._prevAsstId);
+              if (pIdx >= 0 && nextMsgs[pIdx + 1]?.role !== 'user') {
+                nextMsgs.splice(pIdx + 1, 0, lm);
+                continue;
+              }
+            }
+            const hasAsstAfterInLocal = localPending.slice(lIdx + 1).some(x => x && x.role === 'assistant');
+            if (lm.role === 'user' && !lm._held && !hasAsstAfterInLocal && nextMsgs.at(-1)?.role === 'assistant') {
               const lastA = nextMsgs.at(-1);
+              const prevBeforeA = nextMsgs.length >= 2 ? nextMsgs[nextMsgs.length - 2] : null;
+              const missingUserBeforeA = !prevBeforeA || prevBeforeA.role === 'assistant';
+              const isAwaitingThisUser = Boolean(this.awaitId && (this.awaitId === lm.id || this.awaitId === lm.metadata?.nodeId));
               const uTime = lm._sentAt || idTime(lm.id) || 0;
               const aTime = idTime(lastA.id) || 0;
-              if (lastA.metadata?.pending && uTime && (!aTime || aTime >= uTime - 2000)) {
+              if (missingUserBeforeA || ((lastA.metadata?.pending || lastA._incomplete || (this.live && lastA === this.live)) && (isAwaitingThisUser || !uTime || !aTime || aTime >= uTime - 300000))) {
                 nextMsgs.splice(nextMsgs.length - 1, 0, lm);
                 continue;
               }
@@ -2396,34 +3034,98 @@ class Chat {
             nextMsgs.push(lm);
           }
           this.messages = nextMsgs;
+          try { SentUserLog.restoreInto(this, { srvPend: srvLastIsRunningForLoad }); } catch {}
+          try { if (typeof MsgCache !== 'undefined' && typeof MsgCache.sanitize === 'function') MsgCache.sanitize(this.messages); } catch {}
+          if ((typeof SentUserLog !== 'undefined' && SentUserLog.hasAdjacentAsstGap && SentUserLog.hasAdjacentAsstGap(this.messages))) {
+            setTimeout(() => { try { void this.reconcile(0); } catch {} }, 60);
+          }
         }
         this.hasMore = !!c.pagination?.hasMore; this.cursor = c.pagination?.cursor || null;
         if (c.triggerAddress || c.session?.triggerAddress) this.triggerAddress = c.triggerAddress || c.session.triggerAddress;
         if (c.taskId || c.session?.taskId) this.taskId = c.taskId || c.session.taskId;
         this.setToken(c.publicAccessToken || c.session?.publicAccessToken);
-        const sending = this.busy && this.messages.some(m => m._local);   // 载入完成前就发了消息：别打乱发送流程
-        if (!(sending && this.awaitId)) this.lastSeq = c.lastEventId != null ? String(c.lastEventId) : null;
-        this.loaded = true; this.error = null;
-        if (typeof MsgCache !== 'undefined' && MsgCache.putNow) void MsgCache.putNow(this).catch(() => {});
+        const sending = Boolean((this.awaitId || this.preSend || this.sending) && this.busy && this.messages.some(m => m._local));   // 载入完成前就发了消息：别打乱发送流程
+        if (!(sending && this.awaitId) && c.lastEventId != null) this.lastSeq = String(c.lastEventId);
+        if (this._cachedLastSeq && (!this.lastSeq || +this._cachedLastSeq > +this.lastSeq)) this.lastSeq = String(this._cachedLastSeq);
+        const hasFailedTailBeforeLoadEnd = Boolean(this.messages.at(-1)?.role === 'user' && this.messages.at(-1)?.failed);
+        this.loaded = true; if (!hasFailedTailBeforeLoadEnd) this.error = null;
         try {
           if (typeof healChatModelAndBranch === 'function') healChatModelAndBranch(this);
         } catch {}
         try { ExtCompat.replayChat(this); } catch {}
+        const wasRecoveringInc = Boolean(this._recoveringIncomplete || this._startupResuming || (typeof RunningTracker !== 'undefined' && RunningTracker.isTrackedRunning?.(this.sid)));
+        this._recoveringIncomplete = false;
+        this._startupResuming = false;
         const last = srv.at(-1); // a failed local input is not evidence that the server is generating
+        if (last?.role === 'assistant' && last.metadata?.pending && !(typeof isDeadAssistantMsg === 'function' && isDeadAssistantMsg(last)) && !Hitl.idleWait(this)) {
+          for (let i = this.messages.length - 1; i >= 0; i--) {
+            const tm = this.messages[i];
+            if (!tm) continue;
+            if (tm.role === 'assistant') break;
+            if (tm.role === 'user' && (tm.failed || (tm._local && !ids.has(tm.id) && !(sending && this.awaitId === tm.id && (this.preSend || this.sending || this.oursAt))))) {
+              try { SentUserLog.demoteToQueue?.(this, tm, { silent: true, running: true }); } catch {}
+            }
+          }
+        }
+        const tailMsgNow = this.messages.at(-1);
+        const tailHasOpenTool = Boolean(tailMsgNow?.role === 'assistant' && Array.isArray(tailMsgNow.parts) && tailMsgNow.parts.some(p => p?.toolCallId && !Hitl.name(p) && /^(input-streaming|input-available)$/.test(p.state || '')));
         // 停在提问卡片上等回答的那条也是 pending：它不是「正在回复」，不能当成忙（否则提交按钮一直不可用）
-        const pend = !!last && (last.role === 'user' || (last.metadata?.pending && !(typeof isDeadAssistantMsg === 'function' && isDeadAssistantMsg(last)))) && !(last.role === 'assistant' && Hitl.idleWait(this));
+        let pend = ((!!last && (last.role === 'user' || (last.metadata?.pending && !(typeof isDeadAssistantMsg === 'function' && isDeadAssistantMsg(last))))) || Boolean(tailMsgNow?.role === 'assistant' && (tailMsgNow.metadata?.pending || tailMsgNow._incomplete || (wasRecoveringInc && tailHasOpenTool)) && !(typeof isDeadAssistantMsg === 'function' && isDeadAssistantMsg(tailMsgNow)))) && !(last?.role === 'assistant' && Hitl.idleWait(this)) && !Hitl.idleWait(this);
+        if (!pend && wasRecoveringInc && tailMsgNow && !Hitl.idleWait(this) && c.lastEventId != null) {
+          const tailCompleted = Boolean(tailMsgNow.metadata?.timing?.completedAt || tailMsgNow.metadata?.aborted || tailMsgNow.metadata?.error || tailMsgNow.metadata?.finishReason === 'stop' || tailMsgNow.metadata?.finishReason === 'end-turn');
+          if (!tailCompleted || tailHasOpenTool) {
+            if (tailMsgNow.role === 'assistant') {
+              this.live = tailMsgNow;
+              this.parts.clear();
+              (tailMsgNow.parts || []).forEach(p => {
+                if (!p) return;
+                if (p.toolCallId) this.parts.set('tool:' + p.toolCallId, p);
+                if ((p.type === 'text' || p.type === 'reasoning') && p.id) this.parts.set(p.type[0] + ':' + p.id, p);
+              });
+            }
+            const baseSeq = (this._cachedLastSeq != null && +this._cachedLastSeq < +c.lastEventId) ? +this._cachedLastSeq : Math.max(0, +c.lastEventId - 1200);
+            this.lastSeq = String(baseSeq);
+            const dProbe = await this.drain(950, { targetSeq: c.lastEventId }).catch(() => null);
+            const stillOpenTool = Boolean(this.live && Array.isArray(this.live.parts) && this.live.parts.some(p => p?.toolCallId && !Hitl.name(p) && /^(input-streaming|input-available)$/.test(p.state || '')));
+            if (dProbe?.open || dProbe?.run || (stillOpenTool && !this.finAt && !tailCompleted)) {
+              pend = true;
+              if (this.live) {
+                delete this.live._finishedAt;
+                delete this.live._forcedFinish;
+                this.live.metadata = { ...(this.live.metadata || {}), pending: true };
+              }
+            } else {
+              this.lastSeq = String(c.lastEventId);
+              this.fence = +c.lastEventId;
+              this.live = null;
+              this.parts.clear();
+            }
+          }
+        }
+        for (const m of this.messages) {
+          if (m?.role === 'assistant' && (!pend || m !== tailMsgNow)) {
+            delete m._incomplete;
+            delete m._forcedFinish;
+          }
+        }
         for (const m of this.messages) {
           if (m?.role !== 'assistant') continue;
-          if (m.metadata?.pending && (!pend || m !== last)) m.metadata = { ...m.metadata, pending: false };
-          if (!m.metadata?.pending && Array.isArray(m.parts)) {
-            for (const p of m.parts) {
-              if (p?.toolCallId && !Hitl.name(p) && /^(input-streaming|input-available)$/.test(p.state || '')) {
-                p.state = 'output-error';
-                if (!p.errorText) p.errorText = '未返回结果';
+          const isActiveTail = Boolean(pend && m === tailMsgNow);
+          if (m.metadata?.pending && !isActiveTail) m.metadata = { ...m.metadata, pending: false };
+          if (isActiveTail && !m.metadata?.pending) m.metadata = { ...(m.metadata || {}), pending: true };
+          if (!m.metadata?.pending) {
+            if (!m._finishedAt) m._finishedAt = Date.parse(m.metadata?.timing?.completedAt || m.createdAt || '') || idTime(m.id) || now();
+            if (Array.isArray(m.parts)) {
+              for (const p of m.parts) {
+                if (p?.toolCallId && !Hitl.name(p) && /^(input-streaming|input-available)$/.test(p.state || '')) {
+                  p.state = 'output-error';
+                  if (!p.errorText) p.errorText = '未返回结果';
+                }
               }
             }
           }
         }
+        if (typeof MsgCache !== 'undefined' && MsgCache.putNow) void MsgCache.putNow(this).catch(() => {});
         if (sending) this.srvBusy = pend;
         else if (pend) {
           this.status = 'streaming'; this.phase = '接收回复中';
@@ -2439,12 +3141,48 @@ class Chat {
           } else {
             this.live = null; this.parts.clear();
           }
-        } else if (!this.live) {
-          this.status = 'idle'; this._lastSyncedHistAt = (typeof History !== 'undefined' && History.byId?.(this.sid)?.updatedAt) || null;
+        } else {
+          if (this.live && !sending) {
+            delete this.live._incomplete;
+            delete this.live._forcedFinish;
+            if (this.live.metadata) this.live.metadata.pending = false;
+            this.live = null;
+            this.parts.clear();
+          }
+          const tailFailedU = this.messages.at(-1)?.role === 'user' && this.messages.at(-1)?.failed ? this.messages.at(-1) : null;
+          this.status = tailFailedU ? 'error' : 'idle';
+          if (tailFailedU && !this.error) this.error = '上一条消息未发出（服务器未收到），请点击重试';
+          this.phase = ''; this._lastSyncedHistAt = (typeof History !== 'undefined' && History.byId?.(this.sid)?.updatedAt) || null;
+          const tailA = this.messages.at(-1);
+          const tailCompRaw = tailA?.metadata?.timing?.completedAt;
+          const tailCompMs = typeof tailCompRaw === 'number' ? tailCompRaw : (typeof tailCompRaw === 'string' ? Date.parse(tailCompRaw) : 0);
+          const tailFinAt = Math.max(tailA?._finishedAt || 0, Number.isFinite(tailCompMs) ? tailCompMs : 0, this.endAt || 0, idTime(tailA?.id) || 0);
+          if (tailA?.role === 'assistant' && !tailA.metadata?.pending && tailFinAt && (!this.endAt || tailFinAt > this.endAt)) {
+            this.endAt = tailFinAt;
+          }
+          if (!tailFailedU && typeof SendQ !== 'undefined' && (SendQ.of?.(this)?.length || (this.queue || []).length)) {
+            setTimeout(() => { try { SendQ.check(this); } catch {} }, 50);
+          }
+          if (tailA?.role === 'assistant' && !this.stopReq && !this.midTurnStall && (wasRecoveringInc || !tailFinAt || now() - tailFinAt < 90000)) {
+            const st = typeof KeepAlive !== 'undefined' && KeepAlive.isMidTurnStalled ? KeepAlive.isMidTurnStalled(this, tailA) : null;
+            if (st) { this.endAt = this.endAt || (tailFinAt && now() - tailFinAt < 90000 ? tailFinAt : now()); this.midTurnStall = { at: this.endAt, why: st.why, key: st.key }; }
+          }
         }
         this.emit();
-        // 刷新 / 重新载入时服务器上有一轮正在跑：快速补齐（700ms 上限，不阻塞实时流连接）
-        if (pend && !sending && !this.gacha) { this.lastSeq = c.lastEventId != null ? String(Math.max(0, +c.lastEventId - 4000)) : null; await Promise.race([this.drain(2500, { keepIfFinished: true }).catch(() => null), sleep(700)]); if (this.lastSeq == null && c.lastEventId != null) this.lastSeq = String(c.lastEventId); }
+        // 刷新 / 重新载入时服务器上有一轮正在跑：若本地缓存已有本轮进度与游标，直接基于缓存游标增量续接；无缓存游标才回退重放
+        if (pend && !sending && !this.gacha) {
+          const cachedSeq = this._cachedLastSeq || this.lastSeq;
+          const hasCachedLiveParts = Boolean(this.live && Array.isArray(this.live.parts) && this.live.parts.length > 0 && cachedSeq != null);
+          this.lastSeq = hasCachedLiveParts
+            ? String(cachedSeq)
+            : (c.lastEventId != null ? String(Math.max(0, +c.lastEventId - 4000)) : (cachedSeq != null ? String(cachedSeq) : null));
+          if (hasCachedLiveParts) {
+            this.fence = null;
+          } else {
+            await Promise.race([this.drain(2500, { keepIfFinished: true }).catch(() => null), sleep(700)]);
+            if (this.lastSeq == null && (cachedSeq != null || c.lastEventId != null)) this.lastSeq = String(cachedSeq ?? c.lastEventId);
+          }
+        }
         this.stream({ peek: !pend || sending });
         // 更早的消息不再打开就全部拉下来（以前一个长对话会连发几十上百个请求）：滚动到顶部 / 点「加载更早的消息」时才加载，和网页一致
         if (!this.hasMore) setTimeout(() => { try { FingerprintReview?.auto?.(this); } catch {} }, 600);   // 没有指纹信息的对话：按历史里的指纹测试自动校准
@@ -2466,7 +3204,13 @@ class Chat {
             this.hasMore = !!cached.more;
           }
         }
+        this._recoveringIncomplete = false;
+        this._startupResuming = false;
         if (this.messages.length) {
+          if (!this.awaitId && !this.preSend && !this.sending && this.status === 'streaming' && !this.live) {
+            this.status = 'idle';
+            this.phase = '';
+          }
           this.cached = false; this.loaded = true; this.error = null; this.emit();
           if (!this.isEvaluation && !(typeof EvalEngine !== 'undefined' && EvalEngine.isEvalChat?.(this))) {
             setTimeout(() => { if (this.loaded && !this.busy) this.quickSync?.(true); }, 3500);
@@ -2484,8 +3228,8 @@ class Chat {
         }
         this.error = e.status === 404 ? '对话不存在或已删除' : e.status === 429 ? '加载失败：请求过于频繁（429），已按服务器要求等待重试仍被限流' + ((e.retryAfterMs || 0) > 0 ? '，服务端要求等待约 ' + Math.ceil(e.retryAfterMs / 1000) + ' 秒' : '') + '；稍等一会儿点刷新' : '加载失败：' + e.message; this.emit(); throw e;
       }
-      finally { if (this._loadGen === loadGen) { this.loading = null; this._loadCtl = null; } }
-    })();
+      finally { if (this._loadGen === loadGen || this.loading === myLoadP) { this.loading = null; this._loadCtl = null; } }
+    })());
   }
   // 增量查漏补缺（不清空本地数百个已加载工具和消息，只按游标和 toolCallId 补齐缺失输出并续接实时流）
   async resumeIncremental(why) {
@@ -2501,14 +3245,16 @@ class Chat {
     this.gen++; try { this.ctl?.abort(); } catch {} this.streaming = false; this.ctl = null;
     this.fakeEnd = null; this.midTurnStall = null; this.errAt = 0; this.reloadAt = now(); this.reloadWhy = why || '';
     const last = this.messages.at(-1);
+    const lastExplicitlyDone = Boolean(last?.metadata?.timing?.completedAt || last?.metadata?.finishReason === 'stop' || last?.metadata?.finishReason === 'end-turn' || last?.metadata?.aborted || last?.metadata?.error);
     const canReviveLast = Boolean(last && last.role === 'assistant' && !last.metadata?.aborted && !last.metadata?.openThinkStopped && last.metadata?.feedback?.interruption !== 'stop' && (
-      !(typeof isDeadAssistantMsg === 'function' && isDeadAssistantMsg(last)) ||
-      (typeof hasInterruptedToolPart === 'function' && hasInterruptedToolPart(last)) ||
+      last.metadata?.pending ||
+      last._incomplete ||
+      (this.cached && !lastExplicitlyDone && typeof isIncompleteAssistantMsg === 'function' && isIncompleteAssistantMsg(last)) ||
+      (!lastExplicitlyDone && typeof hasInterruptedToolPart === 'function' && hasInterruptedToolPart(last)) ||
       last._forcedFinish
-    ));
-    if (canReviveLast) {
-      this.live = last; delete last._finishedAt; delete last._forcedFinish;
-      last.metadata = { ...(last.metadata || {}), pending: true };
+    ) && !(typeof isDeadAssistantMsg === 'function' && isDeadAssistantMsg(last) && !last._forcedFinish));
+    if (canReviveLast && wasBusy) {
+      this.live = last;
       this.parts.clear();
       (last.parts || []).forEach(p => {
         if (!p) return;
@@ -2518,17 +3264,17 @@ class Chat {
         }
         if ((p.type === 'text' || p.type === 'reasoning') && p.id) this.parts.set(p.type[0] + ':' + p.id, p);
       });
-      last.v = (last.v || 0) + 1;
-    } else {
+    } else if (!wasBusy) {
       this.live = null;
       this.parts.clear();
     }
-    this.status = 'streaming'; this.phase = '增量同步'; this.emit();
+    if (wasBusy) { this.status = 'streaming'; this.phase = '增量同步'; this.emit(); }
     try {
       const needRecover = Boolean(wasBusy || wasFake || why || canReviveLast);
       const incQuery = needRecover ? '?includeStreamToken=false' : '?includeStreamToken=false&recoverRun=false';
-      let got404 = false;
-      const c = await api('/api/chat/' + this.sid + incQuery, { timeout: 35000, noApiRetry: true }).catch(err => { if (err?.status === 404) got404 = true; return null; });
+      let got404 = false, got429 = false;
+      const c = await api('/api/chat/' + this.sid + incQuery, { timeout: 35000, noApiRetry: true, allowDirectFallback: true }).catch(err => { if (err?.status === 404) got404 = true; if (err?.status === 429) got429 = true; return null; });
+      if (!c && got429 && await this.streamDirectFallback({ fromResume: true })) return true;
       if (got404 && typeof EvalEngine !== 'undefined' && !this._evalFallbackTried) {
         this._evalFallbackTried = true;
         try {
@@ -2549,7 +3295,9 @@ class Chat {
         const staleFakePend = !wasBusy && !!wasFake && srvLast?.role === 'assistant' && srvLast.id === last?.id && !hasNewEvents && !srvMore && !ch;
         const dbLaggedBehindLive = wasBusy && ((this._srvLagged && !staleFakePend) || (curLast && srvLast && curLast.id !== srvLast.id));
         const srvPend = dbLaggedBehindLive || srvMore || (!staleFakePend && !!srvLast && (srvLast.role === 'user' || (srvLast.metadata?.pending && !(typeof isDeadAssistantMsg === 'function' && isDeadAssistantMsg(srvLast)))) && !(srvLast.role === 'assistant' && Hitl.idleWait(this)));
-        if (curLast && curLast.role === 'assistant' && (!(typeof isDeadAssistantMsg === 'function' && isDeadAssistantMsg(curLast)) || (typeof hasInterruptedToolPart === 'function' && hasInterruptedToolPart(curLast)))) {
+        const curHasOpenTool = Boolean(curLast?.role === 'assistant' && Array.isArray(curLast.parts) && curLast.parts.some(p => p?.toolCallId && !Hitl.name(p) && /^(input-streaming|input-available)$/.test(p.state || '')));
+        const curExplicitlyDone = Boolean(curLast?.metadata?.timing?.completedAt || curLast?.metadata?.finishReason === 'stop' || curLast?.metadata?.finishReason === 'end-turn' || curLast?.metadata?.aborted || curLast?.metadata?.error);
+        if ((srvPend || hasNewEvents || curHasOpenTool || (canReviveLast && !curExplicitlyDone)) && curLast && curLast.role === 'assistant' && (!(typeof isDeadAssistantMsg === 'function' && isDeadAssistantMsg(curLast)) || (typeof hasInterruptedToolPart === 'function' && hasInterruptedToolPart(curLast)))) {
           this.live = curLast;
           this.parts.clear();
           (curLast.parts || []).forEach(p => {
@@ -2561,20 +3309,21 @@ class Chat {
           this.live = null;
           this.parts.clear();
         }
-        if (!srvPend && (hasNewEvents || why === 'fast-return' || why === 'server-active' || why === '增量补齐' || why === '通道重连' || why === '增量恢复' || canReviveLast) && c.lastEventId != null) {
-          this.lastSeq = String(Math.max(0, (prevSeq != null && prevSeq < +c.lastEventId) ? prevSeq : +c.lastEventId - 4000));
-          const d = await Promise.race([this.drain(1800, { keepIfFinished: true }).catch(() => null), sleep(650)]);
+        if (!srvPend && (hasNewEvents || curHasOpenTool || (canReviveLast && !curExplicitlyDone)) && c.lastEventId != null) {
+          this.lastSeq = String(Math.max(0, (prevSeq != null && prevSeq < +c.lastEventId) ? prevSeq : +c.lastEventId - 1200));
+          const d = await this.drain(850, { targetSeq: c.lastEventId }).catch(() => null);
           const liveHasOpenTool = Boolean(this.live && Array.isArray(this.live.parts) && this.live.parts.some(p => p?.toolCallId && !Hitl.name(p) && /^(input-streaming|input-available)$/.test(p.state || '')));
-          if (d?.open || d?.run || (liveHasOpenTool && !this.finAt)) {
+          if (d?.open || d?.run || (liveHasOpenTool && !this.finAt && !curExplicitlyDone)) {
             if (this.live) { delete this.live._finishedAt; delete this.live._forcedFinish; this.live.metadata = { ...(this.live.metadata || {}), pending: true }; }
             this.status = 'streaming'; this.phase = '接收回复中'; this.emit();
             this.stream({ peek: false });
             return true;
           }
-          if (this.lastSeq == null) this.lastSeq = String(c.lastEventId);
+          this.lastSeq = String(c.lastEventId);
+          this.fence = +c.lastEventId;
         }
         if (!srvPend) {
-          if (c.lastEventId != null && (this.lastSeq == null || +c.lastEventId > +this.lastSeq)) this.lastSeq = String(c.lastEventId);
+          if (c.lastEventId != null) { this.lastSeq = String(c.lastEventId); this.fence = +c.lastEventId; }
           let hadOpenTool = false;
           if (this.live && Array.isArray(this.live.parts)) {
             for (const p of this.live.parts) {
@@ -2583,7 +3332,7 @@ class Chat {
               }
             }
           }
-          if (!hadOpenTool && srvLast?.role === 'assistant' && srvLast.metadata?.pending === false) {
+          if (!hadOpenTool && srvLast?.role === 'assistant' && !srvLast.metadata?.pending) {
             this.finAt = this.finAt || now();
             this.realTcAt = this.realTcAt || now();
           }
@@ -2602,12 +3351,18 @@ class Chat {
         }
         this.status = 'streaming'; this.phase = '接收回复中'; this.emit();
         if ((!wasBusy || why === 'fast-return' || why === '手动重新载入') && c.lastEventId != null) {
-          this.lastSeq = String(Math.max(0, +c.lastEventId - 4000));
-          await Promise.race([this.drain(2000, { keepIfFinished: true }).catch(() => null), sleep(600)]);
-          if (this.lastSeq == null) this.lastSeq = String(c.lastEventId);
+          const hasLiveParts = Boolean(this.live && Array.isArray(this.live.parts) && this.live.parts.length > 0 && prevSeq != null && prevSeq > 0);
+          if (hasLiveParts && prevSeq <= +c.lastEventId && why !== '手动重新载入') {
+            this.lastSeq = String(prevSeq);
+            this.fence = null;
+          } else {
+            this.lastSeq = String(Math.max(0, +c.lastEventId - 4000));
+            await Promise.race([this.drain(2000, { keepIfFinished: true }).catch(() => null), sleep(600)]);
+            if (this.lastSeq == null) this.lastSeq = String(c.lastEventId);
+          }
         }
       } else if (!wasBusy) {
-        if (lastIsHealthyAsst && last) last.metadata = { ...(last.metadata || {}), pending: false };
+        if (last && last.role === 'assistant') last.metadata = { ...(last.metadata || {}), pending: false };
         this.live = null; this.parts.clear(); this.status = 'idle'; this.phase = ''; this.emit();
         if (c && !got404) this.stream({ peek: true });
         return true;
@@ -2615,7 +3370,11 @@ class Chat {
       if (wasBusy && this.lastSeq != null && +this.lastSeq > 2) this.lastSeq = String(Math.max(0, +this.lastSeq - 2));
       if (!got404) this.stream({ peek: false });
       return true;
-    } catch { if (wasBusy) this.stream({ peek: false }); return false; }
+    } catch {
+      if (!wasBusy && !this.live && !this.awaitId) { this.status = 'idle'; this.phase = ''; this.emit(); }
+      else if (wasBusy) this.stream({ peek: false });
+      return false;
+    }
   }
   async reload(why, forceFull = false) {
     if (!forceFull && this.loaded && this.messages.length) return this.resumeIncremental(why);
@@ -2661,7 +3420,7 @@ class Chat {
     const body = JSON.stringify(bodyObj);
     for (let i = 0; i < 2; i++) {
       const usedTok = await this.ensureToken(i > 0);
-      const ctl = new AbortController(); let expired = false; const tm = setTimeout(() => { expired = true; ctl.abort(); }, 25000);
+      const ctl = new AbortController(); let expired = false; const tm = setTimeout(() => { expired = true; ctl.abort(); }, 45000);
       let res, t;
       try { res = await rawFetch(IN(this.sid), { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + usedTok, 'x-trigger-source': 'sdk', 'X-Part-Id': crypto.randomUUID() }, body, cache: 'no-store', signal: ctl.signal }); t = await res.text(); }
       catch (e) { const error = expired ? Object.assign(new Error('发送确认超时，正在恢复连接；请勿重复发送'), { routeTimeout: true }) : e; if (typeof AutoRoute !== 'undefined') AutoRoute.fault(error); throw error; }
@@ -2693,7 +3452,9 @@ class Chat {
         // 很久没有任何记录：问一下服务器那一轮是不是其实已经结束了（漏了结束标记 / 服务器上早就停了）
         if (now() - Math.max(this.recAt || 0, t0) > 60000 && now() - (chkAt || 0) > 45000) {
           chkAt = now();
-          const c = await api('/api/chat/' + this.sid, { timeout: 20000 }).catch(() => null), sl = c?.messages?.at(-1);
+          const pkWf = await this.peekTurn(this.lastSeq, null, 2500, { settleCheck: true }).catch(() => null);
+          if (pkWf && !pkWf.busy && (pkWf.done || pkWf.settled)) { if (pkWf.last != null) { this.lastSeq = String(pkWf.last); this.fence = +pkWf.last; } this.live = null; this.turnInput = null; break; }
+          const c = ReadLimit.active() ? null : await api('/api/chat/' + this.sid + '?includeStreamToken=false&recoverRun=false', { timeout: 20000, bg: true }).catch(() => null), sl = c?.messages?.at(-1);
           if (sl && !(sl.role === 'user' && sl.id !== msg.id) && !sl.metadata?.pending) { if (c.lastEventId != null) { this.lastSeq = String(c.lastEventId); this.fence = +c.lastEventId; } this.live = null; this.turnInput = null; break; }
         }
       }
@@ -2799,12 +3560,13 @@ class Chat {
         }
       }
     }
-    if (opt.retryOf && (opt.retryOf._appendAccepted || opt.retryOf._streamRejected)) {
+    if (opt.retryOf && (opt.retryOf._appendAccepted || opt.retryOf._streamRejected || opt.retryOf.failed)) {
       const oldId = opt.retryOf.id, newId = uuid7();
       opt.retryOf.id = newId;
       delete opt.retryOf._appendAccepted;
       delete opt.retryOf._streamRejected;
-      try { Drafts.accepted?.(oldId); } catch {}
+      try { SentUserLog.remove?.(this.sid, oldId); } catch {}
+      try { Drafts.ack?.(oldId); } catch {}
     }
     const id = opt.retryOf?.id || uuid7(), msg = opt.retryOf || { id, role: 'user', parts: opt.parts || [{ type: 'text', text }], metadata: opt.autoContinue ? { autoContinue: true } : {}, v: 0, _local: true, ...(opt.autoContinue ? { _autoContinue: true } : {}) };
     // 附件：消息立即显示（本地预览 + 上传进度），上传、工作区节点、会话令牌同时进行，全部就绪后再真正发送
@@ -2814,11 +3576,27 @@ class Chat {
     // Queue removal and outbox ownership are persisted in the same draft snapshot.
     // 自动续接（autoContinue）属于后台探针推进，不写入持久化待确认外发箱，也不弹出人机验证或残留红字气泡。
     if (!opt.autoContinue && Drafts.out(this, msg, text, opt) === false) throw Error('本地保存失败，输入未发送，请检查存储空间');
+    const prevAsstForSend = [...this.messages].reverse().find(m => m && m !== msg && m.role === 'assistant' && m.id);
     if (!this.messages.includes(msg)) this.messages.push(msg);
     msg._sentAt = msg._sentAt || now();
-    msg._local = true; msg.deliveryUnknown = false; if (opt.queueIds) msg._queued = true; if (opt.retryOf) this._qPaused = '';
+    if (prevAsstForSend?.id && !msg._prevAsstId) msg._prevAsstId = prevAsstForSend.id;
+    if (prevAsstForSend && msg._prevAsstWeight == null && typeof SentUserLog !== 'undefined' && SentUserLog.measureAsstWeight) msg._prevAsstWeight = SentUserLog.measureAsstWeight(prevAsstForSend);
+    msg._local = true; msg.deliveryUnknown = false; if (opt.queueIds) { msg._queued = true; msg._fromQueue = true; msg._queueIds = opt.queueIds.slice(); } if (opt.retryOf) this._qPaused = '';
+    if (!opt.autoContinue) {
+      for (let i = this.messages.length - 1; i >= 0; i--) {
+        const fm = this.messages[i];
+        if (fm && fm !== msg && fm.role === 'user' && fm.failed) {
+          this.messages.splice(i, 1);
+          try { SentUserLog.remove?.(this.sid, fm.id); } catch {}
+          try { Drafts.ack?.(fm.id); } catch {}
+        }
+      }
+      try { SentUserLog.record(this.sid, msg, msg._prevAsstId || null); } catch {}
+      try { void MsgCache.putNow(this); } catch {}
+    }
     if (!this.gacha) Bus.emit('sent', this.sid, now());
-    this.status = 'submitted'; this.error = null; this.phase = opt.filesP ? '上传附件' : '发送中'; this.sentAt = now(); this.respAt = 0; this.finAt = 0; this.realTcAt = 0; this.endAt = 0; this.fakeEnd = null; this.midTurnStall = null; msg.failed = false;
+    if (!opt.autoContinue && !opt.officialAutoResend && this._ka) { this._ka.autoContCount = 0; this._ka.paused = 0; this._ka.stallSeen = 0; this._ka.stallKeySeen = ''; }
+    this.status = 'submitted'; this.error = null; this.phase = opt.filesP ? '上传附件' : '发送中'; this.sentAt = now(); this.respAt = 0; this.finAt = 0; this.realTcAt = 0; this.endAt = 0; this.fakeEnd = null; this.midTurnStall = null; msg.failed = false; msg.v = (msg.v || 0) + 1;
     // 发出之前：自己这条已经在末尾，这期间服务器上出现的回复都放到它前面（preSend），结束标记也不会把这条的发送流程收掉
     this.awaitId = msg.id; this.turnInput = null; this.preSend = true; const fd0 = this.fDone || 0; let appendAttempted = false;
     try {
@@ -2844,8 +3622,8 @@ class Chat {
         this.phase = '发送中'; this.emit();
       }
       const canSkipDrain = Boolean(this.loaded && this.lastSeq != null && !this.srvBusy && (this.gacha || opt.hitl || wasMidStall || ((this.tcAt || this.endAt || this.recAt) && now() - Math.max(this.tcAt || 0, this.endAt || 0, this.recAt || 0) < 180000)));
-      const prePureTask = (!opt.autoContinue && typeof IPRep !== 'undefined' && typeof IPRep.ensurePreSendPure === 'function')
-        ? IPRep.ensurePreSendPure({ timeoutMs: 1200 }).catch(() => null)
+      const prePureTask = (typeof IPRep !== 'undefined' && typeof IPRep.ensurePreSendPure === 'function')
+        ? IPRep.ensurePreSendPure({ timeoutMs: 1800 }).catch(() => null)
         : Promise.resolve(null);
       const v3IpBefore = (typeof IP !== 'undefined' && IP.ip) || '';
       let [v3, di, prePure] = await Promise.all([opt.v2 ? null : Recaptcha.take('chat_submit').catch(() => null), (this.wakeSessionToken ? this.wakeSessionToken() : this.ensureToken()).catch(() => null).then(() => canSkipDrain ? { max: +this.lastSeq, run: false } : this.drain(900)), prePureTask]);
@@ -2864,7 +3642,7 @@ class Chat {
       // 于是等它结束 → 重放时变成空闲 → 报「这条没有发送」，点多少次提交都一样。这条回答等的正是这一轮：不等，直接发，
       // 并把读取位置挪到最新，免得发送后把这一轮旧记录当成新回复重放一遍。
       if (opt.hitl || wasMidStall) { this.srvBusy = false; if (di?.max != null) { this.lastSeq = String(di.max); this.fence = di.max; } }
-      if (!opt.hitl && !wasMidStall && !this.gacha && !this.srvBusy && !(di?.run && di.runSeq != null)) { const sb = await this.serverMidTurn(msg.id); if (sb) this.srvBusy = true; }
+      if (!opt.hitl && !wasMidStall && !this.gacha && !this.srvBusy && !di && !(di?.run && di.runSeq != null)) { const sb = await this.serverMidTurn(msg.id); if (sb) this.srvBusy = true; }
       if (!opt.hitl && !wasMidStall && !this.gacha && ((di?.run && di.runSeq != null) || this.srvBusy)) {
         const t0 = now(); this.srvBusy = false;
         await this.waitForeign(msg, di?.run ? di : { runSeq: null, runIn: null }, fd0);
@@ -2949,19 +3727,63 @@ class Chat {
               ar = await this.append(body(opt.v2, v3));
             }
           } else {
-            throw e;
+            const got = await this.inDb(msg.id, text, this.sentAt).catch(() => null);
+            if (got === true) {
+              ar = { ok: true, recovered: true };
+            } else {
+              this.phase = '服务器响应较慢，正在后台自动重试…'; this.emit();
+              await sleep(2000);
+              const freshV3 = opt.v2 ? null : await Recaptcha.v3('chat_submit').catch(() => v3);
+              if (freshV3) v3 = freshV3;
+              ar = await this.append(body(opt.v2, v3));
+            }
           }
         } else {
           // 重复指令（429 prompt failed / verification required）或 v3 分数不足（403 recaptcha validation failed）：
           // 切换节点后首次发送可能携带了旧节点预热的 v3 令牌，先用当前节点的新 v3 令牌静默重试一次，避免误判新节点纯净度不足
           let errNow = e;
           let eBody = String(errNow?.body || errNow?.message || '');
-          const isV3Fail = !opt.v2 && errNow?.status === 403 && /recaptcha|人机|验证失败/i.test(eBody);
-          if (isV3Fail) {
-            try { Recaptcha.clearCache?.(); } catch {}
-            const freshV3 = await Recaptcha.v3('chat_submit').catch(() => null);
-            if (freshV3 && freshV3 !== v3) {
-              v3 = freshV3;
+          const isDupPrompt = promptFailed(errNow?.status, eBody);
+          if (errNow?.status === 429 && !opt.v2 && !isDupPrompt && !/verification required/i.test(eBody)) {
+            this.status = 'submitted';
+            this.phase = '触发 429 速率限制，正在直连实时流核对并原地刷新令牌重发…';
+            this.emit();
+            const pkFast = await this.peekTurn(this.baseSeq, msg.id, 2000).catch(() => null);
+            if (pkFast?.taken || pkFast?.busy) {
+              ar = { ok: true, recovered: true };
+              errNow = null;
+            } else {
+              await sleep(1600);
+              try { if (typeof rotateVisitId === 'function') rotateVisitId(); } catch {}
+              try { Recaptcha.clearCache?.(); } catch {}
+              const [freshV3Fast] = await Promise.all([
+                Recaptcha.v3('chat_submit').catch(() => v3),
+                this.ensureToken(true).catch(() => null),
+              ]);
+              if (freshV3Fast) v3 = freshV3Fast;
+              try {
+                ar = await this.append(body(null, v3));
+                errNow = null;
+              } catch (eFast) {
+                errNow = eFast;
+                eBody = String(errNow?.body || errNow?.message || '');
+              }
+            }
+          }
+          const isRcOr429 = Boolean(errNow && !opt.v2 && !promptFailed(errNow?.status, eBody) && (
+            (errNow?.status === 403 && /recaptcha|人机|验证失败|verification required/i.test(eBody)) ||
+            errNow?.status === 429
+          ));
+          if (isRcOr429 && typeof IPRep !== 'undefined' && typeof IPRep.rotateOnVerificationOrLimit === 'function') {
+            this.phase = errNow?.status === 429
+              ? '当前出口触发 429 限流，正在自动切换备用出口重发…'
+              : '当前出口触发人机拦截，正在自动切换纯净出口重发…';
+            this.emit();
+            const rot = await IPRep.rotateOnVerificationOrLimit(errNow?.status === 429 ? '429' : 'rc', { action: 'chat_submit' }).catch(() => null);
+            const nextV3 = rot?.token || await Recaptcha.v3('chat_submit').catch(() => null);
+            if (rot?.switched || (nextV3 && nextV3 !== v3)) {
+              if (nextV3) v3 = nextV3;
+              this.phase = '已切换备用出口，正在自动重发…'; this.emit();
               try {
                 ar = await this.append(body(null, v3));
                 errNow = null;
@@ -2971,10 +3793,38 @@ class Chat {
               }
             }
           }
+          // 当服务器响应较慢、触发 429 速率限制（非重复指令）或临时超时/5xx 时，不在前台立刻报错，而是保持等待状态在后台静默核对与重试
+          if (errNow && !opt.v2 && !promptFailed(errNow?.status, eBody) && !(errNow?.status === 429 && /verification required/i.test(eBody))) {
+            const isRetryableSendErr = errNow?.status === 429 || (errNow?.status >= 500 && errNow?.status <= 524) || errNow?.status === 408 || Boolean(errNow?.routeTimeout || (typeof NetPolicy !== 'undefined' && NetPolicy.transportError?.(errNow)));
+            if (isRetryableSendErr) {
+              for (let bgTry = 1; bgTry <= 3 && errNow; bgTry++) {
+                this.status = 'submitted';
+                this.phase = errNow?.status === 429 ? '服务器繁忙，正在后台排队等待响应…' : '正在等待服务器响应…';
+                this.emit();
+                const pkNow = await this.peekTurn(this.baseSeq, msg.id, 2500).catch(() => null);
+                if (pkNow?.taken || pkNow?.busy) { ar = { ok: true, recovered: true }; errNow = null; break; }
+                const dbNow = await this.inDb(msg.id, text, this.sentAt).catch(() => null);
+                if (dbNow === true) { ar = { ok: true, recovered: true }; errNow = null; break; }
+                const waitMs = Math.min(12000, Math.max(2500 * bgTry, Math.min(Number(errNow?.retryAfterMs) || 0, 10000)));
+                await sleep(waitMs);
+                try { if (errNow?.status === 429 && typeof rotateVisitId === 'function') rotateVisitId(); } catch {}
+                try { Recaptcha.clearCache?.(); } catch {}
+                const retryV3 = await Recaptcha.v3('chat_submit').catch(() => v3);
+                if (retryV3) v3 = retryV3;
+                try {
+                  ar = await this.append(body(null, v3));
+                  errNow = null;
+                  break;
+                } catch (eBg) {
+                  errNow = eBg;
+                  eBody = String(errNow?.body || errNow?.message || '');
+                }
+              }
+            }
+          }
           if (errNow) {
-            const needV2 = promptFailed(errNow?.status, eBody) || (errNow?.status === 403 && /recaptcha|人机|验证失败/i.test(eBody)) || (errNow?.status === 429 && /verification required/i.test(eBody));
+            const needV2 = promptFailed(errNow?.status, eBody) || (errNow?.status === 403 && /recaptcha|人机|验证失败|verification required/i.test(eBody)) || (errNow?.status === 429 && /verification required/i.test(eBody));
             if (opt.v2 || !needV2) throw errNow;
-            if (this.rcV3 && errNow?.status === 403) { this.rcV3 = false; try { IPRep.note('rc'); } catch {} }
             this.phase = promptFailed(errNow?.status, eBody) ? 'Brana 要求人工验证（重复指令）' : 'Brana 要求人工验证（reCAPTCHA）'; this.emit();
             const tok = await Recaptcha.v2().catch(() => null);
             if (!tok) throw Object.assign(new Error('已取消人机验证，这条没有发送，可以点重试'), { status: 0 });
@@ -2984,7 +3834,11 @@ class Chat {
       }
       this._pendingTimeoutMsg = null;
       msg._appendAccepted = true;
-      if (!opt.autoContinue) { try { Drafts.accepted?.(msg.id); } catch {} }   // 服务器已收下这条（POST 成功）：之后只要有一轮结束，就不再挡队列
+      if (!opt.autoContinue) {
+        try { SentUserLog.record(this.sid, msg, msg._prevAsstId || null); } catch {}
+        try { void MsgCache.putNow(this); } catch {}
+        try { Drafts.accepted?.(msg.id); } catch {}
+      }   // 服务器已收下这条（POST 成功）：之后只要有一轮结束，就不再挡队列
       this.awaitSeq = ar && typeof ar === 'object' && ar.seq != null ? +ar.seq : null;
       this.phase = '等待回复'; this.emit();
       this.armLost(msg);
@@ -3001,7 +3855,14 @@ class Chat {
       this.rcV3 = false;
       const isUnknownTimeout = appendAttempted && (!e.status || e.status >= 500 || e.status === 408);
       if (isUnknownTimeout) this._pendingTimeoutMsg = { msg, text, at: this.sentAt || now() };
-      this.stopPending = false; this.status = 'error'; msg.failed = true; msg.deliveryUnknown = isUnknownTimeout; this.error = describe(e); this.phase = ''; this.awaitId = null; this.awaitFrom = 0; this.emit(); throw e;
+      if (!appendAttempted && Array.isArray(opt.queueIds) && opt.queueIds.length > 0 && !opt.retryOf && typeof SendQ !== 'undefined' && typeof SendQ.demoteToQueue === 'function') {
+        this.stopPending = false; this.status = 'idle'; this.error = describe(e); this.phase = ''; this.awaitId = null; this.awaitFrom = 0;
+        SendQ.demoteToQueue(this, msg, { silent: true });
+        try { void MsgCache.putNow(this); } catch {}
+        this.emit();
+        throw e;
+      }
+      this.stopPending = false; this.status = 'error'; msg.failed = true; msg.deliveryUnknown = isUnknownTimeout; this.error = describe(e); this.phase = ''; this.awaitId = null; this.awaitFrom = 0; try { SentUserLog.markFailed?.(this.sid, msg.id, text); } catch {} try { void MsgCache.putNow(this); } catch {} this.emit(); throw e;
     }
   }
   // 回应 ask_user 等：新建一条只含 data-tool-results 的用户消息（和官方 submitHitlResponse 一致）
@@ -3238,6 +4099,14 @@ class Chat {
   }
   async stop(opt = {}) {
     if (!this.busy) return;
+    if (!opt.strict && this.status === 'streaming' && !this.live && !this.awaitId && !this.preSend && !this.sending && Array.isArray(this.messages) && this.messages.length > 0) {
+      const lastVis = this.messages.filter(m => m && !m._held).at(-1);
+      if (lastVis && lastVis.role === 'assistant' && !lastVis.metadata?.pending && !lastVis._incomplete) {
+        this.gen++; this.streaming = false; this.ctl?.abort();
+        this.finishTurn(null, true);
+        return;
+      }
+    }
     if (this.status === 'stopping') { if(opt.strict)this.strictStopAt=this.stopAt; return; }
     // 消息已发出、服务器还没接单：先记下，接单 / 开始输出的那一刻立刻停止（接单前就发停止，可能连这条消息一起丢掉）；再点一次 = 马上停
     if (!opt.strict && !this.stopPending && !this.preSend && this.status === 'submitted' && this.awaitId && !this.oursAt && !this.live) { this.stopPending = true; this.phase = '开始回复时立即停止（再点一次马上停）'; this.emit(); return; }
@@ -3254,7 +4123,11 @@ class Chat {
   async stopCheck(tok) {
     if (this.status !== 'stopping' || this.stopAt !== tok) return;
     try {
-      const j = await api(`/api/chat/${this.sid}`, { timeout: 8000 }), last = Array.isArray(j?.messages) ? j.messages.at(-1) : null;
+      const pk = typeof this.peekTurn === 'function' ? await this.peekTurn(this.lastSeq, null, 2000, { settleCheck: true }).catch(() => null) : null;
+      if (this.status !== 'stopping' || this.stopAt !== tok) return;
+      if (pk && !pk.busy && pk.done) { this.gen++; this.streaming = false; this.ctl?.abort(); this.finishTurn(null, true); return; }
+      if (typeof ReadLimit !== 'undefined' && ReadLimit.active()) return;
+      const j = await api(`/api/chat/${this.sid}?includeStreamToken=false&recoverRun=false`, { timeout: 8000, bg: true }), last = Array.isArray(j?.messages) ? j.messages.at(-1) : null;
       if (this.status !== 'stopping' || this.stopAt !== tok) return;
       const own = (j?.messages || []).findIndex(m => m.id === this.awaitId);
       const current = this.live ? last?.id === this.live.id : own >= 0 && own < j.messages.length - 1;
@@ -3348,7 +4221,20 @@ class Chat {
         if (headers && !failed && !got && !sawDone && this.busy && !peek && !routeTimeout && now() - this.connAt < 5000 && typeof AutoRoute !== 'undefined') AutoRoute.fault(new Error('实时连接提前断开'), 'stream');
         this.dbg?.('stream', { ev: 'end', got, sawDone, failed, turnDone, headers, peek, settled: serverSettled, seq: this.lastSeq });
         if (turnDone || my !== this.gen) break;
-        if ((peek || (serverSettled && !failed && (!this.busy || (!this.live && now() - (this.sentAt || 0) > 15000)))) && sawDone && !got) {
+        if (!peek && (serverSettled || sawDone) && !failed && sawDone && !got && this.busy && this.live) {
+          this._lastConvergeSrvPend = false;
+          const convOk = typeof this.converge === 'function' ? await this.converge().catch(() => false) : false;
+          if (this._lastConvergeSrvPend && this.busy) {
+            await sleep(1200);
+            continue;
+          }
+          if (!convOk && this.busy && this.live && (typeof Hitl === 'undefined' || !Hitl.idleWait(this))) {
+            this.finAt = this.finAt || now();
+            this.finishTurn(this.runTok || null, true);
+          }
+          break;
+        }
+        if ((peek || ((serverSettled || sawDone) && !failed && (!this.busy || (!this.live && now() - (this.sentAt || 0) > 15000)))) && sawDone && !got) {
           if (this.status === 'streaming' && !this.live) { this.status = 'idle'; this.phase = ''; this.emit(); }
           break;
         }
@@ -3359,15 +4245,36 @@ class Chat {
           if (!failWindowStart) failWindowStart = now();
           else if (now() - failWindowStart > RETRY_BUDGET_MS) { this.error = '实时连接连续中断超过 10 分钟，请点击重新载入'; this.emit(); break; }
         }
-        if (this.busy && this.live && !turnDone && !sawDone && typeof this.reconcile === 'function' && now() - (this.recoAt || 0) > 4000) {
+        if (this.busy && !turnDone && typeof this.reconcile === 'function' && now() - (this.recoAt || 0) > 4000) {
           void this.reconcile(0).catch(() => {});
+          if ((sawDone || !this.live) && typeof this.converge === 'function') void this.converge().catch(() => {});
+        }
+        if (this.status === 'streaming' && !this.live && !this.awaitId && !this.preSend && !this.sending) {
+          const lastVis = (this.messages || []).filter(m => m && !m._held).at(-1);
+          if (!lastVis || (lastVis.role === 'assistant' && !lastVis.metadata?.pending && !lastVis._incomplete && (sawDone || serverSettled || idleLoops >= 1))) {
+            this.status = 'idle'; this.phase = ''; this._startupResuming = false; this._recoveringIncomplete = false; this.emit();
+            if (typeof SendQ !== 'undefined' && (this.queue || []).length) setTimeout(() => { try { SendQ.check(this); } catch {} }, 50);
+            break;
+          }
+          idleLoops++;
         }
         if (!this.busy) { if (++idleLoops > 2) break; }
         await sleep(Math.max(backoff, retryWait));
         retryIdx = Math.min(retryIdx + 1, RETRY_STEPS.length - 1);
         backoff = RETRY_STEPS[retryIdx];
       }
-    } finally { if (my === this.gen) { this.streaming = false; this.peeking = false; this.ctl = null; this.streamOpenAt = 0; } }
+    } finally {
+      if (my === this.gen) {
+        this.streaming = false; this.peeking = false; this.ctl = null; this.streamOpenAt = 0;
+        if (this.status === 'streaming' && !this.live && !this.awaitId && !this.preSend && !this.sending) {
+          const lastVis = (this.messages || []).filter(m => m && !m._held).at(-1);
+          if (!lastVis || (lastVis.role === 'assistant' && !lastVis.metadata?.pending && !lastVis._incomplete)) {
+            this.status = 'idle'; this.phase = ''; this._startupResuming = false; this._recoveringIncomplete = false; this.emit();
+            if (typeof SendQ !== 'undefined' && (this.queue || []).length) setTimeout(() => { try { SendQ.check(this); } catch {} }, 50);
+          }
+        }
+      }
+    }
   }
 
   // 服务器刚结束一轮时（turn-complete 之后约 1 秒内）追加的消息会被「读到但不处理」：服务器一直不接单，直到下一条消息进来。
@@ -3449,19 +4356,35 @@ class Chat {
       const j = await api(`/api/chat/${this.sid}`, { timeout: 15000, noApiRetry: true }); if (!Array.isArray(j?.messages)) return null;
       if (j?.publicAccessToken && typeof this.setToken === 'function') this.setToken(j.publicAccessToken);
       if (j.messages.some(m => m && (m.id === id || m.metadata?.nodeId === id))) return true;
+      const localMsgForScope = (this.messages || []).find(x => x && x.id === id);
+      const outEntryForScope = (typeof Drafts !== 'undefined' && typeof Drafts.load === 'function') ? (Drafts.load()?.o || []).find(x => x && x.id === id) : null;
+      const prevAsstId = localMsgForScope?._prevAsstId || outEntryForScope?.prevAsstId || '';
+      const prevAsstIdx = prevAsstId ? j.messages.findIndex(m => m && String(m.id || '') === String(prevAsstId)) : -1;
       const parentId = this._lastSentParentUserId ? String(this._lastSentParentUserId) : '';
       const parentIdx = parentId ? j.messages.findIndex(m => m && (String(m.id || '') === parentId || String(m.metadata?.nodeId || '') === parentId)) : -1;
       let afterParentTurnIdx = parentIdx + 1;
       if (parentIdx >= 0) {
         while (afterParentTurnIdx < j.messages.length && j.messages[afterParentTurnIdx]?.role !== 'user') afterParentTurnIdx++;
       }
-      const scope = parentIdx >= 0 ? j.messages.slice(afterParentTurnIdx) : j.messages;
+      const startSliceIdx = Math.max(parentIdx >= 0 ? afterParentTurnIdx : 0, prevAsstIdx >= 0 ? prevAsstIdx + 1 : 0);
+      const hasBoundIdx = parentIdx >= 0 || prevAsstIdx >= 0;
+      const scope = hasBoundIdx ? j.messages.slice(startSliceIdx) : j.messages;
       const norm = v => String(v || '').replace(/\s+/g, ' ').trim(), t = norm(text), body = m => norm((m.parts || []).filter(p => p.type === 'text').map(p => p.text || '').join('') || m.content || '');
       const users = scope.filter(m => m && m.role === 'user'), ts = m => Date.parse(m.createdAt || m.created_at || '') || (typeof idTime === 'function' ? idTime(m?.id) : 0) || 0;
-      if (t && users.some(m => { const b = body(m); return b === t || (b.length > 8 && (b.includes(t) || t.includes(b))) || (t.length > 40 && b.slice(0, 40) === t.slice(0, 40)); })) return true;
+      if (t && users.some(m => { const mTs = ts(m); if (at > 0 && !hasBoundIdx && mTs > 0 && mTs < at - 15000) return false; const b = body(m); return b === t || (t.length > 8 && b.length > 8 && (b.includes(t) || t.includes(b))) || (t.length > 40 && b.slice(0, 40) === t.slice(0, 40)); })) return true;
       if (at && users.some(m => ts(m) >= at - (parentIdx >= 0 ? 2000 : 15000))) return true;
       if (at && scope.some(m => m && m.role === 'assistant' && !m.metadata?.pending && ts(m) >= at - (parentIdx >= 0 ? 1000 : 5000))) return true;
-      if (parentIdx >= 0 || !j.pagination?.hasMore || (at > 0 && j.messages.length > 0)) return false;
+      const srvLast = j.messages.at(-1);
+      const localMsg = (this.messages || []).find(x => x && x.id === id);
+      const srvLastExplicitDone = Boolean(srvLast?.metadata?.timing?.completedAt || srvLast?.metadata?.finishReason === 'stop' || srvLast?.metadata?.finishReason === 'end-turn' || srvLast?.metadata?.aborted || srvLast?.metadata?.error);
+      const srvLastW = (typeof SentUserLog !== 'undefined' && SentUserLog.measureAsstWeight) ? SentUserLog.measureAsstWeight(srvLast) : 0;
+      const srvLastCompRaw = srvLast?.metadata?.timing?.completedAt;
+      const srvLastCompMs = typeof srvLastCompRaw === 'number' ? srvLastCompRaw : (typeof srvLastCompRaw === 'string' ? Date.parse(srvLastCompRaw) : 0);
+      this._inDbPrevTurnActive = Boolean(srvLast?.role === 'assistant' && ((!srvLastExplicitDone && srvLast.metadata?.pending) || (localMsg?._prevAsstWeight != null && srvLastW > localMsg._prevAsstWeight) || (srvLastCompMs > 0 && at > 0 && srvLastCompMs >= at + 1000 && ts(srvLast) <= at + 5000)));
+      if (this._inDbPrevTurnActive && typeof this.mergeServer === 'function') {
+        try { this.mergeServer(j.messages, this.live); } catch {}
+      }
+      if (hasBoundIdx || !j.pagination?.hasMore || (at > 0 && j.messages.length > 0)) return false;
       const first = j.messages.map(ts).filter(Boolean)[0];
       return at && first && first < at - 15000 ? false : null;
     } catch { return null; }
@@ -3538,7 +4461,7 @@ class Chat {
       if (base != null) hd['Last-Event-ID'] = String(base);
       const res = await rawFetch(OUT(this.sid), { headers: hd, signal: ctl.signal, cache: 'no-store', credentials: 'same-origin' });
       if (!res.ok) return null;
-      let taken = false, busy = false, n = 0, done = false, last = null, buf = '';
+      let taken = false, busy = false, foreignBusy = false, n = 0, done = false, last = null, buf = '';
       const rd = res.body.getReader(), dec = new TextDecoder();
       const eat = (blk) => {
         const data = blk.split(/\r?\n/).filter(l => l.startsWith('data:')).map(l => l.slice(5).replace(/^ /, '')).join('\n');
@@ -3554,7 +4477,9 @@ class Chat {
           const t = bd?.data?.type;
           if (t === 'finish' && bd?.data?.finishReason !== 'tool-calls') { busy = false; continue; }
           if (t === 'error' || t === 'abort') { busy = false; continue; }
-          if (t === 'data-agent-dispatch') { busy = true; if (id && bd.data.data?.inputId === id) taken = true; }
+          if (t === 'data-agent-dispatch') { busy = true; if (id && (!bd.data.data?.inputId || bd.data.data?.inputId === id)) taken = true; }
+          if (t === 'data-agent-dispatch' && id && bd.data.data?.inputId && bd.data.data.inputId !== id) foreignBusy = true;
+          else if (t && t.startsWith('data-') && bd?.data?.transient) { busy = true; }
           else if (t && /^(start|start-step|text-|reasoning-|tool-|source-|file)/.test(t)) busy = true;
         }
       };
@@ -3571,9 +4496,9 @@ class Chat {
         if (!taken && !busy && !settleCheck) return null;
       }
       finally { try { ctl.abort(); } catch {} }
-      if (taken) return { taken, busy: true, n, last };
-      if (!done) return busy ? { taken: false, busy: true, n, last, partial: true } : (settleCheck ? { taken: false, busy: false, settled: true, n, last } : null);
-      return { taken, busy, settled: !busy, n, last };
+      if (taken) return { taken, busy: true, done, n, last };
+      if (!done) return busy ? { taken: false, busy: true, foreignBusy, done: false, n, last, partial: true } : (settleCheck ? { taken: false, busy: false, settled: true, done: false, n, last } : null);
+      return { taken, busy, foreignBusy, settled: !busy, done, n, last };
     } catch { return null; }
     finally { clearTimeout(tm); }
   }
@@ -3602,10 +4527,33 @@ class Chat {
         const pk = await this.peekTurn(base, id, 3500, { settleCheck: true });
         if (!alive()) return;
         if (pk?.taken) return taken('peek');
-        if (pk?.busy) { neg = 0; this.restream(); tick(8000); return; }
+        if (pk?.busy) {
+          if (!msg?._queued && now() - at >= 4500) {
+            const dbBusy = await this.inDb(id, this.msgText(id), this.appAt || 0);
+            if (!alive()) return;
+            if (dbBusy === true) return taken('db');
+            if ((dbBusy === false || (dbBusy === null && pk?.foreignBusy)) && msg) {
+              try { SentUserLog.demoteToQueue?.(this, msg, { running: true }); } catch {}
+              const tailA = this.messages.at(-1);
+              if (tailA?.role === 'assistant') { tailA.metadata = { ...(tailA.metadata || {}), pending: true }; this.live = tailA; }
+              this.status = 'streaming'; this.phase = '接收回复中'; this.dlv = '';
+              this.emit(); this.restream(); return;
+            }
+          }
+          neg = 0; this.restream(); tick(8000); return;
+        }
         const db = pk ? await this.inDb(id, this.msgText(id), this.appAt || 0) : null;
         if (!alive()) return;
         if (db === true) return taken('db');
+        if (db === false && !msg?._queued && msg && (this._inDbPrevTurnActive || (this.messages.at(-1)?.role === 'assistant' && this.messages.at(-1)?.metadata?.pending))) {
+          const isRun = Boolean(this.messages.at(-1)?.role === 'assistant' && this.messages.at(-1)?.metadata?.pending);
+          try { SentUserLog.demoteToQueue?.(this, msg, { running: isRun }); } catch {}
+          if (isRun) { this.live = this.messages.at(-1); this.status = 'streaming'; this.phase = '接收回复中'; }
+          this.dlv = ''; this.emit();
+          if (isRun) this.restream();
+          else if (typeof SendQ !== 'undefined') SendQ.check?.(this);
+          return;
+        }
         if (!pk || db !== false) {
           // 未知：重新接上实时通道，稍后再查（多次未知只提示，不唤醒、不报错）
           neg = 0; unk++; this.restream();
@@ -3613,8 +4561,8 @@ class Chat {
           tick(unk < 6 ? 6000 : 15000); return;
         }
         unk = 0;
-        const minGap = msg?._queued ? 6000 : 3500;
-        const minAge = msg?._queued ? 18000 : 8500;
+        const minGap = msg?._queued ? 6000 : 12000;
+        const minAge = msg?._queued ? 18000 : 25000;
         if (!neg) { neg = 1; negAt = now(); tick(Math.max(minGap, minAge - (now() - at))); return; }
         if (now() - negAt < minGap || now() - at < minAge) { tick(Math.max(2000, minGap - (now() - negAt), minAge - (now() - at))); return; }
         neg = 0;
@@ -3628,25 +4576,37 @@ class Chat {
           if (!this.streaming) this.stream();
           tick(15000); return;
         }
-        if (n >= 4) {
-          // 唤醒 4 次服务器上仍然没有这条消息：结束等待，报错让用户重试（队列会暂停，不会一直显示在等）
-          this.status = 'error'; this.error = '服务器没有接收这条消息（已唤醒 4 次，服务器上也没有）。可以点重试'; this.phase = ''; this.dlv = '';
-          if (msg) msg.failed = true; this.awaitId = null; this.awaitFrom = 0; this.emit(); return;
+        if (n >= 6) {
+          if (msg && (this._inDbPrevTurnActive || this.live || (this.messages.at(-1)?.role === 'assistant' && this.messages.at(-1)?.metadata?.pending))) {
+            try { SentUserLog.demoteToQueue?.(this, msg, { running: true }); } catch {}
+            this.dlv = ''; this.emit(); return;
+          }
+          // 长时间等待且多次后台同步后服务器上仍然没有这条消息：结束等待，提示用户重试
+          this.status = 'error'; this.error = '服务器响应超时或未接收这条消息。可以点重试'; this.phase = ''; this.dlv = '';
+          if (msg) { msg.failed = true; try { SentUserLog.markFailed?.(this.sid, msg.id); } catch {} } this.awaitId = null; this.awaitFrom = 0; this.emit(); return;
         }
         n++; this.wakes = (this.wakes || 0) + 1; this.dlv = 'wake';
         this.wakeLog = (this.wakeLog || []).concat({ at: now(), id, pk: pk && pk.n }).slice(-10);
         if (this.wakeSessionToken) { try { await this.wakeSessionToken(true); } catch {} }
         else if (this.ensureToken) { try { await this.ensureToken(true); } catch {} }
-        if ((n === 1 || n === 2) && this.reSend?.id === id) {
-          this.phase = n === 1 ? '服务器没接单，正在唤醒并重新投递' : '服务器没收到这条，正在重新发送'; this.emit();
+        // 前两次仅在后台重连实时流与拉取最新会话状态，绝不轻易发 stop 或重复 POST 消息（避免打断慢速思考如 asking Bradley 或触发 429 重复指令限流）
+        if (n <= 2 && msg?._appendAccepted) {
+          this.phase = '服务器正在思考处理中，持续等待响应…'; this.emit();
+          this.restream();
+          void this.reconcile?.(0)?.catch?.(() => {});
+          tick(18000); return;
+        }
+        if (n === 3 && this.reSend?.id === id) {
+          this.phase = '服务器响应较慢，正在后台重新同步投递…'; this.emit();
           try { await this.append({ kind: 'stop' }); } catch {}
           try { await this.reSend.fn(); this.resent = (this.resent || 0) + 1; } catch {}
         } else {
-          this.phase = '服务器没接单，正在唤醒' + (n > 1 ? '（第 ' + n + ' 次）' : ''); this.emit();
+          this.phase = '正在等待服务器响应' + (n > 1 ? '（后台同步 #' + n + '）' : '…'); this.emit();
           try { await this.append({ kind: 'stop' }); } catch {}
+          void this.reconcile?.(0)?.catch?.(() => {});
         }
         if (!this.streaming) this.stream();
-        tick(10000);
+        tick(18000);
       }, ms);
     };
     tick(2800);
@@ -3751,12 +4711,14 @@ class Chat {
           if (midChunk == null && (bty === 'start-step' || bty === 'text-start' || bty === 'text-delta' || bty === 'reasoning-start' || bty === 'reasoning-delta' || bty === 'tool-input-start' || bty === 'tool-input-available')) midChunk = sq;
         }
       }
-      const activeStart = open ?? run ?? midChunk;
-      const pick = activeStart ?? (opt?.keepIfFinished ? (lastRun ?? act) : null);
-      this.drainInfo = { n, ms: now() - t0, open: activeStart != null, act: act ?? lastRun ?? midChunk, run: (run ?? midChunk) != null, runSeq: run ?? open ?? midChunk, runIn, partial, max };
+      const reachedTarget = !partial || opt?.targetSeq == null || max >= +opt.targetSeq - 2;
+      const activeStart = reachedTarget ? (open ?? run ?? midChunk) : null;
+      // const pick = activeStart ?? (opt?.keepIfFinished ? (lastRun ?? act) : null);
+      const pick = activeStart ?? (opt?.replayFinished ? (lastRun ?? act) : null);
+      this.drainInfo = { n, ms: now() - t0, open: activeStart != null, act: act ?? lastRun ?? midChunk, run: reachedTarget && (run ?? midChunk) != null, runSeq: run ?? open ?? midChunk, runIn, partial, max };
       if (pick != null) {
         this.lastSeq = String(Math.max(0, pick - 1)); this.fence = pick - 1;
-        if (activeStart == null && opt?.keepIfFinished) this.reconcile(350);
+        if (activeStart == null && (opt?.keepIfFinished || opt?.replayFinished)) this.reconcile(350);
       } else if (max >= 0) {
         this.lastSeq = String(max); this.fence = max;
         if (opt?.keepIfFinished) this.reconcile(250);
@@ -3858,6 +4820,9 @@ class Chat {
     const t = ch.type;
     if (t === 'start') {
       let m = ch.messageId ? this.messages.find(x => x.id === ch.messageId) : null;
+      if (m && !this.awaitId && !m.metadata?.pending && !m._incomplete && Boolean(m.metadata?.timing?.completedAt || m.metadata?.finishReason === 'stop' || m.metadata?.finishReason === 'end-turn' || m.metadata?.aborted || m.metadata?.error)) {
+        return;
+      }
       const fg = this.foreignTurn();
       const iaSelf = (!fg && this.awaitId)
         ? this.messages.findIndex(x => x && (x.id === this.awaitId || x.metadata?.nodeId === this.awaitId))
@@ -3868,15 +4833,26 @@ class Chat {
         const ltIdx = this.messages.length - 1;
         if (lt && lt.role === 'assistant' && lt.metadata?.pending && !lt._local && (iaSelf < 0 || ltIdx > iaSelf)) m = lt;
       }
+      for (let fi = this.messages.length - 1; fi >= 0; fi--) {
+        if (this.messages[fi]?.role === 'user' && this.messages[fi]?.failed) {
+          try { SentUserLog.demoteToQueue?.(this, this.messages[fi], { silent: true, running: true }); } catch {}
+        }
+      }
       if (m) {
         if (!Array.isArray(m.parts)) m.parts = [];
         if (!fg && iaSelf >= 0) {
           const curMIdx = this.messages.indexOf(m);
           if (curMIdx >= 0 && curMIdx < iaSelf) {
-            this.messages.splice(curMIdx, 1);
-            const newIa = this.messages.findIndex(x => x && (x.id === this.awaitId || x.metadata?.nodeId === this.awaitId));
-            if (newIa >= 0) this.messages.splice(newIa + 1, 0, m);
-            else this.messages.push(m);
+            const selfMsg = this.messages[iaSelf];
+            const mHasPriorWork = (m.parts || []).some(p => p && p.type !== 'step-start') || (selfMsg?._prevAsstId && selfMsg._prevAsstId === m.id);
+            if (mHasPriorWork && selfMsg?.role === 'user' && selfMsg._local && !this.oursAt) {
+              try { SentUserLog.demoteToQueue?.(this, selfMsg, { silent: true, running: true }); } catch {}
+            } else {
+              this.messages.splice(curMIdx, 1);
+              const newIa = this.messages.findIndex(x => x && (x.id === this.awaitId || x.metadata?.nodeId === this.awaitId));
+              if (newIa >= 0) this.messages.splice(newIa + 1, 0, m);
+              else this.messages.push(m);
+            }
           }
         }
       } else {
@@ -3895,8 +4871,16 @@ class Chat {
       { const ts = this.recTs || now(), d = this.recTs ? this.dispTs : this.dispAt; this.fmt = Fmt.fresh(d && ts >= d && ts - d < 600000 ? d : ts); m._fmt = this.fmt; } this.fmtGuess = null;   // 回复格式识别：每一轮重新收集
       if (!this.foreignTurn()) { this.oursAt = this.oursAt || now(); clearTimeout(this.startT); if (this.stopPending) setTimeout(() => this.stop(), 0); }
       // 不是自己发起的这一轮（网页 / 别的设备提交了回答或发了消息）：把那条用户消息补进来，提问卡片同步成已回答
-      if (!this.gacha && (!this.awaitId || this.foreignTurn())) this.reconcile(700);
+      for (const um of this.messages) {
+        if (um && um._local && um.role === 'user') {
+          um._appendAccepted = true;
+          try { SentUserLog.record(this.sid, um, um._prevAsstId || null); } catch {}
+        }
+      }
+      try { SentUserLog.restoreInto(this); } catch {}
+      if (!this.gacha && (!this.awaitId || this.foreignTurn() || (typeof SentUserLog !== 'undefined' && SentUserLog.hasAdjacentAsstGap && SentUserLog.hasAdjacentAsstGap(this.messages)))) this.reconcile(400);
       this.live = m; this._contentKey = ''; this.parts.clear();
+      this.saveCache?.();
       this._snapTextParts = []; this._snapReasonParts = [];
       for (const p of m.parts || []) {
         if (p?.toolCallId) this.parts.set('tool:' + p.toolCallId, p);
@@ -3912,13 +4896,26 @@ class Chat {
     }
     if (t.startsWith('data-') && ch.transient) {
       if (t === 'data-agent-dispatch') {
-        this.turnInput = ch.data?.inputId || (this.waitingForeign ? this.turnInput : null); this.dispAt = now(); this.dispTs = this.recTs || 0; clearTimeout(this.wakeT);
+        this.turnInput = ch.data?.inputId || (this.waitingForeign ? this.turnInput : this.awaitId || null); this.dispAt = now(); this.dispTs = this.recTs || 0; clearTimeout(this.wakeT);
         if (this.foreignTurn()) { this.phase = '服务器在补答之前的消息'; this.emit(); return; }
-        // 只有分派记录里的 inputId 就是自己这条，才算「已接单」；没有 inputId 的分派不当成接单（兜底唤醒继续有效）
-        if (this.awaitId && this.turnInput === this.awaitId) { this.oursAt = now(); this.dlv = 'taken'; this.watchStart(this.awaitId); if (this.stopPending) setTimeout(() => this.stop(), 0); }
-        if (!this.live) this.phase = this.oursAt ? '服务器已接单' : '服务器在处理'; if (this.status === 'submitted' && this.oursAt) this.status = 'streaming';
+        if (this.awaitId && (!ch.data?.inputId || this.turnInput === this.awaitId || !this.foreignTurn())) {
+          this.oursAt = this.oursAt || now(); this.dlv = 'taken'; clearTimeout(this.lostT); this.watchStart(this.awaitId);
+          if (this.stopPending) setTimeout(() => this.stop(), 0);
+        }
+        const subName = ch.data?.agentName || ch.data?.subagent || ch.data?.targetAgent || ch.data?.recipient || ch.data?.model || '';
+        if (!this.live) this.phase = subName ? ('正在询问 ' + subName + '…') : (this.oursAt ? '服务器已接单，正在思考…' : '服务器在处理');
+        if (this.status === 'submitted' && this.oursAt) this.status = 'streaming';
       }
       else if (t === 'data-workspace-save-status') this.phase = '保存工作区 · ' + (ch.data?.phase || '');
+      else {
+        if (this.awaitId && !this.foreignTurn()) {
+          this.oursAt = this.oursAt || now(); this.dlv = 'taken'; clearTimeout(this.lostT);
+          if (this.status === 'submitted') this.status = 'streaming';
+        }
+        const subName = ch.data?.agentName || ch.data?.subagent || ch.data?.targetAgent || ch.data?.recipient || '';
+        const statusTxt = ch.data?.status || ch.data?.message || ch.data?.phase || '';
+        if (!this.live && (subName || statusTxt)) this.phase = subName ? ('正在询问 ' + subName + '…') : String(statusTxt);
+      }
       this.emit(); return;
     }
     // 回复格式识别（拿不到运行记录时按格式推测厂商）
@@ -3927,7 +4924,16 @@ class Chat {
     if (!this.live && ch?.toolCallId && /^(tool-input-delta|tool-input-available|tool-input-error|tool-output-available|tool-output-error|tool-output-denied|tool-approval-request)$/.test(t)) {
       const ownerM = [...(this.messages || [])].reverse().find(x => x?.role === 'assistant' && Array.isArray(x.parts) && x.parts.some(p => p && p.toolCallId === ch.toolCallId));
       if (ownerM) {
-        if (ownerM === this.messages.at(-1) && !this.stopReq && !Hitl.idleWait(this)) {
+        const ownerDone = Boolean(ownerM.metadata?.timing?.completedAt || ownerM.metadata?.finishReason === 'stop' || ownerM.metadata?.finishReason === 'end-turn' || ownerM.metadata?.aborted || ownerM.metadata?.error || (ownerM._finishedAt && now() - ownerM._finishedAt > 15000));
+        if (ownerM !== this.messages.at(-1) && !ownerDone && !this.stopReq && !Hitl.idleWait(this)) {
+          const ownerIdx = this.messages.indexOf(ownerM);
+          if (ownerIdx >= 0 && this.messages.slice(ownerIdx + 1).every(x => x && x.role === 'user' && (x.failed || (x._local && !this.oursAt)))) {
+            for (let ui = this.messages.length - 1; ui > ownerIdx; ui--) {
+              try { SentUserLog.demoteToQueue?.(this, this.messages[ui], { silent: true, running: true }); } catch {}
+            }
+          }
+        }
+        if (ownerM === this.messages.at(-1) && !ownerDone && !this.stopReq && !Hitl.idleWait(this)) {
           ownerM.metadata = { ...(ownerM.metadata || {}), pending: true };
           delete ownerM._finishedAt;
           this.live = ownerM;
@@ -3942,7 +4948,7 @@ class Chat {
           if (tp) {
             if (t === 'tool-input-delta' && tp.state !== 'output-available') tp.inputText = (tp.inputText || '') + (ch.inputTextDelta || '');
             else if (t === 'tool-input-available' || t === 'tool-input-error') { tp.input = ch.input; tp.state = t === 'tool-input-error' ? 'output-error' : 'input-available'; if (ch.errorText) tp.errorText = ch.errorText; }
-            else if (t === 'tool-output-available') { tp.output = ch.output; tp.state = 'output-available'; tp.preliminary = !!ch.preliminary; delete tp.errorText; if (!tp.preliminary && tp._startAt && !tp._durMs) tp._durMs = Math.max(0, (this.recTs || now()) - tp._startAt); }
+            else if (t === 'tool-output-available') { tp.output = ch.output; tp.state = 'output-available'; tp.preliminary = !!ch.preliminary; delete tp.errorText; if (!tp.preliminary) { tp._endAt = this.recTs || now(); if (tp._startAt && !tp._durMs) tp._durMs = Math.max(0, tp._endAt - tp._startAt); } }
             else if (t === 'tool-output-error') { tp.errorText = ch.errorText; tp.state = 'output-error'; }
             else if (t === 'tool-output-denied') tp.state = 'output-denied';
             else if (t === 'tool-approval-request') tp.state = 'approval-requested';
@@ -3953,10 +4959,22 @@ class Chat {
         }
       }
     }
-    if (!this.live && this.status === 'idle') {
-      const lm = this.messages.at(-1);
+    if (!this.live && (this.status === 'idle' || this.status === 'error')) {
       const isStreamChunk = (t === 'start-step' || t === 'text-start' || t === 'text-delta' || t === 'reasoning-start' || t === 'reasoning-delta' || t === 'tool-input-start' || t === 'tool-input-available' || t === 'tool-output-available');
-      const canReopenTailAsst = Boolean(lm?.role === 'assistant' && !lm.metadata?.pending && !this.stopReq && !Hitl.idleWait(this) && isStreamChunk);
+      if (isStreamChunk) {
+        for (let fi = this.messages.length - 1; fi >= 0; fi--) {
+          const fm = this.messages[fi];
+          if (!fm) continue;
+          if (fm.role === 'assistant') break;
+          if (fm.role === 'user' && (fm.failed || (fm._local && !this.oursAt && this.messages[fi - 1]?.role === 'assistant' && !this.messages[fi - 1]?.metadata?.timing?.completedAt))) {
+            try { SentUserLog.demoteToQueue?.(this, fm, { silent: true, running: true }); } catch {}
+          }
+        }
+      }
+      const lm = this.messages.at(-1);
+      const lmExplicitlyDone = Boolean(lm?.metadata?.timing?.completedAt || lm?.metadata?.finishReason === 'stop' || lm?.metadata?.finishReason === 'end-turn' || lm?.metadata?.aborted || lm?.metadata?.error);
+      const lmCompAt = lm?._finishedAt || Date.parse(lm?.metadata?.timing?.completedAt || lm?.createdAt || '') || (typeof idTime === 'function' ? idTime(lm?.id) : 0) || 0;
+      const canReopenTailAsst = Boolean(lm?.role === 'assistant' && !lm.metadata?.pending && (lm._forcedFinish || lm._incomplete || (!lmExplicitlyDone && typeof hasInterruptedToolPart === 'function' && hasInterruptedToolPart(lm)) || (!lmExplicitlyDone && (!lmCompAt || (now() - lmCompAt < 15000)))) && !this.stopReq && !Hitl.idleWait(this) && isStreamChunk);
       if (canReopenTailAsst) {
         lm.metadata = { ...(lm.metadata || {}), pending: true };
         delete lm._finishedAt;
@@ -3969,7 +4987,7 @@ class Chat {
       }
       const canPromote = (lm?.role === 'user' || lm?.metadata?.pending || canReopenTailAsst) && !Hitl.idleWait(this) && isStreamChunk;
       if (canPromote) {
-        this.status = 'streaming'; this.phase = '生成中';
+        this.status = 'streaming'; this.phase = '生成中'; this.error = null;
         this.liveMsg(true);
       } else {
         this.dbg?.('drop', { ty: t, why: 'idle-no-live' }); return;
@@ -4000,7 +5018,7 @@ class Chat {
     const P = m.parts, find = id => this.parts.get(id);
     switch (t) {
       case 'start-step': if (P.at(-1)?.type !== 'step-start') P.push({ type: 'step-start' }); break;
-      case 'finish-step': this.parts.forEach((p, k) => { if (!String(k).startsWith('tool:')) this.parts.delete(k); }); break;
+      case 'finish-step': this.parts.forEach((p, k) => { if (!String(k).startsWith('tool:')) this.parts.delete(k); }); this.saveCache?.(); break;
       case 'text-start': case 'reasoning-start': {
         // 抽卡：正文后出现可见思考时按开关停止；不把它当作改派证明，已知闭源除外
         const pType = t.split('-')[0], key = t[0] + ':' + ch.id;
@@ -4053,6 +5071,7 @@ class Chat {
           p.text += dStr;
         }
         if (t === 'text-delta') this.checkMidStreamRoute(t, ch);
+        if (now() - (this._streamCacheAt || 0) > 1500) { this._streamCacheAt = now(); this.saveCache?.(); }
         break;
       }
       case 'text-end': case 'reasoning-end': { const p = find(t[0] + ':' + ch.id); if (p) { if (typeof p._replayBuf === 'string') { if (p._replayBuf.length >= (p.text || '').length) p.text = p._replayBuf; delete p._replayBuf; } p.state = 'done'; } break; }
@@ -4061,25 +5080,27 @@ class Chat {
         if (!p) {
           p = { type: ch.dynamic ? 'dynamic-tool' : 'tool-' + ch.toolName, toolName: ch.toolName, toolCallId: ch.toolCallId, state: 'input-streaming', inputText: '', _startAt: this.recTs || now() };
           P.push(p);
-        } else if (p.state !== 'output-available') {
+        } else if (p.state !== 'output-available' && p.state !== 'input-available') {
           p.inputText = '';
           p.state = 'input-streaming';
         }
         this.parts.set('tool:' + ch.toolCallId, p);
         this.phase = '调用 ' + ch.toolName;
         this.checkMidStreamRoute(t, ch);
+        this.saveCache?.();
         break;
       }
-      case 'tool-input-delta': { const p = find('tool:' + ch.toolCallId) || P.find(x => x && x.toolCallId === ch.toolCallId); if (p && p.state !== 'output-available') p.inputText = (p.inputText || '') + (ch.inputTextDelta || ''); break; }
+      case 'tool-input-delta': { const p = find('tool:' + ch.toolCallId) || P.find(x => x && x.toolCallId === ch.toolCallId); if (p && p.state !== 'output-available' && p.state !== 'input-available') p.inputText = (p.inputText || '') + (ch.inputTextDelta || ''); this.saveCache?.(); break; }
       case 'tool-input-available': case 'tool-input-error': {
         let p = find('tool:' + ch.toolCallId) || P.find(x => x && x.toolCallId === ch.toolCallId);
-        if (!p) { p = { type: ch.dynamic ? 'dynamic-tool' : 'tool-' + ch.toolName, toolName: ch.toolName, toolCallId: ch.toolCallId }; P.push(p); this.parts.set('tool:' + ch.toolCallId, p); }
-        p.input = ch.input; p.state = t === 'tool-input-error' ? 'output-error' : 'input-available'; if (ch.errorText) p.errorText = ch.errorText;
+        if (!p) { p = { type: ch.dynamic ? 'dynamic-tool' : 'tool-' + ch.toolName, toolName: ch.toolName, toolCallId: ch.toolCallId, _startAt: this.recTs || now() }; P.push(p); this.parts.set('tool:' + ch.toolCallId, p); } else if (!p._startAt) { p._startAt = this.recTs || now(); }
+        p.input = ch.input; if (p.state !== 'output-available') p.state = t === 'tool-input-error' ? 'output-error' : 'input-available'; if (ch.errorText) p.errorText = ch.errorText;
         // 提问工具的参数能解析出题目：按「等待回答」显示面板（和网页一致），报错文字只留作诊断
         if (t === 'tool-input-error' && Hitl.name(p) === 'ask_user' && Array.isArray(Hitl.input(p)?.questions)) { p.state = 'input-available'; p.softError = ch.errorText || ''; }
-        this.phase = '执行 ' + (ch.toolName || p.toolName || '工具'); break;
+        this.phase = '执行 ' + (ch.toolName || p.toolName || '工具');
+        this.saveCache?.(); break;
       }
-      case 'tool-output-available': { const p = find('tool:' + ch.toolCallId) || P.find(x => x.toolCallId === ch.toolCallId); if (p) { p.output = ch.output; p.state = 'output-available'; p.preliminary = !!ch.preliminary; delete p.errorText; if (!p.preliminary && p._startAt && !p._durMs) p._durMs = Math.max(0, (this.recTs || now()) - p._startAt); } break; }
+      case 'tool-output-available': { const p = find('tool:' + ch.toolCallId) || P.find(x => x.toolCallId === ch.toolCallId); if (p) { p.output = ch.output; p.state = 'output-available'; p.preliminary = !!ch.preliminary; delete p.errorText; if (!p.preliminary) { p._endAt = this.recTs || now(); if (p._startAt && !p._durMs) p._durMs = Math.max(0, p._endAt - p._startAt); } } this.saveCache?.(); break; }
       case 'tool-output-error': { const p = find('tool:' + ch.toolCallId) || P.find(x => x.toolCallId === ch.toolCallId); if (p) { if (Hitl.name(p) === 'ask_user' && /malformed|refresh and try again/i.test(String(ch.errorText || '')) && Array.isArray(Hitl.input(p)?.questions)) { p.softError = ch.errorText; if (p.state !== 'output-available') p.state = 'input-available'; } else { p.errorText = ch.errorText; p.state = 'output-error'; } } break; }
       case 'tool-output-denied': { const p = find('tool:' + ch.toolCallId) || P.find(x => x && x.toolCallId === ch.toolCallId); if (p) p.state = 'output-denied'; break; }
       case 'tool-approval-request': { const p = find('tool:' + ch.toolCallId) || P.find(x => x && x.toolCallId === ch.toolCallId); if (p) p.state = 'approval-requested'; break; }
@@ -4150,7 +5171,15 @@ class Chat {
         }
         break;
       }
-      case 'abort': m.metadata = { ...m.metadata, aborted: true, pending: false }; try { Strength.markAborted(this.sid); } catch {} this.phase = '已中止'; break;
+      case 'abort':
+        m.metadata = { ...m.metadata, aborted: true, pending: false };
+        m._finishedAt = m._finishedAt || now();
+        for (const p of m.parts || []) if (p.state === 'streaming') p.state = 'done';
+        try { Strength.markAborted(this.sid); } catch {}
+        this.phase = '已中止';
+        clearTimeout(this._finTurnT);
+        this._finTurnT = setTimeout(() => { if (this.live === m && (typeof Hitl === 'undefined' || !Hitl.idleWait(this))) this.finishTurn(); }, 1500);
+        break;
       default:
         if (t.startsWith('data-')) { const ex = ch.id ? P.find(x => x.type === t && x.id === ch.id) : null; if (ex) ex.data = ch.data; else P.push({ type: t, id: ch.id, data: ch.data }); }
     }
@@ -4174,6 +5203,11 @@ class Chat {
   finishTurn(runTok, forced) {
     clearTimeout(this._finTurnT);
     clearTimeout(this._errTurnT);
+    if ((this.waitingForeign || (this.preSend && this.awaitId)) && !this.stopReq) {
+      if (forced && this.streaming) { this.gen++; try { this.ctl?.abort(); } catch {} this.streaming = false; this.ctl = null; }
+      this.foreignDone(runTok ? { 'public-access-token': runTok } : {});
+      return;
+    }
     if (forced && this.streaming) { this.gen++; try { this.ctl?.abort(); } catch {} this.streaming = false; this.ctl = null; }
     const m = this.live;
     this.dbg?.('finish', { forced: !!forced, parts: m?.parts?.length ?? null, ask: !!m?.parts?.some(p => p.toolCallId && Hitl.name(p)), seq: this.lastSeq, n: this.trcN || 0 }); this.trcN = 0;
@@ -4181,10 +5215,11 @@ class Chat {
     if (m && typeof Budget !== 'undefined') try { Budget.turn(this, m); } catch {}   /* 记一笔估算花费，用来推断总额度 / 余额 */
     this.fakeEnd = null; this.midTurnStall = null;
     if (m && !this.stopReq) {
-      const open = m.parts.filter(p => p.toolCallId && (/^(input-streaming|input-available)$/.test(p.state || '') || (p.state === 'output-available' && p.output && typeof p.output === 'object' && p.output.status === 'running')));
-      const ask = open.some(p => Hitl.name(p) || /(^|[-_])(ask|question|confirm|approval|choice|select|form|clarif|human|user[-_]?input)/i.test(String(p.toolName || p.type || '')));
       const lastP = m.parts.filter(p => p.type !== 'step-start').at(-1);
-      if (open.length && !ask) this.fakeEnd = { at: now(), why: (open[0].toolName || '工具') + ' 还没返回结果就结束了（假结束）', key: 'open|' + m.id + '|' + m.parts.length };
+      const hasConcludingText = Boolean(lastP?.type === 'text' && String(lastP.text || '').trim().length > 0 && (this.finAt || m.metadata?.finishReason === 'stop' || m.metadata?.finishReason === 'end-turn'));
+      const open = m.parts.filter(p => p.toolCallId && (/^(input-streaming|input-available)$/.test(p.state || '') || (!hasConcludingText && p === lastP && p.state === 'output-available' && p.output && typeof p.output === 'object' && p.output.status === 'running')));
+      const ask = open.some(p => Hitl.name(p) || /(^|[-_])(ask|question|confirm|approval|choice|select|form|clarif|human|user[-_]?input)/i.test(String(p.toolName || p.type || '')));
+      if (open.length && !ask && !hasConcludingText) this.fakeEnd = { at: now(), why: (open[0].toolName || '工具') + ' 还没返回结果就结束了（假结束）', key: 'open|' + m.id + '|' + m.parts.length };
       else if (forced && !this.finAt && lastP && lastP.type === 'text' && lastP.state === 'streaming' && m.metadata?.pending !== false) this.fakeEnd = { at: now(), why: '回复写到一半就结束了（假结束）', key: 'cut|' + m.id + '|' + m.parts.length };
       if (typeof KeepAlive !== 'undefined' && KeepAlive.isMidTurnStalled) {
         const stall = KeepAlive.isMidTurnStalled(this, m);
@@ -4194,6 +5229,7 @@ class Chat {
     if (m) {
       m._finishedAt = now();
       m._forcedFinish = Boolean(forced && !this.finAt && !this.stopReq);
+      delete m._incomplete;
       m.metadata = { ...m.metadata, pending: false };
       if (!m.metadata.timing?.completedAt) m.metadata.timing = { ...(m.metadata.timing || {}), startedAt: m.metadata.timing?.startedAt || this.oursAt || this.dispAt || 0, completedAt: now() }; if (this.stopReq) { m.metadata.aborted = true; if (this.thinkStopped || this.routedThink) m.metadata.openThinkStopped = true; try { Strength.markAborted(this.sid); } catch {} }
       m.parts.forEach(p => {
@@ -4214,11 +5250,16 @@ class Chat {
       if (lastA?.role === 'assistant') {
         lastA._finishedAt = lastA._finishedAt || now();
         lastA.metadata = { ...(lastA.metadata || {}), pending: false };
+        if (!this.stopReq && !this.midTurnStall && typeof KeepAlive !== 'undefined' && KeepAlive.isMidTurnStalled) {
+          const stallLast = KeepAlive.isMidTurnStalled(this, lastA);
+          if (stallLast) this.midTurnStall = { at: now(), why: stallLast.why, key: stallLast.key };
+        }
       }
     }
     this.stopReq = false; this.stopPending = false;
     const was = this.status, identityInput = this.turnInput, doneAwaitId = this.awaitId;
     if (runTok && runTok !== this.runTok && /read:runs:run_/.test(JSON.stringify(jwt(runTok)?.scopes || ''))) { this.runTok = runTok; this.runAt = now(); Bus.emit('runtoken', this); }
+    this._recoveringIncomplete = false; this._startupResuming = false;
     this.live = null; this.parts.clear(); this.phase = ''; this.status = this.error && !m ? 'error' : 'idle';
     this.awaitFrom = 0; this.awaitId = null; this.turnInput = null; clearTimeout(this.wakeT); clearTimeout(this.lostT); clearTimeout(this.startT); this.dlv = ''; this.oursAt = 0;
     if (this.status === 'idle' && (m || (this.messages || []).at(-1)?.role === 'assistant')) {
@@ -4230,6 +5271,10 @@ class Chat {
       if (Array.isArray(this.messages) && this.messages.length > 0) this.loaded = true;
     }
     this.emit();
+    if (this.status === 'idle' && !this.fakeEnd && typeof SendQ !== 'undefined' && (SendQ.of?.(this)?.length || (this.queue || []).length)) {
+      if (this.midTurnStall) this.midTurnStall = null;
+      setTimeout(() => { try { SendQ.check(this); } catch {} }, 50);
+    }
     if (this.loaded && typeof MsgCache !== 'undefined' && MsgCache.putNow) void MsgCache.putNow(this).catch(() => {});
     // 一轮结束后再看一眼实时通道：把尾巴读掉（位置保持最新），如果服务器接着又开了一轮（长任务续跑）就直接接上显示
     if (!this.gacha && !this.fakeEnd && !this.midTurnStall) { clearTimeout(this.tailT); this.tailT = setTimeout(() => { if (!this.busy && !this.streaming && !this.midTurnStall && !this.fakeEnd && this.loaded) this.stream({ peek: true }); }, 1500); }
@@ -4237,8 +5282,10 @@ class Chat {
     // 每轮结束后都和服务器对一次账：漏掉的记录 / 别处的改动以服务器为准补齐（和网页一致，不必手动刷新）
     clearTimeout(this.hitlT);
     const isKeptOrActive = !this.gacha || (typeof History !== 'undefined' && History.byId?.(this.sid)) || (typeof Tabs !== 'undefined' && Tabs.cur?.sid === this.sid);
-    const recoDelay = this.messages.slice(-4).some(x => x.parts?.some(p => p.toolCallId && Hitl.name(p))) ? 900 : 1400;
-    if (!this.gacha) this.reconcile(recoDelay);
+    const hasRecentHitl = this.messages.slice(-4).some(x => x.parts?.some(p => p.toolCallId && Hitl.name(p)));
+    const hasAsstGap = typeof SentUserLog !== 'undefined' && SentUserLog.hasAdjacentAsstGap && SentUserLog.hasAdjacentAsstGap(this.messages);
+    const recoDelay = hasRecentHitl ? 900 : 1400;
+    if (!this.gacha && (forced || !this.finAt || hasRecentHitl || hasAsstGap || this.fakeEnd || this.midTurnStall)) this.reconcile(recoDelay);
     else if (isKeptOrActive) setTimeout(() => { if (!this.busy && !this.live && this.loaded) void this.reconcile(0).catch(() => {}); }, recoDelay);
     // 服务器记录有时比实时流晚几秒才写好：带提问卡片的一轮结束后再对一次账（卡片已经在就什么都不会变）
     if (isKeptOrActive && this.messages.slice(-2).some(x => x.role === 'assistant' && x.parts?.some(p => p.toolCallId && Hitl.name(p)))) setTimeout(() => { if (!this.live && !this.busy && !this.streaming && this.loaded) this.converge(); }, 5500);
@@ -4358,12 +5405,30 @@ Object.assign(Chat.prototype, {
       let fails = 0;
       try {
         while (my === this.wGen) {
-          if (!this.loaded || this.loading || this.busy || this.streaming || this.syncing || this.lastSeq == null) { await sleep(1200); continue; }
+          if (!this.loaded || this.loading || this.busy || (this.streaming && !this.peeking) || this.syncing) { await sleep(1200); continue; }
+          if (this.lastSeq == null) {
+            const d = await this.drain(1500).catch(() => null);
+            if (this.lastSeq == null) {
+              try {
+                await this.ensureToken();
+                const r0 = await rawFetch(OUT(this.sid), { headers: { Accept: 'text/event-stream', Authorization: 'Bearer ' + this.token, 'Timeout-Seconds': '1' }, cache: 'no-store', credentials: 'same-origin' }).catch(() => null);
+                if (r0 && r0.ok) {
+                  const t0 = await r0.text().catch(() => '');
+                  let mx = -1;
+                  for (const mSq of t0.matchAll(/"seq_num"\s*:\s*(\d+)/g)) { const v = +mSq[1]; if (v > mx) mx = v; }
+                  this.lastSeq = String(mx >= 0 ? mx : 0);
+                } else {
+                  this.lastSeq = d?.max != null && d.max >= 0 ? String(d.max) : '0';
+                }
+              } catch { this.lastSeq = '0'; }
+            }
+            if (my !== this.wGen || this.busy || (this.streaming && !this.peeking) || this.syncing) continue;
+          }
           const ctl = new AbortController(); this.wCtl = ctl; const tm = setTimeout(() => ctl.abort(), 75000);
           const from = this.lastSeq; let hit = null, cur = from, headerTimer = 0, headerTimeout = false;
           try {
             await this.ensureToken();
-            if (my !== this.wGen || this.busy || this.streaming || this.lastSeq !== from) continue;
+            if (my !== this.wGen || this.busy || (this.streaming && !this.peeking) || this.lastSeq !== from) continue;
             headerTimer = setTimeout(() => { headerTimeout = true; ctl.abort(); }, 12000);
             const res = await rawFetch(OUT(this.sid), { headers: { Accept: 'text/event-stream', Authorization: 'Bearer ' + this.token, 'Timeout-Seconds': '60', 'Last-Event-ID': String(from) }, signal: ctl.signal, cache: 'no-store', credentials: 'same-origin' });
             clearTimeout(headerTimer);
@@ -4372,7 +5437,7 @@ Object.assign(Chat.prototype, {
             const rd = res.body.getReader(), dec = new TextDecoder(); let buf = '';
             outer: for (;;) {
               const { done, value } = await rd.read(); if (done) break;
-              if (my !== this.wGen || this.busy || this.streaming) { ctl.abort(); break; }
+              if (my !== this.wGen || this.busy || (this.streaming && !this.peeking)) { ctl.abort(); break; }
               buf += dec.decode(value, { stream: true }); let i;
               while ((i = buf.search(/\r?\n\r?\n/)) >= 0) {
                 const block = buf.slice(0, i); buf = buf.slice(i).replace(/^\r?\n\r?\n/, '');
@@ -4385,9 +5450,9 @@ Object.assign(Chat.prototype, {
                   const ty = b?.data?.type;
                   if (ty === 'start' || ty === 'data-agent-dispatch') { hit = { seq: +rec.seq_num, ty, input: b.data?.data?.inputId || null }; ctl.abort(); break outer; }
                   // 中途接上的一轮（没读到 start / 分派，只有后面的内容）：不能当成「尾巴」悄悄跳过——对账一次，把服务器上的内容补进来
-                  if (/^(text-start|text-delta|reasoning-start|reasoning-delta|tool-input-start|tool-input-delta|tool-input-available|tool-output-available|start-step|finish|turn-complete)$/.test(ty || '')) { hit = { seq: +rec.seq_num, ty, mid: true }; ctl.abort(); break outer; }
+                  if (/^(text-start|text-delta|reasoning-start|reasoning-delta|tool-input-start|tool-input-delta|tool-input-available|tool-output-available|start-step)$/.test(ty || '')) { hit = { seq: +rec.seq_num, ty, mid: true }; ctl.abort(); break outer; }
                   // 上一轮的尾巴（保存工作区、多出来的结束标记）：只把位置往后挪
-                  if (!this.busy && !this.streaming && this.lastSeq === cur) this.lastSeq = cur = String(rec.seq_num);
+                  if (!this.busy && !(this.streaming && !this.peeking) && this.lastSeq === cur) this.lastSeq = cur = String(rec.seq_num);
                 }
               }
               if (this.lastSeq !== cur) { ctl.abort(); break; }   // 位置被别的流程挪了：用新位置重新挂
@@ -4396,7 +5461,7 @@ Object.assign(Chat.prototype, {
           } catch (e) { if (e?.name !== 'AbortError' || headerTimeout) { fails++; this.wFails = fails; } }
           finally { clearTimeout(headerTimer); clearTimeout(tm); if (this.wCtl === ctl) this.wCtl = null; }
           if (my !== this.wGen) break;
-          if (hit && !this.busy && !this.streaming) { this.dbg?.('watch-hit', { seq: hit.seq, ty: hit.ty, mid: !!hit.mid }); this.remoteAt = now(); await this.remoteSync(hit).catch(() => {}); if (hit.mid) await sleep(2500); continue; }
+          if (hit && !this.busy && !(this.streaming && !this.peeking)) { this.dbg?.('watch-hit', { seq: hit.seq, ty: hit.ty, mid: !!hit.mid }); this.remoteAt = now(); await this.remoteSync(hit).catch(() => {}); if (!this.busy && !(this.streaming && !this.peeking) && hit.seq != null && +(this.lastSeq ?? -1) < +hit.seq) this.lastSeq = String(hit.seq); if (hit.mid) await sleep(2500); continue; }
           await sleep(fails ? Math.min(30000, 1500 * 2 ** Math.min(fails, 5)) : 250);
         }
       } finally { if (my === this.wGen) { this.watching = false; this.wCtl = null; } }
@@ -4422,11 +5487,19 @@ Object.assign(Chat.prototype, {
       }
     }
     if (!srv.length) return false;
-    const loc = new Map(this.messages.map((m, i) => [m.id, i]));
-    const first = srv.findIndex(m => loc.has(m.id));
+    const loc = new Map();
+    this.messages.forEach((m, i) => {
+      if (!m) return;
+      if (m.id) loc.set(m.id, i);
+      if (m.metadata?.nodeId && !loc.has(m.metadata.nodeId)) loc.set(m.metadata.nodeId, i);
+    });
+    const first = srv.findIndex(m => loc.has(m.id) || (m.metadata?.nodeId && loc.has(m.metadata.nodeId)));
     let head;
-    if (first < 0) head = this.messages.filter(m => !m._local && !(typeof isPhantomFinishStub === 'function' && isPhantomFinishStub(m)) && idTime(m.id) && idTime(m.id) < idTime(srv[0].id));
-    else head = this.messages.slice(0, loc.get(srv[first].id)).filter(m => !srv.some(x => x.id === m.id) && !(typeof isPhantomFinishStub === 'function' && isPhantomFinishStub(m)));
+    if (first < 0) head = this.messages.filter(m => !m._local && !m._appendAccepted && !(typeof isPhantomFinishStub === 'function' && isPhantomFinishStub(m)) && idTime(m.id) && idTime(m.id) < idTime(srv[0].id));
+    else {
+      const firstLocIdx = loc.get(srv[first].id) ?? loc.get(srv[first].metadata?.nodeId) ?? 0;
+      head = this.messages.slice(0, firstLocIdx).filter(m => !srv.some(x => x.id === m.id || (x.metadata?.nodeId && (x.metadata.nodeId === m.id || x.metadata.nodeId === m.metadata?.nodeId))) && !(typeof isPhantomFinishStub === 'function' && isPhantomFinishStub(m)));
+    }
     const sig = m => {
       const ps = m.parts || [], n = ps.length;
       let s = n + '|' + (m.metadata?.pending ? 1 : 0) + '|' + (m.metadata?.aborted ? 1 : 0);
@@ -4439,7 +5512,7 @@ Object.assign(Chat.prototype, {
       for (let i = 0; i < n; i++) { const p = ps[i]; if (p?.toolCallId && p.state !== 'output-available' && p.state !== 'output-error' && p.state !== 'output-denied') openScore += (i + 1); }
       return s + '|o:' + openScore;
     };
-    const patchAssistantParts = (o, m) => {
+    const patchAssistantParts = this._patchAssistantParts = (o, m) => {
       if (!Array.isArray(o.parts) || !Array.isArray(m.parts)) return false;
       const byTool = new Map(); for (const lp of o.parts) if (lp?.toolCallId) byTool.set(lp.toolCallId, lp);
       let patched = false;
@@ -4456,6 +5529,46 @@ Object.assign(Chat.prototype, {
           }
         } else if (sp.toolCallId && !byTool.has(sp.toolCallId)) { o.parts.push(sp); byTool.set(sp.toolCallId, sp); patched = true; }
       }
+      const sTexts = m.parts.filter(p => p && p.type === 'text' && String(p.text || '').trim());
+      const lTextIdxs = [];
+      for (let idx = 0; idx < o.parts.length; idx++) {
+        if (o.parts[idx]?.type === 'text') lTextIdxs.push(idx);
+      }
+      if (sTexts.length > 0) {
+        if (sTexts.length === lTextIdxs.length) {
+          for (let k = 0; k < sTexts.length; k++) {
+            const sp = sTexts[k], lp = o.parts[lTextIdxs[k]];
+            if (sp.text && (!lp.text || sp.text.length > lp.text.length || (!m.metadata?.pending && sp.text !== lp.text && sp.text.length >= lp.text.length))) {
+              o.parts[lTextIdxs[k]] = { ...lp, ...sp, id: lp.id || sp.id, text: sp.text, state: m.metadata?.pending ? (sp.state || lp.state) : 'done' };
+              delete o.parts[lTextIdxs[k]]._mdEl;
+              patched = true;
+            }
+          }
+        } else if (sTexts.length > lTextIdxs.length) {
+          for (let k = 0; k < lTextIdxs.length; k++) {
+            const sp = sTexts[k], lp = o.parts[lTextIdxs[k]];
+            if (sp.text && (!lp.text || sp.text.length > lp.text.length)) {
+              o.parts[lTextIdxs[k]] = { ...lp, ...sp, id: lp.id || sp.id, text: sp.text, state: m.metadata?.pending ? (sp.state || lp.state) : 'done' };
+              delete o.parts[lTextIdxs[k]]._mdEl;
+              patched = true;
+            }
+          }
+          for (let k = lTextIdxs.length; k < sTexts.length; k++) {
+            const sp = sTexts[k];
+            if (!o.parts.some(lp => lp?.type === 'text' && String(lp.text || '').trim() === String(sp.text || '').trim())) {
+              o.parts.push({ ...sp, state: m.metadata?.pending ? (sp.state || 'streaming') : 'done' });
+              patched = true;
+            }
+          }
+        } else if (lTextIdxs.length > 0) {
+          const lastSp = sTexts.at(-1), lastLIdx = lTextIdxs.at(-1), lastLp = o.parts[lastLIdx];
+          if (lastSp?.text && (!lastLp?.text || lastSp.text.length > lastLp.text.length)) {
+            o.parts[lastLIdx] = { ...lastLp, ...lastSp, id: lastLp?.id || lastSp.id, text: lastSp.text, state: m.metadata?.pending ? (lastSp.state || lastLp?.state) : 'done' };
+            delete o.parts[lastLIdx]._mdEl;
+            patched = true;
+          }
+        }
+      }
       if (m.parts.length > o.parts.length) {
         for (const tp of m.parts.slice(o.parts.length)) {
           if (!tp || tp.type === 'step-start' || (tp.toolCallId && byTool.has(tp.toolCallId))) continue;
@@ -4464,10 +5577,22 @@ Object.assign(Chat.prototype, {
         }
       }
       if (m.metadata) {
-        const prevPend = o.metadata?.pending;
-        o.metadata = { ...(o.metadata || {}), ...m.metadata };
-        if (o.metadata.pending) { delete o._finishedAt; delete o._forcedFinish; }
-        if (prevPend !== o.metadata.pending) patched = true;
+        const prevPend = Boolean(o.metadata?.pending);
+        const mExplicitDone = Boolean(m.metadata?.timing?.completedAt || m.metadata?.finishReason === 'stop' || m.metadata?.finishReason === 'end-turn' || m.metadata?.aborted || m.metadata?.error);
+        const keepLocalDone = Boolean((!prevPend && o._finishedAt && !o._forcedFinish && (now() - o._finishedAt < 60000) && o !== keep) || mExplicitDone);
+        const nextPend = keepLocalDone ? false : Boolean(m.metadata.pending);
+        const savedCompAt = o.metadata?.timing?.completedAt;
+        o.metadata = { ...(o.metadata || {}), ...m.metadata, pending: nextPend };
+        if (keepLocalDone && savedCompAt && !o.metadata?.timing?.completedAt) o.metadata.timing = { ...(o.metadata.timing || {}), completedAt: savedCompAt };
+        if (nextPend) { delete o._finishedAt; delete o._forcedFinish; }
+        else {
+          delete o._incomplete;
+          delete o._forcedFinish;
+          if (!o.metadata.timing?.completedAt) {
+            o.metadata.timing = { ...(o.metadata.timing || {}), startedAt: o.metadata.timing?.startedAt || idTime(o.id) || now(), completedAt: o._finishedAt || now() };
+          }
+        }
+        if (prevPend !== nextPend) patched = true;
       }
       if (patched) o.v = (o.v || 0) + 1;
       return patched;
@@ -4488,18 +5613,27 @@ Object.assign(Chat.prototype, {
     const matchedLocal = new Set();
     const normUText = m => (m?.parts || []).filter(p => p?.type === 'text').map(p => String(p.text || '')).join('').replace(/\s+/g, ' ').trim();
     const mid = srv.map((m, sIdx) => {
-      let i = loc.get(m.id), o = i != null ? this.messages[i] : null;
+      let i = loc.get(m.id) ?? (m.metadata?.nodeId ? loc.get(m.metadata.nodeId) : undefined), o = i != null ? this.messages[i] : null;
       if (!o && m.role === 'user') {
         const mNodeId = m.metadata?.nodeId;
         const mText = normUText(m);
         const mTime = idTime(m.id) || 0;
+        const mAttCount = (m.metadata?.uploads?.length || 0) + (m.parts || []).filter(p => p?.type === 'file').length;
         const cand = this.messages.find(x => x && x.role === 'user' && !matchedLocal.has(x) && !srv.some(sx => sx.id === x.id) && (
           (mNodeId && (x.id === mNodeId || x.metadata?.nodeId === mNodeId)) ||
           (x.metadata?.nodeId && x.metadata.nodeId === m.id) ||
-          (x._local && mText && normUText(x) === mText && (!mTime || !idTime(x.id) || Math.abs(mTime - idTime(x.id)) < 120000))
+          ((x._local || x._appendAccepted) && (
+            (mText && normUText(x) === mText) ||
+            (!mText && !normUText(x) && mAttCount > 0 && ((x._prev?.length || 0) + (x.metadata?.uploads?.length || 0) + (x.parts || []).filter(p => p?.type === 'file').length) > 0)
+          ) && (!mTime || !idTime(x.id) || Math.abs(mTime - idTime(x.id)) < 1800000))
         ));
         if (cand) {
           o = cand;
+          for (const dup of this.messages) {
+            if (dup && dup !== cand && dup.role === 'user' && (dup._local || dup._appendAccepted) && !srv.some(sx => sx.id === dup.id) && mText && normUText(dup) === mText && (!mTime || !idTime(dup.id) || Math.abs(mTime - (dup._sentAt || idTime(dup.id) || 0)) < 3600000)) {
+              matchedLocal.add(dup);
+            }
+          }
           if (this.awaitId && (this.awaitId === cand.id || this.awaitId === cand.metadata?.nodeId)) {
             this.awaitId = m.id;
           }
@@ -4515,9 +5649,15 @@ Object.assign(Chat.prototype, {
           const toolConflict = mTools.size > 0 && cTools.length > 0 && !cTools.some(id => mTools.has(id));
           if (!toolConflict) o = cand;
         }
+        if (!o && keep && keep.role === 'assistant' && !matchedLocal.has(keep) && sIdx === srv.length - 1 && !srv.some(x => x.id === keep.id)) {
+          o = keep;
+        }
       }
       if (o) matchedLocal.add(o);
-      if (o && keep && o === keep) return o;
+      if (o && keep && o === keep) {
+        if (o.role === 'assistant' && patchAssistantParts(o, m)) changed = true;
+        return o;
+      }
       if (o && o.role === 'assistant') {
         const hasNextUser = srv.slice(sIdx + 1).some(x => x && x.role === 'user');
         if (o._awaitingSnapshot) {
@@ -4530,10 +5670,13 @@ Object.assign(Chat.prototype, {
         const hasInterruptedLocal = Boolean(o._forcedFinish || (o.parts || []).some(p => p?.toolCallId && (p._interruptedPending || p.errorText === '未返回结果')));
         const recFin = o._finishedAt && (now() - o._finishedAt < 60000);
         if (!hasInterruptedLocal && ((recFin && m.metadata?.pending && !o.metadata?.pending) || (recFin && ow > mw))) {
-          lagged = true; patchAssistantParts(o, m); return o;
+          lagged = true; if (patchAssistantParts(o, m)) changed = true; return o;
         }
         if (!o._local && !hasInterruptedLocal && sig(o) === sig(m)) return o;
-        if (ow >= mw && !hasInterruptedLocal && (m.metadata?.pending || ow > mw) && o.parts?.length >= 4 && patchAssistantParts(o, m)) { changed = true; return o; }
+        if (ow >= mw && !hasInterruptedLocal && (m.metadata?.pending || o.metadata?.pending || o._incomplete || ow > mw)) {
+          if (patchAssistantParts(o, m)) { changed = true; return o; }
+          if (ow > mw && (m.metadata?.pending || o.metadata?.pending || o._incomplete)) return o;
+        }
       }
       if (o && !o._local && sig(o) === sig(m)) return o;
       changed = true;
@@ -4542,23 +5685,132 @@ Object.assign(Chat.prototype, {
         const localReason = o.parts.filter(p => p && p.type === 'reasoning');
         const srvHasReason = m.parts.some(p => p && p.type === 'reasoning');
         if (localReason.length && !srvHasReason) mergedParts = [...localReason, ...m.parts];
+        const localNonEmptyReason = localReason.filter(p => p.text);
+        let rTextIdx = 0;
         const lIds = { reasoning: o.parts.filter(p => p?.type === 'reasoning' && p.id), text: o.parts.filter(p => p?.type === 'text' && p.id) }, idxMap = { reasoning: 0, text: 0 };
-        mergedParts = mergedParts.map(sp => (sp && (sp.type === 'reasoning' || sp.type === 'text') && !sp.id && lIds[sp.type]?.[idxMap[sp.type]]?.id) ? { ...sp, id: lIds[sp.type][idxMap[sp.type]++].id } : sp);
+        mergedParts = mergedParts.map(sp => {
+          if (!sp) return sp;
+          let outP = (sp.type === 'reasoning' || sp.type === 'text') && !sp.id && lIds[sp.type]?.[idxMap[sp.type]]?.id ? { ...sp, id: lIds[sp.type][idxMap[sp.type]++].id } : sp;
+          if (outP.type === 'reasoning' && !outP.text && localNonEmptyReason[rTextIdx]?.text) {
+            const lr = localNonEmptyReason[rTextIdx++];
+            outP = { ...outP, text: lr.text, id: outP.id || lr.id };
+          }
+          return outP;
+        });
       }
-      if (m.role === 'assistant' && m.metadata?.pending && Array.isArray(mergedParts)) {
+      const mExplicitDone = Boolean(m.metadata?.timing?.completedAt || m.metadata?.finishReason === 'stop' || m.metadata?.finishReason === 'end-turn' || m.metadata?.aborted || m.metadata?.error);
+      const srvMPend = Boolean(m.role === 'assistant' && m.metadata?.pending && sIdx === srv.length - 1 && !mExplicitDone && !(!o?.metadata?.pending && o?._finishedAt && !o?._forcedFinish && (now() - o._finishedAt < 60000) && o !== keep));
+      const mergedMeta = (m.role === 'assistant' && m.metadata?.pending && !srvMPend) ? { ...m.metadata, pending: false } : m.metadata;
+      if (m.role === 'assistant' && srvMPend && Array.isArray(mergedParts)) {
         mergedParts = mergedParts.map(sp => (sp?.toolCallId && sp.state === 'output-error' && (sp.errorText === '未返回结果' || sp._interruptedPending)) ? { ...sp, state: 'input-available', errorText: undefined, _interruptedPending: undefined } : sp);
-      } else if (m.role === 'assistant' && !m.metadata?.pending && Array.isArray(mergedParts)) {
+      } else if (m.role === 'assistant' && !srvMPend && Array.isArray(mergedParts)) {
         mergedParts = mergedParts.map(sp => (sp?.toolCallId && !Hitl.name(sp) && /^(input-streaming|input-available)$/.test(sp.state || '')) ? { ...sp, state: 'output-error', errorText: sp.errorText || '未返回结果' } : sp);
       }
-      return { ...m, parts: mergedParts, _autoContinue: o?._autoContinue || m.metadata?.autoContinue, _streamed: o?._streamed, _finishedAt: m.metadata?.pending ? undefined : o?._finishedAt, _forcedFinish: m.metadata?.pending ? undefined : o?._forcedFinish, _fmt: o?._fmt, _sseMeta: o?._sseMeta, v: (o?.v || 0) + 1 };
+      return { ...m, metadata: mergedMeta, parts: mergedParts, _autoContinue: o?._autoContinue || m.metadata?.autoContinue, _streamed: o?._streamed, _finishedAt: srvMPend ? undefined : (o?._finishedAt || (m.role === 'assistant' ? (Date.parse(m.metadata?.timing?.completedAt || m.createdAt || '') || idTime(m.id) || now()) : undefined)), _forcedFinish: srvMPend ? undefined : o?._forcedFinish, _fmt: o?._fmt, _sseMeta: o?._sseMeta, ...(o?._prev ? { _prev: o._prev } : {}), ...(o?._sentAt ? { _sentAt: o._sentAt } : {}), ...(o?._appendAccepted ? { _appendAccepted: true } : {}), ...(o?._prevAsstId ? { _prevAsstId: o._prevAsstId } : {}), v: (o?.v || 0) + 1 };
     });
+    head = head.filter(m => !matchedLocal.has(m));
     const ids = new Set(srv.map(m => m.id));
-    const srvLastTime = idTime(srv.at(-1)?.id) || 0;
-    const tail = this.messages.filter((m, idx) => {
+    const srvNodeIds = new Set(srv.map(m => m.metadata?.nodeId).filter(Boolean));
+    const srvUserTextSet = new Set(srv.filter(m => m?.role === 'user').map(normUText).filter(Boolean));
+    const srvLastMsg = srv.at(-1);
+    const srvLastCompRaw = srvLastMsg?.metadata?.timing?.completedAt || srvLastMsg?.metadata?.timing?.startedAt;
+    const srvLastCompMs = typeof srvLastCompRaw === 'number' ? srvLastCompRaw : (typeof srvLastCompRaw === 'string' ? Date.parse(srvLastCompRaw) : 0);
+    const srvLastTime = idTime(srvLastMsg?.id) || 0;
+    const srvLastEndTime = Math.max(srvLastTime, Number.isFinite(srvLastCompMs) ? srvLastCompMs : 0, srvLastMsg?._finishedAt || 0);
+    let lastSrvInOldIdx = -1;
+    for (let i = this.messages.length - 1; i >= 0; i--) {
+      if (this.messages[i]?.id && ids.has(this.messages[i].id)) { lastSrvInOldIdx = i; break; }
+    }
+    const willKeepTailAsst = (m, idx, forPrecedingUser = false) => {
+      if (!m || m.role !== 'assistant') return false;
+      if (forPrecedingUser && (ids.has(m.id) || matchedLocal.has(m))) return true;
       if (ids.has(m.id) || matchedLocal.has(m)) return false;
       if (typeof isPhantomFinishStub === 'function' && isPhantomFinishStub(m)) return false;
-      if (m._local || (keep && m === keep)) return true;
-      if (m.role === 'assistant' && partWeight(m.parts) > 0) {
+      if (m._local || m._incomplete || m.metadata?.pending || (keep && m === keep)) return true;
+      if (partWeight(m.parts) > 0) {
+        if (m._awaitingSnapshot) {
+          const srvLast = srv.at(-1);
+          if (srvLast && srvLast.role === 'user' && srvLast.id !== this.messages[idx - 1]?.id) return false;
+          return true;
+        }
+        const prevMsg = idx > 0 ? this.messages[idx - 1] : null;
+        const hasUnmatchedPrevUser = Boolean(prevMsg && prevMsg.role === 'user' && !ids.has(prevMsg.id) && !matchedLocal.has(prevMsg));
+        if (idx < this.messages.length - 1 || (srv.at(-1)?.role === 'assistant' && !hasUnmatchedPrevUser)) return false;
+        const recFin = m._finishedAt && !m._forcedFinish && (now() - m._finishedAt < 60000);
+        const isTrailing = idx >= this.messages.length - 2 || idx > lastSrvInOldIdx;
+        const mTime = idTime(m.id) || 0;
+        if (recFin || (isTrailing && (!srvLastTime || !mTime || mTime >= srvLastTime))) return true;
+      }
+      return false;
+    };
+    const srvLastExplicitDone = Boolean(srvLastMsg?.metadata?.timing?.completedAt || srvLastMsg?.metadata?.finishReason === 'stop' || srvLastMsg?.metadata?.finishReason === 'end-turn' || srvLastMsg?.metadata?.aborted || srvLastMsg?.metadata?.error);
+    const srvLastIsRunning = Boolean(srvLastMsg?.role === 'assistant' && !srvLastExplicitDone && (srvLastMsg.metadata?.pending || (typeof hasInterruptedToolPart === 'function' && hasInterruptedToolPart(srvLastMsg))));
+    const oldAsstWeights = new Map();
+    for (const om of this.messages) if (om?.role === 'assistant' && om.id) oldAsstWeights.set(om.id, (typeof SentUserLog !== 'undefined' && SentUserLog.measureAsstWeight) ? SentUserLog.measureAsstWeight(om) : partWeight(om.parts));
+    const tail = this.messages.filter((m, idx) => {
+      if (!m || ids.has(m.id) || (m.metadata?.nodeId && (ids.has(m.metadata.nodeId) || srvNodeIds.has(m.metadata.nodeId))) || srvNodeIds.has(m.id) || matchedLocal.has(m)) return false;
+      if (m.failed) {
+        if (m.role === 'user') {
+          const uTime = m._sentAt || idTime(m.id) || 0;
+          const uTxt = normUText(m);
+          const inSrv = uTxt && srvUserTextSet.has(uTxt);
+          const pIdx = m._prevAsstId ? srv.findIndex(x => x && x.id === m._prevAsstId) : (srvLastMsg?.role === 'assistant' ? srv.length - 1 : -1);
+          const hasSrvUserAfterP = pIdx >= 0 && srv.slice(pIdx + 1).some(x => x && x.role === 'user');
+          const targetAsst = pIdx >= 0 ? srv[pIdx] : null;
+          const oldW = targetAsst ? (m._prevAsstWeight ?? oldAsstWeights.get(targetAsst.id) ?? null) : null;
+          const newW = targetAsst ? ((typeof SentUserLog !== 'undefined' && SentUserLog.measureAsstWeight) ? SentUserLog.measureAsstWeight(targetAsst) : partWeight(targetAsst.parts)) : 0;
+          const targetSupplemented = Boolean(targetAsst && !hasSrvUserAfterP && ((oldW != null && newW > oldW) || (srvLastEndTime > 0 && uTime > 0 && srvLastEndTime >= uTime + 1000 && (idTime(targetAsst.id) || 0) <= uTime + 5000)));
+          if (!inSrv && !hasSrvUserAfterP && (srvLastIsRunning || this.busy || this.streaming || this.live || targetSupplemented)) {
+            try { if (typeof SentUserLog !== 'undefined' && SentUserLog.demoteToQueue) SentUserLog.demoteToQueue(this, m, { silent: true, running: Boolean(srvLastIsRunning || this.busy || this.streaming || this.live) }); } catch {}
+            return false;
+          }
+          if (!inSrv && idx === this.messages.length - 1 && (!srvLastEndTime || !uTime || uTime >= srvLastEndTime - 30000)) return true;
+        }
+        try { if (typeof SentUserLog !== 'undefined' && SentUserLog.remove) SentUserLog.remove(this.sid, m.id); } catch {}
+        return false;
+      }
+      if (typeof isPhantomFinishStub === 'function' && isPhantomFinishStub(m)) return false;
+      const isAheadOfSrv = idx > lastSrvInOldIdx;
+      if (keep && m === keep) return true;
+      if (m._local || m._appendAccepted) {
+        if (m.role === 'user') {
+          const isAwaitingThis = Boolean(this.awaitId && (this.awaitId === m.id || this.awaitId === m.metadata?.nodeId) && (this.busy || this.sending || this.preSend));
+          const uTxt = normUText(m);
+          const uTime = m._sentAt || idTime(m.id) || 0;
+          if (uTxt && srvUserTextSet.has(uTxt) && srv.some(sm => sm?.role === 'user' && normUText(sm) === uTxt && (!uTime || !idTime(sm.id) || Math.abs(uTime - (sm._sentAt || idTime(sm.id) || 0)) < 3600000))) {
+            try { if (typeof SentUserLog !== 'undefined' && SentUserLog.remove) SentUserLog.remove(this.sid, m.id, uTxt, uTime); } catch {}
+            return false;
+          }
+          const pIdx = m._prevAsstId ? srv.findIndex(x => x && x.id === m._prevAsstId) : (srvLastMsg?.role === 'assistant' ? srv.length - 1 : -1);
+          const hasSrvUserAfterP = pIdx >= 0 && srv.slice(pIdx + 1).some(x => x && x.role === 'user');
+          const targetAsst = pIdx >= 0 ? srv[pIdx] : null;
+          const oldW = targetAsst ? (m._prevAsstWeight ?? oldAsstWeights.get(targetAsst.id) ?? null) : null;
+          const newW = targetAsst ? ((typeof SentUserLog !== 'undefined' && SentUserLog.measureAsstWeight) ? SentUserLog.measureAsstWeight(targetAsst) : partWeight(targetAsst.parts)) : 0;
+          const targetSupplemented = Boolean(targetAsst && !hasSrvUserAfterP && ((oldW != null && newW > oldW) || (srvLastEndTime > 0 && uTime > 0 && srvLastEndTime >= uTime + 1000 && (idTime(targetAsst.id) || 0) <= uTime + 5000)));
+          if (!hasSrvUserAfterP && !(isAwaitingThis && (this.preSend || this.sending)) && (targetSupplemented || (srvLastIsRunning && (!isAwaitingThis || (!this.oursAt && this.dlv !== 'taken'))))) {
+            try { if (typeof SentUserLog !== 'undefined' && SentUserLog.demoteToQueue) SentUserLog.demoteToQueue(this, m, { silent: true, running: Boolean(srvLastIsRunning || this.busy || this.streaming || this.live) }); } catch {}
+            return false;
+          }
+          if (isAwaitingThis) return true;
+          if (srvLastEndTime > 0 && uTime > 0 && uTime < srvLastEndTime - 30000) {
+            const fillsSrvGap = (pIdx >= 0 && srv[pIdx + 1]?.role === 'assistant') || (srv.length >= 2 && srv.at(-1)?.role === 'assistant' && srv.at(-2)?.role === 'assistant' && uTime >= (idTime(srv.at(-2)?.id) || 0) - 15000);
+            if (!fillsSrvGap) {
+              try { if (typeof SentUserLog !== 'undefined' && SentUserLog.remove) SentUserLog.remove(this.sid, m.id, uTxt, uTime); } catch {}
+              return false;
+            }
+          }
+        }
+        return true;
+      }
+      if (m.role === 'user' && (isAheadOfSrv || idx >= this.messages.length - 2)) {
+        const nextLocal = this.messages[idx + 1];
+        if (isAheadOfSrv || (nextLocal && (willKeepTailAsst(nextLocal, idx + 1, true) || (ids.has(nextLocal.id) && mid.at(-1)?.role === 'assistant' && mid.at(-2)?.role === 'assistant')))) {
+          lagged = true;
+          return true;
+        }
+      }
+      if (m.role === 'assistant' && (partWeight(m.parts) > 0 || m._incomplete || m.metadata?.pending)) {
+        if (m._incomplete || m.metadata?.pending) { lagged = true; return true; }
         if (m._awaitingSnapshot) {
           const srvLast = srv.at(-1);
           if (srvLast && srvLast.role === 'user' && srvLast.id !== this.messages[idx - 1]?.id) {
@@ -4568,9 +5820,11 @@ Object.assign(Chat.prototype, {
           lagged = true;
           return true;
         }
-        if (idx < this.messages.length - 1 || srv.at(-1)?.role === 'assistant') return false;
+        const prevMsg = idx > 0 ? this.messages[idx - 1] : null;
+        const hasUnmatchedPrevUser = Boolean(prevMsg && prevMsg.role === 'user' && !ids.has(prevMsg.id) && !matchedLocal.has(prevMsg));
+        if (idx < this.messages.length - 1 || (srv.at(-1)?.role === 'assistant' && !hasUnmatchedPrevUser)) return false;
         const recFin = m._finishedAt && !m._forcedFinish && (now() - m._finishedAt < 60000);
-        const isTrailing = idx >= this.messages.length - 2;
+        const isTrailing = idx >= this.messages.length - 2 || isAheadOfSrv;
         const mTime = idTime(m.id) || 0;
         if (recFin || (isTrailing && (!srvLastTime || !mTime || mTime >= srvLastTime))) {
           lagged = true;
@@ -4581,12 +5835,25 @@ Object.assign(Chat.prototype, {
     });
     this._srvLagged = lagged;
     const next = [...head, ...mid];
-    for (const tm of tail) {
-      if (tm && tm.role === 'user' && !tm._held && next.at(-1)?.role === 'assistant') {
+    for (let tIdx = 0; tIdx < tail.length; tIdx++) {
+      const tm = tail[tIdx];
+      if (tm && tm.role === 'user' && tm._prevAsstId) {
+        const pIdx = next.findIndex(x => x && x.id === tm._prevAsstId);
+        if (pIdx >= 0 && next[pIdx + 1]?.role !== 'user') {
+          next.splice(pIdx + 1, 0, tm);
+          changed = true;
+          continue;
+        }
+      }
+      const hasAsstAfterInTail = tail.slice(tIdx + 1).some(x => x && x.role === 'assistant');
+      if (tm && tm.role === 'user' && !tm._held && !hasAsstAfterInTail && next.at(-1)?.role === 'assistant') {
         const lastA = next.at(-1);
+        const prevBeforeA = next.length >= 2 ? next[next.length - 2] : null;
+        const missingUserBeforeA = !prevBeforeA || prevBeforeA.role === 'assistant';
+        const isAwaitingThisUser = Boolean(this.awaitId && (this.awaitId === tm.id || this.awaitId === tm.metadata?.nodeId));
         const uTime = tm._sentAt || idTime(tm.id) || 0;
         const aTime = idTime(lastA.id) || 0;
-        if ((lastA.metadata?.pending || (keep && lastA === keep)) && (!uTime || !aTime || aTime >= uTime - 2000)) {
+        if (missingUserBeforeA || ((lastA.metadata?.pending || lastA._incomplete || (keep && lastA === keep)) && (isAwaitingThisUser || !uTime || !aTime || aTime >= uTime - 300000))) {
           next.splice(next.length - 1, 0, tm);
           changed = true;
           continue;
@@ -4595,7 +5862,58 @@ Object.assign(Chat.prototype, {
       next.push(tm);
     }
     if (next.length !== this.messages.length) changed = true;
-    this.messages = next; return changed;
+    this.messages = next;
+    if (typeof SentUserLog !== 'undefined' && SentUserLog.restoreInto(this, { srvPend: srvLastIsRunning })) changed = true;
+    for (let i = this.messages.length - 1; i >= 1; i--) {
+      const cur = this.messages[i], prev = this.messages[i - 1];
+      if (cur?.role === 'user' && prev?.role === 'user' && !cur.failed && !prev.failed) {
+        const ct = normUText(cur), pt = normUText(prev);
+        if (cur.id === prev.id || (ct && ct === pt)) {
+          this.messages.splice(cur._local && !prev._local ? i : (prev._local && !cur._local ? i - 1 : i), 1);
+          changed = true;
+        }
+      }
+    }
+    let lastAIdx = -1;
+    for (let i = this.messages.length - 1; i >= 0; i--) {
+      if (this.messages[i]?.role === 'assistant') { lastAIdx = i; break; }
+    }
+    if (lastAIdx > 0) {
+      for (let i = lastAIdx - 1; i >= 0; i--) {
+        const fm = this.messages[i];
+        if (fm?.role === 'user' && fm.failed) {
+          this.messages.splice(i, 1);
+          try { if (typeof SentUserLog !== 'undefined' && SentUserLog.remove) SentUserLog.remove(this.sid, fm.id); } catch {}
+          try { if (typeof Drafts !== 'undefined' && Drafts.ack) Drafts.ack(fm.id); } catch {}
+          lastAIdx--;
+          changed = true;
+        }
+      }
+    }
+    if (lastAIdx >= 0 && lastAIdx < this.messages.length - 1) {
+      const lastAMsg = this.messages[lastAIdx];
+      const lastACompRaw = lastAMsg?.metadata?.timing?.completedAt || lastAMsg?.metadata?.timing?.startedAt;
+      const lastACompMs = typeof lastACompRaw === 'number' ? lastACompRaw : (typeof lastACompRaw === 'string' ? Date.parse(lastACompRaw) : 0);
+      const lastAEnd = Math.max(idTime(lastAMsg?.id) || 0, Number.isFinite(lastACompMs) ? lastACompMs : 0, lastAMsg?._finishedAt || 0);
+      const earlierUsers = this.messages.slice(0, lastAIdx).filter(x => x && x.role === 'user');
+      for (let i = this.messages.length - 1; i > lastAIdx; i--) {
+        const tm = this.messages[i];
+        if (!tm || tm.role !== 'user') continue;
+        const isAwaitingThis = Boolean(this.awaitId && (this.awaitId === tm.id || this.awaitId === tm.metadata?.nodeId) && (this.busy || this.sending || this.preSend));
+        if (isAwaitingThis) continue;
+        const uTs = tm._sentAt || idTime(tm.id) || 0;
+        const uTxt = normUText(tm);
+        const isOlderThanLastAsst = lastAEnd > 0 && uTs > 0 && uTs < lastAEnd - 30000;
+        const isDupOfEarlier = earlierUsers.some(x => x.id === tm.id || (uTxt && normUText(x) === uTxt && (!uTs || !(x._sentAt || idTime(x.id)) || Math.abs(uTs - (x._sentAt || idTime(x.id) || 0)) < 3600000)));
+        if (isOlderThanLastAsst || isDupOfEarlier) {
+          this.messages.splice(i, 1);
+          try { if (typeof SentUserLog !== 'undefined' && SentUserLog.remove) SentUserLog.remove(this.sid, tm.id, uTxt, uTs); } catch {}
+          try { if (typeof Drafts !== 'undefined' && Drafts.ack) Drafts.ack(tm.id); } catch {}
+          changed = true;
+        }
+      }
+    }
+    return changed;
   },
   // 和服务器对一次账（提问卡片的回答 / 别处提交的回答 / 别的设备发的消息）：正在输出的那条保持原对象不动
   reconcile(delay = 0) {
@@ -4609,28 +5927,51 @@ Object.assign(Chat.prototype, {
       if (delay) await sleep(delay);
       const isFg = typeof Tabs !== 'undefined' && Tabs.cur?.sid === this.sid;
       const tailInterrupted = typeof hasInterruptedToolPart === 'function' && hasInterruptedToolPart(this.messages?.at(-1));
-      const recQuery = (this.busy || this.live || this.fakeEnd || this.midTurnStall || tailInterrupted || (this.endAt && now() - this.endAt < 30000)) ? '?includeStreamToken=false' : '?includeStreamToken=false&recoverRun=false';
-      const c = await api('/api/chat/' + this.sid + recQuery, { timeout: 35000, bg: !isFg, noApiRetry: true }).catch(() => null);
-      if (!c?.messages?.length || this.loading) return false;
-      if ((this.gen || 0) !== gen0 || (live0 && (this.live !== live0 || (live0.v || 0) !== v0))) return false;
+      const hasGap = (typeof SentUserLog !== 'undefined' && SentUserLog.hasAdjacentAsstGap && SentUserLog.hasAdjacentAsstGap(this.messages));
+      const recQuery = (this.busy || this.live || this.fakeEnd || this.midTurnStall || tailInterrupted || hasGap || (this.endAt && now() - this.endAt < 30000)) ? '?includeStreamToken=false' : '?includeStreamToken=false&recoverRun=false';
+      let rec429 = false;
+      const c = await api('/api/chat/' + this.sid + recQuery, { timeout: 35000, bg: true, noApiRetry: true }).catch(e => { if (e?.status === 429) rec429 = true; return null; });
+      if (!c?.messages?.length || this.loading) {
+        if (rec429 && !this.loading && !(this.streaming && !this.peeking) && typeof this.streamDirectFallback === 'function') {
+          void this.streamDirectFallback().catch(() => false);
+        }
+        return false;
+      }
+      if ((this.gen || 0) !== gen0 || (live0 && this.live && this.live !== live0)) return false;
       if (this.busy && !this.live && this.status === 'submitted') return false;   // 自己刚发出、还没开始回复：交给发送流程
       this._srvLagged = false;
       const ch = this.mergeServer(c.messages, this.live);
+      const liveIdxNow = this.live ? this.messages.indexOf(this.live) : -1;
+      if (liveIdxNow > 0 && this.messages[liveIdxNow - 1]?.role === 'assistant' && typeof setTimeout === 'function') {
+        if (typeof clearTimeout === 'function') clearTimeout(this._missingUserRecoT);
+        this._missingUserRecoT = setTimeout(() => { this._missingUserRecoT = 0; if (this.loaded) void this.reconcile(0); }, 1500);
+      }
       if (Array.isArray(this.messages) && this.messages.length > 0) this.loaded = true;
       const lagged = this._srvLagged;
       const last = c.messages.at(-1);
-      const srvPend = !!last && (last.role === 'user' || last.metadata?.pending) && !(last.role === 'assistant' && Hitl.idleWait(this));
+      const locLast = last ? (this.messages || []).find(m => m && m.id === last.id) : null;
+      const noNewSrvEvents = Boolean(c.lastEventId != null && this.lastSeq != null && +c.lastEventId <= +this.lastSeq);
+      const lastExplicitDone = Boolean(last?.metadata?.timing?.completedAt || last?.metadata?.finishReason === 'stop' || last?.metadata?.finishReason === 'end-turn' || last?.metadata?.aborted || last?.metadata?.error || (locLast?._finishedAt && !locLast?._forcedFinish && (noNewSrvEvents || now() - locLast._finishedAt < 60000)));
+      const srvPend = !!last && ((last.role === 'user' && !locLast?.failed) || (last.metadata?.pending && !lastExplicitDone && !(typeof isDeadAssistantMsg === 'function' && isDeadAssistantMsg(last)))) && !(last.role === 'assistant' && Hitl.idleWait(this));
       this.dbg?.('reconcile', { n: c.messages.length, changed: !!ch, live: !!this.live, lagged, srvPend });
       if (c.publicAccessToken && !this.token) this.setToken(c.publicAccessToken);
       // 服务器说这一轮已经停在提问上（我们漏了结束标记）：别再显示「进行中」
       if (!this.live && this.status === 'streaming' && Hitl.idleWait(this)) { this.status = 'idle'; this.phase = ''; }
-      else if (srvPend && !lagged && !this.busy && !this.streaming && !this.syncing) {
+      else if (srvPend && !lagged && !this.busy && !(this.streaming && !this.peeking) && !this.syncing) {
         if (last.role === 'assistant' && last.metadata?.pending) this.live = this.messages.find(m => m.id === last.id) || null;
         const baseSeq = c.lastEventId != null ? Math.max(1, +c.lastEventId - 4000) : 1;
         this._remoteSyncSnap = { at: now(), c };
         if (this.remoteSync) void this.remoteSync({ seq: baseSeq, rewind: true, pend: true });
-      } else if (!srvPend && !this.busy && !this.streaming && c.lastEventId != null) {
-        this.lastSeq = String(c.lastEventId); this.fence = Math.max(this.fence || 0, +c.lastEventId);
+      } else if (!srvPend && !this.busy && !(this.streaming && !this.peeking)) {
+        if (c.lastEventId != null) { this.lastSeq = String(c.lastEventId); this.fence = Math.max(this.fence || 0, +c.lastEventId); }
+        const tailA = this.messages.at(-1);
+        const tailCompRaw = tailA?.metadata?.timing?.completedAt;
+        const tailCompMs = typeof tailCompRaw === 'number' ? tailCompRaw : (typeof tailCompRaw === 'string' ? Date.parse(tailCompRaw) : 0);
+        const tailFinAt = Math.max(tailA?._finishedAt || 0, Number.isFinite(tailCompMs) ? tailCompMs : 0, this.endAt || 0, idTime(tailA?.id) || 0);
+        if (tailA?.role === 'assistant' && !this.stopReq && !this.midTurnStall && (!tailFinAt || now() - tailFinAt < 90000)) {
+          const st = typeof KeepAlive !== 'undefined' && KeepAlive.isMidTurnStalled ? KeepAlive.isMidTurnStalled(this, tailA) : null;
+          if (st) { this.endAt = this.endAt || (tailFinAt && now() - tailFinAt < 90000 ? tailFinAt : now()); this.midTurnStall = { at: this.endAt, why: st.why, key: st.key }; }
+        }
       }
       if (ch) {
         this.messages.forEach(m => { if (m.parts?.some(p => p.toolCallId && Hitl.name(p))) m.v = (m.v || 0) + 1; });
@@ -4650,18 +5991,33 @@ Object.assign(Chat.prototype, {
     this.convAt = now();
     const live0 = this.live, v0 = live0?.v || 0, gen0 = this.gen || 0;
     return this.convP = (async () => {
+      if (this.isEvaluation || (typeof EvalEngine !== 'undefined' && EvalEngine.isEvalChat?.(this))) {
+        if (this.busy || this._evalStreaming || this.loading) return false;
+        try { await EvalEngine.loadChat(this, true); return true; } catch { return false; }
+      }
       const isFg = typeof Tabs !== 'undefined' && Tabs.cur?.sid === this.sid;
       const isKeptOrActive = !this.gacha || (typeof History !== 'undefined' && History.byId?.(this.sid)) || isFg;
       const tailInterrupted = typeof hasInterruptedToolPart === 'function' && hasInterruptedToolPart(this.messages?.at(-1));
-      const convQuery = (this.busy || this.live || this.fakeEnd || this.midTurnStall || tailInterrupted || (this.endAt && now() - this.endAt < 30000)) ? '?includeStreamToken=false' : '?includeStreamToken=false&recoverRun=false';
-      const c = await api('/api/chat/' + this.sid + convQuery, { timeout: 35000, bg: !isFg, noApiRetry: true }).catch(() => null);
-      if (!c?.messages?.length || this.loading || !isKeptOrActive) return false;
-      if ((this.gen || 0) !== gen0 || (live0 && (this.live !== live0 || (live0.v || 0) !== v0))) return false;
+      const convQuery = (this.busy || this.live || this.fakeEnd || this.midTurnStall || tailInterrupted || (this._qSyncAt && now() - this._qSyncAt < 5000) || (this.endAt && now() - this.endAt < 30000)) ? '?includeStreamToken=false' : '?includeStreamToken=false&recoverRun=false';
+      let conv429 = false;
+      const c = await api('/api/chat/' + this.sid + convQuery, { timeout: 35000, bg: true, noApiRetry: true }).catch(e => { if (e?.status === 429) conv429 = true; return null; });
+      if (!c?.messages?.length || this.loading || !isKeptOrActive) {
+        if (conv429 && !this.loading && isKeptOrActive && !(this.streaming && !this.peeking) && typeof this.streamDirectFallback === 'function') {
+          return await this.streamDirectFallback().catch(() => false);
+        }
+        return false;
+      }
+      if ((this.gen || 0) !== gen0 || (live0 && this.live && this.live !== live0)) return false;
       const live = this.live, last = c.messages.at(-1);
-      const srvPend = !!last && (last.role === 'user' || last.metadata?.pending) && !(last.role === 'assistant' && Hitl.idleWait(this));
+      const locLast = last ? (this.messages || []).find(m => m && m.id === last.id) : null;
+      const noNewSrvEvents = Boolean(c.lastEventId != null && this.lastSeq != null && +c.lastEventId <= +this.lastSeq);
+      const lastExplicitDone = Boolean(last?.metadata?.timing?.completedAt || last?.metadata?.finishReason === 'stop' || last?.metadata?.finishReason === 'end-turn' || last?.metadata?.aborted || last?.metadata?.error || (locLast?._finishedAt && noNewSrvEvents));
+      const lastHasOpenTool = Boolean(last?.role === 'assistant' && !lastExplicitDone && !noNewSrvEvents && Array.isArray(last.parts) && last.parts.some(p => p?.toolCallId && !Hitl.name(p) && /^(input-streaming|input-available)$/.test(p.state || '')) && (now() - (idTime(last.id) || now()) < 15 * 60000));
+      const srvPend = !!last && ((last.role === 'user' && !locLast?.failed) || (last.metadata?.pending && !lastExplicitDone && !(typeof isDeadAssistantMsg === 'function' && isDeadAssistantMsg(last))) || lastHasOpenTool) && !(last.role === 'assistant' && Hitl.idleWait(this));
+      this._lastConvergeSrvPend = srvPend;
       this.dbg?.('converge', { n: c.messages.length, live: !!live, pending: !!last?.metadata?.pending, srvPend, leid: c.lastEventId ?? null });
       if (!live) {
-        if (this.busy || this.streaming || this.syncing) return false;   // 这期间有别的流程在跑
+        if (this.busy || (this.streaming && !this.peeking) || this.syncing) return false;   // 这期间有别的流程在跑
         this._srvLagged = false;
         const ch = this.mergeServer(c.messages, null);
         const lagged = this._srvLagged;
@@ -4681,10 +6037,22 @@ Object.assign(Chat.prototype, {
         }
         // 服务器已经停下：位置跟到快照，空闲监听不会再把这一轮当成「别处新开的」重放一遍
         if (!last?.metadata?.pending && c.lastEventId != null) { this.lastSeq = String(c.lastEventId); this.fence = +c.lastEventId; }
+        const tailA = this.messages.at(-1);
+        const tailCompRaw = tailA?.metadata?.timing?.completedAt;
+        const tailCompMs = typeof tailCompRaw === 'number' ? tailCompRaw : (typeof tailCompRaw === 'string' ? Date.parse(tailCompRaw) : 0);
+        const tailFinAt = Math.max(tailA?._finishedAt || 0, Number.isFinite(tailCompMs) ? tailCompMs : 0, this.endAt || 0, idTime(tailA?.id) || 0);
+        if (tailA?.role === 'assistant' && !this.stopReq && !this.midTurnStall && (!tailFinAt || now() - tailFinAt < 90000)) {
+          const st = typeof KeepAlive !== 'undefined' && KeepAlive.isMidTurnStalled ? KeepAlive.isMidTurnStalled(this, tailA) : null;
+          if (st) { this.endAt = this.endAt || (tailFinAt && now() - tailFinAt < 90000 ? tailFinAt : now()); this.midTurnStall = { at: this.endAt, why: st.why, key: st.key }; }
+        }
         this._lastSyncedHistAt = (typeof History !== 'undefined' && History.byId?.(this.sid)?.updatedAt) || null;
         this.messages.forEach(m => { if (m.parts?.some(p => p.toolCallId && Hitl.name(p))) m.v = (m.v || 0) + 1; });
         this.saveCache?.();
         this.emit(); return true;
+      }
+      const preLiveIdx = this.messages.indexOf(live);
+      if (preLiveIdx > 0 && this.messages[preLiveIdx - 1]?.role === 'assistant' && typeof this.mergeServer === 'function') {
+        if (this.mergeServer(c.messages, live)) { this.saveCache?.(); this.emit(); }
       }
       const liveIdx = this.messages.indexOf(live);
       const prevLocalUser = liveIdx > 0 ? [...this.messages.slice(0, liveIdx)].reverse().find(x => x && x.role === 'user') : null;
@@ -4704,9 +6072,21 @@ Object.assign(Chat.prototype, {
         if (Hitl.name(p) === 'ask_user' && hasQuestions(p) && !hasQuestions(cur)) return true;
         return false;
       });
-      const srvDone = sv.metadata?.pending === false && (sp.length > lp.length || live.metadata?.pending !== false);
+      const svSubstantive = typeof hasSubstantiveAssistantWork === 'function' ? hasSubstantiveAssistantWork(sv) : sp.length > 0;
+      const svExplicitDone = Boolean(sv.metadata?.timing?.completedAt || sv.metadata?.aborted || sv.metadata?.error || sv.metadata?.finishReason === 'stop' || sv.metadata?.finishReason === 'end-turn' || sv._finishedAt);
+      const srvDone = !sv.metadata?.pending && (sp.length > lp.length || svExplicitDone || live.metadata?.pending === false || ((svSubstantive || lp.length > 0) && sp.length >= lp.length));
       const tail = lp.at(-1), localAsk = !!tail && Hitl.awaiting(tail) && tail.state !== 'input-streaming' && (Hitl.name(tail) !== 'ask_user' || hasQuestions(tail));
-      if (!srvAsk && !srvDone && !localAsk) return false;
+      if (!srvAsk && !srvDone && !localAsk) {
+        const patchFn = typeof this._patchAssistantParts === 'function' ? this._patchAssistantParts : null;
+        if (srvPend && sp.length >= lp.length && patchFn) {
+          if (patchFn(live, sv)) {
+            live.v = (live.v || 0) + 1;
+            this.saveCache?.();
+            this.emit();
+          }
+        }
+        return false;
+      }
       this.dbg?.('converge-adopt', { srvAsk, srvDone, localAsk });
       if (srvAsk || srvDone) {
         live.id = sv.id;
@@ -4736,9 +6116,10 @@ Object.assign(Chat.prototype, {
     if (fgSid && Chats.get(fgSid)?.loading) return;
     const t = now(); if (!this.convAt) { this.convAt = t; return; }
     if (this.live) { this.convGap = 0; if ((this.recAt || 0) > this.convAt) this.liveGap = 0; const lg = this.liveGap || 10000; if (t - (this.recAt || 0) > lg && t - this.convAt > lg) { this.liveGap = Math.min(60000, lg * 2); this.converge(); } return; }
-    if (this.busy || this.streaming) { this.convGap = 0; return; }
+    if (this.busy || (this.streaming && !this.peeking)) { this.convGap = 0; return; }
     const lastMsg = this.messages.at(-1);
-    const waitReply = !!lastMsg && (lastMsg.role === 'user' || lastMsg.metadata?.pending) && !Hitl.idleWait(this);
+    // const waitReply = !!lastMsg && (lastMsg.role === 'user' || lastMsg.metadata?.pending);
+    const waitReply = !!lastMsg && ((lastMsg.role === 'user' && !lastMsg.failed) || lastMsg.metadata?.pending) && !Hitl.idleWait(this);
     const baseGap = waitReply ? 2500 : 20000;
     const gap = waitReply ? 2500 : Math.max(baseGap, this.convGap || baseGap), cap = this.watching && !this.wFails ? 900000 : 300000;
     if (t - this.convAt > gap) void this.converge().then(ch => { this.convGap = (ch || waitReply) ? (waitReply ? 2500 : baseGap) : Math.min(cap, gap * 2); }, () => { this.convGap = Math.min(cap, gap * 2); });
@@ -4748,9 +6129,13 @@ Object.assign(Chat.prototype, {
     const t = now();
     if (!force && t - (this._qSyncAt || 0) < 1000) return;
     this._qSyncAt = t;
+    if (this.isEvaluation || (typeof EvalEngine !== 'undefined' && EvalEngine.isEvalChat?.(this))) {
+      if (!this.busy && !this._evalStreaming) void EvalEngine.loadChat(this, true).catch(() => {});
+      return;
+    }
     this.convGap = 20000;
     this.convAt = 1;
-    if (!this.busy && !this.streaming && !this.syncing) {
+    if (!this.busy && !(this.streaming && !this.peeking) && !this.syncing) {
       void this.converge();
       if (!this.watching) void this.watch();
     } else if (t - (this.recAt || this.evtAt || 0) > 3500) {
@@ -4766,25 +6151,22 @@ Object.assign(Chat.prototype, {
       const info = await this.drain(1500, { keepIfFinished: !!hit?.pend });
       const snap = (this._remoteSyncSnap && now() - (this._remoteSyncSnap.at || 0) < 5000) ? this._remoteSyncSnap.c : null;
       this._remoteSyncSnap = null;
-      const c = hit?.chatSnap || snap || await api('/api/chat/' + this.sid + '?includeStreamToken=false', { timeout: 35000, noApiRetry: true }).catch(() => null);
-      if (this.busy || this.streaming) return;   // 这期间自己发了消息：交给自己的流程
-      if (c?.messages && !hit?.chatSnap && !snap) { this.mergeServer(c.messages); this.setToken(c.publicAccessToken); }
-      else if (c?.publicAccessToken) this.setToken(c.publicAccessToken);
+      const c = hit?.chatSnap || snap || ((ReadLimit.active() && (info?.open || info?.run)) ? null : await api('/api/chat/' + this.sid + '?includeStreamToken=false', { timeout: 35000, bg: true, noApiRetry: true }).catch(() => null));
+      if (this.busy || (this.streaming && !this.peeking)) return;
+      if (c?.messages?.length && typeof this.mergeServer === 'function') this.mergeServer(c.messages, null);
+      if (c?.publicAccessToken) this.setToken(c.publicAccessToken);
       const last = c?.messages?.at(-1);
       const srvPend = !!last && (last.role === 'user' || (last.metadata?.pending && !(typeof isDeadAssistantMsg === 'function' && isDeadAssistantMsg(last)))) && !(last.role === 'assistant' && Hitl.idleWait(this));
-      const act = hit?.mid ? (info?.act ?? info?.runSeq ?? null) : (info?.runSeq ?? info?.act ?? (hit?.seq && this.lastSeq === from ? hit.seq : null));   // 中途接上的（mid）：没有开头可重放，只用服务器记录
-      if (act != null || srvPend) {
-        // drain 已经回放过的游标直接保持在 info.max，避免二次回退重放 4000 条记录与清空已挂载工具部件
-        if (info?.max != null) {
-          this.lastSeq = String(info.max); this.fence = info.max;
-        } else {
-          const startSeq = act != null ? act : (c?.lastEventId != null ? Math.max(1, +c.lastEventId - 3000) : 1);
-          this.lastSeq = String(Math.max(0, startSeq - 1)); this.fence = startSeq - 1;
-        }
+      const isStreamOpen = Boolean(info?.open || info?.run);
+      const act = (isStreamOpen || srvPend) ? (hit?.mid ? (info?.runSeq ?? info?.act ?? null) : (info?.runSeq ?? info?.act ?? (hit?.seq && this.lastSeq === from ? hit.seq : null))) : null;
+      if (isStreamOpen || srvPend) {
+        const startSeq = act ?? info?.runSeq ?? hit?.seq ?? (c?.lastEventId != null ? Math.max(1, +c.lastEventId - 1200) : (info?.max ?? 1));
+        this.lastSeq = String(Math.max(0, startSeq - 1)); this.fence = Math.max(0, startSeq - 1);
         this.status = 'streaming'; this.phase = '接收回复中'; this.remote = true; this.error = null;
         this.sentAt = now(); this.respAt = 0; this.finAt = 0; this.endAt = 0;
         const tailMsg = this.messages.at(-1);
-        if (tailMsg?.role === 'assistant' && !(typeof isDeadAssistantMsg === 'function' && isDeadAssistantMsg(tailMsg))) {
+        const tailIsPending = Boolean(tailMsg?.role === 'assistant' && (tailMsg.metadata?.pending || (last?.role === 'assistant' && last?.metadata?.pending && tailMsg.id === last.id) || isStreamOpen) && !(typeof isDeadAssistantMsg === 'function' && isDeadAssistantMsg(tailMsg)));
+        if (tailIsPending) {
           this.live = tailMsg;
           this.parts.clear();
           (tailMsg.parts || []).forEach(p => {
@@ -4794,12 +6176,20 @@ Object.assign(Chat.prototype, {
           });
         } else if (last?.role === 'assistant' && last?.metadata?.pending) {
           this.live = this.messages.find(m => m.id === last.id) || null;
+        } else {
+          this.live = null;
+          this.parts.clear();
+          if (tailMsg?.role === 'assistant') this.reconcile?.(700);
         }
         this.emit(); this.restream();
       } else {
-        if (!info && c?.lastEventId != null) this.lastSeq = String(c.lastEventId);
-        else if (!info && this.lastSeq === from && hit?.seq) this.lastSeq = String(hit.seq);
+        const maxSeq = Math.max(+(this.lastSeq || 0), info?.max != null && info.max >= 0 ? info.max : 0, c?.lastEventId != null ? +c.lastEventId : 0, hit?.seq != null ? +hit.seq : 0);
+        if (maxSeq > 0) { this.lastSeq = String(maxSeq); this.fence = Math.max(this.fence || 0, maxSeq); }
+        if (this.status === 'streaming' && !this.live && !this.awaitId && !this.preSend && !this.sending) {
+          this.status = 'idle'; this.phase = '';
+        }
         this.saveCache?.();
+        if (typeof SendQ !== 'undefined' && SendQ.of?.(this)?.length) setTimeout(() => { try { SendQ.check(this); } catch {} }, 50);
         this.emit();
       }
       Bus.emit('remote', this);
@@ -4812,14 +6202,18 @@ Object.assign(Chat.prototype, {
 const Sync = {
   start() {
     if (this.t) return;
-    this.t = setInterval(() => this.tick(), 8000);
+    this.t = setInterval(() => { this.tick(); try { if (typeof History !== 'undefined' && typeof History.auto === 'function') History.auto('tick'); } catch {} }, 8000);
     this.ct = setInterval(() => { const c = typeof Tabs !== 'undefined' && Tabs.cur?.sid ? Chats.get(Tabs.cur.sid) : null; if (c) c.tickConverge(); }, 3000);
+    let lastWakeAt = 0;
     const onWake = () => {
       if (document.hidden) return;
-      this.kick();
-      try { if (typeof History !== 'undefined' && now() - (History.attemptAt || 0) > 15000) void History.refresh?.({ bg: true }); } catch {}
+      const t = now(), sinceWake = t - lastWakeAt;
+      lastWakeAt = t;
       const c = typeof Tabs !== 'undefined' && Tabs.cur?.sid ? Chats.get(Tabs.cur.sid) : null;
-      if (c && c.loaded) { c.convAt = 1; c.quickSync?.(); }
+      const streamHealthy = Boolean(c && c.watching && !c.wFails);
+      if (!streamHealthy || sinceWake > 30000) this.kick();
+      try { if (typeof History !== 'undefined' && typeof History.auto === 'function') History.auto('front'); } catch {}
+      if (c && c.loaded && (!streamHealthy || sinceWake > 30000)) { c.convAt = 1; c.quickSync?.(false); }
     };
     document.addEventListener('visibilitychange', onWake);
     window.addEventListener('focus', onWake);
@@ -4934,11 +6328,39 @@ function isOpenCandidateName(s) {
 function hasInterruptedToolPart(m) {
   return Boolean(m && m.role === 'assistant' && Array.isArray(m.parts) && m.parts.some(p => p && p.toolCallId && (p._interruptedPending || p.errorText === '未返回结果' || /^(input-streaming|input-available|approval-requested)$/.test(p.state || ''))));
 }
+function isIncompleteAssistantMsg(m) {
+  if (!m || m.role !== 'assistant') return false;
+  if (m._userStopped || m.metadata?.aborted || m.metadata?.openThinkStopped || m.metadata?.feedback?.interruption === 'stop' || m.metadata?.error) return false;
+  if (m.metadata?.pending || m._incomplete || m.status === 'pending' || m.status === 'streaming') return true;
+  if (hasInterruptedToolPart(m)) return true;
+  const parts = Array.isArray(m.parts) ? m.parts : [];
+  let text = '';
+  let hasReasonOrStep = false;
+  let hasTool = false;
+  for (const p of parts) {
+    if (!p) continue;
+    if (p.type === 'text' && typeof p.text === 'string') text += p.text;
+    else if (p.type === 'reasoning' || p.type === 'step-start') hasReasonOrStep = true;
+    else if (p.toolCallId || String(p.type || '').startsWith('tool-') || p.type === 'dynamic-tool') {
+      hasTool = true;
+      if (p.state === 'output-available' && p.output && typeof p.output === 'object' && p.output.status === 'running') return true;
+    }
+  }
+  if (!text && typeof m.content === 'string') text = m.content;
+  const trimmed = text.trim();
+  if (!trimmed && hasReasonOrStep && !hasTool) return true;
+  if (trimmed) {
+    if (trimmed.endsWith('…[cached]')) return true;
+    const lineFences = (trimmed.match(/(?:^|\n)[ \t]*`{3,}/g) || []).length;
+    if (lineFences % 2 === 1) return true;
+  }
+  return false;
+}
 function isPhantomFinishStub(m) {
   if (!m || m.role !== 'assistant') return false;
   if (m.metadata?.pending || m.metadata?.aborted || m.metadata?.openThinkStopped || m.metadata?.error || m.metadata?.feedback?.interruption === 'stop') return false;
   const parts = Array.isArray(m.parts) ? m.parts : [];
-  return !parts.some(p => p && p.type !== 'step-start' && (p.type !== 'reasoning' || String(p.text || '').trim().length > 0));
+  return !parts.some(p => p && p.type !== 'step-start' && !String(p.type || '').startsWith('data-') && ((p.type !== 'reasoning' && p.type !== 'text') || String(p.text || '').trim().length > 0));
 }
 function hasSubstantiveAssistantWork(m) {
   if (!m || m.role !== 'assistant') return false;
@@ -4953,13 +6375,13 @@ function isDeadAssistantMsg(m) {
   if (hasSubstantiveAssistantWork(m)) return false;
   if (m.metadata?.openThinkStopped || m.metadata?.aborted || m.metadata?.feedback?.interruption === 'stop' || m.metadata?.error) return true;
   if (m._routePivotRole === 'next' && m._turnModelLabel && isOpenCandidateName(m._turnModelLabel)) return true;
-  if (m.metadata?.pending && (!m._finishedAt || m._forcedFinish)) return false;
+  if ((m.metadata?.pending || m._incomplete) && (!m._finishedAt || m._forcedFinish)) return false;
   const parts = Array.isArray(m.parts) ? m.parts : [];
   if (!parts.length) return true;
   if (parts.some(p => p?.type === 'error')) return true;
   const hasText = parts.some(p => p && p.type === 'text' && String(p.text || '').trim().length > 0);
   const toolParts = parts.filter(p => p && (p.toolCallId || String(p.type || '').startsWith('tool-') || p.type === 'dynamic-tool'));
-  if (!hasText && toolParts.length > 0 && !m.metadata?.pending && !m._forcedFinish && toolParts.every(p => p.state === 'output-error' || p.state === 'input-available' || p.state === 'input-streaming' || p.output?.status === 'aborted')) return true;
+  if (!hasText && toolParts.length > 0 && !m.metadata?.pending && !m._incomplete && !m._forcedFinish && toolParts.every(p => p.state === 'output-error' || p.output?.status === 'aborted')) return true;
   return !parts.some(p => p && (
     (p.type === 'text' && String(p.text || '').trim().length > 0) ||
     (p.type === 'reasoning' && String(p.text || '').trim().length > 0) ||
@@ -5060,9 +6482,11 @@ function rebuildChatFmtFromMessages(chat) {
       nf.rWireDeltas = (nf.rWireDeltas || 0) + Number(mf.rWireDeltas || 0);
       nf.rWireEmptyDeltas = (nf.rWireEmptyDeltas || 0) + Number(mf.rWireEmptyDeltas || 0);
       nf.tools = (nf.tools || 0) + Number(mf.tools || 0);
-      if (mf.t0 && (!nf.t0 || mf.t0 < nf.t0)) nf.t0 = mf.t0;
-      if (mf.tFirst && (!nf.tFirst || mf.tFirst < nf.tFirst)) nf.tFirst = mf.tFirst;
-      if (mf.tEnd && (!nf.tEnd || mf.tEnd > nf.tEnd)) nf.tEnd = mf.tEnd;
+      if (mf.t0 && mf.tEnd && mf.tEnd >= mf.t0 && (mf.tEnd - mf.t0) < 3600000) {
+        nf.t0 = mf.t0;
+        nf.tFirst = mf.tFirst || mf.t0;
+        nf.tEnd = mf.tEnd;
+      }
       if (mf.done) nf.done = true;
     }
     for (const p of m.parts || []) {
@@ -5092,9 +6516,16 @@ function rebuildChatFmtFromMessages(chat) {
     for (const k of ['tN', 'rN', 'tidCount', 'tidChars', 'rE', 'rWireDeltas', 'rWireEmptyDeltas', 'tools']) {
       if ((prev[k] || 0) > (nf[k] || 0)) nf[k] = prev[k];
     }
-    if (prev.t0 && !nf.t0) nf.t0 = prev.t0;
-    if (prev.tFirst && !nf.tFirst) nf.tFirst = prev.tFirst;
-    if (prev.tEnd && !nf.tEnd) nf.tEnd = prev.tEnd;
+    if (!nf.t0 && !nf.tEnd && prev.t0 && prev.tEnd && prev.tEnd >= prev.t0 && (prev.tEnd - prev.t0) < 3600000) {
+      nf.t0 = prev.t0;
+      nf.tFirst = prev.tFirst || prev.t0;
+      nf.tEnd = prev.tEnd;
+    }
+    if (nf.t0 && nf.tEnd && (nf.tEnd < nf.t0 || (nf.tEnd - nf.t0) >= 3600000)) {
+      nf.t0 = 0;
+      nf.tFirst = 0;
+      nf.tEnd = 0;
+    }
     if (prev.done) nf.done = true;
   }
   chat.fmt = nf;
@@ -5194,7 +6625,7 @@ function pruneDeadTailTurns(chat) {
     msgs.splice(lastHealthyIdx + 1);
     return { lastUser: null, origText: '', prunedCount: tailSlice.length };
   }
-  const getText = u => (u?.parts || []).filter(p => p && p.type === 'text').map(p => p.text || '').join('\n').trim();
+  const getText = u => (u?.parts || []).filter(p => p && p.type === 'text').map(p => p.text || '').join('\n').trim() || String(u?.text || '').trim();
   const isContinueFiller = u => /^(?:继续|continue|go on|keep going|接着|继续执行)[。.!！?？\s]*$/i.test(getText(u)) && !(u?.metadata?.uploads?.length > 0);
   const pickedUser = [...deadUsers].reverse().find(u => !isContinueFiller(u) && (getText(u) || u?.metadata?.uploads?.length > 0)) || deadUsers.at(-1);
   const maxResent = deadUsers.reduce((mx, u) => Math.max(mx, Number(u?._officialErrAutoResent) || 0), 0);
@@ -5766,7 +7197,33 @@ const History = {
         finally { this.retrying = false; }
       }
       this.seen = new Set(); this.scan = { baseline, cursors: new Set() };
+      const prevUpdatedById = new Map();
+      for (const pe of this.items) if (pe?.id && pe.updatedAt) prevUpdatedById.set(pe.id, pe.updatedAt);
       this.merge(j.entries, true); this.cursor = j.cursor; this.hasMore = j.hasMore;
+      try {
+        const entriesList = j.entries || [];
+        for (let idx = 0; idx < entriesList.length; idx++) {
+          const se = entriesList[idx];
+          if (!se?.id || !se.updatedAt) continue;
+          const c = typeof Chats !== 'undefined' ? Chats.get(se.id) : null;
+          const prevUpd = c?._lastSyncedHistAt || prevUpdatedById.get(se.id);
+          const srvUpdMs = Date.parse(se.updatedAt) || 0;
+          const prevUpdMs = Date.parse(prevUpd || '') || 0;
+          const localRecentMs = Math.max(c?.endAt || 0, c?.recAt || 0, c?.sentAt || 0);
+          const isUpdated = Boolean(prevUpd && se.updatedAt !== prevUpd);
+          const isRealRemoteUpd = isUpdated && (!srvUpdMs || !prevUpdMs || srvUpdMs > prevUpdMs + 1500) && (!localRecentMs || !srvUpdMs || srvUpdMs > localRecentMs + 3000);
+          const isNewRemote = Boolean(baseline.size > 0 && !baseline.has(se.id) && idx < 3);
+          if (isRealRemoteUpd || isNewRemote) {
+            if (c) c._lastSyncedHistAt = se.updatedAt;
+            if (typeof Tabs !== 'undefined' && Tabs.cur?.sid === se.id && c) {
+              if (c.loaded && !c.loading && !c.busy && !(c.watching && !c.wFails)) c.quickSync?.(true);
+              else if (!c.loaded && !c.loading) void c.load(true).catch(() => {});
+            } else if (c && !c.loading && !c.busy) {
+              c.loaded = false; c.cached = true;
+            }
+          }
+        }
+      } catch {}
       const isOffline = (typeof Host !== 'undefined' && Host.online === false) || (typeof BrowseMode !== 'undefined' && BrowseMode.active?.());
       const keepLocal = isOffline;
       if (!keepLocal && j.entries.length > 0) {
@@ -5912,7 +7369,7 @@ const History = {
     const response=await api(`/api/history/${type}/${id}`, { method: 'PATCH', json: { title } });
     const echoed=response?.title ?? response?.entry?.title;
     if(typeof echoed==='string'&&echoed!==title)throw Object.assign(Error('服务器截断或修改了加密标题，未确认同步成功'),{status:422});
-    if(await readTitle()!==title)throw Object.assign(Error('标题已提交但回读未确认，请重试；保留本地结果'),{status:409});
+    if((!isGoldPfx || echoed !== title) && await readTitle()!==title)throw Object.assign(Error('标题已提交但回读未确认，请重试；保留本地结果'),{status:409});
     // History may have replaced its objects while PATCH was in flight.
     const current=this.byId(id);if(current)current.title=title;
     const c = Chats.get(id); if (c) { c.title = title; c.emit(); }
@@ -5925,7 +7382,7 @@ const History = {
     const delUrl = (isEval ? '/api/history/evaluation/' : '/api/chat/') + id;
     const altUrl = (isEval ? '/api/chat/' : '/api/history/evaluation/') + id;
     try { await api(delUrl, { method: 'DELETE' }); }
-    catch (e) { if (e?.status === 404 || e?.status === 400 || e?.status === 405 || e?.status === 422) await api(altUrl, { method: 'DELETE' }).catch(e2 => { if (e2?.status !== 404 && e?.status !== 404) throw e; }); else throw e; }
+    catch (e) { if (e?.status === 400 || e?.status === 405 || e?.status === 422 || (e?.status === 404 && isEval)) await api(altUrl, { method: 'DELETE' }).catch(e2 => { if (e2?.status !== 404 && e?.status !== 404) throw e; }); else if (e?.status !== 404) throw e; }
     if (false) await api((isEval ? '/api/history/evaluation/' : '/api/chat/') + id, { method: 'DELETE' });
     try { LocalCache.drop([id]); } catch {}
     this.items = this.items.filter(e => e.id !== id); ArchiveHistory.drop([id]); this.bury([id]); this.saveSoon(); Bus.emit('history'); try { if (typeof AcctStats !== 'undefined') AcctStats.report?.(); } catch {}
@@ -5935,7 +7392,7 @@ const History = {
     const entry=this.byId(id),isEval=Boolean(entry?.type==='evaluation'||entry?.mode==='battle'||entry?.mode==='direct'||Chats.get(id)?.isEvaluation);
     if(isEval){
       try{await api('/api/history/evaluation/'+encodeURIComponent(id),{method:'PATCH',json:{isArchived:true}});}
-      catch(e){if(e?.status!==404)await api('/api/chat/'+encodeURIComponent(id)+'/archive',{method:'POST',headers:{Accept:'application/json'}}).catch(e2=>{if(e2?.status!==404)throw e;});}
+      catch(e){if(e?.status===404||e?.status===405)await api('/api/chat/'+encodeURIComponent(id)+'/archive',{method:'POST',headers:{Accept:'application/json'}}).catch(e2=>{if(e2?.status!==404)throw e;});else if(e?.status!==404)throw e;}
     }else{
       try{await api('/api/chat/' + encodeURIComponent(id) + '/archive', { method: 'POST', headers: { Accept: 'application/json' } });}
       catch(e){if(e?.status===404)await api('/api/history/evaluation/'+encodeURIComponent(id),{method:'PATCH',json:{isArchived:true}}).catch(()=>{});else throw e;}
@@ -6250,40 +7707,47 @@ const ExtCompat = {
       const effDeltaCount = Math.max(fmtTN, prevValidDeltaCount);
       const effDeltaChars = fmtTN > 0 ? Math.max(fmtTChars, prevValidDeltaChars) : Math.max(prevValidDeltaChars, textDeltaChars);
       const streamIds = (Array.isArray(prevMemo?.streamIds) && prevMemo.streamIds.length) ? prevMemo.streamIds : fmtIds;
-      const tStart = Number(fmt?.t0 || fmt?.tStart) || 0;
-      const durSec = fmt && fmt.tEnd > tStart ? (fmt.tEnd - tStart) / 1000 : (fmt?.gen > 0 ? fmt.gen / 1000 : 0);
-      const liveCps = durSec >= 0.5 && (fmtTChars || fmt?.tChars || textDeltaChars) >= 60 ? Math.round((fmtTChars || fmt?.tChars || textDeltaChars) / durSec) : (prevMemo?.cps || null);
+      const rawT0 = Number(fmt?.t0 || fmt?.tStart) || 0;
+      const rawTEnd = Number(fmt?.tEnd) || 0;
+      const hasValidFmtSpan = rawT0 > 0 && rawTEnd > rawT0 && (rawTEnd - rawT0) < 3600000;
+      const hasValidPrevSpan = Number(prevMemo?.firstDeltaAt) > 0 && Number(prevMemo?.lastDeltaAt) >= Number(prevMemo?.firstDeltaAt) && (Number(prevMemo.lastDeltaAt) - Number(prevMemo.firstDeltaAt)) < 3600000;
+      const tStart = hasValidFmtSpan ? rawT0 : (hasValidPrevSpan ? Number(prevMemo.firstDeltaAt) : 0);
+      const tEndEff = hasValidFmtSpan ? rawTEnd : (hasValidPrevSpan ? Number(prevMemo.lastDeltaAt) : 0);
+      const durSec = hasValidFmtSpan ? (rawTEnd - rawT0) / 1000 : ((fmt?.gen > 0 && fmt.gen < 3600000) ? fmt.gen / 1000 : (hasValidPrevSpan ? (tEndEff - tStart) / 1000 : 0));
+      const liveCps = (durSec >= 0.5 && durSec < 3600 && (fmtTChars || fmt?.tChars || textDeltaChars) >= 60) ? Math.round((fmtTChars || fmt?.tChars || textDeltaChars) / durSec) : (prevMemo?.cps || null);
       const effSawReason = Boolean(sawReasoning || prevMemo?.sawReasoning || fmtRN > 0 || fmtRE > 0 || (fmt && (fmt.rBlocks || fmt.rN || fmt.rE)));
       const effReasonChars = Math.max(reasoningTextLength, Number(prevMemo?.reasoningTextLength) || 0, fmtRChars, Number(fmt?.rChars) || 0);
-      let streamIdPrefix = prevMemo?.streamIdPrefix || null;
+      const curAvgChunk = (fmtTN >= 3 && fmtTChars > 0)
+        ? +(fmtTChars / fmtTN).toFixed(2)
+        : (prevValidAvgChunk || (effDeltaCount >= 6 && effDeltaChars > 0 ? +(effDeltaChars / effDeltaCount).toFixed(2) : null));
+      let streamIdPrefix = (prevMemo?.streamIdPrefix === 'openai-tc-empty' && (Number(curAvgChunk) || 0) >= 4.0) ? 'claude-tc-empty' : (prevMemo?.streamIdPrefix || null);
       if (!streamIdPrefix && streamIds.length) {
         if (streamIds.some(i => /^(?:msg|rs)_[0-9a-f]{16,}/i.test(i))) streamIdPrefix = 'openai-rs';
-        else if (streamIds.some(i => /^tc_[A-Za-z0-9_-]{10,}$/.test(i)) && effReasonChars === 0 && effSawReason) streamIdPrefix = 'openai-tc-empty';
+        else if (streamIds.some(i => /^tc_[A-Za-z0-9_-]{10,}$/.test(i)) && effReasonChars === 0 && effSawReason) {
+          streamIdPrefix = ((Number(curAvgChunk) || 0) > 0 && (Number(curAvgChunk) || 0) <= 3.8) ? 'openai-tc-empty' : ((Number(curAvgChunk) || 0) >= 4.0 && (Number(curAvgChunk) || 0) <= 25.0 ? 'claude-tc-empty' : null);
+        }
       }
+      const effReasonDeltas = Math.max(reasoningDeltaCount, Number(prevMemo?.reasoningDeltaCount) || 0, fmtRN, fmtRE);
       const memo = {
         sid,
         toolIds: toolIds.length ? toolIds : (prevMemo?.toolIds || []),
         streamIds,
         textDeltaCount: effDeltaCount,
         textDeltaChars: effDeltaChars,
-        firstDeltaAt: prevMemo?.firstDeltaAt || (tStart || Date.now() - 1000),
-        lastDeltaAt: fmt?.tEnd || Date.now(),
+        firstDeltaAt: tStart || Date.now() - 1000,
+        lastDeltaAt: tEndEff || (tStart ? tStart + 1000 : Date.now()),
         sawReasoning: effSawReason,
-        reasoningDeltaCount: Math.max(reasoningDeltaCount, Number(prevMemo?.reasoningDeltaCount) || 0, fmtRN),
+        reasoningDeltaCount: effReasonDeltas,
         reasoningTextLength: effReasonChars,
         bashToolCount: Math.max(bashToolCount, Number(prevMemo?.bashToolCount) || 0),
         preToolTextChars,
         interToolTextChars,
         seenToolInTurn: (toolIds.length || prevMemo?.toolIds?.length) > 0,
         pendingInterText: 0,
-        avgChunk: (fmtTN >= 3 && fmtTChars > 0)
-          ? +(fmtTChars / fmtTN).toFixed(2)
-          : (prevValidAvgChunk || (effDeltaCount >= 6 && effDeltaChars > 0 ? +(effDeltaChars / effDeltaCount).toFixed(2) : null)),
+        avgChunk: (fmtTN >= 3 && fmtTChars > 0) ? +(fmtTChars / fmtTN).toFixed(2) : (!isPollutedPrevMemo ? (prev.avgChunk || 0) : 0),
         cps: liveCps,
         silentBashLoop: bashToolCount >= 2 && preToolTextChars === 0 && interToolTextChars === 0,
-        reasoningSignature: prevMemo?.reasoningSignature && prevMemo.reasoningSignature !== 'none'
-          ? prevMemo.reasoningSignature
-          : (!effSawReason ? 'none' : (!reasoningDeltaCount ? 'markers-only' : (effReasonChars > 0 ? 'visible-text' : 'empty-deltas'))),
+        reasoningSignature: (!effSawReason ? 'none' : (effReasonChars > 0 ? 'visible-text' : ((streamIdPrefix === 'claude-tc-empty' || ((Number(curAvgChunk) || 0) >= 4.0 && (Number(curAvgChunk) || 0) <= 25.0) || effReasonDeltas > 0) ? 'empty-deltas' : 'markers-only'))),
         streamIdPrefix,
         updatedAt: Date.now()
       };
@@ -6488,3 +7952,429 @@ function placeInward(pop, anchorOrRect, opts = {}) {
   pop.style.transformOrigin = (openDown ? 'top ' : 'bottom ') + (isLeft ? 'left' : 'right');
 }
 globalThis.placeInward = placeInward;
+
+
+// ---------- 正在运行对话持久化追踪与完成圆点提醒 ----------
+const RunningTracker = {
+  RUN_KEY: 'runningChats:v1',
+  UNREAD_KEY: 'doneUnreadChats:v1',
+  MAX_AGE_MS: 6 * 3600 * 1000,
+  _boundUnload: false,
+  _resuming: false,
+
+  _loadRunMap() {
+    try {
+      const raw = typeof Store !== 'undefined' && Store.get ? Store.get(this.RUN_KEY, {}) : {};
+      if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
+      const tNow = now();
+      let dirty = false;
+      const out = {};
+      for (const [sid, info] of Object.entries(raw)) {
+        if (!sid || !info || typeof info !== 'object') { dirty = true; continue; }
+        if (tNow - (info.updatedAt || info.startedAt || 0) > this.MAX_AGE_MS) { dirty = true; continue; }
+        out[sid] = info;
+      }
+      if (dirty && typeof Store !== 'undefined' && Store.set) Store.set(this.RUN_KEY, out);
+      return out;
+    } catch { return {}; }
+  },
+
+  _saveRunMap(map) {
+    try {
+      if (typeof Store !== 'undefined' && Store.set) Store.set(this.RUN_KEY, map || {});
+    } catch {}
+  },
+
+  _loadUnreadMap() {
+    try {
+      const raw = typeof Store !== 'undefined' && Store.get ? Store.get(this.UNREAD_KEY, {}) : {};
+      if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
+      return { ...raw };
+    } catch { return {}; }
+  },
+
+  _saveUnreadMap(map) {
+    try {
+      if (typeof Store !== 'undefined' && Store.set) Store.set(this.UNREAD_KEY, map || {});
+    } catch {}
+  },
+
+  isCurrentlyViewed(sid) {
+    if (!sid) return false;
+    try {
+      const isCurTab = typeof Tabs !== 'undefined' && Tabs.cur && !Tabs.cur.kind && Tabs.cur.sid === sid;
+      const isFocused = typeof document !== 'undefined' && typeof document.hasFocus === 'function' ? document.hasFocus() : true;
+      const isVisible = typeof document !== 'undefined' ? !document.hidden : true;
+      return Boolean(isCurTab && isVisible && isFocused);
+    } catch { return false; }
+  },
+
+  isChatActivelyGenerating(c) {
+    if (!c || !c.sid || c.gacha) return false;
+    const isTransientSyncOnly = Boolean(!c.live && !c.awaitId && !c.preSend && !c.sending && (c.phase === '增量同步' || c.phase === '正在同步进行中任务…'));
+    if (isTransientSyncOnly) return false;
+    return Boolean(
+      c.busy ||
+      (c.streaming && !c.peeking) ||
+      c._evalStreaming ||
+      c.cloudRunning ||
+      c.midTurnStall ||
+      c.fakeEnd ||
+      c._ka?.plan ||
+      (c.isEvaluation && Array.isArray(c.messages) && c.messages.some(m => m && m.role === 'assistant' && (m.metadata?.pending || m.status === 'pending' || m.status === 'streaming')))
+    );
+  },
+
+  isChatRunning(c) {
+    return this.isChatActivelyGenerating(c);
+  },
+
+  isTrackedRunning(sid) {
+    if (!sid) return false;
+    const rMap = this._loadRunMap();
+    if (!rMap[sid]) return false;
+    try {
+      const c = typeof Chats !== 'undefined' ? Chats.get(sid) : null;
+      if (c && c.loaded && !c.cached && !c.loading && !c._startupResuming && !this.isChatActivelyGenerating(c)) {
+        delete rMap[sid];
+        this._saveRunMap(rMap);
+        c._wasTrackedRunning = false;
+        return false;
+      }
+    } catch {}
+    return true;
+  },
+
+  isUnread(sid) {
+    if (!sid) return false;
+    const uMap = this._loadUnreadMap();
+    return Boolean(uMap[sid]);
+  },
+
+  markUnread(sid) {
+    if (!sid) return;
+    const uMap = this._loadUnreadMap();
+    if (!uMap[sid]) {
+      uMap[sid] = { sid, at: now() };
+      this._saveUnreadMap(uMap);
+      try { if (typeof UI !== 'undefined') { UI.renderListSoon?.(); UI.renderTabs?.(); } } catch {}
+    }
+  },
+
+  markViewed(sid) {
+    if (!sid) return;
+    const uMap = this._loadUnreadMap();
+    if (uMap[sid]) {
+      delete uMap[sid];
+      this._saveUnreadMap(uMap);
+      try {
+        if (typeof document !== 'undefined') {
+          document.querySelectorAll(`#list .card[data-sid="${sid}"]`).forEach(el => {
+            el.classList.remove('has-done-dot');
+            el.querySelectorAll('.card-done-dot').forEach(d => d.remove());
+          });
+        }
+        if (typeof UI !== 'undefined') { UI.renderListSoon?.(); UI.renderTabs?.(); }
+      } catch {}
+    }
+  },
+
+  // 启动瞬间同步预热上次未完成的对话状态：让侧栏卡片在 0ms 第一帧就显示任务进行中动效（旋转图标 + 脉冲波纹），但不把 chat.status 强行设为 streaming（避免阻塞队列与显示假● ● ●）
+  prewarmTrackedChats() {
+    this.bindUnload();
+    const rMap = this._loadRunMap();
+    try {
+      const scanSids = new Set([
+        ...(typeof Store !== 'undefined' && Store.get ? (Store.get('mc:hot:lru', []) || []) : []),
+        ...(typeof Tabs !== 'undefined' && Array.isArray(Tabs.list) ? Tabs.list.map(t => t?.sid).filter(Boolean) : []),
+        ...(typeof History !== 'undefined' && Array.isArray(History.items) ? History.items.slice(0, 12).map(e => e?.id).filter(Boolean) : []),
+      ]);
+      for (const sid of scanSids) {
+        if (!sid || rMap[sid]) continue;
+        const cExisting = typeof Chats !== 'undefined' ? Chats.get(sid) : null;
+        if (cExisting && cExisting.loaded && !cExisting.cached) continue;
+        const hot = typeof MsgCache !== 'undefined' && MsgCache.getSync ? MsgCache.getSync(sid) : null;
+        if (hot && Array.isArray(hot.messages) && hot.messages.length && (now() - (hot.at || 0) < 15 * 60 * 1000)) {
+          const tailM = hot.messages.at(-1);
+          const tailAlreadyDone = Boolean(tailM?._finishedAt || tailM?.metadata?.timing?.completedAt || tailM?.metadata?.aborted || tailM?.metadata?.error || tailM?.metadata?.finishReason === 'stop' || tailM?.metadata?.finishReason === 'end-turn');
+          const inc = !tailAlreadyDone && Boolean(
+            (tailM?.role === 'user' && !tailM.failed && (!tailM._local || tailM._appendAccepted)) ||
+            (tailM?.role === 'assistant' && (tailM.metadata?.pending || tailM._incomplete))
+          );
+          if (inc) {
+            rMap[sid] = { sid, startedAt: hot.at || now(), updatedAt: hot.at || now(), isEval: Boolean(hot.isEvaluation), evalMode: hot.evalMode || '' };
+            this._saveRunMap(rMap);
+          }
+        }
+      }
+    } catch {}
+    let any = false;
+    let mapChanged = false;
+    for (const [sid, info] of Object.entries(rMap)) {
+      if (!sid) continue;
+      try {
+        const c = typeof chatOf === 'function' ? chatOf(sid) : (typeof Chats !== 'undefined' ? Chats.get(sid) : null);
+        if (!c) continue;
+        if (c.loaded && !c.cached && !this.isChatActivelyGenerating(c)) {
+          delete rMap[sid];
+          c._startupResuming = false;
+          c._wasTrackedRunning = false;
+          mapChanged = true;
+          continue;
+        }
+        c._wasTrackedRunning = true;
+        c._startupResuming = true;
+        c._recoveringIncomplete = true;
+        if (info?.isEval) {
+          c.isEvaluation = true;
+          if (info.evalMode && !c.evalMode) c.evalMode = info.evalMode;
+        }
+        any = true;
+      } catch {}
+    }
+    if (mapChanged) this._saveRunMap(rMap);
+    if (any || mapChanged) {
+      try { if (typeof UI !== 'undefined') { UI.renderListSoon?.(); UI.renderTabs?.(); } } catch {}
+      try { if (typeof Bar !== 'undefined') Bar.render?.(); } catch {}
+    }
+  },
+
+  onChatUpdate(c) {
+    if (!c || !c.sid) return;
+    this.bindUnload();
+    const sid = c.sid;
+    const rMap = this._loadRunMap();
+    const uMap = this._loadUnreadMap();
+    const runningNow = this.isChatActivelyGenerating(c);
+    const wasRunning = Boolean(c._wasTrackedRunning || rMap[sid]);
+
+    if (runningNow) {
+      c._wasTrackedRunning = true;
+      const prev = rMap[sid];
+      rMap[sid] = {
+        sid,
+        startedAt: prev?.startedAt || now(),
+        updatedAt: now(),
+        isEval: Boolean(c.isEvaluation),
+        evalMode: c.evalMode || prev?.evalMode || '',
+      };
+      this._saveRunMap(rMap);
+      if (uMap[sid]) {
+        delete uMap[sid];
+        this._saveUnreadMap(uMap);
+      }
+      return;
+    }
+
+    // 仅读到缓存但尚未向服务器确认完成前，绝不提前抹掉进行中状态
+    if (c._startupResuming || c._recoveringIncomplete || c.loading || !c.loaded || c.cached) {
+      return;
+    }
+
+    if (wasRunning && c.loaded && !c.loading && !c.cached) {
+      c._wasTrackedRunning = false;
+      if (rMap[sid]) {
+        delete rMap[sid];
+        this._saveRunMap(rMap);
+      }
+      const tailM = Array.isArray(c.messages) ? c.messages.at(-1) : null;
+      const isFailedUserTail = Boolean(tailM?.role === 'user' && (tailM.failed || (tailM._local && !tailM._appendAccepted)));
+      if (!isFailedUserTail && !this.isCurrentlyViewed(sid)) {
+        uMap[sid] = { sid, doneAt: now() };
+        this._saveUnreadMap(uMap);
+      }
+      try { if (typeof UI !== 'undefined') { UI.renderListSoon?.(); UI.renderTabs?.(); } } catch {}
+      try { if (typeof Bar !== 'undefined') Bar.render?.(); } catch {}
+    }
+  },
+
+  snapshotBeforeClose() {
+    try {
+      const rMap = this._loadRunMap();
+      let changed = false;
+      if (typeof Chats !== 'undefined' && Chats.values) {
+        for (const c of Chats.values()) {
+          if (!c || !c.sid) continue;
+          const tailForSnap = Array.isArray(c.messages) ? c.messages.at(-1) : null;
+          const isUnacceptedSend = Boolean(c.preSend || (tailForSnap?.role === 'user' && tailForSnap._local && !tailForSnap._appendAccepted));
+          if (this.isChatActivelyGenerating(c) && !isUnacceptedSend) {
+            rMap[c.sid] = {
+              sid: c.sid,
+              startedAt: rMap[c.sid]?.startedAt || now(),
+              updatedAt: now(),
+              isEval: Boolean(c.isEvaluation),
+              evalMode: c.evalMode || rMap[c.sid]?.evalMode || '',
+            };
+            changed = true;
+            try { if (typeof MsgCache !== 'undefined' && MsgCache.putNow) void MsgCache.putNow(c); } catch {}
+          } else if (c.loaded && !c.cached && rMap[c.sid] && !this.isChatActivelyGenerating(c)) {
+            delete rMap[c.sid];
+            changed = true;
+          }
+        }
+      }
+      if (changed) this._saveRunMap(rMap);
+    } catch {}
+  },
+
+  bindUnload() {
+    if (this._boundUnload || typeof window === 'undefined') return;
+    this._boundUnload = true;
+    try {
+      window.addEventListener('beforeunload', () => this.snapshotBeforeClose());
+      window.addEventListener('pagehide', () => this.snapshotBeforeClose());
+      document.addEventListener('visibilitychange', () => {
+        if (document.hidden) this.snapshotBeforeClose();
+      });
+    } catch {}
+  },
+
+  async resumeOnStartup() {
+    if (this._resuming) return;
+    this._resuming = true;
+    this.prewarmTrackedChats();
+    try {
+      const rMap = this._loadRunMap();
+      const candidateMap = new Map();
+      for (const [sid, info] of Object.entries(rMap)) {
+        if (!sid) continue;
+        candidateMap.set(sid, info || { sid, updatedAt: now() });
+      }
+      try {
+        const recentSids = new Set([
+          ...(typeof Tabs !== 'undefined' && Array.isArray(Tabs.list) ? Tabs.list.map(t => t?.sid).filter(Boolean) : []),
+          ...(typeof History !== 'undefined' && Array.isArray(History.items) ? History.items.slice(0, 10).filter(e => e?.id && (now() - (typeof entAt === 'function' ? entAt(e) : 0) < 15 * 60 * 1000)).map(e => e.id) : []),
+        ]);
+        for (const sid of recentSids) {
+          if (!sid || candidateMap.has(sid)) continue;
+          const cExisting = typeof Chats !== 'undefined' ? Chats.get(sid) : null;
+          if (cExisting && cExisting.loaded && !cExisting.cached && !this.isChatActivelyGenerating(cExisting)) continue;
+          const cached = typeof MsgCache !== 'undefined' && MsgCache.get ? await MsgCache.get(sid).catch(() => null) : null;
+          if (cached && Array.isArray(cached.messages) && cached.messages.length && (now() - (cached.at || 0) < 15 * 60 * 1000)) {
+            const tailM = cached.messages.at(-1);
+            const tailAlreadyDone = Boolean(tailM?._finishedAt || tailM?.metadata?.timing?.completedAt || tailM?.metadata?.aborted || tailM?.metadata?.error || tailM?.metadata?.finishReason === 'stop' || tailM?.metadata?.finishReason === 'end-turn');
+            const inc = !tailAlreadyDone && Boolean(
+              (tailM?.role === 'user' && !tailM.failed && (!tailM._local || tailM._appendAccepted)) ||
+              (tailM?.role === 'assistant' && (tailM.metadata?.pending || tailM._incomplete))
+            );
+            if (inc) {
+              const info = { sid, startedAt: cached.at || now(), updatedAt: cached.at || now(), isEval: Boolean(cached.isEvaluation), evalMode: cached.evalMode || '' };
+              rMap[sid] = info;
+              candidateMap.set(sid, info);
+              this._saveRunMap(rMap);
+            }
+          }
+        }
+      } catch {}
+
+      if (!candidateMap.size) return;
+
+      const curTabSid = typeof Tabs !== 'undefined' ? Tabs.cur?.sid : null;
+      const entries = [...candidateMap.values()].sort((a, b) => {
+        if (a.sid === curTabSid) return -1;
+        if (b.sid === curTabSid) return 1;
+        return (b.updatedAt || 0) - (a.updatedAt || 0);
+      });
+
+      const resumeOne = async (item) => {
+        const sid = item?.sid;
+        if (!sid) return;
+        try {
+          const c = typeof chatOf === 'function' ? chatOf(sid) : (typeof Chats !== 'undefined' ? Chats.get(sid) : null);
+          if (!c) return;
+          if (c.loaded && !c.cached && !c.loading && !this.isChatActivelyGenerating(c)) {
+            c._startupResuming = false;
+            c._recoveringIncomplete = false;
+            c._wasTrackedRunning = false;
+            delete rMap[sid];
+            this._saveRunMap(rMap);
+            try { if (typeof SendQ !== 'undefined' && (c.queue || []).length) SendQ.check(c); } catch {}
+            return;
+          }
+          c._wasTrackedRunning = true;
+          c._startupResuming = true;
+          c._recoveringIncomplete = true;
+          try { if (typeof UI !== 'undefined') { UI.renderListSoon?.(); UI.renderTabs?.(); } } catch {}
+
+          const hRow = typeof History !== 'undefined' ? History.byId?.(sid) : null;
+          const isEval = Boolean(item.isEval || c.isEvaluation || hRow?.type === 'evaluation' || hRow?.mode === 'battle' || hRow?.mode === 'direct' || (typeof EvalEngine !== 'undefined' && EvalEngine.isEvalChat?.(c)));
+          if (isEval && typeof EvalEngine !== 'undefined') {
+            c.isEvaluation = true;
+            EvalEngine.initEvalFields?.(c, item.evalMode ? { evalMode: item.evalMode } : {});
+            await EvalEngine.loadChat(c, true).catch(() => {});
+          } else {
+            await (c.loading || c.load(true)).catch(() => {});
+            const realRunningAfterLoad = this.isChatActivelyGenerating(c);
+            if (!realRunningAfterLoad && (!c.loaded || c.cached) && typeof c.serverMidTurn === 'function') {
+              const mid = await c.serverMidTurn().catch(() => false);
+              if (mid) {
+                c.status = 'streaming';
+                c.phase = '接收回复中';
+                await c.resumeIncremental?.('server-active')?.catch?.(() => {});
+              }
+            }
+          }
+
+          c._startupResuming = false;
+          c._recoveringIncomplete = false;
+          const stillRunning = this.isChatActivelyGenerating(c);
+          if (stillRunning) {
+            rMap[sid] = {
+              sid,
+              startedAt: item.startedAt || now(),
+              updatedAt: now(),
+              isEval: Boolean(c.isEvaluation || isEval),
+              evalMode: c.evalMode || item.evalMode || '',
+            };
+            this._saveRunMap(rMap);
+          } else {
+            c._wasTrackedRunning = false;
+            delete rMap[sid];
+            this._saveRunMap(rMap);
+            if (!c.awaitId && !c.preSend && !c.sending && c.status === 'streaming' && !c.live) {
+              c.status = 'idle';
+              c.phase = '';
+            }
+            const tailAfterResume = Array.isArray(c.messages) ? c.messages.at(-1) : null;
+            const failedAfterResume = Boolean(tailAfterResume?.role === 'user' && (tailAfterResume.failed || (tailAfterResume._local && !tailAfterResume._appendAccepted)));
+            if (failedAfterResume) {
+              tailAfterResume.failed = true;
+              delete tailAfterResume._appendAccepted;
+              c.status = 'error';
+              if (!c.error) c.error = '上一条消息未发出（服务器未收到），请点击重试';
+            } else {
+              if (!this.isCurrentlyViewed(sid)) {
+                this.markUnread(sid);
+              }
+              if (typeof SendQ !== 'undefined' && (c.queue || []).length) {
+                setTimeout(() => { try { SendQ.check(c); } catch {} }, 50);
+              }
+            }
+          }
+          try { if (typeof UI !== 'undefined') { UI.renderListSoon?.(); UI.renderTabs?.(); } } catch {}
+          try { if (typeof Bar !== 'undefined') Bar.render?.(); } catch {}
+        } catch {
+          try {
+            const c = typeof Chats !== 'undefined' ? Chats.get(sid) : null;
+            if (c) {
+              c._startupResuming = false;
+              c._recoveringIncomplete = false;
+            }
+          } catch {}
+        }
+      };
+
+      // Run active tab immediately, then pace remaining background entries sequentially to avoid startup 429 bursts
+      if (entries.length > 0) {
+        await resumeOne(entries[0]);
+        for (let i = 1; i < entries.length; i++) {
+          await sleep(650);
+          await resumeOne(entries[i]);
+        }
+      }
+    } finally {
+      this._resuming = false;
+    }
+  }
+};
+try { if (typeof window !== 'undefined') window.RunningTracker = RunningTracker; } catch {}

@@ -84,7 +84,7 @@ async function run(){browser=await chromium.launch({headless:true,args:['--no-sa
   await f.page.locator('.np-cur').click();await until(f,()=>[...document.querySelectorAll('.np-row')].every(r=>!/测速中|…/.test(r.textContent)),null,'rows settled');
   assert.match(await f.page.locator('.np-row').first().textContent(),/自动选择/);
   const rows=await f.page.locator('.np-row:not(.np-auto)').allTextContents();assert.match(rows[0],/Fast.*20 ms/);assert.match(rows[1],/Current.*90 ms/);assert.match(rows[2],/Unavailable.*超时/);
-  assert.equal(await f.page.locator('.np-row:not(.np-auto)').first().locator('.dly').getAttribute('class'),'dly d-good');
+  assert.equal(await f.page.locator('.np-row:not(.np-auto)').first().locator('.dly').getAttribute('class'),'np-one dly dly-ping d-good');
   const tested=await f.page.evaluate(()=>({writes:__routeFixture.writes.length,probes:__routeFixture.probes.length,url:__routeFixture.urlTests}));assert.equal(tested.writes,0);assert.equal(tested.probes,0,'opening never probes Brana');assert.ok(tested.url.length>=1);
   const before=tested.url.length;await f.page.evaluate(()=>{__anc.RegionIP.close();__anc.RegionIP.open();});await f.page.clock.runFor(700);assert.equal((await f.page.evaluate(()=>__routeFixture.urlTests)).length,before,'reopening within 5 minutes does not retest');
   // 退出列表自 beta.1 起改为「展开时才渲染行」（pipOpen 门控）：先展开再断言当前选中的行
@@ -145,8 +145,8 @@ async function run(){browser=await chromium.launch({headless:true,args:['--no-sa
   await done(f,platform+': Auto defaults to the lowest-delay node and applies only after confirm');
 
   f=await fixture(platform);await open(f);
-  await pipOpen(f);await f.page.locator('.pip-row[data-k="proxyip.two.invalid"] .pip-t').click();await until(f,()=>/31 ms/.test(document.querySelector('.pip-row[data-k="proxyip.two.invalid"]')?.textContent||''),null,'row retest');
-  await f.page.locator('.pip-all').click();await until(f,()=>__routeFixture.pipProbes.length>=3&&!document.querySelector('.pip-row .dly.d-wait'),null,'test all');
+  await pipOpen(f);await until(f,()=>__routeFixture.pipProbes.length>=2&&!document.querySelector('.pip-row .dly.d-wait'),null,'auto test all on open');
+  await f.page.locator('.pip-row[data-k="proxyip.two.invalid"] .dly-ping').click();await until(f,()=>__routeFixture.pipProbes.length>=3&&/31 ms/.test(document.querySelector('.pip-row[data-k="proxyip.two.invalid"]')?.textContent||''),null,'row retest');
   assert.equal(await f.page.locator('.t-google,.t-brana').count(),0,'separate Google / Brana test buttons are gone');
   await pick(f,'node-1','.region-ip');assert.equal(await f.page.evaluate(()=>__routeFixture.writes.length),0,'picking and testing never apply');
   await f.page.evaluate(()=>{__anc.EnvRefresh.reload=()=>{};});

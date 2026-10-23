@@ -1,6 +1,7 @@
 // Status-bar shortcut: inspect only the current region; explicitly switch only this account's ProxyIP.
 const RegionIP = {
   busy:false, view:null,
+  refreshOpen() { try { if (this.view) this.paint?.(); } catch {} },
   norm:x=>String(x||'').trim().toLowerCase(),
   effReg(a) { return String(a?.region||a?.routeHome||IP.loc||'').trim().toUpperCase(); },
   signature(a) { return JSON.stringify([a?.id,a?.region||'',a?.proxy||'',a?.proxyIp||'',a?.nodeId||'']); },
@@ -38,7 +39,7 @@ const RegionIP = {
     for(const row of rows)if(row.current){const live=IP.liveFor?IP.liveFor(row.k):0;if(live){row.e={...row.e,ms:live,eg:row.e.eg||IP.ip,nodeUnmeasured:false};if(row.state==='bad'||row.state==='wait')row.state='ok';}}
     const order={ok:0,cool:1,used:2,wait:3,risk:4,bad:5,ban:6};
     // 只列已评估为纯净的 IP（可用 / 冷却 / 被占用都是纯净的）；当前在用的始终显示
-    return rows.filter(r=>r.current||['ok','cool','used'].includes(r.state)).sort((a,b)=>Number(b.current)-Number(a.current)||(order[a.state]-order[b.state])||(a.e.ms||9e9)-(b.e.ms||9e9)||a.k.localeCompare(b.k));
+    const purSc=r=>(typeof IPRep!=='undefined'&&IPRep.score?.(r.k,r.e)?.known)?Math.round(IPRep.score?.(r.k,r.e).s):-1;return rows.filter(r=>r.current||['ok','cool','used'].includes(r.state)).sort((a,b)=>(order[a.state]-order[b.state])||(purSc(b)-purSc(a))||(a.e.ms||9e9)-(b.e.ms||9e9)||a.k.localeCompare(b.k));
   },
   async switchNext({owner,progress=()=>{},noScreen=false}={}) {
     if(this.busy)return {ok:false,error:'正在切换，请勿重复点击'};
@@ -101,7 +102,7 @@ const RegionIP = {
                 IPRep.invalidate?.(k);
               }
             }
-            const liveSc=IPRep.score(k,{...(Pool.d?.ips?.[k]||{}),eg:liveEg});
+            const liveSc=IPRep.score?.(k,{...(Pool.d?.ips?.[k]||{}),eg:liveEg});
             if(liveSc?.known&&liveSc.s<(IPRep.PURE||75)){
               await Pool.mutate(d=>{if(typeof Pool.banForever==='function')Pool.banForever(d,k,'切换后实测出口 '+liveEg+' 不纯净（'+liveSc.s+' 分）· 已自动拉黑');}).catch(()=>{});
               progress('候选 '+k+' 实测落地出口不纯净（'+liveSc.s+' 分），已拉黑并继续切换下一个…');
@@ -239,7 +240,7 @@ const RegionIP = {
       if(v.hsig!==sig){v.hsig=sig;
         // 一行：国旗 + 国家代码 + IP + 实时延迟（不再写「日本」、不再列线路小字；不右对齐，右边不留大空白）
         const code=String(IP.loc||cc||'').toUpperCase();
-        const e=a.proxyIp&&typeof Pool!=='undefined'?Pool.d?.ips?.[a.proxyIp]:null,sc=e&&typeof IPRep!=='undefined'?IPRep.score(a.proxyIp,e):null,rl=sc?IPRep.label(sc):'';
+        const e=a.proxyIp&&typeof Pool!=='undefined'?Pool.d?.ips?.[a.proxyIp]:null,sc=e&&typeof IPRep!=='undefined'?IPRep.score?.(a.proxyIp,e):null,rl=sc?IPRep.label(sc):'';
         const pipNote=a.proxyIp&&ip&&!ip.startsWith(String(a.proxyIp).split(':')[0])?'（入口 '+String(a.proxyIp).split(':')[0]+'）':'';
         // 手机紧凑：第一行「当前 IP 🇯🇵 JP 61.124.1.97」完整显示，延迟 / 纯净度 / 住宅等标签放第二行
         v.ipline.replaceChildren(v.title,h('span',{class:'rip-flag'},f),...(code?[h('span',{class:'rip-cc'},code)]:[]),h('b',{title:ip+(pipNote?' '+pipNote:'')},(ip||(IP.err?'出口检测失败':'正在获取…'))+pipNote));
@@ -247,7 +248,7 @@ const RegionIP = {
           isOff?h('span',{class:'rip-chip bad'},arBusy?'检测到连接超时 · 正在自动切换最优节点 / ProxyIP…':'无法连接 · 请切换节点（点右上角 × 可直接离线查阅）'):null,
           ms&&!rttTimeout?h('span',{class:'rip-chip dly '+(ms<300?'d-good':ms<600?'d-mid':'d-bad'),title:'实际延迟（节点 + ProxyIP）\n'+(typeof IP!=='undefined'&&IP.rttTip?IP.rttTip():'')},ms+' ms · 实时'):rttTimeout?h('span',{class:'rip-chip dly d-fail',title:'当前线路实时探测超时'},'超时 · 实时'):null,
           rl&&rl!=='未评估'?h('span',{class:'rip-chip risk '+(rl==='纯净'?'r-good':rl==='一般'?'r-mid':rl==='高风险'?'r-bad':'r-none'),title:'纯净度 '+sc.s+'%'},rl+' '+Math.round(sc.s)+'%'):null,
-          (()=>{const x=e&&typeof IPRep!=='undefined'&&IPRep.kind?IPRep.kind(a.proxyIp,e):null;return x?h('span',{class:'rip-chip ipt '+x.c,title:x.why},x.t):null;})()].filter(Boolean);
+          (()=>{const x=e&&typeof IPRep!=='undefined'&&IPRep.kind?IPRep.kind?.(a.proxyIp,e):null;return x?h('span',{class:'rip-chip ipt '+x.c,title:x.why},x.t):null;})()].filter(Boolean);
         v.chips.replaceChildren(...chips); v.chips.hidden=!chips.length;
       }
     }

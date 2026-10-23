@@ -76,7 +76,8 @@ const NodeSpeed = (() => {
     setTimeout(tick, 3000); setInterval(tick, 60e3);
     Bus.on('nodes', () => { setTimeout(() => void test(Nodes.list.filter(n => !get(n))), 500); });
   }
-  return { URL, TTL, load, get, busy, fresh, sort, best, badge, test, testOne, start, key, get at() { return at; }, get testing() { return testing.size + probing.size; }, probingNow: n => probing.has(key(n)) };
+  function clear() { res = {}; at = 0; Bus.emit('nodespeed'); }
+  return { URL, TTL, load, get, busy, fresh, sort, best, badge, test, testOne, start, clear, key, get at() { return at; }, get testing() { return testing.size + probing.size; }, probingNow: n => probing.has(key(n)) };
 })();
 if (typeof module !== 'undefined' && module.exports) module.exports = NodeSpeed;
 else if (typeof Host !== 'undefined' && Host.urlTest) NodeSpeed.start();
