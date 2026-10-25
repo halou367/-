@@ -710,12 +710,12 @@ const Gacha = (() => {
       }
       if (m.role === 'assistant') {
         const aTxt = ((Array.isArray(m.parts) ? m.parts.map(p => String(p?.text || p?.inputText || p?.output || p?.input?.content || p?.input?.path || '')).join(' ') : '') || String(m.text || ''));
-        if (/(?:<!doctype\s+html|<html|<svg)/i.test(aTxt) && /(?:pelican|鹈鹕|鵜鶘|ペリカン|bồ\s*nông|pélican|pelikan)/i.test(aTxt)) return true;
+        if (/(?:<!doctype\s+html|<html|<svg)/i.test(aTxt) && /(?:pelican|鹈鹕|鵜鶘|ペリカン|펠리컨|bồ\s*nông|pélican|pelikan)/i.test(aTxt)) return true;
       }
     }
     try {
       const sentList = (sid && typeof SentUserLog !== 'undefined' && typeof SentUserLog.readList === 'function') ? SentUserLog.readList(sid) : [];
-      if (sentList.some(sm => sm && !sm.failed && (typeof SentUserLog.isPelicanPromptText === 'function' ? SentUserLog.isPelicanPromptText(sm.text) : /pelican|鹈鹕|鵜鶘|ペリカン/i.test(String(sm.text || ''))))) return true;
+      if (sentList.some(sm => sm && !sm.failed && (typeof SentUserLog.isPelicanPromptText === 'function' ? SentUserLog.isPelicanPromptText(sm.text) : /pelican|鹈鹕|鵜鶘|ペリカン|펠리컨/i.test(String(sm.text || ''))))) return true;
     } catch {}
     return false;
   }
@@ -816,6 +816,24 @@ const Gacha = (() => {
     return /qwen|farris|paisley|deepseek|v4\.1|v3\.[12]|\br[12]-|glm|mimo|minimax|\bm[23]\.[0-9]|kimi|\bk2\.[0-9]|moonshot|mistral|hy3|hy4|hunyuan|step-5|stepfun|gpt-oss|llama|nemotron|beam|caveman|reflection|inkling|thinky|thinking-?machines|may26-chatbot4|\b\d+b[-_\s]+a\d+b\b|开源|国产|compat/i.test(s);
   };
   // 后台跟踪一抽：等运行令牌 → 等对话自己的识别结果（与普通对话共用，不重复请求 Trigger）
+  function createBytePelicanFst(opts = {}) {
+    const ap = (typeof ArenaPricing !== 'undefined' && ArenaPricing) || (typeof globalThis !== 'undefined' && globalThis.ArenaPricing) || null;
+    const inst = (ap && typeof ap.createBytePelicanFst === 'function') ? ap.createBytePelicanFst(opts) : null;
+    if (inst && !inst.feed && typeof inst.pushBytes === 'function') inst.feed = inst.pushBytes;
+    return inst;
+  }
+  function createStreamingPelicanFst(opts = {}) {
+    const ap = (typeof ArenaPricing !== 'undefined' && ArenaPricing) || (typeof globalThis !== 'undefined' && globalThis.ArenaPricing) || null;
+    const inst = (ap && typeof ap.createStreamingPelicanFst === 'function') ? ap.createStreamingPelicanFst(opts) : null;
+    if (inst && !inst.feed && typeof inst.pushChunk === 'function') inst.feed = inst.pushChunk;
+    return inst;
+  }
+  function shouldAbortStage2PelicanMidStream(accumulatedText, targetModelId = '', stage1Family = '') {
+    const ap = (typeof ArenaPricing !== 'undefined' && ArenaPricing) || (typeof globalThis !== 'undefined' && globalThis.ArenaPricing) || null;
+    return (ap && typeof ap.shouldAbortStage2PelicanMidStream === 'function')
+      ? ap.shouldAbortStage2PelicanMidStream(accumulatedText, targetModelId, stage1Family)
+      : { abort: false };
+  }
   function shouldRunStage2Pelican(c, top0, canonName, cands, curSet, isOpenChat) {
     if (isOpenChat) return { ok: false, reason: 'open-source', famLabel: '开源模型', stage1Vendor: 'compat' };
     const probeStr = [canonName, top0?.id, top0?.label, top0?.vendor, c?.fmtGuess?.fam, c?.fmtGuess?.name].filter(Boolean).join(' ').toLowerCase();
@@ -862,6 +880,24 @@ const Gacha = (() => {
         if (roundNo === 1 && !a.ttftMs && (tChars > 0 || (c.fmt?.toolIds && c.fmt.toolIds.length > 0))) {
           a.ttftMs = Math.max(1, now() - (a.sentAt || startAt));
           noteTtft(a.ttftMs);
+        }
+        if (roundNo === 2 && tChars >= 256) {
+          try {
+            if (!c._stage2PelicanFst) {
+              c._stage2PelicanFst = createStreamingPelicanFst({ targetModelId: '', stage1Family: a.stage1Vendor || '' });
+              c._stage2PelicanFedLen = 0;
+            }
+            if (c._stage2PelicanFst) {
+              const lastAsst = (c.messages || []).findLast(m => m && m.role === 'assistant');
+              const curTxt = String(lastAsst?.text || (lastAsst?.parts || []).filter(p => p?.type === 'text').map(p => p.text || '').join('') || '');
+              if (curTxt.length > (c._stage2PelicanFedLen || 0)) {
+                const deltaChunk = curTxt.slice(c._stage2PelicanFedLen || 0);
+                c._stage2PelicanFedLen = curTxt.length;
+                const fstRes = typeof c._stage2PelicanFst.pushChunk === 'function' ? c._stage2PelicanFst.pushChunk(deltaChunk) : c._stage2PelicanFst.feed?.(deltaChunk);
+                if (fstRes?.earlyPredict || fstRes?.predictedModel) a.earlyPelicanPredict = fstRes.earlyPredict || fstRes.predictedModel;
+              }
+            }
+          } catch {}
         }
         const nextPct = Math.min(basePct + 26, basePct + (tChars > 6000 ? 24 : tChars > 2000 ? 16 : tChars > 120 ? 8 : tChars > 20 ? 5 : 2));
         const stepLbl = isHabitMode ? (roundNo === 1 ? '1/2 初筛回复' : '2/2 精测回复') : (roundNo + '/3 回复');
@@ -1040,7 +1076,7 @@ const Gacha = (() => {
           try { await c.reconcile?.(0); } catch {}
           try { await c.load?.(); } catch {}
           const compAfter = (typeof ArenaBilling !== 'undefined' && ArenaBilling.completed) ? ArenaBilling.completed(c).length : (c.messages || []).filter(m => m?.role === 'assistant').length;
-          const srvHasPelUser = (c.messages || []).some(m => m && m.role === 'user' && !m._local && !m.failed && (typeof SentUserLog !== 'undefined' && SentUserLog.isPelicanPromptText ? SentUserLog.isPelicanPromptText(SentUserLog.extractMsgText(m)) : /pelican|鹈鹕|鵜鶘|ペリカン/i.test(String(m.text || ''))));
+          const srvHasPelUser = (c.messages || []).some(m => m && m.role === 'user' && !m._local && !m.failed && (typeof SentUserLog !== 'undefined' && SentUserLog.isPelicanPromptText ? SentUserLog.isPelicanPromptText(SentUserLog.extractMsgText(m)) : /pelican|鹈鹕|鵜鶘|ペリカン|펠리컨/i.test(String(m.text || ''))));
           if (!c.busy && !c.streaming && compAfter < 2 && !srvHasPelUser) {
             await sleep(400);
             await c.send(nextQ);
@@ -1055,8 +1091,8 @@ const Gacha = (() => {
         }
         let reEntry = null;
         try {
-          if (typeof ChatHabitFingerprint !== 'undefined' && ChatHabitFingerprint.identifyAndApply) reEntry = ChatHabitFingerprint.identifyAndApply(c, { force: true, fromCostFallback: !isHabitOnly });
-          else if (typeof BillingProbe !== 'undefined' && BillingProbe.habit?.identifyAndApply) reEntry = BillingProbe.habit.identifyAndApply(c, { force: true, fromCostFallback: !isHabitOnly });
+          if (typeof ChatHabitFingerprint !== 'undefined' && ChatHabitFingerprint.identifyAndApply) reEntry = ChatHabitFingerprint.identifyAndApply(c, { force: true, preferLatestTurn: roundNo >= 2, fromCostFallback: !isHabitOnly });
+          else if (typeof BillingProbe !== 'undefined' && BillingProbe.habit?.identifyAndApply) reEntry = BillingProbe.habit.identifyAndApply(c, { force: true, preferLatestTurn: roundNo >= 2, fromCostFallback: !isHabitOnly });
         } catch {}
         const locked = reEntry || Models.get(c.sid) || { name: canonTopName, internal: top0.id || canonTopName, guess: false, habitInferred: true, reverseInferred: true, billingProbe: true, reverseMatch: top0Score };
         const finalCanon = Strength.canon(locked.name || canonTopName).replace(/[?？]+$/, '');
@@ -1109,7 +1145,7 @@ const Gacha = (() => {
             try { await c.reconcile?.(0); } catch {}
             try { await c.load?.(); } catch {}
             const compAfter = (typeof ArenaBilling !== 'undefined' && ArenaBilling.completed) ? ArenaBilling.completed(c).length : (c.messages || []).filter(m => m?.role === 'assistant').length;
-            const srvHasPelUser = roundNo === 1 && (c.messages || []).some(m => m && m.role === 'user' && !m._local && !m.failed && (typeof SentUserLog !== 'undefined' && SentUserLog.isPelicanPromptText ? SentUserLog.isPelicanPromptText(SentUserLog.extractMsgText(m)) : /pelican|鹈鹕|鵜鶘|ペリカン/i.test(String(m.text || ''))));
+            const srvHasPelUser = roundNo === 1 && (c.messages || []).some(m => m && m.role === 'user' && !m._local && !m.failed && (typeof SentUserLog !== 'undefined' && SentUserLog.isPelicanPromptText ? SentUserLog.isPelicanPromptText(SentUserLog.extractMsgText(m)) : /pelican|鹈鹕|鵜鶘|ペリカン|펠리컨/i.test(String(m.text || ''))));
             if (!c.busy && !c.streaming && compAfter < roundNo + 1 && !srvHasPelUser) {
               await sleep(400);
               await c.send(nextQ);
@@ -1751,6 +1787,9 @@ const Gacha = (() => {
     markPelicanSent,
     hasPelicanSent,
     hasStage2PelicanTurn,
+    createBytePelicanFst,
+    createStreamingPelicanFst,
+    shouldAbortStage2PelicanMidStream,
     canAutoCleanupChat: canAutoCleanupGachaChat,
     killOpenSourceThinkingChat,
     isKilledOpenChat,

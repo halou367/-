@@ -911,7 +911,7 @@ const R = {
   hitlNote(chat, p) {
     const d = UI.hitlDraft.get(p.toolCallId) || {};
     if (d.err) return h('div', { class: 'hq-note err' }, '没有发出去：' + d.err + '。选项已保留，可以直接再点提交。');
-    if (d.sending && chat.phase) return h('div', { class: 'hq-note' }, h('i', { class: 'spin' }), chat.phase);
+    if (d.sending && chat.phase && !Hitl.blocked(chat)) return h('div', { class: 'hq-note' }, h('i', { class: 'spin' }), chat.phase);
     return null;
   },
   hitl(p, chat, m, isLast) {
@@ -1331,7 +1331,10 @@ const R = {
         h('div', { class: 'typing', title: '正在生成与执行中…' }, h('i'), h('i'), h('i')),
         h('span', { class: 'phase typing-phase' }, h('span', { class: 'ph-t' }), h('span', { class: 'dim anc-since' }))
       ));
-      const phTxt = (typeof ThinkingStatus !== 'undefined' && ThinkingStatus.phase) ? ThinkingStatus.phase(chat) : (chat?.phase || '生成中');
+      const rawPhTxt = (typeof ThinkingStatus !== 'undefined' && ThinkingStatus.phase) ? ThinkingStatus.phase(chat) : (chat?.phase || '生成中');
+      const lastSegEl = segs.length ? segs[segs.length - 1] : null;
+      const activeReasonTitle = (lastSegEl && lastSegEl.classList?.contains('reason') && lastSegEl.querySelector?.('.rs-t')?.textContent) || '';
+      const phTxt = (activeReasonTitle && (activeReasonTitle === rawPhTxt || (/思考中/.test(activeReasonTitle) && /思考中/.test(rawPhTxt)))) ? '' : rawPhTxt;
       const phEl = tRow.querySelector('.ph-t');
       if (phEl && phEl.textContent !== phTxt) phEl.textContent = phTxt;
       const sinceEl = tRow.querySelector('.anc-since');

@@ -20,8 +20,14 @@ const RouteConfirm = {
     return this.job;
   },
   // 检测到模型路由（路由到其他模型 / 同型号的强度削弱）时仅轻提示提醒，绝不因为路由误判而暂停对话（仅闭源模型突然出现开源思考才暂停）
+  _promptedRouteKeys: new Set(),
   askModelRoute(chat, { routeType = 'model', fromLabel = '', toLabel = '', reason = '', toTurn = null, seconds = 10 } = {}) {
     if (typeof Prefs !== 'undefined' && Prefs.routePausePrompt === false) return Promise.resolve(false);
+    const sidKey = String(chat?.sid || '');
+    const normTarget = String(toLabel || '').toLowerCase().replace(/\s*\([^)]*\)\s*$/g, '').replace(/[-\s]+(?:none|minimal|low|medium|high|xhigh|max)$/i, '').replace(/[\s_-]+/g, '-').trim();
+    const dedupeKey = sidKey + ':' + routeType + ':' + normTarget;
+    if (sidKey && this._promptedRouteKeys.has(dedupeKey)) return Promise.resolve(false);
+    if (sidKey) this._promptedRouteKeys.add(dedupeKey);
     const isEffort = routeType === 'effort';
     const _legacyTitle = isEffort ? '检测到同型号的强度削弱，是否暂停对话？' : '检测到路由到其他模型，是否暂停对话？';
     void _legacyTitle; void seconds;
@@ -33,7 +39,6 @@ const RouteConfirm = {
     if (chat) {
       chat._routePaused = false;
       try { Trace.note?.(chat.sid, '⚠️ 路由切换提醒（不暂停）：' + label + ' · ' + text, 'warn'); } catch {}
-      try { chat.emit?.(); } catch {}
     }
     try { toast('⚠️ 路由切换提醒：' + label + (text ? ' · ' + text : ''), 'warn'); } catch {}
     return Promise.resolve(false);

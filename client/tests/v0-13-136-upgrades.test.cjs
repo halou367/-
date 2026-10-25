@@ -4036,3 +4036,210 @@ test('Task 60 (v2.0.0-beta.1): Micro-probe -> Pelican zero false route alert, mu
   assert.ok(nshSrc.includes('BranaAI-*.exe'));
   assert.ok(!extIdSrc.includes('-beta') && extIdSrc.includes('-ext'));
 });
+
+test('Task 61: Unified model identity & confidence across all UI surfaces + PC EXE (<100MB), Android APK, and in-process memory trimmer compression', () => {
+  const bpUiSrc = fs.readFileSync(path.join(__dirname, '../ui/billing-probe-ui.js'), 'utf8');
+  const titlesSrc = fs.readFileSync(path.join(__dirname, '../ui/titles.js'), 'utf8');
+  const dockSrc = fs.readFileSync(path.join(__dirname, '../ui/dock.js'), 'utf8');
+  const htmlPrevSrc = fs.readFileSync(path.join(__dirname, '../ui/html-preview.js'), 'utf8');
+  const pkgJson = JSON.parse(fs.readFileSync(path.join(__dirname, '../package.json'), 'utf8'));
+  const afterPackSrc = fs.readFileSync(path.join(__dirname, '../scripts/after-pack.js'), 'utf8');
+  const bundleSrc = fs.readFileSync(path.join(__dirname, '../src/bundle.js'), 'utf8');
+  const mainSrc = fs.readFileSync(path.join(__dirname, '../src/main.js'), 'utf8');
+
+  // 1. Unified model identity & confidence invariants across Titles, Dock, PelicanShots, and BillingProbe
+  assert.ok(titlesSrc.includes('if (e && e.localTitle !== want) { e.localTitle = want; try { History.saveSoon?.(); } catch {} }'));
+  assert.ok(dockSrc.includes('const sum = (!t && typeof BillingProbe !== \'undefined\' && BillingProbe.summary) ? BillingProbe.summary(sid, { readOnly: true }) : null;'));
+  assert.ok(dockSrc.includes('const ovMergedBest = (!mCur?.userCorrected && ovUniqueTop)'));
+  assert.ok(htmlPrevSrc.includes('BillingProbe.summary(sid, { readOnly: true })'));
+  assert.ok(htmlPrevSrc.includes('if (isPreRouteShot || !m.model || m.model === \'未识别\')'));
+  assert.ok(bpUiSrc.includes('const hasLocalSyncEvidence = Boolean('));
+  assert.ok(bpUiSrc.includes('PelicanShots.syncSid(sid);'));
+  assert.ok(bpUiSrc.includes('_lastSyncSig: syncSig,'));
+  assert.ok(bpUiSrc.includes('if (isUniqueTop && (opts?.readOnly === false || model?.name)'));
+
+  // 2. Package & process compression invariants
+  assert.equal(pkgJson.devDependencies.electron, '33.4.11');
+  assert.ok(afterPackSrc.includes('function slimResourcesPak(pakPath)'));
+  assert.ok(afterPackSrc.includes('function slimAppAsar(appOutDir)'));
+  assert.ok(afterPackSrc.includes('BRANA_WIN32_NODE_BR'));
+  assert.ok(bundleSrc.includes('d.models = (d.models || []).map(x => x._ref ? (bm.get(x._ref) || x) : x);'));
+  assert.ok(mainSrc.includes('globalThis._branaWin32Addon'));
+});
+
+test('Task 62: Closed-loop PC pure-icon QR export & Mobile QR scan/import + onboarding', () => {
+  const coreSrc = read('ui/core.js');
+  const accountsSrc = read('ui/accounts.js');
+  const manifestSrc = fs.readFileSync(path.join(__dirname, '../android/app/src/main/AndroidManifest.xml'), 'utf8');
+  const javaSrc = fs.readFileSync(path.join(__dirname, '../android/app/src/main/java/ai/arena/client/MainActivity.java'), 'utf8');
+
+  assert.ok(accountsSrc.includes("class: 'ib export-qr-sync-btn'"));
+  assert.ok(!accountsSrc.includes('export-qr-bar'));
+  assert.ok(accountsSrc.includes("class: 'ib import-qr-sync-btn'"));
+  assert.ok(coreSrc.includes('qrSvgWrap.innerHTML = toSvg(curUri, 248)'));
+  assert.ok(coreSrc.includes('扫描电脑端二维码'));
+  assert.ok(manifestSrc.includes('android.permission.CAMERA'));
+  assert.ok(javaSrc.includes('PermissionRequest.RESOURCE_VIDEO_CAPTURE'));
+});
+
+test('Task 63: Deduplicate reply/thinking status prompts and prevent post-restart old message disorder on multi-chunk tool turns & paginated sync', () => {
+  const vm = require('vm');
+  const viewSrc = read('ui/view.js');
+  const coreSrc = read('ui/core.js');
+
+  // 1. Reply/thinking status prompt deduplication guards in ui/view.js & ui/core.js
+  assert.ok(
+    viewSrc.includes("if (Hitl.blocked(chat) && !chat.live && chat.messages[lastIdx]?.role === 'user' && !chat.waitingForeign)"),
+    '__typing placeholder must not render simultaneously with chat.live .typing-live-row'
+  );
+  assert.ok(
+    viewSrc.includes("const st = t.querySelector('.typing-st'); if (st && st.textContent !== '') st.textContent = '';"),
+    '__typing .typing-st must remain empty when unified .ph-t + .anc-since is rendered'
+  );
+  assert.ok(
+    viewSrc.includes('const phTxt = (activeReasonTitle && (activeReasonTitle === rawPhTxt || (/思考中/.test(activeReasonTitle) && /思考中/.test(rawPhTxt)))) ? \'\' : rawPhTxt;'),
+    '.typing-live-row must not repeat thinking phase text when active streaming .reason block above already displays it'
+  );
+  assert.ok(
+    coreSrc.includes("const pht = row?.querySelector?.('.ph-t'); if (pht) { if (el.textContent !== '') el.textContent = '';"),
+    'core.js interval must not re-populate .typing-st next to .ph-t'
+  );
+
+  // 2. Runtime verification of multi-chunk assistant turns + paginated SentUserLog / mergeServer / sanitizeCachedMsgs
+  const sanStart = coreSrc.indexOf('  function isSameAsstTurnChunk(prev, cur) {');
+  const sanEnd = coreSrc.indexOf('  function slimForHot(msgs', sanStart);
+  const sulStart = coreSrc.indexOf('const SentUserLog = (() => {');
+  const sulEnd = coreSrc.indexOf('})();', sulStart) + 5;
+  const msStart = coreSrc.indexOf('  mergeServer(list, keep) {');
+  const msEnd = coreSrc.indexOf('  // 和服务器对一次账', msStart);
+  const msCode = ('function mergeServer(list, keep) {' + coreSrc.slice(msStart + '  mergeServer(list, keep) {'.length, msEnd)).trimEnd().replace(/,\s*$/, '');
+
+  const storeMap = new Map();
+  const idTime = id => {
+    const x = String(id || '').replace(/-/g, '');
+    if (!/^[0-9a-f]{32}$/i.test(x) || x[12] !== '7') return 0;
+    const t = parseInt(x.slice(0, 12), 16);
+    return t > 1.6e12 && t < 4.2e12 ? t : 0;
+  };
+  const makeUuidAt = (ms, seq = 1) => {
+    const hex = Math.floor(ms).toString(16).padStart(12, '0');
+    return hex.slice(0, 8) + '-' + hex.slice(8, 12) + '-7000-8000-' + String(seq).padStart(12, '0');
+  };
+  const curNow = Date.parse('2026-10-25T04:25:00Z');
+  const ctx = vm.createContext({
+    Map, Set, WeakMap, Array, Object, String, Number, Boolean, Math, Date, RegExp, JSON,
+    now: () => curNow,
+    idTime,
+    Store: {
+      get: (k, d) => (storeMap.has(k) ? JSON.parse(JSON.stringify(storeMap.get(k))) : d),
+      set: (k, v) => storeMap.set(k, JSON.parse(JSON.stringify(v))),
+    },
+    Drafts: { load: () => ({ o: {}, q: {}, ackedIds: [], acceptedIds: [] }), ack: () => {}, setQ: () => {} },
+    formatOfficialErrorText: s => String(s || ''),
+    hasInterruptedToolPart: () => false,
+    isPhantomFinishStub: () => false,
+    Hitl: { mergePending: () => {}, awaiting: () => false, name: () => '' },
+    MsgCache: {},
+  });
+  vm.runInContext(
+    coreSrc.slice(sanStart, sanEnd) +
+    '\nMsgCache.sanitize = sanitizeCachedMsgs;\nthis.sanitizeCachedMsgs = sanitizeCachedMsgs;\n' +
+    coreSrc.slice(sulStart, sulEnd) +
+    '\nthis.SentUserLog = SentUserLog;\n' +
+    msCode +
+    '\nthis.mergeServer = mergeServer;',
+    ctx
+  );
+
+  // Yesterday's 4 user messages (19:52, 20:16, 21:54, 01:49) that scrolled off the 20-message pagination window
+  const sid = '01a16c0e-test-task63';
+  const y1952 = Date.parse('2026-10-24T11:52:00Z');
+  const y2016 = Date.parse('2026-10-24T12:16:00Z');
+  const y2154 = Date.parse('2026-10-24T13:54:00Z');
+  const t0149 = Date.parse('2026-10-24T17:49:00Z');
+  const oldUsers = [
+    { id: makeUuidAt(y1952, 1), role: 'user', parts: [{ type: 'text', text: '昨天 19:52 的旧消息' }], _appendAccepted: true },
+    { id: makeUuidAt(y2016, 2), role: 'user', parts: [{ type: 'text', text: '昨天 20:16 的旧消息' }], _appendAccepted: true },
+    { id: makeUuidAt(y2154, 3), role: 'user', parts: [{ type: 'text', text: '昨天 21:54 的旧消息' }], _appendAccepted: true },
+    { id: makeUuidAt(t0149, 4), role: 'user', parts: [{ type: 'text', text: '01:49 的旧消息' }], _appendAccepted: true },
+  ];
+  for (let i = 0; i < oldUsers.length; i++) {
+    ctx.SentUserLog.record(sid, oldUsers[i], makeUuidAt(y1952 + i * 60000, 90 + i));
+  }
+  assert.equal(ctx.SentUserLog.readList(sid).length, 4);
+
+  // Today's paginated window with multi-chunk tool-calling assistant turns + active assistant turn with reused UUIDv7
+  const t1000 = Date.parse('2026-10-25T02:00:00Z');
+  const t1005 = Date.parse('2026-10-25T02:05:00Z');
+  const t1220 = Date.parse('2026-10-25T04:20:00Z');
+  const uToday1 = { id: makeUuidAt(t1000, 10), role: 'user', parts: [{ type: 'text', text: '今天第一条消息' }] };
+  const aToday1_chunk1 = {
+    id: makeUuidAt(t1005, 11),
+    role: 'assistant',
+    parts: [{ type: 'dynamic-tool', toolCallId: 'call_1', state: 'output-available', output: 'ok' }],
+    metadata: { timing: { completedAt: t1005 } },
+  };
+  const aToday1_chunk2 = {
+    id: makeUuidAt(t1000 + 2000, 12),
+    role: 'assistant',
+    parts: [{ type: 'text', text: '今天第一轮完成。' }],
+    metadata: { finishReason: 'stop', timing: { startedAt: t1000 + 2000, completedAt: t1005 + 5000 } },
+  };
+  const uToday2 = { id: makeUuidAt(t1220, 13), role: 'user', parts: [{ type: 'text', text: '今天最新一条消息' }] };
+  const aToday2_chunk1 = {
+    id: makeUuidAt(t1220 + 60000, 14),
+    role: 'assistant',
+    parts: [{ type: 'dynamic-tool', toolCallId: 'call_2', state: 'output-available', output: 'done' }],
+    metadata: { timing: { completedAt: t1220 + 60000 } },
+  };
+  // Active chunk with server-reused old UUIDv7 (like 01a16d4f-9619 in 2b8) but today's timing.startedAt
+  const aToday2_active = {
+    id: makeUuidAt(t0149 + 5000, 15),
+    role: 'assistant',
+    parts: [{ type: 'dynamic-tool', toolCallId: 'call_3', state: 'output-available', output: 'reading image.png' }],
+    metadata: { pending: true, timing: { startedAt: t1220 + 2000 } },
+  };
+
+  assert.equal(ctx.SentUserLog.isSameAsstTurnChunk(aToday1_chunk1, aToday1_chunk2), true, 'Tool sub-chunk and final chunk belong to the same assistant turn');
+  assert.equal(ctx.SentUserLog.isSameAsstTurnChunk(aToday2_chunk1, aToday2_active), true, 'Active tool sub-chunks belong to the same assistant turn');
+  assert.equal(ctx.SentUserLog.hasAdjacentAsstGap([uToday1, aToday1_chunk1, aToday1_chunk2, uToday2, aToday2_chunk1, aToday2_active]), false, 'Multi-chunk assistant turns must not trigger false adjacent assistant gaps');
+
+  const srvMsgs = [uToday1, aToday1_chunk1, aToday1_chunk2, uToday2, aToday2_chunk1, aToday2_active];
+  // Simulate corrupted cache where oldUsers were wedged before a duplicate aToday2_active
+  const chat = {
+    sid,
+    messages: [...srvMsgs, ...oldUsers.map(u => ({ ...u, _local: true })), { ...aToday2_active }],
+    live: aToday2_active,
+    busy: true,
+    streaming: true,
+    mergeServer: ctx.mergeServer,
+  };
+  chat.mergeServer(srvMsgs, aToday2_active);
+
+  assert.equal(chat.messages.length, 6, 'mergeServer + restoreInto + sanitizeCachedMsgs must strip all 4 old user ghosts and deduplicate active assistant message');
+  assert.equal(
+    chat.messages.map(m => m.id).join(','),
+    srvMsgs.map(m => m.id).join(','),
+    'Message order must strictly match the official server turn sequence'
+  );
+  assert.equal(ctx.SentUserLog.readList(sid).length, 0, 'Scrolled-off old SentUserLog entries must be purged automatically');
+});
+
+test('Task 64 (v2.0.0-beta.2): Inline HTML preview truncation healing, builtinRev 185 local correction bank, provisionalReg failed account isolation, and native auto-CAPTCHA', () => {
+  const coreSrc = read('ui/core.js');
+  const viewSrc = read('ui/view.js');
+  const hpSrc = read('ui/html-preview.js');
+  const bpUiSrc = read('ui/billing-probe-ui.js');
+  const mainSrc = read('src/main.js');
+  const authSrc = read('src/account-auth.js');
+  const capSrc = read('ui/captcha-solver.js');
+  delete require.cache[require.resolve('../ui/habit-builtin-bank.js')];
+  const bankMod = require('../ui/habit-builtin-bank.js');
+
+  assert.ok(coreSrc.includes('_hf(c)') && coreSrc.includes("rawTxt.includes('…[cached]')"));
+  assert.ok(viewSrc.includes("includes('…[cached]')") && hpSrc.includes('healFileText(sid, path) {'));
+  assert.ok(bankMod.builtinRev >= 185 && Array.isArray(bankMod.samples) && bankMod.samples.length >= 448);
+  assert.ok(bpUiSrc.includes("importedFromDiag && !s.autoTeacher && s.truthTier !== 'manual_correction'"));
+  assert.ok(mainSrc.includes('provisionalReg: true') && authSrc.includes('delete a.provisionalReg;'));
+  assert.ok(capSrc.includes('人机验证进行中…') && !capSrc.includes('千面助手'));
+});

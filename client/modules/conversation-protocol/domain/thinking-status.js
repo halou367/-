@@ -71,7 +71,7 @@ const ThinkingStatus = (() => {
   const isClosed=chat=>{const a=access(chat);return a.certain&&a.type==='closed';};
   const isStoppedMsg=m=>Boolean(m?.metadata?.openThinkStopped||m?.metadata?.aborted||m?.metadata?.feedback?.interruption==='stop');
   const isOpenToolId=id=>/^(?:call_\d+_|call_[0-9a-f]{24}$|functions\.|_\d+_[0-9a-f]{6,}|chatcmpl-tool-)/i.test(String(id||''));
-  const isClosedToolId=id=>{const s=String(id||'');return /^(?:toolu_|srvtoolu_|msg_01)/i.test(s)||(/^call_[A-Za-z0-9_-]{20,}$/.test(s)&&!isOpenToolId(s));};
+  const isClosedToolId=id=>{const s=String(id||'');return typeof globalThis.ArenaPricing?.detectToolIdVendor==='function'?globalThis.ArenaPricing.detectToolIdVendor(s)?.strictClosed===true:/^(?:toolu_|srvtoolu_|msg_01)/i.test(s);};
   const hasClosedTools=m=>(m?.parts||[]).some(p=>isClosedToolId(p?.toolCallId));
   const hasOpenTools=m=>(m?.parts||[]).some(p=>isOpenToolId(p?.toolCallId));
   function of(chat) {
@@ -140,7 +140,7 @@ const ThinkingStatus = (() => {
     if ((Number(f?.rChars) || 0) > 0 && !closedByApi && !sawClosed && !chat.thinkStopped && !asstMsgs.some(isStoppedMsg)) {
       const ids = Array.isArray(f?.ids) ? f.ids.map(x => String(x?.[1] ?? '')).filter(Boolean) : [];
       const isClosedFmt = (f?.toolIds || []).some(i => /^toolu_/i.test(String(i || ''))) ||
-        ids.some(i => /^(?:msg|rs)_[0-9a-f]{16,}/i.test(i)) ||
+        ids.some(i => /^(?:msg|rs)_[0-9a-fA-Z_-]{10,}/i.test(i)) ||
         (ids.length > 0 && ids.every(i => /^\d+$/.test(i)) && /^\s*\*\*[^\n*]{2,80}\*\*/.test(String(f?.rHead || '')));
       if (!isClosedFmt) {
         try {

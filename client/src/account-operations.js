@@ -26,7 +26,8 @@ async function refreshAccountStatus(a, ses, { fetch, exists = () => true, save =
         if (r.status === 401 || r.status === 403) { patch.loggedIn = false; return; }
         if (!r.ok) throw Error('HTTP ' + r.status); const j = await r.json();
         if (!j || typeof j !== 'object' || !Object.hasOwn(j, 'user')) throw Error('登录状态响应无效');
-        patch.loggedIn = !!j.user;
+        const isProv = j.user && (j.user.userState === 'provisional' || j.user.isAnonymous === true || j.user.emailConfirmed === false || (!j.user.email && !j.user.name));
+        patch.loggedIn = Boolean(j.user && !isProv);
         if (j.user?.email) {
           const AuthFlow = require('../ui/auth-flow');
           patch.me = AuthFlow.pickRichEmail(a?.email || a?.name, j.user.email);

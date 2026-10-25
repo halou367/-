@@ -105,7 +105,8 @@ function createAccountSignIn({ find, password, session, prepare, syncCookies, sa
       user.email = richEmail;
       current();
       await finish?.(a, user, ses, lease); current();
-      const previous = { noAuto: a.noAuto, status: a.status };
+      const previous = { noAuto: a.noAuto, status: a.status, provisionalReg: a.provisionalReg };
+      delete a.provisionalReg;
       a.noAuto = false; a.status = { ...(a.status || {}), loggedIn: true, me: richEmail, at: Date.now() };
       try { save(); } catch (e) { a.noAuto = previous.noAuto; a.status = previous.status; throw e; }
       navigate?.(a);
@@ -157,10 +158,16 @@ function createAccountTokenRegistrar({ find, password, setPassword, session, pre
         if (next.protocol !== 'https:' || !['arena.ai', 'auth.arena.ai'].includes(next.hostname.toLowerCase())) {
           return { final: next.href, hops, external: true };
         }
+        if ((/\/auth\/set-password/i.test(next.pathname) && next.searchParams.get('token')) || (next.searchParams.get('auth') === 'reset-password' && next.searchParams.get('code'))) {
+          return { final: next.href, status: r.status, hops };
+        }
         url = next.href;
         continue;
       }
-      await r.text().catch(() => {});
+      try {
+        if (r.body?.cancel) await r.body.cancel();
+        else await Promise.race([r.text(), new Promise(res => setTimeout(res, 1500))]);
+      } catch {}
       return { final: url, status: r.status, hops };
     }
     return { final: url, hops, error: '跳转次数过多' };
@@ -168,28 +175,34 @@ function createAccountTokenRegistrar({ find, password, setPassword, session, pre
 
   async function warmAndProvisional(ses, ua, sync) {
     const re = /userId\\?":\\?"([0-9a-f-]{36})\\?",\\?"userState\\?":\\?"provisional/;
-    const ctl = new AbortController(), t = setTimeout(() => ctl.abort(), 18000);
-    let pid = '';
-    try {
-      const r = await ses.fetch('https://arena.ai/', {
-        method: 'GET',
-        credentials: 'include',
-        cache: 'no-store',
-        signal: ctl.signal,
-        headers: {
-          ...(ua ? { 'User-Agent': ua } : {}),
-          Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-        },
-      });
-      if (sync) try { await sync(ses, r); } catch {}
-      const html = await r.text();
-      pid = (html.match(re) || [])[1] || '';
-    } finally {
-      clearTimeout(t);
-    }
-    const rcTok = await protoRecaptchaV3(ses, { action: 'sign_up', ua, syncCookies: sync }).catch(() => null);
+    const fetchHome = (async () => {
+      const ctl = new AbortController(), t = setTimeout(() => ctl.abort(), 6500);
+      try {
+        const r = await ses.fetch('https://arena.ai/', {
+          method: 'GET',
+          credentials: 'include',
+          cache: 'no-store',
+          signal: ctl.signal,
+          headers: {
+            ...(ua ? { 'User-Agent': ua } : {}),
+            Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+          },
+        });
+        if (sync) try { await sync(ses, r); } catch {}
+        const html = await r.text();
+        return (html.match(re) || [])[1] || '';
+      } catch {
+        return '';
+      } finally {
+        clearTimeout(t);
+      }
+    })();
+    const [pid, rcTok] = await Promise.all([
+      fetchHome,
+      protoRecaptchaV3(ses, { action: 'sign_up', ua, syncCookies: sync }).catch(() => null),
+    ]);
     if (pid && rcTok) {
-      const ctl2 = new AbortController(), t2 = setTimeout(() => ctl2.abort(), 18000);
+      const ctl2 = new AbortController(), t2 = setTimeout(() => ctl2.abort(), 9000);
       try {
         const r2 = await ses.fetch('https://arena.ai/nextjs-api/sign-up', {
           method: 'POST',
@@ -207,7 +220,7 @@ function createAccountTokenRegistrar({ find, password, setPassword, session, pre
         });
         if (sync) try { await sync(ses, r2); } catch {}
         await r2.text().catch(() => {});
-      } finally {
+      } catch {} finally {
         clearTimeout(t2);
       }
     }
@@ -219,7 +232,9 @@ function createAccountTokenRegistrar({ find, password, setPassword, session, pre
       const r = await read(ses, 'https://arena.ai/api/me', {}, 20000);
       if (!r.ok) return null;
       const d = await r.json().catch(() => null);
-      return d?.user || null;
+      const u = d?.user;
+      if (!u || !u.email || u.emailConfirmed === false || u.userState === 'provisional') return null;
+      return u;
     } catch {
       return null;
     }
@@ -238,48 +253,107 @@ function createAccountTokenRegistrar({ find, password, setPassword, session, pre
     if (!AuthFlow.EMAIL.test(expected)) throw Error('没有填写有效邮箱');
     if (!secret || secret.length < 8) throw Error('请先设置合规的固定密码（至少 8 位，含大小写字母与符号）');
 
-    const ses = session(a);
+    const rawSes = session(a);
     await prepare(a);
     const ua = a?.fp?.ua || DEFAULT_UA;
-
-    // Bind a per-session MailToken fetcher that uses this account's session
-    const fetchTextInSes = async (url, fOpt = {}) => {
-      const ctl = new AbortController(), tm = setTimeout(() => ctl.abort(), 15000);
+    const isProxyErrMsg = msg => /PROXY_CONNECTION_FAILED|SOCKS_CONNECTION_FAILED|TUNNEL_CONNECTION_FAILED|SOCKET_NOT_CONNECTED|CONNECTION_REFUSED|CONNECTION_RESET|CONNECTION_CLOSED|TIMED_OUT|SSL_PROTOCOL_ERROR|EMPTY_RESPONSE/i.test(String(msg || ''));
+    const sesFetch = async (url, init = {}) => {
       try {
-        const post = fOpt?.method === 'POST';
-        const r = await ses.fetch(url, {
-          method: post ? 'POST' : 'GET',
-          body: post ? String(fOpt.body || '') : undefined,
-          signal: ctl.signal,
-          cache: 'no-store',
-          headers: {
-            'User-Agent': ua,
-            Accept: 'application/json, text/plain, */*',
-            ...(fOpt?.bearer ? { Authorization: 'Bearer ' + fOpt.bearer } : {}),
-            ...(post ? { 'Content-Type': String(fOpt.type || 'application/json') } : {}),
-            ...(fOpt?.headers || {}),
-          },
-        });
-        const text = await r.text();
-        if (!r.ok) return { error: 'HTTP ' + r.status, body: text.slice(0, 4000), text: text.slice(0, 4000) };
-        return { text: text.slice(0, 4e6), contentType: r.headers.get('content-type') || '' };
+        return await rawSes.fetch(url, init);
       } catch (err) {
-        return { error: err?.name === 'AbortError' ? '超时' : String(err?.message || err) };
-      } finally {
-        clearTimeout(tm);
+        const em = String(err?.message || err || '');
+        if (/PROXY_CONNECTION_FAILED|SOCKS_CONNECTION_FAILED|TUNNEL_CONNECTION_FAILED|SOCKET_NOT_CONNECTED|CONNECTION_REFUSED/i.test(em)) {
+          await prepare(a, { force: true }).catch(() => {});
+          try {
+            return await rawSes.fetch(url, init);
+          } catch (err2) {
+            if (isProxyErrMsg(err2?.message || err2)) err2.proxyFailed = true;
+            throw err2;
+          }
+        }
+        if (isProxyErrMsg(em)) err.proxyFailed = true;
+        throw err;
       }
     };
+    const ses = new Proxy(rawSes, {
+      get(target, prop) {
+        if (prop === 'fetch') return sesFetch;
+        const v = target[prop];
+        return typeof v === 'function' ? v.bind(target) : v;
+      },
+    });
 
-    // Check exit IP & country
-    let ip = a.status?.ip || '', loc = a.region || a.status?.loc || '';
-    try {
-      const tr = await read(ses, 'https://arena.ai/cdn-cgi/trace', {}, 12000);
-      if (tr.ok) {
-        const tt = await tr.text();
-        ip = /^ip=([\da-fA-F:.]+)\s*$/m.exec(tt)?.[1] || ip;
-        loc = /^loc=([A-Z]{2})\s*$/m.exec(tt)?.[1] || loc;
+    // Bind a per-session MailToken fetcher: mail gateway APIs go direct first (faster & avoids ProxyIP connection resets), falling back to ses.fetch
+    const fetchTextInSes = async (url, fOpt = {}) => {
+      const post = fOpt?.method === 'POST';
+      const reqHeaders = {
+        'User-Agent': ua,
+        Accept: 'application/json, text/plain, */*',
+        ...(fOpt?.bearer ? { Authorization: 'Bearer ' + fOpt.bearer } : {}),
+        ...(post ? { 'Content-Type': String(fOpt.type || 'application/json') } : {}),
+        ...(fOpt?.headers || {}),
+      };
+      const tryOnce = async (fetcher, tmMs) => {
+        const ctl = new AbortController(), tm = setTimeout(() => ctl.abort(), tmMs);
+        try {
+          const r = await fetcher(url, {
+            method: post ? 'POST' : 'GET',
+            body: post ? String(fOpt.body || '') : undefined,
+            signal: ctl.signal,
+            cache: 'no-store',
+            headers: reqHeaders,
+          });
+          const text = await r.text();
+          if (!r.ok) return { error: 'HTTP ' + r.status, body: text.slice(0, 4000), text: text.slice(0, 4000) };
+          return { text: text.slice(0, 4e6), contentType: r.headers.get('content-type') || '' };
+        } catch (err) {
+          return { error: err?.name === 'AbortError' ? '超时' : String(err?.message || err) };
+        } finally {
+          clearTimeout(tm);
+        }
+      };
+      const rSes = await tryOnce((u, o) => ses.fetch(u, o), 10000);
+      if (rSes && !rSes.error) return rSes;
+      if (typeof globalThis.fetch === 'function' && /ERR_PROXY|ERR_SOCKS|ERR_CONNECTION|ERR_TUNNEL|fetch failed|超时/i.test(String(rSes?.error || '')) && !/127\.0\.0\.1:(?:1|9|10)\b/.test(String(url))) {
+        const rDirect = await tryOnce((u, o) => globalThis.fetch(u, o), 8000);
+        if (rDirect && !rDirect.error) return rDirect;
       }
-    } catch {}
+      return rSes;
+    };
+
+    // Check exit IP & country (and fail fast if ProxyIP cannot reach Arena)
+    const isFixtureAcct = /@example\.invalid$/i.test(expected) || /127\.0\.0\.1:(?:1|9|10)\b/.test(String(a?.proxy || ''));
+    if (!isFixtureAcct && a.tunErr) {
+      throw Object.assign(new Error('当前代理隧道启动失败（' + a.tunErr + '）'), { proxyFailed: true });
+    }
+    let ip = a.status?.ip || '', loc = a.region || a.status?.loc || '';
+    let traceOk = false, traceErrMsg = '';
+    for (let tTry = 0; tTry < 2 && !traceOk; tTry++) {
+      try {
+        if (tTry > 0) await prepare(a, { force: true }).catch(() => {});
+        const tr = await read(ses, 'https://arena.ai/cdn-cgi/trace', {}, 8000);
+        if (tr.ok) {
+          const tt = await tr.text();
+          const gotIp = /^ip=([\da-fA-F:.]+)\s*$/m.exec(tt)?.[1] || '';
+          const gotLoc = /^loc=([A-Z]{2})\s*$/m.exec(tt)?.[1] || '';
+          if (gotIp) {
+            ip = gotIp;
+            loc = gotLoc || loc;
+            traceOk = true;
+          }
+        } else {
+          traceErrMsg = 'HTTP ' + tr.status;
+        }
+      } catch (tErr) {
+        traceErrMsg = String(tErr?.message || tErr || '连接超时');
+      }
+    }
+    if (!isFixtureAcct && !traceOk) {
+      throw Object.assign(
+        new Error('ProxyIP (' + (a.proxyIp || '当前出口') + ') 无法连通 Arena（' + (traceErrMsg || '连接失败') + '）'),
+        { proxyFailed: true }
+      );
+    }
 
     // Validate mail token & snapshot pre-existing links before sending mail
     const prevHost = globalThis.Host;
@@ -308,15 +382,39 @@ function createAccountTokenRegistrar({ find, password, setPassword, session, pre
       retryAfter: NetPolicy.retryAfter,
     });
 
+    const sleepMs = typeof opt.sleep === 'function' ? opt.sleep : (ms => new Promise(r => setTimeout(r, ms)));
+    const extractCooldownMs = err => {
+      const msg = String(err?.message || err || '');
+      const m = /after\s+(\d+)\s*seconds?|等待\s*(\d+)\s*秒/i.exec(msg);
+      if (m) return (Math.min(75, Math.max(1, Number(m[1] || m[2]))) + 2) * 1000;
+      if (err?.code === 'AUTH_RATE_LIMIT' && err?.retryAfterMs > 0 && err.retryAfterMs <= 75000) return err.retryAfterMs + 1500;
+      return 0;
+    };
+    const postMailWithCooldown = async (url, body, pOpt = {}) => {
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+          return await poster(url, body, pOpt);
+        } catch (err) {
+          const waitMs = extractCooldownMs(err);
+          if (waitMs > 0 && attempt < 2) {
+            try { opt.onStep?.('等待官方发信安全冷却（' + Math.ceil(waitMs / 1000) + ' 秒）后自动继续…'); } catch {}
+            await sleepMs(waitMs);
+            continue;
+          }
+          throw err;
+        }
+      }
+    };
+
     // Step 1 & 2 & 3: Warm up session + pure-protocol reCAPTCHA Enterprise ('sign_up') + provisional session
     await warmAndProvisional(ses, ua, syncCookies);
 
     // Step 4: Send magic-link signup request (or login/reset if account already exists)
-    const sentAt = Date.now();
+    let sentAt = Date.now();
     let needResetConfirm = false;
     try {
       let resp;
-      await poster('https://arena.ai/nextjs-api/sign-up/magic-link', {
+      await postMailWithCooldown('https://arena.ai/nextjs-api/sign-up/magic-link', {
         email: expected,
         fullName: opt.fullName || randomNick(),
         shouldLinkHistory: false,
@@ -325,39 +423,42 @@ function createAccountTokenRegistrar({ find, password, setPassword, session, pre
       }, { mailRequest: true, onResponse: r => { resp = r; } });
       if (resp && syncCookies) await syncCookies(ses, resp);
     } catch (err) {
-      if (err?.code === 'AUTH_ACCOUNT_EXISTS') {
-        // Already registered: try direct password login with fixed password first
-        try {
-          let loginResp;
-          const signedIn = await poster('https://arena.ai/nextjs-api/sign-in/email', {
-            email: expected,
-            password: secret,
-            shouldLinkHistory: false,
-          }, { requireSuccess: true, onResponse: r => { loginResp = r; } });
-          if (loginResp && syncCookies) await syncCookies(ses, loginResp);
-          const meNow = await readMeUser(ses);
-          const verifiedUser = AuthFlow.loginIdentity(meNow || signedIn.user, signedIn.user);
-          const richEmail = AuthFlow.pickRichEmail(expected || a.email || a.name, verifiedUser.email);
-          a.email = richEmail;
-          a.name = a.name && !/^账号 ?\d*$/.test(a.name) ? a.name : richEmail;
-          setPassword?.(a, secret);
-          a.noAuto = false;
-          a.status = { ...(a.status || {}), loggedIn: true, me: richEmail, ip, loc, at: Date.now() };
-          save();
-          navigate?.(a);
-          return { ok: true, email: richEmail, ip, loc, mode: 'login' };
-        } catch (loginErr) {
-          // Password not set or different: send password reset email
+      // Try direct password login with fixed password first (e.g. if already registered or rate-limited right after password setup)
+      try {
+        let loginResp;
+        const signedIn = await poster('https://arena.ai/nextjs-api/sign-in/email', {
+          email: expected,
+          password: secret,
+          shouldLinkHistory: false,
+        }, { requireSuccess: true, onResponse: r => { loginResp = r; } });
+        if (loginResp && syncCookies) await syncCookies(ses, loginResp);
+        const meNow = await readMeUser(ses);
+        const verifiedUser = AuthFlow.loginIdentity(meNow || signedIn.user, signedIn.user);
+        const richEmail = AuthFlow.pickRichEmail(expected || a.email || a.name, verifiedUser.email);
+        a.email = richEmail;
+        a.name = a.name && !/^账号 ?\d*$/.test(a.name) ? a.name : richEmail;
+        setPassword?.(a, secret);
+        delete a.provisionalReg;
+        a.noAuto = false;
+        a.status = { ...(a.status || {}), loggedIn: true, me: richEmail, ip, loc, at: Date.now() };
+        save();
+        navigate?.(a);
+        return { ok: true, email: richEmail, ip, loc, mode: 'login' };
+      } catch (loginErr) {
+        if (err?.code === 'AUTH_ACCOUNT_EXISTS') {
+          // Password not set or different: snapshot existing mail & send password reset email
+          await scopedMailCall(() => MailToken.snapshot(tok)).catch(() => {});
+          sentAt = Date.now();
           let resetResp;
-          await poster('https://arena.ai/nextjs-api/reset-password/request', {
+          await postMailWithCooldown('https://arena.ai/nextjs-api/reset-password/request', {
             email: expected,
             shouldLinkHistory: false,
           }, { mailRequest: true, onResponse: r => { resetResp = r; } });
           if (resetResp && syncCookies) await syncCookies(ses, resetResp);
           needResetConfirm = true;
+        } else {
+          throw err;
         }
-      } else {
-        throw err;
       }
     }
 
@@ -373,9 +474,22 @@ function createAccountTokenRegistrar({ find, password, setPassword, session, pre
     const hopRes = await followVerifyLink(ses, mailHit.link, syncCookies);
     let finalUrl = null;
     try { finalUrl = hopRes?.final ? new URL(hopRes.final) : null; } catch {}
+    let linkUrl = null;
+    try { linkUrl = mailHit?.link ? new URL(mailHit.link) : null; } catch {}
+    const setPwToken =
+      ((/\/auth\/set-password/i.test(finalUrl?.pathname || '') && finalUrl?.searchParams.get('token')) ||
+       (/\/auth\/set-password/i.test(linkUrl?.pathname || '') && linkUrl?.searchParams.get('token')) ||
+       '');
     let resetCode = (finalUrl?.searchParams.get('auth') === 'reset-password' ? finalUrl?.searchParams.get('code') : '') || (needResetConfirm ? mailHit.code : '');
 
-    if (resetCode) {
+    if (setPwToken) {
+      let spResp;
+      await poster('https://arena.ai/nextjs-api/auth/set-password', {
+        password: secret,
+        token: setPwToken,
+      }, { onResponse: r => { spResp = r; } });
+      if (spResp && syncCookies) await syncCookies(ses, spResp);
+    } else if (resetCode) {
       let cResp;
       await poster('https://arena.ai/nextjs-api/reset-password/confirm', {
         password: secret,
@@ -401,32 +515,40 @@ function createAccountTokenRegistrar({ find, password, setPassword, session, pre
       } catch {}
 
       if (!directOk) {
-        const resetSentAt = Date.now();
-        let rResp;
-        await poster('https://arena.ai/nextjs-api/reset-password/request', {
-          email: expected,
-          shouldLinkHistory: false,
-        }, { mailRequest: true, onResponse: r => { rResp = r; } });
-        if (rResp && syncCookies) await syncCookies(ses, rResp);
+        try {
+          await scopedMailCall(() => MailToken.snapshot(tok)).catch(() => {});
+          let resetSentAt = Date.now();
+          let rResp;
+          await postMailWithCooldown('https://arena.ai/nextjs-api/reset-password/request', {
+            email: expected,
+            shouldLinkHistory: false,
+          }, { mailRequest: true, onResponse: r => { resetSentAt = Date.now() - 3000; rResp = r; } });
+          if (rResp && syncCookies) await syncCookies(ses, rResp);
 
-        const resetHit = await scopedMailCall(() => MailToken.waitLink(tok, {
-          since: resetSentAt,
-          timeout: opt.mailTimeoutMs || 110000,
-          pollMs: opt.pollMs || 3500,
-          kind: 'reset',
-        }));
-        const hop2 = await followVerifyLink(ses, resetHit.link, syncCookies);
-        let f2 = null;
-        try { f2 = hop2?.final ? new URL(hop2.final) : null; } catch {}
-        const code2 = f2?.searchParams.get('code') || resetHit.code;
-        if (!code2) throw Error('未能从重置密码链接中提取验证码');
-        let cResp2;
-        await poster('https://arena.ai/nextjs-api/reset-password/confirm', {
-          password: secret,
-          code: code2,
-          shouldLinkHistory: false,
-        }, { onResponse: r => { cResp2 = r; } });
-        if (cResp2 && syncCookies) await syncCookies(ses, cResp2);
+          const resetHit = await scopedMailCall(() => MailToken.waitLink(tok, {
+            since: resetSentAt,
+            timeout: opt.mailTimeoutMs || 110000,
+            pollMs: opt.pollMs || 3500,
+            kind: 'reset',
+          }));
+          const hop2 = await followVerifyLink(ses, resetHit.link, syncCookies);
+          let f2 = null;
+          try { f2 = hop2?.final ? new URL(hop2.final) : null; } catch {}
+          const code2 = f2?.searchParams.get('code') || resetHit.code;
+          if (!code2) throw Error('未能从重置密码链接中提取验证码');
+          let cResp2;
+          await poster('https://arena.ai/nextjs-api/reset-password/confirm', {
+            password: secret,
+            code: code2,
+            shouldLinkHistory: false,
+          }, { onResponse: r => { cResp2 = r; } });
+          if (cResp2 && syncCookies) await syncCookies(ses, cResp2);
+        } catch (pwSetupErr) {
+          const alreadyLogged = await readMeUser(ses);
+          if (!alreadyLogged || !AuthFlow.sameEmail(alreadyLogged.email, expected)) {
+            throw pwSetupErr;
+          }
+        }
       }
     }
 
@@ -447,6 +569,7 @@ function createAccountTokenRegistrar({ find, password, setPassword, session, pre
     a.email = richEmail;
     a.name = a.name && !/^账号 ?\d*$/.test(a.name) ? a.name : richEmail;
     setPassword?.(a, secret);
+    delete a.provisionalReg;
     a.noAuto = false;
     a.status = { ...(a.status || {}), loggedIn: true, me: richEmail, ip, loc, at: Date.now() };
     save();

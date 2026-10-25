@@ -195,8 +195,21 @@ const Fingerprint = (() => {
     return entry.name+(confidence!=null&&(!fp.apiIdentity&&(entry.guess||!(entry.internal||entry.response)))?'('+confidence+'%)':'')+tier+(Number.isFinite(score)?'-'+score+'分':'');
   }
   // 判断当前流是否已具有明确的闭源思考/闭源流特征（闭源思考绝不触发暂停，仅真正的开源思考才暂停）
-  function isClosedSourceStream(chat) {
+  function isClosedSourceStream(chat, message = null) {
     if (!chat) return false;
+    const curMsg = message || chat.live || (Array.isArray(chat.messages) ? chat.messages.findLast(m => m && m.role === 'assistant') : null);
+    if (curMsg && curMsg.role === 'assistant') {
+      if (curMsg.metadata?.openThinkStopped) return false;
+      const cParts = Array.isArray(curMsg.parts) ? curMsg.parts : [];
+      const hasOpenTc = cParts.some(p => /^(?:call_\d+_|call_[0-9a-f]{24}$|functions\.|_\d+_[0-9a-f]{6,}|chatcmpl-tool-)/i.test(String(p?.toolCallId || '')));
+      if (hasOpenTc) return false;
+      const hasClosedTc = cParts.some(p => /^(?:toolu_|srvtoolu_|msg_01)/i.test(String(p?.toolCallId || '')));
+      const visRParts = cParts.filter(p => p?.type === 'reasoning' && /[^\s.…·。]/.test(String(p?.text || '')));
+      if (visRParts.length > 0 && !hasClosedTc) {
+        const allGemBold = visRParts.every(p => /^\s*\*\*[^\n*]{2,80}\*\*/.test(String(p?.text || ''))) && cParts.every(p => !p?.id || /^\d+$/.test(String(p.id)));
+        if (!allGemBold) return false;
+      }
+    }
     if (typeof ThinkingStatus !== 'undefined' && ThinkingStatus.isClosed(chat)) return true;
     const f = chat.fmt;
     if (f) {
@@ -225,10 +238,13 @@ const Fingerprint = (() => {
   }
   // Kept as an API name for existing stream hooks; only open-source visible thinking pauses.
   function maybeStopCompat(chat) {
-    if (!chat?.busy || !chat.gacha?.skipCompatThinking || skipFlag(chat) || active.has(chat)) return false;
-    if (isClosedSourceStream(chat)) return false;
-    const head = String(chat.fmt?.rHead || '');
-    if (!/[^\s.…·。]/.test(head)) return false;
+    if (!chat?.busy || !chat.gacha || chat.gacha.skipCompatThinking === false || skipFlag(chat) || active.has(chat)) return false;
+    const liveParts = Array.isArray(chat.live?.parts) ? chat.live.parts : [];
+    const hasOpenTc = liveParts.some(p => /^(?:call_\d+_|call_[0-9a-f]{24}$|functions\.|_\d+_[0-9a-f]{6,}|chatcmpl-tool-)/i.test(String(p?.toolCallId || '')));
+    if (!hasOpenTc && isClosedSourceStream(chat, chat.live)) return false;
+    const liveR = liveParts.find(p => p?.type === 'reasoning' && /[^\s.…·。]/.test(String(p?.text || '')));
+    const head = String((liveR && liveR.text) || chat.fmt?.rHead || '');
+    if (!hasOpenTc && !/[^\s.…·。]/.test(head)) return false;
     return requestSkip(chat,{reason:'visible-thinking',detail:'抽卡开关开启：检测到开源可见 Thinking 思考内容，已跳过'});
   }
   async function finishCompatSkip(chat, signal) {

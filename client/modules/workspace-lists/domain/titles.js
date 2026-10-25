@@ -216,7 +216,7 @@ const Titles = {
     const n = Notes.all[sid];
     if (n) { const ts = this.timeAt(sid, n.t || 0); if (ts > (Number(n.t) || 0)) { n.t = ts; Notes.save(); } }
     const want = this.want(sid); if (!want) return;
-    const e = History.byId(sid); if (e) { e.localTitle = want; }
+    const e = History.byId(sid); if (e && e.localTitle !== want) { e.localTitle = want; try { History.saveSoon?.(); } catch {} }
     const c = typeof Chats !== 'undefined' ? Chats.get(sid) : null;
     if (c) { c.localTitle = want; }
     UI.renderListSoon?.(); UI.renderTabs?.();

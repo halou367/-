@@ -65,7 +65,7 @@ const AccountPicker = {
   mergeRead(rows, readAt = null) {
     // A read already in flight when an edit commits may contain the old name.
     for (const [id, x] of this.renamed) if (now() - x.at > 15000) this.renamed.delete(id);
-    return rows.map(a => { const x = this.renamed.get(a.id); if (!x) return a;
+    return rows.filter(a => !(a?.provisionalReg && !a?.status?.loggedIn)).map(a => { const x = this.renamed.get(a.id); if (!x) return a;
       if (readAt != null && readAt > x.at && a.remark === x.name) { this.renamed.delete(a.id); return a; } return { ...a, remark: x.name }; });
   },
   balance(a) {
@@ -183,7 +183,7 @@ const AccountPicker = {
     return h('div', { class: 'acct-dock', role: 'toolbar', 'aria-label': '账号操作' },
       s, ib('user', '账户管理（账号设置 · 密码）', () => UI.accounts?.()),
       ib('plus', '添加账号', () => UI.addAccount?.(), ' adk-big'),
-      ib('download', '导入账号', () => UI.importAccounts?.()), ib('upload', '导出账号 / 二维码同步', () => UI.exportAccounts?.()));
+      ib('download', '导入账号', () => UI.importAccounts?.()), ...((Host.platform === 'android' || (typeof isMob === 'function' && isMob())) ? [] : [ib('upload', '导出账号 / 二维码同步', () => UI.exportAccounts?.())]));
   },
   async open(e, initialPage = 0) {
     const anc = (e?.currentTarget?.getBoundingClientRect ? e.currentTarget : $('#acct'))?.getBoundingClientRect() || { left: 10, top: 58, bottom: 58 };

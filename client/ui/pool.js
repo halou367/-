@@ -1481,6 +1481,29 @@ const Pool = {
       }
     });
   },
+  markRegIpFailed(k, reason = '', at = now()) {
+    if (!k) return Promise.resolve();
+    const low = String(k).trim().toLowerCase(), host = String(this.parse(k)?.host || '').toLowerCase();
+    const e0 = this.d?.ips?.[k] || this.d?.ips?.[low];
+    const lowEg = String(e0?.eg || '').trim().toLowerCase();
+    const applyFail = d => {
+      if (d.regCool) {
+        delete d.regCool[low];
+        if (host) delete d.regCool[host];
+        if (lowEg) delete d.regCool[lowEg];
+      }
+      const ent = d.ips?.[k] || d.ips?.[low];
+      if (ent) {
+        ent.ok = false;
+        ent.regAt = 0;
+        ent.err = String(reason || '注册连接失败').slice(0, 120);
+        ent.fc = (ent.fc || 0) + 1;
+        ent.cool = Math.max(ent.cool || 0, at + 30 * 60e3);
+      }
+    };
+    if (this.d) applyFail(this.d);
+    return this.mutate(applyFail).catch(() => {});
+  },
   regCandidateList(exceptId, excludeSet = new Set()) {
     const ex = excludeSet instanceof Set ? excludeSet : new Set(Array.isArray(excludeSet) ? excludeSet : []);
     return this.entries().filter(([k, e]) => {
@@ -1512,14 +1535,14 @@ const Pool = {
     const exceptId = acct?.id || '';
     const callerEx = new Set([...(exclude instanceof Set ? exclude : Array.isArray(exclude) ? exclude : [])].map(x => String(x || '').trim().toLowerCase()).filter(Boolean));
     const ex = new Set(callerEx);
-    for (let round = 0; round < 4; round++) {
+    for (let round = 0; round < 8; round++) {
       let avail = this.regAvail(exceptId, ex);
       if (!avail.length) {
-        const untested = this.regCandidateList(exceptId, ex).filter(([k, e]) => e.ok == null && !this.isRegCooling(k)).map(([k]) => k).slice(0, 10);
+        const untested = this.regCandidateList(exceptId, ex).filter(([k, e]) => e.ok == null && !this.isRegCooling(k)).map(([k]) => k).slice(0, 12);
         if (!untested.length && round === 0) {
           for (const dom of this.domains().slice(0, 4)) await this.refreshSrc(dom).catch(() => {});
         }
-        const toProbe = untested.length ? untested : this.regCandidateList(exceptId, ex).filter(([k, e]) => e.ok == null && !this.isRegCooling(k)).map(([k]) => k).slice(0, 10);
+        const toProbe = untested.length ? untested : this.regCandidateList(exceptId, ex).filter(([k, e]) => e.ok == null && !this.isRegCooling(k)).map(([k]) => k).slice(0, 12);
         if (toProbe.length && this.link() && Host.probe) {
           log?.('正在检测 ' + toProbe.length + ' 个未冷却候选 ProxyIP…');
           await this.probe(toProbe).catch(() => {});
@@ -1527,7 +1550,7 @@ const Pool = {
         }
       }
       if (!avail.length) break;
-      const batch = avail.slice(0, 3).map(([k]) => k);
+      const batch = avail.slice(0, 4).map(([k]) => k);
       batch.forEach(k => { ex.add(k); ex.add(k.toLowerCase()); });
       const link = this.link(), nd = this.node();
       if (!link || !Host.probe) {
@@ -1535,11 +1558,24 @@ const Pool = {
         await this.markRegUsed(k, e.eg || '');
         return { ok: true, proxy: link || acct?.proxy || '', nodeId: nd?.id || acct?.nodeId || '', proxyIp: k, ip: e.eg || k.split(':')[0], region: e.loc || acct?.region || 'US', ms: e.ms || 0 };
       }
-      log?.('正在实测验证注册 ProxyIP（' + batch.join('、') + '）…');
-      const r = await this.hostProbe(batch, 8000);
-      if (!Array.isArray(r)) continue;
+      log?.('正在通过节点隧道实测注册 ProxyIP（' + batch.join('、') + '）…');
+      const r = await Host.probe({ link, pips: batch, timeout: 7500, direct: false }).catch(() => null);
+      if (!Array.isArray(r)) {
+        if (round === 1 && Nodes.list?.length > 1) {
+          await this.autoNode(Nodes.list.filter(n => n.id !== nd?.id), { log }).catch(() => null);
+        }
+        continue;
+      }
       const res = batch.map((k, j) => [k, r.find(x => x.pip === k) || r[j] || {}]);
-      await this.mutate(d => { for (const [k, x] of res) this.apply(d, k, x); });
+      await this.mutate(d => {
+        for (const [k, x] of res) {
+          this.apply(d, k, x);
+          if (!(x.ip && x.brana) && d.ips?.[k]) {
+            d.ips[k].ok = false;
+            d.ips[k].cool = Math.max(d.ips[k].cool || 0, now() + 15 * 60e3);
+          }
+        }
+      });
       const good = res.filter(([k, x]) => {
         if (!(x.ip && x.brana)) return false;
         if (this.owner(k, exceptId) || this.owner(x.ip, exceptId)) return false;

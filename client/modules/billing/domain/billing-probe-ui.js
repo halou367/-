@@ -1,574 +1,3 @@
-  const summaryCache = new Map();
-  const topConfidenceCache = new Map();
-  const clearSummaryCache = () => { try { summaryCache.clear(); topConfidenceCache.clear(); } catch {} };
-  function summary(sid, opts = {}) {
-    const mPre = sid && typeof Models !== 'undefined' ? Models.get(sid) : null;
-    const isPoisonedZeroCost = Boolean(mPre && mPre.reverseInferred && Number(mPre.reverseTokens?.total || 0) === 0 && (Number(mPre.reverseVer || 0) < 175 || (Array.isArray(mPre.reverseCandidates) && mPre.reverseCandidates.some(c => c?.structuralRev))));
-    const readOnly = opts?.commit === true ? false : (opts?.readOnly !== undefined ? Boolean(opts.readOnly) : !isPoisonedZeroCost);
-    if (sid && !readOnly) try { upgradeCachedOpus56(sid); } catch {}
-    const chat = Chats.get(sid);
-    const compList = globalThis.ArenaBilling.completed(chat);
-    const compTail = compList.at(-1);
-    const state = engine.state(sid);
-    const trace = Trace.latest(sid);
-    const model = Models.get(sid);
-    const bRev = typeof ChatHabitFingerprint !== 'undefined' && typeof ChatHabitFingerprint.bankRevision === 'function' ? ChatHabitFingerprint.bankRevision() : 0;
-    const cRev = typeof ChatHabitFingerprint !== 'undefined' && typeof ChatHabitFingerprint.calibRevision === 'function' ? ChatHabitFingerprint.calibRevision() : 0;
-    const msgDigest = (chat && typeof ChatHabitFingerprint?.computeMessagesDigest === 'function') ? ChatHabitFingerprint.computeMessagesDigest(chat.messages) : '';
-    const rf = getRankFilter();
-    const tailMsg = chat?.messages?.at(-1);
-    const tailPart = tailMsg?.parts?.at(-1);
-    const tailLen = typeof tailPart?.text === 'string' ? tailPart.text.length : (typeof tailPart?.inputText === 'string' ? tailPart.inputText.length : 0);
-    const busySig = chat?.busy ? `1:${tailMsg?.id || ''}:${tailMsg?.parts?.length || 0}:${tailLen >> 8}:${chat?.fmt?.tN ? (chat.fmt.tN >> 4) : 0}` : '0';
-    const makeSumCacheKey = (mObj, latestId = compTail?.id) => sid ? `${readOnly ? 'ro' : 'rw'}:${state.at || 0}:${state.status || ''}:${state.httpStatus || 0}:${state.retryAt || 0}:${state.pending ? 1 : 0}:${latestId || ''}:${chat?.messages?.length || 0}:${msgDigest}:${busySig}:${mObj?.at || 0}:${mObj?.name || ''}:${mObj?.reverseVer || 0}:${mObj?.routed ? 1 : 0}:${trace?.done ? 1 : 0}:${isCostProbeEnabled() ? 1 : 0}:${bRev}:${cRev}:${rf.rev ? 1 : 0}:${rf.habit ? 1 : 0}` : '';
-    const preCacheKey = makeSumCacheKey(model, compTail?.id);
-    if (preCacheKey && summaryCache.has(sid)) {
-      const hit = summaryCache.get(sid);
-      if (hit && (hit.key === preCacheKey || hit.prevKey === preCacheKey || hit.compKey === preCacheKey)) return hit.val;
-    }
-    const featForTarget = (chat && Array.isArray(chat.messages) && chat.messages.length && typeof ChatHabitFingerprint?.extractFeatures === 'function')
-      ? ChatHabitFingerprint.extractFeatures(chat, model)
-      : null;
-    const latest = (featForTarget?.targetMessageId && compList.find(m => m?.id === featForTarget.targetMessageId)) || compTail;
-    const cacheKey = makeSumCacheKey(model, latest?.id);
-    if (cacheKey && summaryCache.has(sid)) {
-      const hit = summaryCache.get(sid);
-      if (hit && (hit.key === cacheKey || hit.prevKey === cacheKey || hit.compKey === cacheKey)) return hit.val;
-    }
-    const paymentsList = Array.isArray(state.payments) ? state.payments : [];
-    const rawPay = latest ? paymentsList.find(p => p?.messageId === latest.id) : paymentsList.at(-1);
-    const payment = rawPay ? {
-      ...rawPay,
-      effectiveUsd: rawPay.chargedUsd != null ? rawPay.chargedUsd : (rawPay.basePriceUsd != null ? rawPay.basePriceUsd * 2 : rawPay.upstreamUsd),
-    } : null;
-    const sessionPayment = paymentsList.length ? paymentsList.reduce((acc, r) => {
-      if (r.chargedUsd != null) acc.chargedUsd = (acc.chargedUsd || 0) + r.chargedUsd;
-      if (r.upstreamUsd != null) acc.upstreamUsd = (acc.upstreamUsd || 0) + r.upstreamUsd;
-      if (r.basePriceUsd != null) acc.basePriceUsd = (acc.basePriceUsd || 0) + r.basePriceUsd;
-      const eff = r.chargedUsd != null ? r.chargedUsd : (r.basePriceUsd != null ? r.basePriceUsd * 2 : r.upstreamUsd);
-      if (eff != null) { acc.effectiveUsd = (acc.effectiveUsd || 0) + eff; acc.count += 1; acc.turns += 1; }
-      return acc;
-    }, { chargedUsd: null, upstreamUsd: null, basePriceUsd: null, effectiveUsd: null, count: 0, turns: 0 }) : null;
-    const estimate = chat ? LiveEst.of(chat) : null;
-    const pairedTrace = !!latest && !chat?.busy && trace?.done && (trace.records || []).some(row => row.messageId === latest.id);
-    const traceUsd = pairedTrace && trace.sum?.usd > 0 ? trace.sum.usd : null;
-    const diagnostics = engine.diagnostics(sid, { latestId: latest?.id, model, trace, tracePaired: pairedTrace });
-    const pre = diagnostics.preimage || null;
-    const latestPreimage = (pre && latest?.id && pre.byMessage?.[latest.id]) || (pre?.byMessage ? Object.values(pre.byMessage).at(-1) : null) || null;
-    const mergedCandidates = mergeCandidates(sid, diagnostics, model);
-    if (sessionPayment) {
-      const costsObj = state.info?.result?.costs || null;
-      const chanSum = costsObj ? (Number(costsObj.inputUsd || 0) + Number(costsObj.outputUsd || 0) + Number(costsObj.cacheReadUsd || 0) + Number(costsObj.cacheWriteUsd || 0) + Number(costsObj.imageGenerationCostUsd || 0)) : null;
-      const chargedOk = sessionPayment.chargedUsd != null && sessionPayment.basePriceUsd != null && Math.abs(sessionPayment.chargedUsd - sessionPayment.basePriceUsd * 2) <= 1e-8;
-      const channelOk = sessionPayment.upstreamUsd != null && chanSum != null && Math.abs(chanSum - sessionPayment.upstreamUsd) <= 1e-8;
-      const preimageOk = Boolean(pre?.totals?.total > 0 && mergedCandidates[0]?.diophantinePassed !== false);
-      sessionPayment.reconciled = Boolean(chargedOk || (channelOk && preimageOk));
-      sessionPayment.chargedIdentityOk = chargedOk;
-      sessionPayment.channelIdentityOk = channelOk;
-      sessionPayment.preimageIdentityOk = preimageOk;
-      sessionPayment.channelsUsd = costsObj ? {
-        inputUsd: Number(costsObj.inputUsd || 0),
-        outputUsd: Number(costsObj.outputUsd || 0),
-        cacheReadUsd: Number(costsObj.cacheReadUsd || 0),
-        cacheWriteUsd: Number(costsObj.cacheWriteUsd || 0),
-        imageGenerationCostUsd: Number(costsObj.imageGenerationCostUsd || 0),
-      } : null;
-    }
-    const out = {
-      payment,
-      sessionPayment,
-      estimate,
-      traceUsd,
-      tracePaired: pairedTrace,
-      busy: !!chat?.busy,
-      consensus: diagnostics.agreement || engine.consensus(sid, model, latest?.id),
-      diagnostics,
-      ranked: Array.isArray(diagnostics?.candidates) ? diagnostics.candidates : [],
-      top: mergedCandidates,
-      mergedCandidates,
-      habitRoute: mergedCandidates._habitRoute || null,
-      preimage: pre ? { latest: latestPreimage, totals: pre.totals, refVersion: pre.refVersion } : null,
-    };
-    const isActiveOrLoadedChat = Boolean(
-      chat?.loaded ||
-      (Array.isArray(chat?.messages) && chat.messages.length > 0) ||
-      (Array.isArray(model?.reverseCandidates) && model.reverseCandidates.length > 0) ||
-      model?.habitFeatures ||
-      (typeof Tabs !== 'undefined' && Tabs.cur?.sid === sid) ||
-      (typeof UI !== 'undefined' && UI.els?.chat?.sid === sid)
-    );
-    const cloudTitleForSync = (typeof History !== 'undefined' && History.byId?.(sid)?.title) || chat?.title || '';
-    const restoredForSync = typeof TitleSync !== 'undefined' ? TitleSync.restored?.(sid) : null;
-    const isFullEncodedTitle = Boolean((typeof TitleCipher !== 'undefined' && TitleCipher.isEncoded?.(cloudTitleForSync)) || (restoredForSync && !restoredForSync.fromPrefix));
-    const hasLocalSyncEvidence = Boolean(
-      (Array.isArray(chat?.messages) && chat.messages.length > 0) ||
-      (Array.isArray(model?.reverseCandidates) && model.reverseCandidates.length > 0) ||
-      model?.habitFeatures ||
-      (diagnostics?.samples?.observations > 0)
-    );
-    try {
-    if (!readOnly && !isFullEncodedTitle && isActiveOrLoadedChat && sid && mergedCandidates.length > 0 && (!model || (!model.userCorrected && !(model.fingerprint?.result && !model.reverseInferred && !model.habitInferred && !model.billingProbe)))) {
-      const top0 = mergedCandidates[0], top1 = mergedCandidates[1];
-      const hr = out.habitRoute;
-      const isNowRouted = Boolean(top0?.routed || hr?.routed || diagnostics?.routeSwitched || diagnostics?.effortDowngraded || diagnostics?.routeType);
-      const top0Fam = (typeof ChatHabitFingerprint !== 'undefined' && ChatHabitFingerprint.parseModelFamilyAndTier) ? ChatHabitFingerprint.parseModelFamilyAndTier(top0?.canon || top0?.label || '').famKey : '';
-      const top1Fam = (typeof ChatHabitFingerprint !== 'undefined' && ChatHabitFingerprint.parseModelFamilyAndTier) ? ChatHabitFingerprint.parseModelFamilyAndTier(top1?.canon || top1?.label || '').famKey : '';
-      const isSameFamilyTop2 = Boolean(top0Fam && top1Fam && top0Fam === top1Fam);
-      const hasClearTopMargin = !top1 || isNowRouted || (Number(top0.match || 0) - Number(top1.match || 0)) >= 0.05 || (Number(top0.combinedWeight ?? top0.match ?? 0) - Number(top1.combinedWeight ?? top1.match ?? 0)) >= 0.5;
-      if (!hasClearTopMargin && isSameFamilyTop2 && top0) {
-        top0.effortAmbiguous = true;
-        top0.supportGranularity = 'family';
-      }
-      const isUniqueTop = Boolean(top0 && !top0.streamFallback && Number(top0.match || 0) >= 50 && hasClearTopMargin && top0.supportGranularity !== 'family');
-      if (isUniqueTop && (!model?.routed || isNowRouted)) {
-        const rawTopCanon = (top0.label === '开源模型' || top0.canon === '开源模型') ? '开源模型' : (typeof Strength !== 'undefined' && Strength.canon ? Strength.canon(top0.canon || top0.label) : String(top0.canon || top0.label || '')).replace(/[?？]+$/, '');
-        const topCanon = (rawTopCanon !== '开源模型' && typeof Strength !== 'undefined' && Strength.foldVer) ? Strength.foldVer(rawTopCanon) : rawTopCanon;
-        const rawCurCanon = (typeof Strength !== 'undefined' && Strength.canon ? Strength.canon(model?.name || '') : String(model?.name || '')).replace(/[?？]+$/, '');
-        const curCanon = (rawCurCanon && typeof Strength !== 'undefined' && Strength.foldVer) ? Strength.foldVer(rawCurCanon) : rawCurCanon;
-        const nextMatch = Math.round(Number(top0.match || 0) * 10) / 10;
-        const rawTopDecomp = (typeof ChatHabitFingerprint !== 'undefined' && ChatHabitFingerprint.decomposeModelIdentity)
-          ? ChatHabitFingerprint.decomposeModelIdentity(topCanon)
-          : null;
-        const topDecomp = (rawTopDecomp && rawTopDecomp.hasExplicitTier)
-          ? rawTopDecomp
-          : ((typeof ChatHabitFingerprint !== 'undefined' && ChatHabitFingerprint.decomposeModelIdentity)
-            ? ChatHabitFingerprint.decomposeModelIdentity(topCanon, { effort: top0.inferredEffort || top0.effortProfile?.effort })
-            : null);
-        const topEff = topDecomp
-          ? topDecomp.effort
-          : String(top0.inferredEffort || top0.effortProfile?.effort || model?.reverseEffort || 'standard').toLowerCase();
-        const syncedLabel = topDecomp?.displayLabel || top0.label || topCanon;
-        const calcRevSc = (typeof Strength !== 'undefined' && Strength.reverseDepthScore)
-          ? Strength.reverseDepthScore(sid, { ...(model || {}), name: topCanon, reverseEffort: topEff, routed: isNowRouted }, out, chat)
-          : null;
-        const nextScore = calcRevSc ?? top0.habitScore ?? model?.reverseScore ?? model?.habitScore ?? undefined;
-        const isHabitWinner = Boolean((top0.habitSource || top0.source === 'fp' || top0.structuralRev) && (!top0.revPct || top0.structuralRev));
-        const isLockedAutoOpen = Boolean(model && (model.name === '开源模型' || model.reverseCandidateId === 'open-source') && !model.manualOpenInferred && !model.userCorrected);
-        const rAnnotations = isNowRouted
-          ? applyChatRouteAnnotations(
-              sid, chat, diagnostics, model, hr,
-              top0.routeType || hr?.routeType || diagnostics?.routeType || (diagnostics?.effortDowngraded ? 'effort' : 'model'),
-              top0.routeFrom || hr?.fromLabel || diagnostics?.initialModelLabel || model?.routeFrom || '',
-              top0.routeTo || hr?.toLabel || diagnostics?.routedModelLabel || topCanon,
-              top0.routeReason || hr?.reason || ''
-            )
-          : null;
-        const isProtectedRealCostLock = Boolean(
-          model &&
-          curCanon &&
-          curCanon !== topCanon &&
-          diagnostics?.read?.httpStatus === 403 &&
-          !(diagnostics?.samples?.observations > 0) &&
-          model.reverseInferred &&
-          !model.habitInferred &&
-          !model.guess &&
-          (Number(model.reverseTokens?.total) > 0 || Number(model.reverseTotalTokens?.total) > 0 || Number(model.costUsd) > 0) &&
-          !top0.both
-        );
-        const rawRevCanon = (typeof Strength !== 'undefined' && Strength.canon ? Strength.canon(model?.reverseLabel || '') : String(model?.reverseLabel || '')).replace(/[?？]+$/, '');
-        const revCanon = (rawRevCanon && typeof Strength !== 'undefined' && Strength.foldVer) ? Strength.foldVer(rawRevCanon) : rawRevCanon;
-        const hasRealCostInModel = Boolean(
-          (diagnostics?.samples?.observations > 0 && diagnostics?.read?.status !== 'forbidden' && diagnostics?.read?.status !== 'error') ||
-          Number(model?.reverseTokens?.total) > 0 ||
-          Number(model?.reverseTotalTokens?.total) > 0 ||
-          Number(model?.costUsd) > 0
-        );
-        const hasStaleZeroCostRev = Boolean(!hasRealCostInModel && Array.isArray(model?.reverseCandidates) && model.reverseCandidates.length > 0);
-        const hasInternalMismatch = Boolean((curCanon && revCanon && curCanon !== revCanon) || (topEff && topEff !== 'standard' && model?.tier && model.tier !== topEff) || hasStaleZeroCostRev);
-        const syncSig = `${topCanon}:${topEff}:${nextMatch}:${nextScore != null ? Math.round(Number(nextScore) * 10) : ''}:${isNowRouted ? 1 : 0}:${rAnnotations?.routeTo || ''}:${hasStaleZeroCostRev ? 0 : 1}`;
-        const needModelSync = Boolean(
-          !isLockedAutoOpen &&
-          !isProtectedRealCostLock &&
-          topCanon &&
-          !/^(未知型号|待定|未识别)$/.test(topCanon) &&
-          !(model?._lastSyncSig === syncSig && curCanon === topCanon && !model?.pendingConfirm && !model?.guess && !hasStaleZeroCostRev) &&
-          (curCanon !== topCanon || hasInternalMismatch || !model || Boolean(model.routed) !== isNowRouted || (isNowRouted && (!model.lastRouteNotice || model.routeTo !== rAnnotations?.routeTo)) || model.pendingConfirm || model.guess || (nextScore != null && model.reverseScore != null && Math.abs(Number(model.reverseScore) - Number(nextScore)) >= 0.5))
-        );
-        if (needModelSync) {
-          const syncedEntry = {
-            ...(model || { sid }),
-            ...(hasStaleZeroCostRev ? { reverseCandidates: undefined } : {}),
-            _lastSyncSig: syncSig,
-            name: topCanon,
-            candidateName: topCanon,
-            rawLabel: syncedLabel,
-            effort: topEff || model?.effort || model?.reverseEffort || undefined,
-            tier: topEff || model?.tier || model?.reverseEffort || undefined,
-            reverseCandidateId: top0.id || model?.reverseCandidateId || topCanon,
-            reverseLabel: syncedLabel,
-            reverseEffort: topEff || model?.reverseEffort || undefined,
-            reverseMatch: nextMatch,
-            confidence: nextMatch,
-            reverseScore: nextScore,
-            habitScore: top0.habitScore ?? model?.habitScore ?? nextScore,
-            guess: false,
-            pendingConfirm: false,
-            uncertain: false,
-            sure: Boolean(top0.diophantinePassed || top0.userLearned || top0.match >= 75),
-            habitInferred: isHabitWinner,
-            reverseInferred: Boolean(!isHabitWinner || (top0.revPct != null && top0.revPct > 0 && !top0.structuralRev)),
-            billingProbe: Boolean(!isHabitWinner || (top0.revPct != null && top0.revPct > 0 && !top0.structuralRev)),
-            reverseVer: 182,
-            at: model?.at || Date.now(),
-            ...(rAnnotations || {}),
-          };
-          if (!isNowRouted) {
-            syncedEntry.routed = false;
-            delete syncedEntry.routeType;
-            delete syncedEntry.routeFrom;
-            delete syncedEntry.routeTo;
-            delete syncedEntry.routeReason;
-            delete syncedEntry.lastRouteNotice;
-            delete syncedEntry.routeNotices;
-          }
-          const syncedFam = /claude|anthropic|opus|sonnet|haiku|fable/i.test(topCanon) ? 'claude' : /gemini|google|argon|barium/i.test(topCanon) ? 'gemini' : /gpt|openai|\bsol\b|luna|astra|terra/i.test(topCanon) ? 'gpt' : /muse|spark|\bmeta\b/i.test(topCanon) ? 'muse' : /grok|xai/i.test(topCanon) ? 'grok' : 'compat';
-          syncedEntry.fam = syncedFam;
-          if (syncedFam !== 'claude' && /闭合推理|tc_/.test(String(syncedEntry.why || ''))) delete syncedEntry.why;
-          Models.set(sid, syncedEntry);
-          try {
-            if (typeof Notes !== 'undefined') {
-              const nRec = Notes.owns?.(sid) ? Notes.all[sid] : Notes.rec?.(sid, chat?.sentAt || Date.now());
-              if (nRec) { delete nRec.modelData; delete nRec.modelStamp; }
-              Notes.save?.();
-            }
-            if (typeof TitleSync !== 'undefined' && TitleSync.dirty) TitleSync.dirty(sid);
-            if (typeof Titles !== 'undefined') {
-              Titles.local?.(sid);
-              const shouldCloudSync = Boolean((typeof Prefs !== 'undefined' && Prefs.autoTitle) || (typeof TitleSync !== 'undefined' && TitleSync.shouldGoldPrefix?.(sid)));
-              if (shouldCloudSync) {
-                Titles.capture?.(sid, chat?.sentAt);
-                Titles.touch?.(sid);
-              }
-            }
-            UI?.renderListSoon?.();
-            UI?.renderTabs?.();
-          } catch {}
-        }
-      }
-    }
-    } catch (syncErr) {
-      console.warn('[BillingProbe.summary sync]', syncErr);
-    }
-    if (cacheKey) {
-      if (summaryCache.size > 64) summaryCache.delete(summaryCache.keys().next().value);
-      const mAfter = Models.get(sid);
-      const postKey = makeSumCacheKey(mAfter, latest?.id);
-      const compKey = makeSumCacheKey(mAfter, compTail?.id);
-      summaryCache.set(sid, { key: postKey || cacheKey, prevKey: cacheKey, compKey, val: out });
-    }
-    return out;
-  }
-
-  function topConfidence(sid, mi) {
-    if (!sid) return null;
-    const cached = summaryCache.get(sid);
-    const topC = cached?.val?.mergedCandidates?.[0];
-    if (topC && Number.isFinite(+topC.match) && +topC.match > 0) {
-      return Math.max(0, Math.min(100, +topC.match));
-    }
-    const m = mi || (typeof Models !== 'undefined' ? Models.get(sid) : null);
-    if (m?.userCorrected && m?.name) return 100;
-    const isActiveSid = Boolean((typeof Tabs !== 'undefined' && Tabs.cur?.sid === sid) || (typeof UI !== 'undefined' && UI.els?.chat?.sid === sid));
-    if (!isActiveSid && m && (m.reverseVer || 0) >= 174) {
-      const persistedConf = Number(m.reverseMatch ?? m.confidence ?? 0);
-      if (Number.isFinite(persistedConf) && persistedConf > 0) {
-        return Math.max(0, Math.min(100, persistedConf));
-      }
-    }
-    const bRev = typeof ChatHabitFingerprint !== 'undefined' && typeof ChatHabitFingerprint.bankRevision === 'function' ? ChatHabitFingerprint.bankRevision() : 0;
-    const tcKey = `${sid}:${m?.name || ''}:${m?.at || 0}:${m?.reverseMatch || 0}:${m?.confidence || 0}:${m?.userCorrected ? 1 : 0}:${bRev}:${isCostProbeEnabled() ? 1 : 0}`;
-    if (topConfidenceCache.has(sid) && topConfidenceCache.get(sid).key === tcKey) {
-      return topConfidenceCache.get(sid).val;
-    }
-    let val = null;
-    const st = engine.state(sid);
-    if (st?.info && !st.info.reason) {
-      const chat = typeof Chats !== 'undefined' ? Chats.get(sid) : null;
-      const latest = chat ? globalThis.ArenaBilling.completed(chat).at(-1) : null;
-      const d = engine.diagnostics(sid, { latestId: latest?.id, model: m });
-      const merged = mergeCandidates(sid, d, m);
-      if (merged.length && Number.isFinite(+merged[0].match) && +merged[0].match > 0) {
-        val = Math.max(0, Math.min(100, +merged[0].match));
-      }
-    }
-    if (val == null) {
-      const mergedFallback = mergeCandidates(sid, null, m);
-      if (mergedFallback.length && Number.isFinite(+mergedFallback[0].match) && +mergedFallback[0].match > 0) {
-        val = Math.max(0, Math.min(100, +mergedFallback[0].match));
-      }
-    }
-    if (topConfidenceCache.size > 96) topConfidenceCache.delete(topConfidenceCache.keys().next().value);
-    topConfidenceCache.set(sid, { key: tcKey, val });
-    return val;
-  }
-
-  function hasStandout(d, c, mergedOverride) {
-    const cands = (d?.candidates || []).slice().sort((a, b) => (b.match || 0) - (a.match || 0));
-    const ordered = (mergedOverride && mergedOverride.length) ? mergedOverride.slice() : cands;
-    const best = ordered[0] || null, second = ordered[1] || null;
-    if (!best) return { standout: false, best: null, second: null, close: [], cands: ordered };
-    const topConf = Number(best.match || 0);
-    const topWeight = Number(best.combinedWeight ?? topConf);
-    const hasMergedWeights = Boolean(mergedOverride && mergedOverride.length && best.combinedWeight != null);
-    // 最高分唯一则取最高分即可，相近的不算并列，只有同最高分（差距 < 0.05% 且综合权重差距 < 0.5）才视为并列
-    const close = ordered.filter(r =>
-      (r.source === best.source ? Boolean(r.diophantinePassed) === Boolean(best.diophantinePassed) : true) &&
-      Math.abs(topConf - Number(r.match || 0)) < 0.05 &&
-      (!hasMergedWeights || Math.abs(topWeight - Number(r.combinedWeight ?? r.match ?? 0)) < 0.5)
-    );
-    const isTiedTop = close.length > 1;
-    const hasStandout = !isTiedTop && topConf > 0;
-    const prefName = c?.preference?.primary?.name || '';
-    const prefAllowed = prefName && (!mergedOverride?.length || mergedOverride.some(x => canonKey(x.label || x.id) === canonKey(prefName)));
-    const standout = Boolean(prefAllowed) || hasStandout;
-    return { standout, best, second, close, cands: ordered };
-  }
-  function badge(sid, open) {
-    const s = engine.state(sid), sum = summary(sid), c = sum.consensus, d = sum.diagnostics;
-    const { standout, best, close } = hasStandout(d, c, sum.mergedCandidates);
-    const isFpWin = best?.source === 'fp';
-    const hasBest = Boolean(best && best.match > 0);
-    const text = (s.error && !hasBest) ? ('HTTP ' + (s.httpStatus || 'ERR')) : s.pending ? '识别中' : (!standout && best ? '请继续沟通' : best ? (Math.round(best.match) + '%') : '待识别');
-    const tone = (s.error && !hasBest) || (!standout && best) ? 'warn' : (standout && best && best.match >= 88) ? 'ok' : (isFpWin ? 'fp' : 'rev');
-    const tip = (s.error && !hasBest) ? s.error : (!standout && best
-      ? `前排候选权重接近（${close.slice(0, 3).map(x => x.label || x.id).join(' / ')}，最高 ${+best.match.toFixed(1)}%），请继续沟通以锁定唯一模型`
-      : best
-        ? `${best.both ? '反推+指纹双源印证' : isFpWin ? '指纹识别最高权重' : '费用反推最高权重'}：${best.label || best.id}（${+best.match.toFixed(1)}%）\n点击展开识别细节`
-        : (c.text || '点击展开识别细节'));
-    return h('button', {
-      type: 'button',
-      class: 'mc-chip billing-badge',
-      'data-tone': tone,
-      title: tip,
-      onclick: open
-    }, icon((!standout && best) || (s.error && !hasBest) ? 'alert' : isFpWin ? 'fingerprint' : 'bolt'), h('span', {}, text));
-  }
-
-  function applyReverseIdentity(chat, { interactive = false, forceLock = false, fallbackQuestionMark = false } = {}) {
-    if (!chat?.sid || isOtherProbeBusy(chat)) return null;
-    const sid = chat.sid, latest = globalThis.ArenaBilling.completed(chat).at(-1);
-    const sum = summary(sid, { commit: true, readOnly: false }), d = sum.diagnostics, c = sum.consensus;
-    const { standout: rawStandout, best: topBest, close } = hasStandout(d, c, sum.mergedCandidates);
-    const standout = Boolean(forceLock || fallbackQuestionMark || rawStandout);
-    let best = topBest;
-    if (!best || !(best.match > 0)) return null;
-    const known = typeof Models !== 'undefined' ? Models.get(sid) : null;
-    if (interactive && known?.userCorrected) {
-      delete known.userCorrected;
-      delete known.userCorrectedAt;
-    }
-    if (known?.userCorrected && !interactive) {
-      return { entry: known, best, close: [best], standout: true, preimage: sum.preimage, payment: sum.payment };
-    }
-    if (known?.fingerprint?.result && !interactive) {
-      return { entry: known, best, close: [best], standout: true, preimage: sum.preimage, payment: sum.payment };
-    }
-    const cloudTitle = (typeof History !== 'undefined' && History.byId?.(sid)?.title) || chat?.title || '';
-    const restoredMeta = typeof TitleSync !== 'undefined' ? TitleSync.restored?.(sid) : null;
-    const compAsstForGuard = Array.isArray(chat?.messages) ? chat.messages.filter(x => x && x.role === 'assistant' && !x.failed && x.status !== 'failed' && x.status !== 'pending') : [];
-    const hasLoadedMsgs = compAsstForGuard.length > 0;
-    const hasNewerLoadedTurn = Boolean(hasLoadedMsgs && ((compAsstForGuard.length > (Number(known?.completedTurnCount) || 0)) || (compAsstForGuard.at(-1)?.id && known?.lastMessageId && compAsstForGuard.at(-1).id !== known.lastMessageId) || (known?.reverseVer || 0) < 182));
-    if (!interactive && ((typeof TitleCipher !== 'undefined' && TitleCipher.isEncoded?.(cloudTitle)) || (restoredMeta && !restoredMeta.fromPrefix)) && !(known?.lastMessageId && compAsstForGuard.at(-1)?.id && compAsstForGuard.at(-1).id !== known.lastMessageId)) {
-      return { entry: known, best, close: [best], standout: true, preimage: sum.preimage, payment: sum.payment };
-    }
-    if (!interactive && !forceLock && !hasLoadedMsgs && restoredMeta?.fromPrefix && (known?.reverseVer || 0) >= 174) {
-      return { entry: known, best, close: [best], standout: true, preimage: sum.preimage, payment: sum.payment };
-    }
-    const hasRealEvidence = (d?.samples?.observations > 0) || Boolean(best.habitSource || best.habitPct || known?.fingerprint?.result || known?.reverseInferred || known?.billingProbe) || ARGON_HIGH_SIDS.has(sid) || SOL_61_SIDS.has(sid) || sid === '01a13f8c-41c2-7ad3-8e77-73feb405f68d';
-    if (!hasRealEvidence && !interactive && !forceLock && !fallbackQuestionMark) return null;
-    const hasAuthoritativeApi = known && !known.guess && !known.fromTitle && !known.reverseInferred && !known.billingProbe && (known.response || (known.internal && !known.billingProbe) || known.fingerprint?.apiIdentity);
-    if (hasAuthoritativeApi && !interactive) return { entry: known, best, close: [best], preimage: sum.preimage, payment: sum.payment };
-    const habRoute = sum.habitRoute || null;
-    const isDiagRouted = Boolean(d?.routeSwitched || d?.effortDowngraded || d?.routeType || habRoute?.routed || best?.routed);
-    const rawChosen = (d?.routeSwitched && d?.routedModelLabel) ? d.routedModelLabel : (habRoute?.routed && habRoute?.toLabel ? habRoute.toLabel : (best.label || best.id || (c?.preference?.primary?.name || '')));
-    const chosenName = cleanModelLabel(rawChosen);
-    const baseCanon = (typeof Strength !== 'undefined' && Strength.canon ? Strength.canon(chosenName) : String(chosenName || '')).replace(/[?？]+$/, '');
-    const canonName = fallbackQuestionMark ? (baseCanon + '?') : baseCanon;
-    const latestTok = sum.preimage?.latest || sum.preimage?.totals || null;
-    const tierOrder = { none: 0, minimal: 1, low: 2, medium: 3, high: 4, xhigh: 5, max: 6 };
-    const stripTierKey = s => (typeof ChatHabitFingerprint !== 'undefined' && ChatHabitFingerprint.parseModelFamilyAndTier)
-      ? (ChatHabitFingerprint.parseModelFamilyAndTier(s).famKey || String(s || '').trim().toLowerCase())
-      : String(s || '').replace(/\s*\((?:none|minimal|low|medium|high|xhigh|max)\)\s*$/i, '').replace(/-(?:none|minimal|low|medium|high|xhigh|max)$/i, '').replace(/[?？]+$/, '').trim().toLowerCase();
-    const rawBaseDecomp = (typeof ChatHabitFingerprint !== 'undefined' && ChatHabitFingerprint.decomposeModelIdentity)
-      ? ChatHabitFingerprint.decomposeModelIdentity(baseCanon)
-      : null;
-    const curDecomp = (rawBaseDecomp && rawBaseDecomp.hasExplicitTier)
-      ? rawBaseDecomp
-      : ((typeof ChatHabitFingerprint !== 'undefined' && ChatHabitFingerprint.decomposeModelIdentity)
-        ? ChatHabitFingerprint.decomposeModelIdentity(baseCanon, { effort: d?.latestEffort || best.inferredEffort || best.effortProfile?.primaryEffort })
-        : null);
-    const curBaseName = curDecomp?.family || stripTierKey(baseCanon);
-    const curEffort = curDecomp?.effort || String(d?.latestEffort || best.inferredEffort || best.effortProfile?.primaryEffort || 'standard').toLowerCase();
-    const compMsgs = globalThis.ArenaBilling.completed(chat);
-    const isTurn1MicroProbe = Boolean(compMsgs.length === 1 && Number(compMsgs[0]?.text?.length || 0) < 260 && !(compMsgs[0]?.tools?.length > 0) && !(compMsgs[0]?.parts || []).some(p => p && (p.toolCallId || p.type === 'dynamic-tool' || String(p.type || '').startsWith('tool-'))));
-    if (standout && best.match >= 85 && compMsgs.length === 1 && !isTurn1MicroProbe && !chat._routeBaseline) {
-      chat._routeBaseline = {
-        modelId: best.id,
-        baseName: curBaseName,
-        label: baseCanon,
-        effort: curEffort,
-        isClosed: isClosedCandidateName(baseCanon || best.id),
-        messageId: latest?.id || null,
-      };
-    } else if (standout && best.match >= 82 && compMsgs.length === 2 && (!chat._routeBaseline || chat._routeBaseline._fromMicroProbe)) {
-      chat._routeBaseline = {
-        modelId: best.id,
-        baseName: curBaseName,
-        label: baseCanon,
-        effort: curEffort,
-        isClosed: isClosedCandidateName(baseCanon || best.id),
-        messageId: latest?.id || null,
-      };
-    }
-    let detectedRouteType = d?.routeType || (d?.routeSwitched ? 'model' : d?.effortDowngraded ? 'effort' : (habRoute?.routed ? (habRoute.routeType || 'model') : (best?.routed ? (best.routeType || 'model') : null)));
-    let routeFromLabel = cleanModelLabel(d?.initialModelLabel || habRoute?.fromLabel || best?.routeFrom || chat._routeBaseline?.label || '');
-    let routeToLabel = cleanModelLabel(d?.routedModelLabel || habRoute?.toLabel || best?.routeTo || baseCanon || best.label || best.id);
-    if (!detectedRouteType && chat._routeBaseline && latest?.id && chat._routeBaseline.messageId && latest.id !== chat._routeBaseline.messageId && standout && best.match >= 80) {
-      const singleModelSolvedAll = Boolean(d && !d.routeSwitched && best.diophantinePassed && compMsgs.length >= 2);
-      if (singleModelSolvedAll) {
-        chat._routeBaseline = {
-          modelId: best.id,
-          baseName: curBaseName,
-          label: baseCanon,
-          effort: curEffort,
-          isClosed: isClosedCandidateName(baseCanon || best.id),
-          messageId: compMsgs[0]?.id || chat._routeBaseline.messageId,
-        };
-      }
-    }
-    if (detectedRouteType) {
-      const preFromShort = shortCanonLabel(routeFromLabel) || routeFromLabel || '';
-      const preToShort = shortCanonLabel(routeToLabel) || baseCanon || '';
-      const fromBase = stripTierKey(preFromShort || routeFromLabel);
-      const toBase = stripTierKey(preToShort || routeToLabel);
-      if (detectedRouteType === 'model' && fromBase && toBase && fromBase === toBase) {
-        detectedRouteType = null;
-      } else if (preFromShort && preToShort && preFromShort.toLowerCase() === preToShort.toLowerCase()) {
-        detectedRouteType = null;
-      }
-    }
-    const effectiveTargetCanon = detectedRouteType && routeToLabel
-      ? (typeof Strength !== 'undefined' && Strength.canon ? Strength.canon(routeToLabel) : routeToLabel).replace(/[?？]+$/, '')
-      : baseCanon;
-    const finalCanonName = fallbackQuestionMark ? (effectiveTargetCanon + '?') : effectiveTargetCanon;
-    const rawRevScore = typeof Strength !== 'undefined' && Strength.reverseDepthScore
-      ? Strength.reverseDepthScore(sid, { ...(known || {}), name: effectiveTargetCanon, reverseEffort: curEffort, routed: Boolean(detectedRouteType), reverseTokens: latestTok }, sum, chat)
-      : null;
-    const revScore = rawRevScore ?? best.habitScore ?? known?.reverseScore ?? null;
-    const isFpWinner = best.source === 'fp' && !detectedRouteType;
-    const isHabitWinner = Boolean((best.habitSource || best.structuralRev) && (!best.revPct || best.structuralRev));
-    let freshHabitList = null;
-    const isRealCostTeacher = Boolean(
-      standout &&
-      !detectedRouteType &&
-      !habRoute?.routed &&
-      !best.routed &&
-      !best.structuralRev &&
-      !best.userCorrected &&
-      best.source !== 'fp' &&
-      best.source !== 'habit' &&
-      !isHabitWinner &&
-      ((Array.isArray(sum.ranked) && sum.ranked.length > 0) || (Array.isArray(d?.candidates) && d.candidates.length > 0) || (d?.samples?.observations > 0)) &&
-      (best.diophantinePassed || best.revPct >= 75)
-    );
-    if (isRealCostTeacher && typeof ChatHabitFingerprint !== 'undefined') {
-      try {
-        if (typeof ChatHabitFingerprint.learnFromReverseTeacher === 'function') {
-          ChatHabitFingerprint.learnFromReverseTeacher(chat, known, { ...best, label: finalCanonName, dynamicLabel: finalCanonName, canon: finalCanonName }, revScore);
-        } else if (ChatHabitFingerprint.learnFromChat) {
-          const isHighTrustTeacher = Boolean(best.diophantinePassed && best.revPct >= 88);
-          ChatHabitFingerprint.learnFromChat(chat, finalCanonName, { userConfirmed: isHighTrustTeacher, weight: isHighTrustTeacher ? 2.5 : 1.2, score: revScore });
-        }
-        if (typeof ChatHabitFingerprint.analyze === 'function') {
-          const reHabit = ChatHabitFingerprint.analyze(chat || { sid, messages: [] }, { ...(known || {}), sid, reverseScore: revScore });
-          if (reHabit && Array.isArray(reHabit.candidates) && reHabit.candidates.length) {
-            freshHabitList = reHabit.candidates;
-            if (Array.isArray(sum.mergedCandidates)) {
-              const hMap = new Map(freshHabitList.map(hc => [String(hc.canon || hc.label || '').toLowerCase(), hc]));
-              for (const mc of sum.mergedCandidates) {
-                if (!mc) continue;
-                const mk = String(mc.canon || mc.label || '').toLowerCase();
-                const hitH = hMap.get(mk);
-                if (hitH) {
-                  mc.habitPct = hitH.match;
-                  mc.habitScore = hitH.habitScore;
-                  mc.userLearned = Boolean(mc.userLearned || hitH.userLearned);
-                } else if (mc.habitPct != null) {
-                  mc.habitPct = Math.min(Number(mc.habitPct), 88.5);
-                }
-              }
-            }
-          }
-        }
-      } catch {}
-    }
-    const nextEntry = {
-      ...(known || {}),
-      name: finalCanonName,
-      candidateName: finalCanonName,
-      rawLabel: detectedRouteType && routeToLabel ? routeToLabel : chosenName,
-      guess: false,
-      uncertain: Boolean(fallbackQuestionMark || !standout),
-      sure: Boolean(standout && !fallbackQuestionMark && (best.diophantinePassed || isFpWinner || isHabitWinner) && best.match >= 75),
-      pendingConfirm: false,
-      fromTitle: false,
-      habitInferred: isHabitWinner,
-      reverseInferred: Boolean(!isHabitWinner || (best.revPct != null && best.revPct > 0 && !best.structuralRev)),
-      billingProbe: Boolean(!isHabitWinner || (best.revPct != null && best.revPct > 0 && !best.structuralRev)),
-      reverseMatch: Math.round(best.match * 10) / 10,
-      confidence: Math.round(best.match * 10) / 10,
-      effort: curEffort || null,
-      tier: curEffort || null,
-      reverseCandidateId: (detectedRouteType && d?.routedModelId) ? d.routedModelId : best.id,
-      reverseLabel: (detectedRouteType && routeToLabel) ? routeToLabel : (curDecomp?.displayLabel || best.label || best.id),
-      reverseEffort: curEffort || null,
-      reverseCandidates: Array.isArray(sum.mergedCandidates) ? sum.mergedCandidates.filter(c => c && !c.structuralRev && !c.habitSource && (c.source === 'rev' || (c.revPct != null && c.revPct > 0))).slice(0, 5) : [],
-      habitCandidates: freshHabitList ? freshHabitList.slice(0, 5) : (Array.isArray(sum.mergedCandidates) ? sum.mergedCandidates.filter(c => c && (c.habitPct != null || c.habitSource || c.source === 'fp')).slice(0, 5) : (known?.habitCandidates || undefined)),
-      reverseTiedCount: standout ? 1 : Math.max(close.length, 2),
-      reverseEpoch: best.matchedVariant || '2026-10-15',
-      reverseVer: 182,
-      reverseTokens: latestTok,
-      reverseTotalTokens: sum.preimage?.totals || null,
-      reverseScore: revScore,
-      habitTags: best.matchedDims || known?.habitTags || undefined,
-      streamEvidence: chat?._streamEvidence || known?.streamEvidence || undefined,
-      est: revScore != null ? { ...(known?.est || {}), score: revScore, source: isHabitWinner ? 'habit' : 'reverse' } : (known?.est || null),
-      provider: fallbackQuestionMark
-        ? '自动问答3轮反推首选'
-        : best.userCorrected
-          ? '手动纠偏确认 · 已记入习惯自学习库'
-          : isHabitWinner
-            ? (best.userLearned ? '习惯指纹自学习识别' : '对话习惯指纹识别')
-            : isFpWinner
-              ? '指纹识别（最高置信度）'
-              : standout
-                ? '费用反推识别'
-                : '候选并列（请继续沟通）',
-      messageId: latest?.id || known?.messageId || null,
-      lastMessageId: latest?.id || known?.lastMessageId || null,
-      completedTurnCount: compMsgs.length || known?.completedTurnCount || 0,
-      at: now(),
-    };
-    if (detectedRouteType) {
-      const rInfo = applyChatRouteAnnotations(
-        sid, chat, d, known, habRoute,
-        detectedRouteType,
-        routeFromLabel,
-        routeToLabel || effectiveTargetCanon,
-        habRoute?.reason || best?.routeReason || ''
-      );
-      if (rInfo) Object.assign(nextEntry, rInfo);
-      if (nextEntry.fingerprint && typeof nextEntry.fingerprint === 'object') {
-        const syncedFp = { ...nextEntry.fingerprint };
-        if (syncedFp.apiIdentity && typeof syncedFp.apiIdentity === 'object') {
-          syncedFp.apiIdentity = { ...syncedFp.apiIdentity, model: effectiveTargetCanon, preRouteModel: syncedFp.apiIdentity.preRouteModel || syncedFp.apiIdentity.model };
-        }
-        if (syncedFp.result && typeof syncedFp.result === 'object' && syncedFp.result.nearest) {
-          syncedFp.result = {
-            ...syncedFp.result,
-            nearest: { ...syncedFp.result.nearest, id: effectiveTargetCanon, display_name: effectiveTargetCanon },
-          };
-        }
         if (revScore != null) {
           syncedFp.reasoning = {
             ...(syncedFp.reasoning || {}),
@@ -844,7 +273,7 @@
     };
     if (sid) {
       const mQuick = Models.get(sid);
-      if (mQuick && ((mQuick.reverseVer || 0) >= 182 || (SOL_61_SIDS.has(sid) && (mQuick.reverseVer || 0) >= 164)) && !hasNameRevMismatch(mQuick) && !(mQuick.routed && (mQuick.reverseVer || 0) < 155) && !isSpecialSidNeedsFix(sid, mQuick) && !isOpus55Needs56(sid, mQuick)) {
+      if (mQuick && ((mQuick.reverseVer || 0) >= 183 || (SOL_61_SIDS.has(sid) && (mQuick.reverseVer || 0) >= 164)) && !hasNameRevMismatch(mQuick) && !(mQuick.routed && (mQuick.reverseVer || 0) < 155) && !isSpecialSidNeedsFix(sid, mQuick) && !isOpus55Needs56(sid, mQuick)) {
         return;
       }
     } else {
@@ -877,7 +306,7 @@
       } catch {}
     };
     for (const [id, m] of targets) {
-      if (m && ((m.reverseVer || 0) >= 182 || (SOL_61_SIDS.has(id) && (m.reverseVer || 0) >= 164)) && !hasNameRevMismatch(m) && !(m.routed && (m.reverseVer || 0) < 155) && !isSpecialSidNeedsFix(id, m) && !isOpus55Needs56(id, m)) {
+      if (m && ((m.reverseVer || 0) >= 183 || (SOL_61_SIDS.has(id) && (m.reverseVer || 0) >= 164)) && !hasNameRevMismatch(m) && !(m.routed && (m.reverseVer || 0) < 155) && !isSpecialSidNeedsFix(id, m) && !isOpus55Needs56(id, m)) {
         continue;
       }
       const nmCur = String(m?.name || m?.candidateName || m?.reverseLabel || m?.rawLabel || '');
@@ -1355,7 +784,7 @@
         continue;
       }
       const hasValidSavedCostForRc = Boolean((Number(m.costUsd) > 0) || (Number(m.reverseTokens?.total) > 0) || (Number(m.reverseTotalTokens?.total) > 0));
-      if (!m.userCorrected && (m.habitInferred || (!hasValidSavedCostForRc && (m.reverseInferred || m.billingProbe)) || m.pendingConfirm || m.guess || hasNameRevMismatch(m) || (Array.isArray(m.reverseCandidates) && m.reverseCandidates.length > 0)) && ((m.reverseVer || 0) < 182 || hasNameRevMismatch(m))) {
+      if (!m.userCorrected && (m.habitInferred || (!hasValidSavedCostForRc && (m.reverseInferred || m.billingProbe)) || m.pendingConfirm || m.guess || hasNameRevMismatch(m) || (Array.isArray(m.reverseCandidates) && m.reverseCandidates.length > 0)) && ((m.reverseVer || 0) < 183 || hasNameRevMismatch(m))) {
         const cleanedRevCands = (hasValidSavedCostForRc && Array.isArray(m.reverseCandidates))
           ? m.reverseCandidates.filter(rc => rc && !rc.structuralRev && !rc.zeroQuota && !rc.zeroQuotaMode && rc.source !== 'habit' && rc.source !== 'fp' && !rc.habitSource && (rc.revPct != null || rc.diophantinePassed))
           : undefined;
@@ -1403,8 +832,8 @@
             guess: false,
             pendingConfirm: false,
             provider: '费用反推识别',
-            reverseVer: 182,
-            _mismatchCheckedVer: 182,
+            reverseVer: 183,
+            _mismatchCheckedVer: 183,
             habitCandidates: undefined,
             reverseCandidates: cleanedRevCands,
           };
@@ -1447,7 +876,7 @@
           summaryCache.delete(id);
           const re = ChatHabitFingerprint.identifyAndApply(chatObj, { force: true, fromCostFallback: true });
           if (re && re.name) {
-            try { re._mismatchCheckedVer = 176; if (Models.all?.[id]) Models.all[id]._mismatchCheckedVer = 176; } catch {}
+            try { re._mismatchCheckedVer = 183; if (Models.all?.[id]) Models.all[id]._mismatchCheckedVer = 183; } catch {}
             ensurePelLoaded();
             if (pelMap && typeof pelMap === 'object' && pelMap[id]) {
               pelMap[id] = { ...pelMap[id], model: re.name, label: re.rawLabel || re.name };
@@ -1463,6 +892,7 @@
             continue;
           }
         }
+        if (chatObj && chatObj._upgradingFromCache) continue;
         const validCanon = (m.name && !/^(未识别|未知型号|待定)$/.test(String(m.name).trim()))
           ? m.name
           : (m.candidateName || m.reverseLabel || '');
@@ -1476,8 +906,8 @@
           sure: hasValidCanon ? true : Boolean(m.sure),
           guess: !hasValidCanon,
           pendingConfirm: !hasValidCanon,
-          reverseVer: 182,
-          _mismatchCheckedVer: 182,
+          reverseVer: 183,
+          _mismatchCheckedVer: 183,
           habitCandidates: undefined,
           reverseCandidates: cleanedRevCands && cleanedRevCands.length ? cleanedRevCands : undefined,
         });
@@ -1546,10 +976,10 @@
       // 关闭 /cost 开关时：完全不请求 /api/chat/:id/cost，直接用对话习惯指纹与推理分零延迟识别（仅当未识别或版本过期时执行一次，杜绝重复刷屏）
       if (!costOn) {
         const mNow = typeof Models !== 'undefined' ? Models.get(chat.sid) : null;
-        if (autoSeen.get(chat) === stamp && mNow?.name && (mNow.reverseVer || 0) >= 182 && mNow.lastMessageId === last) return;
+        if (autoSeen.get(chat) === stamp && mNow?.name && (mNow.reverseVer || 0) >= 183 && mNow.lastMessageId === last) return;
         autoSeen.set(chat, stamp);
-        if (!mNow || (!mNow.userCorrected && (!mNow.name || mNow.pendingConfirm || mNow.guess || (mNow.reverseVer || 0) < 182 || !mNow.lastMessageId || mNow.lastMessageId !== last))) {
-          try { ChatHabitFingerprint.identifyAndApply(chat, { force: (mNow?.reverseVer || 0) < 182 || !mNow?.lastMessageId || mNow.lastMessageId !== last }); } catch {}
+        if (!mNow || (!mNow.userCorrected && (!mNow.name || mNow.pendingConfirm || mNow.guess || (mNow.reverseVer || 0) < 183 || !mNow.lastMessageId || mNow.lastMessageId !== last))) {
+          try { ChatHabitFingerprint.identifyAndApply(chat, { force: (mNow?.reverseVer || 0) < 183 || !mNow?.lastMessageId || mNow.lastMessageId !== last }); } catch {}
         }
         return;
       }
@@ -1839,9 +1269,7 @@
           const hasDual = Boolean(revVal != null && habVal != null);
           const combinedMatch = r?.userCorrected
             ? 100
-            : hasDual
-              ? Math.min(100, Math.round((revVal * 0.55 + habVal * 0.45) * 10) / 10)
-              : Number(r?.combinedPct ?? revVal ?? habVal ?? r?.match ?? 0);
+            : Number(r?.match ?? r?.combinedPct ?? (hasDual ? Math.min(100, Math.round((revVal * 0.55 + habVal * 0.45) * 10) / 10) : (revVal ?? habVal ?? 0)));
           const dualSum = Math.round(((revVal || 0) + (habVal || 0)) * 10) / 10;
           return {
             ...r,
@@ -1850,15 +1278,6 @@
             hasDual,
             displayMode: 'both',
           };
-        })
-        .sort((a, b) => {
-          if (Boolean(a.userCorrected) !== Boolean(b.userCorrected)) return Number(Boolean(b.userCorrected)) - Number(Boolean(a.userCorrected));
-          if (Boolean(a.hasDual) !== Boolean(b.hasDual)) return Number(Boolean(b.hasDual)) - Number(Boolean(a.hasDual));
-          return (
-            ((b.displayMatch || 0) - (a.displayMatch || 0)) ||
-            ((b.dualSum || 0) - (a.dualSum || 0)) ||
-            (Number(Boolean(b.diophantinePassed)) - Number(Boolean(a.diophantinePassed)))
-          );
         })
         .slice(0, 5);
     } else if (rankFilter.rev) {

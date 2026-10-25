@@ -1,555 +1,3 @@
-  function vectorSimilarity(v1, v2, feat, customDimWeights = null) {
-    if (!Array.isArray(v1) || !Array.isArray(v2) || v1.length !== v2.length) return 0;
-    const W = BASE_VEC_W;
-    // Active Subspace Masking: downweight unactivated tool/HTML dimensions while amplifying active prose/streaming/SVG subspaces
-    const noTools = feat && feat.totalTools === 0;
-    const noHtml = feat && !feat.htmlMaxLen && !feat.writtenChars && !feat.cssRoot && !feat.raf && !feat.svgRich && !feat.boxComment;
-    const onlyAskUser = feat && feat.totalTools > 0 && feat.askUser === feat.totalTools;
-    const isLightHtmlOrSvg = Boolean(feat && !noHtml && (feat.isMicroProbeChat || (feat.htmlMaxLen > 0 && feat.htmlMaxLen <= 12000)));
-    let sumSq = 0, wTot = 0;
-    for (let i = 0; i < v1.length; i++) {
-      let w = W[i] || 1;
-      const zeroTiming = Boolean(feat && (feat.avgTurnDurMs || 0) === 0 && (feat.cps || 0) === 0);
-      if (noTools) {
-        if (i >= 2 && i <= 9) w *= 0.06;
-        if (noHtml && i >= 10 && i <= 13) w *= 0.06;
-        if (i === 18) w *= 0.12;
-      } else {
-        if (onlyAskUser && i >= 3 && i <= 9) w *= 0.08;
-        if (noHtml && i >= 10 && i <= 13) w *= 0.06;
-      }
-      if (zeroTiming && i === 19) w *= 0.15;
-      // When no tools or no HTML are used, prose stylometry (14..16) and streaming/thinking dynamics (17..19) are the primary active signals!
-      if (noHtml && (noTools || onlyAskUser) && i >= 14 && i <= 19 && !(noTools && i === 18) && !(zeroTiming && i === 19)) {
-        w *= 1.55;
-      } else if (isLightHtmlOrSvg && ((i >= 10 && i <= 13) || i === 17 || (!noTools && i === 18) || (!zeroTiming && i === 19))) {
-        w *= 1.45;
-      }
-      if (Array.isArray(customDimWeights) && customDimWeights.length === v1.length) {
-        const cw = Number(customDimWeights[i]);
-        if (Number.isFinite(cw) && cw > 0) w *= cw;
-      }
-      const d = (Number(v1[i]) || 0) - (Number(v2[i]) || 0);
-      sumSq += w * d * d;
-      wTot += w;
-    }
-    const rmse = Math.sqrt(sumSq / Math.max(1e-6, wTot));
-    return Math.max(0, Math.min(1, 1 - rmse * 1.22));
-  }
-
-  // 12 维同家族档位微差子空间马氏/加权相似度（按模态动态聚焦激活子空间：文字/代码/搜索/图片/视频/Agent）
-  function tierVecSimilarity(tv1, tv2, evalModality = 'chat', stdVec = null) {
-    if (!Array.isArray(tv1) || !Array.isArray(tv2) || tv1.length !== 12 || tv2.length !== 12) return null;
-    const mod = String(evalModality || 'chat').toLowerCase();
-    // 0:thinkIntensity, 1:thinkDurNorm, 2:cpsToDepthRatio, 3:proseStructRichness, 4:selfCheckRigor,
-    // 5:codeCompleteness, 6:codeDefensiveDepth, 7:toolChainAutonomy, 8:parallelPlanning, 9:searchSynthesisDepth,
-    // 10:multiTurnPersistenceNorm, 11:effortToPromptRatio
-    const W = [2.4, 2.2, 1.9, 1.8, 2.1, 1.6, 1.6, 1.5, 1.4, 1.3, 1.5, 2.5];
-    if (mod === 'webdev') {
-      W[5] = 2.8; W[6] = 2.7; W[7] = 2.2; W[8] = 2.0; W[9] = 0.4;
-    } else if (mod === 'search') {
-      W[9] = 3.0; W[3] = 2.4; W[4] = 2.3; W[5] = 0.5; W[6] = 0.5;
-    } else if (mod === 'image' || mod === 'video') {
-      W[1] = 2.6; W[2] = 2.2; W[3] = 2.0; W[5] = 0.3; W[6] = 0.3; W[7] = 0.6;
-    } else if (mod === 'chat') {
-      W[0] = 2.7; W[1] = 2.5; W[3] = 2.3; W[4] = 2.5; W[11] = 2.7; W[7] = 0.6; W[8] = 0.6;
-    }
-    let sumSq = 0, wTot = 0;
-    for (let i = 0; i < 12; i++) {
-      const stdScale = Array.isArray(stdVec) && stdVec.length === 12
-        ? Math.max(0.55, Math.min(1.65, 0.14 / Math.max(0.05, Number(stdVec[i]) || 0.12)))
-        : 1.0;
-      const w = (W[i] || 1) * stdScale;
-      const d = (Number(tv1[i]) || 0) - (Number(tv2[i]) || 0);
-      sumSq += w * d * d;
-      wTot += w;
-    }
-    const rmse = Math.sqrt(sumSq / Math.max(1e-6, wTot));
-    return Math.max(0, Math.min(1, 1 - rmse * 1.18));
-  }
-
-  // ── 常用纠偏频次统计（驱动三次卡片跳转置顶 + 习惯先验微调）──
-  const FREQ_KEY = 'habit:correctionFreq:v1';
-  function getUsageStats() {
-    if (_cachedUsageStats) return _cachedUsageStats;
-    let raw = null;
-    try { raw = typeof Store !== 'undefined' && Store.get ? Store.get(FREQ_KEY, null) : null; } catch {}
-    const stats = (raw && typeof raw === 'object' && raw.vendors && raw.models)
-      ? raw
-      : { vendors: {}, families: {}, models: {}, efforts: {}, updatedAt: 0 };
-    if (!stats._seeded) {
-      stats._seeded = true;
-      const seedModel = (name, weight = 1) => {
-        const clean = String(name || '').replace(/[?？]+$/, '').trim();
-        if (!clean || /^(未知型号|待定|未识别)$/.test(clean)) return;
-        const decomp = decomposeModelIdentity(clean);
-        const canon = decomp.canon || (clean === '开源模型' ? '开源模型' : (typeof Strength !== 'undefined' && Strength.canon ? Strength.canon(clean) : clean));
-        const vid = decomp.vendor || 'other';
-        const fam = decomp.family || canon;
-        const eff = decomp.effort || 'standard';
-        stats.vendors[vid] = (stats.vendors[vid] || 0) + weight;
-        stats.families[fam.toLowerCase()] = (stats.families[fam.toLowerCase()] || 0) + weight;
-        stats.models[canon.toLowerCase()] = (stats.models[canon.toLowerCase()] || 0) + weight;
-        stats.efforts[eff] = (stats.efforts[eff] || 0) + weight;
-      };
-      try {
-        for (const s of loadBank()) {
-          if (s && s.model && s.userConfirmed) seedModel(s.model, 2);
-        }
-        if (typeof Models !== 'undefined' && Models.all) {
-          for (const m of Object.values(Models.all)) {
-            if (m && m.userCorrected && m.name) seedModel(m.rawLabel || m.name, 2);
-          }
-        }
-      } catch {}
-      try { if (typeof Store !== 'undefined' && Store.set) Store.set(FREQ_KEY, stats); } catch {}
-    }
-    _cachedUsageStats = stats;
-    return stats;
-  }
-
-  function recordModelUse(modelLabel, vendorHint = '', familyHint = '', effortHint = '') {
-    try {
-      const stats = getUsageStats();
-      const clean = String(modelLabel || '').replace(/[?？]+$/, '').trim();
-      const decomp = decomposeModelIdentity(clean, { vendor: vendorHint, family: familyHint, effort: effortHint || undefined });
-      const canon = decomp.canon || (clean === '开源模型' ? '开源模型' : (typeof Strength !== 'undefined' && Strength.canon ? Strength.canon(clean) : clean));
-      const s = canon.toLowerCase();
-      const vid = decomp.vendor || vendorHint || 'open';
-      const fam = (familyHint || decomp.family || canon).trim().toLowerCase();
-      const eff = decomp.effort || 'standard';
-      stats.vendors[vid] = (stats.vendors[vid] || 0) + 3;
-      if (fam) stats.families[fam] = (stats.families[fam] || 0) + 3;
-      if (s) stats.models[s] = (stats.models[s] || 0) + 3;
-      if (eff) stats.efforts[eff] = (stats.efforts[eff] || 0) + 2;
-      stats.updatedAt = Date.now();
-      _cachedUsageStats = stats;
-      _analyzeCache.clear();
-      if (typeof Store !== 'undefined' && Store.set) Store.set(FREQ_KEY, stats);
-    } catch {}
-  }
-
-  function extractCompactMeta(feat) {
-    if (!feat) return null;
-    return {
-      turns: feat.turns || 1,
-      hidR: feat.hidR || 0,
-      maxRInTurn: feat.maxRInTurn || 0,
-      totalTools: feat.totalTools || 0,
-      bash: feat.bash || 0,
-      write: feat.write || 0,
-      edit: feat.edit || 0,
-      read: feat.read || 0,
-      search: feat.search || 0,
-      genImg: feat.genImg || 0,
-      askUser: feat.askUser || 0,
-      askUserIntent: feat.askUserIntent || 0,
-      askIdHasUnderscore: feat.askIdHasUnderscore || 0,
-      askIdBareIntent: feat.askIdBareIntent || 0,
-      askFormatOpt: feat.askFormatOpt || 0,
-      askTransformOpt: feat.askTransformOpt || 0,
-      askSolSig: feat.askSolSig || 0,
-      askSol56Sig: feat.askSol56Sig || 0,
-      parallelSteps: feat.parallelSteps || 0,
-      preNarrate: feat.preNarrate || 0,
-      preToolTextChars: feat.preToolTextChars || 0,
-      interToolTextChars: feat.interToolTextChars || 0,
-      avgTurnDurMs: feat.avgTurnDurMs || 0,
-      cps: feat.cps || 0,
-      memoAvgChunk: feat.memoAvgChunk || 0,
-      memoDeltaCount: feat.memoDeltaCount || 0,
-      writtenChars: feat.writtenChars || 0,
-      htmlMaxLen: feat.htmlMaxLen || 0,
-      meanChars: feat.meanChars || 0,
-      nonCodeMeanChars: feat.nonCodeMeanChars || 0,
-      isMicroProbeChat: Boolean(feat.isMicroProbeChat),
-      hasCompactMultiTurnSurge: Boolean(feat.hasCompactMultiTurnSurge),
-      isFlash38LowIdentity: Boolean(feat.isFlash38LowIdentity),
-      pyHeredoc: feat.pyHeredoc || 0,
-      catHeredoc: feat.catHeredoc || 0,
-      geminiPyHelper: feat.geminiPyHelper || 0,
-      inlineHtmlEcho: feat.inlineHtmlEcho || 0,
-      sandboxLink: feat.sandboxLink || 0,
-      lowerDoctype: feat.lowerDoctype || 0,
-      colorSchemeCss: feat.colorSchemeCss || 0,
-      prefersReducedMotion: feat.prefersReducedMotion || 0,
-      svgSmilNoScript: feat.svgSmilNoScript || 0,
-      ariaLabelledby: feat.ariaLabelledby || 0,
-      cssRoot: feat.cssRoot || 0,
-      raf: feat.raf || 0,
-      svgRich: feat.svgRich || 0,
-      boxComment: feat.boxComment || 0,
-      claudeWarmPalette: feat.claudeWarmPalette || 0,
-      cnColon: feat.cnColon || 0,
-      emDash: feat.emDash || 0,
-      curlyApostrophe: feat.curlyApostrophe || 0,
-      straightApostrophe: feat.straightApostrophe || 0,
-      unspacedEmDash: feat.unspacedEmDash || 0,
-      writeUnderscoreName: feat.writeUnderscoreName || 0,
-      checkmarkEmoji: feat.checkmarkEmoji || 0,
-      lunaNotSurePhrase: feat.lunaNotSurePhrase || 0,
-      solClarifyPhrase: feat.solClarifyPhrase || 0,
-      astraSelfContainedPhrase: feat.astraSelfContainedPhrase || 0,
-      terraPhrase: feat.terraPhrase || 0,
-      evalModality: feat.evalModality || 'chat',
-      tableCount: feat.tableCount || 0,
-      listLineCount: feat.listLineCount || 0,
-      selfCheckCount: feat.selfCheckCount || 0,
-      thinkStepLines: feat.thinkStepLines || 0,
-      avgThinkDurMs: feat.avgThinkDurMs || 0,
-      codeOmissionCount: feat.codeOmissionCount || 0,
-      codeDefensiveCount: feat.codeDefensiveCount || 0,
-      searchSourcesCount: feat.searchSourcesCount || 0,
-      citationCount: feat.citationCount || 0,
-      mediaImgCount: feat.mediaImgCount || 0,
-      mediaVideoCount: feat.mediaVideoCount || 0,
-      bashReadFiles: feat.bashReadFiles || 0,
-      bashEditFiles: feat.bashEditFiles || 0,
-      bashSearchOps: feat.bashSearchOps || 0,
-      bashTestRuns: feat.bashTestRuns || 0,
-      bashBuildRuns: feat.bashBuildRuns || 0,
-      editAddedLines: feat.editAddedLines || 0,
-      editDeletedLines: feat.editDeletedLines || 0,
-      multiTurnPersistence: feat.multiTurnPersistence ?? 0.78,
-      promptEntropy: feat.promptEntropy ?? 0.45,
-      codingTurns: feat.codingTurns || undefined,
-      wireFam: feat.wireFam || undefined,
-      htmlSvgMatch: feat.htmlSvgMatch?.best ? { code_type: feat.htmlSvgMatch.code_type, best: feat.htmlSvgMatch.best, top_candidates: (feat.htmlSvgMatch.top_candidates || feat.htmlSvgMatch.top3 || [feat.htmlSvgMatch.best]).slice(0, 4), features: feat.htmlSvgMatch.features } : undefined,
-      tierVec: Array.isArray(feat.tierVec) && feat.tierVec.length === 12 ? feat.tierVec : undefined,
-      htmlSvgSig: Array.isArray(feat.htmlSvgSig) && feat.htmlSvgSig.length === 12 ? feat.htmlSvgSig : undefined,
-      isGeminiCoding: Boolean(feat.isGeminiCoding),
-      isOpenThink: Boolean(feat.isOpenThink),
-    };
-  }
-
-  function metaSimilarity(feat, meta) {
-    if (!feat || !meta) return null;
-    const fTools = feat.totalTools || 0;
-    const mTools = meta.totalTools || 0;
-    const hasBothTv = Array.isArray(feat.tierVec) && feat.tierVec.length === 12 && Array.isArray(meta.tierVec) && meta.tierVec.length === 12;
-    if ((fTools === 0) !== (mTools === 0)) {
-      if (!hasBothTv) return 0.25;
-      const tvSimCross = tierVecSimilarity(feat.tierVec, meta.tierVec, feat.evalModality || meta.evalModality || 'chat');
-      return tvSimCross != null ? Math.max(0.25, Math.min(0.68, 0.22 + tvSimCross * 0.48)) : 0.25;
-    }
-    const fOnlyAsk = fTools > 0 && feat.askUser === fTools;
-    const mOnlyAsk = mTools > 0 && meta.askUser === mTools;
-    if (fOnlyAsk !== mOnlyAsk) return 0.30;
-    if (Boolean(feat.isGeminiCoding) !== Boolean(meta.isGeminiCoding)) return 0.20;
-    const tvSim = hasBothTv
-      ? tierVecSimilarity(feat.tierVec, meta.tierVec, feat.evalModality || meta.evalModality || 'chat')
-      : null;
-    let dSq = 0, wSum = 0;
-    const addD = (a, b, scale, w) => {
-      const diff = Math.min(1, Math.abs((Number(a) || 0) - (Number(b) || 0)) / Math.max(1e-5, scale));
-      dSq += w * diff * diff;
-      wSum += w;
-    };
-    const bothToolless = fTools === 0 && mTools === 0;
-    const hasHtmlEither = (feat.htmlMaxLen || 0) > 0 || (meta.htmlMaxLen || 0) > 0 || (feat.writtenChars || 0) > 0 || (meta.writtenChars || 0) > 0;
-    addD(feat.hidR / Math.max(1, feat.turns), (meta.hidR || 0) / Math.max(1, meta.turns || 1), 6.0, 2.8);
-    addD(feat.maxRInTurn || 0, meta.maxRInTurn || 0, 12.0, 2.6);
-    if (!bothToolless) {
-      addD(feat.preToolTextChars || 0, meta.preToolTextChars || 0, 280.0, 2.2);
-      addD(feat.interToolTextChars || 0, meta.interToolTextChars || 0, 280.0, 1.8);
-      addD(feat.askIdHasUnderscore || 0, meta.askIdHasUnderscore || 0, 1.0, fOnlyAsk ? 3.5 : 1.0);
-    }
-    if ((feat.avgTurnDurMs || 0) > 0 && (meta.avgTurnDurMs || 0) > 0) {
-      const fDur = feat.isMicroProbeChat ? feat.avgTurnDurMs * 4.2 : feat.avgTurnDurMs;
-      const mDur = meta.isMicroProbeChat ? meta.avgTurnDurMs * 4.2 : meta.avgTurnDurMs;
-      addD(fDur, mDur, 90000.0, 2.2);
-    }
-    if (!bothToolless || hasHtmlEither) {
-      if (bothToolless && hasHtmlEither) {
-        addD(Math.max(feat.writtenChars || 0, feat.htmlMaxLen || 0), Math.max(meta.writtenChars || 0, meta.htmlMaxLen || 0), 16000.0, 2.2);
-        addD(feat.ariaLabelledby || 0, meta.ariaLabelledby || 0, 1.0, 1.5);
-        addD(feat.svgSmilNoScript || 0, meta.svgSmilNoScript || 0, 1.0, 1.5);
-      } else {
-        const fWritten = feat.isMicroProbeChat ? Math.max(feat.writtenChars || 0, feat.htmlMaxLen || 0) * 8.5 : (feat.writtenChars || 0);
-        const mWritten = meta.isMicroProbeChat ? Math.max(meta.writtenChars || 0, meta.htmlMaxLen || 0) * 8.5 : (meta.writtenChars || 0);
-        addD(fWritten, mWritten, 45000.0, 1.6);
-      }
-    }
-    addD(feat.meanChars || 0, meta.meanChars || 0, 5000.0, 2.2);
-    if (!bothToolless) {
-      addD(feat.edit || 0, meta.edit || 0, 4.0, 1.8);
-      addD(feat.parallelSteps || 0, meta.parallelSteps || 0, 3.0, 1.6);
-    }
-    if ((feat.cps || 0) > 0 && (meta.cps || 0) > 0) {
-      addD(feat.cps, meta.cps, 90.0, 1.8);
-    }
-    if ((feat.memoAvgChunk || 0) > 0 && (meta.memoAvgChunk || 0) > 0) {
-      addD(feat.memoAvgChunk, meta.memoAvgChunk, feat.isGeminiCoding ? 80.0 : 12.0, 2.0);
-    }
-    if (!bothToolless || hasHtmlEither) {
-      addD(feat.lowerDoctype || 0, meta.lowerDoctype || 0, 2.0, 1.8);
-      addD(feat.colorSchemeCss || 0, meta.colorSchemeCss || 0, 2.0, 1.6);
-      addD(feat.prefersReducedMotion || 0, meta.prefersReducedMotion || 0, 2.0, 1.6);
-    }
-    if (!bothToolless) {
-      addD(feat.bash || 0, meta.bash || 0, 4.0, 1.5);
-      addD(feat.write || 0, meta.write || 0, 2.0, 1.5);
-    }
-    if (bothToolless) {
-      addD(feat.emDash || 0, meta.emDash || 0, 8.0, 1.6);
-      addD(feat.cnColon || 0, meta.cnColon || 0, 8.0, 1.6);
-      if (meta.h2 !== undefined || meta.h3 !== undefined) {
-        addD(feat.h2 || 0, meta.h2 || 0, 5.0, 1.4);
-        addD(feat.h3 || 0, meta.h3 || 0, 6.0, 1.4);
-      }
-      if (meta.codeBlocks !== undefined) {
-        addD(feat.codeBlocks || 0, meta.codeBlocks || 0, 4.0, 1.5);
-      }
-    }
-    if ((feat.selfCheckCount || 0) > 0 || (meta.selfCheckCount || 0) > 0) {
-      addD(feat.selfCheckCount || 0, meta.selfCheckCount || 0, 4.0, 1.4);
-    }
-    if ((feat.codeDefensiveCount || 0) > 0 || (meta.codeDefensiveCount || 0) > 0) {
-      addD(feat.codeDefensiveCount || 0, meta.codeDefensiveCount || 0, 6.0, 1.5);
-    }
-    if ((feat.searchSourcesCount || 0) > 0 || (meta.searchSourcesCount || 0) > 0) {
-      addD(feat.searchSourcesCount || 0, meta.searchSourcesCount || 0, 8.0, 1.6);
-    }
-    if ((feat.bash || 0) > 0 && (meta.bash || 0) > 0 && (meta.bashReadFiles !== undefined || meta.bashEditFiles !== undefined || meta.bashSearchOps !== undefined)) {
-      addD(feat.bashReadFiles || 0, meta.bashReadFiles || 0, 6.0, 1.2);
-      addD(feat.bashEditFiles || 0, meta.bashEditFiles || 0, 4.0, 1.3);
-      addD(feat.bashSearchOps || 0, meta.bashSearchOps || 0, 5.0, 1.1);
-      addD(feat.bashTestRuns || 0, meta.bashTestRuns || 0, 3.0, 1.2);
-    }
-    if ((feat.edit || 0) > 0 && (meta.edit || 0) > 0 && (meta.editAddedLines !== undefined || meta.editDeletedLines !== undefined)) {
-      addD(feat.editAddedLines || 0, meta.editAddedLines || 0, 120.0, 1.1);
-      addD(feat.editDeletedLines || 0, meta.editDeletedLines || 0, 80.0, 1.0);
-    }
-    if (Array.isArray(feat.htmlSvgSig) && feat.htmlSvgSig.length === 12 && Array.isArray(meta.htmlSvgSig) && meta.htmlSvgSig.length === 12) {
-      for (let si = 0; si < 12; si++) {
-        addD(feat.htmlSvgSig[si], meta.htmlSvgSig[si], 1.0, 0.45);
-      }
-    }
-    const baseMetaSim = Math.max(0, Math.min(1, 1 - Math.sqrt(dSq / Math.max(1e-6, wSum))));
-    return tvSim != null ? (baseMetaSim * 0.72 + tvSim * 0.28) : baseMetaSim;
-  }
-
-  // 二阶段同家族相邻档位解耦判别器（Stage-2 Intra-Family Effort-Tier Disentangler）：
-  // 在 Stage-1 锁定候选模型家族后，专门使用 12 维档位微差子空间 tierVec、Battle 对偶超平面、多模态画像与厂商因子化档位先验，
-  // 精准分离同家族内已存在的多个强度档位候选（绝不向 scoreMap 注入伪造或派生行，强度识别与型号本体识别严格解耦）
-  function disentangleIntraFamilyTiers(scoreMap, feat, calib, bankByKey, isEvalAnalyze = false) {
-    try {
-      if (!scoreMap || !feat || !Array.isArray(feat.tierVec) || feat.tierVec.length !== 12) return;
-      const tv = feat.tierVec;
-      const mod = String(feat.evalModality || 'chat').toLowerCase();
-      const TIER_IDEAL_EFFORT = { low: 0.25, medium: 0.48, high: 0.68, xhigh: 0.81, max: 0.92 };
-
-      // 1. 按 famKey 聚合现有候选家族（不再从 tierCentroids 派生新行进入 scoreMap，防止强度档位与型号习惯冲突或产生双后缀）
-      const famGroups = new Map();
-      for (const [k, item] of scoreMap.entries()) {
-        if (!item) continue;
-        item.label = formatDisplayModelLabel(item.label, item.canon);
-        const p = parseModelFamilyAndTier(item.canon || item.label);
-        if (!p.famKey || !p.tier) continue;
-        if (!famGroups.has(p.famKey)) famGroups.set(p.famKey, []);
-        famGroups.get(p.famKey).push({ key: k, item, tier: p.tier, famKey: p.famKey, baseLabel: p.baseLabel });
-      }
-
-      for (const [famKey, members] of famGroups.entries()) {
-        const effInfo = identifyEffortTier(feat, famKey, calib);
-        if (effInfo?.tier) {
-          for (const m of members) {
-            m.item.detectedEffort = (m.tier && m.tier !== 'standard') ? m.tier : effInfo.tier;
-            m.item.familyInferredEffort = effInfo.tier;
-          }
-        }
-        if (members.length < 2) continue;
-        const maxFamSim = Math.max(...members.map(m => m.item.sim || 0));
-        if (maxFamSim < 0.78) continue;
-
-        const hyperMap = calib?.intraFamilyHyperplanes?.[famKey] || null;
-        const tierScores = new Map();
-
-        for (const m of members) {
-          let ev = 0;
-          let wSum = 0;
-
-          // (A) 该档位专属 Battle/Direct 真值质心匹配度（最高优先，高权重锚定）
-          const cent = calib?.tierCentroids?.[m.key];
-          if (cent && Array.isArray(cent.tierVec) && cent.tierVec.length === 12) {
-            const cSim = tierVecSimilarity(tv, cent.tierVec, mod, cent.stdVec);
-            if (cSim != null) {
-              const truthConf = Math.min(1.0, (Number(cent.truthWeightSum) || (cent.count || 1) * 2) / 9.0);
-              const wCent = 3.4 * (0.45 + 0.55 * truthConf);
-              ev += (cSim - 0.75) * wCent;
-              wSum += wCent;
-            }
-          }
-
-          // (B) 当前模态（chat / webdev / search / image / video）专属档位画像匹配
-          const modProf = calib?.modalityProfiles?.[mod]?.[m.key];
-          if (modProf && Array.isArray(modProf.tierVec) && modProf.tierVec.length === 12) {
-            const mSim = tierVecSimilarity(tv, modProf.tierVec, mod);
-            if (mSim != null) {
-              const wMod = 1.85;
-              ev += (mSim - 0.75) * wMod;
-              wSum += wMod;
-            }
-          }
-
-          // (C) 厂商级跨家族档位相对先验（当该家族某档位尚缺直接样本时，借用同厂商如 Anthropic/OpenAI 同档位微差特征）
-          const vid = detectModelVendorId(m.item.canon || m.item.label);
-          const vPrior = calib?.vendorTierDeltas?.[vid]?.[m.tier];
-          if (vPrior && Array.isArray(vPrior.tierVec) && vPrior.tierVec.length === 12) {
-            const vpSim = tierVecSimilarity(tv, vPrior.tierVec, mod);
-            if (vpSim != null) {
-              const wVp = cent ? 0.55 : 1.15;
-              ev += (vpSim - 0.76) * wVp;
-              wSum += wVp;
-            }
-          }
-
-          // (D) Battle 同题对偶线性超平面 margin 投票（如 high>medium, max>high）：大幅拉开同家族不同强度档位误差
-          if (hyperMap && typeof hyperMap === 'object') {
-            for (const [pk, hObj] of Object.entries(hyperMap)) {
-              if (!hObj || !Array.isArray(hObj.wVec) || hObj.wVec.length !== 12) continue;
-              const [hiT, loT] = pk.split('>');
-              if (m.tier !== hiT && m.tier !== loT) continue;
-              const proj = tv.reduce((acc, val, idx) => acc + (Number(hObj.wVec[idx]) || 0) * (Number(val) || 0), 0);
-              const margin = proj - (Number(hObj.threshold) || 0);
-              const dir = m.tier === hiT ? 1 : -1;
-              const hConf = Math.min(1.0, (Number(hObj.count) || 1) / 3);
-              ev += Math.max(-0.24, Math.min(0.24, dir * margin * 1.85)) * (2.4 * hConf);
-              wSum += 1.5 * hConf;
-            }
-          }
-
-          // (E) 内禀 Prompt 复杂度归一化努力度曲线（兜底防漂移）
-          const idealE = TIER_IDEAL_EFFORT[m.tier] ?? 0.68;
-          const actualE = (Number(tv[11]) || 0.65) * 0.55 + (Number(tv[0]) || 0.5) * 0.25 + (Number(tv[4]) || 0.5) * 0.20;
-          const eDist = Math.abs(actualE - idealE);
-          ev += (0.18 - eDist) * 1.05;
-          wSum += 1.05;
-
-          const normEv = wSum > 0 ? (ev / wSum) : 0;
-          tierScores.set(m.key, normEv);
-        }
-
-        // 零均值中心化精排：保持该模型家族整体对外竞争力不变，在有 Battle/Direct 真值校准时果断拉开不同强度档位差距
-        const hasLearnedFamTier = Boolean(
-          (hyperMap && Object.keys(hyperMap).length > 0) ||
-          members.some(m => calib?.tierCentroids?.[m.key])
-        );
-        const vals = [...tierScores.values()];
-        const meanEv = vals.reduce((a, b) => a + b, 0) / Math.max(1, vals.length);
-        const sortedBySim = [...members].sort((a, b) => (Number(b.item?.sim) || 0) - (Number(a.item?.sim) || 0));
-        const famMaxSim = Number(sortedBySim[0]?.item?.sim) || 0.15;
-        const secondSim = Number(sortedBySim[1]?.item?.sim) || 0;
-        const hasStrongRuleLeader = Boolean(sortedBySim[0]?.item?.protoRuleLeader) || (famMaxSim >= 0.955 && (famMaxSim - secondSim) >= 0.024) || Boolean(feat?.tagReiTier && sortedBySim[0]?.tier === feat.tagReiTier);
-        let bestMember = null, bestRel = -999;
-        if (hasStrongRuleLeader) {
-          bestMember = sortedBySim[0];
-          bestRel = 0.05;
-        } else {
-          for (const m of members) {
-            const rel = (tierScores.get(m.key) || 0) - meanEv;
-            if (rel > bestRel) {
-              bestRel = rel;
-              bestMember = m;
-            }
-            const delta = hasLearnedFamTier
-              ? Math.max(-0.075, Math.min(0.085, rel * 0.52))
-              : Math.max(-0.026, Math.min(0.032, rel * 0.22));
-            m.item.sim = Math.max(0.12, Math.min(0.994, famMaxSim + 0.004, m.item.sim + delta));
-          }
-          if (bestMember && bestMember.item.sim < famMaxSim) bestMember.item.sim = famMaxSim;
-        }
-        if (bestMember && bestRel >= 0.028 && calib?.tierCentroids?.[bestMember.key]) {
-          const tag = `🎯 同族档位微差锁定(${bestMember.tier.toUpperCase()})`;
-          bestMember.item.tags = [tag, ...(bestMember.item.tags || []).filter(t => t !== tag).slice(0, 4)];
-        }
-      }
-    } catch {}
-  }
-
-  function analyze(chat, modelEntry = null, { ignoreExactSid = false } = {}) {
-    const rawSid = String(chat?.sid || modelEntry?.sid || '');
-    const sid = rawSid;
-    const cacheSidKey = rawSid || '';
-    const allMsgs = Array.isArray(chat?.messages) ? chat.messages : [];
-    const lastM = allMsgs.at(-1);
-    const lastP = lastM?.parts?.at(-1);
-    const lastPLen = typeof lastP?.text === 'string' ? lastP.text.length : (typeof lastP?.inputText === 'string' ? lastP.inputText.length : 0);
-    const mRef = ignoreExactSid ? modelEntry : (modelEntry || (sid && typeof Models !== 'undefined' ? Models.get(sid) : null));
-    const msgDigest = computeMessagesDigest(allMsgs);
-    const anaCacheKey = cacheSidKey ? `${cacheSidKey}:${allMsgs.length}:${lastM?.id || ''}:${lastM?.parts?.length || 0}:${msgDigest}:${chat?.busy ? (lastPLen >> 8) : lastPLen}:${chat?.fmt?.tN ? (chat.fmt.tN >> 4) : 0}:${ignoreExactSid ? '' : (mRef?.name || '')}:${ignoreExactSid ? 0 : (mRef?.userCorrected ? 1 : 0)}:${ignoreExactSid ? 0 : (mRef?.reverseScore || 0)}:${ignoreExactSid ? 0 : (mRef?.habitTags?.length || 0)}:${bankRev}:${calibRev}:${ignoreExactSid ? 1 : 0}` : '';
-    if (anaCacheKey && _analyzeCache.has(cacheSidKey) && _analyzeCache.get(cacheSidKey).key === anaCacheKey) {
-      return _analyzeCache.get(cacheSidKey).val;
-    }
-    const feat = chat?._injectedFeat || extractFeatures(chat, mRef, { ignoreExactSid });
-    if (!feat) {
-      if (anaCacheKey) {
-        if (_analyzeCache.size > 64) _analyzeCache.delete(_analyzeCache.keys().next().value);
-        _analyzeCache.set(cacheSidKey, { key: anaCacheKey, val: null });
-      }
-      return null;
-    }
-    if (!Array.isArray(feat.habitTags)) feat.habitTags = [];
-    const bank = loadBank();
-    const calib = loadCalibration();
-    const usageStats = getUsageStats();
-    const scoreMap = new Map();
-    const cpsEarly = Number(feat.cps) || 0;
-
-    const isArgonBehavior = ((feat.turns === 2 && feat.write === 1 && feat.bash === 1 && (feat.search || 0) >= 2 && feat.askUser >= 1 && (feat.writtenChars || 0) >= 50000 && cpsEarly >= 200) || (feat.turns === 2 && feat.write === 1 && (feat.bash || 0) <= 6 && (feat.tagThinkTok || 0) >= 25000) || (feat.write === 2 && (feat.bash || 0) <= 1 && (feat.edit || 0) === 0 && ((feat.memoAvgChunk || 0) >= 200 || cpsEarly >= 210) && (feat.writtenChars || 0) >= 95000) || ((feat.inlineHtmlEcho === 0 || feat.htmlSvgMatch?.best?.model_id === "google/gemini-4-argon" || (feat.turns === 2 && feat.write === 2 && feat.bash === 1 && (feat.parallelSteps || 0) >= 2 && feat.avgTurnDurMs >= 220000 && cpsEarly > 0 && cpsEarly < 140) || (feat.turns >= 4 && feat.bash >= 5 && feat.writtenChars >= 65000) || (feat.turns <= 2 && feat.bash >= 50 && (feat.search || 0) >= 20 && feat.avgTurnDurMs >= 300000) || (feat.turns === 2 && feat.bash === 0 && feat.write === 1 && (feat.nonCodeMeanChars || 0) >= 850 && feat.avgTurnDurMs >= 195000)) && (feat.geminiPyHelper === 0 || (feat.bash >= 20 && (feat.read || 0) >= 8 && feat.write === 0 && feat.edit === 0 && (cpsEarly === 0 || cpsEarly < 15))))) && !(feat.turns >= 3 && (feat.search || 0) >= 25 && (feat.askUser || 0) >= 1) && !(feat.turns >= 5 && (feat.pyHeredoc || 0) >= 20 && (feat.askUser || 0) >= 1) && (
-      feat.edit >= 1 ||
-      feat.read >= 12 ||
-      (feat.bash >= 20 && (feat.read || 0) >= 8 && feat.write === 0 && feat.edit === 0 && (cpsEarly === 0 || cpsEarly < 15)) ||
-      (feat.parallelSteps >= 2 && feat.catHeredoc === 0) ||
-      (feat.parallelSteps >= 1 && feat.avgTurnDurMs >= 60000) ||
-      (feat.bash >= 3 && (feat.search || 0) < 10 && feat.avgTurnDurMs >= 80000 && !(feat.turns <= 2 && cpsEarly >= 180 && (feat.memoDeltaCount || 0) >= 200 && (feat.read || 0) === 0) && (feat.write >= 1 || (feat.turns === 1 && feat.bash <= 19 && feat.totalTools <= 36) || (feat.turns === 2 && feat.bash >= 20 && (feat.search || 0) <= 2 && feat.avgTurnDurMs >= 250000))) ||
-      (feat.turns === 1 && feat.bash >= 20 && feat.bash <= 32 && (feat.search || 0) >= 10 && (feat.search || 0) <= 25 && feat.write === 0 && feat.edit === 0 && feat.avgTurnDurMs >= 200000 && feat.avgTurnDurMs <= 310000) ||
-      (feat.turns <= 2 && feat.bash >= 50 && (feat.search || 0) >= 20 && feat.avgTurnDurMs >= 400000) ||
-      (feat.turns === 2 && feat.write === 2 && feat.bash === 3 && (feat.read || 0) === 1 && feat.edit === 0 && cpsEarly >= 165) ||
-      (feat.turns === 2 && feat.write === 2 && feat.bash === 1 && feat.edit === 0 && (cpsEarly === 0 || cpsEarly < 160) && feat.writtenChars >= 30000 && feat.writtenChars <= 44500 && (feat.writeUnderscoreName || 0) === 0) ||
-      (feat.turns === 2 && feat.write === 2 && feat.bash >= 1 && feat.bash <= 2 && feat.edit === 0 && (cpsEarly === 0 || cpsEarly < 195) && ((feat.writtenChars >= 42000 && feat.writtenChars <= 52000) || (feat.writtenChars >= 34000 && feat.writtenChars <= 62000 && ((feat.boxComment || 0) >= 1 || (feat.cnColon || 0) >= 3)))) ||
-      (feat.write === 2 && (feat.bash || 0) <= 1 && (feat.edit || 0) === 0 && ((feat.memoAvgChunk || 0) >= 160 || cpsEarly >= 155) && (feat.writtenChars || 0) >= 75000) ||
-      (feat.turns === 3 && feat.bash >= 15 && (feat.search || 0) <= 5 && feat.write <= 1 && feat.edit === 0) ||
-      (feat.askUser >= 1 && feat.bash >= 1 && feat.bash <= 8 && (feat.search || 0) <= 2 && feat.write <= 1 && feat.edit === 0) ||
-      (feat.turns === 2 && feat.write === 1 && feat.bash === 1 && (feat.search || 0) >= 2 && feat.askUser >= 1 && (feat.writtenChars || 0) >= 40000 && cpsEarly >= 150) ||
-      (feat.turns === 2 && feat.write === 1 && (feat.bash || 0) <= 6 && (feat.tagThinkTok || 0) >= 25000) ||
-      (feat.turns <= 3 && feat.bash >= 5 && (feat.pyHeredoc || 0) <= 10 && (feat.search || 0) === 0 && feat.edit === 0 && (feat.write >= 1 || feat.cnColon >= 4) && (feat.writtenChars > 0 || feat.avgTurnDurMs > 0 || feat.cnColon >= 4)) ||
-      (feat.turns === 2 && feat.bash === 0 && feat.write === 1 && (feat.nonCodeMeanChars || 0) >= 850 && feat.avgTurnDurMs >= 195000) ||
-      (feat.turns === 1 && feat.totalTools === 1 && feat.bash === 0 && feat.write === 0 && feat.edit === 0 && feat.askUser === 0 && ((feat.avgTurnDurMs >= 33000 && feat.meanChars >= 800) || ((feat.search || 0) === 1 && feat.meanChars >= 2000))) ||
-      (feat.totalTools === 0 && feat.meanChars >= 330 && (feat.avgTurnDurMs >= 15000 || (feat.turns >= 2 && (feat.memoAvgChunk || 0) >= 20 && (feat.memoAvgChunk || 0) <= 80) || (feat.turns === 1 && (feat.avgTurnDurMs || 0) === 0 && (feat.htmlMaxLen || 0) >= 14000 && (feat.evalModality === 'chat' || (feat.htmlSvgMatch?.best?.canon === 'gemini-4-argon-max' && (feat.htmlSvgMatch?.best?.ruleScore || 0) >= 0.70)))))
-    );
-    const isKnownArgon = !CONFIRMED_GEMINI_FLASH_SIDS.has(sid) && (
-      KNOWN_ARGON_SIDS.has(sid) ||
-      Boolean(isArgonBehavior) ||
-      bank.some(b => b && b.sid === sid && (b.userConfirmed || b.importedFromDiag) && /argon|barium/i.test(String(b.id || b.model || '')))
-    );
-
-    const onlyAskUser = feat.totalTools > 0 && feat.askUser === feat.totalTools;
-    const isHaikuPlainMedium = feat.totalTools === 0 && !(feat.turns === 1 && feat.hidR === 0 && (feat.meanChars || 0) >= 700 && (feat.meanChars || 0) <= 850 && (feat.straightApostrophe || 0) >= 2) && feat.straightApostrophe >= 1 && feat.curlyApostrophe === 0 && feat.meanChars >= 380 && feat.meanChars <= 1600;
-    const wPerWrite = (feat.writtenChars || 0) / Math.max(1, feat.write || 1);
-    const isFable51CodingCore = Boolean(
-      !feat.isGeminiCoding && !feat.isOpenThink && (
-        (((feat.turns === 1 && feat.hidR === 1) || ((feat.codingTurns || 1) === 1 && (feat.nonCodeMeanChars || 0) > 0 && (feat.nonCodeMeanChars || 0) <= 180 && (feat.maxRInTurn || 1) === 1)) &&
-        feat.write === 1 && feat.totalTools === 2 &&
-        (feat.bash || 0) === 0 && (feat.preToolTextChars || 0) === 0 && (feat.interToolTextChars || 0) === 0 &&
-        (((feat.cps || 0) >= 95) || ((feat.cps || 0) === 0 && ((feat.avgTurnDurMs || 0) === 0 || (feat.avgTurnDurMs || 0) >= 3600000) && (feat.memoDeltaCount || 0) >= 40)) && ((feat.memoAvgChunk || 0) >= 10.5 && (feat.memoAvgChunk || 0) <= 15.2) &&
-        (feat.writtenChars || 0) >= 11500 && (feat.writtenChars || 0) <= 16500 &&
-        (feat.straightApostrophe || 0) >= 2 &&
-        (feat.prefersReducedMotion || 0) === 0 && (feat.colorSchemeCss || 0) === 0 && (feat.sandboxLink || 0) === 0 && (feat.boxComment || 0) === 0) ||
-        (feat.turns === 1 && feat.hidR === 1 && feat.totalTools === 2 && feat.write === 1 && (feat.bash || 0) === 0 && (feat.edit || 0) === 0 && (feat.preToolTextChars || 0) === 0 && (feat.interToolTextChars || 0) === 0 && cpsEarly >= 52 && cpsEarly <= 75 && (feat.avgTurnDurMs || 0) >= 165000 && (feat.writtenChars || 0) >= 12000 && (feat.writtenChars || 0) <= 18000) ||
-        (feat.htmlSvgMatch?.best?.id === 'anthropic/claude-fable-5.1' && (feat.htmlSvgMatch?.best?.ruleScore || 0) >= 0.65)
-      )
-    );
-    const isLunaHighCodingCore = false;
-    const isHaikuMultiTurnMedium = !isFable51CodingCore && feat.wireFam !== 'openai' && (((feat.turns === 3 && feat.write === 2 && feat.bash === 0 && (feat.search || 0) === 1) || (feat.turns === 2 && feat.write === 1 && feat.bash === 0 && feat.askUser === 1)) && cpsEarly >= 220 && feat.writtenChars >= 16000 && feat.writtenChars < 22000 || (feat.turns >= 2 && feat.write >= 1 && feat.write <= 2 && feat.bash === 0 && feat.edit === 0 && feat.askUser === 0 && wPerWrite >= 12000 && wPerWrite < 14000 && ((feat.nonCodeMeanChars || 0) === 0 || (feat.nonCodeMeanChars || 0) <= 500 || (feat.nonCodeMeanChars || 0) === Math.round(feat.meanChars || 0)) && feat.maxRInTurn <= 2 && (feat.memoDeltaCount >= 50 || ((feat.memoDeltaCount || 0) === 0 && ((feat.straightApostrophe || 0) >= 3 || (feat.avgTurnDurMs >= 65000 && feat.avgTurnDurMs <= 90000) || (feat.turns >= 5 && feat.meanChars >= 4000 && feat.meanChars < 7500)))) && feat.sandboxLink === 0 && feat.lowerDoctype === 0 && feat.prefersReducedMotion === 0 && feat.boxComment === 0));
-    const isMicroProbe = Boolean(feat.isMicroProbeChat);
-    const effWChars = isMicroProbe ? Math.round(Math.max(feat.writtenChars || 0, feat.htmlMaxLen || 0) * 8.5) : (feat.writtenChars || 0);
-    const avgChunk = Number(feat.memoAvgChunk) || 0;
-    const deltaCnt = Number(feat.memoDeltaCount) || 0;
-    const isEvalAnalyze = Boolean(chat?.isEvaluation || chat?.evalMode === 'battle' || chat?.evalMode === 'direct' || chat?.battleSide || /#[ab]$/i.test(rawSid) || /#[ab]$/i.test(sid));
-    const hasOpenAiIntentMarkers = Boolean((feat.askIdHasUnderscore || 0) > 0 || (feat.askFormatOpt || 0) > 0 || (feat.askTransformOpt || 0) > 0 || feat.hasSys6603Tag || feat.hasZeroCacheWriteTag || feat.isSol61Tag || feat.isLunaFastTag || (feat.totalTools === 0 && (feat.straightApostrophe || 0) === 0 && (feat.htmlMaxLen || 0) === 0 && ((feat.solClarifyPhrase || 0) > 0 || (feat.lunaNotSurePhrase || 0) > 0 || (feat.astraSelfContainedPhrase || 0) > 0 || ((feat.unspacedEmDash || 0) >= 1 && (feat.avgTurnDurMs || 0) > 0 && (feat.avgTurnDurMs || 0) <= 4000 && (feat.meanChars || 0) <= 150) || (feat.turns === 1 && feat.hidR === 0 && (feat.avgTurnDurMs || 0) === 0 && feat.isMicroProbeChat && (feat.meanChars || 0) >= 250 && (feat.meanChars || 0) <= 320 && (feat.cnColon || 0) === 0))) || (feat.turns === 1 && feat.hidR === 0 && (feat.read || 0) >= 4 && feat.write === 0 && feat.bash === 0 && (feat.edit || 0) === 0 && (feat.meanChars || 0) <= 220));
-    const isDefiniteOpenAiChunkStream = !isEvalAnalyze && !feat.isGeminiCoding && !isFable51CodingCore && deltaCnt >= 15 && avgChunk >= 1.0 && avgChunk < 4.2 && (feat.claudeWarmPalette || 0) === 0;
-    const hasClaudeChunkSig = !isEvalAnalyze && !isDefiniteOpenAiChunkStream && !hasOpenAiIntentMarkers && feat.wireFam !== 'openai' && deltaCnt >= 6 && avgChunk >= 4.0 && avgChunk <= 19.5 && !feat.isGeminiCoding && (feat.sandboxLink || 0) === 0 && (feat.lowerDoctype || 0) === 0 && (feat.colorSchemeCss || 0) === 0;
     const hasOpenAiChunkSig = !isEvalAnalyze && (isDefiniteOpenAiChunkStream || (deltaCnt >= 6 && ((avgChunk >= 20.0 && avgChunk <= 62.0) || (avgChunk >= 1.0 && avgChunk < 5.0)) && !feat.isGeminiCoding && (feat.claudeWarmPalette || 0) === 0 && (feat.boxComment || 0) === 0 && (feat.preToolTextChars || 0) < 100 && (feat.interToolTextChars || 0) < 80));
     const isClaudeHtmlNoOpenAiMarkers = !isDefiniteOpenAiChunkStream && feat.wireFam !== 'openai' && !feat.isGeminiCoding && (feat.sandboxLink || 0) === 0 && (feat.lowerDoctype || 0) === 0 && (feat.colorSchemeCss || 0) === 0 && (feat.svgSmilNoScript || 0) === 0 && ((feat.ariaLabelledby || 0) === 0 || (feat.boxComment || 0) >= 1 || (feat.preNarrate || 0) >= 0.45) && (feat.prefersReducedMotion || 0) <= (hasClaudeChunkSig || (feat.boxComment || 0) >= 1 ? 2 : 1) && (hasClaudeChunkSig || (feat.boxComment || 0) >= 1 || (feat.write >= 2 && feat.hidR >= 2 && feat.maxRInTurn <= 3 && feat.writtenChars >= 9500 && feat.writtenChars < 22000) || (feat.write === 1 && feat.bash === 0 && feat.hidR >= 1 && feat.maxRInTurn <= 3 && feat.writtenChars >= 14000 && (feat.avgTurnDurMs || 0) >= 95000));
     const isHaikuCodingOrSearch = !isDefiniteOpenAiChunkStream && (
@@ -1855,14 +1303,18 @@
   function inferPlainModelByRAvg(streamProbe) {
     const rAvg = Number(streamProbe && streamProbe.rAvgChunk) ||
       ((streamProbe && streamProbe.reasoningChunks > 0) ? +(streamProbe.rawReasoningChars / streamProbe.reasoningChunks).toFixed(2) : 0);
-    if (rAvg > 85) return { id: 'contenders/caveman-agent', label: 'Beam 1.0 501B A23B' };
-    if (rAvg > 0 && rAvg <= 3.6) return { id: 'deepseek/deepseek-v4.1-flash', label: 'DeepSeek V4.1 Flash' };
-    if (rAvg > 3.6 && rAvg <= 6.2) return { id: 'moonshotai/kimi-k3', label: 'Kimi K3' };
-    if (rAvg > 6.2 && rAvg <= 8.35) return { id: 'alibaba/qwen3.8-max', label: 'Qwen 3.8 Max' };
-    if (rAvg > 8.35 && rAvg <= 10.2) return { id: 'xiaomi/mimo-v2.6-pro', label: 'MiMo V2.6 Pro' };
-    if (rAvg > 10.2 && rAvg <= 18.0) return { id: 'z-ai/glm-5.3', label: 'GLM 5.3' };
-    if (rAvg > 18.0) return { id: 'nvidia/nemotron-3-ultra', label: 'Nemotron 3 Ultra' };
-    return { id: 'deepseek/deepseek-v4.1-flash', label: 'DeepSeek V4.1 Flash' };
+    const _AP = (typeof ArenaPricing !== 'undefined' && ArenaPricing) || (typeof globalThis !== 'undefined' && globalThis.ArenaPricing) || null;
+    const v18Band = (_AP && typeof _AP.classifyOpenThinkingByRAvg === 'function')
+      ? _AP.classifyOpenThinkingByRAvg(rAvg, streamProbe)
+      : null;
+    if (rAvg > 85) return { id: 'contenders/caveman-agent', label: 'Beam 1.0 501B A23B', v18Band };
+    if (rAvg > 0 && rAvg <= 3.6) return { id: 'deepseek/deepseek-v4.1-flash', label: 'DeepSeek V4.1 Flash', v18Band };
+    if (rAvg > 3.6 && rAvg <= 6.2) return { id: 'moonshotai/kimi-k3', label: 'Kimi K3', v18Band };
+    if (rAvg > 6.2 && rAvg <= 8.35) return { id: 'alibaba/qwen3.8-max', label: 'Qwen 3.8 Max', v18Band };
+    if (rAvg > 8.35 && rAvg <= 10.2) return { id: 'xiaomi/mimo-v2.6-pro', label: 'MiMo V2.6 Pro', v18Band };
+    if (rAvg > 10.2 && rAvg <= 18.0) return { id: 'z-ai/glm-5.3', label: 'GLM 5.3', v18Band };
+    if (rAvg > 18.0) return { id: 'nvidia/nemotron-3-ultra', label: 'Nemotron 3 Ultra', v18Band };
+    return { id: 'deepseek/deepseek-v4.1-flash', label: 'DeepSeek V4.1 Flash', v18Band };
   }
 
   // 通过对话记录与工具调用拓扑结构直接反推模型（仅在 /cost 接口 403/关闭/无账单时，作为纯展示兜底）
@@ -2289,3 +1741,111 @@
     return { kind: 'diagnostic', imported: importedCount, model: lastModel, total: bank.length };
   }
 
+
+  function isEvalSession(sidOrChat, hEntry = null) {
+    const c = (typeof sidOrChat === 'object' && sidOrChat) ? sidOrChat : (sidOrChat && typeof Chats !== 'undefined' ? Chats.get(sidOrChat) : null);
+    if (c && (c.isEvaluation || c.evalMode === 'battle' || c.evalMode === 'direct' || c._isVirtualBattleSide)) return true;
+    const sid = (typeof sidOrChat === 'string') ? sidOrChat : c?.sid;
+    const he = hEntry || (sid && typeof History !== 'undefined' && typeof History.byId === 'function' ? History.byId(sid) : null);
+    if (he && (he.type === 'evaluation' || he.mode === 'battle' || he.mode === 'direct' || he.mode === 'direct-battle' || he.mode === 'side-by-side')) return true;
+    return false;
+  }
+
+  function identifyAndApply(chat, { force = false, fromCostFallback = false, interactive = false, preferLatestTurn = false } = {}) {
+    if (!chat?.sid || isEvalSession(chat)) return null;
+    const sid = chat.sid;
+    const known = typeof Models !== 'undefined' ? Models.get(sid) : null;
+    if (known?.userCorrected && !interactive && !CONFIRMED_GEMINI_FLASH_SIDS.has(sid)) return known;
+    if (interactive && known?.userCorrected) {
+      delete known.userCorrected;
+      delete known.userCorrectedAt;
+    }
+    if (known?.fingerprint?.result && !interactive) return known;
+    const cloudTitle = (typeof History !== 'undefined' && History.byId?.(sid)?.title) || chat?.title || '';
+    const restoredMeta = typeof TitleSync !== 'undefined' ? TitleSync.restored?.(sid) : null;
+    const compAsstForGuard = Array.isArray(chat?.messages) ? chat.messages.filter(x => x && x.role === 'assistant' && !x.failed && x.status !== 'failed' && x.status !== 'pending') : [];
+    const hasLoadedMsgs = compAsstForGuard.length > 0;
+    const hasNewerLoadedTurn = Boolean(hasLoadedMsgs && ((compAsstForGuard.length > (Number(known?.completedTurnCount) || 0)) || !known?.lastMessageId || (compAsstForGuard.at(-1)?.id && compAsstForGuard.at(-1).id !== known.lastMessageId) || (known?.reverseVer || 0) < 183));
+    if (!interactive && !force && !hasLoadedMsgs && !hasNewerLoadedTurn && !known?.habitFeatures && ((typeof TitleCipher !== 'undefined' && TitleCipher.isEncoded?.(cloudTitle)) || (restoredMeta && !restoredMeta.fromPrefix && !restoredMeta.fromLocal))) return known;
+    if (!interactive && !force && !hasLoadedMsgs && restoredMeta?.fromPrefix && (!known?.habitFeatures && (known?.reverseVer || 0) >= 174)) return known;
+    const hasAuthoritativeApi = known && !known.guess && !known.fromTitle && !known.reverseInferred && !known.billingProbe && !known.habitInferred && (known.response || (known.internal && !known.billingProbe));
+    if (hasAuthoritativeApi && !force) return known;
+    // 识别到开源模型后，除非用户手动点击「反推锁定」（interactive: true），否则直接标记为「开源模型」并同步修改对话名称，不再浪费算力去推理具体计费型号
+    if (!interactive && typeof BillingProbe !== 'undefined' && typeof BillingProbe.shouldSkipCostForOpenSource === 'function' && BillingProbe.shouldSkipCostForOpenSource(chat)) {
+      if (typeof BillingProbe.markAsOpenSourceModel === 'function') {
+        return BillingProbe.markAsOpenSourceModel(chat);
+      }
+    }
+    const costEnabledNow = typeof BillingProbe !== 'undefined' && typeof BillingProbe.isCostProbeEnabled === 'function' ? BillingProbe.isCostProbeEnabled() : true;
+    const stNowForCost = (typeof BillingProbe !== 'undefined' && typeof BillingProbe.getLiveState === 'function')
+      ? BillingProbe.getLiveState(sid)
+      : (typeof BillingProbe !== 'undefined' && typeof BillingProbe.state === 'function' ? BillingProbe.state(sid) : null);
+    const hasLiveValidCostObs = Boolean(
+      Number(stNowForCost?.ledger?.observations || 0) > 0 &&
+      Number(stNowForCost?.info?.result?.actual?.basePriceUsd || stNowForCost?.lastInfo?.result?.actual?.basePriceUsd || 0) > 0 &&
+      stNowForCost?.status !== 'forbidden' && stNowForCost?.status !== 'error'
+    );
+    const liveCostCands = hasLiveValidCostObs ? (stNowForCost?.info?.result?.baseMatch?.candidates || stNowForCost?.lastInfo?.result?.baseMatch?.candidates || []) : [];
+    const hasKnownRealCost = Boolean(
+      (Number(known?.costUsd) > 0) ||
+      (Number(known?.reverseTokens?.total) > 0) ||
+      (Number(known?.reverseTotalTokens?.total) > 0)
+    );
+    const realSavedRevCand = (hasKnownRealCost && known && Array.isArray(known.reverseCandidates))
+      ? known.reverseCandidates.find(rc => rc && !rc.structuralRev && !rc.zeroQuota && !rc.zeroQuotaMode && rc.source !== 'habit' && rc.source !== 'fp' && !rc.habitSource && (rc.diophantinePassed || Number(rc.revPct ?? rc.match ?? 0) >= 75))
+      : null;
+    const hasRealCostModel = Boolean(
+      !CONFIRMED_GEMINI_FLASH_SIDS.has(sid) && (
+        liveCostCands.length > 0 ||
+        realSavedRevCand ||
+        (known && !known.habitInferred && known.reverseInferred && hasKnownRealCost)
+      )
+    );
+    const resPreCheck = (hasRealCostModel || known?.routed || preferLatestTurn) ? analyze(chat, known, { ignoreExactSid: Boolean((interactive && force) || preferLatestTurn), preferLatestTurn }) : null;
+    const habRoutePreCheck = (resPreCheck && typeof BillingProbe !== 'undefined' && typeof BillingProbe.detectHabitAndMessageRoute === 'function')
+      ? BillingProbe.detectHabitAndMessageRoute(sid, chat, null, known, resPreCheck, known?.reverseCandidates)
+      : null;
+    const isMidTurnRouted = Boolean(habRoutePreCheck?.routed || resPreCheck?.features?.htmlSvgRoutePivot);
+    if (hasRealCostModel && costEnabledNow && !interactive && !preferLatestTurn && !isMidTurnRouted) {
+      if (realSavedRevCand && known && !known.routed) {
+        try { learnFromReverseTeacher(chat, known, realSavedRevCand); } catch {}
+      }
+      return known;
+    }
+    if ((hasRealCostModel || (hasKnownRealCost && known?.sure && known?.reverseInferred && !known?.habitInferred)) && !interactive && !preferLatestTurn && !isMidTurnRouted && !CONFIRMED_GEMINI_FLASH_SIDS.has(sid) && (!force || !known?.habitInferred)) return known;
+
+    const res = resPreCheck || analyze(chat, known, { ignoreExactSid: Boolean((interactive && force) || preferLatestTurn), preferLatestTurn });
+    if (!res || !res.best) return null;
+    if (!interactive && res.features?.isOpenThink && typeof BillingProbe !== 'undefined' && typeof BillingProbe.markAsOpenSourceModel === 'function') {
+      return BillingProbe.markAsOpenSourceModel(chat);
+    }
+    const habRouteNow = habRoutePreCheck || ((typeof BillingProbe !== 'undefined' && typeof BillingProbe.detectHabitAndMessageRoute === 'function')
+      ? BillingProbe.detectHabitAndMessageRoute(sid, chat, null, known, res, known?.reverseCandidates)
+      : null);
+    const isNowMidTurnRouted = Boolean(habRouteNow?.routed);
+    const best = res.best;
+    const second = res.candidates[1] || null;
+    const isStandout = !second || (best.match - second.match) >= 0.5 || best.match >= 82;
+    const rawBestDecomp = decomposeModelIdentity(best.canon || best.label);
+    const decomp = rawBestDecomp.hasExplicitTier
+      ? rawBestDecomp
+      : decomposeModelIdentity(best.canon || best.label, {
+          vendor: best.vendorId || best.vendor,
+          family: best.family,
+          effort: best.effort || best.detectedEffort || res.identifiedEffort || undefined,
+          rawLabel: best.label,
+        });
+    const canon = decomp.canon || (best.label === '开源模型' ? '开源模型' : (typeof Strength !== 'undefined' && Strength.canon ? Strength.canon(best.label) : best.label).replace(/[?？]+$/, ''));
+    const sameKnownModel = Boolean(known?.name && (typeof Strength !== 'undefined' && Strength.canon ? Strength.canon(known.name) : String(known.name)).replace(/[?？]+$/, '').toLowerCase() === canon.toLowerCase());
+    const revScore = (!interactive && sameKnownModel && known && !known.habitInferred && known.reverseScore != null) ? known.reverseScore : res.reasoningScore;
+    const curEffort = decomp.effort || 'standard';
+    const consistentLabel = decomp.displayLabel || best.label || canon;
+    const compMsgsNow = (Array.isArray(chat?.messages) ? chat.messages : []).filter(x => x && x.role === 'assistant' && !x.failed && x.status !== 'failed' && x.status !== 'pending' && !(x.parts || []).some(p => p?.type === 'error'));
+    const latestAsstId = res?.features?.targetMessageId || compMsgsNow.at(-1)?.id || known?.lastMessageId || known?.messageId || null;
+    // 绝不把 structuralRev 或无账单反推写入 reverseCandidates（仅保留真实 /cost 反推候选池）
+    const preservedRevCands = (hasKnownRealCost && Array.isArray(known?.reverseCandidates))
+      ? known.reverseCandidates.filter(rc => rc && !rc.structuralRev && !rc.zeroQuota && !rc.zeroQuotaMode && rc.source !== 'habit' && rc.source !== 'fp' && !rc.habitSource && (!CONFIRMED_GEMINI_FLASH_SIDS.has(sid) || !/gemini[-\s]*4|argon/i.test(String(rc.label || rc.id || ''))) && (rc.diophantinePassed || (rc.revPct != null && (!interactive || Number(rc.revPct ?? rc.match ?? 0) >= 80))))
+      : [];
+    const shouldLockHabitNow = true;
+    const nextProvider = isNowMidTurnRouted
+      ? `中途路由切换识别（${habRouteNow.fromLabel} → ${habRouteNow.toLabel}）`

@@ -119,7 +119,11 @@ const AuthFlow = (() => {
         }, { timeout: opt.timeout ?? 30000, signal: opt.signal });
       } catch (e) {
         if (opt.signal?.aborted) throw fail('AUTH_CANCELLED', '已取消本次认证请求', { name: 'AbortError' });
-        throw fail('AUTH_REQUEST_UNCONFIRMED', '认证请求结果尚未确认（网络异常或超时），请检查邮箱或刷新登录状态后再决定是否重试', { uncertain: true });
+        const rawErr = String(e?.message || e || '');
+        if (e?.proxyFailed || /PROXY_CONNECTION_FAILED|SOCKS_CONNECTION_FAILED|TUNNEL_CONNECTION_FAILED|SOCKET_NOT_CONNECTED|CONNECTION_REFUSED|CONNECTION_RESET|CONNECTION_CLOSED|TIMED_OUT|SSL_PROTOCOL_ERROR|EMPTY_RESPONSE/i.test(rawErr)) {
+          throw fail('AUTH_PROXY_FAILED', '当前 ProxyIP 线路连接失败（' + rawErr.replace(/^Error:s*/i, '').slice(0, 120) + '）', { proxyFailed: true, uncertain: true });
+        }
+        throw fail('AUTH_REQUEST_UNCONFIRMED', '认证请求结果尚未确认（网络异常或超时：' + rawErr.replace(/^Error:s*/i, '').slice(0, 80) + '）', { proxyFailed: true, uncertain: true });
       }
       const status = response.status;
       if (status === 429) {

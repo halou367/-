@@ -160,7 +160,10 @@ function createAccountTokenRegistrar({ find, password, setPassword, session, pre
         url = next.href;
         continue;
       }
-      await r.text().catch(() => {});
+      try {
+        if (r.body?.cancel) await r.body.cancel();
+        else await Promise.race([r.text(), new Promise(res => setTimeout(res, 1500))]);
+      } catch {}
       return { final: url, status: r.status, hops };
     }
     return { final: url, hops, error: '跳转次数过多' };
@@ -219,7 +222,9 @@ function createAccountTokenRegistrar({ find, password, setPassword, session, pre
       const r = await read(ses, 'https://arena.ai/api/me', {}, 20000);
       if (!r.ok) return null;
       const d = await r.json().catch(() => null);
-      return d?.user || null;
+      const u = d?.user;
+      if (!u || !u.email || u.emailConfirmed === false || u.userState === 'provisional') return null;
+      return u;
     } catch {
       return null;
     }
@@ -308,15 +313,39 @@ function createAccountTokenRegistrar({ find, password, setPassword, session, pre
       retryAfter: NetPolicy.retryAfter,
     });
 
+    const sleepMs = typeof opt.sleep === 'function' ? opt.sleep : (ms => new Promise(r => setTimeout(r, ms)));
+    const extractCooldownMs = err => {
+      const msg = String(err?.message || err || '');
+      const m = /after\s+(\d+)\s*seconds?|等待\s*(\d+)\s*秒/i.exec(msg);
+      if (m) return (Math.min(75, Math.max(1, Number(m[1] || m[2]))) + 2) * 1000;
+      if (err?.code === 'AUTH_RATE_LIMIT' && err?.retryAfterMs > 0 && err.retryAfterMs <= 75000) return err.retryAfterMs + 1500;
+      return 0;
+    };
+    const postMailWithCooldown = async (url, body, pOpt = {}) => {
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+          return await poster(url, body, pOpt);
+        } catch (err) {
+          const waitMs = extractCooldownMs(err);
+          if (waitMs > 0 && attempt < 2) {
+            try { opt.onStep?.('等待官方发信安全冷却（' + Math.ceil(waitMs / 1000) + ' 秒）后自动继续…'); } catch {}
+            await sleepMs(waitMs);
+            continue;
+          }
+          throw err;
+        }
+      }
+    };
+
     // Step 1 & 2 & 3: Warm up session + pure-protocol reCAPTCHA Enterprise ('sign_up') + provisional session
     await warmAndProvisional(ses, ua, syncCookies);
 
     // Step 4: Send magic-link signup request (or login/reset if account already exists)
-    const sentAt = Date.now();
+    let sentAt = Date.now();
     let needResetConfirm = false;
     try {
       let resp;
-      await poster('https://arena.ai/nextjs-api/sign-up/magic-link', {
+      await postMailWithCooldown('https://arena.ai/nextjs-api/sign-up/magic-link', {
         email: expected,
         fullName: opt.fullName || randomNick(),
         shouldLinkHistory: false,
@@ -325,39 +354,40 @@ function createAccountTokenRegistrar({ find, password, setPassword, session, pre
       }, { mailRequest: true, onResponse: r => { resp = r; } });
       if (resp && syncCookies) await syncCookies(ses, resp);
     } catch (err) {
-      if (err?.code === 'AUTH_ACCOUNT_EXISTS') {
-        // Already registered: try direct password login with fixed password first
-        try {
-          let loginResp;
-          const signedIn = await poster('https://arena.ai/nextjs-api/sign-in/email', {
-            email: expected,
-            password: secret,
-            shouldLinkHistory: false,
-          }, { requireSuccess: true, onResponse: r => { loginResp = r; } });
-          if (loginResp && syncCookies) await syncCookies(ses, loginResp);
-          const meNow = await readMeUser(ses);
-          const verifiedUser = AuthFlow.loginIdentity(meNow || signedIn.user, signedIn.user);
-          const richEmail = AuthFlow.pickRichEmail(expected || a.email || a.name, verifiedUser.email);
-          a.email = richEmail;
-          a.name = a.name && !/^账号 ?\d*$/.test(a.name) ? a.name : richEmail;
-          setPassword?.(a, secret);
-          a.noAuto = false;
-          a.status = { ...(a.status || {}), loggedIn: true, me: richEmail, ip, loc, at: Date.now() };
-          save();
-          navigate?.(a);
-          return { ok: true, email: richEmail, ip, loc, mode: 'login' };
-        } catch (loginErr) {
+      // Try direct password login with fixed password first (e.g. if already registered or rate-limited right after password setup)
+      try {
+        let loginResp;
+        const signedIn = await poster('https://arena.ai/nextjs-api/sign-in/email', {
+          email: expected,
+          password: secret,
+          shouldLinkHistory: false,
+        }, { requireSuccess: true, onResponse: r => { loginResp = r; } });
+        if (loginResp && syncCookies) await syncCookies(ses, loginResp);
+        const meNow = await readMeUser(ses);
+        const verifiedUser = AuthFlow.loginIdentity(meNow || signedIn.user, signedIn.user);
+        const richEmail = AuthFlow.pickRichEmail(expected || a.email || a.name, verifiedUser.email);
+        a.email = richEmail;
+        a.name = a.name && !/^账号 ?\d*$/.test(a.name) ? a.name : richEmail;
+        setPassword?.(a, secret);
+        a.noAuto = false;
+        a.status = { ...(a.status || {}), loggedIn: true, me: richEmail, ip, loc, at: Date.now() };
+        save();
+        navigate?.(a);
+        return { ok: true, email: richEmail, ip, loc, mode: 'login' };
+      } catch (loginErr) {
+        if (err?.code === 'AUTH_ACCOUNT_EXISTS') {
           // Password not set or different: send password reset email
+          sentAt = Date.now();
           let resetResp;
-          await poster('https://arena.ai/nextjs-api/reset-password/request', {
+          await postMailWithCooldown('https://arena.ai/nextjs-api/reset-password/request', {
             email: expected,
             shouldLinkHistory: false,
           }, { mailRequest: true, onResponse: r => { resetResp = r; } });
           if (resetResp && syncCookies) await syncCookies(ses, resetResp);
           needResetConfirm = true;
+        } else {
+          throw err;
         }
-      } else {
-        throw err;
       }
     }
 
@@ -373,9 +403,22 @@ function createAccountTokenRegistrar({ find, password, setPassword, session, pre
     const hopRes = await followVerifyLink(ses, mailHit.link, syncCookies);
     let finalUrl = null;
     try { finalUrl = hopRes?.final ? new URL(hopRes.final) : null; } catch {}
+    let linkUrl = null;
+    try { linkUrl = mailHit?.link ? new URL(mailHit.link) : null; } catch {}
+    const setPwToken =
+      ((/\/auth\/set-password/i.test(finalUrl?.pathname || '') && finalUrl?.searchParams.get('token')) ||
+       (/\/auth\/set-password/i.test(linkUrl?.pathname || '') && linkUrl?.searchParams.get('token')) ||
+       '');
     let resetCode = (finalUrl?.searchParams.get('auth') === 'reset-password' ? finalUrl?.searchParams.get('code') : '') || (needResetConfirm ? mailHit.code : '');
 
-    if (resetCode) {
+    if (setPwToken) {
+      let spResp;
+      await poster('https://arena.ai/nextjs-api/auth/set-password', {
+        password: secret,
+        token: setPwToken,
+      }, { onResponse: r => { spResp = r; } });
+      if (spResp && syncCookies) await syncCookies(ses, spResp);
+    } else if (resetCode) {
       let cResp;
       await poster('https://arena.ai/nextjs-api/reset-password/confirm', {
         password: secret,
@@ -401,32 +444,39 @@ function createAccountTokenRegistrar({ find, password, setPassword, session, pre
       } catch {}
 
       if (!directOk) {
-        const resetSentAt = Date.now();
-        let rResp;
-        await poster('https://arena.ai/nextjs-api/reset-password/request', {
-          email: expected,
-          shouldLinkHistory: false,
-        }, { mailRequest: true, onResponse: r => { rResp = r; } });
-        if (rResp && syncCookies) await syncCookies(ses, rResp);
+        try {
+          let resetSentAt = Date.now();
+          let rResp;
+          await postMailWithCooldown('https://arena.ai/nextjs-api/reset-password/request', {
+            email: expected,
+            shouldLinkHistory: false,
+          }, { mailRequest: true, onResponse: r => { resetSentAt = Date.now() - 3000; rResp = r; } });
+          if (rResp && syncCookies) await syncCookies(ses, rResp);
 
-        const resetHit = await scopedMailCall(() => MailToken.waitLink(tok, {
-          since: resetSentAt,
-          timeout: opt.mailTimeoutMs || 110000,
-          pollMs: opt.pollMs || 3500,
-          kind: 'reset',
-        }));
-        const hop2 = await followVerifyLink(ses, resetHit.link, syncCookies);
-        let f2 = null;
-        try { f2 = hop2?.final ? new URL(hop2.final) : null; } catch {}
-        const code2 = f2?.searchParams.get('code') || resetHit.code;
-        if (!code2) throw Error('未能从重置密码链接中提取验证码');
-        let cResp2;
-        await poster('https://arena.ai/nextjs-api/reset-password/confirm', {
-          password: secret,
-          code: code2,
-          shouldLinkHistory: false,
-        }, { onResponse: r => { cResp2 = r; } });
-        if (cResp2 && syncCookies) await syncCookies(ses, cResp2);
+          const resetHit = await scopedMailCall(() => MailToken.waitLink(tok, {
+            since: resetSentAt,
+            timeout: opt.mailTimeoutMs || 110000,
+            pollMs: opt.pollMs || 3500,
+            kind: 'reset',
+          }));
+          const hop2 = await followVerifyLink(ses, resetHit.link, syncCookies);
+          let f2 = null;
+          try { f2 = hop2?.final ? new URL(hop2.final) : null; } catch {}
+          const code2 = f2?.searchParams.get('code') || resetHit.code;
+          if (!code2) throw Error('未能从重置密码链接中提取验证码');
+          let cResp2;
+          await poster('https://arena.ai/nextjs-api/reset-password/confirm', {
+            password: secret,
+            code: code2,
+            shouldLinkHistory: false,
+          }, { onResponse: r => { cResp2 = r; } });
+          if (cResp2 && syncCookies) await syncCookies(ses, cResp2);
+        } catch (pwSetupErr) {
+          const alreadyLogged = await readMeUser(ses);
+          if (!alreadyLogged || !AuthFlow.sameEmail(alreadyLogged.email, expected)) {
+            throw pwSetupErr;
+          }
+        }
       }
     }
 

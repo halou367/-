@@ -51,15 +51,23 @@
     setTimeout(() => this.stop(), 0);
   }
   checkMidStreamRoute(t, ch) {
-    if (!this.busy || this.stopReq || this.gacha || this._midRoutePrompted || Fingerprint.isRunning(this)) return;
+    if (!this.busy || this.stopReq || this.gacha || Fingerprint.isRunning(this)) return;
+    const curTurnKey = String(this.live?.id || (this.messages || []).length || '');
+    if (this._midRouteTurnKey !== curTurnKey) {
+      this._midRouteTurnKey = curTurnKey;
+      this._midRouteChecked = false;
+      this._midRoutePrompted = false;
+    }
+    if (this._midRoutePrompted) return;
     const priorMsgs = (this.messages || []).filter(m => m && m.role === 'assistant' && m !== this.live && !m.metadata?.pending);
     let priorToolFam = '', priorHiddenThink = false;
-    const isStrictOpenAiToolId = id => /^call_[A-Za-z0-9]{24}$/.test(String(id || '')) && !/^call_[0-9a-f]{24}$/i.test(String(id || '')) && !/^call_\d+_/i.test(String(id || ''));
+    const isOpenTcId = id => /^(?:call_\d+_|call_[0-9a-f]{24}$|functions\.|_\d+_[0-9a-f]{6,}|chatcmpl-tool-)/i.test(String(id || ''));
+    const isStrictOpenAiToolId = id => (/^(?:tc|fc)_[A-Za-z0-9_-]{16,}$/i.test(String(id || '')) || (/^call_[A-Za-z0-9_-]{18,}$/.test(String(id || '')) && !isOpenTcId(id)));
     for (const pm of priorMsgs) {
       for (const pp of pm.parts || []) {
         if (pp.type === 'reasoning' && !/[^\s.…·。]/.test(String(pp.text || ''))) priorHiddenThink = true;
         if (pp.toolCallId) {
-          if (/^(?:toolu_|srvtoolu_)/i.test(pp.toolCallId)) priorToolFam = 'claude';
+          if (/^(?:toolu_|srvtoolu_|msg_01)/i.test(pp.toolCallId)) priorToolFam = 'claude';
           else if (isStrictOpenAiToolId(pp.toolCallId)) priorToolFam = 'openai';
         }
       }
@@ -67,20 +75,79 @@
     if (!priorToolFam && this.live?.parts?.length) {
       for (const lp of this.live.parts) {
         if (lp?.toolCallId && lp.toolCallId !== ch?.toolCallId) {
-          if (/^(?:toolu_|srvtoolu_)/i.test(lp.toolCallId)) { priorToolFam = 'claude'; break; }
+          if (/^(?:toolu_|srvtoolu_|msg_01)/i.test(lp.toolCallId)) { priorToolFam = 'claude'; break; }
           if (isStrictOpenAiToolId(lp.toolCallId)) { priorToolFam = 'openai'; break; }
         }
       }
     }
-    if (!priorMsgs.length && !priorToolFam) return;
     const baseLabel = this._routeBaseline?.label || (typeof Models !== 'undefined' && Models.get(this.sid)?.name) || '';
-    if (t === 'tool-input-start' && ch?.toolCallId && priorToolFam) {
-      const curToolFam = /^(?:toolu_|srvtoolu_)/i.test(ch.toolCallId) ? 'claude' : (isStrictOpenAiToolId(ch.toolCallId) ? 'openai' : '');
+    if (!priorToolFam && baseLabel) {
+      if (/claude|opus|sonnet|haiku|fable/i.test(baseLabel)) priorToolFam = 'claude';
+      else if (/gpt|\bsol\b|\bluna\b|\bastra\b|\bterra\b/i.test(baseLabel)) priorToolFam = 'openai';
+      else if (/gemini|argon|barium|carbon/i.test(baseLabel)) priorToolFam = 'google';
+    }
+    if (!priorMsgs.length && !priorToolFam) return;
+    const priorClosed = Boolean(priorToolFam || priorHiddenThink || (baseLabel && !/开源|compat|qwen|deepseek|glm|kimi|minimax|llama|mistral|nemotron|inkling|beam|caveman|gemma|step-|hy4|mimo/i.test(baseLabel)));
+    if (priorClosed && ((t === 'reasoning-delta' && /[^\s.…·。]/.test(String(ch?.delta || ''))) || (t === 'tool-input-start' && isOpenTcId(ch?.toolCallId)))) {
+      this._midRoutePrompted = true;
+      const fromLbl = baseLabel || (priorToolFam === 'claude' ? 'Claude 系列' : priorToolFam === 'openai' ? 'GPT 系列' : '闭源模型');
+      const fmtGuess = this.fmt && typeof Fmt !== 'undefined' ? String(Fmt.guess(this.fmt)?.name || '').trim() : '';
+      const toLbl = (fmtGuess && !/未知|闭源/i.test(fmtGuess)) ? fmtGuess : '开源模型';
+      this.routed = true;
+      this.routeFrom = fromLbl;
+      this.routeTo = toLbl;
+      if (this.live) {
+        const turnIdx = priorMsgs.length + 1;
+        this.live._routeNotice = {
+          type: 'model',
+          fromTurn: 1,
+          toTurn: turnIdx,
+          fromLabel: fromLbl,
+          toLabel: toLbl,
+          text: `路由提示：对话由 ${fromLbl} 路由至 ${toLbl}`,
+        };
+        this.lastRouteNotice = this.live._routeNotice;
+      }
+      try {
+        if (typeof Models !== 'undefined' && this.sid) {
+          const curM = Models.get(this.sid) || {};
+          Models.put(this.sid, { ...curM, name: toLbl, routed: true, routeFrom: fromLbl, routeTo: toLbl, routeType: 'model' });
+        }
+      } catch {}
+      if ((typeof Prefs === 'undefined' || Prefs.routePausePrompt !== false) && typeof RouteConfirm !== 'undefined' && typeof RouteConfirm.askModelRoute === 'function') {
+        void RouteConfirm.askModelRoute(this, {
+          routeType: 'model',
+          fromLabel: fromLbl,
+          toLabel: toLbl,
+          reason: t === 'reasoning-delta' ? '前序轮次为闭源模型，本轮出现明文思考，检测到路由至开源模型' : '前序轮次为闭源模型，本轮出现开源工具调用前缀',
+        });
+      }
+      return;
+    }
+    if ((t === 'tool-input-start' || t === 'text-delta' || t === 'reasoning-delta') && priorToolFam) {
+      let curToolFam = '';
+      if (t === 'tool-input-start' && ch?.toolCallId) {
+        curToolFam = /^(?:toolu_|srvtoolu_|msg_01)/i.test(ch.toolCallId) ? 'claude' : (isStrictOpenAiToolId(ch.toolCallId) ? 'openai' : '');
+      } else if (this.fmt?.ids?.length) {
+        const lastPair = this.fmt.ids.at(-1);
+        const lastId = String(Array.isArray(lastPair) ? lastPair[1] : lastPair || '');
+        if (/^(?:toolu_|srvtoolu_|msg_01[1-9A-HJ-NP-Za-km-z]{18,})/i.test(lastId)) curToolFam = 'claude';
+        else if (/^(?:rs|fc|fo|tc)_[A-Za-z0-9_-]{16,}/i.test(lastId)) curToolFam = 'openai';
+      }
       if (curToolFam && curToolFam !== priorToolFam) {
         this._midRoutePrompted = true;
-        const fromLbl = baseLabel || (priorToolFam === 'claude' ? 'Claude 系列' : 'GPT 系列');
+        const fromLbl = baseLabel || (priorToolFam === 'claude' ? 'Claude 系列' : priorToolFam === 'openai' ? 'GPT 系列' : 'Gemini 系列');
         const fmtGuess = this.fmt && typeof Fmt !== 'undefined' ? String(Fmt.guess(this.fmt)?.name || '').trim() : '';
         const toLbl = (fmtGuess && !/未知|compat/i.test(fmtGuess)) ? fmtGuess : (curToolFam === 'claude' ? 'Claude 系列' : 'GPT 系列');
+        this.routed = true;
+        this.routeFrom = fromLbl;
+        this.routeTo = toLbl;
+        try {
+          if (typeof Models !== 'undefined' && this.sid) {
+            const curM = Models.get(this.sid) || {};
+            Models.put(this.sid, { ...curM, name: toLbl, routed: true, routeFrom: fromLbl, routeTo: toLbl, routeType: 'model' });
+          }
+        } catch {}
         const liveTools = (this.live?.parts || []).filter(p => String(p?.type || '').startsWith('tool-') || p?.type === 'dynamic-tool');
         const liveBash = liveTools.filter(p => /^(bash|shell|run_command)$/i.test(String(p?.toolName || String(p?.type || '').replace(/^tool-/, '')))).length;
         const curToolPart = liveTools.find(p => p.toolCallId === ch.toolCallId) || liveTools.at(-1);
@@ -1141,7 +1208,7 @@
         } else {
           p.text += dStr;
         }
-        if (t === 'text-delta') this.checkMidStreamRoute(t, ch);
+        if (t === 'text-delta' || t === 'reasoning-delta') this.checkMidStreamRoute(t, ch);
         if (now() - (this._streamCacheAt || 0) > 1500) { this._streamCacheAt = now(); this.saveCache?.(); }
         break;
       }
@@ -1568,10 +1635,10 @@ Object.assign(Chat.prototype, {
     });
     const first = srv.findIndex(m => loc.has(m.id) || (m.metadata?.nodeId && loc.has(m.metadata.nodeId)));
     let head;
-    if (first < 0) head = this.messages.filter(m => !m._local && !m._appendAccepted && !(typeof isPhantomFinishStub === 'function' && isPhantomFinishStub(m)) && idTime(m.id) && idTime(m.id) < idTime(srv[0].id));
+    if (first < 0) head = [];
     else {
       const firstLocIdx = loc.get(srv[first].id) ?? loc.get(srv[first].metadata?.nodeId) ?? 0;
-      head = this.messages.slice(0, firstLocIdx).filter(m => !srv.some(x => x.id === m.id || (x.metadata?.nodeId && (x.metadata.nodeId === m.id || x.metadata.nodeId === m.metadata?.nodeId))) && !(typeof isPhantomFinishStub === 'function' && isPhantomFinishStub(m)));
+      head = this.messages.slice(0, firstLocIdx).filter(m => m && !m._local && (!keep || (m !== keep && m.id !== keep.id)) && !srv.some(x => x.id === m.id || (x.metadata?.nodeId && (x.metadata.nodeId === m.id || x.metadata.nodeId === m.metadata?.nodeId))) && !(typeof isPhantomFinishStub === 'function' && isPhantomFinishStub(m)));
     }
     const sig = m => {
       const ps = m.parts || [], n = ps.length;
@@ -1811,7 +1878,7 @@ Object.assign(Chat.prototype, {
         const hasUnmatchedPrevUser = Boolean(prevMsg && prevMsg.role === 'user' && !ids.has(prevMsg.id) && !matchedLocal.has(prevMsg));
         if (idx < this.messages.length - 1 || (srv.at(-1)?.role === 'assistant' && !hasUnmatchedPrevUser)) return false;
         const recFin = m._finishedAt && !m._forcedFinish && (now() - m._finishedAt < 60000);
-        const isTrailing = idx >= this.messages.length - 2 || idx > lastSrvInOldIdx;
+        const isTrailing = idx >= this.messages.length - 2 || (lastSrvInOldIdx >= 0 && idx > lastSrvInOldIdx);
         const mTime = idTime(m.id) || 0;
         if (recFin || (isTrailing && (!srvLastTime || !mTime || mTime >= srvLastTime))) return true;
       }
@@ -1849,7 +1916,7 @@ Object.assign(Chat.prototype, {
         return false;
       }
       if (typeof isPhantomFinishStub === 'function' && isPhantomFinishStub(m)) return false;
-      const isAheadOfSrv = idx > lastSrvInOldIdx;
+      const isAheadOfSrv = lastSrvInOldIdx >= 0 && idx > lastSrvInOldIdx;
       if (keep && m === keep) return true;
       if (m._local || m._appendAccepted) {
         if (m.role === 'user') {
@@ -1881,8 +1948,11 @@ Object.assign(Chat.prototype, {
           }
           if (isAwaitingThis) return true;
           if (srvLastEndTime > 0 && uTime > 0 && uTime < srvLastEndTime - 30000) {
-            const srvLastStartTime = idTime(srvLastMsg?.id) || Date.parse(srvLastMsg?.metadata?.timing?.startedAt || '') || 0;
-            const fillsSrvGap = hasLocalAsstAfterP || (pIdx >= 0 && srv[pIdx + 1]?.role === 'assistant') || (srv.length >= 2 && srv.at(-1)?.role === 'assistant' && srv.at(-2)?.role === 'assistant' && uTime >= (idTime(srv.at(-2)?.id) || 0) - 60000) || (srvLastStartTime > 0 && uTime >= srvLastStartTime - 60000 && (srv.length < 2 || srv.at(-2)?.role !== 'user'));
+            const firstSrvLastIdx = (typeof SentUserLog !== 'undefined' && SentUserLog.firstAsstIdxOfTurn && srvLastMsg?.role === 'assistant') ? SentUserLog.firstAsstIdxOfTurn(srv, srv.length - 1) : (srv.length - 1);
+            const firstSrvLastMsg = srv[firstSrvLastIdx] || srvLastMsg;
+            const srvLastStartTime = Number(firstSrvLastMsg?.metadata?.timing?.startedAt) || Date.parse(firstSrvLastMsg?.metadata?.timing?.startedAt || '') || idTime(firstSrvLastMsg?.id) || 0;
+            const pEndIdx = pIdx >= 0 && typeof SentUserLog !== 'undefined' && SentUserLog.lastAsstIdxOfTurn ? SentUserLog.lastAsstIdxOfTurn(srv, pIdx) : pIdx;
+            const fillsSrvGap = hasLocalAsstAfterP || (pEndIdx >= 0 && srv[pEndIdx + 1]?.role === 'assistant' && !(typeof SentUserLog !== 'undefined' && SentUserLog.isSameAsstTurnChunk?.(srv[pEndIdx], srv[pEndIdx + 1]))) || (srv.length >= 2 && srv.at(-1)?.role === 'assistant' && srv.at(-2)?.role === 'assistant' && !(typeof SentUserLog !== 'undefined' && SentUserLog.isSameAsstTurnChunk?.(srv.at(-2), srv.at(-1))) && uTime >= (idTime(srv.at(-2)?.id) || 0) - 60000) || (srvLastStartTime > 0 && uTime >= srvLastStartTime - 60000 && (firstSrvLastIdx < 1 || srv[firstSrvLastIdx - 1]?.role !== 'user'));
             if (!fillsSrvGap) {
               try { if (typeof SentUserLog !== 'undefined' && SentUserLog.remove) SentUserLog.remove(this.sid, m.id, uTxt, uTime); } catch {}
               return false;
@@ -1893,13 +1963,15 @@ Object.assign(Chat.prototype, {
       }
       if (m.role === 'user' && (isAheadOfSrv || idx >= this.messages.length - 2)) {
         const nextLocal = this.messages[idx + 1];
-        if (isAheadOfSrv || (nextLocal && (willKeepTailAsst(nextLocal, idx + 1, true) || (ids.has(nextLocal.id) && mid.at(-1)?.role === 'assistant' && mid.at(-2)?.role === 'assistant')))) {
+        const midTailGap = mid.length >= 2 && mid.at(-1)?.role === 'assistant' && mid.at(-2)?.role === 'assistant' && !(typeof SentUserLog !== 'undefined' && SentUserLog.isSameAsstTurnChunk?.(mid.at(-2), mid.at(-1)));
+        if (isAheadOfSrv || (nextLocal && (willKeepTailAsst(nextLocal, idx + 1, true) || (ids.has(nextLocal.id) && midTailGap)))) {
           lagged = true;
           return true;
         }
       }
       if (m.role === 'assistant' && (partWeight(m.parts) > 0 || m._incomplete || m.metadata?.pending)) {
-        if (m._incomplete || m.metadata?.pending) { lagged = true; return true; }
+        const mTailTs = Number(m?.metadata?.timing?.completedAt) || Number(m?.metadata?.timing?.startedAt) || Number(m?._finishedAt) || idTime(m?.id) || 0;
+        if ((m._incomplete || m.metadata?.pending) && (!srvLastEndTime || !mTailTs || mTailTs >= srvLastEndTime - 5000)) { lagged = true; return true; }
         if (m._awaitingSnapshot) {
           const srvLast = srv.at(-1);
           if (srvLast && srvLast.role === 'user' && srvLast.id !== this.messages[idx - 1]?.id) {
@@ -1923,11 +1995,13 @@ Object.assign(Chat.prototype, {
       return false;
     });
     this._srvLagged = lagged;
-    const next = [...head, ...mid];
+    const tailIdSet = new Set(tail.map(x => x?.id).filter(Boolean));
+    const next = [...head.filter(x => !x?.id || !tailIdSet.has(x.id)), ...mid];
     for (let tIdx = 0; tIdx < tail.length; tIdx++) {
       const tm = tail[tIdx];
       if (tm && tm.role === 'user' && tm._prevAsstId) {
-        const pIdx = next.findIndex(x => x && (x.id === tm._prevAsstId || x._localId === tm._prevAsstId));
+        let pIdx = next.findIndex(x => x && (x.id === tm._prevAsstId || x._localId === tm._prevAsstId));
+        if (pIdx >= 0 && typeof SentUserLog !== 'undefined' && SentUserLog.lastAsstIdxOfTurn) pIdx = SentUserLog.lastAsstIdxOfTurn(next, pIdx);
         if (pIdx >= 0 && next[pIdx + 1]?.role !== 'user') {
           next.splice(pIdx + 1, 0, tm);
           changed = true;
@@ -1936,14 +2010,16 @@ Object.assign(Chat.prototype, {
       }
       const hasAsstAfterInTail = tail.slice(tIdx + 1).some(x => x && x.role === 'assistant');
       if (tm && tm.role === 'user' && !tm._held && !hasAsstAfterInTail && next.at(-1)?.role === 'assistant') {
-        const lastA = next.at(-1);
-        const prevBeforeA = next.length >= 2 ? next[next.length - 2] : null;
+        const firstTailIdx = (typeof SentUserLog !== 'undefined' && SentUserLog.firstAsstIdxOfTurn) ? SentUserLog.firstAsstIdxOfTurn(next, next.length - 1) : (next.length - 1);
+        const lastA = next[firstTailIdx] || next.at(-1);
+        const prevBeforeA = firstTailIdx >= 1 ? next[firstTailIdx - 1] : null;
         const missingUserBeforeA = !prevBeforeA || prevBeforeA.role === 'assistant';
         const isAwaitingThisUser = Boolean(this.awaitId && (this.awaitId === tm.id || this.awaitId === tm.metadata?.nodeId));
         const uTime = tm._sentAt || idTime(tm.id) || 0;
-        const aTime = idTime(lastA.id) || 0;
-        if (missingUserBeforeA || ((lastA.metadata?.pending || lastA._incomplete || (keep && lastA === keep)) && (isAwaitingThisUser || !uTime || !aTime || aTime >= uTime - 300000))) {
-          next.splice(next.length - 1, 0, tm);
+        const aTime = Number(lastA?.metadata?.timing?.startedAt) || idTime(lastA?.id) || 0;
+        const timeMatchesTail = isAwaitingThisUser || !uTime || !aTime || (uTime >= aTime - 300000 && uTime <= aTime + 30000);
+        if (timeMatchesTail && (missingUserBeforeA || (lastA.metadata?.pending || lastA._incomplete || (keep && lastA === keep)))) {
+          next.splice(firstTailIdx, 0, tm);
           changed = true;
           continue;
         }
@@ -1980,12 +2056,14 @@ Object.assign(Chat.prototype, {
       }
     }
     if (lastAIdx >= 0 && lastAIdx < this.messages.length - 1) {
+      const firstLastTurnIdx = (typeof SentUserLog !== 'undefined' && SentUserLog.firstAsstIdxOfTurn) ? SentUserLog.firstAsstIdxOfTurn(this.messages, lastAIdx) : lastAIdx;
       const lastAMsg = this.messages[lastAIdx];
+      const firstLastAMsg = this.messages[firstLastTurnIdx] || lastAMsg;
       const lastACompRaw = lastAMsg?.metadata?.timing?.completedAt || lastAMsg?.metadata?.timing?.startedAt;
       const lastACompMs = typeof lastACompRaw === 'number' ? lastACompRaw : (typeof lastACompRaw === 'string' ? Date.parse(lastACompRaw) : 0);
       const lastAEnd = Math.max(idTime(lastAMsg?.id) || 0, Number.isFinite(lastACompMs) ? lastACompMs : 0, lastAMsg?._finishedAt || 0);
-      const earlierUsers = this.messages.slice(0, lastAIdx).filter(x => x && x.role === 'user');
-      const lastAStart = idTime(lastAMsg?.id) || Date.parse(lastAMsg?.metadata?.timing?.startedAt || '') || 0;
+      const earlierUsers = this.messages.slice(0, firstLastTurnIdx).filter(x => x && x.role === 'user');
+      const lastAStart = Number(firstLastAMsg?.metadata?.timing?.startedAt) || Date.parse(firstLastAMsg?.metadata?.timing?.startedAt || '') || idTime(firstLastAMsg?.id) || 0;
       for (let i = this.messages.length - 1; i > lastAIdx; i--) {
         const tm = this.messages[i];
         if (!tm || tm.role !== 'user') continue;
@@ -1994,15 +2072,15 @@ Object.assign(Chat.prototype, {
         const uTs = tm._sentAt || idTime(tm.id) || 0;
         const uTxt = normUText(tm);
         const isDupOfEarlier = earlierUsers.some(x => x.id === tm.id || (uTxt && normUText(x) === uTxt && ((tm._prevAsstId && x._prevAsstId && tm._prevAsstId === x._prevAsstId) || (!tm._prevAsstId && (!uTs || !(x._sentAt || idTime(x.id)) || Math.abs(uTs - (x._sentAt || idTime(x.id) || 0)) < 15000)))));
-        if (!isDupOfEarlier && lastAIdx >= 1 && this.messages[lastAIdx - 1]?.role === 'assistant' && (!lastAStart || !uTs || uTs >= lastAStart - 120000)) {
+        if (!isDupOfEarlier && firstLastTurnIdx >= 1 && this.messages[firstLastTurnIdx - 1]?.role === 'assistant' && !(typeof SentUserLog !== 'undefined' && SentUserLog.isSameAsstTurnChunk?.(this.messages[firstLastTurnIdx - 1], this.messages[firstLastTurnIdx])) && (!lastAStart || !uTs || (uTs >= lastAStart - 120000 && uTs <= lastAStart + 30000))) {
           this.messages.splice(i, 1);
-          this.messages.splice(lastAIdx, 0, tm);
-          tm._prevAsstId = this.messages[lastAIdx - 1]?.id || tm._prevAsstId;
+          this.messages.splice(firstLastTurnIdx, 0, tm);
+          tm._prevAsstId = this.messages[firstLastTurnIdx - 1]?.id || tm._prevAsstId;
           lastAIdx++;
           changed = true;
           continue;
         }
-        const lastAHasUser = lastAIdx >= 1 && this.messages[lastAIdx - 1]?.role === 'user';
+        const lastAHasUser = firstLastTurnIdx >= 1 && this.messages[firstLastTurnIdx - 1]?.role === 'user';
         const isOlderThanLastAsst = lastAHasUser && lastAEnd > 0 && uTs > 0 && uTs < lastAEnd - 30000 && (!lastAStart || uTs < lastAStart - 30000);
         if (isOlderThanLastAsst || isDupOfEarlier) {
           this.messages.splice(i, 1);
@@ -2012,6 +2090,7 @@ Object.assign(Chat.prototype, {
         }
       }
     }
+    try { if (typeof MsgCache !== 'undefined' && typeof MsgCache.sanitize === 'function') MsgCache.sanitize(this.messages); } catch {}
     return changed;
   },
   // 和服务器对一次账（提问卡片的回答 / 别处提交的回答 / 别的设备发的消息）：正在输出的那条保持原对象不动
@@ -2298,3 +2377,4 @@ Object.assign(Chat.prototype, {
 // 被「重复 / 已读过」跳过的记录也记进轨迹（不改 onRecord 本身：位置没动 = 被跳过）
 { const orig = Chat.prototype.onRecord; Chat.prototype.onRecord = function (rec) { const b = this.lastSeq, r = orig.call(this, rec); try { if (rec?.seq_num != null && r !== 'done' && this.lastSeq === b) this.dbgRec?.(rec, 'skip'); } catch {} return r; }; }
 // 挂哪些对话：当前窗口一定挂；其它打开着的窗口（已加载过的）也挂，电脑最多 4 个、手机最多 2 个
+

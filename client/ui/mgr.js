@@ -106,6 +106,11 @@ const LaunchPick = {
       status.replaceChildren(h('p',{},'账号读取失败或超时，界面仍可关闭。'),h('button',{class:'btn',onclick:()=>{back.remove();void this.show(opt);}},'重试'));return;
     }
     accts=AccountPicker.mergeRead(accts.slice());
+    if (!opt.back && accts.every(a => !a.email && !a.hasPw) && typeof QrSync !== 'undefined' && QrSync.isFirstTimeNoCache?.()) {
+      back.remove();
+      try { UI.loginGate?.(); } catch {}
+      return;
+    }
     const cur=UI.host?.account?.id;
     // 抽卡按钮（原「切换账号」面板里的）：当前账号 = 输入框旁边那个抽卡面板；多账号后台运行时，其他账号 = 那个账号自己的抽卡面板，START 后在后台抽
     const multi = !!Host.gachaAccount; let gb = null, swipe = null; const gbs = [];

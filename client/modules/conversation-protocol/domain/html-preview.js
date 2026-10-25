@@ -1197,6 +1197,12 @@ const PelicanShots = (() => {
       }
       const mi = sid ? Models.get(sid) : null;
       const hRow = sid && typeof History !== 'undefined' ? History.byId?.(sid) : null;
+      if (!name && sid && !mi?.userCorrected && typeof BillingProbe !== 'undefined' && typeof BillingProbe.summary === 'function') {
+        const sumTop = BillingProbe.summary(sid, { readOnly: true })?.mergedCandidates?.[0];
+        if (sumTop && !sumTop.streamFallback && Number(sumTop.match || 0) >= 50 && sumTop.supportGranularity !== 'family' && (sumTop.canon || sumTop.label)) {
+          name = Strength.canon(sumTop.canon || sumTop.label);
+        }
+      }
       const hasReidMi = Boolean(mi && !mi.pendingConfirm && (!mi.guess || mi.userCorrected || mi.habitInferred || mi.reverseInferred || mi.billingProbe));
       if (!name && mi && mi.name && hasReidMi) name = Strength.canon(mi.name);
       if (!name && mi && mi.reverseCandidateId && mi.sure) name = Strength.canon(mi.name || mi.reverseLabel || mi.reverseCandidateId);
@@ -1219,10 +1225,12 @@ const PelicanShots = (() => {
       const sc = r.score ?? (r.model && r.model !== '未识别' && typeof Strength !== 'undefined' ? Strength.board?.()?.find?.(b => key(b.name) === key(r.model))?.score ?? null : null);
       return { ...r, model: cleanName(r.model) || '未识别', score: sc ?? null };
     }
-    if (r.lockedModel || r.messageId || r.artifactDigest) {
-      return { ...r, model: cleanName(r.model) || '未识别', score: r.score ?? null, think: r.think ?? null };
-    }
     const m = modelOf(r.sid);
+    const mi = typeof Models !== 'undefined' ? Models.get(r.sid) : null;
+    const isPreRouteShot = Boolean(r.model && r.model !== '未识别' && mi?.routed && mi?.routeFrom && key(r.model) === key(mi.routeFrom));
+    if (isPreRouteShot || !m.model || m.model === '未识别') {
+      return { ...r, model: cleanName(r.model) || '未识别', score: r.score ?? m.score ?? null, think: r.think ?? m.think ?? null };
+    }
     const nextModel = isBetterModel(m.model, r.model) ? m.model : (cleanName(r.model) || m.model || '未识别');
     const nextScore = m.score ?? r.score ?? null;
     const nextThink = m.think ?? r.think ?? null;

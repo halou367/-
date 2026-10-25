@@ -362,6 +362,7 @@
     let fmtTidChars = Number(fmt?.tidChars) || 0;
     let fmtReasonBlocks = Number(fmt?.rBlocks || fmt?.rN || fmt?.rE || (Array.isArray(fmt?.rs) ? fmt.rs.length : 0)) || 0;
     let rWireDeltas = Number(fmt?.rWireDeltas || fmt?.rWireEmptyDeltas || fmt?.rE) || 0;
+    let rWireChars = Number(fmt?.rChars || fmt?.rWireChars) || 0;
     const fmtIds = Array.isArray(fmt?.ids) ? fmt.ids.slice() : [];
     if (Array.isArray(fmt?.rs)) {
       for (const r of fmt.rs) if (r?.id != null) fmtIds.push(['r', String(r.id)]);
@@ -379,12 +380,15 @@
         if (mfRBlocks > fmtReasonBlocks) fmtReasonBlocks = mfRBlocks;
         const mfWire = Number(mf.rWireDeltas || mf.rWireEmptyDeltas || mf.rE) || 0;
         if (mfWire > rWireDeltas) rWireDeltas = mfWire;
+        const mfRChars = Number(mf.rChars || mf.rWireChars) || 0;
+        if (mfRChars > rWireChars) rWireChars = mfRChars;
         for (const x of mf.ids || []) fmtIds.push(x);
         for (const r of mf.rs || []) if (r?.id != null) fmtIds.push(['r', String(r.id)]);
       }
       const meta = m?._sseMeta || (hints && typeof hints.get === 'function' ? hints.get(m.id) : null);
       if (meta) {
         if ((Number(meta.reasoningDeltas) || 0) > rWireDeltas) rWireDeltas = Number(meta.reasoningDeltas) || 0;
+        if ((Number(meta.reasoningChars) || 0) > rWireChars) rWireChars = Number(meta.reasoningChars) || 0;
         if (Array.isArray(meta.ids)) {
           let metaR = 0;
           for (const x of meta.ids) {
@@ -514,6 +518,13 @@
     const noReasoningParts = msgs.length > 0 && totalReasonParts === 0 && !visibleReasoning;
     const hiddenReasoning = totalReasonParts > 0 && !visibleReasoning;
     const hasPelicanSvg = Boolean(sawPelicanWord && sawSvgTag);
+    const effReasonLen = reasoningTextLength > 0 ? reasoningTextLength : rWireChars;
+    const rAvgChunk = (rWireDeltas >= 2 && effReasonLen > 0)
+      ? Number((effReasonLen / rWireDeltas).toFixed(2))
+      : (Number(fmt?.rAvgChunk || sseMemoEarly?.rAvgChunk || prevEv?.rAvgChunk) || 0);
+    if (chat && typeof chat === 'object' && rAvgChunk > 0) {
+      chat._streamEvidence = { ...(chat._streamEvidence || {}), rAvgChunk };
+    }
     const stylometry = typeof P.extractStylometryAndToolHabits === 'function'
       ? P.extractStylometryAndToolHabits(allVisText, allReasonText, {
           totalToolCalls: effToolCount,
@@ -522,8 +533,19 @@
           interToolChars: totalInterToolChars,
           bashCount: totalBashCount,
           toolNames: allToolCalls.map(t => t.toolName).filter(Boolean),
+          rBlocks: Math.max(fmtReasonBlocks, maxReason),
+          avgChunk,
+          rAvgChunk,
+          cps,
+          visibleReasoning,
+          reasoningSignature,
         })
       : null;
+    const toolNameCounts = {};
+    for (const tc of allToolCalls) {
+      const k = String(tc?.toolName || '').trim();
+      if (k) toolNameCounts[k] = (toolNameCounts[k] || 0) + 1;
+    }
     const toolCallIdShape = toolIds.some(id => /^(?:toolu_|srvtoolu_)/i.test(id)) ? 'toolu'
       : toolIds.some(id => /^call_[0-9a-f]{24,}/i.test(id)) ? 'call_hex'
       : toolIds.some(id => /^call_[A-Za-z0-9_-]{20,}/.test(id)) ? 'call_b64'
@@ -546,6 +568,14 @@
       streamIdShape,
       toolCallIdShape,
       stylometry,
+      toolNameCounts,
+      firstToolIndex: allToolCalls.length ? 0 : -1,
+      firstToolName: allToolCalls[0]?.toolName || null,
+      preToolTextLen: totalPreToolChars,
+      interToolTextLen: totalInterToolChars,
+      firstChunkChars: Number(fmt?.firstChunkChars || sseMemoEarly?.firstChunkChars) || 0,
+      chunkCount: fmtTN,
+      totalStreamChars: fmtChars,
       fpModel: fpRes?.nearest?.id || null,
       fpFamily: fpRes?.nearest?.family || null,
       fpConfidence: fpRes?.status === 'clear' ? 'high' : (fpRes?.status === 'close' ? 'medium' : null),
@@ -553,7 +583,7 @@
       fpScore: Number(fpRes?.signals?.fit) || 0,
       fpCandidates: Array.isArray(fpRes?.candidates) ? fpRes.candidates.slice(0, 8).map(c => ({ id: c.id, score: Number(c.fit) || 0, prob: Number(c.probability) || 0 })) : [],
       avgChunk,
-      rAvgChunk: (rWireDeltas >= 2 && reasoningTextLength > 0) ? Number((reasoningTextLength / rWireDeltas).toFixed(2)) : 0,
+      rAvgChunk,
       preToolChars: totalPreToolChars,
       interToolChars: totalInterToolChars,
       turnDurationMs,
@@ -565,7 +595,7 @@
       rBlocks: Math.max(fmtReasonBlocks, maxReason),
       reasoningStartCount: Math.max(fmtReasonBlocks, totalReasonParts),
       reasoningDeltaCount: rWireDeltas,
-      reasoningTextLength,
+      reasoningTextLength: effReasonLen,
       toolInputChars,
       streamIds: allIds,
       stepCount: Math.max(1, 1 + toolIds.length),
@@ -821,7 +851,7 @@
       const liveId = e.messageId || chat.live?.id || null;
       if (e.type === 'start') {
         s.current = liveId || '_active';
-        s.messages.set(s.current, { ids: [], reasoningDeltas: 0 });
+        s.messages.set(s.current, { ids: [], reasoningDeltas: 0, reasoningChars: 0 });
         while (s.messages.size > MAX_MESSAGES) s.messages.delete(s.messages.keys().next().value);
       } else if (liveId && s.current === '_active' && liveId !== '_active') {
         const prev = s.messages.get('_active');
@@ -830,11 +860,15 @@
         s.current = liveId;
       } else if (!s.current) {
         s.current = liveId || '_active';
-        if (!s.messages.has(s.current)) s.messages.set(s.current, { ids: [], reasoningDeltas: 0 });
+        if (!s.messages.has(s.current)) s.messages.set(s.current, { ids: [], reasoningDeltas: 0, reasoningChars: 0 });
       }
       const m = s.messages.get(s.current); if (!m) return;
       if (['text-start', 'reasoning-start'].includes(e.type) && m.ids.length < 64) m.ids.push({ type: e.type, ...(e.id != null ? { id: String(e.id).slice(0, 200) } : {}) });
-      if (e.type === 'reasoning-delta') m.reasoningDeltas++;
+      if (e.type === 'reasoning-delta') {
+        m.reasoningDeltas++;
+        const dLen = String(e.delta || e.text || e.content || '').length;
+        if (dLen > 0) m.reasoningChars = (m.reasoningChars || 0) + dLen;
+      }
       s.messages.set('_last', m);
       if (chat?.live) chat.live._sseMeta = m;
     }

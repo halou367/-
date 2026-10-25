@@ -33,46 +33,10 @@ const GachaPrompts = (() => {
     return result;
   }
   const PELICAN_LANG_BANKS = [
-    // 仅保留识别准确率最高的 4 大核心语种（简中 / 繁中 / 英文 / 日文）：
-    // 100% 保证模型使用标准英文 SVG/JS 变量名与函数名，且分词流速 cps 与字节长度完美对齐 435 条样本库
-    {
-      lang: 'zh-CN',
-      sep: '',
-      a: [
-        '请新建一个独立的单文件 HTML 页面。',
-        '请编写一个完整的单文件 HTML 网页。',
-        '请创建一个自包含的全新 HTML 文档，所有代码内联。',
-        '请生成一个完整的独立 HTML 文件。',
-        '请构建一个无需外部依赖的单文件 HTML 页面。',
-        '请直接编写一个包含全部内联代码的独立 HTML 文件。',
-      ],
-      scene: [
-        '使用内联 SVG 绘制一只鹈鹕踩着脚踏板向前骑自行车的 2D 动态动画场景。',
-        '通过 SVG 制作一个二维动态画面，展示一只大嘴鹈鹕正在骑自行车前进。',
-        '用内联 SVG 实现一只鹈鹕骑着自行车持续向前蹬行的 2D 动画插画。',
-        '借助 SVG 描绘一只鹈鹕在 2D 场景中骑自行车顺畅前行的循环动画。',
-        '利用内联 SVG 呈现一只鹈鹕双腿交替踩踏板骑自行车向前行进的 2D 动画。',
-        '使用 SVG 构建一只鹈鹕骑在自行车上持续蹬车前进的二维动态场景。',
-      ],
-      detail: [
-        '保持车轮旋转与脚踏蹬动自然同步。',
-        '让鹈鹕标志性的长喙、喉囊以及骑行动作清晰易辨。',
-        '画面保持干净利落，动画过渡平滑流畅。',
-        '展现出鹈鹕一边踩踏板一边向前行进的动感。',
-        '确保脚踏曲柄转动、车轮滚动与腿部动作协调一致。',
-        '突出鹈鹕的大嘴喉囊特征与自然连贯的骑行姿态。',
-      ],
-      noTest: [
-        '直接输出最终完成的 HTML 文件即可，无需运行任何测试或检查。',
-        '不需要执行测试步骤，请直接给出完整的 HTML 代码。',
-        '跳过所有测试环节，直接创建并输出该文件。',
-        '请勿进行测试或校验，直接交付完整结果。',
-        '无需运行验证命令或测试脚本，直接完成文件即可。',
-        '省去一切测试与检查流程，直接生成最终 HTML。',
-      ],
-    },
+    // 多语言权重分配：繁体中文(24%)、英文(24%)、日文(22%)、韩文(20%) 高概率优先（合计 90%），法/德/西等其他语言(6%)，简体中文低概率(4%)
     {
       lang: 'zh-TW',
+      weight: 24,
       sep: '',
       a: [
         '請建立一個獨立的單一檔案 HTML 頁面。',
@@ -109,6 +73,7 @@ const GachaPrompts = (() => {
     },
     {
       lang: 'en',
+      weight: 24,
       sep: ' ',
       a: [
         'Create a new standalone single-file HTML page.',
@@ -145,6 +110,7 @@ const GachaPrompts = (() => {
     },
     {
       lang: 'ja',
+      weight: 22,
       sep: '',
       a: [
         '新しいスタンドアロンの単一ファイル HTML ページを作成してください。',
@@ -179,11 +145,177 @@ const GachaPrompts = (() => {
         'すべてのテスト工程を省略し、完成した HTML ファイルだけを出力してください。',
       ],
     },
+    {
+      lang: 'ko',
+      weight: 20,
+      sep: ' ',
+      a: [
+        '새로운 독립 실행형 단일 파일 HTML 페이지를 만들어 주세요.',
+        '모든 코드가 인라인으로 포함된 완전한 단일 HTML 파일을 작성해 주세요.',
+        '외부 의존성이 없는 자체 포함형 새 HTML 문서를 구축해 주세요.',
+        '하나의 파일로 된 완전한 독립형 HTML 웹페이지를 생성해 주세요.',
+        '모든 스타일과 스크립트를 인라인으로 담은 단일 HTML 문서를 제작해 주세요.',
+        '별도의 외부 파일 없이 바로 실행되는 깔끔한 단일 HTML 파일을 작성해 주세요.',
+      ],
+      scene: [
+        '인라인 SVG를 사용하여 펠리컨이 페달을 밟으며 자전거를 타고 앞으로 나아가는 2D 애니메이션을 그려 주세요.',
+        'SVG를 활용해 큰 부리를 가진 펠리컨이 자전거를 타고 달리는 2D 애니메이션 장면을 구현해 주세요.',
+        '인라인 SVG로 펠리컨이 자전거 페달을 계속 밟으며 전진하는 2D 루프 애니메이션 일러스트를 만들어 주세요.',
+        'SVG를 이용해 펠리컨이 자전거를 타고 부드럽게 앞으로 나아가는 2차원 애니메이션을 표현해 주세요.',
+        '인라인 SVG로 펠리컨이 두 다리로 페달을 번갈아 밟으며 자전거를 타는 2D 애니메이션을 제작해 주세요.',
+        'SVG를 사용하여 자전거를 탄 펠리컨이 경쾌하게 앞으로 달려가는 2D 다이내믹 장면을 구성해 주세요.',
+      ],
+      detail: [
+        '바퀴의 회전과 페달을 밟는 움직임이 자연스럽게 동기화되도록 해 주세요.',
+        '펠리컨 특유의 큰 부리와 목주머니, 그리고 자전거를 타는 자세가 뚜렷하게 드러나도록 해 주세요.',
+        '화면 구성을 깔끔하게 유지하고 애니메이션 움직임을 매끄럽게 처리해 주세요.',
+        '펠리컨이 페달을 밟으며 앞으로 나아가는 생동감이 잘 느껴지도록 해 주세요.',
+        '크랭크 회전, 구르는 바퀴, 다리 움직임이 자연스럽게 맞물려 돌아가도록 해 주세요.',
+        '펠리컨의 특징적인 큰 부리와 목주머니를 살려 자연스럽고 연속적인 라이딩 동작을 보여 주세요.',
+      ],
+      noTest: [
+        '어떠한 테스트나 검사도 실행하지 말고 완성된 HTML 파일을 바로 출력해 주세요.',
+        '테스트 과정은 모두 생략하고 완성된 HTML 코드만 직접 제시해 주세요.',
+        '동작 확인이나 검증 명령 없이 바로 파일을 생성하여 결과만 전달해 주세요.',
+        '별도의 테스트 스크립트나 점검을 수행하지 말고 최종 HTML을 즉시 생성해 주세요.',
+        '모든 테스트 단계를 건너뛰고 완성된 단일 HTML 파일만 바로 출력해 주세요.',
+        '검증이나 확인 절차 없이 최종 완성된 HTML 결과물만 바로 제공해 주세요.',
+      ],
+    },
+    {
+      lang: 'fr',
+      weight: 2,
+      sep: ' ',
+      a: [
+        'Créez une nouvelle page HTML autonome dans un seul fichier.',
+        'Écrivez un fichier HTML complet et auto-contenu avec tout le code en ligne.',
+        'Construisez un document HTML unique sans aucune dépendance externe.',
+      ],
+      scene: [
+        'Utilisez du SVG en ligne pour dessiner une animation 2D d\'un pélican pédalant sur un vélo vers l\'avant.',
+        'Réalisez une scène animée 2D en SVG montrant un pélican à grand bec faisant du vélo en boucle.',
+        'Implémentez une illustration animée 2D fluide en SVG d\'un pélican qui avance à vélo.',
+      ],
+      detail: [
+        'Gardez la rotation des roues et le mouvement de pédalage naturellement synchronisés.',
+        'Rendez le grand bec, la poche gulaire et la posture de cycliste du pélican clairement reconnaissables.',
+        'Maintenez une composition propre et une animation fluide.',
+      ],
+      noTest: [
+        'Produisez directement le fichier HTML final sans exécuter aucun test ni vérification.',
+        'Aucun test n\'est nécessaire ; fournissez directement le code HTML complet.',
+        'Ignorez toutes les étapes de test et livrez directement le fichier terminé.',
+      ],
+    },
+    {
+      lang: 'de',
+      weight: 2,
+      sep: ' ',
+      a: [
+        'Erstellen Sie eine neue, eigenständige HTML-Seite in einer einzigen Datei.',
+        'Schreiben Sie eine vollständige, in sich geschlossene HTML-Datei mit gesamtem Inline-Code.',
+        'auen Sie ein einzelnes HTML-Dokument ohne externe Abhängigkeiten.',
+      ],
+      scene: [
+        'Verwenden Sie Inline-SVG, um eine 2D-Animation eines Pelikans zu zeichnen, der auf einem Fahrrad vorwärts radelt.',
+        'Zeichnen Sie mit SVG eine animierte 2D-Szene, die einen Pelikan mit großem Kehlsack beim Fahrradfahren zeigt.',
+        'Implementieren Sie eine flüssige, endlose 2D-SVG-Animation eines fahrradfahrenden Pelikans.',
+      ],
+      detail: [
+        'Halten Sie die Raddrehung und die Tretbewegung natürlich synchronisiert.',
+        'Machen Sie den markanten großen Schnabel, den Kehlsack und die Fahrhaltung klar erkennbar.',
+        'Halten Sie das Bild aufgeräumt und die Animation geschmeidig.',
+      ],
+      noTest: [
+        'Geben Sie die fertige HTML-Datei direkt aus, ohne Tests oder Prüfungen auszuführen.',
+        'Es sind keine Tests erforderlich; liefern Sie einfach direkt den fertigen HTML-Code.',
+        'Überspringen Sie alle Testschritte und erstellen Sie die Datei direkt.',
+      ],
+    },
+    {
+      lang: 'es',
+      weight: 2,
+      sep: ' ',
+      a: [
+        'Crea una nueva página HTML independiente en un solo archivo.',
+        'Escribe un archivo HTML completo y autónomo con todo el código en línea.',
+        'Construye un documento HTML de archivo único sin dependencias externas.',
+      ],
+      scene: [
+        'Usa SVG en línea para renderizar una animación 2D de un pelícano pedaleando hacia adelante en una bicicleta.',
+        'Dibuja una escena animada 2D con SVG que muestre a un pelícano de gran pico montando en bicicleta.',
+        'Implementa una animación 2D continua en SVG de un pelícano avanzando en bicicleta.',
+      ],
+      detail: [
+        'Mantén la rotación de las ruedas y el movimiento de pedaleo sincronizados con naturalidad.',
+        'Haz que el gran pico característico, la bolsa gular y la postura de ciclismo sean claramente reconocibles.',
+        'Mantén una composición limpia y un movimiento de animación fluido.',
+      ],
+      noTest: [
+        'Entrega directamente el archivo HTML terminado sin ejecutar ninguna prueba ni verificación.',
+        'No se necesita ninguna prueba; proporciona directamente el código HTML completo.',
+        'Omite todos los pasos de prueba y genera el archivo directamente.',
+      ],
+    },
+    {
+      lang: 'zh-CN',
+      weight: 4,
+      sep: '',
+      a: [
+        '请新建一个独立的单文件 HTML 页面。',
+        '请编写一个完整的单文件 HTML 网页。',
+        '请创建一个自包含的全新 HTML 文档，所有代码内联。',
+        '请生成一个完整的独立 HTML 文件。',
+        '请构建一个无需外部依赖的单文件 HTML 页面。',
+        '请直接编写一个包含全部内联代码的独立 HTML 文件。',
+      ],
+      scene: [
+        '使用内联 SVG 绘制一只鹈鹕踩着脚踏板向前骑自行车的 2D 动态动画场景。',
+        '通过 SVG 制作一个二维动态画面，展示一只大嘴鹈鹕正在骑自行车前进。',
+        '用内联 SVG 实现一只鹈鹕骑着自行车持续向前蹬行的 2D 动画插画。',
+        '借助 SVG 描绘一只鹈鹕在 2D 场景中骑自行车顺畅前行的循环动画。',
+        '利用内联 SVG 呈现一只鹈鹕双腿交替踩踏板骑自行车向前行进的 2D 动画。',
+        '使用 SVG 构建一只鹈鹕骑在自行车上持续蹬车前进的二维动态场景。',
+      ],
+      detail: [
+        '保持车轮旋转与脚踏蹬动自然同步。',
+        '让鹈鹕标志性的长喙、喉囊以及骑行动作清晰易辨。',
+        '画面保持干净利落，动画过渡平滑流畅。',
+        '展现出鹈鹕一边踩踏板一边向前行进的动感。',
+        '确保脚踏曲柄转动、车轮滚动与腿部动作协调一致。',
+        '突出鹈鹕的大嘴喉囊特征与自然连贯的骑行姿态。',
+      ],
+      noTest: [
+        '直接输出最终完成的 HTML 文件即可，无需运行任何测试或检查。',
+        '不需要执行测试步骤，请直接给出完整的 HTML 代码。',
+        '跳过所有测试环节，直接创建并输出该文件。',
+        '请勿进行测试或校验，直接交付完整结果。',
+        '无需运行验证命令或测试脚本，直接完成文件即可。',
+        '省去一切测试与检查流程，直接生成最终 HTML。',
+      ],
+    },
   ];
+
+  function pickWeighted(items, weightFn) {
+    const list = Array.isArray(items) ? items : [];
+    if (!list.length) return null;
+    const weights = list.map(x => Math.max(1, Number(weightFn ? weightFn(x) : x?.weight) || 1));
+    const total = weights.reduce((s, w) => s + w, 0);
+    let r = randomInt(total);
+    for (let i = 0; i < list.length; i++) {
+      if (r < weights[i]) return list[i];
+      r -= weights[i];
+    }
+    return list[0];
+  }
 
   function svg() {
     return unique('gacha:svg-prompts:v1', () => {
-      const bank = pick(PELICAN_LANG_BANKS);
+      const lastKey = 'gacha:pelican-svg-last-lang:v1';
+      const lastLang = String(Store.get(lastKey, '') || '');
+      const pool = PELICAN_LANG_BANKS.filter(b => b.lang !== lastLang);
+      const bank = pickWeighted(pool.length ? pool : PELICAN_LANG_BANKS, b => b.weight) || PELICAN_LANG_BANKS[0];
+      try { Store.set(lastKey, bank.lang); } catch {}
       const sep = bank.sep ?? ' ';
       const a = pick(bank.a);
       const scene = pick(bank.scene);
@@ -372,9 +504,16 @@ const GachaPrompts = (() => {
     let hist = Store.get(HKEY, []);
     if (!Array.isArray(hist)) hist = [];
     const lastLang = hist.length ? hist[hist.length - 1].lang : "";
-    const corePool = PELICAN_I18N_POOL.slice(0, 4);
-    const cands = corePool.filter(x => x.lang !== lastLang);
-    const chosen = pick(cands.length ? cands : corePool);
+    const i18nWeight = lang => {
+      if (lang === '中文(繁)') return 24;
+      if (lang === 'English') return 24;
+      if (lang === '日本語') return 22;
+      if (lang === '한국어') return 20;
+      if (lang === '中文(简)') return 3;
+      return 1;
+    };
+    const cands = PELICAN_I18N_POOL.filter(x => x.lang !== lastLang);
+    const chosen = pickWeighted(cands.length ? cands : PELICAN_I18N_POOL, x => i18nWeight(x.lang)) || PELICAN_I18N_POOL[1];
     const usedSuffixes = new Set(hist.map(h => h.suffix));
     let suffix = makePelicanSuffix11D6L();
     for (let g = 0; g < 15 && usedSuffixes.has(suffix); g++) suffix = makePelicanSuffix11D6L();

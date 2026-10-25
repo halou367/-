@@ -1,7 +1,7 @@
 {
   "name": "brana-client",
   "productName": "Brana AI",
-  "version": "2.0.0-beta.1",
+  "version": "2.0.0-beta.2",
   "description": "Cross-platform workspace client with multi-tab markdown rendering and session telemetry",
   "main": "src/main.js",
   "author": "755287249",
@@ -15,7 +15,7 @@
     "build:probe": "node scripts/build-probe.js"
   },
   "devDependencies": {
-    "electron": "44.7.2",
+    "electron": "33.4.11",
     "electron-builder": "^25.1.8"
   },
   "build": {

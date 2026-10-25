@@ -747,7 +747,7 @@ const KS_SEL = '[data-ks], .modal-back, .dlg-back, #lppop, #gpop, .gacha, .lpick
   f.__ks = true; Element.prototype.replaceChildren = f;
 })();
 // 送达状态每秒刷新一次（只改回复占位里的一行文字）
-setInterval(() => { const el = document.querySelector('#view .typing-st'); if (!el) return; const c = typeof UI !== 'undefined' ? UI.els?.chat : null; const t = c?.dlvText?.() || ''; if (el.textContent !== t) el.textContent = t; }, 1000);
+setInterval(() => { const el = document.querySelector('#view .typing-st'); if (!el) return; const row = el.closest?.('.typing-row'); const pht = row?.querySelector?.('.ph-t'); if (pht) { if (el.textContent !== '') el.textContent = ''; const c = typeof UI !== 'undefined' ? UI.els?.chat : null; if (c && !c.live) { const dlvRaw = (c.dlvText?.() || '').replace(/\s+\d+s$/, '').trim(); const rawP = (typeof ThinkingStatus !== 'undefined' && ThinkingStatus.phase) ? ThinkingStatus.phase(c) : (c.phase || '进行中'); const nextP = (!rawP || rawP === '发送中' || rawP === '进行中') && dlvRaw ? dlvRaw : rawP; if (nextP && pht.textContent !== nextP) pht.textContent = nextP; } return; } const c = typeof UI !== 'undefined' ? UI.els?.chat : null; const t = c?.dlvText?.() || ''; if (el.textContent !== t) el.textContent = t; }, 1000);
 // 手机输入法占位：切换页面时焦点临时交给它，输入法不收起；换完页面还在它身上（比如切到抽卡页）就松开
 const KB = {
   el: null,

@@ -810,7 +810,7 @@ const NodeRoutes = (() => {
     footReady=true;
     queueMicrotask(()=>void load());
     return {inp:wrap,hint:status,selectMode:chooseMode,get busy(){return applying||probing||saving;},block:()=>wrap,refresh:load,check,commit,save,draftRoute:!live,testedRoute:true,setRegion(c){if(c!==cc||regAuto)void pickRegion(c);},
-      get mode(){return State.isNode(current)?'node':strategy==='direct'?'direct':'local';},get routeMode(){return strategy;},
+      get mode(){return (isNodeMode()||State.isNode(current))?(strategy==='auto'?'region':'node'):strategy==='direct'?'direct':'local';},get routeMode(){return strategy;},
       get dirty(){return changed;},get proxy(){return current.proxy;},get proxyIp(){return current.proxyIp;},get nodeId(){return current.nodeId;},get region(){return current.region;},get exit(){try{return lastBrana&&lastBrana.key===routeKey(current)?String(lastBrana.result?.loc||''):'';}catch{return '';}},
       err(){return ((!live||changed)&&loading)||applying||probing||saving?'线路正在读取、检测或保存，请等待结果':error||'';}};
   }

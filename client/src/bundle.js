@@ -15,7 +15,7 @@ if (!fs._branaBrotliHooked) {
   fs._branaBrotliHooked = true;
 }
 const path = require('path');
-const ORDER = ['vless.js', 'route-state.js', 'route-policy.js', 'route-host.js', 'workspace-path.js', 'md.js', 'net-policy.js', 'auth-flow.js', 'auth-environment.js', 'core.js', 'cap-route.js', 'eval-core.js', 'mail-token.js', 'gacha-prompts.js', 'title-compact.js', 'title-flex.js', 'title-cipher.js', 'fmt.js', 'cscore.js', 'trace.js', 'workspace-preview.js', 'probe-vendor.js', 'probe-bank-cache.js', 'probe-bank-ikale.js', 'fp-libs.js', 'probe-output-guard.js', 'thinking-status.js', 'personal-fingerprint-math.js', 'personal-fingerprint.js', 'shared-fingerprint-schema.js', 'shared-fingerprint.js', 'fingerprint.js', 'fingerprint-library-ui.js', 'fingerprint-batch.js', 'pelican-test.js', 'fingerprint-review.js', 'conversation-labels.js', 'slash-commands.js', 'panel-work.js', 'render-work.js', 'send-queue.js', 'view.js', 'mode-switcher.js', 'eval-view.js', 'html-preview.js', 'sidebar-tools.js', 'gacha.js', 'gview.js', 'device-info.js', 'arena-trace/preimage.js', 'arena-trace/pricing.js', 'arena-trace/family.js', 'arena-trace/confidence.js', 'arena-trace/catalog-sync.js', 'billing-probe.js', 'habit-builtin-bank.js', 'billing-probe-ui.js', 'dock.js', 'file-export.js', 'chat-export.js', 'connectors.js', 'titles.js', 'title-sync.js', 'probe-archive.js', 'strength.js', 'price.js', 'gpop.js', 'slot.js', 'revolver.js', 'accounts.js', 'account-panel-size.js', 'account-vendor-fold.js', 'account-picker.js', 'account-management.js', 'nodes.js', 'iprep.js', 'pool.js', 'node-speed.js', 'node-routes.js', 'region-ip.js', 'env-refresh.js', 'env-check.js', 'auto-route.js', 'plus.js', 'palette.js', 'keep.js', 'mobile.js', 'astats.js', 'mgr.js', 'update.js', 'capture.js', 'bulk.js', 'session-gate.js', 'boot.js'];
+const ORDER = ['vless.js', 'route-state.js', 'route-policy.js', 'route-host.js', 'workspace-path.js', 'md.js', 'net-policy.js', 'auth-flow.js', 'auth-environment.js', 'core.js', 'cap-route.js', 'eval-core.js', 'mail-token.js', 'gacha-prompts.js', 'title-compact.js', 'title-flex.js', 'title-cipher.js', 'fmt.js', 'cscore.js', 'trace.js', 'workspace-preview.js', 'probe-vendor.js', 'probe-bank-cache.js', 'probe-bank-ikale.js', 'fp-libs.js', 'probe-output-guard.js', 'thinking-status.js', 'personal-fingerprint-math.js', 'personal-fingerprint.js', 'shared-fingerprint-schema.js', 'shared-fingerprint.js', 'fingerprint.js', 'fingerprint-library-ui.js', 'fingerprint-batch.js', 'pelican-test.js', 'fingerprint-review.js', 'conversation-labels.js', 'slash-commands.js', 'panel-work.js', 'render-work.js', 'send-queue.js', 'view.js', 'mode-switcher.js', 'eval-view.js', 'html-preview.js', 'sidebar-tools.js', 'gacha.js', 'gview.js', 'device-info.js', 'arena-trace/probe-context.js', 'arena-trace/preimage.js', 'arena-trace/claude-standalone-v5.js', 'arena-trace/gpt-standalone-v1.js', 'arena-trace/pricing.js', 'arena-trace/family.js', 'arena-trace/confidence.js', 'arena-trace/catalog-sync.js', 'billing-probe.js', 'habit-builtin-bank.js', 'billing-probe-ui.js', 'dock.js', 'file-export.js', 'chat-export.js', 'connectors.js', 'titles.js', 'title-sync.js', 'probe-archive.js', 'strength.js', 'price.js', 'gpop.js', 'slot.js', 'revolver.js', 'accounts.js', 'account-panel-size.js', 'account-vendor-fold.js', 'account-picker.js', 'account-management.js', 'nodes.js', 'iprep.js', 'pool.js', 'node-speed.js', 'node-routes.js', 'region-ip.js', 'env-refresh.js', 'env-check.js', 'auto-route.js', 'plus.js', 'palette.js', 'keep.js', 'mobile.js', 'astats.js', 'mgr.js', 'update.js', 'capture.js', 'bulk.js', 'session-gate.js', 'boot.js'];
 function build(uiDir, version, opt = {}) {
   if (process.versions?.electron && !opt?.forceRebuild) {
     for (const cand of [
@@ -33,7 +33,8 @@ function build(uiDir, version, opt = {}) {
   try { css = css.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\s*\n\s*/g, '').replace(/\s*([{};,>~])\s*/g, '$1').replace(/:\s+/g, ':').replace(/;}/g, '}'); } catch {}
   // 国家 → [默认语言, 时区…]（设备信息核对时区 / 语言用）
   let env = '{}'; try { const R = JSON.parse(fs.readFileSync(path.join(uiDir, 'region-environments.json'), 'utf8')); env = JSON.stringify(Object.fromEntries(Object.entries(R).map(([k, v]) => [k, [v.locale, ...new Set([v.timezone, ...(v.zones || [])])]]))); } catch {}
-  const billingCatalog = JSON.stringify(JSON.parse(fs.readFileSync(path.join(uiDir, 'arena-trace', 'catalog.json'), 'utf8'))); // Fail the build rather than ship a silently empty price table.
+  const billingCatalog = JSON.stringify(JSON.parse(fs.readFileSync(path.join(uiDir, 'arena-trace', 'catalog.json'), 'utf8')));
+  let pelicanClassifierModel = 'null'; try { pelicanClassifierModel = JSON.stringify(JSON.parse(fs.readFileSync(path.join(uiDir, 'arena-trace', 'pelican-classifier-model.json'), 'utf8'))); } catch {} // Fail the build rather than ship a silently empty price table.
   const js = ORDER.map(f => {
     const compactBundleSlice = (fname, raw) => {
       try {
@@ -59,16 +60,33 @@ function build(uiDir, version, opt = {}) {
             return 'let _hbRaw = ' + JSON.stringify(minJson) + ', _hbParsed = null;\nconst _getHb = () => { if (!_hbParsed) { _hbParsed = JSON.parse(_hbRaw); _hbRaw = ""; } return _hbParsed; };\nconst BUILTIN_HABIT_BANK = new Proxy({}, { get(_, k) { if (k === "__releaseSamples") return () => { if (_hbParsed) delete _hbParsed.samples; }; return _getHb()[k]; }, ownKeys() { return Reflect.ownKeys(_getHb()); }, getOwnPropertyDescriptor(_, k) { return Object.getOwnPropertyDescriptor(_getHb(), k); }, has(_, k) { return k in _getHb(); } });\nif (typeof globalThis !== "undefined") globalThis.BUILTIN_HABIT_BANK = BUILTIN_HABIT_BANK;\n';
           }
         }
-        if (fname === 'probe-vendor.js' && opt?.slimDesktopBundle) {
+        if (fname === 'probe-vendor.js') {
           const iBank = raw.indexOf('get bank() {');
           const iSeed = raw.indexOf('get seedBank() {', iBank);
           const iEnd = raw.indexOf('});', iSeed);
           if (iBank !== -1 && iSeed > iBank && iEnd > iSeed) {
-            raw = raw.slice(0, iBank)
-              + 'get bank() { clearTimeout(_bt); if (!_bank) { _bank = engine.validateBank(JSON.parse((typeof window !== "undefined" && window.BranaHost?.staticBankSync && window.BranaHost.staticBankSync("whatsmyllm")) || "{}")); } _bt = setTimeout(() => { _bank = null; }, 3500); return _bank; }, '
-              + 'get seedBank() { clearTimeout(_sbt); if (!_seedBank) { _seedBank = engine.validateBank(JSON.parse((typeof window !== "undefined" && window.BranaHost?.staticBankSync && window.BranaHost.staticBankSync("whatsmyllm-seed")) || "{}")); } _sbt = setTimeout(() => { _seedBank = null; }, 3500); return _seedBank; }'
-              + raw.slice(iEnd);
-            raw = raw.replace('let _bank, _seedBank;', 'let _bank, _seedBank, _bt = 0, _sbt = 0;');
+            if (opt?.slimDesktopBundle) {
+              raw = raw.slice(0, iBank)
+                + 'get bank() { clearTimeout(_bt); if (!_bank) { _bank = engine.validateBank(JSON.parse((typeof window !== "undefined" && window.BranaHost?.staticBankSync && window.BranaHost.staticBankSync("whatsmyllm")) || "{}")); } _bt = setTimeout(() => { _bank = null; }, 3500); return _bank; }, '
+                + 'get seedBank() { clearTimeout(_sbt); if (!_seedBank) { _seedBank = engine.validateBank(JSON.parse((typeof window !== "undefined" && window.BranaHost?.staticBankSync && window.BranaHost.staticBankSync("whatsmyllm-seed")) || "{}")); } _sbt = setTimeout(() => { _seedBank = null; }, 3500); return _seedBank; }'
+                + raw.slice(iEnd);
+              raw = raw.replace('let _bank, _seedBank;', 'let _bank, _seedBank, _bt = 0, _sbt = 0;');
+            } else {
+              const bStart = raw.indexOf('JSON.parse(', iBank) + 11;
+              const bEnd = raw.lastIndexOf(')))', iSeed);
+              const sStart = raw.indexOf('JSON.parse(', iSeed) + 11;
+              const sEnd = raw.lastIndexOf(')))', iEnd);
+              if (bStart > 11 && bEnd > bStart && sStart > iSeed && sEnd > sStart) {
+                const bObj = JSON.parse(JSON.parse(raw.slice(bStart, bEnd)));
+                const sObj = JSON.parse(JSON.parse(raw.slice(sStart, sEnd)));
+                const bById = new Map((bObj.models || []).map(m => [m.id, JSON.stringify(m)]));
+                const slimModels = (sObj.models || []).map(m => bById.get(m.id) === JSON.stringify(m) ? { _ref: m.id } : m);
+                const sSlimLit = JSON.stringify(JSON.stringify({ ...sObj, models: slimModels }));
+                raw = raw.slice(0, iSeed)
+                  + 'get seedBank() { if (_seedBank) return _seedBank; const b = this.bank, bm = new Map((b?.models || []).map(x => [x.id, x])), d = JSON.parse(' + sSlimLit + '); d.models = (d.models || []).map(x => x._ref ? (bm.get(x._ref) || x) : x); return (_seedBank = engine.validateBank(d)); }'
+                  + raw.slice(iEnd);
+              }
+            }
           }
         }
       } catch {}
@@ -97,6 +115,7 @@ function build(uiDir, version, opt = {}) {
     let s = compactBundleSlice(f, fs.readFileSync(path.join(uiDir, f), 'utf8'));
     if (s.includes('/*__REGION_ENV__*/null')) s = s.replace('/*__REGION_ENV__*/null', env);
     if (s.includes('/*__ARENA_AGENT_CATALOG__*/null')) s = s.replace('/*__ARENA_AGENT_CATALOG__*/null', billingCatalog);
+    if (s.includes('/*__PELICAN_CLASSIFIER_MODEL__*/null')) s = s.replace('/*__PELICAN_CLASSIFIER_MODEL__*/null', pelicanClassifierModel);
     return `// ---- ${f} ----\n` + s;
   }).join('\n');
   // 内置的更新服务器地址（package.json 的 updateUrl；空 = 用户在设置里自己填）

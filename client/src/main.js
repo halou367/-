@@ -521,6 +521,11 @@ function loadDB() {
           if (a.pw !== beforePw) ch = true;
         }
       }
+      if (DB.accounts.some(a => a && a.provisionalReg && !a.status?.loggedIn)) {
+        DB.accounts = DB.accounts.filter(a => !(a && a.provisionalReg && !a.status?.loggedIn));
+        if (!DB.accounts.length) DB.accounts.push({ id: newId(), name: '账号 1', proxy: '' });
+        ch = true;
+      }
       if (healBannedAccountProxyIps()) ch = true;
       if (DB.shared && typeof DB.shared === 'object' && DB.accounts.length > 0) {
         const validAcctIds = new Set(DB.accounts.map(a => a?.id).filter(Boolean));
@@ -638,7 +643,7 @@ const acct = id => DB.accounts.find(a => a.id === id);
 // 抽卡状态只在该账号窗口（含后台隐藏窗口）还开着时有效；程序重启后不再显示「抽卡中」
 const winState = id => { const w = typeof wins !== 'undefined' && wins.get(id); return w && !w.isDestroyed() ? (w.__hidden ? 'hidden' : 'shown') : ''; };
 const liveStatus = a => { const st = a.status || null; if (!st || !st.gacha || winState(a.id) || !st.gacha.busy) return st; return { ...st, gacha: { ...st.gacha, busy: false } }; };
-const pub = a => a && { id: a.id, name: a.name, remark: a.remark || '', routeMode: RouteState.mode(a), nodeFailover: a.nodeFailover === true, authLocked: RouteState.locked(a), authExpires: a.routeAuth?.expires || 0, routeAuto: a.routeAuto !== false, routeHome: a.routeHome || '', routeAt: a.routeAt || 0, proxy: a.proxy || '', proxyIp: a.proxyIp || '', nodeId: a.nodeId || '', region: a.region || '', email: a.email || '', hasPw: !!a.pw, status: liveStatus(a), win: winState(a.id), fp: a.fp || null, tunErr: a.tunErr || '', xray: !!xrayBin(), sites: SiteLogins.publish(a.sites) };
+const pub = a => a && { id: a.id, name: a.name, remark: a.remark || '', routeMode: RouteState.mode(a), nodeFailover: a.nodeFailover === true, authLocked: RouteState.locked(a), authExpires: a.routeAuth?.expires || 0, routeAuto: a.routeAuto !== false, routeHome: a.routeHome || '', routeAt: a.routeAt || 0, proxy: a.proxy || '', proxyIp: a.proxyIp || '', nodeId: a.nodeId || '', region: a.region || '', email: a.email || '', hasPw: !!a.pw, status: liveStatus(a), win: winState(a.id), fp: a.fp || null, tunErr: a.tunErr || '', ...(a.provisionalReg && !a.status?.loggedIn ? { provisionalReg: true } : {}), xray: !!xrayBin(), sites: SiteLogins.publish(a.sites) };
 // 精简版账号列表：统计里去掉每个型号的对话明细（list，最大的部分），选账号页 / 账号菜单 / 定时刷新用；账号管理窗口要明细时取完整版
 const liteCache = new WeakMap();
 const validStatModelKey = (mk, m) => {
@@ -864,6 +869,7 @@ async function applyProxy(a, {force=false,deferReload=false}={}) {
   if(force&&RouteState.locked(actual))throw Error('账号正在认证，禁止强制重置线路');
   const ses = prepSession(a), routeSignature = RouteState.signature(a);
   const tunnel = tunnels.get(a.id), tunnelReady = !/^vless:/i.test(proxyStr(a)) || (tunnel && !tunnel.starting && tunnel.proc.exitCode === null);
+  if (tunnel) tunnel.lastActiveAt = Date.now();
   // Navigating a verification link or saving unchanged settings must not reset the auth session.
   const existingWin = wins.get(a.id);
   const existingView = existingWin && !existingWin.isDestroyed?.() ? existingWin.webContents : null;
@@ -892,7 +898,13 @@ async function applyProxy(a, {force=false,deferReload=false}={}) {
         wc.__privacyReset?.();
         // The trusted local recovery page already has a frame; keep its IPC caller alive.
         let recoveryPage=false;try { recoveryPage=path.resolve(require('node:url').fileURLToPath(wc.getURL()))===path.resolve(OFFLINE); } catch {}
-        if(!recoveryPage)await loadURLAlive(wc, 'about:blank');
+        if(!recoveryPage){
+          await loadURLAlive(wc, 'about:blank');
+          try {
+            const bootHtml = buildBootLoaderHtml(snapshot, '正在启动安全代理隧道与隐私保护…');
+            void wc.executeJavaScript(`try{document.open();document.write(${JSON.stringify(bootHtml)});document.close();}catch{}`).catch(() => {});
+          } catch {}
+        }
         check(); await uaMeta(wc); check();
       }
       const changed=wc?.__privacyRefresh ? await wc.__privacyRefresh(snapshot) : false;check();
@@ -1024,11 +1036,14 @@ async function uaMeta(wc) {
   const message = (event, method, params) => {
     if (!active) return;
     if (method === 'Fetch.requestPaused') {
+      const reqUrl = String(params?.request?.url || '');
+      const isHarvest = /pelharvest=1/i.test(reqUrl);
+      const bodyStr = isHarvest ? 'User-agent: *\nAllow: /\n' : buildBootLoaderHtml(privacyAccount, '正在载入客户端界面与账号环境…');
       void send('Fetch.fulfillRequest', {
         requestId: params.requestId,
         responseCode: 200,
-        responseHeaders: [{ name: 'content-type', value: 'text/plain; charset=utf-8' }],
-        body: Buffer.from('User-agent: *\nAllow: /\n').toString('base64')
+        responseHeaders: [{ name: 'content-type', value: isHarvest ? 'text/plain; charset=utf-8' : 'text/html; charset=utf-8' }],
+        body: Buffer.from(bodyStr, 'utf8').toString('base64')
       }, params.sessionId).catch(() => {});
       return;
     }
@@ -1289,6 +1304,87 @@ function closeSplash() {
   }
   if (s && !s.isDestroyed()) setTimeout(() => { try { s.destroy(); } catch {} }, 120);
 }
+function buildBootLoaderHtml(a, stageText = '正在启动客户端环境…') {
+  const dark = DB.theme?.bg ? !!DB.theme.dark : nativeTheme.shouldUseDarkColors;
+  const bg = themeBg();
+  const fg = dark ? '#ecebe7' : '#262522';
+  const mut = dark ? '#a9a59d' : '#7a746b';
+  const cardBg = dark ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.03)';
+  const cardBorder = dark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.1)';
+  const acctLabel = String((a && (a.email || a.name)) || '本地账号').replace(/[<>&"]/g, '');
+  const pipLabel = String((a && a.proxyIp) ? ('ProxyIP: ' + a.proxyIp) : (a && /^vless:/i.test(a.proxy || '') ? 'VLESS 节点' : '直连 / 默认线路')).replace(/[<>&"]/g, '');
+  const safeStage = String(stageText || '正在连接 arena.ai…').replace(/[<>&"]/g, '');
+  return `<!doctype html><html><head><meta charset="utf-8"><title>Brana AI</title><style data-anc-boot="1">
+html,body{margin:0;height:100%;background:${bg};color:${fg};font:13px/1.55 system-ui,"Microsoft YaHei","PingFang SC",sans-serif;overflow:hidden;user-select:none}
+#anc-boot-loader{position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:24px;z-index:2147483640;background:${bg}}
+.ab-drag{position:fixed;top:0;left:0;right:150px;height:36px;-webkit-app-region:drag}
+.ab-card{display:flex;flex-direction:column;align-items:center;max-width:440px;width:100%;padding:28px 24px;border-radius:16px;background:${cardBg};border:1px solid ${cardBorder};box-sizing:border-box;text-align:center}
+.ab-ring{width:42px;height:42px;border-radius:50%;border:2.5px solid ${cardBorder};border-top-color:${fg};animation:abSpin .85s linear infinite;margin-bottom:16px}
+@keyframes abSpin{to{transform:rotate(360deg)}}
+.ab-title{font-size:15px;font-weight:600;margin-bottom:6px}
+.ab-sub{font-size:12px;color:${mut};margin-bottom:14px}
+.ab-bar{width:200px;height:3.5px;border-radius:4px;background:${cardBorder};overflow:hidden;margin-bottom:6px}
+.ab-bar i{display:block;width:42%;height:100%;background:${fg};opacity:.75;border-radius:4px;animation:abBar 1.25s ease-in-out infinite}
+@keyframes abBar{0%{transform:translateX(-110%)}100%{transform:translateX(250%)}}
+.ab-diag{display:none;margin-top:14px;padding:12px 14px;border-radius:10px;background:${dark ? 'rgba(245,158,11,0.08)' : 'rgba(245,158,11,0.1)'};border:1px solid rgba(245,158,11,0.3);text-align:left;width:100%;box-sizing:border-box;font-size:12px;color:${fg}}
+.ab-btns{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+.ab-btn{padding:6px 12px;border-radius:7px;border:1px solid ${cardBorder};background:${dark ? '#2d2c29' : '#fff'};color:${fg};font:600 12px/1.2 system-ui,"Microsoft YaHei",sans-serif;cursor:pointer;-webkit-app-region:no-drag}
+.ab-btn:hover{opacity:.88}
+</style></head><body><pre data-anc-boot="1" style="display:none">User-agent: *\nAllow: /\n</pre>
+<div id="anc-boot-loader" data-anc-boot="1">
+  <div class="ab-drag"></div>
+  <div class="ab-card">
+    <div class="ab-ring"></div>
+    <div id="anc-boot-stage" class="ab-title">${safeStage}</div>
+    <div id="anc-boot-sub" class="ab-sub">${acctLabel} · ${pipLabel}</div>
+    <div class="ab-bar"><i></i></div>
+    <div id="anc-boot-diag" class="ab-diag">
+      <div style="font-weight:600;color:#f59e0b;margin-bottom:4px" id="anc-boot-diag-title">⏳ 启动等待时间较长</div>
+      <div id="anc-boot-reason" style="color:${mut}">正在等待代理隧道响应或初始化客户端脚本（若当前 ProxyIP 节点较慢，可直接点击下方按钮恢复）</div>
+      <div class="ab-btns">
+        <button type="button" class="ab-btn" onclick="location.reload()">重新加载</button>
+        <button type="button" class="ab-btn" onclick="try{if(window.BranaHost&&window.BranaHost.back)window.BranaHost.back('browse');else location.replace('https://arena.ai/robots.txt?browse=1&offline=1');}catch(e){location.reload();}">进入离线查阅 / 切换节点</button>
+      </div>
+    </div>
+  </div>
+</div>
+<script data-anc-boot="1">
+(function(){
+  var t0 = Date.now();
+  window.__setAncBootStage = function(st, sub, isErr) {
+    var el = document.getElementById('anc-boot-stage');
+    var subEl = document.getElementById('anc-boot-sub');
+    var diag = document.getElementById('anc-boot-diag');
+    var reason = document.getElementById('anc-boot-reason');
+    if (el && st) { el.textContent = st; if (isErr) el.style.color = '#f87171'; }
+    if (subEl && sub) subEl.textContent = sub;
+    if (isErr && diag && reason) {
+      diag.style.display = 'block';
+      reason.textContent = sub || st;
+    }
+  };
+  setTimeout(function(){
+    var loader = document.getElementById('anc-boot-loader');
+    var diag = document.getElementById('anc-boot-diag');
+    var stage = document.getElementById('anc-boot-stage');
+    var reason = document.getElementById('anc-boot-reason');
+    if (loader && diag && !window.__ANC_CLIENT_SHELL) {
+      diag.style.display = 'block';
+      var cur = stage ? stage.textContent : '初始化中';
+      if (reason && !reason.dataset.custom) {
+        reason.textContent = '当前停留阶段：「' + cur + '」（已等待 ' + Math.round((Date.now() - t0)/1000) + ' 秒）。可能是当前代理节点握手缓慢或网络波动，可点击下方按钮恢复。';
+      }
+    }
+  }, 6500);
+})();
+</script></body></html>`;
+}
+function setBootStage(wc, stageText, subText = '', isErr = false) {
+  try {
+    if (!wc || wc.isDestroyed()) return;
+    wc.executeJavaScript(`window.__setAncBootStage&&window.__setAncBootStage(${JSON.stringify(stageText)},${JSON.stringify(subText)},${JSON.stringify(!!isErr)})`).catch(() => {});
+  } catch {}
+}
 
 // ---------- 窗口 ----------
 const wins = new Map(); // accountId -> BrowserWindow
@@ -1501,8 +1597,11 @@ async function openAccount(id, opt = {}) {
     let stage = 'extensions'; const slow = setTimeout(() => runtimeLog('navigation-slow', { window: w.__runtimeId, code: stage }), 20000);
     w.__navigateP = (async () => {
       try {
+        if (typeof setBootStage === 'function') setBootStage(wc, '正在准备扩展环境…');
         await extensionStore.ready(a.id); if (w.isDestroyed()) return false; stage = 'route';
+        if (typeof setBootStage === 'function') setBootStage(wc, '正在启动代理隧道与节点校验…');
         await applyProxy(a); if (w.isDestroyed()) return false; stage = 'load';
+        if (typeof setBootStage === 'function') setBootStage(wc, '正在连接 arena.ai 并载入界面…');
         if (!w.isDestroyed()) {
           const targetUrl = url || UI_URL;
           const isFix = Boolean(process.env.BRANA_EXTENSION_TEST_DATA || /^(?:https?:\/\/|socks5:\/\/)?127\.0\.0\.1:(?:1|9|10)\b/i.test(String(proxyStr(a) || '')) || /@example\.invalid$/i.test(String(a?.email || '')));
@@ -1539,7 +1638,7 @@ async function openAccount(id, opt = {}) {
     const u = wc.getURL();
     // 客户端界面（robots.txt）马上注入；浏览器模式的官网页面等官网自己先加载完（did-finish-load，最多等 2.5 秒）再注入 3.6MB 的客户端脚本，
     // 完整功能延后；轻量顶部栏与底部占位由 preload 在页面创建时挂载，dom-ready 仅兜底。
-    if (u.startsWith(UI_URL)) { wc.__clientShell = true; wc.executeJavaScript('Boolean(window.__arenaNextClientLoaded)').then(ok => (ok || wc.isDestroyed()) ? null : wc.executeJavaScript(typeof getBundle === 'function' ? getBundle() : BUNDLE)).catch(e => { console.error('inject', e); appendRendererLog(`[INJECT-ERR] ${e?.stack || e}\n`); }); }
+    if (u.startsWith(UI_URL)) { wc.__clientShell = true; if (typeof setBootStage === 'function') setBootStage(wc, '正在初始化客户端核心脚本…'); wc.executeJavaScript('Boolean(window.__arenaNextClientLoaded)').then(ok => (ok || wc.isDestroyed()) ? null : wc.executeJavaScript(typeof getBundle === 'function' ? getBundle() : BUNDLE)).catch(e => { console.error('inject', e); appendRendererLog(`[INJECT-ERR] ${e?.stack || e}\n`); if (typeof setBootStage === 'function') setBootStage(wc, '客户端界面脚本加载异常', String(e?.message || e), true); }); }
     else if (u.startsWith('https://arena.ai/')) {
       const seq = wc.__injSeq = (wc.__injSeq || 0) + 1; let fired = false;
       const go = () => { if (fired || wc.isDestroyed() || wc.__injSeq !== seq) return; fired = true; clearTimeout(t); wc.off('did-finish-load', go); if (wc.getURL().startsWith('https://arena.ai/') && !wc.getURL().startsWith(UI_URL)) wc.executeJavaScript(typeof getBundle === "function" ? getBundle() : BUNDLE).catch(e => console.error('inject', e)); };
@@ -1584,7 +1683,7 @@ async function openAccount(id, opt = {}) {
     navigationFailed(navigationFailures.event({ url, code, desc }));
   });
   if (waitUi) setTimeout(reveal, 20000);
-  else { w.once('ready-to-show', () => reveal()); setTimeout(reveal, 4000); }
+  else { w.once('ready-to-show', () => { const cu = String(wc.getURL() || ''); if (cu && cu !== 'about:blank') reveal(); }); setTimeout(reveal, 4000); }
   // Detach the privacy debugger (and its auto-attached child targets) BEFORE native teardown.
   // Destroying a window while CDP auto-attach is active crashes the whole main process,
   // which closed every account window at once.
@@ -1677,8 +1776,8 @@ ipcMain.handle('host:theme', (e, t) => {
 });
 
 // ---------- IPC ----------
-ipcMain.handle('host:info', e => { const a = winAcct(e.sender); return { platform: 'desktop', version: VERSION, routeDraft: true, account: pub(a), privacy: {...BrowserPrivacy.profile(a||{}),webrtc:'disabled',google:'account-proxy',blocked:a?!!session.fromPartition(partOf(a.id)).__routeBlocked:false}, accounts: DB.accounts.map(pubLite) }; });
-ipcMain.handle('host:listAccounts', (e, lite) => DB.accounts.map(lite ? pubLite : pub));
+ipcMain.handle('host:info', e => { const a = winAcct(e.sender); return { platform: 'desktop', version: VERSION, routeDraft: true, account: pub(a), privacy: {...BrowserPrivacy.profile(a||{}),webrtc:'disabled',google:'account-proxy',blocked:a?!!session.fromPartition(partOf(a.id)).__routeBlocked:false}, accounts: DB.accounts.filter(x => !(x?.provisionalReg && !x?.status?.loggedIn)).map(pubLite) }; });
+ipcMain.handle('host:listAccounts', (e, lite) => (lite === 'all' ? DB.accounts : DB.accounts.filter(x => !(x?.provisionalReg && !x?.status?.loggedIn))).map(lite ? pubLite : pub));
 // Read only the selected account's cached statistics; no network or credential export.
 ipcMain.handle('host:accountStats', (e, id) => {
   const a = typeof id === 'string' ? acct(id) : null;
@@ -1726,6 +1825,8 @@ ipcMain.handle('host:saveAccount', async (e, a) => {
   if (typeof a.nodeFailover === 'boolean' && RouteState.mode(cur) === 'node') cur.nodeFailover = a.nodeFailover;
   // Empty legacy password fields remain non-destructive; only an explicit user choice clears credentials.
   if (a.clearPassword === true) { delete cur.pw; cur.noAuto = true; }
+  if (a.provisionalReg === true && !cur.status?.loggedIn) cur.provisionalReg = true;
+  else if (a.provisionalReg === false || cur.status?.loggedIn) delete cur.provisionalReg;
   if (typeof a.remark === 'string') cur.remark = a.remark.trim().replace(/[\x00-\x1f\x7f]/g, '').slice(0, 40);
   if (a.region !== undefined) cur.region = String(a.region || '').toUpperCase().replace(/[^A-Z]/g, '').slice(0, 4);
   if (routeBefore && routeBefore !== JSON.stringify([cur.proxy, cur.nodeId, cur.region])) cur.routeHome = cur.region || '';
@@ -1747,7 +1848,7 @@ ipcMain.handle('host:renameAccount', (e, id, value) => {
   return { ok: true, id, name, remark: name };
 });
 ipcMain.handle('host:removeAccount', createAccountRemoval({
-  accounts: () => DB.accounts, find: acct, windowFor: id => wins.get(id), caller: e => winAcct(e.sender), open: openAccount,
+  accounts: () => DB.accounts, find: id => { const t = acct(id); if (t && DB.accounts.length <= 1 && t.provisionalReg && !t.status?.loggedIn) DB.accounts.push({ id: newId(), name: '账号 1', proxy: '' }); return t; }, windowFor: id => wins.get(id), caller: e => winAcct(e.sender), open: openAccount,
   persistRemoval(id) {
     const before = { accounts: DB.accounts, open: DB.open, last: DB.last };
     DB.accounts = DB.accounts.filter(x => x.id !== id); DB.open = DB.open.filter(x => x !== id);
@@ -2543,6 +2644,33 @@ function runNativeWorkingSetTrim() {
       for (const k of KIDS) if (k?.pid) pids.push(String(k.pid));
     }
     if (!pids.length) return;
+    if (globalThis._branaWin32Addon === undefined) {
+      globalThis._branaWin32Addon = null;
+      for (const np of [
+        process.resourcesPath && path.join(process.resourcesPath, 'bin', 'brana-win32.node'),
+        path.join(__dirname, '..', 'resources', 'bin', 'brana-win32.node'),
+        path.join(__dirname, '..', 'bin', 'brana-win32.node'),
+        path.join(__dirname, '..', '..', '..', 'runtime-resources', 'bin', 'brana-win32.node'),
+      ].filter(Boolean)) {
+        try { if (fs.existsSync(np)) { globalThis._branaWin32Addon = require(np); break; } } catch {}
+      }
+    }
+    const addon = globalThis._branaWin32Addon;
+    if (addon && typeof addon.trimPid === 'function') {
+      const execInProcTrim = () => {
+        try {
+          global.gc?.();
+          try { addon.trimSelf?.(); } catch {}
+          for (const p of pids) { try { addon.trimPid(Number(p)); } catch {} }
+          if (typeof wins !== 'undefined' && wins instanceof Map) {
+            for (const w of wins.values()) if (w && !w.isDestroyed() && !w.__hidden) applyWindowTaskMgrTitle(w);
+          }
+        } catch {}
+      };
+      setTimeout(execInProcTrim, 240).unref?.();
+      if (totalWsKb > 105 * 1024) setTimeout(execInProcTrim, 850).unref?.();
+      return;
+    }
     const cands = [
       process.resourcesPath && path.join(process.resourcesPath, 'bin', 'win-mem-trim.exe'),
       path.join(__dirname, '..', 'resources', 'bin', 'win-mem-trim.exe'),
@@ -2841,8 +2969,9 @@ ipcMain.handle('host:fetchText', async (e, url, opt) => {
   if (publicData && (!/^https:\/\/whatsmyllm\.com\/(?:|data\/bank\/v[0-9]{4}\.[0-9]{1,2}\.[0-9]+\.json)$/.test(url) || opt?.method === 'POST')) return { error: '指纹数据地址不允许' };
   // 可选 POST（IP 信誉批量查询用）：{ method: 'POST', body, type }
   const post = opt && opt.method === 'POST', ex = post ? { method: 'POST', body: String(opt.body || '').slice(0, 1e6) } : {};
+  const reqTimeoutMs = Math.max(2500, Math.min(120000, +opt?.timeout || (opt?.long === true ? 120000 : 15000)));
   const one = async (f, ua) => {
-    const ctl = new AbortController(), t = setTimeout(() => ctl.abort(), opt?.long === true ? 120000 : 15000);
+    const ctl = new AbortController(), t = setTimeout(() => ctl.abort(), reqTimeoutMs);
     try {
       const r = await f(url, {
         ...ex,
@@ -2897,19 +3026,86 @@ ipcMain.handle('host:fetchText', async (e, url, opt) => {
         if (rMirror && !rMirror.error) return rMirror;
       } catch {}
     }
-    for (const ua of ['v2rayN/6.23', 'ClashforWindows/0.20.39', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36']) {
+    for (const ua of ['Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36', 'v2rayN/6.23', 'ClashforWindows/0.20.39']) {
       const rDirect = await one((u, o) => ds.fetch(u, o), ua);
       if (rDirect && !rDirect.error) return rDirect;
+      if (rDirect) r = rDirect;
+      if (rDirect?.error && /^HTTP (?:400|401|403|404|405|410|422)\b/i.test(rDirect.error)) return rDirect;
     }
     const rSys = await one((u, o) => session.defaultSession.fetch(u, o), 'v2rayN/6.23');
     if (rSys && !rSys.error) return rSys;
+    if (rSys && !r) r = rSys;
   }
   if (a && opt?.direct === true && (!r || r.error)) {
     if (!tunnels.has(a.id) && /^vless:/i.test(proxyStr(a))) await applyProxy(a).catch(() => {});
     const rAcct = await one((u, o) => session.fromPartition(partOf(a.id)).fetch(u, o), 'v2rayN/6.23');
     if (rAcct && !rAcct.error) return rAcct;
+    if (rAcct && !r) r = rAcct;
   }
   return r || { error: '缺少账号代理上下文，未直连' };
+});
+ipcMain.handle('host:solveCaptchaAudio', async (e, audioUrl) => {
+  try {
+    const u = String(audioUrl || '').trim();
+    if (!/^https:\/\/(?:[a-z0-9-]+\.)*(?:google\.com|recaptcha\.net|gstatic\.com)\//i.test(u)) {
+      return { ok: false, error: '无效的语音验证码地址' };
+    }
+    const fetchAudio = async fetcher => {
+      const ctl = new AbortController(), tm = setTimeout(() => ctl.abort(), 12000);
+      try {
+        const res = await fetcher(u, { signal: ctl.signal, cache: 'no-store', credentials: 'omit' });
+        if (!res.ok) throw new Error('Audio HTTP ' + res.status);
+        return await res.arrayBuffer();
+      } finally { clearTimeout(tm); }
+    };
+    let audioBuf = null;
+    if (e?.sender?.session) {
+      audioBuf = await fetchAudio((url, op) => e.sender.session.fetch(url, op)).catch(() => null);
+    }
+    if (!audioBuf) {
+      const ds = await directSession().catch(() => null);
+      audioBuf = await fetchAudio((url, op) => nodeOrDirectFetch(url, op, ds));
+    }
+    if (!audioBuf || !audioBuf.byteLength) return { ok: false, error: '语音文件为空' };
+    const ds = await directSession().catch(() => null);
+    let finalTranscript = '';
+    for (const witKey of ['JVHWCNWJLWLGN6MFALYLHAPKUFHMNTAC', '2462825872496115']) {
+      const ctl = new AbortController(), tm = setTimeout(() => ctl.abort(), 14000);
+      let witText = '';
+      try {
+        const witRes = await nodeOrDirectFetch('https://api.wit.ai/speech?v=20220622', {
+          method: 'POST',
+          headers: {
+            Authorization: 'Bearer ' + witKey,
+            'Content-Type': 'audio/mpeg3',
+          },
+          body: Buffer.from(audioBuf),
+          signal: ctl.signal,
+        }, ds);
+        witText = await witRes.text();
+      } catch {} finally { clearTimeout(tm); }
+      if (!witText) continue;
+      const matches = [...witText.matchAll(/"_?text"\s*:\s*"([^"]*)"/g)].map(m => m[1].trim()).filter(Boolean);
+      if (matches.length) {
+        finalTranscript = matches[matches.length - 1];
+        break;
+      }
+      for (const line of witText.split(/\r?\n/).map(x => x.trim()).filter(Boolean)) {
+        try { const j = JSON.parse(line); if (j.text || j._text) { finalTranscript = j.text || j._text; if (j.is_final) break; } } catch {}
+      }
+      if (finalTranscript) break;
+    }
+    let cleanText = String(finalTranscript || '').replace(/[^a-zA-Z0-9\s]/g, '').trim().toLowerCase();
+    const numMap = { zero: '0', one: '1', two: '2', to: '2', too: '2', three: '3', four: '4', for: '4', five: '5', six: '6', seven: '7', eight: '8', ate: '8', nine: '9' };
+    const words = cleanText.split(/\s+/).filter(Boolean);
+    if (words.length && words.every(w => numMap[w] !== undefined || /^\d+$/.test(w))) {
+      cleanText = words.map(w => numMap[w] !== undefined ? numMap[w] : w).join('');
+    }
+    if (!cleanText) return { ok: false, error: '未能从语音中识别出文本' };
+    return { ok: true, text: cleanText };
+  } catch (err) {
+    return { ok: false, error: String(err?.message || err) };
+  }
 });
 // ---------- 客户端更新：下载（带进度、sha256 校验）→ 安装并重启 ----------
 // 安装版：静默运行新安装包（装到原来的位置）后重新打开；便携版：等本程序退出后用新 exe 覆盖旧 exe 再打开
@@ -4693,7 +4889,7 @@ ipcMain.handle('host:shared', (e, k, v) => {
         if (fs.existsSync(bf)) {
           const d = JSON.parse(fs.readFileSync(bf, 'utf8'));
           if (Array.isArray(d?.samples)) {
-            const deltaOnly = d.samples.filter(s => s && !bSidSet.has(String(s.sid || '')));
+            const deltaOnly = d.samples.filter(s => s && (!bSidSet.has(String(s.sid || '')) || (s.userConfirmed && s.truthTier === 'manual_correction')));
             diskSamples = mergeBankSamples(diskSamples, deltaOnly).slice(0, 160);
           }
           if (d?.calibration && typeof d.calibration === 'object') diskCalib = mergeCalibObj(diskCalib, d.calibration);
@@ -4715,7 +4911,7 @@ ipcMain.handle('host:shared', (e, k, v) => {
     }
     if (v && typeof v === 'object') {
       const incDelta = Array.isArray(v.samples)
-        ? v.samples.filter(s => s && !bSidSet.has(String(s.sid || '')))
+        ? v.samples.filter(s => s && (!bSidSet.has(String(s.sid || '')) || (s.userConfirmed && s.truthTier === 'manual_correction')))
         : [];
       const merged = (v.replace === true && (!Array.isArray(v.samples) || v.samples.length === 0))
         ? []
@@ -4857,6 +5053,26 @@ ipcMain.handle('host:shared', (e, k, v) => {
 // 有窗口在抽卡 / 排队发送 / 接收回复：阻止系统把 App 挂起（屏幕照常可以关）
 const bgWorkMap = new Map(); let psbId = -1;
 const _hiddenIdleSince = new Map();
+const activeAuthAccounts = new Map();
+async function withAuthTunnel(id, fn) {
+  const k = String(id || '');
+  if (k) activeAuthAccounts.set(k, (activeAuthAccounts.get(k) || 0) + 1);
+  const touch = () => { const tv = k && tunnels.get(k); if (tv) tv.lastActiveAt = Date.now(); };
+  touch();
+  const hb = k ? setInterval(touch, 3000) : 0;
+  if (hb && typeof hb.unref === 'function') hb.unref();
+  try {
+    return await fn();
+  } finally {
+    if (hb) clearInterval(hb);
+    touch();
+    if (k) {
+      const n = (activeAuthAccounts.get(k) || 1) - 1;
+      if (n > 0) activeAuthAccounts.set(k, n);
+      else activeAuthAccounts.delete(k);
+    }
+  }
+}
 function bgCheck() {
   const t = Date.now(); let busy = false;
   for (const [k, v] of bgWorkMap) { if (t - v.at > 90000) bgWorkMap.delete(k); else if (v.busy) busy = true; }
@@ -4905,10 +5121,13 @@ function bgCheck() {
     if (typeof tunnels !== 'undefined' && tunnels instanceof Map) {
       for (const [tk, tv] of [...tunnels.entries()]) {
         if (!tv || tv.starting) continue;
-        if (wins.has(tk) && !wins.get(tk)?.isDestroyed()) { tv.lastActiveAt = t; continue; }
+        if ((wins.has(tk) && !wins.get(tk)?.isDestroyed()) || activeAuthAccounts.has(tk) || isBgBusy(tk) || applyRoute?.busy?.has?.(tk)) {
+          tv.lastActiveAt = t;
+          continue;
+        }
         const isAcctTunnel = Boolean(acct(tk));
-        const maxIdle = isAcctTunnel ? 18000 : 45000;
-        if (t - (tv.lastActiveAt || 0) > maxIdle && !(isAcctTunnel && applyRoute?.busy?.has?.(tk))) {
+        const maxIdle = isAcctTunnel ? 180000 : 45000;
+        if (t - (tv.lastActiveAt || 0) > maxIdle) {
           stopTunnel(tk);
           if (isAcctTunnel) { try { session.fromPartition(partOf(tk)).closeAllConnections().catch(() => {}); } catch {} }
         }
@@ -4977,6 +5196,22 @@ async function storeSetCookies(ses, r) {
   let list = [];
   try { list = r.headers.getSetCookie?.() || []; } catch {}
   if (!list.length) { const raw = r.headers.get('set-cookie'); if (raw) list = raw.split(/,(?=\s*[^;,=\s]+=)/); }
+  const authNames = new Set();
+  for (const line of list) {
+    const [nv] = line.split(';'); const i = nv.indexOf('='); if (i < 1) continue;
+    const nm = nv.slice(0, i).trim(), val = nv.slice(i + 1).trim();
+    if (val && /^arena-auth-prod-v1(?:\.\d+)?$/.test(nm)) authNames.add(nm);
+  }
+  if (authNames.size) {
+    try {
+      const prev = await ses.cookies.get({ url: 'https://arena.ai' });
+      for (const pc of prev) {
+        if (/^arena-auth-prod-v1(?:\.\d+)?$/.test(pc.name) && !authNames.has(pc.name)) {
+          await ses.cookies.remove('https://arena.ai', pc.name).catch(() => {});
+        }
+      }
+    } catch {}
+  }
   for (const line of list) {
     const [nv, ...attrs] = line.split(';'); const i = nv.indexOf('='); if (i < 1) continue;
     const c = { url: 'https://arena.ai', name: nv.slice(0, i).trim(), value: nv.slice(i + 1).trim(), path: '/', secure: true };
@@ -5018,21 +5253,51 @@ const signInAccount = require('./account-auth').createAccountSignIn({
   release: async (a, lease) => authRouteGuard.task(a.id, { op: 'cancel', ticket: lease.ticket }),
   finish: async (a, user, ses, lease) => authRouteGuard.task(a.id, { op: 'finish', ticket: lease.ticket, email: user.email, ip: await authExit(ses), environment: backgroundEnvironment(a) }),
   syncCookies: async (ses, response) => {
-    const cookies = await ses.cookies.get({ url: 'https://arena.ai' });
-    if (!cookies.some(c => /^arena-auth-prod-v1/.test(c.name))) await storeSetCookies(ses, response);
+    if (response) await storeSetCookies(ses, response);
     await ses.cookies.flushStore().catch(() => {});
   },
   save: () => saveDB(true),
   navigate: a => { const w = wins.get(a.id); if (w && !w.isDestroyed()) void navigateAccount(w.webContents); },
 });
-ipcMain.handle('host:signInAccount', async (e, id) => { try { return await signInAccount(id); } catch (err) { return { error: String(err.message || err) }; } });
+ipcMain.handle('host:signInAccount', async (e, id) => { try { return await withAuthTunnel(id, () => signInAccount(id)); } catch (err) { return { error: String(err.message || err) }; } });
+const ensureAccountNodeProxy = a => {
+  if (!a || typeof a !== 'object') return a;
+  if (String(a.proxy || '').trim() || /@example\.invalid$/i.test(String(a.email || ''))) return a;
+  if (a.routeMode === 'direct') { a.proxy = 'direct'; return a; }
+  if (a.routeMode === 'proxy' || a.routeMode === 'local') return a;
+  try {
+    const vlessAcct = (DB.accounts || []).find(x => x && x.id !== a.id && /^vless:\/\//i.test(String(x.proxy || '')));
+    const nodes = Array.isArray(DB.shared?.nodes) ? DB.shared.nodes : [];
+    const prefNodeId = a.nodeId || DB.shared?.pippool?.node || vlessAcct?.nodeId || nodes[0]?.id || '';
+    const nodeObj = nodes.find(n => n && n.id === prefNodeId) || nodes[0] || null;
+    let link = '';
+    if (vlessAcct && (!prefNodeId || vlessAcct.nodeId === prefNodeId)) link = vlessAcct.proxy;
+    if (!link && vlessAcct) link = vlessAcct.proxy;
+    if (link) {
+      a.proxy = link;
+      if (!a.nodeId && (nodeObj?.id || vlessAcct?.nodeId)) a.nodeId = nodeObj?.id || vlessAcct?.nodeId || '';
+    }
+    if (!String(a.proxyIp || '').trim() && DB.shared?.pippool?.ips && typeof DB.shared.pippool.ips === 'object') {
+      const usedPips = new Set((DB.accounts || []).filter(x => x && x.id !== a.id).map(x => String(x.proxyIp || '').trim().toLowerCase()).filter(Boolean));
+      const cands = Object.entries(DB.shared.pippool.ips)
+        .filter(([k, e]) => k && e && e.ok === true && !e.gone && !e.banned && !usedPips.has(String(k).toLowerCase()))
+        .sort((x, y) => (Number(x[1]?.ms) || 9999) - (Number(y[1]?.ms) || 9999));
+      if (cands[0]) {
+        a.proxyIp = cands[0][0];
+        if (!a.region && cands[0][1]?.loc) a.region = cands[0][1].loc;
+      }
+    }
+    saveSoon();
+  } catch {}
+  return a;
+};
 const sendMagicLinkAccount = require('./account-auth').createAccountMagicLinkSender({
   find: acct,
   session: prepSession,
-  prepare: applyProxy,
+  prepare: async (a, pOpt = {}) => { ensureAccountNodeProxy(a); return applyProxy(a, pOpt); },
 });
 ipcMain.handle('host:sendMagicLinkAccount', async (_e, id, email, fullName) => {
-  try { return await sendMagicLinkAccount(id, email, fullName); }
+  try { return await withAuthTunnel(id, () => sendMagicLinkAccount(id, email, fullName)); }
   catch (err) { return { ok: false, error: String(err?.message || err) }; }
 });
 const registerTokenAccount = require('./account-auth').createAccountTokenRegistrar({
@@ -5040,18 +5305,17 @@ const registerTokenAccount = require('./account-auth').createAccountTokenRegistr
   password: a => decPw(a.pw),
   setPassword: (a, pw) => { if (pw) { a.pw = encPw(String(pw)); a.noAuto = false; } },
   session: prepSession,
-  prepare: applyProxy,
+  prepare: async (a, pOpt = {}) => { ensureAccountNodeProxy(a); return applyProxy(a, pOpt); },
   syncCookies: async (ses, response) => {
-    const cookies = await ses.cookies.get({ url: 'https://arena.ai' });
-    if (!cookies.some(c => /^arena-auth-prod-v1/.test(c.name))) await storeSetCookies(ses, response);
+    if (response) await storeSetCookies(ses, response);
     await ses.cookies.flushStore().catch(() => {});
   },
   save: () => saveDB(true),
   navigate: a => { const w = wins.get(a.id); if (w && !w.isDestroyed()) void navigateAccount(w.webContents); },
 });
 ipcMain.handle('host:registerTokenAccount', async (e, id, opt) => {
-  try { return await registerTokenAccount(id, opt && typeof opt === 'object' ? opt : {}); }
-  catch (err) { return { error: String(err.message || err), mailFailed: !!err?.mailFailed, tokenInvalid: !!err?.tokenInvalid }; }
+  try { return await withAuthTunnel(id, () => registerTokenAccount(id, opt && typeof opt === 'object' ? opt : {})); }
+  catch (err) { return { error: String(err.message || err), mailFailed: !!err?.mailFailed, tokenInvalid: !!err?.tokenInvalid, proxyFailed: !!err?.proxyFailed }; }
 });
 ipcMain.handle('host:setCookies', async (e, id, list) => {
   const a = acct(id); if (!a || !Array.isArray(list)) return false;
@@ -5063,12 +5327,13 @@ let lastQuotaRefreshAt = 0, lastQuotaRefreshResult = null;
 const refreshAllAccounts = createAccountRefresh({
   accounts: () => DB.accounts, exists: a => acct(a.id) === a, session: prepSession,
   // Never reset a live account's proxy/connections while it is chatting or running gacha.
-  prepare: async a => { const w = wins.get(a.id); if (!w || w.isDestroyed()) await applyProxy(a); },
+  prepare: async a => { if (activeAuthAccounts.has(a.id) || (a.provisionalReg && !a.status?.loggedIn)) return; const w = wins.get(a.id); if (!w || w.isDestroyed()) await applyProxy(a); },
   refresh: async (a, ses) => {
+    if (activeAuthAccounts.has(a.id) || (a.provisionalReg && !a.status?.loggedIn)) return a.status || null;
     try { return await refreshStatus(a, ses); }
     finally {
       const w = wins.get(a.id);
-      if (!w || w.isDestroyed()) {
+      if (!activeAuthAccounts.has(a.id) && (!w || w.isDestroyed())) {
         stopTunnel(a.id);
         try { await ses.closeAllConnections(); await ses.clearCache(); } catch {}
       }
@@ -5228,8 +5493,9 @@ app.commandLine.appendSwitch('process-per-site');
 try {
   app.commandLine.appendSwitch('lang', 'zh-CN');
   app.commandLine.appendSwitch('accept-lang', 'zh-CN,zh,en-US,en');
-  app.commandLine.appendSwitch('js-flags', '--max-old-space-size=512 --initial-old-space-size=16 --max-semi-space-size=2 --optimize-for-size --lazy-feedback-allocation --memory-reducer --expose-gc');
-  app.commandLine.appendSwitch('renderer-process-limit', '1');
+  // legacy baseline: app.commandLine.appendSwitch('renderer-process-limit', '1'); --max-old-space-size=512 --initial-old-space-size=16 --max-semi-space-size=2
+  app.commandLine.appendSwitch('js-flags', '--max-old-space-size=2048 --expose-gc');
+  app.commandLine.appendSwitch('renderer-process-limit', '4');
   app.commandLine.appendSwitch('num-raster-threads', '1');
   app.commandLine.appendSwitch('no-sandbox');
   app.commandLine.appendSwitch('disable-gpu-sandbox');

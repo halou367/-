@@ -16,16 +16,41 @@ const desktopBundlePath = path.join(root, 'gen', 'ui.desktop.bundle.js');
 fs.writeFileSync(desktopBundlePath, outDesktop);
 console.log('wrote', path.relative(root, desktopBundlePath), outDesktop.length, 'bytes');
 
+function compactAssetJs(raw) {
+  let inTpl = 0, inBlk = false;
+  const outLines = [];
+  for (const line of String(raw || '').split(/\r?\n/)) {
+    const trimmed = (inTpl > 0 || inBlk) ? line : line.trim();
+    if (!inTpl && !inBlk && (!trimmed || trimmed.startsWith('//'))) continue;
+    outLines.push(trimmed);
+    for (let i = 0; i < trimmed.length; i++) {
+      const ch = trimmed[i], nx = trimmed[i + 1];
+      if (inBlk) { if (ch === '*' && nx === '/') { inBlk = false; i++; } continue; }
+      if (!inTpl && ch === '/' && nx === '*') { inBlk = true; i++; continue; }
+      if (!inTpl && ch === '/' && nx === '/') break;
+      if (ch === '\\') { i++; continue; }
+      if (!inTpl && (ch === "'" || ch === '"')) {
+        const q = ch; i++;
+        while (i < trimmed.length && trimmed[i] !== q) { if (trimmed[i] === '\\') i++; i++; }
+        continue;
+      }
+      if (ch === '`') { inTpl = inTpl ? 0 : 1; }
+    }
+  }
+  return outLines.join('\n');
+}
+
 const off = path.join(root, 'android', 'app', 'src', 'main', 'assets', 'offline.html');
 fs.copyFileSync(path.join(root, 'ui', 'offline.html'), off);
 console.log('wrote', path.relative(root, off));
-fs.copyFileSync(path.join(root, 'ui', 'vless.js'), path.join(root, 'android', 'app', 'src', 'main', 'assets', 'vless.js'));
-for (const name of ['route-state.js', 'route-policy.js', 'route-host.js', 'node-routes.js', 'offline-modes.js', 'offline-context.js', 'nodes.js', 'iprep.js', 'pool.js', 'node-speed.js', 'app.css', 'flags.woff2', 'rtc-lockdown.js', 'webbar.js']) {
+for (const name of ['vless.js', 'route-state.js', 'route-policy.js', 'route-host.js', 'node-routes.js', 'offline-modes.js', 'offline-context.js', 'nodes.js', 'iprep.js', 'pool.js', 'node-speed.js', 'app.css', 'flags.woff2', 'rtc-lockdown.js', 'webbar.js']) {
   const srcP = path.join(root, 'ui', name);
   const dstP = path.join(root, 'android', 'app', 'src', 'main', 'assets', name);
   if (name === 'app.css') {
     const minCss = fs.readFileSync(srcP, 'utf8').replace(/\/\*[\s\S]*?\*\//g, '').replace(/\s*\n\s*/g, '').replace(/\s*([{};,>~])\s*/g, '$1').replace(/:\s+/g, ':').replace(/;}/g, '}');
     fs.writeFileSync(dstP, minCss, 'utf8');
+  } else if (name.endsWith('.js')) {
+    fs.writeFileSync(dstP, compactAssetJs(fs.readFileSync(srcP, 'utf8')), 'utf8');
   } else {
     fs.copyFileSync(srcP, dstP);
   }

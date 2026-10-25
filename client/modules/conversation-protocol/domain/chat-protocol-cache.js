@@ -209,6 +209,40 @@ const MsgCache = (() => {
   let dbp = null; const timers = new Map(), memHot = new Map(), MAX = 600, CAP = 6e6, HOT_MAX = 2, HOT_CAP = 48000;
   const db = () => dbp ||= new Promise(res => { try { const r = indexedDB.open('anc-msgs', 1); r.onupgradeneeded = () => r.result.createObjectStore('c'); r.onsuccess = () => res(r.result); r.onerror = () => res(null); } catch { res(null); } });
   const idx = () => Store.get('mc:idx', {}) || {};
+  function isSameAsstTurnChunk(prev, cur) {
+    if (!prev || !cur || prev.role !== 'assistant' || cur.role !== 'assistant') return false;
+    if (prev.id && cur.id && prev.id === cur.id) return true;
+    const pStart = Number(prev.metadata?.timing?.startedAt) || 0;
+    const pEnd = Number(prev.metadata?.timing?.completedAt) || Number(prev._finishedAt) || 0;
+    const cStart = Number(cur.metadata?.timing?.startedAt) || 0;
+    const pIdTs = typeof idTime === 'function' ? (idTime(prev.id) || 0) : 0;
+    const cIdTs = typeof idTime === 'function' ? (idTime(cur.id) || 0) : 0;
+    if (cStart > 0 && pEnd > 0 && cStart <= pEnd + 2000) return true;
+    if (cIdTs > 0 && pIdTs > 0 && cIdTs < pIdTs) return true;
+    if (!pStart && pEnd > 0 && cStart > 0 && cStart < pEnd) return true;
+    const pHasTool = Array.isArray(prev.parts) && prev.parts.some(p => p && (
+      p.type === 'dynamic-tool' ||
+      String(p.type || '').startsWith('tool-') ||
+      (p.type === 'text' && /<function_calls>|<invoke\b/i.test(String(p.text || '')))
+    ));
+    const pFin = prev.metadata?.finishReason || '';
+    const pHasFinalFinish = pFin === 'stop' || pFin === 'end-turn';
+    if (pHasTool && !pHasFinalFinish) {
+      if (cStart > 0 && (pEnd || pIdTs) > 0 && cStart <= (pEnd || pIdTs) + 5000) return true;
+      if (!cStart && cIdTs > 0 && (pEnd || pIdTs) > 0 && Math.abs(cIdTs - (pEnd || pIdTs)) < 600000) return true;
+    }
+    return false;
+  }
+  function firstAsstIdxOfTurn(arr, idx) {
+    let k = idx;
+    while (k > 0 && arr[k - 1]?.role === 'assistant' && isSameAsstTurnChunk(arr[k - 1], arr[k])) k--;
+    return k;
+  }
+  function lastAsstIdxOfTurn(arr, idx) {
+    let k = idx;
+    while (k + 1 < arr.length && arr[k + 1]?.role === 'assistant' && isSameAsstTurnChunk(arr[k], arr[k + 1])) k++;
+    return k;
+  }
   function sanitizeCachedMsgs(msgs) {
     if (!Array.isArray(msgs)) return msgs;
     for (const m of msgs) {
@@ -221,10 +255,11 @@ const MsgCache = (() => {
         if (p._parsedInputVal !== undefined) delete p._parsedInputVal;
       }
     }
+    if (msgs.length < 2) return msgs;
     const tsOf = m => {
       if (!m || typeof m !== 'object') return 0;
       const idAt = typeof idTime === 'function' ? idTime(m.id) : 0;
-      if (m._sentAt && m._sentAt > 1.6e12) return m._sentAt;
+      if (m._sentAt && m._sentAt > 1.6e12 && (!idAt || Math.abs(m._sentAt - idAt) <= 600000)) return m._sentAt;
       const tStart = m.metadata?.timing?.startedAt;
       const sMs = typeof tStart === 'number' ? tStart : (typeof tStart === 'string' ? Date.parse(tStart) : 0);
       if (sMs && sMs > 1.6e12) return sMs;
@@ -233,22 +268,112 @@ const MsgCache = (() => {
       const cMs = typeof tComp === 'number' ? tComp : (typeof tComp === 'string' ? Date.parse(tComp) : 0);
       return (cMs && cMs > 1.6e12) ? cMs : (m._finishedAt || 0);
     };
-    const endTsOf = m => {
+    const endTsOf = (m, arr, idx) => {
       if (!m || typeof m !== 'object') return 0;
       const tComp = m.metadata?.timing?.completedAt;
       const cMs = typeof tComp === 'number' ? tComp : (typeof tComp === 'string' ? Date.parse(tComp) : 0);
-      return Math.max(tsOf(m), (cMs && cMs > 1.6e12) ? cMs : 0, m._finishedAt || 0);
+      const tStart = m.metadata?.timing?.startedAt;
+      const sMs = typeof tStart === 'number' ? tStart : (typeof tStart === 'string' ? Date.parse(tStart) : 0);
+      const fin = Number(m._finishedAt) || 0;
+      if ((cMs && cMs > 1.6e12) || (sMs && sMs > 1.6e12)) {
+        return Math.max((cMs && cMs > 1.6e12) ? cMs : 0, (sMs && sMs > 1.6e12) ? sMs : 0);
+      }
+      if (fin && fin > 1.6e12) return fin;
+      if (Array.isArray(arr) && typeof idx === 'number' && m.role === 'assistant') {
+        const fIdx = firstAsstIdxOfTurn(arr, idx);
+        const lIdx = lastAsstIdxOfTurn(arr, idx);
+        let best = 0;
+        for (let k = fIdx; k <= lIdx; k++) {
+          const cm = arr[k];
+          const tc = cm?.metadata?.timing?.completedAt;
+          const ts = cm?.metadata?.timing?.startedAt;
+          const cmC = typeof tc === 'number' ? tc : (typeof tc === 'string' ? Date.parse(tc) : 0);
+          const cmS = typeof ts === 'number' ? ts : (typeof ts === 'string' ? Date.parse(ts) : 0);
+          const cmF = Number(cm?._finishedAt) || 0;
+          const v = Math.max(cmC > 1.6e12 ? cmC : 0, cmS > 1.6e12 ? cmS : 0, cmF > 1.6e12 ? cmF : 0);
+          if (v > best) best = v;
+        }
+        if (best > 0) return best;
+      }
+      return tsOf(m);
     };
     const uTxtOf = m => m?.role === 'user' ? (m.parts || []).filter(p => p?.type === 'text').map(p => String(p.text || '')).join('').replace(/\s+/g, ' ').trim() : '';
+
+    // 1. Deduplicate identical message IDs in-place (keep earlier slot, merge fresher parts/metadata)
+    const seenIdIdx = new Map();
+    for (let i = 0; i < msgs.length; i++) {
+      const m = msgs[i];
+      if (!m) continue;
+      if (m.id && seenIdIdx.has(m.id)) {
+        const prevIdx = seenIdIdx.get(m.id);
+        const prev = msgs[prevIdx];
+        if (prev && prev !== m) {
+          const prevLen = Array.isArray(prev.parts) ? prev.parts.length : 0;
+          const curLen = Array.isArray(m.parts) ? m.parts.length : 0;
+          if (curLen >= prevLen) msgs[prevIdx] = Object.assign(prev, m);
+        }
+        msgs.splice(i, 1);
+        i--;
+        continue;
+      }
+      if (m.id) seenIdIdx.set(m.id, i);
+    }
+
+    // 2. Remove out-of-order historical user messages (>60s older than maxEarlierTurnTs) & earlier duplicates
+    let maxEarlierTurnTs = 0;
+    const earlierUserTexts = new Set();
+    for (let i = 0; i < msgs.length; i++) {
+      const m = msgs[i];
+      if (!m) continue;
+      if (m.role === 'assistant') {
+        const aTs = endTsOf(m, msgs, i);
+        if (aTs > maxEarlierTurnTs && (maxEarlierTurnTs === 0 || aTs >= maxEarlierTurnTs - 3600000)) {
+          maxEarlierTurnTs = aTs;
+        }
+        continue;
+      }
+      if (m.role === 'user') {
+        const uTs = tsOf(m);
+        const uTxt = uTxtOf(m);
+        const prevM = i > 0 ? msgs[i - 1] : null;
+        const nextM = i + 1 < msgs.length ? msgs[i + 1] : null;
+        const nextAsstStart = nextM?.role === 'assistant' ? tsOf(nextM) : 0;
+        const isAnsweredByNextAsst = Boolean(
+          nextM?.role === 'assistant' &&
+          !(prevM?.role === 'assistant' && isSameAsstTurnChunk(prevM, nextM)) &&
+          uTs > 0 && nextAsstStart > 0 &&
+          nextAsstStart >= uTs - 5000 && nextAsstStart <= uTs + 900000 &&
+          (!maxEarlierTurnTs || uTs >= maxEarlierTurnTs - 300000)
+        );
+        const isOutOfOrderOld = !isAnsweredByNextAsst && maxEarlierTurnTs > 0 && uTs > 0 && uTs < maxEarlierTurnTs - 60000;
+        const isDupOfEarlier = Boolean(uTxt && earlierUserTexts.has(uTxt) && (m._local || (!isAnsweredByNextAsst && maxEarlierTurnTs > 0 && uTs > 0 && uTs < maxEarlierTurnTs - 2000)));
+        if (isOutOfOrderOld || isDupOfEarlier) {
+          msgs.splice(i, 1);
+          i--;
+          continue;
+        }
+        if (uTs > maxEarlierTurnTs) maxEarlierTurnTs = uTs;
+        if (uTxt) earlierUserTexts.add(uTxt);
+      }
+    }
+
+    // 3. Clean adjacent user duplicates or stale stacked user messages
     for (let i = msgs.length - 1; i >= 1; i--) {
       const cur = msgs[i], prev = msgs[i - 1];
       if (cur?.role === 'user' && prev?.role === 'user' && !cur.failed && !prev.failed) {
         const ct = uTxtOf(cur), pt = uTxtOf(prev);
         if (cur.id === prev.id || (ct && ct === pt)) {
           msgs.splice(cur._local && !prev._local ? i : (prev._local && !cur._local ? i - 1 : i), 1);
+          continue;
+        }
+        const u1Ts = tsOf(prev), u2Ts = tsOf(cur);
+        if (u1Ts > 0 && u2Ts > 0 && (u1Ts > u2Ts + 60000 || ((prev._local || cur._local) && u2Ts - u1Ts > 1800000))) {
+          msgs.splice(u1Ts < u2Ts ? i - 1 : i, 1);
+          continue;
         }
       }
     }
+
     let lastAIdx = -1;
     for (let i = msgs.length - 1; i >= 0; i--) {
       if (msgs[i]?.role === 'assistant') { lastAIdx = i; break; }
@@ -262,22 +387,29 @@ const MsgCache = (() => {
       }
     }
     if (lastAIdx >= 0 && lastAIdx < msgs.length - 1) {
-      const lastAEnd = endTsOf(msgs[lastAIdx]);
-      const earlierUsers = msgs.slice(0, lastAIdx).filter(x => x && x.role === 'user');
+      const firstLastTurnIdx = firstAsstIdxOfTurn(msgs, lastAIdx);
+      const lastAEnd = endTsOf(msgs[lastAIdx], msgs, lastAIdx);
+      const earlierUsers = msgs.slice(0, firstLastTurnIdx).filter(x => x && x.role === 'user');
       for (let i = msgs.length - 1; i > lastAIdx; i--) {
         const tm = msgs[i];
         if (!tm || tm.role !== 'user') continue;
-        const uTs = tsOf(tm), uTxt = uTxtOf(tm), lastA = msgs[lastAIdx], lastAStart = tsOf(lastA);
+        const uTs = tsOf(tm), uTxt = uTxtOf(tm), lastA = msgs[firstLastTurnIdx], lastAStart = tsOf(lastA);
         const isDupOfEarlier = earlierUsers.some(x => x.id === tm.id || (tm._prevAsstId && x._prevAsstId && tm._prevAsstId === x._prevAsstId && uTxt && uTxtOf(x) === uTxt) || (uTxt && uTxtOf(x) === uTxt && uTs > 0 && tsOf(x) > 0 && Math.abs(uTs - tsOf(x)) < 5000));
-        if (!isDupOfEarlier && lastAIdx >= 1 && msgs[lastAIdx - 1]?.role === 'assistant' && (!lastAStart || !uTs || uTs >= lastAStart - 120000)) {
+        if (
+          !isDupOfEarlier &&
+          firstLastTurnIdx >= 1 &&
+          msgs[firstLastTurnIdx - 1]?.role === 'assistant' &&
+          !isSameAsstTurnChunk(msgs[firstLastTurnIdx - 1], msgs[firstLastTurnIdx]) &&
+          lastAStart > 0 && uTs > 0 && uTs >= lastAStart - 300000 && uTs <= lastAStart + 30000
+        ) {
           msgs.splice(i, 1);
-          msgs.splice(lastAIdx, 0, tm);
-          tm._prevAsstId = msgs[lastAIdx - 1]?.id || tm._prevAsstId;
+          msgs.splice(firstLastTurnIdx, 0, tm);
+          tm._prevAsstId = msgs[firstLastTurnIdx - 1]?.id || tm._prevAsstId;
           lastAIdx++;
           continue;
         }
-        const lastAHasUser = lastAIdx >= 1 && msgs[lastAIdx - 1]?.role === 'user';
-        const isOlderThanLastAsst = lastAHasUser && lastAEnd > 0 && uTs > 0 && uTs < lastAEnd - 30000 && tm._prevAsstId !== lastA?.id && (!lastAStart || lastAStart > uTs + 30000);
+        const lastAHasUser = firstLastTurnIdx >= 1 && msgs[firstLastTurnIdx - 1]?.role === 'user';
+        const isOlderThanLastAsst = lastAHasUser && lastAEnd > 0 && uTs > 0 && uTs < lastAEnd - 30000 && tm._prevAsstId !== msgs[lastAIdx]?.id && (!lastAStart || lastAStart > uTs + 30000);
         if (isOlderThanLastAsst || isDupOfEarlier) {
           msgs.splice(i, 1);
         }
@@ -402,7 +534,22 @@ const MsgCache = (() => {
                 return hm;
               });
               const knownIds = new Set(merged.map(m => m?.id).filter(Boolean));
-              for (const hm of hot.messages) if (hm?.id && !knownIds.has(hm.id)) merged.push(hm);
+              let lastSharedHotIdx = -1;
+              for (let hi = hot.messages.length - 1; hi >= 0; hi--) {
+                if (hot.messages[hi]?.id && knownIds.has(hot.messages[hi].id)) { lastSharedHotIdx = hi; break; }
+              }
+              if (lastSharedHotIdx >= 0) {
+                const lastBase = merged[merged.length - 1];
+                const baseLastTs = Number(lastBase?._sentAt) || Number(lastBase?.metadata?.timing?.completedAt) || Number(lastBase?.metadata?.timing?.startedAt) || (typeof idTime === 'function' ? idTime(lastBase?.id) : 0) || 0;
+                for (let hi = lastSharedHotIdx + 1; hi < hot.messages.length; hi++) {
+                  const hm = hot.messages[hi];
+                  if (!hm?.id || knownIds.has(hm.id)) continue;
+                  const hmTs = Number(hm._sentAt) || Number(hm.metadata?.timing?.completedAt) || Number(hm.metadata?.timing?.startedAt) || (typeof idTime === 'function' ? idTime(hm.id) : 0) || 0;
+                  if (baseLastTs > 0 && hmTs > 0 && hmTs < baseLastTs - 5000) continue;
+                  merged.push(hm);
+                  knownIds.add(hm.id);
+                }
+              }
               r = { ...q.result, ...hot, messages: merged, more: Boolean(q.result.more), _hotSlice: false };
             }
           }
@@ -635,7 +782,7 @@ const SentUserLog = (() => {
       if (m.role === 'user' && !m.failed && isPelicanPromptText(extractMsgText(m))) return true;
       if (m.role === 'assistant') {
         const aTxt = extractMsgText(m) + ' ' + (Array.isArray(m.parts) ? m.parts.map(p => String(p?.inputText || p?.output || p?.input?.content || p?.input?.path || '')).join(' ') : '');
-        if (/(?:<!doctype\s+html|<html|<svg)/i.test(aTxt) && /(?:pelican|鹈鹕|鵜鶘|ペリカン|bồ\s*nông|pélican|pelikan)/i.test(aTxt)) return true;
+        if (/(?:<!doctype\s+html|<html|<svg)/i.test(aTxt) && /(?:pelican|鹈鹕|鵜鶘|ペリカン|펠리컨|bồ\s*nông|pélican|pelikan)/i.test(aTxt)) return true;
       }
     }
     return false;
@@ -643,7 +790,7 @@ const SentUserLog = (() => {
   const getMsgTs = m => {
     if (!m || typeof m !== 'object') return 0;
     const idAt = typeof idTime === 'function' ? idTime(m.id) : 0;
-    if (m._sentAt && m._sentAt > 1.6e12) return m._sentAt;
+    if (m._sentAt && m._sentAt > 1.6e12 && (!idAt || Math.abs(m._sentAt - idAt) <= 600000)) return m._sentAt;
     const tStart = m.metadata?.timing?.startedAt;
     const sMs = typeof tStart === 'number' ? tStart : (typeof tStart === 'string' ? Date.parse(tStart) : 0);
     if (sMs && sMs > 1.6e12) return sMs;
@@ -752,7 +899,7 @@ const SentUserLog = (() => {
   function record(sid, msg, prevAsstId = null) {
     if (!sid || !msg || !msg.id) return;
     try {
-      const txt = extractMsgText(msg), tNow = msg._sentAt || now();
+      const txt = extractMsgText(msg), tNow = msg._sentAt || (typeof idTime === 'function' ? idTime(msg.id) : 0) || now();
       if (!prevAsstId && msg._prevAsstId) prevAsstId = msg._prevAsstId;
       msg._sentAt = tNow;
       if (prevAsstId) msg._prevAsstId = prevAsstId;
@@ -768,12 +915,47 @@ const SentUserLog = (() => {
       Store.set(keyOf(sid), list);
     } catch {}
   }
+  function isSameAsstTurnChunk(prev, cur) {
+    if (!prev || !cur || prev.role !== 'assistant' || cur.role !== 'assistant') return false;
+    if (prev.id && cur.id && prev.id === cur.id) return true;
+    const pStart = Number(prev.metadata?.timing?.startedAt) || 0;
+    const pEnd = Number(prev.metadata?.timing?.completedAt) || Number(prev._finishedAt) || 0;
+    const cStart = Number(cur.metadata?.timing?.startedAt) || 0;
+    const pIdTs = typeof idTime === 'function' ? (idTime(prev.id) || 0) : 0;
+    const cIdTs = typeof idTime === 'function' ? (idTime(cur.id) || 0) : 0;
+    if (cStart > 0 && pEnd > 0 && cStart <= pEnd + 2000) return true;
+    if (cIdTs > 0 && pIdTs > 0 && cIdTs < pIdTs) return true;
+    if (!pStart && pEnd > 0 && cStart > 0 && cStart < pEnd) return true;
+    const pHasTool = Array.isArray(prev.parts) && prev.parts.some(p => p && (
+      p.type === 'dynamic-tool' ||
+      String(p.type || '').startsWith('tool-') ||
+      (p.type === 'text' && /<function_calls>|<invoke\b/i.test(String(p.text || '')))
+    ));
+    const pFin = prev.metadata?.finishReason || '';
+    const pHasFinalFinish = pFin === 'stop' || pFin === 'end-turn';
+    if (pHasTool && !pHasFinalFinish) {
+      if (cStart > 0 && (pEnd || pIdTs) > 0 && cStart <= (pEnd || pIdTs) + 5000) return true;
+      if (!cStart && cIdTs > 0 && (pEnd || pIdTs) > 0 && Math.abs(cIdTs - (pEnd || pIdTs)) < 600000) return true;
+    }
+    return false;
+  }
+  function firstAsstIdxOfTurn(arr, idx) {
+    let k = idx;
+    while (k > 0 && arr[k - 1]?.role === 'assistant' && isSameAsstTurnChunk(arr[k - 1], arr[k])) k--;
+    return k;
+  }
+  function lastAsstIdxOfTurn(arr, idx) {
+    let k = idx;
+    while (k + 1 < arr.length && arr[k + 1]?.role === 'assistant' && isSameAsstTurnChunk(arr[k], arr[k + 1])) k++;
+    return k;
+  }
   function hasAdjacentAsstGap(msgs) {
     if (!Array.isArray(msgs) || msgs.length < 2) return false;
     for (let i = 1; i < msgs.length; i++) {
       const prev = msgs[i - 1], cur = msgs[i];
       if (prev?.role === 'assistant' && cur?.role === 'assistant') {
         if (prev.participantPosition && cur.participantPosition && prev.participantPosition !== cur.participantPosition) continue;
+        if (isSameAsstTurnChunk(prev, cur)) continue;
         return true;
       }
     }
@@ -849,12 +1031,16 @@ const SentUserLog = (() => {
     for (let i = chat.messages.length - 1; i >= 0; i--) {
       if (chat.messages[i]?.role === 'assistant') { lastAsstIdx = i; break; }
     }
+    const firstLastTurnIdx = lastAsstIdx >= 0 ? firstAsstIdxOfTurn(chat.messages, lastAsstIdx) : -1;
     const lastAsst = lastAsstIdx >= 0 ? chat.messages[lastAsstIdx] : null;
     const lastAsstEndTs = getMsgEndTs(lastAsst);
+    const firstChatMsg = chat.messages.find(m => m && !m._local) || chat.messages[0] || null;
+    const firstChatTs = getMsgTs(firstChatMsg);
     for (const entry of entries) {
       if (!entry || !entry.id) continue;
       const entryTxt = normTxt(entry.text || extractMsgText(entry));
-      const entryTime = entry._sentAt || (typeof idTime === 'function' ? idTime(entry.id) : 0) || 0;
+      const entryIdAt = typeof idTime === 'function' ? idTime(entry.id) : 0;
+      const entryTime = (entry._sentAt && (!entryIdAt || Math.abs(entry._sentAt - entryIdAt) <= 600000)) ? entry._sentAt : (entryIdAt || entry._sentAt || 0);
       const isPureHitl = Array.isArray(entry.parts) && entry.parts.length > 0 && entry.parts.every(p => p?.type === 'data-tool-results');
       const isCurrentSessionOutbox = Boolean(typeof Drafts !== 'undefined' && Drafts.sess?.has?.(entry.id));
       const isActivelyAwaiting = Boolean(chat.awaitId && chat.awaitId === entry.id && (chat.busy || chat.sending || chat.preSend));
@@ -866,26 +1052,33 @@ const SentUserLog = (() => {
         try { if (typeof Drafts !== 'undefined' && Drafts.ack) Drafts.ack(entry.id); } catch {}
         continue;
       }
+      if (!isActivelyAwaiting && firstChatTs > 0 && entryTime > 0 && entryTime < firstChatTs - 60000 && chat.messages.length >= 2) {
+        remove(chat.sid, entry.id, entryTxt, entryTime);
+        try { if (typeof Drafts !== 'undefined' && Drafts.ack) Drafts.ack(entry.id); } catch {}
+        continue;
+      }
       let prevIdx = entry.prevAsstId ? chat.messages.findIndex(m => m && (m.id === entry.prevAsstId || m._localId === entry.prevAsstId)) : -1;
+      if (prevIdx >= 0) prevIdx = lastAsstIdxOfTurn(chat.messages, prevIdx);
       if (prevIdx < 0 && chat.messages.length >= 2) {
         for (let i = chat.messages.length - 1; i >= 1; i--) {
           const p = chat.messages[i - 1], c = chat.messages[i];
           if (p?.role === 'assistant' && c?.role === 'assistant') {
             if (p.participantPosition && c.participantPosition && p.participantPosition !== c.participantPosition) continue;
-            const pStart = (typeof idTime === 'function' ? idTime(p.id) : 0) || getMsgTs(p);
-            const cStart = (typeof idTime === 'function' ? idTime(c.id) : 0) || getMsgTs(c);
-            if ((!pStart || !entryTime || entryTime >= pStart - 60000) && (!cStart || !entryTime || entryTime <= cStart + 300000)) {
+            if (isSameAsstTurnChunk(p, c)) continue;
+            const pEnd = getMsgEndTs(p) || (typeof idTime === 'function' ? idTime(p.id) : 0);
+            const cStart = getMsgTs(c) || (typeof idTime === 'function' ? idTime(c.id) : 0);
+            if ((!pEnd || !entryTime || entryTime >= pEnd - 60000) && (!cStart || !entryTime || (entryTime >= cStart - 300000 && entryTime <= cStart + 30000))) {
               prevIdx = i - 1; break;
             }
           }
         }
       }
-      const lastAsstStartTs = (typeof idTime === 'function' ? idTime(lastAsst?.id) : 0) || getMsgTs(lastAsst);
+      const lastAsstStartTs = (firstLastTurnIdx >= 0 ? getMsgTs(chat.messages[firstLastTurnIdx]) : 0) || getMsgTs(lastAsst) || (typeof idTime === 'function' ? idTime(lastAsst?.id) : 0);
       const hasNewAsstAfterPrev = prevIdx >= 0
-        ? chat.messages.slice(prevIdx + 1).some(m => m && m.role === 'assistant' && m.id !== entry.prevAsstId && m.id !== chat.messages[prevIdx]?.id)
-        : Boolean(lastAsst && entry.prevAsstId && lastAsst.id && lastAsst.id !== entry.prevAsstId && (!entryTime || !lastAsstStartTs || lastAsstStartTs >= entryTime - 5000));
-      const fillsAdjacentAsstGap = Boolean(prevIdx >= 0 && chat.messages[prevIdx + 1]?.role === 'assistant' && chat.messages[prevIdx + 1]?.id !== chat.messages[prevIdx]?.id);
-      const lastAsstHasPrecedingUser = lastAsstIdx >= 1 && chat.messages[lastAsstIdx - 1]?.role === 'user';
+        ? chat.messages.slice(prevIdx + 1).some(m => m && m.role === 'assistant' && m.id !== entry.prevAsstId && m.id !== chat.messages[prevIdx]?.id && !isSameAsstTurnChunk(chat.messages[prevIdx], m))
+        : Boolean(lastAsst && entry.prevAsstId && lastAsst.id && lastAsst.id !== entry.prevAsstId && (!entryTime || !lastAsstStartTs || (lastAsstStartTs >= entryTime - 5000 && lastAsstStartTs <= entryTime + 300000)));
+      const fillsAdjacentAsstGap = Boolean(prevIdx >= 0 && chat.messages[prevIdx + 1]?.role === 'assistant' && chat.messages[prevIdx + 1]?.id !== chat.messages[prevIdx]?.id && !isSameAsstTurnChunk(chat.messages[prevIdx], chat.messages[prevIdx + 1]));
+      const lastAsstHasPrecedingUser = firstLastTurnIdx >= 1 && chat.messages[firstLastTurnIdx - 1]?.role === 'user';
       const isSupersededByNewerAsst = prevIdx >= 0
         ? (lastAsstIdx > prevIdx && !fillsAdjacentAsstGap)
         : (lastAsstHasPrecedingUser && lastAsstEndTs > 0 && entryTime > 0 && entryTime < lastAsstEndTs - 30000 && (!lastAsstStartTs || lastAsstStartTs > entryTime + 30000));
@@ -927,7 +1120,7 @@ const SentUserLog = (() => {
         continue;
       }
       if (byIdIdx >= 0) {
-        if (prevIdx >= 0 && byIdIdx > prevIdx + 1 && chat.messages[prevIdx + 1]?.role === 'assistant') {
+        if (prevIdx >= 0 && byIdIdx > prevIdx + 1 && chat.messages[prevIdx + 1]?.role === 'assistant' && !isSameAsstTurnChunk(chat.messages[prevIdx], chat.messages[prevIdx + 1])) {
           chat.messages.splice(byIdIdx, 1);
           chat.messages.splice(prevIdx + 1, 0, byId);
           byId._prevAsstId = chat.messages[prevIdx]?.id || byId._prevAsstId;
@@ -992,14 +1185,22 @@ const SentUserLog = (() => {
         }
         continue;
       }
-      if (prevIdx >= 0) { chat.messages.splice(prevIdx + 1, 0, userObj); changed = true; continue; }
+      if (prevIdx >= 0) {
+        const prevEnd = getMsgEndTs(chat.messages[prevIdx]);
+        if (!isActivelyAwaiting && prevEnd > 0 && entryTime > 0 && entryTime < prevEnd - 60000) {
+          remove(chat.sid, entry.id, entryTxt, entryTime);
+          continue;
+        }
+        chat.messages.splice(prevIdx + 1, 0, userObj); changed = true; continue;
+      }
       let gapIdx = -1;
       for (let i = chat.messages.length - 1; i >= 1; i--) {
         const p = chat.messages[i - 1], c = chat.messages[i];
         if (p?.role === 'assistant' && c?.role === 'assistant') {
           if (p.participantPosition && c.participantPosition && p.participantPosition !== c.participantPosition) continue;
+          if (isSameAsstTurnChunk(p, c)) continue;
           const pEnd = getMsgEndTs(p), cStart = getMsgTs(c);
-          if ((!pEnd || !entryTime || entryTime >= pEnd - 60000) && (!cStart || !entryTime || entryTime <= cStart + 60000)) {
+          if ((!pEnd || !entryTime || entryTime >= pEnd - 60000) && (!cStart || !entryTime || (entryTime >= cStart - 300000 && entryTime <= cStart + 60000))) {
             gapIdx = i; break;
           }
         }
@@ -1007,10 +1208,11 @@ const SentUserLog = (() => {
       if (gapIdx >= 1) { userObj._prevAsstId = chat.messages[gapIdx - 1]?.id || null; chat.messages.splice(gapIdx, 0, userObj); changed = true; continue; }
       const lastM = chat.messages.at(-1);
       const isTailAsstActive = lastM?.role === 'assistant' && Boolean(lastM.metadata?.pending || lastM._incomplete || lastM === chat.live || (typeof isIncompleteAssistantMsg === 'function' && isIncompleteAssistantMsg(lastM)));
-      if ((isTailAsstActive || (lastM?.role === 'assistant' && entry._appendAccepted)) && chat.messages.length >= 1 && chat.messages.at(-2)?.role !== 'user') {
-        const tailAsstStart = (typeof idTime === 'function' ? idTime(lastM.id) : 0) || getMsgTs(lastM);
-        if (isActivelyAwaiting || !tailAsstStart || !entryTime || (entryTime >= tailAsstStart - 120000 && now() - entryTime < 1800000)) {
-          chat.messages.splice(chat.messages.length - 1, 0, userObj); changed = true; continue;
+      const tailTurnStartIdx = lastM?.role === 'assistant' ? firstAsstIdxOfTurn(chat.messages, chat.messages.length - 1) : -1;
+      if ((isTailAsstActive || (lastM?.role === 'assistant' && entry._appendAccepted)) && tailTurnStartIdx >= 0 && (tailTurnStartIdx === 0 || chat.messages[tailTurnStartIdx - 1]?.role !== 'user')) {
+        const tailAsstStart = getMsgTs(chat.messages[tailTurnStartIdx]) || getMsgTs(lastM) || (typeof idTime === 'function' ? idTime(lastM.id) : 0);
+        if (isActivelyAwaiting || !tailAsstStart || !entryTime || (entryTime >= tailAsstStart - 120000 && entryTime <= tailAsstStart + 30000 && now() - entryTime < 1800000)) {
+          chat.messages.splice(tailTurnStartIdx, 0, userObj); changed = true; continue;
         }
       }
       if (!isActivelyAwaiting && lastAsstHasPrecedingUser && lastAsstEndTs > 0 && entryTime > 0 && entryTime < lastAsstEndTs - 30000 && (!lastAsstStartTs || entryTime < lastAsstStartTs - 30000)) {
@@ -1024,7 +1226,8 @@ const SentUserLog = (() => {
     }
     return changed;
   }
-  return { record, remove, markFailed, hasFailed, readList, restoreInto, hasAdjacentAsstGap, extractMsgText, measureAsstWeight, demoteToQueue, isPelicanPromptText, isGachaProbeText, hasPelicanTurnInChat };
+  return { record, remove, markFailed, hasFailed, readList, restoreInto, hasAdjacentAsstGap, isSameAsstTurnChunk, firstAsstIdxOfTurn, lastAsstIdxOfTurn, extractMsgText, measureAsstWeight, demoteToQueue, isPelicanPromptText, isGachaProbeText, hasPelicanTurnInChat };
 })();
 try { if (typeof window !== 'undefined') window.SentUserLog = SentUserLog; } catch {}
+
 

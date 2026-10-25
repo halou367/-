@@ -83,19 +83,47 @@ const PelicanTest = (() => {
           for (let i = 0; chat.busy && i < 2400; i++) { if (ctl.signal.aborted) { try { await chat.stop(); } catch {} break; } await sleep(250); }
         }
         if (!chat.busy && !ctl.signal.aborted) {
+          const prevModel = name || (mi && mi.name ? Strength.canon(mi.name) : '');
           say('鹈鹕测试：正在核对型号与保存测试图…'); await sleep(350);
+          try { if (typeof Fmt !== 'undefined' && Fmt.fromReplay) await Fmt.fromReplay(chat); } catch {}
+          try {
+            if (typeof ChatHabitFingerprint !== 'undefined' && typeof ChatHabitFingerprint.identifyAndApply === 'function') {
+              ChatHabitFingerprint.identifyAndApply(chat, { force: true, preferLatestTurn: true });
+            } else if (typeof BillingProbe !== 'undefined' && typeof BillingProbe.habit?.identifyAndApply === 'function') {
+              BillingProbe.habit.identifyAndApply(chat, { force: true, preferLatestTurn: true });
+            }
+          } catch {}
           if (typeof BillingProbe !== 'undefined' && typeof BillingProbe.refresh === 'function') {
             try {
               await Promise.race([BillingProbe.refresh(chat, { force: true }), sleep(2600)]);
-              if (typeof BillingProbe.applyReverseIdentity === 'function') BillingProbe.applyReverseIdentity(chat, { interactive: false });
+              if (typeof ChatHabitFingerprint !== 'undefined' && typeof ChatHabitFingerprint.identifyAndApply === 'function') {
+                ChatHabitFingerprint.identifyAndApply(chat, { force: true, preferLatestTurn: true });
+              } else if (typeof BillingProbe.habit?.identifyAndApply === 'function') {
+                BillingProbe.habit.identifyAndApply(chat, { force: true, preferLatestTurn: true });
+              }
+              if (typeof BillingProbe.applyReverseIdentity === 'function') BillingProbe.applyReverseIdentity(chat, { interactive: false, force: true, preferLatestTurn: true });
             } catch {}
           }
           const latestMi = Models.get(sid);
           const hmBest = latestMi?.habitFeatures?.htmlSvgMatch?.best || chat?._habitFeatures?.htmlSvgMatch?.best || null;
+          const hmCanon = hmBest?.canon ? Strength.canon(hmBest.canon) : '';
+          const hmConf = Number(hmBest?.match || (hmBest?.prob != null ? hmBest.prob * 100 : 0) || 0);
           const spectralScore = latestMi?.habitFeatures?.htmlSvgMatch?.spectralScore ?? chat?._habitFeatures?.htmlSvgMatch?.spectralScore ?? null;
-          const latestName = (latestMi && !latestMi.guess && latestMi.name)
-            ? Strength.canon(latestMi.name)
-            : (name || (hmBest?.canon ? Strength.canon(hmBest.canon) : ''));
+          const latestMiCanon = (latestMi && !latestMi.guess && latestMi.name) ? Strength.canon(latestMi.name) : '';
+          const latestName = (hmCanon && hmConf >= 72 && (!latestMiCanon || latestMiCanon === prevModel))
+            ? hmCanon
+            : (latestMiCanon || hmCanon || name);
+          if (prevModel && latestName && Strength.canon(prevModel) !== Strength.canon(latestName)) {
+            chat.routed = true;
+            chat.routeFrom = prevModel;
+            chat.routeTo = latestName;
+            try {
+              const curM = Models.get(sid) || {};
+              Models.put(sid, { ...curM, name: latestName, guess: false, routed: true, routeFrom: prevModel, routeTo: latestName, routeType: 'model' });
+              Bus.emit('model', chat, Models.get(sid));
+            } catch {}
+            toast('检测到模型路由切换：' + prevModel + ' → ' + latestName, 'warn');
+          }
           if ((latestName && latestName !== name) || spectralScore != null) {
             remember(sid, {
               at: now(),
@@ -109,11 +137,13 @@ const PelicanTest = (() => {
             });
           }
           shot = await PelicanShots.auto(sid, chat);
-          if (shot?.rec) { try { Dock.render(); } catch {} toast('鹈鹕测试图已自动保存 · ' + shot.rec.model + '（模型信息 · 概览 · 鹈鹕测试图）'); }
+          if (shot?.rec) { try { Dock.render(); } catch {} toast('鹈鹕测试图已自动保存 · ' + (latestName || shot.rec.model) + '（模型信息 · 概览 · 鹈鹕测试图）'); }
           else if (shot?.none) toast('鹈鹕测试：' + shot.none);
         } else if (chat.busy) { try { await chat.stop(); } catch {} }
       } catch (e) { toast('测试图保存失败：' + describe(e), 'err'); }
-      return { score, think: est.think, name, shot: !!shot?.rec };
+      const finalMi = Models.get(sid);
+      const finalName = (finalMi && !finalMi.guess && finalMi.name) ? Strength.canon(finalMi.name) : name;
+      return { score, think: est.think, name: finalName, routed: Boolean(chat.routed), routeFrom: chat.routeFrom || '', routeTo: chat.routeTo || '', shot: !!shot?.rec };
     } catch (e) {
       if (chat.busy) try { await chat.stop(); } catch {}
       toast(e?.name === 'AbortError' ? '鹈鹕测试已停止' : '鹈鹕测试失败：' + describe(e), e?.name === 'AbortError' ? undefined : 'err');

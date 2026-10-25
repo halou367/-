@@ -1,5 +1,6 @@
 // Mail verification connector: supports standard webhook JSON endpoints and OAuth2 IMAP/REST mail readers
 const MailToken = (() => {
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
   const TOKEN_URL = 'https://login.microsoftonline.com/consumers/oauth2/v2.0/token';
   const URL_CID = '00000000-0000-4000-8000-000000000000';
   const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -272,7 +273,7 @@ const MailToken = (() => {
         n++;
         const r = await pollUrlOnce(tok);
         const freshLinks = (r.links || []).filter(lk => !seen.has(lk));
-        const pick = (kind === 'reset' ? freshLinks.find(lk => /reset|recovery|password/i.test(lk)) : null) || freshLinks[0] || '';
+        const pick = kind === 'reset' ? (freshLinks.find(lk => /reset|recovery|password/i.test(lk)) || '') : (freshLinks[0] || '');
         const freshCode = r.code && !seen.has('code:' + r.code) ? r.code : '';
         if (pick || freshCode) {
           if (pick) { seen.add(pick); (tok._seen ||= new Set()).add(pick); }

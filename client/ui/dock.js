@@ -1075,7 +1075,7 @@ const Dock = {
     const compTurns = chat && Array.isArray(chat.messages) ? chat.messages.filter(x => x && x.role === 'assistant' && x.status === 'completed').length : 0;
     const totalTurns = Math.max(bt?.turns || 0, billing?.sessionPayment?.turns || 0, compTurns);
     const top0IsCost = Boolean(uniqueTop && top0 && (top0.diophantinePassed || top0.revPct != null) && !top0.habitSource);
-    const revMatch = (top0IsCost && !m?.userCorrected) ? (top0.revPct ?? top0.match ?? m?.reverseMatch ?? m?.confidence) : (m?.reverseMatch ?? m?.confidence);
+    const revMatch = (!m?.userCorrected && uniqueTop && top0 && Number.isFinite(+top0.match)) ? +top0.match : (top0IsCost && !m?.userCorrected) ? (top0.revPct ?? top0.match ?? m?.reverseMatch ?? m?.confidence) : (m?.reverseMatch ?? m?.confidence ?? (uniqueTop && top0 ? top0.match : undefined));
     const srcLabel = m?.userCorrected ? '手动纠偏确认'
       : (m?.routed || billing?.habitRoute?.routed || billing?.diagnostics?.routeSwitched) ? ('中途路由切换识别' + (Number.isFinite(revMatch) ? ' ' + +Number(revMatch).toFixed(1) + '%' : ''))
       : pend ? ('候选并列 · 请继续沟通' + (Number.isFinite(revMatch) ? '（最高 ' + +Number(revMatch).toFixed(1) + '%）' : ''))
@@ -1527,8 +1527,12 @@ const Dock = {
     const billing=t===ts.at(-1) && typeof BillingProbe!=='undefined'?BillingProbe.summary(sid, { readOnly: true }):null;
     // ① 身份 + 消耗
     const mCur = Models.get(sid);
+    const ovTop0 = billing?.mergedCandidates?.[0];
+    const ovTop1 = billing?.mergedCandidates?.[1];
+    const ovUniqueTop = Boolean(ovTop0 && !ovTop0.streamFallback && Number(ovTop0.match || 0) >= 50 && (!ovTop1 || (Number(ovTop0.match || 0) - Number(ovTop1.match || 0)) >= 0.05 || (Number(ovTop0.combinedWeight ?? ovTop0.match ?? 0) - Number(ovTop1.combinedWeight ?? ovTop1.match ?? 0)) >= 0.5) && ovTop0.supportGranularity !== 'family');
+    const ovMergedBest = (!mCur?.userCorrected && ovUniqueTop) ? (ovTop0.canon || ovTop0.label || '') : '';
     const hasReidCur = Boolean((mCur?.userCorrected || mCur?.routed || mCur?.habitInferred || mCur?.reverseInferred || mCur?.billingProbe) && mCur?.name && !mCur?.pendingConfirm && !mCur?.guess);
-    const best = hasReidCur ? mCur.name : (t.best || t.internal || c?.response || c?.request || c?.model || mCur?.name || ''), [fam, sfx] = famTier(best), vid = Brand.of(best) || Brand.of(c?.model || '');
+    const best = (ovMergedBest || (hasReidCur ? mCur.name : '')) || (t.best || t.internal || c?.response || c?.request || c?.model || mCur?.name || ''), [fam, sfx] = famTier(best), vid = Brand.of(best) || Brand.of(c?.model || '');
     const tier = (hasReidCur && sfx) ? sfx : (c?.effort && c.effort !== 'conflict' ? c.effort : sfx);
     const card = h('section', { class: 'mc-card mc-hero' });
     const top = h('div', { class: 'mc-top' }, vid ? vlogo(vid, 30) : h('span', { class: 'vlogo', style: { width: '30px', height: '30px' } }, '?'),
@@ -2312,7 +2316,7 @@ const Bar = {
       ? Boolean((curBarChat.isEvaluation && curBarChat.evalMode === 'battle') || (typeof EvalView !== 'undefined' && EvalView.isBattleChat?.(curBarChat)))
       : (typeof ModeState !== 'undefined' && typeof ModeState.getMode === 'function' && ModeState.getMode() === 'battle');
     if (!isBattleBarMode) {
-      if (Gacha.capOffer()) kids.push(Gacha.capCooling?.() ? h('button', { class: 'bi link bcap cool', title: '验证分数低，正在自动冷却后重试，不用操作；想马上继续也可以点一下手动验证', onclick: () => GPop.captcha() }, '验证冷却中 · 自动重试') : h('button', { class: 'bi link bcap', title: '抽卡遇到人机验证：点一下完成验证', onclick: () => GPop.captcha() }, '验 · 抽卡需要人机验证'));
+      if (Gacha.capOffer()) kids.push(h('button', { class: 'bi link bcap cool', title: '正在自动完成人机验证…', onclick: () => GPop.captcha() }, '人机验证进行中…'));
       else { const r = Gacha.run; if (r && (Gacha.busy() || r.status === 'hit')) kids.push(h('button', { class: 'bi link', onclick: () => GPop.openAny() }, `抽卡 ${r.completed}/${r.settings?.endless ? '∞' : r.settings?.maxAttempts} · 命中 ${(r.hits || []).length}`)); }
     }
     const a = UI.host?.account || {};
@@ -2557,8 +2561,8 @@ const GPop = {
   capEl(b, on, solving) {
     b.toggleAttribute('data-cap', !!on);
     if (!on) return false;
-    b.title = solving ? '正在人机验证…' : '抽卡遇到人机验证：点一下完成验证，完成后自动继续抽卡';
-    b.replaceChildren(h('span', { class: 'g-cap' + (solving ? ' ing' : '') }, '验'));
+    b.title = '人机验证进行中…';
+    b.replaceChildren(h('span', { class: 'g-cap ing' }, '验'));
     return true;
   },
   paint(b) {

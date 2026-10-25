@@ -320,3 +320,265 @@ test('6. Chat actions prioritize DOM grecaptcha.enterprise.execute, pack cx + ar
   assert.match(iprep, /else if \(rc >= 1\)/);
   assert.match(iprep, /p\.pu\.dc && p\.pu\.bc/);
 });
+
+test('7. createAccountTokenRegistrar handles multi-poll waitLink sleep, Supabase 60s email cooldown ("after 23 seconds"), and provisional /api/me users', async () => {
+  const acct = {
+    id: 'acc_yun_1',
+    name: '账号 2',
+    email: 'mottos_90_taking+f9mw@icloud.com',
+    proxy: 'vless://node1',
+    proxyIp: '198.51.100.33:443',
+    region: 'US',
+    fp: { ua: 'Mozilla/5.0 Chrome/135.0.0.0' },
+    status: {},
+  };
+  let savedPw = '';
+  let magicSent = false;
+  let yunPollsAfterMagic = 0;
+  let resetReqAttempts = 0;
+  let sleptMs = [];
+  let confirmed = false;
+
+  const ses = {
+    cookies: {
+      async get() { return [{ name: 'arena-auth-prod-v1', value: 'cookie_val' }]; },
+      async flushStore() {},
+    },
+    async fetch(url) {
+      if (String(url).includes('yunapi.pro/api/key=')) {
+        let payload;
+        if (!magicSent) {
+          payload = { success: false, code: 'no_code', retryable: true, message: '暂未收到邮件' };
+        } else if (resetReqAttempts === 0) {
+          yunPollsAfterMagic++;
+          if (yunPollsAfterMagic === 1) {
+            payload = { success: false, code: 'no_code', retryable: true, message: '暂未收到邮件' };
+          } else {
+            payload = {
+              success: true,
+              email: 'mottos_90_taking+F9mW@icloud.com',
+              type: 'link',
+              login_url: 'https://arena.ai/nextjs-api/callback/email?token=pkce_043d56c7e10f412d&type=email&signup_intent_id=ea0e99f0',
+              subject: 'Confirm Your Signup',
+            };
+          }
+        } else {
+          payload = {
+            success: true,
+            email: 'mottos_90_taking+F9mW@icloud.com',
+            type: 'link',
+            login_url: 'https://arena.ai/nextjs-api/callback/email?token=pkce_reset_999&type=recovery',
+            subject: 'Reset Your Password',
+          };
+        }
+        return {
+          ok: true,
+          status: 200,
+          headers: new Map([['content-type', 'application/json']]),
+          async text() { return JSON.stringify(payload); },
+        };
+      }
+      if (url === 'https://arena.ai/cdn-cgi/trace') {
+        return { ok: true, status: 200, headers: new Map(), async text() { return 'ip=198.51.100.33\nloc=US\n'; } };
+      }
+      if (url === 'https://arena.ai/') {
+        return { ok: true, status: 200, headers: new Map(), async text() { return '<html>"userId":"11111111-2222-4333-8444-555555555555","userState":"provisional"</html>'; } };
+      }
+      if (url.includes('/recaptcha/enterprise/anchor')) {
+        return { ok: true, status: 200, headers: new Map(), async text() { return '<input id="recaptcha-token" value="ANCHOR_2">'; } };
+      }
+      if (url.includes('/recaptcha/enterprise/reload')) {
+        return { ok: true, status: 200, headers: new Map(), async text() { return ')]}\'\n["rresp","RRESP_2"]'; } };
+      }
+      if (url === 'https://arena.ai/nextjs-api/sign-up') {
+        return { ok: true, status: 200, headers: new Map([['content-type', 'application/json']]), async text() { return '{"ok":true}'; } };
+      }
+      if (url === 'https://arena.ai/nextjs-api/sign-up/magic-link') {
+        magicSent = true;
+        return { ok: true, status: 200, headers: new Map([['content-type', 'application/json']]), async text() { return '{"requiresVerification":true}'; } };
+      }
+      if (url.startsWith('https://arena.ai/nextjs-api/callback/email?token=pkce_043d56c7e10f412d')) {
+        return { ok: false, status: 307, headers: new Map([['location', 'https://arena.ai/']]), async text() { return ''; } };
+      }
+      if (url === 'https://arena.ai/nextjs-api/account/password') {
+        return { ok: false, status: 404, headers: new Map([['content-type', 'application/json']]), async text() { return '{"error":"Not found"}'; } };
+      }
+      if (url === 'https://arena.ai/nextjs-api/reset-password/request') {
+        resetReqAttempts++;
+        if (resetReqAttempts === 1) {
+          return {
+            ok: false,
+            status: 400,
+            headers: new Map([['content-type', 'application/json']]),
+            async text() { return JSON.stringify({ error: 'For security purposes, you can only request this after 23 seconds.' }); },
+          };
+        }
+        return { ok: true, status: 200, headers: new Map([['content-type', 'application/json']]), async text() { return '{"success":true}'; } };
+      }
+      if (url.startsWith('https://arena.ai/nextjs-api/callback/email?token=pkce_reset_999')) {
+        return { ok: false, status: 307, headers: new Map([['location', 'https://arena.ai/?auth=reset-password&code=rc_yun_777']]), async text() { return ''; } };
+      }
+      if (url.startsWith('https://arena.ai/?auth=reset-password')) {
+        return { ok: true, status: 200, headers: new Map(), async text() { return '<html></html>'; } };
+      }
+      if (url === 'https://arena.ai/nextjs-api/reset-password/confirm') {
+        confirmed = true;
+        return { ok: true, status: 200, headers: new Map([['content-type', 'application/json']]), async text() { return '{"success":true}'; } };
+      }
+      if (url === 'https://arena.ai/nextjs-api/sign-in/email') {
+        return {
+          ok: true,
+          status: 200,
+          headers: new Map([['content-type', 'application/json']]),
+          async text() {
+            return JSON.stringify({ success: true, user: { id: 'u_yun_1', email: 'mottos_90_taking+f9mw@icloud.com', emailConfirmed: true } });
+          },
+        };
+      }
+      if (url === 'https://arena.ai/api/me') {
+        return {
+          ok: true,
+          status: 200,
+          headers: new Map([['content-type', 'application/json']]),
+          async json() {
+            return { user: { id: 'prov_1', userState: 'provisional', email: null } };
+          },
+        };
+      }
+      throw new Error('Unhandled fetch URL: ' + url);
+    },
+  };
+
+  const registrar = createAccountTokenRegistrar({
+    find: id => (id === acct.id ? acct : null),
+    password: () => savedPw,
+    setPassword: (_a, pw) => { savedPw = pw; },
+    session: () => ses,
+    prepare: async () => {},
+    syncCookies: async () => {},
+    save: () => {},
+    navigate: () => {},
+    read: async (s, u) => s.fetch(u),
+  });
+
+  const res = await registrar('acc_yun_1', {
+    tokenLine: 'mottos_90_taking+f9mw@icloud.com----https://www.yunapi.pro/api/key=WO5ThKwYroO3tiywd8bAkHC3VW-f7ojgsejSMXw_Iyo',
+    password: 'Brana#2026Pw',
+    pollMs: 15,
+    sleep: async ms => { sleptMs.push(ms); },
+  });
+
+  assert.equal(res.ok, true);
+  assert.equal(res.email, 'mottos_90_taking+f9mw@icloud.com');
+  assert.ok(yunPollsAfterMagic >= 2);
+  assert.equal(resetReqAttempts, 2);
+  assert.deepEqual(sleptMs, [25000]);
+  assert.equal(confirmed, true);
+  assert.equal(savedPw, 'Brana#2026Pw');
+  assert.equal(acct.status.loggedIn, true);
+});
+
+test('8. createAccountTokenRegistrar completes signup in 1 step via /auth/set-password redirect -> POST /nextjs-api/auth/set-password', async () => {
+  const acct = { id: 'acc_setpw_1', email: 'mottos_90_taking+f9mw@icloud.com', name: 'mottos_90_taking+f9mw@icloud.com', status: {} };
+  let savedPw = '';
+  let magicSent = false;
+  let setPwPosted = null;
+  let resetReqCalled = 0;
+
+  const ses = {
+    cookies: {
+      async get() { return [{ name: 'arena-auth-prod-v1.0', value: 'cookie_val' }]; },
+      async flushStore() {},
+    },
+    fetch: async (url, init = {}) => {
+      if (String(url).includes('yunapi.pro/api/key=')) {
+        const payload = !magicSent
+          ? { success: false, code: 'no_code', retryable: true, message: '暂未收到邮件' }
+          : {
+              success: true,
+              email: 'mottos_90_taking+F9mW@icloud.com',
+              type: 'link',
+              login_url: 'https://arena.ai/nextjs-api/callback/email?token=pkce_test_setpw_123&type=email&signup_intent_id=ea0e99f0-74fe-48e9-ab3c-82356f1eb38d',
+              subject: 'Confirm Your Signup',
+            };
+        return {
+          ok: true,
+          status: 200,
+          headers: new Map([['content-type', 'application/json']]),
+          async text() { return JSON.stringify(payload); },
+        };
+      }
+      if (url === 'https://arena.ai/cdn-cgi/trace') return { ok: true, status: 200, headers: new Map(), async text() { return 'ip=198.51.100.88\nloc=US\n'; } };
+      if (url === 'https://arena.ai/') return { ok: true, status: 200, headers: new Map(), async text() { return '<html></html>'; } };
+      if (url.includes('google.com/recaptcha/enterprise/anchor')) return { ok: true, status: 200, headers: new Map(), async text() { return '<input id="recaptcha-token" value="03AFcWeA_ANCHOR_SETPW">'; } };
+      if (url.includes('google.com/recaptcha/enterprise/reload')) return { ok: true, status: 200, headers: new Map(), async text() { return ')}\'\n["rresp","03AFcWeA_SOLVED_SETPW",null,120]'; } };
+      if (url === 'https://arena.ai/nextjs-api/sign-up') return { ok: true, status: 200, headers: new Map([['content-type', 'application/json']]), async text() { return '{"ok":true}'; } };
+      if (url === 'https://arena.ai/nextjs-api/sign-up/magic-link') {
+        magicSent = true;
+        return { ok: true, status: 200, headers: new Map([['content-type', 'application/json']]), async text() { return '{"success":true,"requiresVerification":true}'; } };
+      }
+      if (url.startsWith('https://arena.ai/nextjs-api/callback/email')) {
+        return {
+          ok: false,
+          status: 307,
+          headers: new Map([['location', 'https://arena.ai/auth/set-password?token=eyJ0b2tlbktleSI6IjEyMzQifQ%3D%3D']]),
+          async text() { return ''; },
+        };
+      }
+      if (url.startsWith('https://arena.ai/auth/set-password')) {
+        return { ok: true, status: 200, headers: new Map(), async text() { return '<html>Set Your Password</html>'; } };
+      }
+      if (url === 'https://arena.ai/nextjs-api/auth/set-password') {
+        setPwPosted = JSON.parse(init.body || '{}');
+        return {
+          ok: true,
+          status: 200,
+          headers: new Map([['content-type', 'application/json']]),
+          async text() {
+            return JSON.stringify({ success: true, message: 'Password set successfully! You are now logged in.', redirectTo: '/?success=password_set' });
+          },
+        };
+      }
+      if (url === 'https://arena.ai/nextjs-api/reset-password/request') {
+        resetReqCalled++;
+        return { ok: true, status: 200, headers: new Map([['content-type', 'application/json']]), async text() { return '{"success":true}'; } };
+      }
+      if (url === 'https://arena.ai/api/me') {
+        return {
+          ok: true,
+          status: 200,
+          headers: new Map([['content-type', 'application/json']]),
+          async json() {
+            return { user: { id: 'u_setpw_1', email: 'mottos_90_taking+F9mW@icloud.com', emailConfirmed: true } };
+          },
+        };
+      }
+      throw new Error('Unhandled fetch URL: ' + url);
+    },
+  };
+
+  const registrar = createAccountTokenRegistrar({
+    find: id => (id === acct.id ? acct : null),
+    password: () => savedPw,
+    setPassword: (_a, pw) => { savedPw = pw; },
+    session: () => ses,
+    prepare: async () => {},
+    syncCookies: async () => {},
+    save: () => {},
+    navigate: () => {},
+    read: async (s, u) => s.fetch(u),
+  });
+
+  const res = await registrar('acc_setpw_1', {
+    tokenLine: 'mottos_90_taking+f9mw@icloud.com----https://www.yunapi.pro/api/key=WO5ThKwYroO3tiywd8bAkHC3VW-f7ojgsejSMXw_Iyo',
+    password: 'Brana#2026Pw',
+    pollMs: 10,
+  });
+
+  assert.equal(res.ok, true);
+  assert.deepEqual(setPwPosted, { password: 'Brana#2026Pw', token: 'eyJ0b2tlbktleSI6IjEyMzQifQ==' });
+  assert.equal(resetReqCalled, 0);
+  assert.equal(savedPw, 'Brana#2026Pw');
+  assert.equal(acct.email, 'mottos_90_taking+f9mw@icloud.com');
+  assert.equal(acct.status.loggedIn, true);
+});

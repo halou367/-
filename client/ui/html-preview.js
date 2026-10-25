@@ -74,20 +74,178 @@ const HtmlPreview = (() => {
     }
     return '<!doctype html>' + d.documentElement.outerHTML;
   }
+  const resolvedTexts = new Map(), healingFiles = new Map();
+  let _resolvedVer = 0;
+  const normPvPath = p => String(p || '').replace(/\\/g, '/').replace(/^\/home\/user\//, '').replace(/^~\//, '').replace(/^\.\//, '').replace(/^\/+/, '');
+  const isStubText = t => !t || String(t).includes('…[cached]');
+  const hasUnclosedCodeTag = t => {
+    const s = String(t || '');
+    const sOpen = (s.match(/<style\b/gi) || []).length, sClose = (s.match(/<\/style\s*>/gi) || []).length;
+    if (sOpen > sClose) return true;
+    const jOpen = (s.match(/<script\b/gi) || []).length, jClose = (s.match(/<\/script\s*>/gi) || []).length;
+    return jOpen > jClose;
+  };
+  const isUsablePreviewText = (t, name = '') => {
+    const s = String(t || '').trim();
+    if (!s || isStubText(s) || hasUnclosedCodeTag(s)) return false;
+    if (/<\/(?:html|svg)\s*>\s*$/i.test(s)) return true;
+    if (/\.svg$/i.test(name || '')) return /<\/svg\s*>/i.test(s);
+    return /<(?:body|svg|main|canvas|section|div)\b/i.test(s) && /<\/(?:html|body|svg|main|canvas|script|div)\s*>/i.test(s);
+  };
+  function resolvedText(sid, path) {
+    const norm = normPvPath(path);
+    if (!norm) return '';
+    return (sid && resolvedTexts.get(sid + ':' + norm)) || resolvedTexts.get('*:' + norm) || '';
+  }
+  function cacheResolvedText(sid, path, text) {
+    const norm = normPvPath(path), s = String(text || '');
+    if (!norm || !s.trim() || isStubText(s)) return false;
+    const k = (sid || '') + ':' + norm, prev = resolvedTexts.get(k) || '';
+    if (prev === s) return false;
+    if (prev && prev.length > s.length && !isStubText(prev)) return false;
+    if (resolvedTexts.size >= 80) resolvedTexts.delete(resolvedTexts.keys().next().value);
+    if (sid) resolvedTexts.set(k, s);
+    resolvedTexts.set('*:' + norm, s);
+    _resolvedVer++;
+    try {
+      if (sid && typeof Chats !== 'undefined') {
+        const chat = Chats.get?.(sid);
+        if (chat && Array.isArray(chat.messages)) {
+          let patchedChat = false;
+          for (const m of chat.messages) {
+            for (const p of (m?.parts || [])) {
+              if (!p || !(String(p.type || '').startsWith('tool-') || p.type === 'dynamic-tool')) continue;
+              const tn = String(p.toolName || p.name || p.type || '').replace(/^tool-/, '').toLowerCase();
+              if (!/^(write_?file|create_?file|overwrite_?file|write)$/.test(tn)) continue;
+              const inp = (typeof R !== 'undefined' && R.tinput ? R.tinput(p) : p.input) || {};
+              const pNorm = normPvPath(inp.path || inp.file_path || '');
+              if (pNorm !== norm) continue;
+              const curC = typeof p.input?.content === 'string' ? p.input.content : (typeof p.input?.text === 'string' ? p.input.text : '');
+              if (!p.input || isStubText(curC) || curC.length < s.length) {
+                p.input = { ...(p.input && typeof p.input === 'object' ? p.input : {}), path: inp.path || inp.file_path || norm, content: s };
+                delete p.inputText; delete p._parsedInputRaw; delete p._parsedInputVal;
+                m.v = (m.v || 0) + 1;
+                patchedChat = true;
+              }
+            }
+          }
+          if (patchedChat) {
+            try { R?._fileTextCache?.delete(sid); R?._writesCache?.delete(sid); } catch {}
+            try { if (typeof MsgCache !== 'undefined') MsgCache.put?.(chat); } catch {}
+          }
+        }
+      }
+    } catch {}
+    try {
+      const lineCnt = countLinesFast(s);
+      if (typeof document !== 'undefined') {
+        document.querySelectorAll('details.wcard').forEach(d => {
+          if (normPvPath(d._filePath) === norm && (!sid || !d._wsid || d._wsid === sid)) {
+            if (d._linesEl && lineCnt) d._linesEl.textContent = lineCnt + ' 行';
+            const pre = d.querySelector('pre.wc-code');
+            if (pre) pre.textContent = s.length > 60000 ? s.slice(0, 60000) + '\n…' : s;
+          }
+        });
+      }
+    } catch {}
+    try {
+      cards.forEach(c => {
+        if (c?.o && normPvPath(c.o.path) === norm) c.paint();
+      });
+    } catch {}
+    return true;
+  }
+  async function healFileText(sid, path) {
+    const norm = normPvPath(path);
+    const effSid = sid || (typeof Tabs !== 'undefined' ? Tabs.cur?.sid : null) || '';
+    if (!norm || !effSid) return '';
+    const existing = resolvedText(effSid, norm);
+    if (existing && isUsablePreviewText(existing, norm) && /<\/(?:html|svg)\s*>\s*$/i.test(existing.trim())) return existing;
+    const hKey = effSid + ':' + norm;
+    if (healingFiles.has(hKey)) return healingFiles.get(hKey);
+    const job = (async () => {
+      try {
+        if (typeof Workspace !== 'undefined' && typeof WorkspacePreview !== 'undefined') {
+          let data = (typeof WS !== 'undefined' && WS.sid === effSid && WS.data?.manifest?.root) ? WS.data : null;
+          if (!data?.manifest?.root && typeof Workspace.latest === 'function') {
+            try { data = await Workspace.latest(effSid); } catch {}
+          }
+          if (data?.manifest?.root) {
+            const ctx = WorkspacePreview.context(effSid, data);
+            const r = await ctx.find(norm);
+            const hit = r?.hits?.[0];
+            if (hit?.e) {
+              const blob = await Workspace.fileBlob(hit.e);
+              let txt = (await blob.text()).slice(0, MAXCODE);
+              if (txt && !isStubText(txt)) {
+                if (kindOf(norm) === 'html' && !/\.svg$/i.test(norm) && /<(?:link|img|source|image)\b/i.test(txt)) {
+                  try { txt = await inlineAssets(txt, norm, ctx); } catch {}
+                }
+                cacheResolvedText(effSid, norm, txt);
+                if (st && st.sid === effSid && normPvPath(st.path) === norm) render();
+                return txt;
+              }
+            }
+          }
+        }
+        if (typeof api === 'function') {
+          const d = await api('/api/chat/' + effSid, { timeout: 12000 }).catch(() => null);
+          const rawList = Array.isArray(d?.messages) ? d.messages : Array.isArray(d?.data?.messages) ? d.data.messages : [];
+          for (let i = rawList.length - 1; i >= 0; i--) {
+            const m = rawList[i];
+            for (const p of (m?.parts || m?.experimental_attachments || [])) {
+              const inp = p?.input || p?.args || null;
+              if (!inp || typeof inp !== 'object') continue;
+              const pNorm = normPvPath(inp.path || inp.file_path || '');
+              const c = typeof inp.content === 'string' ? inp.content : (typeof inp.text === 'string' ? inp.text : '');
+              if (pNorm === norm && c && !isStubText(c)) {
+                cacheResolvedText(effSid, norm, c);
+                if (st && st.sid === effSid && normPvPath(st.path) === norm) render();
+                return c;
+              }
+            }
+          }
+        }
+      } catch {}
+      finally {
+        setTimeout(() => healingFiles.delete(hKey), 3000);
+      }
+      return '';
+    })();
+    healingFiles.set(hKey, job);
+    return job;
+  }
   const textOf = () => {
     try {
+      const sid = st?.sid || st?.wsid || (typeof Tabs !== 'undefined' ? Tabs.cur?.sid : null);
+      const res = st?.path ? resolvedText(sid, st.path) : '';
       const direct = String(st?.get?.() ?? '');
-      if (direct) return direct;
-      if (st?.sid && st?.path && typeof R !== 'undefined' && R.latestFileText) return String(R.latestFileText(st.sid, st.path) || '');
-      return '';
+      if (direct && !isStubText(direct) && (!res || direct.length >= res.length)) {
+        if (st?.path && isUsablePreviewText(direct, st.name)) cacheResolvedText(sid, st.path, direct);
+        return direct;
+      }
+      if (res) return res;
+      if (sid && st?.path && typeof R !== 'undefined' && R.latestFileText) {
+        const lt = String(R.latestFileText(sid, st.path) || '');
+        if (lt && !isStubText(lt)) return lt;
+      }
+      return isStubText(direct) ? '' : direct;
     } catch { return ''; }
   };
   const textFrom = (fn, sid, path) => {
     try {
+      const res = path ? resolvedText(sid, path) : '';
       const direct = String(fn?.() ?? '');
-      if (direct) return direct;
-      if (path && typeof R !== 'undefined' && R.latestFileText) return String(R.latestFileText(sid, path) || '');
-      return '';
+      if (direct && !isStubText(direct) && (!res || direct.length >= res.length)) {
+        if (path && isUsablePreviewText(direct, path)) cacheResolvedText(sid, path, direct);
+        return direct;
+      }
+      if (res) return res;
+      if (path && typeof R !== 'undefined' && R.latestFileText) {
+        const lt = String(R.latestFileText(sid, path) || '');
+        if (lt && !isStubText(lt)) return lt;
+      }
+      return isStubText(direct) ? '' : direct;
     } catch { return ''; }
   };
   const on = () => !!st;
@@ -209,7 +367,7 @@ const HtmlPreview = (() => {
     let mounted = 0;
     while (cardMountQueue.length && mounted < 2) {
       const c = cardMountQueue.shift();
-      if (c && c.live && c.o && c.text != null && !c.stage.querySelector('iframe.pvc-frame')) {
+      if (c && c.live && c.o && c.text != null && (c.shown !== c.text || !c.stage.querySelector('iframe.pvc-frame'))) {
         c.renderNow(c.text, String(c.o.path || '').split('/').pop());
         mounted++;
       }
@@ -242,9 +400,13 @@ const HtmlPreview = (() => {
       if (c.title.textContent !== t) c.title.textContent = t;
       const bTxt = extOf(name); if (c.badge.textContent !== bTxt) c.badge.textContent = bTxt;
       if (c._ariaLabel !== t) { c._ariaLabel = t; c.el.setAttribute('aria-label', '放大预览 ' + t); }
-      const ready = !!text.trim() && (!o.running || finished(text));
+      const usable = isUsablePreviewText(text, name);
+      const ready = usable && (!o.running || finished(text));
+      if (!o.running && (!usable || !finished(text)) && (sid || o.path)) {
+        void healFileText(sid, o.path);
+      }
       c.ph.hidden = ready && !!c.shown; c.phText.textContent = ready ? '正在加载预览…' : '正在生成预览…'; c.el.classList.toggle('pvc-wait', !ready);
-      if (!ready || text === c.text) return;
+      if (!ready || (text === c.text && c.shown === text && c.stage.querySelector('iframe.pvc-frame'))) return;
       c.text = text; if (c.live) c.render(text, name); else c.pending = true;
     };
     c.renderNow = (text, name) => {
@@ -272,7 +434,7 @@ const HtmlPreview = (() => {
       scheduleCardMount(c);
     };
     // 滚动到可见范围才真正创建页面（长对话里很多个 html 不会同时加载；且滚动进行中推迟挂载避免卡帧）
-    const go = () => { c.live = true; if (c.o && c.text != null && !c.stage.querySelector('iframe')) c.render(c.text, String(c.o.path || '').split('/').pop()); };
+    const go = () => { c.live = true; if (c.o && c.text != null && (c.shown !== c.text || !c.stage.querySelector('iframe'))) c.render(c.text, String(c.o.path || '').split('/').pop()); };
     if (typeof IntersectionObserver === 'function') { const io = new IntersectionObserver(es => { if (es.some(e => e.isIntersecting)) { io.disconnect(); go(); } }, { rootMargin: '300px' }); io.observe(c.el); c.io = io; } else c.live = true;
     return c;
   }
@@ -529,6 +691,15 @@ const HtmlPreview = (() => {
       highlightEnd: o.highlightEnd || 0,
     };
     if (prev && prev.kind === kind && o.keepMode) st.mode = prev.mode;
+    const effSid = st.sid || st.wsid || (typeof Tabs !== 'undefined' ? Tabs.cur?.sid : null);
+    if (st.kind !== 'image' && st.path) {
+      const initTxt = String(o.view || st.get?.() || '');
+      if (initTxt && !isStubText(initTxt) && (st.kind !== 'html' || isUsablePreviewText(initTxt, st.name))) {
+        cacheResolvedText(effSid, st.path, initTxt);
+      } else if (effSid) {
+        void healFileText(effSid, st.path);
+      }
+    }
     document.body.classList.add('pv-on');
     if (!wasOpen && root && mobile()) { root.classList.add('pv-enter'); const tok = ++closeTok; setTimeout(() => { if (closeTok === tok) root?.classList.remove('pv-enter'); }, 420); }
     render(); if (!wasOpen) try { UI.layout(); } catch {}
@@ -1128,7 +1299,8 @@ const HtmlPreview = (() => {
     });
   }
   return { previewable, kindOf, inlineAssets, open, openEvalMessage, selectEvalOption, syncEval, extractEvalBundle, activeEvalPos: () => st?.evalPos || null,
-    activeMode: () => st?.mode || '', activeEvalMsgId: () => st?.evalMsgId || null, image, isFull: () => !!root?.classList.contains('pv-full'), close, dismiss, on, mount, bindRow, render, syncLive, record, shoot, shootText, card, titleOf, sid: () => st?.sid || null, docOf };
+    activeMode: () => st?.mode || '', activeEvalMsgId: () => st?.evalMsgId || null, image, isFull: () => !!root?.classList.contains('pv-full'), close, dismiss, on, mount, bindRow, render, syncLive, record, shoot, shootText, card, titleOf, sid: () => st?.sid || null, docOf,
+    resolvedText, resolvedVer: () => _resolvedVer, cacheResolvedText, healFileText, isUsablePreviewText };
 })();
 
 // ---------- 鹈鹕测试库（全客户端共享）：记录 / 概览卡片 / 导出与导入合并 / 多模型并排对比 / 能力表（SVG） ----------
@@ -1197,6 +1369,12 @@ const PelicanShots = (() => {
       }
       const mi = sid ? Models.get(sid) : null;
       const hRow = sid && typeof History !== 'undefined' ? History.byId?.(sid) : null;
+      if (!name && sid && !mi?.userCorrected && typeof BillingProbe !== 'undefined' && typeof BillingProbe.summary === 'function') {
+        const sumTop = BillingProbe.summary(sid, { readOnly: true })?.mergedCandidates?.[0];
+        if (sumTop && !sumTop.streamFallback && Number(sumTop.match || 0) >= 50 && sumTop.supportGranularity !== 'family' && (sumTop.canon || sumTop.label)) {
+          name = Strength.canon(sumTop.canon || sumTop.label);
+        }
+      }
       const hasReidMi = Boolean(mi && !mi.pendingConfirm && (!mi.guess || mi.userCorrected || mi.habitInferred || mi.reverseInferred || mi.billingProbe));
       if (!name && mi && mi.name && hasReidMi) name = Strength.canon(mi.name);
       if (!name && mi && mi.reverseCandidateId && mi.sure) name = Strength.canon(mi.name || mi.reverseLabel || mi.reverseCandidateId);
@@ -1219,10 +1397,12 @@ const PelicanShots = (() => {
       const sc = r.score ?? (r.model && r.model !== '未识别' && typeof Strength !== 'undefined' ? Strength.board?.()?.find?.(b => key(b.name) === key(r.model))?.score ?? null : null);
       return { ...r, model: cleanName(r.model) || '未识别', score: sc ?? null };
     }
-    if (r.lockedModel || r.messageId || r.artifactDigest) {
-      return { ...r, model: cleanName(r.model) || '未识别', score: r.score ?? null, think: r.think ?? null };
-    }
     const m = modelOf(r.sid);
+    const mi = typeof Models !== 'undefined' ? Models.get(r.sid) : null;
+    const isPreRouteShot = Boolean(r.model && r.model !== '未识别' && mi?.routed && mi?.routeFrom && key(r.model) === key(mi.routeFrom));
+    if (isPreRouteShot || !m.model || m.model === '未识别') {
+      return { ...r, model: cleanName(r.model) || '未识别', score: r.score ?? m.score ?? null, think: r.think ?? m.think ?? null };
+    }
     const nextModel = isBetterModel(m.model, r.model) ? m.model : (cleanName(r.model) || m.model || '未识别');
     const nextScore = m.score ?? r.score ?? null;
     const nextThink = m.think ?? r.think ?? null;

@@ -129,7 +129,7 @@ const _doExtFetch = (u, o) => {
       if (typeof o.headers.forEach === 'function') o.headers.forEach((v, k) => { hdrObj[k] = v; });
       else if (typeof o.headers === 'object') Object.assign(hdrObj, o.headers);
     }
-    const isAuth = /^\/nextjs-api\/(?:sign-in|sign-up|reset-password|resend-verification|account\/password)\b/i.test(protoRel);
+    const isAuth = /^\/nextjs-api\/(?:sign-in|sign-up|reset-password|resend-verification|account\/password|auth\/set-password)\b/i.test(protoRel);
     const timeout = isAuth ? 18000 : protoRel === '/cdn-cgi/trace' ? 6000 : 20000;
     const pCall = Host.protoFetch(protoRel, {
       method: o?.method || 'GET',
@@ -1115,6 +1115,8 @@ class HttpError extends Error {
 
 // ── QrSync: 电脑端 ⇄ 手机端 节点订阅与账号配置二维码同步 & 首次无缓存引导 ──
 const QrSync = (() => {
+  const ONBOARD_DONE_KEY = 'qr_onboard_done';
+  const ib = (ic, tip, fn) => h('button', { type: 'button', class: 'ib', title: tip, 'aria-label': tip, onclick: fn }, icon(ic));
   const CAP_L = [0,17,32,53,78,106,134,154,192,230,271,321,367,425,458,520,586,644,718,792,858,929,1003,1091,1171,1273,1367];
   const EC_L = [
     null,[19,7,1,19,0,0],[34,10,1,34,0,0],[55,15,1,55,0,0],[80,20,1,80,0,0],[108,26,1,108,0,0],
@@ -1241,7 +1243,7 @@ const QrSync = (() => {
     for (let i = 8; i < 15; i++) setMod(size - 15 + i, 8, ((fBits >>> i) & 1) === 1);
     return { size, grid };
   }
-  function toSvg(text, pxSize = 228) {
+  function buildQrPathData(text) {
     const { size, grid } = encodeQR(text);
     const pad = 3, total = size + pad * 2;
     let d = '';
@@ -1250,7 +1252,27 @@ const QrSync = (() => {
         if (grid[r][c]) d += `M${c + pad},${r + pad}h1v1h-1z`;
       }
     }
+    return { size, total, d };
+  }
+  function toSvg(text, pxSize = 228) {
+    const { total, d } = buildQrPathData(text);
     return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${total} ${total}" width="${pxSize}" height="${pxSize}" shape-rendering="crispEdges" style="background:#fff;border-radius:12px;display:block;margin:0 auto;box-shadow:0 4px 16px rgba(0,0,0,.18)"><path d="${d}" fill="#111"/></svg>`;
+  }
+  function toSvgEl(text, pxSize = 248) {
+    const { total, d } = buildQrPathData(text);
+    const ns = 'http://www.w3.org/2000/svg';
+    const svg = document.createElementNS(ns, 'svg');
+    svg.setAttribute('xmlns', ns);
+    svg.setAttribute('viewBox', `0 0 ${total} ${total}`);
+    svg.setAttribute('width', String(pxSize));
+    svg.setAttribute('height', String(pxSize));
+    svg.setAttribute('shape-rendering', 'crispEdges');
+    svg.setAttribute('style', 'background:#fff;border-radius:12px;display:block;margin:0 auto;box-shadow:0 4px 16px rgba(0,0,0,.18)');
+    const p = document.createElementNS(ns, 'path');
+    p.setAttribute('d', d);
+    p.setAttribute('fill', '#111');
+    svg.appendChild(p);
+    return svg;
   }
   function decodeQRMatrix(grid) {
     const size = grid.length;
@@ -1344,48 +1366,49 @@ const QrSync = (() => {
       const i = (Math.min(height - 1, Math.max(0, Math.round(y))) * width + Math.min(width - 1, Math.max(0, Math.round(x)))) * 4;
       return data[i] * 0.299 + data[i + 1] * 0.587 + data[i + 2] * 0.114;
     };
-    let sMinX = 0, sMinY = 0, sMaxX = width - 1, sMaxY = height - 1;
-    const cornerLum = (lum(0, 0) + lum(width - 1, 0) + lum(0, height - 1) + lum(width - 1, height - 1)) / 4;
-    if (cornerLum < 128) {
-      let wMinX = width, wMinY = height, wMaxX = 0, wMaxY = 0;
-      for (let y = 0; y < height; y += 2) {
-        for (let x = 0; x < width; x += 2) {
-          if (lum(x, y) > 200) {
-            if (x < wMinX) wMinX = x;
-            if (y < wMinY) wMinY = y;
-            if (x > wMaxX) wMaxX = x;
-            if (y > wMaxY) wMaxY = y;
+    const isValid = txt => Boolean(txt && (txt.includes('brana-sync') || txt.startsWith('ARENA-ACCOUNTS-V1:') || txt.startsWith('http') || txt.startsWith('{') || /^vless:\/\//i.test(txt)));
+    const regions = [];
+    const cx = width >> 1, cy = height >> 1;
+    let wMinX = width, wMinY = height, wMaxX = 0, wMaxY = 0, wHits = 0;
+    for (let y = 0; y < height; y += 2) {
+      for (let x = 0; x < width; x += 2) {
+        if (lum(x, y) > 190) { wHits++; if (x < wMinX) wMinX = x; if (y < wMinY) wMinY = y; if (x > wMaxX) wMaxX = x; if (y > wMaxY) wMaxY = y; }
+      }
+    }
+    if (wHits > 80 && wMaxX - wMinX > 32 && wMaxY - wMinY > 32) regions.push([wMinX + 2, wMinY + 2, wMaxX - 2, wMaxY - 2]);
+    regions.push([0, 0, width - 1, height - 1]);
+    if (width > 120 && height > 120) {
+      regions.push([Math.round(width * 0.12), Math.round(height * 0.12), Math.round(width * 0.88), Math.round(height * 0.88)]);
+      regions.push([Math.round(width * 0.22), Math.round(height * 0.22), Math.round(width * 0.78), Math.round(height * 0.78)]);
+    }
+    for (const [sMinX, sMinY, sMaxX, sMaxY] of regions) {
+      let minL = 255, maxL = 0;
+      for (let y = sMinY; y <= sMaxY; y += 2) for (let x = sMinX; x <= sMaxX; x += 2) { const v = lum(x, y); if (v < minL) minL = v; if (v > maxL) maxL = v; }
+      const midT = (minL + maxL) * 0.5;
+      for (const thr of [midT, 132, midT * 0.9, midT * 1.1]) {
+        let minX = sMaxX, minY = sMaxY, maxX = sMinX, maxY = sMinY;
+        for (let y = sMinY; y <= sMaxY; y += 1) for (let x = sMinX; x <= sMaxX; x += 1) {
+          if (lum(x, y) < thr) { if (x < minX) minX = x; if (y < minY) minY = y; if (x > maxX) maxX = x; if (y > maxY) maxY = y; }
+        }
+        if (maxX <= minX + 16 || maxY <= minY + 16) continue;
+        const qrW = maxX - minX + 1, qrH = maxY - minY + 1;
+        if (Math.abs(qrW - qrH) > Math.max(qrW, qrH) * 0.35) continue;
+        for (let ver = 1; ver <= 26; ver++) {
+          const sz = ver * 4 + 17, stepX = qrW / sz, stepY = qrH / sz;
+          const grid = Array.from({ length: sz }, (_, r) => {
+            const row = new Uint8Array(sz);
+            for (let c = 0; c < sz; c++) {
+              const px = minX + (c + 0.5) * stepX, py = minY + (r + 0.5) * stepY;
+              const sLum = (lum(px, py) * 2 + lum(px - stepX * 0.15, py) + lum(px + stepX * 0.15, py) + lum(px, py - stepY * 0.15) + lum(px, py + stepY * 0.15)) / 6;
+              row[c] = sLum < thr ? 1 : 0;
+            }
+            return row;
+          });
+          if (grid[0][0] && grid[0][6] && grid[6][0] && grid[3][3] && !grid[1][1]) {
+            const txt = decodeQRMatrix(grid);
+            if (isValid(txt)) return txt;
           }
         }
-      }
-      if (wMaxX - wMinX > 32 && wMaxY - wMinY > 32) {
-        sMinX = wMinX + 2; sMinY = wMinY + 2; sMaxX = wMaxX - 2; sMaxY = wMaxY - 2;
-      }
-    }
-    let minX = sMaxX, minY = sMaxY, maxX = sMinX, maxY = sMinY;
-    for (let y = sMinY; y <= sMaxY; y += 1) {
-      for (let x = sMinX; x <= sMaxX; x += 1) {
-        if (lum(x, y) < 128) {
-          if (x < minX) minX = x;
-          if (y < minY) minY = y;
-          if (x > maxX) maxX = x;
-          if (y > maxY) maxY = y;
-        }
-      }
-    }
-    if (maxX <= minX + 16 || maxY <= minY + 16) return null;
-    const qrW = maxX - minX + 1, qrH = maxY - minY + 1;
-    for (let ver = 1; ver <= 26; ver++) {
-      const sz = ver * 4 + 17;
-      const stepX = qrW / sz, stepY = qrH / sz;
-      const grid = Array.from({ length: sz }, (_, r) => {
-        const row = new Uint8Array(sz);
-        for (let c = 0; c < sz; c++) row[c] = lum(minX + (c + 0.5) * stepX, minY + (r + 0.5) * stepY) < 135 ? 1 : 0;
-        return row;
-      });
-      if (grid[0][0] && grid[0][6] && grid[6][0] && grid[3][3] && !grid[1][1]) {
-        const txt = decodeQRMatrix(grid);
-        if (txt && (txt.includes('brana-sync') || txt.startsWith('http') || txt.startsWith('{') || /^vless:\/\//i.test(txt))) return txt;
       }
     }
     return null;
@@ -1439,17 +1462,23 @@ const QrSync = (() => {
     return bytes;
   };
   const fromB64Url = str => JSON.parse(new TextDecoder().decode(b64UrlToBytes(str)));
+  const withQuickTimeout = (p, ms = 1200) => Promise.race([
+    Promise.resolve(p),
+    new Promise(resolve => setTimeout(() => resolve(null), ms)),
+  ]);
   const compressToB64Url = async obj => {
     const rawBytes = new TextEncoder().encode(JSON.stringify(obj));
     if (typeof CompressionStream === 'function') {
       try {
         const cs = new CompressionStream('deflate-raw');
         const writer = cs.writable.getWriter();
-        writer.write(rawBytes);
-        writer.close();
-        const buf = await new Response(cs.readable).arrayBuffer();
-        const comp = new Uint8Array(buf);
-        if (comp.length && comp.length < rawBytes.length) return { ver: 'v2', b64: bytesToB64Url(comp) };
+        void writer.write(rawBytes);
+        void writer.close();
+        const buf = await withQuickTimeout(new Response(cs.readable).arrayBuffer(), 500);
+        if (buf) {
+          const comp = new Uint8Array(buf);
+          if (comp.length && comp.length < rawBytes.length) return { ver: 'v2', b64: bytesToB64Url(comp) };
+        }
       } catch {}
     }
     return { ver: 'v1', b64: bytesToB64Url(rawBytes) };
@@ -1457,6 +1486,7 @@ const QrSync = (() => {
   const decodeSyncToken = async rawStr => {
     const s = String(rawStr || '').trim();
     if (s.startsWith('{')) return JSON.parse(s);
+    if (/^ARENA-ACCOUNTS-V1:/i.test(s)) { const obj = JSON.parse(new TextDecoder().decode(b64UrlToBytes(s.replace(/^ARENA-ACCOUNTS-V1:/i, '').trim()))); return { v: 1, accounts: (obj.accounts || []).map(a => ({ name: a.name || a.email || '', remark: a.remark || '', email: a.email || '', password: a.pw || a.password || '', proxy: a.proxy || '', proxyIp: a.proxyIp || '', region: a.region || '', nodeId: a.nodeId || '' })) }; }
     if (/^brana-sync:\/\/v2\//i.test(s)) {
       const bytes = b64UrlToBytes(s.replace(/^brana-sync:\/\/v2\//i, ''));
       if (typeof DecompressionStream === 'function') {
@@ -1472,12 +1502,12 @@ const QrSync = (() => {
     return cleaned.startsWith('{') ? JSON.parse(cleaned) : fromB64Url(cleaned);
   };
   async function buildSyncBundle() {
-    try { if (typeof Nodes !== 'undefined') await Nodes.load?.(); } catch {}
-    try { if (typeof Nodes !== 'undefined') await Nodes.loadSubs?.(); } catch {}
-    try { if (typeof Nodes !== 'undefined') await Nodes.loadPips?.(); } catch {}
-    try { if (typeof Pool !== 'undefined' && !Pool.d) await Pool.load?.(); } catch {}
+    try { if (typeof Nodes !== 'undefined' && (!Array.isArray(Nodes.list) || !Nodes.list.length)) await withQuickTimeout(Nodes.load?.(), 1000); } catch {}
+    try { if (typeof Nodes !== 'undefined' && (!Array.isArray(Nodes.subs) || !Nodes.subs.length)) await withQuickTimeout(Nodes.loadSubs?.(), 1000); } catch {}
+    try { if (typeof Nodes !== 'undefined' && (!Array.isArray(Nodes.pips) || !Nodes.pips.length)) await withQuickTimeout(Nodes.loadPips?.(), 1000); } catch {}
+    try { if (typeof Pool !== 'undefined' && !Pool.d) await withQuickTimeout(Pool.load?.(), 1000); } catch {}
     let exp = null;
-    try { if (typeof Host !== 'undefined' && typeof Host.exportAccounts === 'function') exp = await Host.exportAccounts(); } catch {}
+    try { if (typeof Host !== 'undefined' && typeof Host.exportAccounts === 'function') exp = await withQuickTimeout(Host.exportAccounts(), 1500); } catch {}
     const subs = (typeof Nodes !== 'undefined' && Array.isArray(Nodes.subs)) ? Nodes.subs : (exp?.shared?.subs || []);
     const list = (typeof Nodes !== 'undefined' && Array.isArray(Nodes.list)) ? Nodes.list : (exp?.shared?.nodes || []);
     const pips = (typeof Nodes !== 'undefined' && Array.isArray(Nodes.pips)) ? Nodes.pips : (exp?.shared?.pips || []);
@@ -1569,7 +1599,20 @@ const QrSync = (() => {
       a: compactAccts,
     });
     const fullTokenStr = 'brana-sync://' + fullPacked.ver + '/' + fullPacked.b64;
-    return { fullBundle, inlineLite, qrPayload, fullTokenStr };
+    const qrPages = [];
+    if (qrPayload.length <= 1300 && inlineLite?.a?.length === compactAccts.length) {
+      qrPages.push(qrPayload);
+    } else if (compactAccts.length > 0) {
+      for (let i = 0; i < compactAccts.length; i += 5) {
+        const pPack = await compressToB64Url({ v: 2, s: i === 0 ? subUrls.slice(0, 2) : [], l: allLinks.slice(0, 1), p: i === 0 ? pipStrings.slice(0, 4) : [], a: compactAccts.slice(i, i + 5).map(x => ({ ...x, li: 0 })) });
+        qrPages.push('brana-sync://' + pPack.ver + '/' + pPack.b64);
+      }
+      if (qrPages[0]) qrPayload = qrPages[0];
+    } else {
+      qrPages.push(qrPayload);
+    }
+    const summary = { subs: subUrls.length, nodes: allLinks.length, accounts: slimAccts.length, currentEmail: slimAccts[0]?.email || '' };
+    return { fullBundle, inlineLite, qrPayload, qrPages, fullTokenStr, uri: qrPayload, summary };
   }
   async function applySyncPayload(rawInput, onProgress) {
     const step = msg => { try { onProgress?.(msg); } catch {} };
@@ -1642,6 +1685,7 @@ const QrSync = (() => {
     }
     if (typeof Nodes !== 'undefined' && (vlessLinks.length || rawNodes.length)) {
       try { Nodes.save?.(); } catch {}
+      try { void Nodes.syncAndroid?.(); } catch {}
     }
     if (subUrls.length && typeof Nodes !== 'undefined' && Array.isArray(Nodes.subs)) {
       let subChanged = false;
@@ -1658,6 +1702,7 @@ const QrSync = (() => {
       const pipLines = rawPips.map(x => typeof x === 'string' ? x : (x?.ip ? (x.ip + (x.port && +x.port !== 443 ? ':' + x.port : '')) : (x?.address ? (x.address + (x.port && +x.port !== 443 ? ':' + x.port : '')) : ''))).filter(Boolean);
       if (pipLines.length) {
         try { Nodes.addPips(pipLines.join('\n')); } catch {}
+        try { void Pool?.pushG?.(); } catch {}
       }
     }
     const chosenNode = resolvedNodesByLinkIdx[0] || (data.activeNodeId && Nodes?.get?.(data.activeNodeId)) || Nodes?.list?.[0] || null;
@@ -1694,8 +1739,12 @@ const QrSync = (() => {
           ''
         ).trim();
         const nodeId = boundNode?.id || chosenNodeId || '';
-        const loc = (email && localList.find(x => String(x?.email || '').trim().toLowerCase() === email.toLowerCase())) ||
+        let loc = (email && localList.find(x => String(x?.email || '').trim().toLowerCase() === email.toLowerCase())) ||
           (!email && localList.find(x => String(x?.name || '').trim() === name && !x?.email)) || null;
+        if (!loc && importedAccts === 0) {
+          const emptyCur = localList.find(x => x && !x.email && !x.hasPw && (x.id === UI?.host?.account?.id || localList.length === 1));
+          if (emptyCur) loc = emptyCur;
+        }
         let pip = String(a.proxyIp || '').trim();
         const pipLower = pip.toLowerCase();
         if (pipLower && usedPips.has(pipLower) && (!loc || String(loc.proxyIp || '').trim().toLowerCase() !== pipLower)) {
@@ -1714,20 +1763,21 @@ const QrSync = (() => {
           deferProxy: !loc?.id,
         };
         try {
-          await Host.saveAccount(payload);
+          const isCur = Boolean(loc?.id && loc.id === UI?.host?.account?.id);
+          const saved = await Host.saveAccount({ ...payload, deferProxy: !isCur || accts.length > 1 });
+          if (isCur && UI?.host) UI.host.account = { ...(UI.host.account || {}), ...(saved?.account || payload) };
           if (pipLower) usedPips.add(pipLower);
           importedAccts++;
         } catch {}
       }
     }
+    try { const refreshed = await Host.listAccounts?.(true); if (Array.isArray(refreshed) && UI?.host) UI.host.accounts = refreshed; if (typeof LaunchPick !== 'undefined') LaunchPick.cache = null; } catch {}
+    const sCnt = Nodes.subs?.length || subUrls.length, nCnt = Nodes.list?.length || 0, aCnt = importedAccts || accts.length, firstEm = accts.find(a => a.email)?.email || '';
     return {
-      ok: true,
-      mode: 'sync',
-      subCount: Nodes.subs?.length || subUrls.length,
-      nodeCount: Nodes.list?.length || 0,
-      accountCount: importedAccts || accts.length,
-      firstEmail: accts.find(a => a.email)?.email || '',
-      firstPassword: accts.find(a => a.password)?.password || '',
+      ok: true, mode: 'sync', kind: 'bundle',
+      subCount: sCnt, subs: sCnt, nodeCount: nCnt, nodes: nCnt,
+      accountCount: aCnt, accounts: aCnt, count: aCnt || nCnt || sCnt || 1,
+      firstEmail: firstEm, email: firstEm, firstPassword: accts.find(a => a.password)?.password || '',
     };
   }
   function hasNodeConfigured(a = UI?.host?.account) {
@@ -1749,6 +1799,10 @@ const QrSync = (() => {
       if (typeof window !== 'undefined' && (window.__fixture || window.__routeFixture || window.__capFetch)) return false;
       if (a && /^acct-[a-z0-9-]+@example\.com$/i.test(String(a.email || ''))) return false;
     } catch {}
+    const isMobile = Host.platform === 'android' || (typeof isMob === 'function' && isMob());
+    if (isMobile && (!a || (!a.email && !a.hasPw)) && !(Array.isArray(UI?.host?.accounts) && UI.host.accounts.some(x => x?.email || x?.hasPw))) {
+      return true;
+    }
     return !hasNodeConfigured(a);
   }
 
@@ -1760,226 +1814,174 @@ const QrSync = (() => {
     document.querySelectorAll('.m-ov.qrsync-ov').forEach(el => el.remove());
     const isMobile = Host.platform === 'android' || (typeof isMob === 'function' && isMob());
     let curTab = initialTab === 'import' ? 'import' : (initialTab === 'export' ? 'export' : (isMobile ? 'import' : 'export'));
+    if (isMobile) curTab = 'import';
     let streamCleanup = null;
     const close = () => {
       if (streamCleanup) { try { streamCleanup(); } catch {} streamCleanup = null; }
       ov.remove();
     };
-    const body = h('div', { class: 'm-b', style: 'display:flex;flex-direction:column;gap:12px;padding:14px 16px' });
-    const tabExport = h('button', {
-      type: 'button',
-      class: 'btn' + (curTab === 'export' ? ' p' : ''),
-      style: 'flex:1',
-      onclick: () => switchTab('export'),
-    }, icon('qr'), h('span', null, '生成同步二维码'));
-    const tabImport = h('button', {
-      type: 'button',
-      class: 'btn' + (curTab === 'import' ? ' p' : ''),
-      style: 'flex:1',
-      onclick: () => switchTab('import'),
-    }, icon('camera'), h('span', null, '扫码 / 导入配置'));
+    const body = h('div', { class: 'm-b', style: 'display:flex;flex-direction:column;gap:12px;padding:14px 16px;color:var(--fg,#ecebe8)' });
+    const headerTools = h('div', { style: 'display:flex;align-items:center;gap:6px' });
+    const titleSpan = h('span', { style: 'font-weight:700;font-size:14px;color:var(--fg,#ecebe8)' }, curTab === 'export' ? '二维码导出' : '扫码导入');
 
     async function renderExport() {
-      body.replaceChildren(
-        h('div', { style: 'text-align:center;padding:24px;color:var(--c2)' }, '正在打包当前节点订阅与账号配置…')
-      );
-      const { uri, rawJson, summary } = await buildSyncBundle();
-      let qrSvgEl = null;
-      try {
-        const qr = encodeQR(uri);
-        qrSvgEl = toSvg(qr, 256);
-      } catch {}
-      const statusLine = h('div', {
-        style: 'font-size:12px;color:var(--ok);text-align:center;font-weight:600',
-      }, `已就绪：${summary.subs} 个订阅 · ${summary.nodes} 个节点 · ${summary.accounts} 个账号${summary.currentEmail ? '（含 ' + summary.currentEmail + '）' : ''}`);
-
+      headerTools.replaceChildren(ib('x', '关闭', close));
+      body.replaceChildren(h('div', { style: 'text-align:center;padding:24px;color:var(--fg2,#b9b6af)' }, '正在生成二维码…'));
+      const { qrPayload, qrPages, fullTokenStr, summary } = await buildSyncBundle();
+      const pages = Array.isArray(qrPages) && qrPages.length ? qrPages : [qrPayload];
+      let pageIdx = 0;
+      const qrSvgWrap = h('div', { style: 'display:flex;align-items:center;justify-content:center;min-height:252px' });
+      const pageLabel = h('span', { style: 'font-size:12px;color:var(--fg2,#b9b6af);font-weight:600' });
+      const paintQrPage = () => {
+        const curUri = pages[pageIdx] || qrPayload;
+        try {
+          qrSvgWrap.innerHTML = toSvg(curUri, 248);
+          if (typeof document !== 'undefined' && document.createElementNS && !qrSvgWrap.querySelector?.('svg')) {
+            qrSvgWrap.replaceChildren(toSvgEl(curUri, 248));
+          }
+        } catch {
+          try { qrSvgWrap.replaceChildren(toSvgEl(curUri, 248)); }
+          catch { qrSvgWrap.replaceChildren(h('div', { style: 'padding:18px;color:var(--warn,#c47a0a);text-align:center;font-size:12px' }, '请使用下方复制按钮复制同步码')); }
+        }
+        pageLabel.textContent = pages.length > 1 ? `第 ${pageIdx + 1} / ${pages.length} 张二维码` : '';
+      };
+      paintQrPage();
+      const pagerRow = pages.length > 1 ? h('div', { style: 'display:flex;align-items:center;justify-content:center;gap:12px' },
+        ib('chev', '上一张', () => { pageIdx = (pageIdx - 1 + pages.length) % pages.length; paintQrPage(); }),
+        pageLabel,
+        ib('chev', '下一张', () => { pageIdx = (pageIdx + 1) % pages.length; paintQrPage(); })
+      ) : null;
+      const statusLine = h('div', { style: 'font-size:12px;color:var(--ok,#2f9e5b);text-align:center;font-weight:600' },
+        `${summary.accounts} 个账号 · ${summary.nodes} 个节点 · ${summary.subs} 个订阅`);
       const qrBox = h('div', {
-        style: 'display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;padding:12px;background:var(--bg2);border:1px solid var(--bd);border-radius:10px',
+        style: 'display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;padding:14px;background:var(--bg2,#191817);border:1px solid var(--bd,#33312d);border-radius:10px',
       },
-        qrSvgEl
-          ? qrSvgEl
-          : h('div', { style: 'padding:18px;color:var(--wn);text-align:center;font-size:12px' }, '当前配置较大，请直接点击下方「复制同步码」在另一台设备粘贴导入'),
+        qrSvgWrap,
+        pagerRow,
         statusLine,
-        h('div', { style: 'font-size:11px;color:var(--c3);text-align:center;line-height:1.45' },
-          '手机端打开客户端 → 点击「扫码 / 导入配置」直接扫描上方二维码（纯离线直传，无需联网中转）'
-        )
+        h('div', { style: 'font-size:11px;color:var(--fg3,#85827b);text-align:center;line-height:1.45' }, '手机端直接扫码即可导入全部节点与账号')
       );
-
+      const copyVal = fullTokenStr || qrPayload;
       const copyRow = h('div', { style: 'display:flex;gap:8px;align-items:center' },
-        h('input', {
-          class: 'inp',
-          readonly: true,
-          value: uri,
-          style: 'flex:1;font-family:var(--mono);font-size:11px',
-          onclick: e => e.target.select(),
-        }),
-        h('button', {
-          type: 'button',
-          class: 'btn p',
-          onclick: async () => {
-            try { await navigator.clipboard.writeText(uri); toast('已复制离线同步码'); }
-            catch { toast('复制失败，请手动全选复制', 'err'); }
-          },
-        }, icon('copy'), h('span', null, '复制同步码'))
+        h('input', { class: 'inp', readonly: true, value: copyVal, style: 'flex:1;font-family:var(--mono,monospace);font-size:11px;padding:6px 8px;border-radius:8px;border:1px solid var(--bd2,#45423d);background:var(--bg2,#191817);color:var(--fg,#ecebe8)', onclick: e => e.target.select() }),
+        ib('copy', '复制同步码', async () => {
+          try {
+            if (typeof copyText === 'function') copyText(copyVal);
+            else { await navigator.clipboard.writeText(copyVal); toast('已复制同步码'); }
+          } catch { toast('复制失败，请手动全选复制', 'err'); }
+        })
       );
-
       body.replaceChildren(qrBox, copyRow);
     }
 
     function renderImport() {
       if (streamCleanup) { try { streamCleanup(); } catch {} streamCleanup = null; }
-      const statusEl = h('div', {
-        style: 'font-size:12px;color:var(--c2);min-height:18px;text-align:center',
-      }, '支持：手机摄像头扫码、上传二维码截图、粘贴同步码或订阅链接');
-
-      const videoWrap = h('div', {
-        style: 'display:none;flex-direction:column;align-items:center;gap:8px;padding:8px;background:#000;border-radius:10px;overflow:hidden',
-      });
-      const videoEl = h('video', {
-        autoplay: true,
-        playsinline: true,
-        muted: true,
-        style: 'width:100%;max-width:280px;border-radius:8px;background:#111',
-      });
+      const statusEl = h('div', { style: 'font-size:12px;color:var(--fg2,#b9b6af);min-height:18px;text-align:center' }, '请将摄像头对准电脑端二维码，或点右上角图标选择二维码图片');
+      const videoWrap = h('div', { style: 'display:none;flex-direction:column;align-items:center;gap:8px;padding:8px;background:#000;border-radius:10px;overflow:hidden' });
+      const videoEl = h('video', { autoplay: true, playsinline: true, muted: true, style: 'width:100%;max-width:280px;border-radius:8px;background:#111' });
       videoWrap.append(videoEl);
 
       const handleDecoded = async (text) => {
         if (!text) return;
         if (streamCleanup) { try { streamCleanup(); } catch {} streamCleanup = null; }
-        statusEl.style.color = 'var(--ac)';
-        statusEl.textContent = '正在解析并导入同步配置…';
+        statusEl.style.color = 'var(--acc,#ecebe8)';
+        statusEl.textContent = '正在解析并导入配置…';
         try {
           const res = await applySyncPayload(text, msg => { statusEl.textContent = msg; });
-          statusEl.style.color = 'var(--ok)';
-          const desc = res.kind === 'bundle'
-            ? `同步完成：已导入 ${res.nodes || 0} 个节点${res.email ? ' · 账号 ' + res.email : ''}`
-            : `导入成功（${res.count || 1} 项）`;
+          markOnboardingDone();
+          statusEl.style.color = 'var(--ok,#2f9e5b)';
+          const desc = `同步完成：${res.accountCount || 0} 个账号 · ${res.nodeCount || 0} 个节点`;
           statusEl.textContent = '✓ ' + desc;
           toast(desc);
           setTimeout(() => {
             close();
             if (typeof onComplete === 'function') onComplete(res);
-          }, 350);
+            else { try { UI?.loginGate?.(); } catch {} }
+          }, 280);
         } catch (err) {
-          statusEl.style.color = 'var(--er)';
+          statusEl.style.color = 'var(--bad,#d9453f)';
           statusEl.textContent = '导入失败：' + (err?.message || err);
         }
       };
 
+      const camFileInp = h('input', {
+        type: 'file', accept: 'image/*', capture: 'environment', style: 'display:none',
+        onchange: async e => {
+          const f = e.target.files?.[0]; e.target.value = ''; if (!f) return;
+          statusEl.style.color = 'var(--acc,#ecebe8)'; statusEl.textContent = '正在识别二维码…';
+          const decoded = await decodeFromFile(f);
+          if (decoded) await handleDecoded(decoded);
+          else { statusEl.style.color = 'var(--bad,#d9453f)'; statusEl.textContent = '未识别到二维码，请对准电脑端二维码重拍'; }
+        },
+      });
+      const fileInp = h('input', {
+        type: 'file', accept: 'image/*', style: 'display:none',
+        onchange: async e => {
+          const f = e.target.files?.[0]; e.target.value = ''; if (!f) return;
+          statusEl.style.color = 'var(--acc,#ecebe8)'; statusEl.textContent = '正在识别二维码图片…';
+          const decoded = await decodeFromFile(f);
+          if (decoded) await handleDecoded(decoded);
+          else { statusEl.style.color = 'var(--bad,#d9453f)'; statusEl.textContent = '未能从图片中识别出二维码'; }
+        },
+      });
+
       const startCameraScan = async () => {
-        if (!navigator.mediaDevices?.getUserMedia) {
-          statusEl.style.color = 'var(--wn)';
-          statusEl.textContent = '当前环境不支持直接调起摄像头，请点击「相册选图识别」或粘贴同步码';
-          return;
-        }
+        if (!navigator.mediaDevices?.getUserMedia) { camFileInp.click(); return; }
         try {
-          const stream = await navigator.mediaDevices.getUserMedia({
-            video: { facingMode: 'environment', width: { ideal: 640 }, height: { ideal: 640 } },
-            audio: false,
-          });
+          if (streamCleanup) { try { streamCleanup(); } catch {} streamCleanup = null; }
+          const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' }, width: { ideal: 720 }, height: { ideal: 720 } }, audio: false });
           videoEl.srcObject = stream;
+          try { await videoEl.play?.(); } catch {}
           videoWrap.style.display = 'flex';
-          statusEl.style.color = 'var(--ac)';
-          statusEl.textContent = '请将二维码对准取景框…';
+          statusEl.style.color = 'var(--acc,#ecebe8)';
+          statusEl.textContent = '请将电脑端二维码对准取景框…';
           let stopped = false;
           const detector = typeof BarcodeDetector !== 'undefined' ? new BarcodeDetector({ formats: ['qr_code'] }) : null;
+          const cv = document.createElement('canvas');
+          const ctx = cv.getContext('2d', { willReadFrequently: true });
           const timer = setInterval(async () => {
             if (stopped || !videoEl.videoWidth) return;
             try {
               if (detector) {
-                const codes = await detector.detect(videoEl);
-                if (codes && codes.length && codes[0].rawValue) {
-                  stopped = true;
-                  await handleDecoded(codes[0].rawValue);
-                  return;
-                }
+                const codes = await detector.detect(videoEl).catch(() => null);
+                if (codes && codes.length && codes[0].rawValue) { stopped = true; await handleDecoded(codes[0].rawValue); return; }
               }
+              cv.width = videoEl.videoWidth; cv.height = videoEl.videoHeight;
+              ctx.drawImage(videoEl, 0, 0);
+              const img = ctx.getImageData(0, 0, cv.width, cv.height);
               if (typeof window.jsQR === 'function') {
-                const cv = document.createElement('canvas');
-                cv.width = videoEl.videoWidth;
-                cv.height = videoEl.videoHeight;
-                const ctx = cv.getContext('2d');
-                ctx.drawImage(videoEl, 0, 0);
-                const img = ctx.getImageData(0, 0, cv.width, cv.height);
                 const hit = window.jsQR(img.data, img.width, img.height);
-                if (hit?.data) {
-                  stopped = true;
-                  await handleDecoded(hit.data);
-                }
+                if (hit?.data) { stopped = true; await handleDecoded(hit.data); return; }
               }
+              const decoded = await decodeFromImageData(img);
+              if (decoded) { stopped = true; await handleDecoded(decoded); }
             } catch {}
-          }, 260);
+          }, 220);
           streamCleanup = () => {
-            stopped = true;
-            clearInterval(timer);
+            stopped = true; clearInterval(timer);
             try { stream.getTracks().forEach(t => t.stop()); } catch {}
             videoWrap.style.display = 'none';
           };
-        } catch (err) {
-          statusEl.style.color = 'var(--wn)';
-          statusEl.textContent = '摄像头未授权或不可用，可使用「相册选图识别」或直接粘贴同步码';
+        } catch {
+          statusEl.style.color = 'var(--warn,#c47a0a)';
+          statusEl.textContent = '点右上角相机或相册图标拍照/选图识别二维码';
         }
       };
 
-      const fileInp = h('input', {
-        type: 'file',
-        accept: 'image/*',
-        style: 'display:none',
-        onchange: async e => {
-          const f = e.target.files?.[0];
-          if (!f) return;
-          statusEl.style.color = 'var(--ac)';
-          statusEl.textContent = '正在识别图片中的二维码…';
-          const decoded = await decodeFromFile(f);
-          if (decoded) {
-            await handleDecoded(decoded);
-          } else {
-            statusEl.style.color = 'var(--er)';
-            statusEl.textContent = '未能从图片中识别出二维码，请尝试更清晰的截图或直接粘贴同步码';
-          }
-          e.target.value = '';
-        },
-      });
-
-      const pasteTa = h('textarea', {
-        class: 'inp m-ta',
-        rows: 3,
-        placeholder: '在此粘贴 brana-sync:// 离线同步码、https:// 节点订阅链接、vless:// 节点或 ARENA-ACCOUNTS-V1 账号包…',
-        style: 'font-family:var(--mono);font-size:11px',
-      });
-
-      const actionRow = h('div', { style: 'display:flex;gap:8px;flex-wrap:wrap' },
-        h('button', {
-          type: 'button',
-          class: 'btn p',
-          style: 'flex:1;min-width:130px',
-          onclick: startCameraScan,
-        }, icon('camera'), h('span', null, '开启摄像头扫码')),
-        h('button', {
-          type: 'button',
-          class: 'btn',
-          style: 'flex:1;min-width:130px',
-          onclick: () => fileInp.click(),
-        }, icon('upload'), h('span', null, '选择二维码图片')),
-        fileInp
+      headerTools.replaceChildren(
+        ib('camera', '摄像头扫码', startCameraScan),
+        ib('upload', '从相册选择二维码图片', () => fileInp.click()),
+        ib('x', '关闭', close)
       );
 
-      const applyBtn = h('button', {
-        type: 'button',
-        class: 'btn p',
-        style: 'width:100%',
-        onclick: () => handleDecoded(pasteTa.value),
-      }, icon('check'), h('span', null, '立即同步并应用配置'));
-
-      body.replaceChildren(actionRow, videoWrap, pasteTa, applyBtn, statusEl);
-    }
-
-    function switchTab(t) {
-      curTab = t;
-      tabExport.className = 'btn' + (curTab === 'export' ? ' p' : '');
-      tabImport.className = 'btn' + (curTab === 'import' ? ' p' : '');
-      if (curTab === 'export') void renderExport();
-      else renderImport();
+      const pasteInp = h('input', {
+        class: 'inp', type: 'text', placeholder: '或粘贴同步码 / 订阅链接…',
+        style: 'flex:1;font-family:var(--mono,monospace);font-size:11px;padding:6px 8px;border-radius:8px;border:1px solid var(--bd2,#45423d);background:var(--bg2,#191817);color:var(--fg,#ecebe8)',
+        onkeydown: e => { if (e.key === 'Enter') { e.preventDefault(); void handleDecoded(pasteInp.value); } },
+      });
+      const pasteRow = h('div', { style: 'display:flex;gap:8px;align-items:center' }, pasteInp, ib('check', '立即导入', () => handleDecoded(pasteInp.value)));
+      body.replaceChildren(videoWrap, statusEl, pasteRow, fileInp, camFileInp);
+      setTimeout(() => { void startCameraScan(); }, 60);
     }
 
     const ov = h('div', {
@@ -1987,40 +1989,43 @@ const QrSync = (() => {
       style: 'position:fixed;inset:0;z-index:10000;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,0.62);padding:16px',
       onclick: e => { if (e.target === ov) close(); },
     },
-      h('div', { class: 'm-box', style: 'width:460px;max-width:94vw;background:var(--bg1);border:1px solid var(--bd);border-radius:14px;box-shadow:0 16px 48px rgba(0,0,0,0.45);overflow:hidden' },
-        h('div', { class: 'm-h', style: 'display:flex;align-items:center;justify-content:space-between;padding:12px 16px;border-bottom:1px solid var(--bd)' },
-          h('span', { style: 'font-weight:700;font-size:14px' }, '二维码离线同步（节点订阅 + 账号配置）'),
-          ib('x', '关闭', close)
-        ),
-        h('div', { style: 'display:flex;gap:8px;padding:12px 16px 0' }, tabExport, tabImport),
+      h('div', { class: 'm-box', style: 'width:380px;max-width:94vw;background:var(--bg,#1f1e1c);color:var(--fg,#ecebe8);border:1px solid var(--bd,#33312d);border-radius:14px;box-shadow:0 16px 48px rgba(0,0,0,0.45);overflow:hidden' },
+        h('div', { class: 'm-h', style: 'display:flex;align-items:center;justify-content:space-between;padding:12px 16px;border-bottom:1px solid var(--bd,#33312d)' }, titleSpan, headerTools),
         body
       )
     );
     document.body.append(ov);
-    switchTab(curTab);
+    if (curTab === 'export') void renderExport();
+    else renderImport();
     return ov;
   }
 
   function renderFirstTimeOnboarding(v, a, reason, goStep2) {
     v.replaceChildren();
-    const errEl = h('div', {
-      class: 'lerr',
-      style: 'min-height:20px;margin:6px 0;color:var(--c2);text-align:center',
-    }, reason || '');
-    const subInp = h('input', {
-      class: 'inp',
-      type: 'text',
-      placeholder: '请粘贴 EdgeTunnel 订阅地址 (https://...) 或 vless:// 节点链接',
-      style: 'width:100%',
-    });
+    const isMobile = Host.platform === 'android' || (typeof isMob === 'function' && isMob());
+    const errEl = h('div', { class: 'lerr', style: 'min-height:20px;margin:6px 0;color:var(--fg2,#b9b6af);text-align:center' }, reason || '');
+    if (isMobile) {
+      const scanBtn = h('button', {
+        type: 'button', class: 'ib mobile-onboard-qr-btn', title: '扫描电脑端二维码', 'aria-label': '扫描电脑端二维码',
+        style: 'width:76px;height:76px;margin:10px auto;border-radius:20px;border:1px solid var(--bd,#33312d);background:var(--bg2,#191817);color:var(--acc,#ecebe8);display:flex;align-items:center;justify-content:center;box-shadow:0 8px 24px rgba(0,0,0,0.28)',
+        onclick: () => openModal('import', res => { markOnboardingDone(); goStep2(res); }),
+      }, icon('qr'));
+      v.append(h('div', { class: 'lwrap' },
+        h('div', { class: 'lcard', style: 'max-width:420px;text-align:center' },
+          h('div', { class: 'llogo' }, 'A'),
+          h('div', { class: 'ltitle' }, '扫描电脑端二维码'),
+          h('div', { class: 'lsub' }, '打开电脑端「导出账号合集」点击右上角二维码图标，手机直接扫码即可一键导入节点与账号'),
+          scanBtn,
+          errEl
+        )
+      ));
+      return;
+    }
+    const subInp = h('input', { class: 'inp', type: 'text', placeholder: '请粘贴 EdgeTunnel 订阅地址 (https://...) 或 vless:// 节点链接', style: 'width:100%' });
     const doImportAndNext = async (raw) => {
       const val = String(raw ?? subInp.value ?? '').trim();
       if (!val) {
-        if (hasNodeConfigured(a)) {
-          markOnboardingDone();
-          goStep2(null);
-          return;
-        }
+        if (hasNodeConfigured(a)) { markOnboardingDone(); goStep2(null); return; }
         errEl.style.color = 'var(--er)';
         errEl.textContent = '请先填写 EdgeTunnel 订阅地址，配置好节点后才能登录或注册账号';
         subInp.focus();
@@ -2030,7 +2035,7 @@ const QrSync = (() => {
       errEl.textContent = '正在拉取并配置 EdgeTunnel 订阅节点…';
       try {
         const res = await applySyncPayload(val, m => { errEl.textContent = m; });
-        if (!hasNodeConfigured(a) && !(res && (res.email || res.accounts > 0))) {
+        if (!hasNodeConfigured(a) && !(res && (res.email || res.firstEmail || res.accounts > 0 || res.accountCount > 0))) {
           throw new Error('未能从该地址获取到可用节点，请检查 EdgeTunnel 订阅地址是否正确');
         }
         markOnboardingDone();
@@ -2042,19 +2047,8 @@ const QrSync = (() => {
         errEl.textContent = String(e?.message || e || 'EdgeTunnel 订阅配置失败，请检查地址后重试');
       }
     };
-    subInp.onkeydown = (e) => {
-      if (e.key === 'Enter') {
-        e.preventDefault();
-        void doImportAndNext();
-      }
-    };
-    const subBtn = h('button', {
-      type: 'button',
-      class: 'btn p lbtn',
-      style: 'width:100%;height:40px;font-weight:700',
-      onclick: () => void doImportAndNext(),
-    }, icon('globe'), h('span', null, '配置 EdgeTunnel 订阅并继续（登录 / 注册）'));
-
+    subInp.onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); void doImportAndNext(); } };
+    const subBtn = h('button', { type: 'button', class: 'btn p lbtn', style: 'width:100%;height:40px;font-weight:700', onclick: () => void doImportAndNext() }, icon('globe'), h('span', null, '配置 EdgeTunnel 订阅并继续（登录 / 注册）'));
     const card = h('div', { class: 'lwrap' },
       h('div', { class: 'lcard', style: 'max-width:460px' },
         h('div', { class: 'llogo' }, 'A'),
@@ -2065,16 +2059,8 @@ const QrSync = (() => {
           subInp,
           subBtn,
           h('div', { style: 'display:flex;gap:8px;justify-content:center;margin-top:4px;flex-wrap:wrap' },
-            h('button', {
-              type: 'button',
-              class: 'btn',
-              onclick: () => Nodes.openModal(),
-            }, icon('globe'), h('span', null, '节点订阅管理')),
-            h('button', {
-              type: 'button',
-              class: 'btn',
-              onclick: () => Pool.openModal(),
-            }, icon('shield'), h('span', null, 'ProxyIP 池'))
+            h('button', { type: 'button', class: 'btn', onclick: () => Nodes.openModal() }, icon('globe'), h('span', null, '节点订阅管理')),
+            h('button', { type: 'button', class: 'btn', onclick: () => Pool.openModal() }, icon('shield'), h('span', null, 'ProxyIP 池'))
           )
         )
       )
@@ -2082,6 +2068,7 @@ const QrSync = (() => {
     v.append(card);
     setTimeout(() => { try { subInp.focus(); } catch {} }, 40);
   }
-  return { encodeQR, toSvg, decodeFromFile, buildSyncBundle, applySyncPayload, hasNodeConfigured, isFirstTimeNoCache, markOnboardingDone, openModal, renderFirstTimeOnboarding };
+  return { encodeQR, toSvg, decodeFromImageData, decodeFromFile, buildSyncBundle, applySyncPayload, hasNodeConfigured, isFirstTimeNoCache, markOnboardingDone, openModal, renderFirstTimeOnboarding };
 })();
 if (typeof window !== 'undefined') window.QrSync = QrSync;
+

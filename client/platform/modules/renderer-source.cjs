@@ -12,6 +12,11 @@ function resolveModuleFile(relPath) {
 const MIGRATED_SLOTS = Object.freeze({
   // model-identity (12 slots)
   'arena-trace/preimage.js': { moduleFile: 'modules/model-identity/domain/preimage.js' },
+  'arena-trace/claude-standalone-v5.js': { moduleFile: 'modules/model-identity/domain/claude-standalone-v5.js' },
+  'arena-trace/gpt-standalone-v1.js': { moduleFile: 'modules/model-identity/domain/gpt-standalone-v1.js' },
+  'arena-trace/probe-context.js': {
+    moduleFile: 'modules/model-identity/domain/probe-context.js',
+  },
   'arena-trace/pricing.js': { moduleFile: 'modules/model-identity/domain/pricing.js' },
   'arena-trace/family.js': { moduleFile: 'modules/model-identity/domain/family.js' },
   'arena-trace/confidence.js': { moduleFile: 'modules/model-identity/domain/confidence.js' },

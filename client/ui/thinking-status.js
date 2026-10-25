@@ -35,6 +35,13 @@ const ThinkingStatus = (() => {
       if (_accessMemo && typeof memoObj === 'object') _accessMemo.set(memoObj, { sig: aSig, val });
       return val;
     };
+    if (current && current.role === 'assistant') {
+      const cParts = Array.isArray(current.parts) ? current.parts : [];
+      const visParts = cParts.filter(p => p?.type === 'reasoning' && visible(p));
+      const isGemBold = visParts.length > 0 && visParts.every(p => /^\s*\*\*[^\n*]{2,80}\*\*/.test(String(p.text || ''))) && cParts.every(p => !p?.id || /^\d+$/.test(String(p.id)));
+      const hasExplicitOpenMsg = Boolean(current.metadata?.openThinkStopped || hasOpenTools(current) || (visParts.length > 0 && !isGemBold && !hasClosedTools(current)));
+      if (hasExplicitOpenMsg) return saveAcc({ type: 'open', certain: true });
+    }
     const matches=current?.id?turns.filter(t=>(t.records||[]).some(r=>r.messageId===current.id)):[];
     if(matches.length===1){const t=matches[0];if(t.changed||t.routing||t.outcome)return saveAcc({type:'unknown',certain:false});const name=t.response||t.internal;return saveAcc({type:classify(name,t),certain:true});}
     if(matches.length>1)return saveAcc({type:'unknown',certain:false});
@@ -71,7 +78,7 @@ const ThinkingStatus = (() => {
   const isClosed=chat=>{const a=access(chat);return a.certain&&a.type==='closed';};
   const isStoppedMsg=m=>Boolean(m?.metadata?.openThinkStopped||m?.metadata?.aborted||m?.metadata?.feedback?.interruption==='stop');
   const isOpenToolId=id=>/^(?:call_\d+_|call_[0-9a-f]{24}$|functions\.|_\d+_[0-9a-f]{6,}|chatcmpl-tool-)/i.test(String(id||''));
-  const isClosedToolId=id=>{const s=String(id||'');return /^(?:toolu_|srvtoolu_|msg_01)/i.test(s)||(/^call_[A-Za-z0-9_-]{20,}$/.test(s)&&!isOpenToolId(s));};
+  const isClosedToolId=id=>{const s=String(id||'');return typeof globalThis.ArenaPricing?.detectToolIdVendor==='function'?globalThis.ArenaPricing.detectToolIdVendor(s)?.strictClosed===true:/^(?:toolu_|srvtoolu_|msg_01)/i.test(s);};
   const hasClosedTools=m=>(m?.parts||[]).some(p=>isClosedToolId(p?.toolCallId));
   const hasOpenTools=m=>(m?.parts||[]).some(p=>isOpenToolId(p?.toolCallId));
   function of(chat) {
@@ -108,22 +115,32 @@ const ThinkingStatus = (() => {
     const nonStopped = asstMsgs.filter(m => !isStoppedMsg(m));
     const msgs = nonStopped.length ? nonStopped : asstMsgs;
     for (const m of msgs) {
-      let mHasVisible = false, mHasHidden = false;
-      for (const p of m.parts || []) {
+      let mHasVisible = false, mHasHidden = false, mAllGemBold = true;
+      const mParts = m.parts || [];
+      const mAllNumIds = mParts.every(p => !p?.id || /^\d+$/.test(String(p.id)));
+      for (const p of mParts) {
         if (p?.type === 'reasoning') {
-          if (visible(p)) mHasVisible = true;
-          else mHasHidden = true;
+          if (visible(p)) {
+            mHasVisible = true;
+            if (!/^\s*\*\*[^\n*]{2,80}\*\*/.test(String(p.text || ''))) mAllGemBold = false;
+          } else {
+            mHasHidden = true;
+          }
         }
       }
+      const isGemSummaryTurn = mHasVisible && mAllGemBold && mAllNumIds && !hasOpenTools(m) && !m?.metadata?.openThinkStopped;
+      if (isGemSummaryTurn) mHasVisible = false;
       if (!mHasVisible && (mHasHidden || hasClosedTools(m))) {
         sawClosed = true;
       }
-      if ((mHasVisible || m?.metadata?.openThinkStopped || (anyExplicitOpen && hasOpenTools(m))) && !closedByApi && !sawClosed) {
+      const mExplicitOpen = Boolean((mHasVisible && !hasClosedTools(m)) || m?.metadata?.openThinkStopped || hasOpenTools(m));
+      if ((mExplicitOpen || (anyExplicitOpen && hasOpenTools(m))) && (!closedByApi || mExplicitOpen) && (!sawClosed || mExplicitOpen)) {
         try {
-          if (chat.sid && !chat._closedLockedModel && !chat._openSourceMarked && !chat._openSourceMarking && typeof BillingProbe !== 'undefined' && typeof BillingProbe.markAsOpenSourceModel === 'function') {
+          if (chat.sid && !chat._openSourceMarked && !chat._openSourceMarking && typeof BillingProbe !== 'undefined' && typeof BillingProbe.markAsOpenSourceModel === 'function') {
             const curM = typeof Models !== 'undefined' ? Models.get(chat.sid) : null;
             const isAlreadyOpenMarked = Boolean(curM && (curM.userCorrected || curM.manualOpenInferred || curM.name === '开源模型' || curM.reverseCandidateId === 'open-source' || curM.provider === '开源思考识别（免计费反推）' || curM.provider === '开源思考过滤'));
             if (!isAlreadyOpenMarked) {
+              chat._closedLockedModel = false;
               chat._openSourceMarking = true;
               queueMicrotask(() => {
                 try { BillingProbe.markAsOpenSourceModel(chat); chat._openSourceMarked = true; } catch {}
@@ -140,7 +157,7 @@ const ThinkingStatus = (() => {
     if ((Number(f?.rChars) || 0) > 0 && !closedByApi && !sawClosed && !chat.thinkStopped && !asstMsgs.some(isStoppedMsg)) {
       const ids = Array.isArray(f?.ids) ? f.ids.map(x => String(x?.[1] ?? '')).filter(Boolean) : [];
       const isClosedFmt = (f?.toolIds || []).some(i => /^toolu_/i.test(String(i || ''))) ||
-        ids.some(i => /^(?:msg|rs)_[0-9a-f]{16,}/i.test(i)) ||
+        ids.some(i => /^(?:msg|rs)_[0-9a-fA-Z_-]{10,}/i.test(i)) ||
         (ids.length > 0 && ids.every(i => /^\d+$/.test(i)) && /^\s*\*\*[^\n*]{2,80}\*\*/.test(String(f?.rHead || '')));
       if (!isClosedFmt) {
         try {

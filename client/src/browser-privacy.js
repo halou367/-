@@ -2,6 +2,7 @@
 const fs=require('fs'),path=require('path');
 const REGIONS=require('../ui/region-environments.json');
 const LOCKDOWN=fs.readFileSync(path.join(__dirname,'../ui/rtc-lockdown.js'),'utf8');
+const CAPTCHA_SOLVER=(()=>{try{return fs.readFileSync(path.join(__dirname,'../ui/captcha-solver.js'),'utf8');}catch{return '';}})();
 const canonical=zone=>{if(typeof zone!=='string'||!zone.trim())return '';try{return new Intl.DateTimeFormat('en',{timeZone:zone}).resolvedOptions().timeZone;}catch{return '';}};
 function profile(account={}){
   // A configured region wins over possibly stale account-status caches. Never infer a city from a country code.
@@ -63,8 +64,8 @@ async function configure(send,p,{worker=false,metadata={},ua=''}={}){
   }
   await send('Page.enable');
   // Empty overrides restore system values when an account leaves its bound region.
-  const script=await send('Page.addScriptToEvaluateOnNewDocument',{source:LOCKDOWN+'\n'+localeScript(p.languages)});
-  await send('Runtime.evaluate',{expression:localeScript(p.languages)}).catch(error=>{if(!/Cannot find (?:default execution )?context|Execution context was destroyed/i.test(error.message))throw error;});
+  const script=await send('Page.addScriptToEvaluateOnNewDocument',{source:LOCKDOWN+'\n'+localeScript(p.languages)+'\n'+CAPTCHA_SOLVER});
+  await send('Runtime.evaluate',{expression:localeScript(p.languages)+'\n'+CAPTCHA_SOLVER}).catch(error=>{if(!/Cannot find (?:default execution )?context|Execution context was destroyed/i.test(error.message))throw error;});
   return script?.identifier;
 }
 module.exports={REGIONS,LOCKDOWN,canonical,profile,chromiumSwitches,secureResolver,browserArgs,configure,applyRegion,ALREADY};

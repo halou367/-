@@ -26,6 +26,8 @@ ICON.pen = '<path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M13.5 6.5l4 4"/>';
 ICON.sort = '<path d="M7 4v16M3 16l4 4 4-4M17 20V4M13 8l4-4 4 4"/>';
 ICON.mic = '<rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/>';
 ICON.qr = '<rect x="3" y="3" width="7" height="7" rx="1"/><rect x="5.2" y="5.2" width="2.6" height="2.6" rx="0.4" fill="currentColor" stroke="none"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="16.2" y="5.2" width="2.6" height="2.6" rx="0.4" fill="currentColor" stroke="none"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="5.2" y="16.2" width="2.6" height="2.6" rx="0.4" fill="currentColor" stroke="none"/><path d="M14 14h3v3h-3zM18 14h3v3h-3zM14 18h3v3h-3zM18 18h3v3h-3z"/>';
+ICON.camera = '<path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/>';
+ICON.check = '<path d="M5 12.5 9.5 17 19 7.5"/>';
 ICON.eye = '<path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/>';
 ICON[' eye'] = ICON.eye;
 ICON.RefreshCw = ICON.refresh;
@@ -2054,7 +2056,18 @@ const R = {
     if (!chat || !Array.isArray(chat.messages)) return '';
     const msgs = chat.messages, L = msgs.length, last = L ? msgs[L - 1] : null;
     const lp = last?.parts, lpl = Array.isArray(lp) ? lp.length : 0, tailP = lpl ? lp[lpl - 1] : null;
-    const tailLen = (tailP?.inputText?.length || 0) + (tailP?.text?.length || 0) + (tailP?.state || '');
+    let writeInSig = 0, stubCnt = 0;
+    if (Array.isArray(lp)) {
+      for (let i = 0; i < lpl; i++) {
+        const p = lp[i];
+        if (!p) continue;
+        const cStr = typeof p.input?.content === 'string' ? p.input.content : (typeof p.input?.text === 'string' ? p.input.text : '');
+        writeInSig += cStr.length + (p.inputText?.length || 0);
+        if (cStr.includes('…[cached]')) stubCnt++;
+      }
+    }
+    const resV = (typeof HtmlPreview !== 'undefined' && typeof HtmlPreview.resolvedVer === 'function') ? HtmlPreview.resolvedVer() : 0;
+    const tailLen = (tailP?.inputText?.length || 0) + (tailP?.text?.length || 0) + (tailP?.state || '') + ':' + writeInSig + ':' + stubCnt + ':' + resV;
     return L + ':' + (last?.v || 0) + ':' + lpl + ':' + tailLen + ':' + (chat.busy ? 1 : 0);
   },
   latestFileText(sid, targetPath, fallbackPart) {
@@ -2086,8 +2099,11 @@ const R = {
         R._fileTextCache.set(cSid, entry);
       }
       const hit = entry.files.get(norm);
+      const resolved = (typeof HtmlPreview !== 'undefined' && typeof HtmlPreview.resolvedText === 'function') ? HtmlPreview.resolvedText(cSid, norm) : '';
+      if (resolved && (!hit || hit.includes('…[cached]') || resolved.length > hit.length)) return resolved;
       if (hit) return hit;
     }
+    const resolvedFallback = (typeof HtmlPreview !== 'undefined' && typeof HtmlPreview.resolvedText === 'function' && norm) ? HtmlPreview.resolvedText(chat?.sid || sid, norm) : '';
     let text = '', found = false;
     for (const m of chat?.messages || []) {
       for (const p of m.parts || []) {
@@ -2105,12 +2121,17 @@ const R = {
         }
       }
     }
-    if (found && text) return text;
+    if (found && text) {
+      if (resolvedFallback && (text.includes('…[cached]') || resolvedFallback.length > text.length)) return resolvedFallback;
+      return text;
+    }
     if (fallbackPart) {
       const i = R.tinput(fallbackPart) || {};
-      return typeof i.content === 'string' ? i.content : typeof i.text === 'string' ? i.text : text;
+      const fb = typeof i.content === 'string' ? i.content : typeof i.text === 'string' ? i.text : text;
+      if (resolvedFallback && (!fb || fb.includes('…[cached]') || resolvedFallback.length > fb.length)) return resolvedFallback;
+      return fb;
     }
-    return text;
+    return resolvedFallback || text;
   },
   tstate(p) {
     if (p?.state === 'output-available') {
@@ -2758,17 +2779,22 @@ const R = {
     return list;
   },
   writeCard(p, key, live = false) {
+    const chatSid = arguments[3] || null;
     const inp = R.tinput(p) || {}, path = String(inp.path || inp.file_path || ''), short = R.normPath(path);
-    const sidOf = el => el?.closest?.('[data-wsid]')?.getAttribute('data-wsid') || (typeof Tabs !== 'undefined' ? Tabs.cur?.sid : null) || null;
+    const sidOf = el => el?.closest?.('[data-wsid]')?.getAttribute('data-wsid') || chatSid || (typeof Tabs !== 'undefined' ? Tabs.cur?.sid : null) || null;
     const getTxt = () => R.latestFileText(sidOf(d), short, p);
-    const text = (typeof inp.content === 'string' ? inp.content : typeof inp.text === 'string' ? inp.text : '') || R.latestFileText(null, short, p);
+    const rawContent = typeof inp.content === 'string' ? inp.content : typeof inp.text === 'string' ? inp.text : '';
+    const latestTxt = R.latestFileText(chatSid, short, p);
+    const text = (latestTxt && (!rawContent || rawContent.includes('…[cached]') || latestTxt.length > rawContent.length)) ? latestTxt : (rawContent || latestTxt);
     const lines = R.countLinesFast(text), st = R.tstate(p, live), name = path.split('/').pop() || path;
     const ext = (/\.([\w]+)$/.exec(name)?.[1] || 'plain').toUpperCase();
     const pv = HtmlPreview.previewable(path);   // html / svg：点这一行在右侧内嵌预览（箭头仍是展开代码）
-    const wsm = h('summary', {}, h('span', { class: 'wc-w' }, 'Write'), pv ? h('code', { class: 'wc-p', title: '点击在右侧预览' }, short) : h('code', { class: 'wc-p fpath', 'data-fpath': short, title: '在工作区打开' }, short), h('span', { class: 'dim' }, lines ? lines + ' 行' : ''), st === 'run' ? h('i', { class: 'spin' }) : st === 'bad' ? h('span', { class: 'tr-st bad' }, '✗') : null, h('span', { class: 'grow' }), icon('chevr', 'tg-chev'));
+    const linesEl = h('span', { class: 'dim' }, lines ? lines + ' 行' : '');
+    const wsm = h('summary', {}, h('span', { class: 'wc-w' }, 'Write'), pv ? h('code', { class: 'wc-p', title: '点击在右侧预览' }, short) : h('code', { class: 'wc-p fpath', 'data-fpath': short, title: '在工作区打开' }, short), linesEl, st === 'run' ? h('i', { class: 'spin' }) : st === 'bad' ? h('span', { class: 'tr-st bad' }, '✗') : null, h('span', { class: 'grow' }), icon('chevr', 'tg-chev'));
     wsm.__reactFiber$extcompat = { memoizedProps: { part: R.extPart(p, key) }, return: null };
     const isOpen = Boolean(R.openOf(key, false) || p.errorText);
     const d = R.keep(h('details', { class: 'wcard ' + st + (pv ? ' pvable' : ''), open: isOpen || null }, wsm), key);
+    d._linesEl = linesEl; d._filePath = short; d._wsid = chatSid;
     if (pv) HtmlPreview.bindRow(d.querySelector('summary'), { path: short, get: getTxt, getWsid: () => sidOf(d) });
     let bodyBuilt = false;
     const ensureBody = () => {
@@ -2815,7 +2841,7 @@ const R = {
       UI.hitlDraft.delete(p.toolCallId);
     })
       .catch(async e => {
-        if (e?.status === 403 && /recaptcha/i.test(e.body || '') && !opt.v2) { toast('需要人机验证', 'err'); const tok = await Recaptcha.v2().catch(() => null); if (tok) { d.sending = false; return R.hitlSend(chat, p, out, { ...opt, v2: tok }); } }
+        if (e?.status === 403 && /recaptcha/i.test(e.body || '') && !opt.v2) { const tok = await Recaptcha.v2().catch(() => null); if (tok) { d.sending = false; return R.hitlSend(chat, p, out, { ...opt, v2: tok }); } }
         // 失败原因留在卡片上（toast 几秒就没了，看不到就没法判断是哪一步出的问题）；选项草稿还在，直接再点提交即可
         d.sending = false; d.err = describe(e) + (e?.status ? '（HTTP ' + e.status + '）' : ''); toast('提交失败：' + describe(e), 'err'); chat.emit(); scheduleChat(chat);
       });
@@ -2824,7 +2850,7 @@ const R = {
   hitlNote(chat, p) {
     const d = UI.hitlDraft.get(p.toolCallId) || {};
     if (d.err) return h('div', { class: 'hq-note err' }, '没有发出去：' + d.err + '。选项已保留，可以直接再点提交。');
-    if (d.sending && chat.phase) return h('div', { class: 'hq-note' }, h('i', { class: 'spin' }), chat.phase);
+    if (d.sending && chat.phase && !Hitl.blocked(chat)) return h('div', { class: 'hq-note' }, h('i', { class: 'spin' }), chat.phase);
     return null;
   },
   hitl(p, chat, m, isLast) {
@@ -3095,7 +3121,11 @@ const R = {
     const body = Seg.box(m.id, 'body', () => h('div', { class: 'msg-body' })), segs = [], mid = m.id;
     const running = p => p.state !== 'output-available' && p.state !== 'output-error' && p.state !== 'output-denied' || !!p.preliminary;
     const outSig = p => p.output === undefined ? -1 : typeof p.output === 'string' ? p.output.length : (p.output?.stdout?.length || 0) + (p.output?.stderr?.length || 0) + (p.output?.exit_code ?? 0);
-    const pSig = p => p.type + ':' + (p.state || '') + ':' + (p.text?.length || 0) + ':' + (p.inputText?.length || 0) + ':' + (p.input ? 1 : 0) + ':' + outSig(p) + ':' + (p.preliminary ? 1 : 0) + ':' + (p.errorText ? 1 : 0);
+    const pSig = p => {
+      const cStr = typeof p.input?.content === 'string' ? p.input.content : (typeof p.input?.text === 'string' ? p.input.text : '');
+      const inSig = p.input ? ((cStr.length || 1) + (cStr.includes('…[cached]') ? 'S' : '')) : 0;
+      return p.type + ':' + (p.state || '') + ':' + (p.text?.length || 0) + ':' + (p.inputText?.length || 0) + ':' + inSig + ':' + outSig(p) + ':' + (p.preliminary ? 1 : 0) + ':' + (p.errorText ? 1 : 0);
+    };
     const isEvalMsg = Boolean(chat?.isEvaluation || m.webdev || m.webdevTemplate || m.activeWorkflowRunId || m.metadata?.workflowRunId);
     let grp = null;
     const flush = () => {
@@ -3116,7 +3146,7 @@ const R = {
       // 开源思考（有可见思考文字）绝不能像 bash 一样被折叠进「已运行工具」中：先 flush 工具组，再独立标红展示
       if (p.type === 'reasoning' && !ThinkingStatus.visible(p) && grp && !isEvalMsg) return;
       flush();
-      if (isTool) { segs.push(Seg.use(mid, 'w:' + i, pSig(p) + (live ? ':L' : ''), () => R.writeCard(p, mid + ':' + i, live))); return; }
+      if (isTool) { segs.push(Seg.use(mid, 'w:' + i, pSig(p) + (live ? ':L' : ''), () => R.writeCard(p, mid + ':' + i, live, chat?.sid))); return; }
       if (p.type === 'text') {
         const streaming = live && p.state === 'streaming';
         const htmlSegs = R.extractInlineHtmlSegments(p.text, streaming);
@@ -3150,7 +3180,12 @@ const R = {
           });
           return x;
         });
-        const streaming = live && p.state === 'streaming', isClosedTurn = reasonAccess?.type === 'closed' || (typeof Fingerprint !== 'undefined' && Fingerprint.isClosedSourceStream?.(chat)), openThink = !isClosedTurn && ThinkingStatus.visible(p);
+        const streaming = live && p.state === 'streaming';
+        const hasVisP = ThinkingStatus.visible(p);
+        const isGemBoldP = hasVisP && /^\s*\*\*[^\n*]{2,80}\*\*/.test(String(p?.text || '')) && (m?.parts || []).every(pt => !pt?.id || /^\d+$/.test(String(pt.id)));
+        const isExplicitOpenTurn = Boolean(m?.metadata?.openThinkStopped || (hasVisP && !isGemBoldP) || (typeof ThinkingStatus !== 'undefined' && ThinkingStatus.of?.(chat)?.kind === 'compat-thinking' && !isGemBoldP));
+        const isClosedTurn = !isExplicitOpenTurn && (reasonAccess?.type === 'closed' || (typeof Fingerprint !== 'undefined' && Fingerprint.isClosedSourceStream?.(chat, m)));
+        const openThink = !isClosedTurn && (hasVisP || isExplicitOpenTurn);
         d.classList.toggle('open-think', openThink);
         if (d.__badge) d.__badge.hidden = !openThink;
         let lbl = reasonLabels.of(p, streaming);
@@ -3244,7 +3279,10 @@ const R = {
         h('div', { class: 'typing', title: '正在生成与执行中…' }, h('i'), h('i'), h('i')),
         h('span', { class: 'phase typing-phase' }, h('span', { class: 'ph-t' }), h('span', { class: 'dim anc-since' }))
       ));
-      const phTxt = (typeof ThinkingStatus !== 'undefined' && ThinkingStatus.phase) ? ThinkingStatus.phase(chat) : (chat?.phase || '生成中');
+      const rawPhTxt = (typeof ThinkingStatus !== 'undefined' && ThinkingStatus.phase) ? ThinkingStatus.phase(chat) : (chat?.phase || '生成中');
+      const lastSegEl = segs.length ? segs[segs.length - 1] : null;
+      const activeReasonTitle = (lastSegEl && lastSegEl.classList?.contains('reason') && lastSegEl.querySelector?.('.rs-t')?.textContent) || '';
+      const phTxt = (activeReasonTitle && (activeReasonTitle === rawPhTxt || (/思考中/.test(activeReasonTitle) && /思考中/.test(rawPhTxt)))) ? '' : rawPhTxt;
       const phEl = tRow.querySelector('.ph-t');
       if (phEl && phEl.textContent !== phTxt) phEl.textContent = phTxt;
       const sinceEl = tRow.querySelector('.anc-since');
@@ -3334,10 +3372,11 @@ const R = {
 const ExtensionNodes = {
   detach(doc) {
     const out = { html: [], head: [], body: [] }, root = doc?.documentElement; if (!root) return out;
+    const isBoot = el => Boolean(el?.hasAttribute?.('data-anc-boot') || el?.id === 'anc-boot-loader');
     const take = (parent, list, keep) => { for (const el of [...(parent?.children || [])]) if (!keep(el)) { list.push(el); el.remove(); } };
-    take(root, out.html, el => el.tagName === 'HEAD' || el.tagName === 'BODY');
-    take(doc.head, out.head, el => el.tagName !== 'STYLE' && el.tagName !== 'LINK');
-    take(doc.body, out.body, el => el.tagName === 'PRE' || el.tagName === 'SCRIPT');
+    take(root, out.html, el => el.tagName === 'HEAD' || el.tagName === 'BODY' || isBoot(el));
+    take(doc.head, out.head, el => (el.tagName !== 'STYLE' && el.tagName !== 'LINK') || isBoot(el));
+    take(doc.body, out.body, el => el.tagName === 'PRE' || el.tagName === 'SCRIPT' || isBoot(el));
     return out;
   },
   restore(doc, kept) {
@@ -3351,6 +3390,54 @@ const UI = {
   modelIds:new WeakMap(),modelSeq:0,
   modelStamp(model){if(!model)return 0;let id=this.modelIds.get(model);if(!id){id=++this.modelSeq;this.modelIds.set(model,id);}return id;},
   me: null, host: null, accounts: [], scrolls: new Map(), modelsV: 0, opens: new Map(), hitlDraft: new Map(), atts: new Map(),
+  mountBootView() {
+    if (typeof window !== 'undefined' && (window.__fixture || window.__routeFixture)) return;
+    const v = $('#view');
+    if (!v || v.children.length > 0) return;
+    const stepEl = h('div', { id: 'anc-boot-view-step', style: { fontSize: '15px', fontWeight: '600', marginBottom: '6px' } }, '正在初始化客户端环境…');
+    const subEl = h('div', { id: 'anc-boot-view-sub', class: 'dim', style: { fontSize: '12px', marginBottom: '14px' } }, '正在准备账号会话与安全代理通道…');
+    const barFill = h('div', { style: { width: '42%', height: '100%', borderRadius: '4px', background: 'currentColor', opacity: '0.65', animation: 'ancBootBar 1.3s ease-in-out infinite' } });
+    const barWrap = h('div', { style: { width: '220px', height: '4px', borderRadius: '4px', background: 'rgba(128,128,128,0.18)', overflow: 'hidden', margin: '0 auto 14px' } }, barFill);
+    const diagEl = h('div', { id: 'anc-boot-view-diag', hidden: true, style: { marginTop: '12px', padding: '12px 14px', borderRadius: '10px', background: 'rgba(128,128,128,0.09)', border: '1px solid rgba(128,128,128,0.2)', maxWidth: '420px', textAlign: 'left', fontSize: '12px', lineHeight: '1.6' } });
+    const root = h('div', { class: 'anc-boot-view', style: { display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', padding: '24px', textAlign: 'center', userSelect: 'none' } },
+      h('style', {}, '@keyframes ancBootBar{0%{transform:translateX(-110%)}100%{transform:translateX(250%)}}@keyframes ancBootPulse{0%,100%{transform:scale(1);opacity:.9}50%{transform:scale(1.06);opacity:1}}'),
+      h('div', { style: { position: 'relative', width: '44px', height: '44px', marginBottom: '16px', display: 'flex', alignItems: 'center', justifyContent: 'center', animation: 'ancBootPulse 2s ease-in-out infinite' } },
+        h('i', { class: 'spin', style: { width: '36px', height: '36px', borderWidth: '2.5px' } })),
+      stepEl,
+      subEl,
+      barWrap,
+      diagEl
+    );
+    v.appendChild(root);
+    clearTimeout(this._bootDiagT);
+    const startedAt = Date.now();
+    this._bootDiagT = setTimeout(() => {
+      if (!root.isConnected) return;
+      const acct = this.host?.account || {};
+      const errReason = acct.tunErr || (typeof IP !== 'undefined' && IP.err) || (typeof AuthEnv !== 'undefined' && AuthEnv.lastError) || '当前代理节点或网络响应较慢，正在等待远端握手确认';
+      const curStep = stepEl.textContent || '初始化中';
+      diagEl.hidden = false;
+      diagEl.replaceChildren(
+        h('div', { style: { fontWeight: '600', marginBottom: '4px', color: '#f59e0b' } }, '⏳ 启动耗时较长（已等待 ' + Math.round((Date.now() - startedAt) / 1000) + ' 秒）'),
+        h('div', { class: 'dim', style: { marginBottom: '4px' } }, '当前卡在阶段：' + curStep),
+        h('div', { class: 'dim', style: { marginBottom: '10px' } }, '可能原因：' + errReason + (acct.proxyIp ? '（当前 ProxyIP: ' + acct.proxyIp + '）' : '')),
+        h('div', { style: { display: 'flex', gap: '8px', flexWrap: 'wrap' } },
+          h('button', { type: 'button', class: 'btn sm', onclick: () => { try { if (typeof RegionIP !== 'undefined') RegionIP.open({ offlineAlert: true }); } catch {} } }, '切换节点 / ProxyIP'),
+          h('button', { type: 'button', class: 'btn ghost sm', onclick: () => { try { this.enterBrowseMode('已手动跳过启动等待 · 可查阅本地对话或切换节点'); } catch {} } }, '离线查阅模式'),
+          h('button', { type: 'button', class: 'btn ghost sm', onclick: () => { try { this.loginGate('已手动跳过等待，请检查代理节点或直接登录'); } catch {} } }, '打开登录页'),
+          h('button', { type: 'button', class: 'btn ghost sm', onclick: () => location.reload() }, '重新加载'))
+      );
+    }, 6000);
+  },
+  setBootStep(step, sub, isErr = false) {
+    const stepEl = document.getElementById('anc-boot-view-step');
+    const subEl = document.getElementById('anc-boot-view-sub');
+    if (stepEl && step) {
+      stepEl.textContent = step;
+      if (isErr) stepEl.style.color = '#f87171';
+    }
+    if (subEl && sub !== undefined) subEl.textContent = sub;
+  },
   build() {
     // 先摘下扩展挂进来的节点（见上方 ExtensionNodes），界面搭好后挂回去
     const kept = ExtensionNodes.detach(document);
@@ -3398,6 +3485,7 @@ const UI = {
       h('div', { id: 'bar' }),
       // 手机：模型信息面板收在右边缘，平时只露一个小圆点头，点一下 / 从右边缘往左滑展开
       h('button', { id: 'dockhandle', type: 'button', title: '模型信息（可上下拖拽调整位置）', 'aria-label': '模型信息', onclick: e => { if (e.currentTarget?.dataset?.dragged === '1') { e.currentTarget.dataset.dragged = ''; return; } Dock.toggle(true); } }, h('span', { class: 'dh-mark' }, '>'))));
+    try { this.mountBootView(); } catch {}
     try { if (typeof Mob !== 'undefined' && typeof Mob.initDockHandle === 'function') Mob.initDockHandle(); } catch {}
     ExtensionNodes.restore(document, kept);
     this.paintThemeSeg(); try { ExtPop.refreshPins(); } catch {} try { WS.mount($('#ws')); } catch (e) { console.error(e); } try { HtmlPreview.mount($('#pv')); } catch (e) { console.error(e); } try { Dock.mount($('#dock')); } catch (e) { console.error(e); } try { Bar.mount($('#bar')); } catch (e) { console.error(e); } try { Mag.bind($('#list')); } catch (e) { console.error(e); }
@@ -4262,10 +4350,12 @@ const UI = {
         if (c?.el && typeof c.el.nodeType === 'number') els.push(c.el);
       });
       // 「正在输入」占位复用同一个节点：否则每帧都换新节点，整串消息被重新挂载、整页重排
-      if (Hitl.blocked(chat) && chat.messages[lastIdx]?.role === 'user' && !chat.waitingForeign) {
+      if (Hitl.blocked(chat) && !chat.live && chat.messages[lastIdx]?.role === 'user' && !chat.waitingForeign) {
         const t = this.cache.get('__typing') || (() => { const t = h('div', { class: 'msg assistant' }, h('div', { class: 'msg-body typing-row' }, h('div', { class: 'typing' }, h('i'), h('i'), h('i')), h('span', { class: 'typing-st' }), h('span', { class: 'phase typing-phase' }, h('span', { class: 'ph-t' }), h('span', { class: 'dim anc-since' })))); this.cache.set('__typing', t); return t; })();
-        const st = t.querySelector('.typing-st'); if (st) st.textContent = chat.dlvText?.() || '';
-        const phEl = t.querySelector('.ph-t'); if (phEl && phEl.textContent !== phase) phEl.textContent = phase;
+        const dlvRaw = (chat.dlvText?.() || '').replace(/\s+\d+s$/, '').trim();
+        const unifiedPhase = (!phase || phase === '发送中' || phase === '进行中') && dlvRaw ? dlvRaw : phase;
+        const st = t.querySelector('.typing-st'); if (st && st.textContent !== '') st.textContent = '';
+        const phEl = t.querySelector('.ph-t'); if (phEl && phEl.textContent !== unifiedPhase) phEl.textContent = unifiedPhase;
         const sinceEl = t.querySelector('.anc-since');
         if (sinceEl) {
           const lastM = chat.messages[lastIdx];
@@ -4715,7 +4805,7 @@ const UI = {
         histIdx = -1; histSavedDraft = '';
         ta.value = ''; tab.draft = ''; autosize(); Tabs.save(); P.stick = true; atts.length = 0; paintAtt();
         const run = v2 => c.skipHitlSend(text, { ...(filesP ? { filesP, previews: list } : {}), ...(v2 ? { v2 } : {}) });
-        try { await run().catch(async e => { if (e?.status === 403 && /recaptcha/i.test(e.body || '')) { toast('需要人机验证', 'err'); const tok = await Recaptcha.v2().catch(() => null); if (tok) return run(tok); } throw e; }); }
+        try { await run().catch(async e => { if (e?.status === 403 && /recaptcha/i.test(e.body || '')) { const tok = await Recaptcha.v2().catch(() => null); if (tok) return run(tok); } throw e; }); }
         catch (e) {
           toast(describe(e), 'err');
           if (!ta.value) { ta.value = restore.v; tab.draft = restore.v; autosize(); Tabs.save(); } if (!atts.length) { atts.push(...list); paintAtt(); }
@@ -4930,7 +5020,6 @@ const UI = {
       unpend();
       if (hint) hint.textContent = '';
       if (e.status === 403 && /recaptcha/i.test(e.body || '')) {
-        toast('需要人机验证', 'err');
         const tok = await Recaptcha.v2().catch(() => null);
         if (tok) return this.startNew(tab, text, ta, tok, files);
         return;

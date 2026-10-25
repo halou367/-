@@ -99,21 +99,25 @@ const Fmt = {
       f = synth;
     }
     const ret = (fam, sure, why) => ({ fam, name: this.NAME[fam] || fam, sure, why });
-    if ((f.toolIds || []).some(i => /^toolu_/.test(i))) return ret('claude', true, '工具调用编号是 toolu_…' + (f.toolIds.some(i => /^toolu_vrtx_/.test(i)) ? '（toolu_vrtx_ = Vertex 上的 Claude）' : '') + '：Anthropic 接口');
-    if (!f.ids?.length) return null;
-    const ids = f.ids, all = ids.map(x => x[1]);
-    if (all.some(i => /^(msg|rs)_[0-9a-f]{16,}/i.test(i))) return ret('gpt', true, '文字块编号是 msg_… / rs_…（OpenAI Responses 接口）');
+    if ((f.toolIds || []).some(i => /^(?:call_\d+_|call_[0-9a-f]{24}$|functions\.|_\d+_[0-9a-f]{6,}|chatcmpl-tool-)/i.test(String(i || '')))) {
+      return ret('compat', true, '工具调用编号属于开源兼容协议（DeepSeek / Kimi / Qwen / GLM 等）');
+    }
+    const ids = Array.isArray(f.ids) ? f.ids : [], all = ids.map(x => x[1]);
     const rs = ids.filter(x => x[0] === 'r').map(x => x[1]);
     const tx = ids.filter(x => x[0] === 't').map(x => x[1]);
     const num = i => /^\d+$/.test(i);
-    // 铁律：开源模型含可见思考文字（rChars > 0）；闭源模型思考块为空（rChars === 0）或使用 msg_/rs_（OpenAI）或纯数字+**标题**（Gemini）
+    // 铁律：开源模型含可见思考文字（rChars > 0）；闭源模型思考块为空（rChars === 0）或使用纯数字+**标题**（Gemini）
     if (f.rChars > 0) {
+      if (rs.length > 0 && rs.every(i => /^rs_[0-9a-f]{16,}$/i.test(i))) return ret('gpt', true, '思考块编号是 rs_…（OpenAI Responses 接口）');
       if (all.some(i => /^[0-9a-z]{9}$/.test(i))) return ret('mistral', true, '9 位短编号 + 开源可见思考内容');
       if (all.length > 0 && all.every(num) && /^\s*\*\*[^\n*]{2,80}\*\*/.test(f.rHead || '')) {
         return ret('gemini', true, '纯数字流块编号 + **标题** 思考摘要（Google Gemini 闭源思考格式）');
       }
       return ret('compat', true, '思考块含可见思考文字（开源思考：仅匹配开源模型，绝不匹配闭源模型）');
     }
+    if ((f.toolIds || []).some(i => /^toolu_/.test(i))) return ret('claude', true, '工具调用编号是 toolu_…' + (f.toolIds.some(i => /^toolu_vrtx_/.test(i)) ? '（toolu_vrtx_ = Vertex 上的 Claude）' : '') + '：Anthropic 接口');
+    if (!ids.length) return null;
+    if (all.some(i => /^(msg|rs)_[0-9a-f]{16,}/i.test(i))) return ret('gpt', true, '文字块编号是 msg_… / rs_…（OpenAI Responses 接口）');
     if (all.some(i => /^(txt|reasoning)-\d+$/.test(i))) {
       if (rs.length > 0 && f.rChars === 0) return ret('gpt', false, '思考块内容为空（闭源思考：仅匹配闭源模型）');
       return ret('compat', true, '流块编号是 txt-0 / reasoning-0 这种兼容格式（DeepSeek / GLM / Qwen / Kimi / MiniMax 等）');

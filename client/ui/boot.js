@@ -528,8 +528,8 @@ async function init() {
     try { ReadLimit.until = 0; Quota.clear(true); } catch {}
     toast(`出口 IP 变化：${prev} → ${ip}`);
   });
-  // 发送时人机验证没通过（recaptcha validation failed）：自动弹出验证，完成后重新发送；同一轮只自动弹一次
-  Bus.on('captcha', c => { if (c.gacha?.fingerprint || Fingerprint.isRunning(c)) { toast('指纹探针遇到验证，未自动重发；请完成官方验证后重新测试', 'err'); return; } if (UI.els?.chat !== c || c.capAt > now() - 60000) return; c.capAt = now(); toast('Brana 要求人机验证，完成后自动重新发送'); UI.retry(c, null, true); });
+  // 发送时人机验证没通过（recaptcha validation failed）：自动弹出并自动完成验证，完成后重新发送
+  Bus.on('captcha', c => { if (!c || c.capAt > now() - 45000) return; c.capAt = now(); UI.retry(c, null, true); });
     Bus.on('relogin', r => { if (r?.ok) toast('会话已过期，已用保存的密码自动重新登录'); });
   let histT = 0;
   Bus.on('turn', (c, info) => {
@@ -615,9 +615,11 @@ async function init() {
       }
     } catch {}
   }
-  UI.host = await Host.info().catch(() => null) || {};
+  try { UI.setBootStep?.('正在读取账号与代理配置…', '正在从宿主进程同步当前账号信息'); } catch {}
+  UI.host = await Promise.race([Host.info().catch(() => null), sleep(4500).then(() => null)]) || {};
   try { EnvRefresh.init(); } catch {}
-  await AuthEnv.restore().catch(e => { AuthEnv.lastError = describe(e); });
+  try { UI.setBootStep?.('正在恢复认证环境与节点状态…', (UI.host?.account?.email || UI.host?.account?.name || '') + (UI.host?.account?.proxyIp ? ' · ProxyIP ' + UI.host.account.proxyIp : '')); } catch {}
+  await Promise.race([AuthEnv.restore().catch(e => { AuthEnv.lastError = describe(e); }), sleep(4500)]);
   AutoRoute.init();
   try { RouteWarm.start(); } catch {}
   // 进入账号自检：从浏览器模式切回客户端（fastReturn）或已有正常连接时不重复自检
@@ -642,10 +644,14 @@ async function init() {
   Nodes.load().then(() => Nodes.syncAndroid()).then(() => Pool.pushG()).catch(() => {});
   // Draft recovery is independent of preferences; retain Shared -> account-gacha ordering.
   // Do not display an editable composer until draft merging is complete.
+  try { UI.setBootStep?.('正在同步共享配置与本地草稿…', (UI.host?.account?.email || UI.host?.account?.name || '')); } catch {}
+  const _bootSyncTask = async () => {
   await Promise.all([
     Shared.pull().catch(()=>{}).then(()=>Gacha.pullOwn().catch(()=>{})),
     Drafts.pull().catch(e=>console.warn(e)),
   ]);
+  };
+  await Promise.race([_bootSyncTask(), sleep(4500)]);
   try { if (typeof AccountPicker !== 'undefined' && AccountPicker.startCheckTimer) AccountPicker.startCheckTimer(true); } catch {}
   // 外壳永远不该滚动：万一被 focus / scrollIntoView 滚动了（旧内核不支持 overflow:clip 时），立刻复位
   { const fix = e => { const t = e.target; if (t && t !== document && t !== document.body && t !== document.documentElement && t.id !== 'app' && t.id !== 'main') return; for (const el of t === document ? [document.scrollingElement, document.body] : [t]) if (el && (el === document.body || el === document.documentElement || el.id === 'app' || el.id === 'main') && (el.scrollTop || el.scrollLeft)) { el.scrollTop = 0; el.scrollLeft = 0; } };
@@ -802,6 +808,7 @@ async function init() {
     }
     return;
   }
+  try { UI.setBootStep?.('正在连接 arena.ai 核对登录状态…', (UI.host?.account?.email || '') + (UI.host?.account?.proxyIp ? ' · ' + UI.host.account.proxyIp : '')); } catch {}
   const check = await SessionGate.check({ early });
   if (check.browse || window.__BRANA_BROWSE_MODE) {
     if (!UI.authed) UI.enterBrowseMode('已进入查阅模式（免登录浏览本地缓存对话）');
@@ -1043,7 +1050,7 @@ function boot() {
     try { const A = window.BranaAndroid; if (A?.insets) { const [t, b] = JSON.parse(A.insets()); const st = document.documentElement.style; st.setProperty('--sa-top', t + 'px'); st.setProperty('--sa-bottom', b + 'px'); } } catch {}
     // 从选账号页进入的新页面：一开始就盖上进度层，并马上让外壳切过来（用进度层代替「正在切换」转圈）
     if (Host.platform === 'android' && Host.takeEnter?.()) { EnterFlow.go(); requestAnimationFrame(() => requestAnimationFrame(() => UI.shown())); }
-    setTimeout(() => { try { window.BranaHost?.ready?.()?.catch?.(() => {}); } catch {} }, 320); init().catch(e => { console.error(e); toast('初始化失败：' + e.message, 'err'); UI.shown(); }); setTimeout(() => UI.shown(), 8000); };
+    setTimeout(() => { try { window.BranaHost?.ready?.()?.catch?.(() => {}); } catch {} }, 320); init().catch(e => { console.error(e); try { UI.setBootStep?.('初始化遇到问题：' + (e?.message || e), '可点击下方按钮切换节点、进入离线查阅或重新加载', true); } catch {} toast('初始化失败：' + e.message, 'err'); UI.shown(); }); setTimeout(() => UI.shown(), 8000); };
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start, { once: true }); else start();
 }
 boot();

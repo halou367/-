@@ -1,5 +1,6 @@
 // Mail verification connector: supports standard webhook JSON endpoints and OAuth2 IMAP/REST mail readers
 const MailToken = (() => {
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
   const TOKEN_URL = 'https://login.microsoftonline.com/consumers/oauth2/v2.0/token';
   const URL_CID = '00000000-0000-4000-8000-000000000000';
   const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -84,7 +85,7 @@ const MailToken = (() => {
   }
   async function rawHttp(url, opt = {}) {
     if (typeof Host === 'undefined' || !Host.fetchText) throw Error('当前环境不支持取件（需要客户端）');
-    const r = await Host.fetchText(url, { browserUa: true, ...opt });
+    const r = await Host.fetchText(url, { direct: true, timeout: 10000, browserUa: true, ...opt });
     const text = String(r?.text ?? r?.body ?? '');
     let json = null;
     try { json = JSON.parse(text); } catch {}
@@ -110,24 +111,32 @@ const MailToken = (() => {
 
   function extractMailPayload(res) {
     const { ok, error, text, json } = res || {};
-    const msg = String(json?.message || json?.detail || json?.error_description || json?.error || error || '').trim();
-    const errCode = String(json?.code || '').trim().toLowerCase();
+    const detailObj = json?.detail && typeof json.detail === 'object' ? json.detail : null;
+    const errObj = json?.error && typeof json.error === 'object' ? json.error : null;
+    const msg = String(
+      json?.message || detailObj?.message || (typeof json?.detail === 'string' ? json.detail : '')
+      || json?.error_description || errObj?.message || (typeof json?.error === 'string' ? json.error : '')
+      || error || ''
+    ).trim();
+    const errCode = String(json?.code || detailObj?.code || errObj?.code || '').trim().toLowerCase();
     // 判断是否为待收信 / 同步中状态
     const busyOrEmpty = errCode === 'mailbox_busy' || errCode === 'no_code' || errCode === 'no_recent_message'
       || /HTTP 503/i.test(error)
       || (json && json.retryable === true && json.success === false)
       || /暂未收到|没有收到|未收到|正在保存|正在同步|稍后重试/i.test(msg);
-    // 判断是否为令牌本身无效 / 过期 / 401 / 403 / 404
+    // 判断是否为令牌本身无效 / 过期 / 401 / 403 / 404 / 422 / IMAP 认证拒绝
     const tokenInvalid = !busyOrEmpty && (
-      /HTTP (401|403|404|410)\b/i.test(error)
-      || errCode === 'invalid_api_key' || errCode === 'unauthorized' || errCode === 'forbidden'
+      /HTTP (401|403|404|410|422)\b/i.test(error)
+      || ['invalid_api_key', 'unauthorized', 'forbidden', 'imap_authentication_rejected', 'authenticationfailed', 'invalid_credentials', 'account_not_found', 'mailbox_not_found'].includes(errCode)
       || (json && json.success === false && json.retryable === false)
-      || /取码地址无效|API\s*Key\s*错误|令牌.*(无效|失效|过期)|已停用|已删除|invalid.*(key|token)|not\s*found/i.test(msg)
+      || (json && json.status === 'error' && /invalid|expired|auth|token|not.?found|不存在|无效|过期/i.test(msg))
+      || /取码地址无效|API\s*Key\s*错误|令牌.*(无效|失效|过期)|已停用|已删除|invalid.*(key|token|credential)|imap.*authentication.*failed|authenticationfailed|not\s*found/i.test(msg)
       || (!json && /<title>[^<]*登录/i.test(text))
     );
     if (tokenInvalid) {
       return { tokenInvalid: true, error: msg || error || '收件令牌无效或已失效', links: [], code: '' };
     }
+    const networkError = Boolean(!ok && error && !busyOrEmpty);
     const bag = [text];
     const collect = o => {
       if (!o || typeof o !== 'object') return;
@@ -166,7 +175,7 @@ const MailToken = (() => {
       foundLinks.push('https://arena.ai/?auth=reset-password&code=' + encodeURIComponent(code));
     }
     const subject = String(json?.subject || json?.data?.subject || '').trim();
-    return { tokenInvalid: false, busyOrEmpty, links: foundLinks, code, subject, msg: msg || error };
+    return { tokenInvalid: false, networkError, busyOrEmpty, links: foundLinks, code, subject, msg: msg || error };
   }
 
   function candidateUrls(u) {
@@ -187,13 +196,17 @@ const MailToken = (() => {
     if (!u) throw Object.assign(Error('缺少收件地址'), { mailFailed: true, tokenInvalid: true });
     const urls = candidateUrls(u);
     const allLinks = [];
-    let bestCode = '', bestSubj = '', lastErr = '', sawInvalid = false, sawValidEndpoint = false;
+    let bestCode = '', bestSubj = '', lastErr = '', lastNetErr = '', sawInvalid = false, sawValidEndpoint = false;
     for (const target of urls) {
       const res = await rawHttp(target, { headers: { Accept: 'application/json, text/plain, */*' } });
       const parsed = extractMailPayload(res);
       if (parsed.tokenInvalid) {
         sawInvalid = true;
         lastErr = parsed.error || lastErr;
+        continue;
+      }
+      if (parsed.networkError) {
+        lastNetErr = parsed.msg || res.error || lastNetErr;
         continue;
       }
       sawValidEndpoint = true;
@@ -205,7 +218,7 @@ const MailToken = (() => {
     if (!sawValidEndpoint && sawInvalid) {
       throw Object.assign(Error('收件令牌失效：' + (lastErr || '无法读取收件接口')), { mailFailed: true, tokenInvalid: true });
     }
-    return { links: allLinks, code: bestCode, subject: bestSubj };
+    return { links: allLinks, code: bestCode, subject: bestSubj, networkError: !sawValidEndpoint && !!lastNetErr, error: lastNetErr };
   }
 
   // 预记录邮箱里已有的旧链接/旧验证码，确保后续只消费新收到的验证邮件
@@ -272,7 +285,7 @@ const MailToken = (() => {
         n++;
         const r = await pollUrlOnce(tok);
         const freshLinks = (r.links || []).filter(lk => !seen.has(lk));
-        const pick = (kind === 'reset' ? freshLinks.find(lk => /reset|recovery|password/i.test(lk)) : null) || freshLinks[0] || '';
+        const pick = kind === 'reset' ? (freshLinks.find(lk => /reset|recovery|password/i.test(lk)) || '') : (freshLinks[0] || '');
         const freshCode = r.code && !seen.has('code:' + r.code) ? r.code : '';
         if (pick || freshCode) {
           if (pick) { seen.add(pick); (tok._seen ||= new Set()).add(pick); }
@@ -283,7 +296,7 @@ const MailToken = (() => {
         log('正在通过收件接口获取验证邮件…（第 ' + n + ' 次，' + Math.max(0, Math.round((end - Date.now()) / 1000)) + ' 秒后超时）');
         await sleep(pollMs);
       }
-      throw Object.assign(Error('收不到验证邮件（令牌可能已失效）'), { mailFailed: true, tokenInvalid: true });
+      throw Object.assign(Error('等待验证邮件超时（收件接口正常但未收到新验证邮件，请稍后重试）'), { mailFailed: true, tokenInvalid: false });
     }
     while (Date.now() < end) {
       if (cancelled()) throw Error('已取消');

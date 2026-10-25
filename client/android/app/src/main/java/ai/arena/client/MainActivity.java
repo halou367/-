@@ -98,7 +98,9 @@ public class MainActivity extends Activity {
     final WorkspacePreview workspacePreview = new WorkspacePreview(this);
     final WorkspaceDownload workspaceDownload = new WorkspaceDownload(this);
     static final int FILE_REQ = 7301;
+    static final int CAM_PERM_REQ = 7302;
     android.webkit.ValueCallback<Uri[]> fileCb;
+    android.webkit.PermissionRequest pendingCamReq;
 
     @Override protected void onActivityResult(int req, int res, Intent data) {
         if (req != FILE_REQ) { super.onActivityResult(req, res, data); return; }
@@ -109,6 +111,21 @@ public class MainActivity extends Activity {
             else if (data.getData() != null) out = new Uri[] { data.getData() };
         }
         fileCb.onReceiveValue(out); fileCb = null;
+    }
+
+    @Override public void onRequestPermissionsResult(int req, String[] perms, int[] res) {
+        super.onRequestPermissionsResult(req, perms, res);
+        if (req == CAM_PERM_REQ) {
+            android.webkit.PermissionRequest pReq = pendingCamReq;
+            pendingCamReq = null;
+            if (pReq != null) {
+                if (res != null && res.length > 0 && res[0] == android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                    try { pReq.grant(new String[]{android.webkit.PermissionRequest.RESOURCE_VIDEO_CAPTURE}); } catch (Exception ignored) {}
+                } else {
+                    try { pReq.deny(); } catch (Exception ignored) {}
+                }
+            }
+        }
     }
     final RouteSupport routeSupport = new RouteSupport(this);
     volatile String currentRouteSignature = "";
@@ -1074,7 +1091,31 @@ public class MainActivity extends Activity {
             }
         });
         w.setWebChromeClient(new WebChromeClient() {
-            @Override public void onPermissionRequest(android.webkit.PermissionRequest request) { request.deny(); }
+            @Override public void onPermissionRequest(final android.webkit.PermissionRequest request) {
+                if (request == null) return;
+                runOnUiThread(() -> {
+                    try {
+                        String[] rs = request.getResources();
+                        boolean wantsVideo = false;
+                        if (rs != null) {
+                            for (String r : rs) {
+                                if (android.webkit.PermissionRequest.RESOURCE_VIDEO_CAPTURE.equals(r)) { wantsVideo = true; break; }
+                            }
+                        }
+                        if (!wantsVideo) { request.deny(); return; }
+                        if (android.os.Build.VERSION.SDK_INT >= 23 && checkSelfPermission(android.Manifest.permission.CAMERA) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                            if (pendingCamReq != null) { try { pendingCamReq.deny(); } catch (Exception ignored) {} }
+                            pendingCamReq = request;
+                            ownAct = true;
+                            requestPermissions(new String[]{android.Manifest.permission.CAMERA}, CAM_PERM_REQ);
+                        } else {
+                            request.grant(new String[]{android.webkit.PermissionRequest.RESOURCE_VIDEO_CAPTURE});
+                        }
+                    } catch (Exception e) {
+                        try { request.deny(); } catch (Exception ignored) {}
+                    }
+                });
+            }
             @Override public void onGeolocationPermissionsShowPrompt(String origin, android.webkit.GeolocationPermissions.Callback callback) { callback.invoke(origin, false, false); }
             // 输入框「+」添加附件：打开系统文件选择器
             @Override public boolean onShowFileChooser(WebView v, android.webkit.ValueCallback<Uri[]> cb, FileChooserParams params) {
@@ -1509,7 +1550,7 @@ public class MainActivity extends Activity {
                 if (in.optBoolean("clearPassword", false)) { a.remove("pw"); a.put("noAuto", true); }
                 saveAccounts();
                 final JSONObject fa = a;
-                if (changed || isNew) ui.post(() -> proxyChanged(fa));
+                if (!in.optBoolean("deferProxy", false) && (changed || isNew)) ui.post(() -> proxyChanged(fa));
                 return pubX(a).toString();
             } catch (Exception e) { try { return new JSONObject().put("error", String.valueOf(e.getMessage())).toString(); } catch (Exception x) { return "null"; } }
         }

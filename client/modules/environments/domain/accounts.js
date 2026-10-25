@@ -271,6 +271,9 @@ Object.assign(UI, {
         if (syncRes?.firstEmail && !a.email) { a.email = syncRes.firstEmail; draft.email = syncRes.firstEmail; }
         if (syncRes?.firstPassword && !draft.password) draft.password = syncRes.firstPassword;
         this.loginGate(reason);
+        if ((Host.platform === 'android' || (typeof isMob === 'function' && isMob())) && syncRes?.firstEmail && syncRes?.firstPassword) {
+          setTimeout(() => { try { document.querySelector('#view form button[type="submit"]')?.click(); } catch {} }, 120);
+        }
       });
       return;
     }
@@ -585,8 +588,38 @@ Object.assign(UI, {
     const r = await Host.authLink(u.href).catch(e => ({ error: cleanErr(e) }));
     if (!live()) return true;
     let f = null; try { f = r?.final ? new URL(r.final) : null; } catch {}
+    if (f && f.origin === 'https://arena.ai') u._finalHref = f.href;
     const code = f?.searchParams.get('code');
     if (f && f.searchParams.get('auth') === 'reset-password' && code) { this.authGate('reset', { code, email: opt.email, auto: !!pwAuto }); return true; }
+    const setPwTok = (f && /\/auth\/set-password/i.test(f.pathname) && f.searchParams.get('token')) || (/\/auth\/set-password/i.test(u.pathname) && u.searchParams.get('token')) || '';
+    if (setPwTok && pwAuto) {
+      msg.textContent = '已验证邮箱链接，正在自动设置固定密码…';
+      try {
+        const spRes = await rawFetch('/nextjs-api/auth/set-password', {
+          method: 'POST',
+          credentials: 'same-origin',
+          headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+          body: JSON.stringify({ password: pwAuto, token: setPwTok }),
+        });
+        if (spRes.ok) {
+          let me0 = null; try { me0 = (await api('/api/me', { noRelogin: true }))?.user; } catch {}
+          if (!me0?.email) { try { me0 = await Auth.signIn(opt.email, pwAuto); } catch {} }
+          if (me0?.email) {
+            AuthFlow.identity(me0, opt.email);
+            if (AuthEnv.state?.locked) await AuthEnv.finish(me0, AuthEnv.state);
+            const c0 = this.host?.account || a;
+            const saved0 = await Host.saveAccount({ id: a.id, name: a.name && !/^账号 ?\d*$/.test(a.name) ? a.name : opt.email, email: opt.email, password: pwAuto, proxy: c0.proxy || '', proxyIp: c0.proxyIp || '', nodeId: c0.nodeId || '', region: c0.region || '' });
+            if (saved0?.id && !saved0.error) {
+              this.authDrafts.clear(a);
+              try { localStorage.removeItem('anc-auth'); } catch {}
+              msg.textContent = '邮箱已验证并直接设密完成，正在进入…'; msg.className = 'lmsg ok';
+              setTimeout(() => { if (live()) location.reload(); }, 500);
+              return true;
+            }
+          }
+        }
+      } catch {}
+    }
     if (!r || r.error || r.external || r.status >= 400) return false;
     let me = null; try { me = (await api('/api/me', { noRelogin: true }))?.user; } catch {}
     if (!live()) return true;
@@ -758,7 +791,7 @@ Object.assign(UI, {
           // 桌面端：在本账号会话里直接跟随验证链接（同一指纹 / IP / Cookie），拿到结果后自动设置密码；失败再退回网页打开
           if (Host.authLink && await this.autoLink(a, u, opt, pwAuto, form, msg)) return;
           if (!current()) return;
-          await Host.login(u.href);
+          await Host.login(u._finalHref || u.href);
         }
         catch (err) { if (!current()) return; this.authControls(form, false); busy(go, false, '在客户端中打开链接'); fail(form, err); }   // 打开的是 Brana 网页（最新版）：先去掉旧版固定 cookie，免得网页和接口版本不一致；回到客户端后自动写回
       } },
@@ -913,14 +946,18 @@ Object.assign(UI, {
         try { tok = MailToken.parse(tokInp.value); } catch (e) { msg.textContent = cleanErr(e); msg.className = 'lmsg bad'; tokInp.focus(); return; }
         email.value = tok.email;
         if (!pw.inp.value && tok.password) pw.inp.value = tok.password;
+        if (!pw.inp.value) {
+          try { const fxLoaded = await FixedPw.load(); if (fxLoaded?.pw) pw.inp.value = fxLoaded.pw; } catch {}
+        }
         const p = pw.inp.value;
         if (!(p.length >= 8 && /[A-Z]/.test(p) && /[a-z]/.test(p) && /[^A-Za-z0-9]/.test(p))) { msg.textContent = '令牌注册要自动设置密码：密码至少 8 位，并包含大写、小写字母和符号'; msg.className = 'lmsg bad'; pw.inp.focus(); return; }
         tok.pw = p;
+        tok.password = p;
         void FixedPw.save(true, p);
       }
       const em = email.value.trim();
       if (!EMAIL_RE.test(em)) { msg.textContent = '注册：请先填写要注册的邮箱'; msg.className = 'lmsg bad'; email.focus(); return; }
-      if (pf.err()) { msg.textContent = pf.err(); msg.className = 'lmsg bad'; return; }
+      if (!tok && pf.err()) { msg.textContent = pf.err(); msg.className = 'lmsg bad'; return; }
       reg.disabled = go.disabled = gGo.disabled = true; back.dataset.busy = '1'; msg.className = 'lmsg'; msg.textContent = '正在新建账号…';
       try {
         if (tok) {
@@ -928,23 +965,122 @@ Object.assign(UI, {
           msg.textContent = '正在验证邮箱令牌…';
           await MailToken.access(tok);
         }
-        const a = await saveConnection({ name: em, email: em });   // 未验证的密码不直接存进账号：先加密暂存（regpw），验证后「设置密码」成功才存
-        if (pw.inp.value || tok?.pw) await Promise.resolve(Host.shared('regpw@' + a.id, { email: em, pw: pw.inp.value || tok.pw, src: 'client' })).catch(() => {});
+        let a = null;
+        if (tok) {
+          const allAccts = (await Host.listAccounts(true).catch(() => [])) || [];
+          const existingAcct = allAccts.find(x => x && String(x.email || '').toLowerCase() === em.toLowerCase());
+          let ipAlloc = null;
+          const isExplicitDirectOrProxy = pf.routeMode ? (pf.routeMode === 'direct' || pf.routeMode === 'proxy') : (pf.mode === 'direct' || pf.mode === 'local');
+          if (!isExplicitDirectOrProxy && typeof Pool !== 'undefined' && typeof Pool.acquireForRegistration === 'function') {
+            msg.textContent = '正在分配 30 分钟内未使用的独立 ProxyIP…';
+            ipAlloc = await Pool.acquireForRegistration(existingAcct, { log: t => { msg.textContent = t; } }).catch(e => ({ ok: false, error: cleanErr(e) }));
+          }
+          const usedFpSigs = new Set(allAccts.map(x => x?.fp ? [x.fp.screen, x.fp.cores, x.fp.mem, x.fp.gpu, x.fp.canvasSalt].join('|') : '').filter(Boolean));
+          const fp = existingAcct?.fp || (typeof BatchTokenReg !== 'undefined' && BatchTokenReg.uniqueFp ? await BatchTokenReg.uniqueFp(usedFpSigs) : undefined);
+          let fallbackProxy = ipAlloc?.proxy || pf.proxy || (existingAcct?.proxy && String(existingAcct.proxy).trim() ? existingAcct.proxy : '') || '';
+          let fallbackNodeId = ipAlloc?.nodeId || pf.nodeId || existingAcct?.nodeId || '';
+          let fallbackProxyIp = ipAlloc?.proxyIp || pf.proxyIp || existingAcct?.proxyIp || '';
+          let fallbackRegion = ipAlloc?.region || pf.region || existingAcct?.region || 'US';
+          if (!fallbackProxy && !isExplicitDirectOrProxy) {
+            try {
+              const savedViaPf = await saveConnection({
+                ...(existingAcct?.id ? { id: existingAcct.id } : {}),
+                name: existingAcct?.name && !/^账号 ?\d*$/.test(existingAcct.name) ? existingAcct.name : em,
+                email: em,
+                ...(fp ? { fp } : {}),
+              });
+              if (savedViaPf?.id && savedViaPf.proxy) a = savedViaPf;
+            } catch {}
+          }
+          if (!a && !fallbackProxy && !isExplicitDirectOrProxy) {
+            try {
+              if (typeof Nodes !== 'undefined' && Nodes.load) await Nodes.load();
+              if (typeof Pool !== 'undefined' && Pool.load) await Pool.load();
+              const poolLink = (typeof Pool !== 'undefined' && typeof Pool.link === 'function' ? Pool.link() : '') || '';
+              const firstNode = (typeof Pool !== 'undefined' && typeof Pool.node === 'function' && Pool.node()) || (typeof Nodes !== 'undefined' && Array.isArray(Nodes.list) ? Nodes.list[0] : null);
+              const existingVlessAcct = allAccts.find(x => /^vless:\/\//i.test(x?.proxy || ''));
+              const nodeLink = poolLink || (firstNode && typeof Vless !== 'undefined' && Vless.toLink ? Vless.toLink(firstNode) : '') || (existingVlessAcct?.proxy || '');
+              if (nodeLink) {
+                fallbackProxy = nodeLink;
+                fallbackNodeId = fallbackNodeId || firstNode?.id || existingVlessAcct?.nodeId || '';
+              }
+              if (!fallbackProxyIp && typeof Pool !== 'undefined' && Pool.entries) {
+                const usedPips = new Set(allAccts.filter(x => x?.id !== existingAcct?.id).map(x => String(x?.proxyIp || '').toLowerCase()).filter(Boolean));
+                const candEntry = Pool.entries().find(([k, e]) => e?.ok === true && !e.gone && !e.banned && !usedPips.has(String(k).toLowerCase()));
+                if (candEntry) {
+                  fallbackProxyIp = candEntry[0];
+                  fallbackRegion = candEntry[1]?.loc || fallbackRegion;
+                }
+              }
+            } catch {}
+          }
+          if (!a) {
+            if (!ipAlloc?.ok && !fallbackProxy && !isExplicitDirectOrProxy) throw new Error(ipAlloc?.error || '暂无可用未冷却 ProxyIP');
+            a = await Host.saveAccount({
+              id: existingAcct?.id,
+              name: existingAcct?.name && !/^账号 ?\d*$/.test(existingAcct.name) ? existingAcct.name : em,
+              email: em,
+              proxy: fallbackProxy || (pf.routeMode === 'direct' || pf.mode === 'direct' ? 'direct' : ''),
+              proxyIp: fallbackProxyIp,
+              nodeId: fallbackNodeId,
+              region: fallbackRegion,
+              ...(fp ? { fp } : {}),
+            });
+          }
+        } else {
+          a = await saveConnection({ name: em, email: em });   // 未验证的密码不直接存进账号：先加密暂存（regpw），验证后「设置密码」成功才存
+        }
+        if (pw.inp.value || tok?.pw) await Promise.resolve(Host.shared('regpw@' + a?.id, { email: em, pw: pw.inp.value || tok.pw, src: 'client' })).catch(() => {});
         if (!a?.id || a.error) throw new Error(a?.error || '保存失败');
-        if (pf.mode === 'region' && tok && typeof Pool.acquireForRegistration === 'function') {
-          const q = await Pool.acquireForRegistration(a, { log: t => { msg.textContent = t; } });
-          if (!q.ok) throw new Error(q.error || '暂无可用未冷却 ProxyIP');
-          await Host.saveAccount({ id: a.id, proxy: q.proxy, proxyIp: q.proxyIp, nodeId: q.nodeId, region: q.region });
-        } else if (pf.mode === 'region' && pf.region) {
+        if (!tok && pf.mode === 'region' && pf.region) {
           const q = await Pool.acquire(a, pf.region, { prefer: pf.proxyIp, log: t => { msg.textContent = t; } });
           if (!q.ok) throw new Error(regionLabel(pf.region) + '：' + q.error);
-          if (tok && q.to) await Pool.markRegUsed?.(q.to, '').catch(() => {});
         }
         if (tok && await MailToken.save(a.id, tok) !== true) throw new Error('邮箱令牌没有保存成功，请更新客户端后重试');
-        if (tok && typeof Host.registerTokenAccount === 'function') {
-          msg.textContent = '正在执行纯协议令牌注册（预热 → 纯协议 reCAPTCHA → 收件验证 → 设置固定密码）…';
-          const pr = await Host.registerTokenAccount(a.id, { tokenLine: tokInp.value, password: tok.pw }).catch(e => ({ error: cleanErr(e), mailFailed: !!e?.mailFailed, tokenInvalid: !!e?.tokenInvalid }));
+        const regFn = Host.registerTokenAccount || Host.registerAccountByToken;
+        if (tok && typeof regFn === 'function') {
+          if (typeof Host.setCookies === 'function') {
+            const staleNames = ['arena-auth-prod-v1', 'arena-auth-prod-v1.0', 'arena-auth-prod-v1.1'];
+            try {
+              await Host.setCookies(a.id, staleNames.map(name => ({
+                url: 'https://arena.ai', name, value: '', domain: '.arena.ai', path: '/', secure: true, httpOnly: true, sameSite: 'lax', expirationDate: 1,
+              })));
+            } catch {}
+          }
+          let pr = null;
+          for (let attempt = 0; attempt < 3; attempt++) {
+            msg.textContent = attempt === 0
+              ? '正在执行纯协议令牌注册（预热 → 纯协议 reCAPTCHA → 收件验证 → 设置固定密码）…'
+              : '正在继续执行纯协议令牌验证与设置固定密码…';
+            pr = await regFn.call(Host, a.id, {
+              email: em,
+              tokenLine: tokInp.value,
+              password: tok.pw,
+              token: tok,
+              tok,
+            }).catch(e => ({ error: cleanErr(e), mailFailed: !!e?.mailFailed, tokenInvalid: !!e?.tokenInvalid, cooldownWaitSec: e?.cooldownWaitSec || 0 }));
+            const waitSec = Number(pr?.cooldownWaitSec) || (() => {
+              const m = /after\s+(\d+)\s*seconds?|等待\s*(\d+)\s*秒/i.exec(String(pr?.error || ''));
+              return m ? Math.min(75, Math.max(1, Number(m[1] || m[2]))) + 2 : 0;
+            })();
+            if (!pr?.ok && waitSec > 0 && attempt < 2) {
+              for (let rem = waitSec; rem > 0; rem--) {
+                if (!back.isConnected) return;
+                msg.textContent = '官方发信安全冷却中（' + rem + 's），冷却后自动继续注册与设密…';
+                await new Promise(r => setTimeout(r, 1000));
+              }
+              continue;
+            }
+            break;
+          }
           if (pr && pr.ok) {
+            try {
+              const btrSt = typeof BatchTokenReg !== 'undefined' ? BatchTokenReg.loadState() : null;
+              if (btrSt) {
+                const fIdx = btrSt.failed.findIndex(x => String(x.email || '').toLowerCase() === em.toLowerCase());
+                if (fIdx >= 0) { btrSt.failed.splice(fIdx, 1); BatchTokenReg.saveState(); }
+              }
+            } catch {}
             try { await Nodes.refreshAccts(); } catch {}
             if (typeof LaunchPick !== 'undefined') { LaunchPick.cache = null; LaunchPick.cacheAt = 0; }
             msg.textContent = '纯协议注册并设置固定密码完成（' + (pr.email || em) + '），已添加到登录卡片，正在打开…';
@@ -952,7 +1088,7 @@ Object.assign(UI, {
             setTimeout(() => { back.remove(); Host.openAccount(a.id); }, 400);
             return;
           }
-          if (pr && (pr.tokenInvalid || pr.mailFailed)) throw new Error('收不到验证邮件（令牌可能已失效）：' + (pr.error || '收件失败'));
+          if (pr?.error) throw new Error(pr.error);
         }
         const accepted = await Host.shared('signup@' + a.id, { email: em, at: now() });
         if (accepted !== true) throw new Error(accepted?.error || '注册任务没有保存，未打开新窗口；请重试或更新客户端');
@@ -1091,7 +1227,7 @@ Object.assign(UI, {
     const info=h('div',{class:'am-top dim'},'账号管理 · 点开后才读取密码及加载连接编辑器');
     const back=modal('账号管理',K(info,rows),K(
       h('button',{class:'btn ghost',onclick:()=>{back.remove();this.importAccounts();}},icon('download'),'导入'),
-      h('button',{class:'btn ghost',onclick:()=>{back.remove();this.exportAccounts();}},icon('upload'),'导出'),
+      ...((Host.platform === 'android' || (typeof isMob === 'function' && isMob())) ? [] : [h('button',{class:'btn ghost',onclick:()=>{back.remove();this.exportAccounts();}},icon('upload'),'导出')]),
       h('button',{class:'btn ghost',onclick:()=>ProxySet.open()},icon('globe'),'ProxyIP'),
       h('button',{class:'btn ghost',onclick:()=>{back.remove();this.batchTokenRegister();}},icon('key'),'批量令牌注册'),
       h('button',{class:'btn ghost',onclick:()=>{back.remove();this.addAccount();}},icon('plus'),'添加账号'),
@@ -1214,37 +1350,38 @@ Object.assign(UI, {
 
   // ----- 导出账号合集（与油猴「账号切换」脚本互通：ARENA-ACCOUNTS-V1）-----
   async exportAccounts() {
+    const isMobile = Host.platform === 'android' || (typeof isMob === 'function' && isMob());
+    if (isMobile) {
+      this.importAccounts();
+      return;
+    }
     const all = (await Host.exportAccounts().catch(() => []) || []).filter(a => a.email);
     const pack = all.length ? (PACK_PREFIX + utf8b64(JSON.stringify({ v: 1, from: 'brana-client', at: now(), accounts: all.map(a => ({ email: a.email, pw: a.password || undefined, name: a.name && a.name !== a.email ? a.name : undefined, remark: a.remark || undefined, proxy: a.proxy || undefined, proxyIp: a.proxyIp || undefined, region: a.region || undefined, nodeId: a.nodeId || undefined })) }))) : '';
     const np = all.filter(a => a.password).length;
-    const ta = h('textarea', { class: 'packbox', readonly: true, rows: 6, placeholder: '暂无带邮箱的账号可导出文本合集，可直接使用上方二维码按钮同步节点与订阅配置' }, pack);
+    const ta = h('textarea', { class: 'packbox', readonly: true, rows: 6, placeholder: '暂无带邮箱的账号可导出文本合集，可点击右上角二维码图标导出配置' }, pack);
     const openQrSync = () => {
       if (typeof QrSync !== 'undefined' && QrSync.openModal) {
-        QrSync.openModal(Host.platform === 'android' ? 'import' : 'export');
+        QrSync.openModal('export');
       }
     };
-    const qrSyncBar = h('div', {
-      class: 'export-qr-bar',
-      style: 'display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 10px;margin-bottom:8px;border:1px solid var(--bd);border-radius:8px;background:var(--bg2)',
-    },
-      h('span', { style: 'font-size:12px;color:var(--c2)' }, '手机 ⇄ 电脑离线扫码同步节点订阅与账号配置'),
-      h('button', {
-        type: 'button',
-        class: 'ib export-qr-sync-btn',
-        title: '二维码同步（离线扫码导出/导入节点订阅与账号）',
-        style: 'width:auto;padding:0 10px;height:28px;gap:5px;border:1px solid var(--bd);border-radius:6px;color:var(--ac)',
-        onclick: openQrSync,
-      }, icon('qr'), h('span', { style: 'font-size:12px;font-weight:600' }, '二维码同步'))
+    const qrIconBtn = h('button', {
+      type: 'button',
+      class: 'ib export-qr-sync-btn',
+      title: '二维码导出',
+      'aria-label': '二维码导出',
+      onclick: openQrSync,
+    }, icon('qr'));
+    const hdr = h('div', { style: 'display:flex;align-items:center;justify-content:space-between;width:100%' },
+      h('span', {}, '导出账号合集'),
+      qrIconBtn
     );
-    const back = modal('导出账号合集', K(
-      qrSyncBar,
-      h('p', { class: 'muted' }, all.length ? `共 ${all.length} 个账号（${np} 个带密码）${all.length - np ? '，没有密码的账号导入后需要手动登录' : ''}。内含密码，请勿发给他人。可粘贴到本客户端或油猴「账号切换」脚本的「导入账号」。` : '当前暂无已保存邮箱的账号，可点击上方二维码图标同步节点订阅或扫码导入账号。'),
+    const back = modal(hdr, K(
+      h('p', { class: 'muted' }, all.length ? `共 ${all.length} 个账号（${np} 个带密码）${all.length - np ? '，没有密码的账号导入后需要手动登录' : ''}。内含密码，请勿发给他人。可粘贴到本客户端或油猴「账号切换」脚本的「导入账号」。` : '当前暂无已保存邮箱的账号，可点击右上角二维码图标导出节点订阅配置。'),
       ta
     ),
       K(
-        h('button', { type: 'button', class: 'btn ghost export-qr-footer-btn', title: '二维码同步', onclick: openQrSync }, icon('qr'), '二维码同步'),
         h('button', { class: 'btn ghost', onclick: () => back.remove() }, '关闭'),
-        h('button', { class: 'btn', onclick: () => pack ? copyText(pack) : openQrSync() }, pack ? '复制' : '打开二维码')
+        h('button', { class: 'btn', onclick: () => pack ? copyText(pack) : openQrSync() }, '复制')
       ), 'small');
     if (pack) { copyText(pack); ta.select?.(); }
   },
@@ -1262,15 +1399,50 @@ Object.assign(UI, {
       try { const t = (await f.text()).trim(); ta.value = ta.value.trim() ? ta.value.trim() + '\n' + t : t; const r = parseAccounts(ta.value); toast(r.error ? r.error : '已读取 ' + r.list.length + ' 个账号，确认后点「导入」', r.error ? 'err' : ''); }
       catch (e) { toast('读取文件失败：' + describe(e), 'err'); }
     } });
+    const openQrImport = () => {
+      if (typeof QrSync !== 'undefined' && QrSync.openModal) {
+        QrSync.openModal('import', async () => {
+          try { back.remove(); } catch {}
+          try {
+            if (typeof LaunchPick !== 'undefined' && document.querySelector('.lpick')) {
+              LaunchPick.cache = null;
+              document.querySelectorAll('.lpick').forEach(el => el.remove());
+              void LaunchPick.show();
+            } else {
+              this.loginGate?.();
+            }
+          } catch {}
+        });
+      }
+    };
     const pick = h('div', { class: 'lrow' },
+      h('button', { class: 'ib import-qr-sync-btn', type: 'button', title: '扫码导入电脑端二维码', 'aria-label': '扫码导入电脑端二维码', onclick: openQrImport }, icon('qr')),
       h('button', { class: 'btn ghost sm', type: 'button', onclick: () => fin.click() }, icon('file'), '从文件导入'),
       h('button', { class: 'btn ghost sm', type: 'button', title: '切换到一行一个号批量令牌协议注册', onclick: () => { back.remove(); this.batchTokenRegister(ta.value); } }, icon('key'), '批量令牌协议注册'),
       h('button', { class: 'btn ghost sm', type: 'button', onclick: async () => { try { const t = (await navigator.clipboard.readText()).trim(); if (!t) { toast('剪贴板是空的', 'err'); return; } ta.value = ta.value.trim() ? ta.value.trim() + '\n' + t : t; } catch { toast('无法读取剪贴板，请长按输入框粘贴', 'err'); ta.focus(); } } }, icon('copy'), '粘贴'),
-      h('span', { class: 'grow' }), h('span', { class: 'dim', style: { fontSize: '12px' } }, '支持账号合集 / txt / csv'), fin);
-    const back = modal('导入账号', K(h('p', { class: 'muted' }, '支持本客户端或油猴「账号切换」脚本导出的账号合集（ARENA-ACCOUNTS-V1），也支持每行「邮箱 密码 [代理]」。同邮箱的账号会合并更新。'), pick, ta,
+      h('span', { class: 'grow' }), h('span', { class: 'dim', style: { fontSize: '12px' } }, '支持二维码 / 账号合集 / txt'), fin);
+    const importHdr = h('div', { style: 'display:flex;align-items:center;justify-content:space-between;width:100%' },
+      h('span', {}, '导入账号'),
+      h('button', { type: 'button', class: 'ib', title: '扫码导入电脑端二维码', 'aria-label': '扫码导入电脑端二维码', onclick: openQrImport }, icon('qr'))
+    );
+    const back = modal(importHdr, K(h('p', { class: 'muted' }, '支持右上角二维码扫码同步，或粘贴导出的账号合集（ARENA-ACCOUNTS-V1）、每行「邮箱 密码 [代理]」。同邮箱的账号会合并更新。'), pick, ta,
       h('div', { class: 'lrow' }, h('label', { class: 'lrem' }, skip, '跳过已存在且已登录的账号'), dproxy), out),
       K(h('button', { class: 'btn ghost', onclick: () => back.remove() }, '关闭'), go), 'small');
     go.onclick = async () => {
+      const rawTrim = ta.value.trim();
+      if (/^brana-sync:\/\//i.test(rawTrim) && typeof QrSync !== 'undefined' && QrSync.applySyncPayload) {
+        go.disabled = true; back.dataset.busy = '1';
+        try {
+          const res = await QrSync.applySyncPayload(rawTrim, msg => { go.textContent = msg; });
+          toast(`已同步导入 ${res.accountCount || 0} 个账号 · ${res.nodeCount || 0} 个节点`);
+          back.remove();
+          this.loginGate?.();
+        } catch (e) {
+          toast('导入失败：' + describe(e), 'err');
+          go.disabled = false; delete back.dataset.busy; go.textContent = Host.platform === 'desktop' ? '导入并登录' : '导入';
+        }
+        return;
+      }
       const tb = typeof MailToken !== 'undefined' && MailToken.parseBatch ? MailToken.parseBatch(ta.value) : null;
       if (tb && tb.items.length > 0 && tb.items.every(x => x.kind === 'url' || x.kind === 'oauth')) {
         back.remove();
@@ -1455,15 +1627,15 @@ const BatchTokenReg = {
   enqueueText(text) {
     const st = this.loadState();
     const { items, errors } = MailToken.parseBatch(text);
-    const existingEmails = new Set([
-      ...st.pending.map(x => x.email),
-      ...st.failed.map(x => x.email),
-    ]);
+    const existingEmails = new Set(st.pending.map(x => x.email));
     let added = 0, bad = 0;
     for (const it of items) {
       if (existingEmails.has(it.email)) continue;
       existingEmails.add(it.email);
+      const prevFailIdx = st.failed.findIndex(x => x.email === it.email);
+      const prevFail = prevFailIdx >= 0 ? st.failed.splice(prevFailIdx, 1)[0] : null;
       st.pending.push({
+        ...(prevFail?.acctId ? { acctId: prevFail.acctId } : {}),
         id: 'btr_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 7),
         email: it.email,
         raw: it.raw,
@@ -1687,17 +1859,65 @@ const BatchTokenReg = {
           nextItem.step = '正在执行纯协议注册、收件验证并设置固定密码…';
           this.saveState();
 
+          const clearStaleProvisionalCookies = async id => {
+            if (typeof Host.setCookies !== 'function') return;
+            const staleNames = ['arena-auth-prod-v1', 'arena-auth-prod-v1.0', 'arena-auth-prod-v1.1'];
+            try {
+              await Host.setCookies(id, staleNames.map(name => ({
+                url: 'https://arena.ai',
+                name,
+                value: '',
+                domain: '.arena.ai',
+                path: '/',
+                secure: true,
+                httpOnly: true,
+                sameSite: 'lax',
+                expirationDate: 1,
+              })));
+            } catch {}
+          };
+
           let regRes = null;
           if (typeof Host.registerTokenAccount === 'function') {
-            regRes = await Promise.race([
-              Host.registerTokenAccount(savedAcct.id, {
-                tokenLine: nextItem.raw,
-                password: targetPw,
-                mailTimeoutMs: 110000,
-                pollMs: 3500,
-              }),
-              new Promise((_, rej) => ctl.signal.addEventListener('abort', () => rej(Object.assign(new Error('已暂停或取消'), { aborted: true })), { once: true })),
-            ]);
+            for (let regTry = 0; regTry < 3; regTry++) {
+              await clearStaleProvisionalCookies(savedAcct.id);
+              regRes = await Promise.race([
+                Host.registerTokenAccount(savedAcct.id, {
+                  tokenLine: nextItem.raw,
+                  password: targetPw,
+                  mailTimeoutMs: regTry > 0 ? 180000 : 120000,
+                  pollMs: regTry > 0 ? 42000 : 3500,
+                }),
+                new Promise((_, rej) => ctl.signal.addEventListener('abort', () => rej(Object.assign(new Error('已暂停或取消'), { aborted: true })), { once: true })),
+              ]);
+              if (isAborted() || !st.pending.includes(nextItem)) break;
+              const errStr = String(regRes?.error || '');
+              if (errStr && /尚未确认登录会话|AUTH_SESSION_MISSING/i.test(errStr) && typeof Host.signInAccount === 'function') {
+                nextItem.step = '已设置密码，正在完成协议会话登录确认…';
+                this.saveState();
+                await clearStaleProvisionalCookies(savedAcct.id);
+                const signRes = await Host.signInAccount(savedAcct.id).catch(e => ({ error: String(e?.message || e) }));
+                if (signRes && !signRes.error && (signRes.ok || signRes.email)) {
+                  regRes = { ok: true, email: signRes.email || tok.email, ip: signRes.ip || ipAlloc.ip || '', loc: signRes.loc || ipAlloc.region || '' };
+                  break;
+                }
+              }
+              const cdMatch = errStr && /after\s+(\d+)\s*seconds?|等待\s*(\d+)\s*秒/i.exec(errStr);
+              if (cdMatch && regTry < 2) {
+                const waitSec = Math.min(75, Math.max(2, Number(cdMatch[1] || cdMatch[2]) + 2));
+                for (let rem = waitSec; rem > 0; rem--) {
+                  if (isAborted() || !st.pending.includes(nextItem)) break;
+                  nextItem.step = '官方发信安全冷却中（' + rem + 's），冷却后自动继续注册与设密…';
+                  this.paint();
+                  await new Promise(r => setTimeout(r, 1000));
+                }
+                if (isAborted() || !st.pending.includes(nextItem)) break;
+                nextItem.step = '冷却结束，正在继续执行纯协议验证与设置密码…';
+                this.saveState();
+                continue;
+              }
+              break;
+            }
           } else {
             throw Object.assign(new Error('当前环境需要宿主协议注册通道'), { routeRetry: false });
           }
@@ -1907,6 +2127,24 @@ Object.assign(UI, {
           const { added, bad } = BatchTokenReg.enqueueText(ta.value);
           ta.value = '';
           if (added || bad) toast(`已加入待注册列表 ${added} 个${bad ? '，格式错误归入失败列表 ' + bad + ' 个' : ''}`);
+        } else if (!st.pending.length && st.failed.some(x => x.raw && !x.tokenInvalid)) {
+          const retryable = st.failed.filter(x => x.raw && !x.tokenInvalid);
+          st.failed = st.failed.filter(x => !x.raw || x.tokenInvalid);
+          for (const fItem of retryable) {
+            st.pending.push({
+              id: fItem.id || ('btr_' + Date.now().toString(36)),
+              email: fItem.email,
+              raw: fItem.raw,
+              acctId: fItem.acctId || '',
+              status: 'queued',
+              step: '手动重新加入待注册队列',
+              proxyIp: '',
+              readyAt: 0,
+              addedAt: now(),
+            });
+          }
+          BatchTokenReg.saveState();
+          toast(`已将失败列表中的 ${retryable.length} 个账号移回待注册队列`);
         }
         void BatchTokenReg.start(v);
       },
@@ -2026,7 +2264,7 @@ Object.assign(UI, {
                   addedAt: now(),
                 });
                 BatchTokenReg.saveState();
-                if (!BatchTokenReg.running && !BatchTokenReg.paused) void BatchTokenReg.start(pw.inp.value.trim());
+                if (!BatchTokenReg.running) void BatchTokenReg.start(pw.inp.value.trim());
               },
             }, icon('refresh')),
             h('button', {

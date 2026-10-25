@@ -1075,7 +1075,7 @@ const Dock = {
     const compTurns = chat && Array.isArray(chat.messages) ? chat.messages.filter(x => x && x.role === 'assistant' && x.status === 'completed').length : 0;
     const totalTurns = Math.max(bt?.turns || 0, billing?.sessionPayment?.turns || 0, compTurns);
     const top0IsCost = Boolean(uniqueTop && top0 && (top0.diophantinePassed || top0.revPct != null) && !top0.habitSource);
-    const revMatch = (top0IsCost && !m?.userCorrected) ? (top0.revPct ?? top0.match ?? m?.reverseMatch ?? m?.confidence) : (m?.reverseMatch ?? m?.confidence);
+    const revMatch = (!m?.userCorrected && uniqueTop && top0 && Number.isFinite(+top0.match)) ? +top0.match : (top0IsCost && !m?.userCorrected) ? (top0.revPct ?? top0.match ?? m?.reverseMatch ?? m?.confidence) : (m?.reverseMatch ?? m?.confidence ?? (uniqueTop && top0 ? top0.match : undefined));
     const srcLabel = m?.userCorrected ? '手动纠偏确认'
       : (m?.routed || billing?.habitRoute?.routed || billing?.diagnostics?.routeSwitched) ? ('中途路由切换识别' + (Number.isFinite(revMatch) ? ' ' + +Number(revMatch).toFixed(1) + '%' : ''))
       : pend ? ('候选并列 · 请继续沟通' + (Number.isFinite(revMatch) ? '（最高 ' + +Number(revMatch).toFixed(1) + '%）' : ''))
@@ -1527,8 +1527,12 @@ const Dock = {
     const billing=t===ts.at(-1) && typeof BillingProbe!=='undefined'?BillingProbe.summary(sid, { readOnly: true }):null;
     // ① 身份 + 消耗
     const mCur = Models.get(sid);
+    const ovTop0 = billing?.mergedCandidates?.[0];
+    const ovTop1 = billing?.mergedCandidates?.[1];
+    const ovUniqueTop = Boolean(ovTop0 && !ovTop0.streamFallback && Number(ovTop0.match || 0) >= 50 && (!ovTop1 || (Number(ovTop0.match || 0) - Number(ovTop1.match || 0)) >= 0.05 || (Number(ovTop0.combinedWeight ?? ovTop0.match ?? 0) - Number(ovTop1.combinedWeight ?? ovTop1.match ?? 0)) >= 0.5) && ovTop0.supportGranularity !== 'family');
+    const ovMergedBest = (!mCur?.userCorrected && ovUniqueTop) ? (ovTop0.canon || ovTop0.label || '') : '';
     const hasReidCur = Boolean((mCur?.userCorrected || mCur?.routed || mCur?.habitInferred || mCur?.reverseInferred || mCur?.billingProbe) && mCur?.name && !mCur?.pendingConfirm && !mCur?.guess);
-    const best = hasReidCur ? mCur.name : (t.best || t.internal || c?.response || c?.request || c?.model || mCur?.name || ''), [fam, sfx] = famTier(best), vid = Brand.of(best) || Brand.of(c?.model || '');
+    const best = (ovMergedBest || (hasReidCur ? mCur.name : '')) || (t.best || t.internal || c?.response || c?.request || c?.model || mCur?.name || ''), [fam, sfx] = famTier(best), vid = Brand.of(best) || Brand.of(c?.model || '');
     const tier = (hasReidCur && sfx) ? sfx : (c?.effort && c.effort !== 'conflict' ? c.effort : sfx);
     const card = h('section', { class: 'mc-card mc-hero' });
     const top = h('div', { class: 'mc-top' }, vid ? vlogo(vid, 30) : h('span', { class: 'vlogo', style: { width: '30px', height: '30px' } }, '?'),

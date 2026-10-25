@@ -516,10 +516,11 @@ class Chat {
               try { SentUserLog.remove?.(this.sid, m.id); } catch {}
               return false;
             }
-            const isAheadOfSrv = idx > lastSrvInOldIdx;
+            const isAheadOfSrv = lastSrvInOldIdx >= 0 && idx > lastSrvInOldIdx;
             const prevInOld = idx > 0 ? this.messages[idx - 1] : null;
-            const isCachedActiveTailAsst = m.role === 'assistant' && idx === this.messages.length - 1 && (mergedSrv.at(-1)?.role === 'user' || prevInOld?.role === 'user' || isAheadOfSrv) && (m.metadata?.pending || m._incomplete || (Array.isArray(m.parts) && m.parts.some(p => p && (p.toolCallId || p.text))));
-            const isRecentTailUser = m.role === 'user' && (idx > lastSrvInOldIdx || idx >= this.messages.length - 2) && (m._appendAccepted || isAheadOfSrv || (this.messages[idx + 1]?.role === 'assistant' && (ids.has(this.messages[idx + 1]?.id) || this.messages[idx + 1]?._incomplete || this.messages[idx + 1]?.metadata?.pending)));
+            const mTailTs = Number(m?.metadata?.timing?.completedAt) || Number(m?.metadata?.timing?.startedAt) || Number(m?._finishedAt) || idTime(m?.id) || 0;
+            const isCachedActiveTailAsst = m.role === 'assistant' && idx === this.messages.length - 1 && (!srvLastTimeForLoad || !mTailTs || mTailTs >= srvLastTimeForLoad - 5000) && (mergedSrv.at(-1)?.role === 'user' || prevInOld?.role === 'user' || isAheadOfSrv) && (m.metadata?.pending || m._incomplete || (Array.isArray(m.parts) && m.parts.some(p => p && (p.toolCallId || p.text))));
+            const isRecentTailUser = m.role === 'user' && (isAheadOfSrv || idx >= this.messages.length - 2) && (m._appendAccepted || isAheadOfSrv || (this.messages[idx + 1]?.role === 'assistant' && (ids.has(this.messages[idx + 1]?.id) || this.messages[idx + 1]?._incomplete || this.messages[idx + 1]?.metadata?.pending)));
             if (!m._local && !m._appendAccepted && !isRecentTailUser && !isCachedActiveTailAsst) return false;
             if (m.role === 'user') {
               if (m.metadata?.nodeId && (ids.has(m.metadata.nodeId) || srvUserNodes.has(m.metadata.nodeId))) return false;
@@ -547,18 +548,21 @@ class Chat {
                 return false;
               }
               if (!isAwaitingThis && srvLastTimeForLoad > 0 && uTime > 0 && uTime < srvLastTimeForLoad - 30000) {
-                const srvLastStartForLoad = idTime(srvLastForLoad?.id) || Date.parse(srvLastForLoad?.metadata?.timing?.startedAt || '') || 0;
-                const fillsLoadGap = (pIdxInSrv >= 0 && mergedSrv[pIdxInSrv + 1]?.role === 'assistant') || (mergedSrv.length >= 2 && mergedSrv.at(-1)?.role === 'assistant' && mergedSrv.at(-2)?.role === 'assistant') || (srvLastStartForLoad > 0 && uTime >= srvLastStartForLoad - 60000);
+                const srvLastStartForLoad = Number(srvLastMsgForLoad?.metadata?.timing?.startedAt) || Date.parse(srvLastMsgForLoad?.metadata?.timing?.startedAt || '') || idTime(srvLastMsgForLoad?.id) || 0;
+                const pEndIdxInSrv = pIdxInSrv >= 0 && typeof SentUserLog !== 'undefined' && SentUserLog.lastAsstIdxOfTurn ? SentUserLog.lastAsstIdxOfTurn(mergedSrv, pIdxInSrv) : pIdxInSrv;
+                const fillsLoadGap = (pEndIdxInSrv >= 0 && mergedSrv[pEndIdxInSrv + 1]?.role === 'assistant' && !(typeof SentUserLog !== 'undefined' && SentUserLog.isSameAsstTurnChunk?.(mergedSrv[pEndIdxInSrv], mergedSrv[pEndIdxInSrv + 1]))) || (mergedSrv.length >= 2 && mergedSrv.at(-1)?.role === 'assistant' && mergedSrv.at(-2)?.role === 'assistant' && !(typeof SentUserLog !== 'undefined' && SentUserLog.isSameAsstTurnChunk?.(mergedSrv.at(-2), mergedSrv.at(-1))) && uTime >= (idTime(mergedSrv.at(-2)?.id) || 0) - 60000) || (srvLastStartForLoad > 0 && uTime >= srvLastStartForLoad - 60000);
                 if (!fillsLoadGap) return false;
               }
             }
             return true;
           });
-          const nextMsgs = [...olderPrefix, ...mergedSrv];
+          const localPendingIds = new Set(localPending.map(x => x?.id).filter(Boolean));
+          const nextMsgs = [...olderPrefix.filter(x => !x?.id || !localPendingIds.has(x.id)), ...mergedSrv];
           for (let lIdx = 0; lIdx < localPending.length; lIdx++) {
             const lm = localPending[lIdx];
             if (lm.role === 'user' && lm._prevAsstId) {
-              const pIdx = nextMsgs.findIndex(x => x && x.id === lm._prevAsstId);
+              let pIdx = nextMsgs.findIndex(x => x && x.id === lm._prevAsstId);
+              if (pIdx >= 0 && typeof SentUserLog !== 'undefined' && SentUserLog.lastAsstIdxOfTurn) pIdx = SentUserLog.lastAsstIdxOfTurn(nextMsgs, pIdx);
               if (pIdx >= 0 && nextMsgs[pIdx + 1]?.role !== 'user') {
                 nextMsgs.splice(pIdx + 1, 0, lm);
                 continue;
@@ -566,14 +570,16 @@ class Chat {
             }
             const hasAsstAfterInLocal = localPending.slice(lIdx + 1).some(x => x && x.role === 'assistant');
             if (lm.role === 'user' && !lm._held && !hasAsstAfterInLocal && nextMsgs.at(-1)?.role === 'assistant') {
-              const lastA = nextMsgs.at(-1);
-              const prevBeforeA = nextMsgs.length >= 2 ? nextMsgs[nextMsgs.length - 2] : null;
+              const firstTailIdx = (typeof SentUserLog !== 'undefined' && SentUserLog.firstAsstIdxOfTurn) ? SentUserLog.firstAsstIdxOfTurn(nextMsgs, nextMsgs.length - 1) : (nextMsgs.length - 1);
+              const lastA = nextMsgs[firstTailIdx] || nextMsgs.at(-1);
+              const prevBeforeA = firstTailIdx >= 1 ? nextMsgs[firstTailIdx - 1] : null;
               const missingUserBeforeA = !prevBeforeA || prevBeforeA.role === 'assistant';
               const isAwaitingThisUser = Boolean(this.awaitId && (this.awaitId === lm.id || this.awaitId === lm.metadata?.nodeId));
               const uTime = lm._sentAt || idTime(lm.id) || 0;
-              const aTime = idTime(lastA.id) || 0;
-              if (missingUserBeforeA || ((lastA.metadata?.pending || lastA._incomplete || (this.live && lastA === this.live)) && (isAwaitingThisUser || !uTime || !aTime || aTime >= uTime - 300000))) {
-                nextMsgs.splice(nextMsgs.length - 1, 0, lm);
+              const aTime = Number(lastA?.metadata?.timing?.startedAt) || idTime(lastA?.id) || 0;
+              const timeMatchesTail = isAwaitingThisUser || !uTime || !aTime || (uTime >= aTime - 300000 && uTime <= aTime + 30000);
+              if (timeMatchesTail && (missingUserBeforeA || (lastA.metadata?.pending || lastA._incomplete || (this.live && lastA === this.live)))) {
+                nextMsgs.splice(firstTailIdx, 0, lm);
                 continue;
               }
             }
@@ -1509,3 +1515,4 @@ class Chat {
   }
   // 思考自动停止（模型信息 → 设置，默认开）：这个对话一直在调用工具（bash 等）、从来没出现过思考，
   // 突然出现有内容的思考时按用户开关停止；这不能证明开源或改派，已知闭源不误触发。一开始就有思考的对话不停。
+

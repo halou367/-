@@ -120,6 +120,22 @@ async function storeSetCookies(ses, r) {
   let list = [];
   try { list = r.headers.getSetCookie?.() || []; } catch {}
   if (!list.length) { const raw = r.headers.get('set-cookie'); if (raw) list = raw.split(/,(?=\s*[^;,=\s]+=)/); }
+  const authNames = new Set();
+  for (const line of list) {
+    const [nv] = line.split(';'); const i = nv.indexOf('='); if (i < 1) continue;
+    const nm = nv.slice(0, i).trim(), val = nv.slice(i + 1).trim();
+    if (val && /^arena-auth-prod-v1/.test(nm)) authNames.add(nm);
+  }
+  if (authNames.size) {
+    try {
+      const prev = await ses.cookies.get({ url: 'https://arena.ai' });
+      for (const pc of prev) {
+        if (/^arena-auth-prod-v1/.test(pc.name) && !authNames.has(pc.name)) {
+          await ses.cookies.remove('https://arena.ai', pc.name).catch(() => {});
+        }
+      }
+    } catch {}
+  }
   for (const line of list) {
     const [nv, ...attrs] = line.split(';'); const i = nv.indexOf('='); if (i < 1) continue;
     const c = { url: 'https://arena.ai', name: nv.slice(0, i).trim(), value: nv.slice(i + 1).trim(), path: '/', secure: true };
@@ -161,18 +177,48 @@ const signInAccount = require('./account-auth').createAccountSignIn({
   release: async (a, lease) => authRouteGuard.task(a.id, { op: 'cancel', ticket: lease.ticket }),
   finish: async (a, user, ses, lease) => authRouteGuard.task(a.id, { op: 'finish', ticket: lease.ticket, email: user.email, ip: await authExit(ses), environment: backgroundEnvironment(a) }),
   syncCookies: async (ses, response) => {
-    const cookies = await ses.cookies.get({ url: 'https://arena.ai' });
-    if (!cookies.some(c => /^arena-auth-prod-v1/.test(c.name))) await storeSetCookies(ses, response);
+    if (response) await storeSetCookies(ses, response);
     await ses.cookies.flushStore().catch(() => {});
   },
   save: () => saveDB(true),
   navigate: a => { const w = wins.get(a.id); if (w && !w.isDestroyed()) void navigateAccount(w.webContents); },
 });
 ipcMain.handle('host:signInAccount', async (e, id) => { try { return await signInAccount(id); } catch (err) { return { error: String(err.message || err) }; } });
+const ensureAccountNodeProxy = a => {
+  if (!a || typeof a !== 'object') return a;
+  if (String(a.proxy || '').trim() || /@example\.invalid$/i.test(String(a.email || ''))) return a;
+  if (a.routeMode === 'direct') { a.proxy = 'direct'; return a; }
+  if (a.routeMode === 'proxy' || a.routeMode === 'local') return a;
+  try {
+    const vlessAcct = (DB.accounts || []).find(x => x && x.id !== a.id && /^vless:\/\//i.test(String(x.proxy || '')));
+    const nodes = Array.isArray(DB.shared?.nodes) ? DB.shared.nodes : [];
+    const prefNodeId = a.nodeId || DB.shared?.pippool?.node || vlessAcct?.nodeId || nodes[0]?.id || '';
+    const nodeObj = nodes.find(n => n && n.id === prefNodeId) || nodes[0] || null;
+    let link = '';
+    if (vlessAcct && (!prefNodeId || vlessAcct.nodeId === prefNodeId)) link = vlessAcct.proxy;
+    if (!link && vlessAcct) link = vlessAcct.proxy;
+    if (link) {
+      a.proxy = link;
+      if (!a.nodeId && (nodeObj?.id || vlessAcct?.nodeId)) a.nodeId = nodeObj?.id || vlessAcct?.nodeId || '';
+    }
+    if (!String(a.proxyIp || '').trim() && DB.shared?.pippool?.ips && typeof DB.shared.pippool.ips === 'object') {
+      const usedPips = new Set((DB.accounts || []).filter(x => x && x.id !== a.id).map(x => String(x.proxyIp || '').trim().toLowerCase()).filter(Boolean));
+      const cands = Object.entries(DB.shared.pippool.ips)
+        .filter(([k, e]) => k && e && e.ok === true && !e.gone && !e.banned && !usedPips.has(String(k).toLowerCase()))
+        .sort((x, y) => (Number(x[1]?.ms) || 9999) - (Number(y[1]?.ms) || 9999));
+      if (cands[0]) {
+        a.proxyIp = cands[0][0];
+        if (!a.region && cands[0][1]?.loc) a.region = cands[0][1].loc;
+      }
+    }
+    saveSoon();
+  } catch {}
+  return a;
+};
 const sendMagicLinkAccount = require('./account-auth').createAccountMagicLinkSender({
   find: acct,
   session: prepSession,
-  prepare: applyProxy,
+  prepare: async a => { ensureAccountNodeProxy(a); return applyProxy(a); },
 });
 ipcMain.handle('host:sendMagicLinkAccount', async (_e, id, email, fullName) => {
   try { return await sendMagicLinkAccount(id, email, fullName); }
@@ -183,10 +229,10 @@ const registerTokenAccount = require('./account-auth').createAccountTokenRegistr
   password: a => decPw(a.pw),
   setPassword: (a, pw) => { if (pw) { a.pw = encPw(String(pw)); a.noAuto = false; } },
   session: prepSession,
-  prepare: applyProxy,
+  prepare: async a => { ensureAccountNodeProxy(a); return applyProxy(a); },
+
   syncCookies: async (ses, response) => {
-    const cookies = await ses.cookies.get({ url: 'https://arena.ai' });
-    if (!cookies.some(c => /^arena-auth-prod-v1/.test(c.name))) await storeSetCookies(ses, response);
+    if (response) await storeSetCookies(ses, response);
     await ses.cookies.flushStore().catch(() => {});
   },
   save: () => saveDB(true),

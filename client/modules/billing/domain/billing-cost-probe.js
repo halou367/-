@@ -1,614 +1,3 @@
-const BillingProbe = (() => {
-  const bundled = /*__ARENA_AGENT_CATALOG__*/null;
-  const activeRuns = new WeakMap();
-  const isRunning = chat => !!(chat && activeRuns.has(chat));
-  const isOtherProbeBusy = chat => !!(chat && ((typeof Fingerprint !== 'undefined' && Fingerprint.isRunning?.(chat)) || (typeof PelicanTest !== 'undefined' && PelicanTest.isRunning?.(chat))));
-  let lastCostReloginAt = 0;
-  let globalCost429Until = 0;
-  let globalCost403Until = 0;
-  let lastCostNetAt = 0;
-  const isCostProbeEnabled = () => {
-    try {
-      if (typeof Prefs !== 'undefined' && typeof Prefs.costProbe === 'boolean') return Prefs.costProbe;
-      if (typeof Store !== 'undefined' && Store.get) return Store.get('billing:costProbe', true) !== false;
-    } catch {}
-    return true;
-  };
-  const setCostProbeEnabled = (on) => {
-    const val = Boolean(on);
-    try {
-      if (typeof Prefs !== 'undefined') {
-        Prefs.costProbe = val;
-        if (typeof savePrefs === 'function') savePrefs();
-      }
-      if (typeof Store !== 'undefined' && Store.set) Store.set('billing:costProbe', val);
-    } catch {}
-    return val;
-  };
-  const COST_SKEW_POOL = [
-    'dpl_3UbNvzoXfT6iNZqgBa7GjsGeKLaT',
-    'dpl_HAxwrhqRf48UW1Hf4MDQquRXSs7x',
-  ];
-  const SEED_COST_DPLS = new Set(['dpl_3UbNvzoXfT6iNZqgBa7GjsGeKLaT']);
-  let activeCostSkewDpl = (typeof Pin !== 'undefined' && typeof Pin.dpl === 'function' ? Pin.dpl() : '') || COST_SKEW_POOL[0];
-  if (!/^dpl_[A-Za-z0-9]{16,48}$/.test(activeCostSkewDpl) || (activeCostSkewDpl === 'dpl_HAxwrhqRf48UW1Hf4MDQquRXSs7x' && !(typeof Pin !== 'undefined' && typeof Pin.lockedDpl === 'function' && Pin.lockedDpl() === 'dpl_HAxwrhqRf48UW1Hf4MDQquRXSs7x'))) {
-    activeCostSkewDpl = 'dpl_3UbNvzoXfT6iNZqgBa7GjsGeKLaT';
-  }
-  const setSkewDpl = (dpl, manual = false) => {
-    const id = String(dpl || '').trim();
-    if (/^dpl_[A-Za-z0-9]{16,48}$/.test(id)) {
-      activeCostSkewDpl = id;
-      const idx = COST_SKEW_POOL.indexOf(id);
-      if (idx > 0) COST_SKEW_POOL.splice(idx, 1);
-      if (!COST_SKEW_POOL.includes(id)) COST_SKEW_POOL.unshift(id);
-      applySkewCookie(id);
-    } else {
-      activeCostSkewDpl = 'dpl_3UbNvzoXfT6iNZqgBa7GjsGeKLaT';
-      applySkewCookie(activeCostSkewDpl);
-    }
-    if (manual) {
-      try {
-        const curSid = typeof Tabs !== 'undefined' && Tabs.cur?.sid;
-        const curChat = curSid && typeof Chats !== 'undefined' ? Chats.get(curSid) : null;
-        if (curChat && isCostProbeEnabled()) setTimeout(() => { try { invalidateAndRefresh(curChat, true); } catch {} }, 60);
-      } catch {}
-    }
-    return activeCostSkewDpl;
-  };
-  let lastClientScrapeAt = 0;
-  const autoHealAt = new Map();
-  const applySkewCookie = dpl => {
-    if (!dpl || typeof document === 'undefined' || location.hostname !== 'arena.ai') return;
-    try {
-      if (typeof Pin !== 'undefined' && typeof Pin.ensureBillingFlags === 'function') Pin.ensureBillingFlags(false);
-      if (typeof Pin !== 'undefined' && typeof Pin.drop === 'function') Pin.drop();
-      if (typeof Pin !== 'undefined' && typeof Pin.lockedDpl === 'function' && !Pin.lockedDpl() && (typeof Prefs === 'undefined' || Prefs.pinOn !== true)) return;
-      document.cookie = `__vdpl=${dpl}; path=/; max-age=31536000; secure; samesite=lax`;
-    } catch {}
-  };
-  const promoteWorkingCostDpl = (dpl, endpointPath = '') => {
-    const id = String(dpl || '').trim();
-    if (/^dpl_[A-Za-z0-9]{16,48}$/.test(id)) {
-      activeCostSkewDpl = id;
-      const idx = COST_SKEW_POOL.indexOf(id);
-      if (idx > 0) COST_SKEW_POOL.splice(idx, 1);
-      if (!COST_SKEW_POOL.includes(id)) COST_SKEW_POOL.unshift(id);
-      try { if (typeof Pin !== 'undefined' && typeof Pin.learnDpl === 'function') Pin.learnDpl(id, true); } catch {}
-      applySkewCookie(id);
-    }
-    if (endpointPath) {
-      const m = /^(\/(?:api|nextjs-api)\/(?:chat|evaluation|sessions)\/)[0-9a-f-]{36}(\/cost(?:\?.*)?)$/i.exec(String(endpointPath).replace(/[?&]dpl=[^&]+/g, '').replace(/\?&/, '?').replace(/[?&]$/, ''));
-      if (m) {
-        const tpl = m[1] + '{sid}' + m[2];
-        try { if (typeof Pin !== 'undefined' && typeof Pin.learnEndpoint === 'function') Pin.learnEndpoint(tpl, true); } catch {}
-      }
-    }
-  };
-  const demoteFailedCostDpl = dpl => {
-    const id = String(dpl || '').trim();
-    if (!/^dpl_[A-Za-z0-9]{16,48}$/.test(id) || id === 'dpl_3UbNvzoXfT6iNZqgBa7GjsGeKLaT') return;
-    const locked = typeof Pin !== 'undefined' && typeof Pin.lockedDpl === 'function' ? Pin.lockedDpl() : '';
-    if (locked && id === locked) return;
-    if (!SEED_COST_DPLS.has(id)) {
-      try { if (typeof Pin !== 'undefined' && typeof Pin.markBadDpl === 'function') Pin.markBadDpl(id); } catch {}
-      const idx = COST_SKEW_POOL.indexOf(id);
-      if (idx >= 0 && COST_SKEW_POOL.length > 1) COST_SKEW_POOL.splice(idx, 1);
-    } else {
-      const idx = COST_SKEW_POOL.indexOf(id);
-      if (idx >= 0 && COST_SKEW_POOL.length > 1) {
-        COST_SKEW_POOL.splice(idx, 1);
-        COST_SKEW_POOL.push(id);
-      }
-    }
-    if (activeCostSkewDpl === id) {
-      const next = COST_SKEW_POOL.find(x => x && x !== id) || COST_SKEW_POOL[0];
-      if (next) {
-        activeCostSkewDpl = next;
-        applySkewCookie(next);
-      }
-    }
-  };
-  const appendDplParam = (p, dpl) => {
-    if (!dpl || !p) return p;
-    const clean = String(p).replace(/([?&])dpl=[^&]+(&|$)/g, (_, p1, p2) => (p2 ? p1 : '')).replace(/[?&]$/, '');
-    return clean + (clean.includes('?') ? '&' : '?') + 'dpl=' + encodeURIComponent(dpl);
-  };
-  const buildAltCostPaths = rawPath => {
-    const m = /^\/(?:api|nextjs-api)\/(?:chat|evaluation)\/([0-9a-f-]{36})\/cost\b/i.exec(String(rawPath || ''));
-    if (!m) return [rawPath];
-    const sid = encodeURIComponent(m[1]);
-    const pinEnds = (typeof Pin !== 'undefined' && Array.isArray(Pin.ENDPOINTS)) ? Pin.ENDPOINTS : [];
-    return [...new Set([
-      rawPath,
-      ...pinEnds.map(t => String(t).replace('{sid}', sid)),
-      `/api/chat/${sid}/cost?includeSession=true`,
-      `/api/chat/${sid}/cost`,
-      `/api/evaluation/${sid}/cost?includeSession=true`,
-      `/api/evaluation/${sid}/cost`,
-    ])];
-  };
-  const scrapeFreshCostDpls = async (force = false) => {
-    if (!force && now() - lastClientScrapeAt < 25000) return [];
-    lastClientScrapeAt = now();
-    const discovered = [];
-    const probePaths = ['/leaderboard/agent', '/?mode=agent', '/'];
-    const fetchOne = async (p) => {
-      try {
-        let html = '';
-        if (typeof Host !== 'undefined' && typeof Host.protoFetch === 'function') {
-          const r = await Host.protoFetch(p, { method: 'GET', timeout: 3200, headers: { Accept: 'text/html,*/*' } });
-          if (r && r.text) html = String(r.text);
-          if (Array.isArray(r?.pool)) {
-            for (const d of r.pool) {
-              if (d && /^dpl_[A-Za-z0-9]{16,48}$/.test(d) && !discovered.includes(d)) {
-                discovered.push(d);
-                try { Pin?.learnDpl?.(d, false); } catch {}
-              }
-            }
-          }
-        } else if (typeof rawFetch === 'function') {
-          const r = await rawFetch(p, { method: 'GET', cache: 'no-store', credentials: 'same-origin' });
-          if (r && r.ok) html = await r.text().catch(() => '');
-        }
-        if (html && typeof Pin !== 'undefined' && typeof Pin.discoverFromHtml === 'function') {
-          const found = Pin.discoverFromHtml(html);
-          for (const d of found) if (!discovered.includes(d)) discovered.push(d);
-        }
-      } catch {}
-    };
-    await Promise.allSettled(probePaths.slice(0, 2).map(fetchOne));
-    if (!discovered.length && probePaths[2]) await fetchOne(probePaths[2]);
-    return discovered;
-  };
-  const fallbackCostReq = globalThis.ArenaBilling.costRequest((path, options) => api(path, options), document);
-  const runFallbackWithRelogin = async (path, options = {}) => {
-    if (options && options._triedAllSkew && (options._protoStatus === 403 || options._protoStatus === 409)) {
-      throw Object.assign(Error('HTTP ' + options._protoStatus), { status: options._protoStatus });
-    }
-    const locked = typeof Pin !== 'undefined' && typeof Pin.lockedDpl === 'function' ? Pin.lockedDpl() : '';
-    if (locked) activeCostSkewDpl = locked;
-    const isExp = d => Boolean(typeof Pin !== 'undefined' && Pin.EXPIRED && typeof Pin.EXPIRED.has === 'function' && Pin.EXPIRED.has(d) && !SEED_COST_DPLS.has(d) && d !== locked);
-    const fullPool = [...new Set([locked, activeCostSkewDpl, 'dpl_3UbNvzoXfT6iNZqgBa7GjsGeKLaT', ...(typeof Pin !== 'undefined' && Array.isArray(Pin.POOL) ? Pin.POOL : []), ...COST_SKEW_POOL].filter(d => d && !isExp(d)))].slice(0, 1);
-    const pool = fullPool;
-    const altPaths = buildAltCostPaths(path);
-    let lastErr = null;
-    let scrapedInRun = Boolean(options && options._triedAllSkew);
-    for (let i = 0; i < pool.length; i++) {
-      const dpl = pool[i];
-      if (!(options && options._triedAllSkew) && i > 0 && typeof Host !== 'undefined' && typeof Host.protoFetch === 'function') {
-        try {
-          const pr = await Host.protoFetch(path, {
-            method: 'GET',
-            costShown: true,
-            skewDpl: dpl,
-            timeout: options?.timeout || 15000,
-            headers: { Accept: 'application/json', 'x-deployment-id': dpl },
-          });
-          if (pr && pr.ok && pr.text) {
-            const pData = JSON.parse(String(pr.text).trim());
-            if (pData && typeof pData === 'object') {
-              promoteWorkingCostDpl(pr.skewDpl || dpl, pr.endpointTpl || path);
-              return pData;
-            }
-          }
-        } catch {}
-      }
-      applySkewCookie(dpl);
-      const primaryPath = path;
-      const primaryOpts = dpl ? { ...options, headers: { ...(options?.headers || {}), 'x-deployment-id': dpl } } : options;
-      try {
-        const res = await fallbackCostReq(primaryPath, primaryOpts);
-        promoteWorkingCostDpl(dpl, path);
-        return res;
-      } catch (err) {
-        lastErr = err;
-        if (err && err.status === 401 && typeof Auth !== 'undefined' && typeof Auth.relogin === 'function' && now() - lastCostReloginAt > 45000) {
-          lastCostReloginAt = now();
-          const ok = await Promise.resolve(Auth.relogin()).catch(() => false);
-          if (ok) {
-            applySkewCookie(dpl);
-            const reloggedRes = await fallbackCostReq(primaryPath, primaryOpts);
-            promoteWorkingCostDpl(dpl, path);
-            return reloggedRes;
-          }
-        }
-        if (err && err.status === 403) {
-          globalCost403Until = Math.max(globalCost403Until, now() + 180000);
-          if (dpl) demoteFailedCostDpl(dpl);
-          throw err;
-        } else if (err && err.status === 409 && dpl) {
-          demoteFailedCostDpl(dpl);
-        }
-        if (err && err.status === 429) {
-          globalCost429Until = Math.max(globalCost429Until, now() + Math.max(Number(err.retryAfterMs) || 0, 35000));
-          try { if (typeof rotateVisitId === 'function') rotateVisitId(); } catch {}
-          throw err;
-        }
-        if (!err || err.status !== 409) throw err;
-      }
-    }
-    if (false && altPaths.length > 1 && !(options && options._triedAllSkew)) {
-      const bestDpl = activeCostSkewDpl || COST_SKEW_POOL[0] || '';
-      applySkewCookie(bestDpl);
-      for (let pIdx = 1; pIdx < altPaths.length; pIdx++) {
-        const altP = altPaths[pIdx];
-        try {
-          const altRes = await fallbackCostReq(altP, {
-            ...options,
-            headers: { ...(options?.headers || {}), ...(bestDpl ? { 'x-deployment-id': bestDpl } : {}) },
-          });
-          if (altRes && typeof altRes === 'object') {
-            promoteWorkingCostDpl(bestDpl, altP);
-            return altRes;
-          }
-        } catch {}
-      }
-    }
-    throw lastErr || Object.assign(Error('HTTP 403'), { status: 403 });
-  };
-  const costDocCache = (() => {
-    const map = new Map();
-    try {
-      const saved = typeof Store !== 'undefined' && Store.get ? Store.get('billing:costDocCache', null) : null;
-      if (saved && typeof saved === 'object') {
-        for (const [k, v] of Object.entries(saved)) {
-          if (k && v && typeof v.data?.messages === 'object') map.set(k, v);
-        }
-      }
-    } catch {}
-    return map;
-  })();
-  let saveCostDocTimer = 0;
-  const persistCostDocCache = () => {
-    clearTimeout(saveCostDocTimer);
-    saveCostDocTimer = setTimeout(() => {
-      try {
-        if (typeof Store === 'undefined' || !Store.set) return;
-        const entries = [...costDocCache.entries()].sort((a, b) => (b[1]?.at || 0) - (a[1]?.at || 0)).slice(0, 80);
-        Store.set('billing:costDocCache', Object.fromEntries(entries));
-      } catch {}
-    }, 600);
-  };
-  const getCachedCostDoc = (sid, lastCompId = '') => {
-    if (!sid) return null;
-    const rec = costDocCache.get(sid);
-    if (!rec || !rec.data || typeof rec.data.messages !== 'object') return null;
-    const msgKeys = Object.keys(rec.data.messages);
-    const age = now() - (rec.at || 0);
-    // 若已覆盖当前最后一条已完成回复，且有有效账单记录，直接复用本地缓存（零网络请求）
-    if (msgKeys.length > 0 && (!lastCompId || rec.lastId === lastCompId || rec.data.messages[lastCompId])) {
-      return rec.data;
-    }
-    // 即使某历史会话账单为空（或最后一条超过50条上限未收录），3分钟内也不重复轰炸 /cost 接口
-    if (age < 180000 && (!lastCompId || rec.lastId === lastCompId)) {
-      return rec.data;
-    }
-    return null;
-  };
-  const setCachedCostDoc = (sid, lastCompId, data) => {
-    if (!sid || !data || typeof data.messages !== 'object') return;
-    const chRef = typeof Chats !== 'undefined' ? Chats.get(sid) : null;
-    const isFreshPendingBill = Boolean(lastCompId && !data.messages[lastCompId] && chRef && now() - (chRef._lastTurnDoneAt || 0) < 12000);
-    costDocCache.set(sid, { lastId: isFreshPendingBill ? '' : (lastCompId || ''), count: Object.keys(data.messages).length, at: now(), data });
-    if (costDocCache.size > 24) {
-      const oldest = [...costDocCache.entries()].sort((a, b) => (a[1]?.at || 0) - (b[1]?.at || 0))[0]?.[0];
-      if (oldest) costDocCache.delete(oldest);
-    }
-    persistCostDocCache();
-  };
-  const clearCachedCostDoc = sid => {
-    if (sid) costDocCache.delete(sid);
-    else costDocCache.clear();
-    persistCostDocCache();
-  };
-  const costInflightBySid = new Map();
-  let costPaceQ = Promise.resolve(), costLastReqAt = 0;
-  const paceCostNet = async () => {
-    const p = costPaceQ.then(async () => {
-      const w = costLastReqAt + 850 - now();
-      if (w > 0) await new Promise(r => setTimeout(r, w));
-      costLastReqAt = now();
-    });
-    costPaceQ = p.catch(() => {});
-    return p;
-  };
-  const protoCostReq = async (path, options = {}) => {
-    const sidMatch = /\/(?:api|nextjs-api)\/(?:chat|evaluation)\/([0-9a-f-]{36})\/cost\b/i.exec(String(path || ''));
-    const reqSid = sidMatch ? sidMatch[1] : '';
-    const chatRef = (reqSid && typeof Chats !== 'undefined') ? Chats.get(reqSid) : null;
-    const lastCompId = chatRef ? (globalThis.ArenaBilling.completed(chatRef).at(-1)?.id || '') : '';
-    if (reqSid && !options?.forceNet && !chatRef?.busy) {
-      const cached = getCachedCostDoc(reqSid, lastCompId);
-      if (cached) return cached;
-    }
-    const curOwner = (typeof Acc !== 'undefined' && Acc.cur) ? String(Acc.cur) : '';
-    const inflightKey = reqSid ? `${curOwner}:${reqSid}:${lastCompId}:${String(path || '')}` : '';
-    if (globalCost429Until > now() && !options?.interactive) {
-      const cached429 = reqSid ? getCachedCostDoc(reqSid, lastCompId) : null;
-      if (cached429) return cached429;
-      throw Object.assign(Error('计费接口冷却中'), { status: 429, rateLimitedLocally: true, retryAfterMs: globalCost429Until - now() });
-    }
-    if (globalCost403Until > now() && !options?.interactive) {
-      const cached403 = reqSid ? getCachedCostDoc(reqSid, lastCompId) : null;
-      if (cached403) return cached403;
-      throw Object.assign(Error('计费接口拒绝读取（HTTP 403 冷却中）'), { status: 403, rateLimitedLocally: true, retryAfterMs: globalCost403Until - now() });
-    }
-    if (inflightKey && costInflightBySid.has(inflightKey)) return costInflightBySid.get(inflightKey);
-    const runNet = (async () => {
-      await paceCostNet();
-    const reqPath = (() => {
-      const m = /^\/api\/chat\/([0-9a-f-]{36})\/cost\?includeSession=true$/i.exec(String(path || ''));
-      const prefTpl = (typeof Pin !== 'undefined' && Array.isArray(Pin.ENDPOINTS) && Pin.ENDPOINTS[0]) ? Pin.ENDPOINTS[0] : '';
-      if (m && prefTpl && prefTpl.includes('{sid}')) return prefTpl.replace('{sid}', encodeURIComponent(m[1]));
-      return path;
-    })();
-    if (typeof Host !== 'undefined' && typeof Host.protoFetch === 'function') {
-      const lockedNow = typeof Pin !== 'undefined' && typeof Pin.lockedDpl === 'function' ? Pin.lockedDpl() : '';
-      if (lockedNow) activeCostSkewDpl = lockedNow;
-      try {
-        const r = await Host.protoFetch(reqPath, {
-          method: 'GET',
-          costShown: true,
-          skewDpl: activeCostSkewDpl,
-          timeout: options?.timeout || 15000,
-          headers: { Accept: 'application/json' },
-        });
-        if (r && !r.fallback && !r.error && typeof r.status === 'number') {
-          if (Array.isArray(r.pool)) {
-            for (const d of r.pool) { try { Pin?.learnDpl?.(d, false); } catch {} }
-          }
-          if (r.skewDpl && r.ok) {
-            globalCost403Until = 0;
-            promoteWorkingCostDpl(r.skewDpl, r.endpointTpl || reqPath);
-          }
-          if (r.status === 403) {
-            globalCost403Until = Math.max(globalCost403Until, now() + 180000);
-            if (chatRef) chatRef._lastCost403TurnId = lastCompId || '_turn';
-            options = Object.assign({}, options, { _triedAllSkew: true, _protoStatus: 403 });
-          } else if (r.status === 409 && r.triedAllSkew) {
-            options = Object.assign({}, options, { _triedAllSkew: true, _protoStatus: r.status });
-          }
-          if (r.status === 401 || r.status === 403) {
-            return await runFallbackWithRelogin(path, options);
-          }
-          if (r.status === 409 && !r.triedAllSkew) {
-            return await runFallbackWithRelogin(path, options);
-          }
-          if (r.status >= 300 && r.status < 400) {
-            throw Object.assign(Error('计费接口被重定向，未读取'), { status: r.status, responseFormat: 'redirect' });
-          }
-          const ct = String(r.contentType || '').toLowerCase();
-          const trimmed = String(r.text || '').trim();
-          const html = ct.includes('text/html') || /^<(?:!doctype|html)\b/i.test(trimmed);
-          let data = null;
-          if (!html && trimmed) {
-            try { data = JSON.parse(trimmed); } catch {
-              if (r.ok) throw Object.assign(Error('计费返回非 JSON'), { status: r.status || 200, responseFormat: 'invalid-json' });
-            }
-          }
-          if (!r.ok) {
-            const retrySec = Number(r.retryAfter);
-            const retryAfterMs = Number.isFinite(retrySec) && retrySec > 0 ? retrySec * 1000 : null;
-            if (r.status === 429) {
-              globalCost429Until = Math.max(globalCost429Until, now() + Math.max(Number(retryAfterMs) || 0, 45000));
-              try { if (typeof rotateVisitId === 'function') rotateVisitId(); } catch {}
-            }
-            throw Object.assign(Error(data?.error || data?.message || ('HTTP ' + r.status)), {
-              status: r.status,
-              retryAfterMs,
-              responseFormat: html ? 'html' : undefined,
-            });
-          }
-          if (html || !data || typeof data !== 'object') {
-            throw Object.assign(Error('计费接口返回非 JSON 页面'), { status: r.status || 200, responseFormat: html ? 'html' : 'invalid-json' });
-          }
-          if (reqSid && typeof data.messages === 'object') setCachedCostDoc(reqSid, lastCompId, data);
-          return data;
-        }
-      } catch (e) {
-        if (e && (e.status === 401 || (e.status === 403 && !options?._triedAllSkew))) {
-          const fbData = await runFallbackWithRelogin(path, options);
-          if (reqSid && fbData && typeof fbData.messages === 'object') setCachedCostDoc(reqSid, lastCompId, fbData);
-          return fbData;
-        }
-        if (e && (Number.isInteger(e.status) || e.responseFormat)) throw e;
-      }
-    }
-    const fbData = await runFallbackWithRelogin(path, options);
-    if (reqSid && fbData && typeof fbData.messages === 'object') setCachedCostDoc(reqSid, lastCompId, fbData);
-    return fbData;
-    })();
-    if (inflightKey) {
-      costInflightBySid.set(inflightKey, runNet);
-      return runNet.finally(() => { if (costInflightBySid.get(inflightKey) === runNet) costInflightBySid.delete(inflightKey); });
-    }
-    return runNet;
-  };
-  const engine = globalThis.ArenaBilling.create({
-    request: protoCostReq,
-    account: () => String(UI.host?.account?.id || UI.me?.id || UI.host?.account?.email || UI.me?.email || ''), clock: now, bundled,
-    savedCatalog: Store.get('billing:catalog', null), saveCatalog: doc => Store.set('billing:catalog', doc),
-    changed: sid => {
-      if (sid && typeof Chats !== 'undefined') {
-        const ch = Chats.get(sid);
-        if (ch) {
-          const last = globalThis.ArenaBilling.completed(ch).at(-1)?.id;
-          const stNow = engine.state(sid);
-          const used = stNow.info?.result?.unitPrice?.used || [];
-          const postCovered = stNow.postTurnCoveredIds || [];
-          if (last && used.some(r => r.messageId === last) && postCovered.includes(last) && stNow.status === 'ready') {
-            for (const t of delayed.get(ch) || []) clearTimeout(t);
-            delayed.delete(ch);
-          }
-          if (!isOtherProbeBusy(ch) && ch.gacha?.mode !== 'autoqa' && ch.gacha?.mode !== 'habit' && !ch.gacha?.fingerprint && Store.get('billing:auto', true) !== false) {
-            try { applyReverseIdentity(ch, { interactive: false }); } catch {}
-          }
-          if (stNow.status === 'forbidden' && stNow.httpStatus === 403 && !isOtherProbeBusy(ch)) {
-            try { ChatHabitFingerprint.identifyAndApply(ch, { force: false, fromCostFallback: true }); } catch {}
-          }
-        }
-      }
-      Bus.emit('billing', sid);
-      try { Bus.emit('budget'); } catch {}
-    },
-    paymentsReceived: (sid, rows, owner) => {
-      if (typeof Budget !== 'undefined') Budget.payments(sid, rows, owner);
-      try { if (typeof Price !== 'undefined' && sid) Price.learn(sid); } catch {}
-      try { Bus.emit('budget'); } catch {}
-    },
-  });
-  const REASONS = {
-    'no-catalog': '第一方价格候选池为空', 'no-paired-samples': '账单尚未与完整助手消息配对，稍后刷新',
-    'no-assistant-output': '没有可配对的完整助手回复', 'no-base-price': '账单尚未提供基准费用',
-    'no-costs': '尚未取得可用计费数据',
-  };
-  const autoEnabled = () => {
-    try { if (typeof Prefs !== 'undefined' && typeof Prefs.billingAuto === 'boolean') return Prefs.billingAuto; } catch {}
-    return Store.get('billing:auto', true) !== false;
-  };
-  const setAutoEnabled = (on) => {
-    const val = Boolean(on);
-    try { if (typeof Prefs !== 'undefined') { Prefs.billingAuto = val; if (typeof savePrefs === 'function') savePrefs(); } } catch {}
-    try { if (typeof Store !== 'undefined' && Store.set) Store.set('billing:auto', val); } catch {}
-    return val;
-  };
-  const autoSeen = new WeakMap();
-  try {
-    if (typeof Bus !== 'undefined' && typeof Bus.on === 'function') {
-      Bus.on('ipchange', () => { try { engine.clearCooldowns?.(); } catch {} });
-    }
-  } catch {}
-
-  function isOpenCandidateName(s) {
-    const id = String(s || '').toLowerCase();
-    if (/muse/i.test(id)) return false;
-    const vid = (typeof Brand !== 'undefined' && typeof Brand.of === 'function') ? Brand.of(id) : '';
-    if (['deepseek', 'qwen', 'zhipu', 'moonshot', 'minimax', 'mistral', 'meta', 'stepfun', 'tencent', 'xiaomi', 'compat'].includes(vid)) return true;
-    return /qwen|farris|paisley|deepseek|v4\.1|v3\.[12]|\br[12]-|glm|mimo|minimax|\bm[23]\.[0-9]|kimi|\bk2\.[0-9]|moonshot|mistral|hy3|hy4|hunyuan|step-5|stepfun|gpt-oss|llama|nemotron|beam|caveman|reflection|inkling|thinky|thinking-?machines|may26-chatbot4|\b\d+b[-_\s]+a\d+b\b|开源|国产|compat/i.test(id);
-  }
-  function isClosedCandidateName(s) {
-    const id = String(s || '').toLowerCase();
-    if (/muse/i.test(id)) return true;
-    if (isOpenCandidateName(id)) return false;
-    const vid = (typeof Brand !== 'undefined' && typeof Brand.of === 'function') ? Brand.of(id) : '';
-    if (['claude', 'openai', 'gemini', 'grok'].includes(vid)) return true;
-    return /gpt-|6-astra|6\.1-sol|6-sol|6-luna|5\.6-|openai|claude|anthropic|opus|sonnet|haiku|fable|gemini|google|barium|argon|grok|x-ai|muse|solar-pro/i.test(id);
-  }
-  function shouldSkipCostForOpenSource(chat) {
-    if (!chat) return false;
-    if (chat._closedLockedModel && !isOpenCandidateName(chat._closedLockedModel)) return false;
-    const m = chat.sid && typeof Models !== 'undefined' ? Models.get(chat.sid) : null;
-    if (m?.userCorrected) {
-      return m.name === '开源模型' || isOpenCandidateName(m.name);
-    }
-    const thinkSt = (typeof ThinkingStatus !== 'undefined' && ThinkingStatus.of) ? ThinkingStatus.of(chat) : null;
-    if (thinkSt?.kind === 'compat-thinking' || thinkSt?.kind === 'open') return true;
-    const allMsgs = [...(Array.isArray(chat.messages) ? chat.messages : []), chat.live].filter(x => x && x.role === 'assistant');
-    if (allMsgs.length > 0) {
-      const firstParts = Array.isArray(allMsgs[0]?.parts) ? allMsgs[0].parts : [];
-      if (allMsgs[0]?.metadata?.openThinkStopped || firstParts.some(p => p && (p.type === 'reasoning' || p.type === 'thinking') && /[^\s.…·。]/.test(String(p.text || p.reasoning || '').trim()))) return true;
-    }
-    if (m && !m.routed && (m.name === '开源模型' || (isOpenCandidateName(m.name) && (m.provider === '开源思考过滤' || m.provider === '开源思考识别（免计费反推）')))) return true;
-    return false;
-  }
-
-  // 识别为开源模型后：立即标记为「开源模型」并同步修改对话名称（侧栏卡片与顶部标签页），不自动浪费时间推理具体计费模型（除非用户手动点击反推锁定）
-  const _markingOpenSids = new Set();
-  function markAsOpenSourceModel(chat, { force = false } = {}) {
-    const sid = typeof chat === 'string' ? chat : chat?.sid;
-    if (!sid || ChatHabitFingerprint.isEvalSession?.(chat)) return null;
-    const c = typeof chat === 'object' && chat ? chat : (typeof Chats !== 'undefined' ? Chats.get(sid) : null);
-    if (c?._killedOpenThink || (typeof Gacha !== 'undefined' && Gacha.isKilledOpenChat?.(sid))) return null;
-    const known = typeof Models !== 'undefined' ? Models.get(sid) : null;
-    if (_markingOpenSids.has(sid)) return known;
-    if (known?.userCorrected && !force) return known;
-    // 若用户之前已手动点击「反推锁定」推理出了具体的开源型号（manualOpenInferred），在自动流程中保留该结果不覆盖
-    if (known?.manualOpenInferred && !force) return known;
-    if (!force && known?.name && known.name !== '开源模型' && isClosedCandidateName(known.name) && !known.guess) return known;
-    if (!force && c && Array.isArray(c.messages)) {
-      const asstList = c.messages.filter(m => m && m.role === 'assistant');
-      if (asstList.length > 1) {
-        const firstParts = Array.isArray(asstList[0]?.parts) ? asstList[0].parts : [];
-        const firstHadVisible = Boolean(asstList[0]?.metadata?.openThinkStopped || firstParts.some(p => p && (p.type === 'reasoning' || p.type === 'thinking') && /[^\s.…·。]/.test(String(p.text || p.reasoning || '').trim())));
-        if (!firstHadVisible) return known;
-      }
-    }
-    const alreadyOpen = Boolean(known && known.name === '开源模型' && !known.guess && !known.pendingConfirm && known.sure);
-    if (alreadyOpen && !force) {
-      if (c) c._openSourceMarked = true;
-      return known;
-    }
-    _markingOpenSids.add(sid);
-    try {
-      if (c) c._openSourceMarked = true;
-      const nextEntry = {
-        ...(known || {}),
-        name: '开源模型',
-        candidateName: '开源模型',
-        rawLabel: '开源模型',
-        reverseCandidateId: 'open-source',
-        reverseLabel: '开源模型',
-        reverseMatch: 100,
-        confidence: 100,
-        habitTags: ['开源思考 · 已跳过自动计费反推（手动点反推锁定可测具体型号）'],
-        habitInferred: false,
-        reverseInferred: true,
-        billingProbe: true,
-        sure: true,
-        guess: false,
-        uncertain: false,
-        pendingConfirm: false,
-        fromTitle: false,
-        routed: false,
-        provider: '开源思考识别（免计费反推）',
-        why: '检测到开源模型，已自动同步对话名称并跳过自动计费推理（如需细分型号请手动点击反推锁定）',
-        at: known?.at && alreadyOpen ? known.at : now(),
-      };
-      if (typeof Models !== 'undefined') {
-        Models.set(sid, nextEntry);
-        try { if (typeof Strength !== 'undefined' && Strength.noteReverse) Strength.noteReverse(sid, nextEntry); } catch {}
-        try { if (typeof Bus !== 'undefined') Bus.emit('model', c || { sid }, nextEntry); } catch {}
-      }
-      try {
-        const ts = c?.sentAt || now();
-        if (typeof Notes !== 'undefined') {
-          const n = Notes.rec?.(sid, ts);
-          if (n && !n.t) n.t = ts;
-          Notes.save?.();
-        }
-        if (typeof Titles !== 'undefined') {
-          Titles.capture?.(sid, ts);
-          Titles.local?.(sid);
-          Titles.kick?.(true);
-        }
-        if (typeof History !== 'undefined' && History.byId) {
-          const he = History.byId(sid);
-          const want = typeof Titles !== 'undefined' && Titles.want ? Titles.want(sid) : '';
-          if (he && want && he.title !== want) he.localTitle = want;
-        }
-        if (typeof Bus !== 'undefined') Bus.emit('billing', sid);
-        UI?.renderListSoon?.();
-        UI?.renderTabs?.();
-        Dock?.soon?.();
-      } catch {}
-      return nextEntry;
-    } finally {
-      _markingOpenSids.delete(sid);
-    }
-  }
-  function cleanModelLabel(s) {
-    let raw = String(s || '').trim();
-    if (!raw) return raw;
-    if (typeof ChatHabitFingerprint !== 'undefined' && typeof ChatHabitFingerprint.sanitizeCorruptedTierSlug === 'function') {
-      raw = ChatHabitFingerprint.sanitizeCorruptedTierSlug(raw);
-    }
-    raw = raw.replace(/(?:\s*\((None|Minimal|Low|Medium|High|xHigh|Max)\))+$/i, (_, lastTier) => ` (${lastTier})`);
-    if (!/\s/.test(raw) && /^[a-z0-9._-]+$/i.test(raw) && typeof ChatHabitFingerprint !== 'undefined' && typeof ChatHabitFingerprint.formatDisplayModelLabel === 'function') {
-      raw = ChatHabitFingerprint.formatDisplayModelLabel(raw, raw);
-    }
-    return raw;
-  }
-  function shortCanonLabel(s) {
     const cleaned = cleanModelLabel(s);
     if (!cleaned) return '';
     try {
@@ -761,6 +150,7 @@ const BillingProbe = (() => {
         let rParts = 0, rEnc = 0, rOpen = 0, tCount = 0, tLen = 0, lowerDoc = 0, upperDoc = 0;
         let preToolChars = 0, interToolChars = 0, seenTool = false, pendingBetween = 0;
         let boxComment = 0, warmPalette = 0, sandboxLink = 0, colorCss = 0, redMotion = 0, wireFam = '';
+        if (msg?._fmt === 'anthropic' || msg?._fmt === 'openai') wireFam = msg._fmt;
         for (const p of parts) {
           if (!p) continue;
           if (p.type === 'reasoning') {
@@ -911,6 +301,22 @@ const BillingProbe = (() => {
       }
     }
 
+    if (!msgPivot && habitRes?.features?.htmlSvgRoutePivot && compMsgs.length >= 2) {
+      const hp = habitRes.features.htmlSvgRoutePivot;
+      const pIdx = Math.max(1, compMsgs.length - 1);
+      msgPivot = {
+        type: 'pelican-retest-route',
+        pivotIdx: pIdx,
+        fromTurn: Math.max(1, pIdx),
+        toTurn: pIdx + 1,
+        prevMessageId: compMsgs[pIdx - 1]?.id || null,
+        pivotMessageId: compMsgs[pIdx]?.id || null,
+        fromHtmlModel: hp.fromModel,
+        toHtmlModel: hp.toModel,
+        hadInterruptedFailover: false,
+      };
+    }
+
     const revPool = [
       ...(Array.isArray(rawRevList) ? rawRevList : []),
       ...(Array.isArray(m?.reverseCandidates) ? m.reverseCandidates : []),
@@ -995,8 +401,12 @@ const BillingProbe = (() => {
       fromRaw = chatObj._routeBaseline.label;
     } else if (msgPivot && m?.routeFrom && !m?._fromMicroProbeTurn1) {
       fromRaw = m.routeFrom;
+    } else if (msgPivot?.fromHtmlModel) {
+      fromRaw = msgPivot.fromHtmlModel;
     } else if (m && !m.habitInferred && m.reverseInferred && m.name) {
       fromRaw = m.reverseLabel || m.name;
+    } else if (msgPivot && m?.name && !m?._fromMicroProbeTurn1 && (m.sure || Number(m.confidence ?? m.reverseMatch ?? 0) >= 80)) {
+      fromRaw = m.routeFrom || m.reverseLabel || m.name;
     }
 
     const fromCanon = toCanonLabel(fromRaw);
@@ -1028,7 +438,7 @@ const BillingProbe = (() => {
       solvedTurns >= totalTurns &&
       !d?.routeSwitched
     );
-    const isHardStructuralPivot = Boolean(msgPivot && (msgPivot.type === 'zero-to-enc' || msgPivot.type === 'enc-to-zero' || msgPivot.type === 'closed-to-open' || msgPivot.type === 'open-to-closed'));
+    const isHardStructuralPivot = Boolean(msgPivot && (msgPivot.type === 'zero-to-enc' || msgPivot.type === 'enc-to-zero' || msgPivot.type === 'closed-to-open' || msgPivot.type === 'open-to-closed' || msgPivot.type === 'pelican-retest-route'));
     if (costCoveredLatest && !isHardStructuralPivot) return { routed: false };
 
     const toHabitMatch = msgPivot?.type === 'closed-to-open' ? Math.max(96, Number(topHabit?.match || 0)) : Number(topHabit?.match || 0);
@@ -1060,9 +470,9 @@ const BillingProbe = (() => {
     );
     const msgPivotConfirmed = Boolean(
       msgPivot &&
-      (fromFam !== toFam || msgPivot.type === 'closed-to-open' || msgPivot.type === 'open-to-closed') &&
+      (fromFam !== toFam || msgPivot.type === 'closed-to-open' || msgPivot.type === 'open-to-closed' || msgPivot.type === 'pelican-retest-route') &&
       toHabitMatch >= 82 &&
-      (habitGap >= 12 || googleToEncConflict || encToGoogleConflict || msgPivot.type === 'anthropic-to-openai' || msgPivot.type === 'openai-to-anthropic' || msgPivot.type === 'closed-to-open' || msgPivot.type === 'open-to-closed')
+      (habitGap >= 12 || googleToEncConflict || encToGoogleConflict || msgPivot.type === 'anthropic-to-openai' || msgPivot.type === 'openai-to-anthropic' || msgPivot.type === 'closed-to-open' || msgPivot.type === 'open-to-closed' || msgPivot.type === 'pelican-retest-route')
     );
     const metaConflictConfirmed = Boolean(
       !costCoveredLatest &&
@@ -1552,7 +962,8 @@ const BillingProbe = (() => {
               existing.dualSum = Math.round((effRevBase + hc.match) * 10) / 10;
               existing.match = isBillingFeasibleTie && isEffectiveLearnedOrDecisive
                 ? Math.min(99.8, Math.round((effRevBase * 0.35 + hc.match * 0.65) * 10) / 10)
-                : existing.revPct;
+                : existing.combinedPct;
+              existing.combinedPct = existing.match;
               existing.combinedWeight = hasRealCostRev
                 ? (200 + existing.dualSum + (existing.diophantinePassed ? 50 : 15) + (isBillingFeasibleTie ? learnedRankBoost : (isEffectiveLearnedOrDecisive ? 6 : 0)))
                 : (200 + existing.dualSum + (isEffectiveLearnedOrDecisive ? 12 : 0));
@@ -1793,6 +1204,7 @@ const BillingProbe = (() => {
     }
     const merged = [...byKey.values()].filter(x => !violatesThinkingScope(x.id) && !violatesThinkingScope(x.label)).sort((a, b) => {
       if (Boolean(a.userCorrected) !== Boolean(b.userCorrected)) return Number(Boolean(b.userCorrected)) - Number(Boolean(a.userCorrected));
+      // if (Boolean(a.hasDual) !== Boolean(b.hasDual)) return Number(Boolean(b.hasDual)) - Number(Boolean(a.hasDual)); ((b.displayMatch || 0) - (a.displayMatch || 0))
       if (Boolean(a.routedTarget) !== Boolean(b.routedTarget)) return Number(Boolean(b.routedTarget)) - Number(Boolean(a.routedTarget));
       if (Boolean(a.preRouteModel) !== Boolean(b.preRouteModel)) return Number(Boolean(b.preRouteModel)) - Number(Boolean(a.preRouteModel));
       const aDual = Boolean(!a.preRouteModel && a.both && (a.revPct || 0) > 0 && ((a.habitPct ?? a.fpPct) || 0) > 0);
@@ -1859,3 +1271,581 @@ const BillingProbe = (() => {
     try { summaryCache.clear(); topConfidenceCache.clear(); } catch {}
     return val;
   }
+
+  const summaryCache = new Map();
+  const topConfidenceCache = new Map();
+  const clearSummaryCache = () => { try { summaryCache.clear(); topConfidenceCache.clear(); } catch {} };
+  function summary(sid, opts = {}) {
+    const mPre = sid && typeof Models !== 'undefined' ? Models.get(sid) : null;
+    const isPoisonedZeroCost = Boolean(mPre && mPre.reverseInferred && Number(mPre.reverseTokens?.total || 0) === 0 && (Number(mPre.reverseVer || 0) < 175 || (Array.isArray(mPre.reverseCandidates) && mPre.reverseCandidates.some(c => c?.structuralRev))));
+    const readOnly = opts?.commit === true ? false : (opts?.readOnly !== undefined ? Boolean(opts.readOnly) : !isPoisonedZeroCost);
+    if (sid && !readOnly) try { upgradeCachedOpus56(sid); } catch {}
+    const chat = Chats.get(sid);
+    const compList = globalThis.ArenaBilling.completed(chat);
+    const compTail = compList.at(-1);
+    const state = engine.state(sid);
+    const trace = Trace.latest(sid);
+    const model = Models.get(sid);
+    const bRev = typeof ChatHabitFingerprint !== 'undefined' && typeof ChatHabitFingerprint.bankRevision === 'function' ? ChatHabitFingerprint.bankRevision() : 0;
+    const cRev = typeof ChatHabitFingerprint !== 'undefined' && typeof ChatHabitFingerprint.calibRevision === 'function' ? ChatHabitFingerprint.calibRevision() : 0;
+    const msgDigest = (chat && typeof ChatHabitFingerprint?.computeMessagesDigest === 'function') ? ChatHabitFingerprint.computeMessagesDigest(chat.messages) : '';
+    const rf = getRankFilter();
+    const tailMsg = chat?.messages?.at(-1);
+    const tailPart = tailMsg?.parts?.at(-1);
+    const tailLen = typeof tailPart?.text === 'string' ? tailPart.text.length : (typeof tailPart?.inputText === 'string' ? tailPart.inputText.length : 0);
+    const busySig = chat?.busy ? `1:${tailMsg?.id || ''}:${tailMsg?.parts?.length || 0}:${tailLen >> 8}:${chat?.fmt?.tN ? (chat.fmt.tN >> 4) : 0}` : '0';
+    const makeSumCacheKey = (mObj, latestId = compTail?.id) => sid ? `${readOnly ? 'ro' : 'rw'}:${state.at || 0}:${state.status || ''}:${state.httpStatus || 0}:${state.retryAt || 0}:${state.pending ? 1 : 0}:${latestId || ''}:${chat?.messages?.length || 0}:${msgDigest}:${busySig}:${mObj?.at || 0}:${mObj?.name || ''}:${mObj?.reverseVer || 0}:${mObj?.routed ? 1 : 0}:${trace?.done ? 1 : 0}:${isCostProbeEnabled() ? 1 : 0}:${bRev}:${cRev}:${rf.rev ? 1 : 0}:${rf.habit ? 1 : 0}` : '';
+    const preCacheKey = makeSumCacheKey(model, compTail?.id);
+    if (preCacheKey && summaryCache.has(sid)) {
+      const hit = summaryCache.get(sid);
+      if (hit && (hit.key === preCacheKey || hit.prevKey === preCacheKey || hit.compKey === preCacheKey)) return hit.val;
+    }
+    const featForTarget = (chat && Array.isArray(chat.messages) && chat.messages.length && typeof ChatHabitFingerprint?.extractFeatures === 'function')
+      ? ChatHabitFingerprint.extractFeatures(chat, model)
+      : null;
+    const latest = (featForTarget?.targetMessageId && compList.find(m => m?.id === featForTarget.targetMessageId)) || compTail;
+    const cacheKey = makeSumCacheKey(model, latest?.id);
+    if (cacheKey && summaryCache.has(sid)) {
+      const hit = summaryCache.get(sid);
+      if (hit && (hit.key === cacheKey || hit.prevKey === cacheKey || hit.compKey === cacheKey)) return hit.val;
+    }
+    const paymentsList = Array.isArray(state.payments) ? state.payments : [];
+    const rawPay = latest ? paymentsList.find(p => p?.messageId === latest.id) : paymentsList.at(-1);
+    const payment = rawPay ? {
+      ...rawPay,
+      effectiveUsd: rawPay.chargedUsd != null ? rawPay.chargedUsd : (rawPay.basePriceUsd != null ? rawPay.basePriceUsd * 2 : rawPay.upstreamUsd),
+    } : null;
+    const sessionPayment = paymentsList.length ? paymentsList.reduce((acc, r) => {
+      if (r.chargedUsd != null) acc.chargedUsd = (acc.chargedUsd || 0) + r.chargedUsd;
+      if (r.upstreamUsd != null) acc.upstreamUsd = (acc.upstreamUsd || 0) + r.upstreamUsd;
+      if (r.basePriceUsd != null) acc.basePriceUsd = (acc.basePriceUsd || 0) + r.basePriceUsd;
+      const eff = r.chargedUsd != null ? r.chargedUsd : (r.basePriceUsd != null ? r.basePriceUsd * 2 : r.upstreamUsd);
+      if (eff != null) { acc.effectiveUsd = (acc.effectiveUsd || 0) + eff; acc.count += 1; acc.turns += 1; }
+      return acc;
+    }, { chargedUsd: null, upstreamUsd: null, basePriceUsd: null, effectiveUsd: null, count: 0, turns: 0 }) : null;
+    const estimate = chat ? LiveEst.of(chat) : null;
+    const pairedTrace = !!latest && !chat?.busy && trace?.done && (trace.records || []).some(row => row.messageId === latest.id);
+    const traceUsd = pairedTrace && trace.sum?.usd > 0 ? trace.sum.usd : null;
+    const diagnostics = engine.diagnostics(sid, { latestId: latest?.id, model, trace, tracePaired: pairedTrace });
+    const pre = diagnostics.preimage || null;
+    const latestPreimage = (pre && latest?.id && pre.byMessage?.[latest.id]) || (pre?.byMessage ? Object.values(pre.byMessage).at(-1) : null) || null;
+    const mergedCandidates = mergeCandidates(sid, diagnostics, model);
+    if (sessionPayment) {
+      const costsObj = state.info?.result?.costs || null;
+      const chanSum = costsObj ? (Number(costsObj.inputUsd || 0) + Number(costsObj.outputUsd || 0) + Number(costsObj.cacheReadUsd || 0) + Number(costsObj.cacheWriteUsd || 0) + Number(costsObj.imageGenerationCostUsd || 0)) : null;
+      const chargedOk = sessionPayment.chargedUsd != null && sessionPayment.basePriceUsd != null && Math.abs(sessionPayment.chargedUsd - sessionPayment.basePriceUsd * 2) <= 1e-8;
+      const channelOk = sessionPayment.upstreamUsd != null && chanSum != null && Math.abs(chanSum - sessionPayment.upstreamUsd) <= 1e-8;
+      const preimageOk = Boolean(pre?.totals?.total > 0 && mergedCandidates[0]?.diophantinePassed !== false);
+      sessionPayment.reconciled = Boolean(chargedOk || (channelOk && preimageOk));
+      sessionPayment.chargedIdentityOk = chargedOk;
+      sessionPayment.channelIdentityOk = channelOk;
+      sessionPayment.preimageIdentityOk = preimageOk;
+      sessionPayment.channelsUsd = costsObj ? {
+        inputUsd: Number(costsObj.inputUsd || 0),
+        outputUsd: Number(costsObj.outputUsd || 0),
+        cacheReadUsd: Number(costsObj.cacheReadUsd || 0),
+        cacheWriteUsd: Number(costsObj.cacheWriteUsd || 0),
+        imageGenerationCostUsd: Number(costsObj.imageGenerationCostUsd || 0),
+      } : null;
+    }
+    const out = {
+      payment,
+      sessionPayment,
+      estimate,
+      traceUsd,
+      tracePaired: pairedTrace,
+      busy: !!chat?.busy,
+      consensus: diagnostics.agreement || engine.consensus(sid, model, latest?.id),
+      diagnostics,
+      ranked: Array.isArray(diagnostics?.candidates) ? diagnostics.candidates : [],
+      top: mergedCandidates,
+      mergedCandidates,
+      habitRoute: mergedCandidates._habitRoute || null,
+      preimage: pre ? { latest: latestPreimage, totals: pre.totals, refVersion: pre.refVersion } : null,
+    };
+    const isActiveOrLoadedChat = Boolean(
+      chat?.loaded ||
+      (Array.isArray(chat?.messages) && chat.messages.length > 0) ||
+      (Array.isArray(model?.reverseCandidates) && model.reverseCandidates.length > 0) ||
+      model?.habitFeatures ||
+      (typeof Tabs !== 'undefined' && Tabs.cur?.sid === sid) ||
+      (typeof UI !== 'undefined' && UI.els?.chat?.sid === sid)
+    );
+    const cloudTitleForSync = (typeof History !== 'undefined' && History.byId?.(sid)?.title) || chat?.title || '';
+    const restoredForSync = typeof TitleSync !== 'undefined' ? TitleSync.restored?.(sid) : null;
+    const isFullEncodedTitle = Boolean((typeof TitleCipher !== 'undefined' && TitleCipher.isEncoded?.(cloudTitleForSync)) || (restoredForSync && !restoredForSync.fromPrefix && !restoredForSync.fromLocal));
+    const hasLocalSyncEvidence = Boolean(
+      (Array.isArray(chat?.messages) && chat.messages.length > 0) ||
+      (Array.isArray(model?.reverseCandidates) && model.reverseCandidates.length > 0) ||
+      model?.habitFeatures ||
+      (diagnostics?.samples?.observations > 0)
+    );
+    try {
+    if (!opts?.noModelSync && (!isFullEncodedTitle || hasLocalSyncEvidence) && (isActiveOrLoadedChat || hasLocalSyncEvidence) && sid && mergedCandidates.length > 0 && (!model || (!model.userCorrected && !(model.fingerprint?.result && !model.reverseInferred && !model.habitInferred && !model.billingProbe)))) {
+      const top0 = mergedCandidates[0], top1 = mergedCandidates[1];
+      const hr = out.habitRoute;
+      const isNowRouted = Boolean(top0?.routed || hr?.routed || diagnostics?.routeSwitched || diagnostics?.effortDowngraded || diagnostics?.routeType);
+      const top0Fam = (typeof ChatHabitFingerprint !== 'undefined' && ChatHabitFingerprint.parseModelFamilyAndTier) ? ChatHabitFingerprint.parseModelFamilyAndTier(top0?.canon || top0?.label || '').famKey : '';
+      const top1Fam = (typeof ChatHabitFingerprint !== 'undefined' && ChatHabitFingerprint.parseModelFamilyAndTier) ? ChatHabitFingerprint.parseModelFamilyAndTier(top1?.canon || top1?.label || '').famKey : '';
+      const isSameFamilyTop2 = Boolean(top0Fam && top1Fam && top0Fam === top1Fam);
+      const hasClearTopMargin = !top1 || isNowRouted || (Number(top0.match || 0) - Number(top1.match || 0)) >= 0.05 || (Number(top0.combinedWeight ?? top0.match ?? 0) - Number(top1.combinedWeight ?? top1.match ?? 0)) >= 0.5;
+      if (!hasClearTopMargin && isSameFamilyTop2 && top0) {
+        top0.effortAmbiguous = true;
+        top0.supportGranularity = 'family';
+      }
+      const isUniqueTop = Boolean(top0 && !top0.streamFallback && Number(top0.match || 0) >= 50 && hasClearTopMargin && top0.supportGranularity !== 'family');
+      if (isUniqueTop && (opts?.readOnly === false || model?.name) && (!model?.routed || isNowRouted)) {
+        const rawTopCanon = (top0.label === '开源模型' || top0.canon === '开源模型') ? '开源模型' : (typeof Strength !== 'undefined' && Strength.canon ? Strength.canon(top0.canon || top0.label) : String(top0.canon || top0.label || '')).replace(/[?？]+$/, '');
+        const topCanon = (rawTopCanon !== '开源模型' && typeof Strength !== 'undefined' && Strength.foldVer) ? Strength.foldVer(rawTopCanon) : rawTopCanon;
+        const rawCurCanon = (typeof Strength !== 'undefined' && Strength.canon ? Strength.canon(model?.name || '') : String(model?.name || '')).replace(/[?？]+$/, '');
+        const curCanon = (rawCurCanon && typeof Strength !== 'undefined' && Strength.foldVer) ? Strength.foldVer(rawCurCanon) : rawCurCanon;
+        const nextMatch = Math.round(Number(top0.match || 0) * 10) / 10;
+        const rawTopDecomp = (typeof ChatHabitFingerprint !== 'undefined' && ChatHabitFingerprint.decomposeModelIdentity)
+          ? ChatHabitFingerprint.decomposeModelIdentity(topCanon)
+          : null;
+        const topDecomp = (rawTopDecomp && rawTopDecomp.hasExplicitTier)
+          ? rawTopDecomp
+          : ((typeof ChatHabitFingerprint !== 'undefined' && ChatHabitFingerprint.decomposeModelIdentity)
+            ? ChatHabitFingerprint.decomposeModelIdentity(topCanon, { effort: top0.inferredEffort || top0.effortProfile?.effort })
+            : null);
+        const topEff = topDecomp
+          ? topDecomp.effort
+          : String(top0.inferredEffort || top0.effortProfile?.effort || model?.reverseEffort || 'standard').toLowerCase();
+        const syncedLabel = topDecomp?.displayLabel || top0.label || topCanon;
+        const calcRevSc = (typeof Strength !== 'undefined' && Strength.reverseDepthScore)
+          ? Strength.reverseDepthScore(sid, { ...(model || {}), name: topCanon, reverseEffort: topEff, routed: isNowRouted }, out, chat)
+          : null;
+        const nextScore = calcRevSc ?? top0.habitScore ?? model?.reverseScore ?? model?.habitScore ?? undefined;
+        const isHabitWinner = Boolean((top0.habitSource || top0.source === 'fp' || top0.structuralRev) && (!top0.revPct || top0.structuralRev));
+        const isLockedAutoOpen = Boolean(model && (model.name === '开源模型' || model.reverseCandidateId === 'open-source') && !model.manualOpenInferred && !model.userCorrected);
+        const rAnnotations = isNowRouted
+          ? applyChatRouteAnnotations(
+              sid, chat, diagnostics, model, hr,
+              top0.routeType || hr?.routeType || diagnostics?.routeType || (diagnostics?.effortDowngraded ? 'effort' : 'model'),
+              top0.routeFrom || hr?.fromLabel || diagnostics?.initialModelLabel || model?.routeFrom || '',
+              top0.routeTo || hr?.toLabel || diagnostics?.routedModelLabel || topCanon,
+              top0.routeReason || hr?.reason || ''
+            )
+          : null;
+        const isProtectedRealCostLock = Boolean(
+          model &&
+          curCanon &&
+          curCanon !== topCanon &&
+          diagnostics?.read?.httpStatus === 403 &&
+          !(diagnostics?.samples?.observations > 0) &&
+          model.reverseInferred &&
+          !model.habitInferred &&
+          !model.guess &&
+          (Number(model.reverseTokens?.total) > 0 || Number(model.reverseTotalTokens?.total) > 0 || Number(model.costUsd) > 0) &&
+          !top0.both
+        );
+        const rawRevCanon = (typeof Strength !== 'undefined' && Strength.canon ? Strength.canon(model?.reverseLabel || '') : String(model?.reverseLabel || '')).replace(/[?？]+$/, '');
+        const revCanon = (rawRevCanon && typeof Strength !== 'undefined' && Strength.foldVer) ? Strength.foldVer(rawRevCanon) : rawRevCanon;
+        const hasRealCostInModel = Boolean(
+          (diagnostics?.samples?.observations > 0 && diagnostics?.read?.status !== 'forbidden' && diagnostics?.read?.status !== 'error') ||
+          Number(model?.reverseTokens?.total) > 0 ||
+          Number(model?.reverseTotalTokens?.total) > 0 ||
+          Number(model?.costUsd) > 0
+        );
+        const hasStaleZeroCostRev = Boolean(!hasRealCostInModel && Array.isArray(model?.reverseCandidates) && model.reverseCandidates.length > 0);
+        const hasInternalMismatch = Boolean((curCanon && revCanon && curCanon !== revCanon) || (topEff && topEff !== 'standard' && model?.tier && model.tier !== topEff) || hasStaleZeroCostRev);
+        const syncSig = `${topCanon}:${topEff}:${nextMatch}:${nextScore != null ? Math.round(Number(nextScore) * 10) : ''}:${isNowRouted ? 1 : 0}:${rAnnotations?.routeTo || ''}:${hasStaleZeroCostRev ? 0 : 1}`;
+        const needModelSync = Boolean(
+          !isLockedAutoOpen &&
+          !isProtectedRealCostLock &&
+          topCanon &&
+          !/^(未知型号|待定|未识别)$/.test(topCanon) &&
+          !(model?._lastSyncSig === syncSig && curCanon === topCanon && !model?.pendingConfirm && !model?.guess && !hasStaleZeroCostRev) &&
+          (curCanon !== topCanon || hasInternalMismatch || !model || Boolean(model.routed) !== isNowRouted || (isNowRouted && (!model.lastRouteNotice || model.routeTo !== rAnnotations?.routeTo)) || model.pendingConfirm || model.guess || Math.abs(Number(model?.reverseMatch ?? model?.confidence ?? 0) - nextMatch) >= 0.1 || (nextScore != null && model.reverseScore != null && Math.abs(Number(model.reverseScore) - Number(nextScore)) >= 0.5))
+        );
+        if (needModelSync) {
+          const syncedEntry = {
+            ...(model || { sid }),
+            ...(hasStaleZeroCostRev ? { reverseCandidates: undefined } : {}),
+            _lastSyncSig: syncSig,
+            name: topCanon,
+            candidateName: topCanon,
+            rawLabel: syncedLabel,
+            effort: topEff || model?.effort || model?.reverseEffort || undefined,
+            tier: topEff || model?.tier || model?.reverseEffort || undefined,
+            reverseCandidateId: top0.id || model?.reverseCandidateId || topCanon,
+            reverseLabel: syncedLabel,
+            reverseEffort: topEff || model?.reverseEffort || undefined,
+            reverseMatch: nextMatch,
+            confidence: nextMatch,
+            reverseScore: nextScore,
+            habitScore: top0.habitScore ?? model?.habitScore ?? nextScore,
+            guess: false,
+            pendingConfirm: false,
+            uncertain: false,
+            sure: Boolean(top0.diophantinePassed || top0.userLearned || top0.match >= 75),
+            habitInferred: isHabitWinner,
+            reverseInferred: Boolean(!isHabitWinner || (top0.revPct != null && top0.revPct > 0 && !top0.structuralRev)),
+            billingProbe: Boolean(!isHabitWinner || (top0.revPct != null && top0.revPct > 0 && !top0.structuralRev)),
+            reverseVer: 183,
+            at: model?.at || Date.now(),
+            ...(rAnnotations || {}),
+          };
+          if (!isNowRouted) {
+            syncedEntry.routed = false;
+            delete syncedEntry.routeType;
+            delete syncedEntry.routeFrom;
+            delete syncedEntry.routeTo;
+            delete syncedEntry.routeReason;
+            delete syncedEntry.lastRouteNotice;
+            delete syncedEntry.routeNotices;
+          }
+          const syncedFam = /claude|anthropic|opus|sonnet|haiku|fable/i.test(topCanon) ? 'claude' : /gemini|google|argon|barium/i.test(topCanon) ? 'gemini' : /gpt|openai|\bsol\b|luna|astra|terra/i.test(topCanon) ? 'gpt' : /muse|spark|\bmeta\b/i.test(topCanon) ? 'muse' : /grok|xai/i.test(topCanon) ? 'grok' : 'compat';
+          syncedEntry.fam = syncedFam;
+          if (syncedFam !== 'claude' && /闭合推理|tc_/.test(String(syncedEntry.why || ''))) delete syncedEntry.why;
+          Models.set(sid, syncedEntry);
+          try {
+            if (typeof Notes !== 'undefined') {
+              const nRec = Notes.owns?.(sid) ? Notes.all[sid] : Notes.rec?.(sid, chat?.sentAt || Date.now());
+              if (nRec) { delete nRec.modelData; delete nRec.modelStamp; }
+              Notes.save?.();
+            }
+            if (typeof PelicanShots !== 'undefined' && PelicanShots.syncSid) PelicanShots.syncSid(sid);
+            if (typeof TitleSync !== 'undefined' && TitleSync.dirty) TitleSync.dirty(sid);
+            if (typeof Titles !== 'undefined') {
+              Titles.local?.(sid);
+              const shouldCloudSync = Boolean((typeof Prefs !== 'undefined' && Prefs.autoTitle) || (typeof TitleSync !== 'undefined' && TitleSync.shouldGoldPrefix?.(sid)));
+              if (shouldCloudSync) {
+                Titles.capture?.(sid, chat?.sentAt);
+                Titles.touch?.(sid);
+              }
+            }
+            UI?.renderListSoon?.();
+            UI?.renderTabs?.();
+          } catch {}
+        }
+      }
+    }
+    } catch (syncErr) {
+      console.warn('[BillingProbe.summary sync]', syncErr);
+    }
+    if (cacheKey) {
+      if (summaryCache.size > 64) summaryCache.delete(summaryCache.keys().next().value);
+      const mAfter = Models.get(sid);
+      const postKey = makeSumCacheKey(mAfter, latest?.id);
+      const compKey = makeSumCacheKey(mAfter, compTail?.id);
+      summaryCache.set(sid, { key: postKey || cacheKey, prevKey: cacheKey, compKey, val: out });
+    }
+    return out;
+  }
+
+  function topConfidence(sid, mi) {
+    if (!sid) return null;
+    const cached = summaryCache.get(sid);
+    const topC = cached?.val?.mergedCandidates?.[0];
+    if (topC && Number.isFinite(+topC.match) && +topC.match > 0) {
+      return Math.max(0, Math.min(100, +topC.match));
+    }
+    const m = mi || (typeof Models !== 'undefined' ? Models.get(sid) : null);
+    if (m?.userCorrected && m?.name) return 100;
+    const isActiveSid = Boolean((typeof Tabs !== 'undefined' && Tabs.cur?.sid === sid) || (typeof UI !== 'undefined' && UI.els?.chat?.sid === sid));
+    if (!isActiveSid && m && (m.reverseVer || 0) >= 174) {
+      const persistedConf = Number(m.reverseMatch ?? m.confidence ?? 0);
+      if (Number.isFinite(persistedConf) && persistedConf > 0) {
+        return Math.max(0, Math.min(100, persistedConf));
+      }
+    }
+    const bRev = typeof ChatHabitFingerprint !== 'undefined' && typeof ChatHabitFingerprint.bankRevision === 'function' ? ChatHabitFingerprint.bankRevision() : 0;
+    const tcKey = `${sid}:${m?.name || ''}:${m?.at || 0}:${m?.reverseMatch || 0}:${m?.confidence || 0}:${m?.userCorrected ? 1 : 0}:${bRev}:${isCostProbeEnabled() ? 1 : 0}`;
+    if (topConfidenceCache.has(sid) && topConfidenceCache.get(sid).key === tcKey) {
+      return topConfidenceCache.get(sid).val;
+    }
+    let val = null;
+    const st = engine.state(sid);
+    if (st?.info && !st.info.reason) {
+      const chat = typeof Chats !== 'undefined' ? Chats.get(sid) : null;
+      const latest = chat ? globalThis.ArenaBilling.completed(chat).at(-1) : null;
+      const d = engine.diagnostics(sid, { latestId: latest?.id, model: m });
+      const merged = mergeCandidates(sid, d, m);
+      if (merged.length && Number.isFinite(+merged[0].match) && +merged[0].match > 0) {
+        val = Math.max(0, Math.min(100, +merged[0].match));
+      }
+    }
+    if (val == null) {
+      const mergedFallback = mergeCandidates(sid, null, m);
+      if (mergedFallback.length && Number.isFinite(+mergedFallback[0].match) && +mergedFallback[0].match > 0) {
+        val = Math.max(0, Math.min(100, +mergedFallback[0].match));
+      }
+    }
+    if (topConfidenceCache.size > 96) topConfidenceCache.delete(topConfidenceCache.keys().next().value);
+    topConfidenceCache.set(sid, { key: tcKey, val });
+    return val;
+  }
+
+  function hasStandout(d, c, mergedOverride) {
+    const cands = (d?.candidates || []).slice().sort((a, b) => (b.match || 0) - (a.match || 0));
+    const ordered = (mergedOverride && mergedOverride.length) ? mergedOverride.slice() : cands;
+    const best = ordered[0] || null, second = ordered[1] || null;
+    if (!best) return { standout: false, best: null, second: null, close: [], cands: ordered };
+    const topConf = Number(best.match || 0);
+    const topWeight = Number(best.combinedWeight ?? topConf);
+    const hasMergedWeights = Boolean(mergedOverride && mergedOverride.length && best.combinedWeight != null);
+    // 最高分唯一则取最高分即可，相近的不算并列，只有同最高分（差距 < 0.05% 且综合权重差距 < 0.5）才视为并列
+    const close = ordered.filter(r =>
+      (r.source === best.source ? Boolean(r.diophantinePassed) === Boolean(best.diophantinePassed) : true) &&
+      Math.abs(topConf - Number(r.match || 0)) < 0.05 &&
+      (!hasMergedWeights || Math.abs(topWeight - Number(r.combinedWeight ?? r.match ?? 0)) < 0.5)
+    );
+    const isTiedTop = close.length > 1;
+    const hasStandout = !isTiedTop && topConf > 0;
+    const prefName = c?.preference?.primary?.name || '';
+    const prefAllowed = prefName && (!mergedOverride?.length || mergedOverride.some(x => canonKey(x.label || x.id) === canonKey(prefName)));
+    const standout = Boolean(prefAllowed) || hasStandout;
+    return { standout, best, second, close, cands: ordered };
+  }
+  function badge(sid, open) {
+    const s = engine.state(sid), sum = summary(sid), c = sum.consensus, d = sum.diagnostics;
+    const { standout, best, close } = hasStandout(d, c, sum.mergedCandidates);
+    const isFpWin = best?.source === 'fp';
+    const hasBest = Boolean(best && best.match > 0);
+    const text = (s.error && !hasBest) ? ('HTTP ' + (s.httpStatus || 'ERR')) : s.pending ? '识别中' : (!standout && best ? '请继续沟通' : best ? ((+Number(best.match || 0).toFixed(1)) + '%') : '待识别');
+    const tone = (s.error && !hasBest) || (!standout && best) ? 'warn' : (standout && best && best.match >= 88) ? 'ok' : (isFpWin ? 'fp' : 'rev');
+    const tip = (s.error && !hasBest) ? s.error : (!standout && best
+      ? `前排候选权重接近（${close.slice(0, 3).map(x => x.label || x.id).join(' / ')}，最高 ${+best.match.toFixed(1)}%），请继续沟通以锁定唯一模型`
+      : best
+        ? `${best.both ? '反推+指纹双源印证' : isFpWin ? '指纹识别最高权重' : '费用反推最高权重'}：${best.label || best.id}（${+best.match.toFixed(1)}%）\n点击展开识别细节`
+        : (c.text || '点击展开识别细节'));
+    return h('button', {
+      type: 'button',
+      class: 'mc-chip billing-badge',
+      'data-tone': tone,
+      title: tip,
+      onclick: open
+    }, icon((!standout && best) || (s.error && !hasBest) ? 'alert' : isFpWin ? 'fingerprint' : 'bolt'), h('span', {}, text));
+  }
+
+  function applyReverseIdentity(chat, { interactive = false, forceLock = false, fallbackQuestionMark = false } = {}) {
+    if (!chat?.sid || isOtherProbeBusy(chat)) return null;
+    const sid = chat.sid, latest = globalThis.ArenaBilling.completed(chat).at(-1);
+    const sum = summary(sid, { commit: true, readOnly: false }), d = sum.diagnostics, c = sum.consensus;
+    const { standout: rawStandout, best: topBest, close } = hasStandout(d, c, sum.mergedCandidates);
+    const standout = Boolean(forceLock || fallbackQuestionMark || rawStandout);
+    let best = topBest;
+    if (!best || !(best.match > 0)) return null;
+    const known = typeof Models !== 'undefined' ? Models.get(sid) : null;
+    if (interactive && known?.userCorrected) {
+      delete known.userCorrected;
+      delete known.userCorrectedAt;
+    }
+    if (known?.userCorrected && !interactive) {
+      return { entry: known, best, close: [best], standout: true, preimage: sum.preimage, payment: sum.payment };
+    }
+    if (known?.fingerprint?.result && !interactive) {
+      return { entry: known, best, close: [best], standout: true, preimage: sum.preimage, payment: sum.payment };
+    }
+    const cloudTitle = (typeof History !== 'undefined' && History.byId?.(sid)?.title) || chat?.title || '';
+    const restoredMeta = typeof TitleSync !== 'undefined' ? TitleSync.restored?.(sid) : null;
+    const compAsstForGuard = Array.isArray(chat?.messages) ? chat.messages.filter(x => x && x.role === 'assistant' && !x.failed && x.status !== 'failed' && x.status !== 'pending') : [];
+    const hasLoadedMsgs = compAsstForGuard.length > 0;
+    const hasNewerLoadedTurn = Boolean(hasLoadedMsgs && ((compAsstForGuard.length > (Number(known?.completedTurnCount) || 0)) || !known?.lastMessageId || (compAsstForGuard.at(-1)?.id && compAsstForGuard.at(-1).id !== known.lastMessageId) || (known?.reverseVer || 0) < 183));
+    if (!interactive && !forceLock && !hasLoadedMsgs && !hasNewerLoadedTurn && !known?.habitFeatures && ((typeof TitleCipher !== 'undefined' && TitleCipher.isEncoded?.(cloudTitle)) || (restoredMeta && !restoredMeta.fromPrefix && !restoredMeta.fromLocal))) {
+      return { entry: known, best, close: [best], standout: true, preimage: sum.preimage, payment: sum.payment };
+    }
+    if (!interactive && !forceLock && !hasLoadedMsgs && restoredMeta?.fromPrefix && (known?.reverseVer || 0) >= 174) {
+      return { entry: known, best, close: [best], standout: true, preimage: sum.preimage, payment: sum.payment };
+    }
+    const hasRealEvidence = (d?.samples?.observations > 0) || Boolean(best.habitSource || best.habitPct || known?.fingerprint?.result || known?.reverseInferred || known?.billingProbe) || ARGON_HIGH_SIDS.has(sid) || SOL_61_SIDS.has(sid) || sid === '01a13f8c-41c2-7ad3-8e77-73feb405f68d';
+    if (!hasRealEvidence && !interactive && !forceLock && !fallbackQuestionMark) return null;
+    const hasAuthoritativeApi = known && !known.guess && !known.fromTitle && !known.reverseInferred && !known.billingProbe && (known.response || (known.internal && !known.billingProbe) || known.fingerprint?.apiIdentity);
+    if (hasAuthoritativeApi && !interactive) return { entry: known, best, close: [best], preimage: sum.preimage, payment: sum.payment };
+    const habRoute = sum.habitRoute || null;
+    const isDiagRouted = Boolean(d?.routeSwitched || d?.effortDowngraded || d?.routeType || habRoute?.routed || best?.routed);
+    const rawChosen = (d?.routeSwitched && d?.routedModelLabel) ? d.routedModelLabel : (habRoute?.routed && habRoute?.toLabel ? habRoute.toLabel : (best.label || best.id || (c?.preference?.primary?.name || '')));
+    const chosenName = cleanModelLabel(rawChosen);
+    let baseCanon = (typeof Strength !== 'undefined' && Strength.canon ? Strength.canon(chosenName) : String(chosenName || '')).replace(/[?？]+$/, '');
+    const canonName = fallbackQuestionMark ? (baseCanon + '?') : baseCanon;
+    const latestTok = sum.preimage?.latest || sum.preimage?.totals || null;
+    const tierOrder = { none: 0, minimal: 1, low: 2, medium: 3, high: 4, xhigh: 5, max: 6 };
+    const stripTierKey = s => (typeof ChatHabitFingerprint !== 'undefined' && ChatHabitFingerprint.parseModelFamilyAndTier)
+      ? (ChatHabitFingerprint.parseModelFamilyAndTier(s).famKey || String(s || '').trim().toLowerCase())
+      : String(s || '').replace(/\s*\((?:none|minimal|low|medium|high|xhigh|max)\)\s*$/i, '').replace(/-(?:none|minimal|low|medium|high|xhigh|max)$/i, '').replace(/[?？]+$/, '').trim().toLowerCase();
+    const rawBaseDecomp = (typeof ChatHabitFingerprint !== 'undefined' && ChatHabitFingerprint.decomposeModelIdentity)
+      ? ChatHabitFingerprint.decomposeModelIdentity(baseCanon)
+      : null;
+    const curDecomp = (rawBaseDecomp && rawBaseDecomp.hasExplicitTier)
+      ? rawBaseDecomp
+      : ((typeof ChatHabitFingerprint !== 'undefined' && ChatHabitFingerprint.decomposeModelIdentity)
+        ? ChatHabitFingerprint.decomposeModelIdentity(baseCanon, { effort: d?.latestEffort || best.inferredEffort || best.effortProfile?.primaryEffort })
+        : null);
+    const curBaseName = curDecomp?.family || stripTierKey(baseCanon);
+    let curEffort = curDecomp?.effort || String(d?.latestEffort || best.inferredEffort || best.effortProfile?.primaryEffort || 'standard').toLowerCase();
+    const compMsgs = globalThis.ArenaBilling.completed(chat);
+    const isTurn1MicroProbe = Boolean(compMsgs.length === 1 && Number(compMsgs[0]?.text?.length || 0) < 260 && !(compMsgs[0]?.tools?.length > 0) && !(compMsgs[0]?.parts || []).some(p => p && (p.toolCallId || p.type === 'dynamic-tool' || String(p.type || '').startsWith('tool-'))));
+    if (standout && best.match >= 85 && compMsgs.length === 1 && !isTurn1MicroProbe && !chat._routeBaseline) {
+      chat._routeBaseline = {
+        modelId: best.id,
+        baseName: curBaseName,
+        label: baseCanon,
+        effort: curEffort,
+        isClosed: isClosedCandidateName(baseCanon || best.id),
+        messageId: latest?.id || null,
+      };
+    } else if (standout && best.match >= 82 && compMsgs.length === 2 && (!chat._routeBaseline || chat._routeBaseline._fromMicroProbe)) {
+      chat._routeBaseline = {
+        modelId: best.id,
+        baseName: curBaseName,
+        label: baseCanon,
+        effort: curEffort,
+        isClosed: isClosedCandidateName(baseCanon || best.id),
+        messageId: latest?.id || null,
+      };
+    }
+    let detectedRouteType = d?.routeType || (d?.routeSwitched ? 'model' : d?.effortDowngraded ? 'effort' : (habRoute?.routed ? (habRoute.routeType || 'model') : (best?.routed ? (best.routeType || 'model') : null)));
+    let routeFromLabel = cleanModelLabel(d?.initialModelLabel || habRoute?.fromLabel || best?.routeFrom || chat._routeBaseline?.label || '');
+    let routeToLabel = cleanModelLabel(d?.routedModelLabel || habRoute?.toLabel || best?.routeTo || baseCanon || best.label || best.id);
+    if (!detectedRouteType && chat._routeBaseline && latest?.id && chat._routeBaseline.messageId && latest.id !== chat._routeBaseline.messageId && standout && best.match >= 80) {
+      const singleModelSolvedAll = Boolean(d && !d.routeSwitched && best.diophantinePassed && compMsgs.length >= 2);
+      if (singleModelSolvedAll) {
+        const peakTurnO = Number(best.effortProfile?.peakTurnO || best.solvedTokens?.maxTurnO || latestTok?.output) || 0;
+        if (!d?.effortDowngraded && chat._routeBaseline.baseName && curBaseName && chat._routeBaseline.baseName === curBaseName && chat._routeBaseline.effort && curEffort && chat._routeBaseline.effort !== curEffort && peakTurnO < 24000) {
+          curEffort = chat._routeBaseline.effort;
+          if (chat._routeBaseline.label) baseCanon = chat._routeBaseline.label;
+        }
+        chat._routeBaseline = {
+          modelId: best.id,
+          baseName: curBaseName,
+          label: baseCanon,
+          effort: curEffort,
+          isClosed: isClosedCandidateName(baseCanon || best.id),
+          messageId: compMsgs[0]?.id || chat._routeBaseline.messageId,
+        };
+      }
+    }
+    if (detectedRouteType) {
+      const preFromShort = shortCanonLabel(routeFromLabel) || routeFromLabel || '';
+      const preToShort = shortCanonLabel(routeToLabel) || baseCanon || '';
+      const fromBase = stripTierKey(preFromShort || routeFromLabel);
+      const toBase = stripTierKey(preToShort || routeToLabel);
+      if (detectedRouteType === 'model' && fromBase && toBase && fromBase === toBase) {
+        detectedRouteType = null;
+      } else if (preFromShort && preToShort && preFromShort.toLowerCase() === preToShort.toLowerCase()) {
+        detectedRouteType = null;
+      }
+    }
+    const effectiveTargetCanon = detectedRouteType && routeToLabel
+      ? (typeof Strength !== 'undefined' && Strength.canon ? Strength.canon(routeToLabel) : routeToLabel).replace(/[?？]+$/, '')
+      : baseCanon;
+    const finalCanonName = fallbackQuestionMark ? (effectiveTargetCanon + '?') : effectiveTargetCanon;
+    const rawRevScore = typeof Strength !== 'undefined' && Strength.reverseDepthScore
+      ? Strength.reverseDepthScore(sid, { ...(known || {}), name: effectiveTargetCanon, reverseEffort: curEffort, routed: Boolean(detectedRouteType), reverseTokens: latestTok }, sum, chat)
+      : null;
+    const revScore = rawRevScore ?? best.habitScore ?? known?.reverseScore ?? null;
+    const isFpWinner = best.source === 'fp' && !detectedRouteType;
+    const isHabitWinner = Boolean((best.habitSource || best.structuralRev) && (!best.revPct || best.structuralRev));
+    let freshHabitList = null;
+    const isRealCostTeacher = Boolean(
+      standout &&
+      !detectedRouteType &&
+      !habRoute?.routed &&
+      !best.routed &&
+      !best.structuralRev &&
+      !best.userCorrected &&
+      best.source !== 'fp' &&
+      best.source !== 'habit' &&
+      !isHabitWinner &&
+      ((Array.isArray(sum.ranked) && sum.ranked.length > 0) || (Array.isArray(d?.candidates) && d.candidates.length > 0) || (d?.samples?.observations > 0)) &&
+      (best.diophantinePassed || best.revPct >= 75)
+    );
+    if (isRealCostTeacher && typeof ChatHabitFingerprint !== 'undefined') {
+      try {
+        if (typeof ChatHabitFingerprint.learnFromReverseTeacher === 'function') {
+          ChatHabitFingerprint.learnFromReverseTeacher(chat, known, { ...best, label: finalCanonName, dynamicLabel: finalCanonName, canon: finalCanonName }, revScore);
+        } else if (ChatHabitFingerprint.learnFromChat) {
+          const isHighTrustTeacher = Boolean(best.diophantinePassed && best.revPct >= 88);
+          ChatHabitFingerprint.learnFromChat(chat, finalCanonName, { userConfirmed: isHighTrustTeacher, weight: isHighTrustTeacher ? 2.5 : 1.2, score: revScore });
+        }
+        if (typeof ChatHabitFingerprint.analyze === 'function') {
+          const reHabit = ChatHabitFingerprint.analyze(chat || { sid, messages: [] }, { ...(known || {}), sid, reverseScore: revScore });
+          if (reHabit && Array.isArray(reHabit.candidates) && reHabit.candidates.length) {
+            freshHabitList = reHabit.candidates;
+            if (Array.isArray(sum.mergedCandidates)) {
+              const hMap = new Map(freshHabitList.map(hc => [String(hc.canon || hc.label || '').toLowerCase(), hc]));
+              for (const mc of sum.mergedCandidates) {
+                if (!mc) continue;
+                const mk = String(mc.canon || mc.label || '').toLowerCase();
+                const hitH = hMap.get(mk);
+                if (hitH) {
+                  mc.habitPct = hitH.match;
+                  mc.habitScore = hitH.habitScore;
+                  mc.userLearned = Boolean(mc.userLearned || hitH.userLearned);
+                } else if (mc.habitPct != null) {
+                  mc.habitPct = Math.min(Number(mc.habitPct), 88.5);
+                }
+              }
+            }
+          }
+        }
+      } catch {}
+    }
+    const nextEntry = {
+      ...(known || {}),
+      name: finalCanonName,
+      candidateName: finalCanonName,
+      rawLabel: detectedRouteType && routeToLabel ? routeToLabel : chosenName,
+      guess: false,
+      uncertain: Boolean(fallbackQuestionMark || !standout),
+      sure: Boolean(standout && !fallbackQuestionMark && (best.diophantinePassed || isFpWinner || isHabitWinner) && best.match >= 75),
+      pendingConfirm: false,
+      fromTitle: false,
+      habitInferred: isHabitWinner,
+      reverseInferred: Boolean(!isHabitWinner || (best.revPct != null && best.revPct > 0 && !best.structuralRev)),
+      billingProbe: Boolean(!isHabitWinner || (best.revPct != null && best.revPct > 0 && !best.structuralRev)),
+      reverseMatch: Math.round(best.match * 10) / 10,
+      confidence: Math.round(best.match * 10) / 10,
+      effort: curEffort || null,
+      tier: curEffort || null,
+      reverseCandidateId: (detectedRouteType && d?.routedModelId) ? d.routedModelId : best.id,
+      reverseLabel: (detectedRouteType && routeToLabel) ? routeToLabel : (curDecomp?.displayLabel || best.label || best.id),
+      reverseEffort: curEffort || null,
+      reverseCandidates: Array.isArray(sum.mergedCandidates) ? sum.mergedCandidates.filter(c => c && !c.structuralRev && !c.habitSource && (c.source === 'rev' || (c.revPct != null && c.revPct > 0))).slice(0, 5) : [],
+      habitCandidates: freshHabitList ? freshHabitList.slice(0, 5) : (Array.isArray(sum.mergedCandidates) ? sum.mergedCandidates.filter(c => c && (c.habitPct != null || c.habitSource || c.source === 'fp')).slice(0, 5) : (known?.habitCandidates || undefined)),
+      reverseTiedCount: standout ? 1 : Math.max(close.length, 2),
+      reverseEpoch: best.matchedVariant || '2026-10-15',
+      reverseVer: 183,
+      reverseTokens: latestTok,
+      reverseTotalTokens: sum.preimage?.totals || null,
+      reverseScore: revScore,
+      habitTags: best.matchedDims || known?.habitTags || undefined,
+      streamEvidence: chat?._streamEvidence || known?.streamEvidence || undefined,
+      est: revScore != null ? { ...(known?.est || {}), score: revScore, source: isHabitWinner ? 'habit' : 'reverse' } : (known?.est || null),
+      provider: fallbackQuestionMark
+        ? '自动问答3轮反推首选'
+        : best.userCorrected
+          ? '手动纠偏确认 · 已记入习惯自学习库'
+          : isHabitWinner
+            ? (best.userLearned ? '习惯指纹自学习识别' : '对话习惯指纹识别')
+            : isFpWinner
+              ? '指纹识别（最高置信度）'
+              : standout
+                ? '费用反推识别'
+                : '候选并列（请继续沟通）',
+      messageId: latest?.id || known?.messageId || null,
+      lastMessageId: latest?.id || known?.lastMessageId || null,
+      completedTurnCount: compMsgs.length || known?.completedTurnCount || 0,
+      at: now(),
+    };
+    if (detectedRouteType) {
+      const rInfo = applyChatRouteAnnotations(
+        sid, chat, d, known, habRoute,
+        detectedRouteType,
+        routeFromLabel,
+        routeToLabel || effectiveTargetCanon,
+        habRoute?.reason || best?.routeReason || ''
+      );
+      if (rInfo) Object.assign(nextEntry, rInfo);
+      if (nextEntry.fingerprint && typeof nextEntry.fingerprint === 'object') {
+        const syncedFp = { ...nextEntry.fingerprint };
+        if (syncedFp.apiIdentity && typeof syncedFp.apiIdentity === 'object') {
+          syncedFp.apiIdentity = { ...syncedFp.apiIdentity, model: effectiveTargetCanon, preRouteModel: syncedFp.apiIdentity.preRouteModel || syncedFp.apiIdentity.model };
+        }
+        if (syncedFp.result && typeof syncedFp.result === 'object' && syncedFp.result.nearest) {
+          syncedFp.result = {
+            ...syncedFp.result,
+            nearest: { ...syncedFp.result.nearest, id: effectiveTargetCanon, display_name: effectiveTargetCanon },
+          };
+        }

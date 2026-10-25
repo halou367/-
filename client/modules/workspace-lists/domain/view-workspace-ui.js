@@ -913,10 +913,12 @@ const UI = {
         if (c?.el && typeof c.el.nodeType === 'number') els.push(c.el);
       });
       // 「正在输入」占位复用同一个节点：否则每帧都换新节点，整串消息被重新挂载、整页重排
-      if (Hitl.blocked(chat) && chat.messages[lastIdx]?.role === 'user' && !chat.waitingForeign) {
+      if (Hitl.blocked(chat) && !chat.live && chat.messages[lastIdx]?.role === 'user' && !chat.waitingForeign) {
         const t = this.cache.get('__typing') || (() => { const t = h('div', { class: 'msg assistant' }, h('div', { class: 'msg-body typing-row' }, h('div', { class: 'typing' }, h('i'), h('i'), h('i')), h('span', { class: 'typing-st' }), h('span', { class: 'phase typing-phase' }, h('span', { class: 'ph-t' }), h('span', { class: 'dim anc-since' })))); this.cache.set('__typing', t); return t; })();
-        const st = t.querySelector('.typing-st'); if (st) st.textContent = chat.dlvText?.() || '';
-        const phEl = t.querySelector('.ph-t'); if (phEl && phEl.textContent !== phase) phEl.textContent = phase;
+        const dlvRaw = (chat.dlvText?.() || '').replace(/\s+\d+s$/, '').trim();
+        const unifiedPhase = (!phase || phase === '发送中' || phase === '进行中') && dlvRaw ? dlvRaw : phase;
+        const st = t.querySelector('.typing-st'); if (st && st.textContent !== '') st.textContent = '';
+        const phEl = t.querySelector('.ph-t'); if (phEl && phEl.textContent !== unifiedPhase) phEl.textContent = unifiedPhase;
         const sinceEl = t.querySelector('.anc-since');
         if (sinceEl) {
           const lastM = chat.messages[lastIdx];

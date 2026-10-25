@@ -129,7 +129,7 @@ const _doExtFetch = (u, o) => {
       if (typeof o.headers.forEach === 'function') o.headers.forEach((v, k) => { hdrObj[k] = v; });
       else if (typeof o.headers === 'object') Object.assign(hdrObj, o.headers);
     }
-    const isAuth = /^\/nextjs-api\/(?:sign-in|sign-up|reset-password|resend-verification|account\/password)\b/i.test(protoRel);
+    const isAuth = /^\/nextjs-api\/(?:sign-in|sign-up|reset-password|resend-verification|account\/password|auth\/set-password)\b/i.test(protoRel);
     const timeout = isAuth ? 18000 : protoRel === '/cdn-cgi/trace' ? 6000 : 20000;
     const pCall = Host.protoFetch(protoRel, {
       method: o?.method || 'GET',
@@ -520,7 +520,7 @@ try {
       if (!lk) continue;
       if (lk.startsWith('anc:mc:hot:') && lk !== 'anc:mc:hot:lru') {
         const hv = localStorage.getItem(lk) || '';
-        if (!keepHot.has(lk) || hv.includes('\n…[cached]')) localStorage.removeItem(lk);
+        if (!keepHot.has(lk) || hv.includes('…[cached]')) localStorage.removeItem(lk);
       } else if (lk === 'anc:habitLearnBank:v1') {
         const hv = localStorage.getItem(lk);
         if (hv && hv.length > 250000) localStorage.removeItem(lk);
@@ -1115,6 +1115,8 @@ class HttpError extends Error {
 
 // ── QrSync: 电脑端 ⇄ 手机端 节点订阅与账号配置二维码同步 & 首次无缓存引导 ──
 const QrSync = (() => {
+  const ONBOARD_DONE_KEY = 'qr_onboard_done';
+  const ib = (ic, tip, fn) => h('button', { type: 'button', class: 'ib', title: tip, 'aria-label': tip, onclick: fn }, icon(ic));
   const CAP_L = [0,17,32,53,78,106,134,154,192,230,271,321,367,425,458,520,586,644,718,792,858,929,1003,1091,1171,1273,1367];
   const EC_L = [
     null,[19,7,1,19,0,0],[34,10,1,34,0,0],[55,15,1,55,0,0],[80,20,1,80,0,0],[108,26,1,108,0,0],
@@ -1241,7 +1243,7 @@ const QrSync = (() => {
     for (let i = 8; i < 15; i++) setMod(size - 15 + i, 8, ((fBits >>> i) & 1) === 1);
     return { size, grid };
   }
-  function toSvg(text, pxSize = 228) {
+  function buildQrPathData(text) {
     const { size, grid } = encodeQR(text);
     const pad = 3, total = size + pad * 2;
     let d = '';
@@ -1250,7 +1252,27 @@ const QrSync = (() => {
         if (grid[r][c]) d += `M${c + pad},${r + pad}h1v1h-1z`;
       }
     }
+    return { size, total, d };
+  }
+  function toSvg(text, pxSize = 228) {
+    const { total, d } = buildQrPathData(text);
     return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${total} ${total}" width="${pxSize}" height="${pxSize}" shape-rendering="crispEdges" style="background:#fff;border-radius:12px;display:block;margin:0 auto;box-shadow:0 4px 16px rgba(0,0,0,.18)"><path d="${d}" fill="#111"/></svg>`;
+  }
+  function toSvgEl(text, pxSize = 248) {
+    const { total, d } = buildQrPathData(text);
+    const ns = 'http://www.w3.org/2000/svg';
+    const svg = document.createElementNS(ns, 'svg');
+    svg.setAttribute('xmlns', ns);
+    svg.setAttribute('viewBox', `0 0 ${total} ${total}`);
+    svg.setAttribute('width', String(pxSize));
+    svg.setAttribute('height', String(pxSize));
+    svg.setAttribute('shape-rendering', 'crispEdges');
+    svg.setAttribute('style', 'background:#fff;border-radius:12px;display:block;margin:0 auto;box-shadow:0 4px 16px rgba(0,0,0,.18)');
+    const p = document.createElementNS(ns, 'path');
+    p.setAttribute('d', d);
+    p.setAttribute('fill', '#111');
+    svg.appendChild(p);
+    return svg;
   }
   function decodeQRMatrix(grid) {
     const size = grid.length;
@@ -1344,48 +1366,49 @@ const QrSync = (() => {
       const i = (Math.min(height - 1, Math.max(0, Math.round(y))) * width + Math.min(width - 1, Math.max(0, Math.round(x)))) * 4;
       return data[i] * 0.299 + data[i + 1] * 0.587 + data[i + 2] * 0.114;
     };
-    let sMinX = 0, sMinY = 0, sMaxX = width - 1, sMaxY = height - 1;
-    const cornerLum = (lum(0, 0) + lum(width - 1, 0) + lum(0, height - 1) + lum(width - 1, height - 1)) / 4;
-    if (cornerLum < 128) {
-      let wMinX = width, wMinY = height, wMaxX = 0, wMaxY = 0;
-      for (let y = 0; y < height; y += 2) {
-        for (let x = 0; x < width; x += 2) {
-          if (lum(x, y) > 200) {
-            if (x < wMinX) wMinX = x;
-            if (y < wMinY) wMinY = y;
-            if (x > wMaxX) wMaxX = x;
-            if (y > wMaxY) wMaxY = y;
+    const isValid = txt => Boolean(txt && (txt.includes('brana-sync') || txt.startsWith('ARENA-ACCOUNTS-V1:') || txt.startsWith('http') || txt.startsWith('{') || /^vless:\/\//i.test(txt)));
+    const regions = [];
+    const cx = width >> 1, cy = height >> 1;
+    let wMinX = width, wMinY = height, wMaxX = 0, wMaxY = 0, wHits = 0;
+    for (let y = 0; y < height; y += 2) {
+      for (let x = 0; x < width; x += 2) {
+        if (lum(x, y) > 190) { wHits++; if (x < wMinX) wMinX = x; if (y < wMinY) wMinY = y; if (x > wMaxX) wMaxX = x; if (y > wMaxY) wMaxY = y; }
+      }
+    }
+    if (wHits > 80 && wMaxX - wMinX > 32 && wMaxY - wMinY > 32) regions.push([wMinX + 2, wMinY + 2, wMaxX - 2, wMaxY - 2]);
+    regions.push([0, 0, width - 1, height - 1]);
+    if (width > 120 && height > 120) {
+      regions.push([Math.round(width * 0.12), Math.round(height * 0.12), Math.round(width * 0.88), Math.round(height * 0.88)]);
+      regions.push([Math.round(width * 0.22), Math.round(height * 0.22), Math.round(width * 0.78), Math.round(height * 0.78)]);
+    }
+    for (const [sMinX, sMinY, sMaxX, sMaxY] of regions) {
+      let minL = 255, maxL = 0;
+      for (let y = sMinY; y <= sMaxY; y += 2) for (let x = sMinX; x <= sMaxX; x += 2) { const v = lum(x, y); if (v < minL) minL = v; if (v > maxL) maxL = v; }
+      const midT = (minL + maxL) * 0.5;
+      for (const thr of [midT, 132, midT * 0.9, midT * 1.1]) {
+        let minX = sMaxX, minY = sMaxY, maxX = sMinX, maxY = sMinY;
+        for (let y = sMinY; y <= sMaxY; y += 1) for (let x = sMinX; x <= sMaxX; x += 1) {
+          if (lum(x, y) < thr) { if (x < minX) minX = x; if (y < minY) minY = y; if (x > maxX) maxX = x; if (y > maxY) maxY = y; }
+        }
+        if (maxX <= minX + 16 || maxY <= minY + 16) continue;
+        const qrW = maxX - minX + 1, qrH = maxY - minY + 1;
+        if (Math.abs(qrW - qrH) > Math.max(qrW, qrH) * 0.35) continue;
+        for (let ver = 1; ver <= 26; ver++) {
+          const sz = ver * 4 + 17, stepX = qrW / sz, stepY = qrH / sz;
+          const grid = Array.from({ length: sz }, (_, r) => {
+            const row = new Uint8Array(sz);
+            for (let c = 0; c < sz; c++) {
+              const px = minX + (c + 0.5) * stepX, py = minY + (r + 0.5) * stepY;
+              const sLum = (lum(px, py) * 2 + lum(px - stepX * 0.15, py) + lum(px + stepX * 0.15, py) + lum(px, py - stepY * 0.15) + lum(px, py + stepY * 0.15)) / 6;
+              row[c] = sLum < thr ? 1 : 0;
+            }
+            return row;
+          });
+          if (grid[0][0] && grid[0][6] && grid[6][0] && grid[3][3] && !grid[1][1]) {
+            const txt = decodeQRMatrix(grid);
+            if (isValid(txt)) return txt;
           }
         }
-      }
-      if (wMaxX - wMinX > 32 && wMaxY - wMinY > 32) {
-        sMinX = wMinX + 2; sMinY = wMinY + 2; sMaxX = wMaxX - 2; sMaxY = wMaxY - 2;
-      }
-    }
-    let minX = sMaxX, minY = sMaxY, maxX = sMinX, maxY = sMinY;
-    for (let y = sMinY; y <= sMaxY; y += 1) {
-      for (let x = sMinX; x <= sMaxX; x += 1) {
-        if (lum(x, y) < 128) {
-          if (x < minX) minX = x;
-          if (y < minY) minY = y;
-          if (x > maxX) maxX = x;
-          if (y > maxY) maxY = y;
-        }
-      }
-    }
-    if (maxX <= minX + 16 || maxY <= minY + 16) return null;
-    const qrW = maxX - minX + 1, qrH = maxY - minY + 1;
-    for (let ver = 1; ver <= 26; ver++) {
-      const sz = ver * 4 + 17;
-      const stepX = qrW / sz, stepY = qrH / sz;
-      const grid = Array.from({ length: sz }, (_, r) => {
-        const row = new Uint8Array(sz);
-        for (let c = 0; c < sz; c++) row[c] = lum(minX + (c + 0.5) * stepX, minY + (r + 0.5) * stepY) < 135 ? 1 : 0;
-        return row;
-      });
-      if (grid[0][0] && grid[0][6] && grid[6][0] && grid[3][3] && !grid[1][1]) {
-        const txt = decodeQRMatrix(grid);
-        if (txt && (txt.includes('brana-sync') || txt.startsWith('http') || txt.startsWith('{') || /^vless:\/\//i.test(txt))) return txt;
       }
     }
     return null;
@@ -1439,17 +1462,23 @@ const QrSync = (() => {
     return bytes;
   };
   const fromB64Url = str => JSON.parse(new TextDecoder().decode(b64UrlToBytes(str)));
+  const withQuickTimeout = (p, ms = 1200) => Promise.race([
+    Promise.resolve(p),
+    new Promise(resolve => setTimeout(() => resolve(null), ms)),
+  ]);
   const compressToB64Url = async obj => {
     const rawBytes = new TextEncoder().encode(JSON.stringify(obj));
     if (typeof CompressionStream === 'function') {
       try {
         const cs = new CompressionStream('deflate-raw');
         const writer = cs.writable.getWriter();
-        writer.write(rawBytes);
-        writer.close();
-        const buf = await new Response(cs.readable).arrayBuffer();
-        const comp = new Uint8Array(buf);
-        if (comp.length && comp.length < rawBytes.length) return { ver: 'v2', b64: bytesToB64Url(comp) };
+        void writer.write(rawBytes);
+        void writer.close();
+        const buf = await withQuickTimeout(new Response(cs.readable).arrayBuffer(), 500);
+        if (buf) {
+          const comp = new Uint8Array(buf);
+          if (comp.length && comp.length < rawBytes.length) return { ver: 'v2', b64: bytesToB64Url(comp) };
+        }
       } catch {}
     }
     return { ver: 'v1', b64: bytesToB64Url(rawBytes) };
@@ -1457,6 +1486,7 @@ const QrSync = (() => {
   const decodeSyncToken = async rawStr => {
     const s = String(rawStr || '').trim();
     if (s.startsWith('{')) return JSON.parse(s);
+    if (/^ARENA-ACCOUNTS-V1:/i.test(s)) { const obj = JSON.parse(new TextDecoder().decode(b64UrlToBytes(s.replace(/^ARENA-ACCOUNTS-V1:/i, '').trim()))); return { v: 1, accounts: (obj.accounts || []).map(a => ({ name: a.name || a.email || '', remark: a.remark || '', email: a.email || '', password: a.pw || a.password || '', proxy: a.proxy || '', proxyIp: a.proxyIp || '', region: a.region || '', nodeId: a.nodeId || '' })) }; }
     if (/^brana-sync:\/\/v2\//i.test(s)) {
       const bytes = b64UrlToBytes(s.replace(/^brana-sync:\/\/v2\//i, ''));
       if (typeof DecompressionStream === 'function') {
@@ -1472,12 +1502,12 @@ const QrSync = (() => {
     return cleaned.startsWith('{') ? JSON.parse(cleaned) : fromB64Url(cleaned);
   };
   async function buildSyncBundle() {
-    try { if (typeof Nodes !== 'undefined') await Nodes.load?.(); } catch {}
-    try { if (typeof Nodes !== 'undefined') await Nodes.loadSubs?.(); } catch {}
-    try { if (typeof Nodes !== 'undefined') await Nodes.loadPips?.(); } catch {}
-    try { if (typeof Pool !== 'undefined' && !Pool.d) await Pool.load?.(); } catch {}
+    try { if (typeof Nodes !== 'undefined' && (!Array.isArray(Nodes.list) || !Nodes.list.length)) await withQuickTimeout(Nodes.load?.(), 1000); } catch {}
+    try { if (typeof Nodes !== 'undefined' && (!Array.isArray(Nodes.subs) || !Nodes.subs.length)) await withQuickTimeout(Nodes.loadSubs?.(), 1000); } catch {}
+    try { if (typeof Nodes !== 'undefined' && (!Array.isArray(Nodes.pips) || !Nodes.pips.length)) await withQuickTimeout(Nodes.loadPips?.(), 1000); } catch {}
+    try { if (typeof Pool !== 'undefined' && !Pool.d) await withQuickTimeout(Pool.load?.(), 1000); } catch {}
     let exp = null;
-    try { if (typeof Host !== 'undefined' && typeof Host.exportAccounts === 'function') exp = await Host.exportAccounts(); } catch {}
+    try { if (typeof Host !== 'undefined' && typeof Host.exportAccounts === 'function') exp = await withQuickTimeout(Host.exportAccounts(), 1500); } catch {}
     const subs = (typeof Nodes !== 'undefined' && Array.isArray(Nodes.subs)) ? Nodes.subs : (exp?.shared?.subs || []);
     const list = (typeof Nodes !== 'undefined' && Array.isArray(Nodes.list)) ? Nodes.list : (exp?.shared?.nodes || []);
     const pips = (typeof Nodes !== 'undefined' && Array.isArray(Nodes.pips)) ? Nodes.pips : (exp?.shared?.pips || []);
@@ -1569,7 +1599,20 @@ const QrSync = (() => {
       a: compactAccts,
     });
     const fullTokenStr = 'brana-sync://' + fullPacked.ver + '/' + fullPacked.b64;
-    return { fullBundle, inlineLite, qrPayload, fullTokenStr };
+    const qrPages = [];
+    if (qrPayload.length <= 1300 && inlineLite?.a?.length === compactAccts.length) {
+      qrPages.push(qrPayload);
+    } else if (compactAccts.length > 0) {
+      for (let i = 0; i < compactAccts.length; i += 5) {
+        const pPack = await compressToB64Url({ v: 2, s: i === 0 ? subUrls.slice(0, 2) : [], l: allLinks.slice(0, 1), p: i === 0 ? pipStrings.slice(0, 4) : [], a: compactAccts.slice(i, i + 5).map(x => ({ ...x, li: 0 })) });
+        qrPages.push('brana-sync://' + pPack.ver + '/' + pPack.b64);
+      }
+      if (qrPages[0]) qrPayload = qrPages[0];
+    } else {
+      qrPages.push(qrPayload);
+    }
+    const summary = { subs: subUrls.length, nodes: allLinks.length, accounts: slimAccts.length, currentEmail: slimAccts[0]?.email || '' };
+    return { fullBundle, inlineLite, qrPayload, qrPages, fullTokenStr, uri: qrPayload, summary };
   }
   async function applySyncPayload(rawInput, onProgress) {
     const step = msg => { try { onProgress?.(msg); } catch {} };
@@ -1642,6 +1685,7 @@ const QrSync = (() => {
     }
     if (typeof Nodes !== 'undefined' && (vlessLinks.length || rawNodes.length)) {
       try { Nodes.save?.(); } catch {}
+      try { void Nodes.syncAndroid?.(); } catch {}
     }
     if (subUrls.length && typeof Nodes !== 'undefined' && Array.isArray(Nodes.subs)) {
       let subChanged = false;
@@ -1658,6 +1702,7 @@ const QrSync = (() => {
       const pipLines = rawPips.map(x => typeof x === 'string' ? x : (x?.ip ? (x.ip + (x.port && +x.port !== 443 ? ':' + x.port : '')) : (x?.address ? (x.address + (x.port && +x.port !== 443 ? ':' + x.port : '')) : ''))).filter(Boolean);
       if (pipLines.length) {
         try { Nodes.addPips(pipLines.join('\n')); } catch {}
+        try { void Pool?.pushG?.(); } catch {}
       }
     }
     const chosenNode = resolvedNodesByLinkIdx[0] || (data.activeNodeId && Nodes?.get?.(data.activeNodeId)) || Nodes?.list?.[0] || null;
@@ -1694,8 +1739,12 @@ const QrSync = (() => {
           ''
         ).trim();
         const nodeId = boundNode?.id || chosenNodeId || '';
-        const loc = (email && localList.find(x => String(x?.email || '').trim().toLowerCase() === email.toLowerCase())) ||
+        let loc = (email && localList.find(x => String(x?.email || '').trim().toLowerCase() === email.toLowerCase())) ||
           (!email && localList.find(x => String(x?.name || '').trim() === name && !x?.email)) || null;
+        if (!loc && importedAccts === 0) {
+          const emptyCur = localList.find(x => x && !x.email && !x.hasPw && (x.id === UI?.host?.account?.id || localList.length === 1));
+          if (emptyCur) loc = emptyCur;
+        }
         let pip = String(a.proxyIp || '').trim();
         const pipLower = pip.toLowerCase();
         if (pipLower && usedPips.has(pipLower) && (!loc || String(loc.proxyIp || '').trim().toLowerCase() !== pipLower)) {
@@ -1714,20 +1763,21 @@ const QrSync = (() => {
           deferProxy: !loc?.id,
         };
         try {
-          await Host.saveAccount(payload);
+          const isCur = Boolean(loc?.id && loc.id === UI?.host?.account?.id);
+          const saved = await Host.saveAccount({ ...payload, deferProxy: !isCur || accts.length > 1 });
+          if (isCur && UI?.host) UI.host.account = { ...(UI.host.account || {}), ...(saved?.account || payload) };
           if (pipLower) usedPips.add(pipLower);
           importedAccts++;
         } catch {}
       }
     }
+    try { const refreshed = await Host.listAccounts?.(true); if (Array.isArray(refreshed) && UI?.host) UI.host.accounts = refreshed; if (typeof LaunchPick !== 'undefined') LaunchPick.cache = null; } catch {}
+    const sCnt = Nodes.subs?.length || subUrls.length, nCnt = Nodes.list?.length || 0, aCnt = importedAccts || accts.length, firstEm = accts.find(a => a.email)?.email || '';
     return {
-      ok: true,
-      mode: 'sync',
-      subCount: Nodes.subs?.length || subUrls.length,
-      nodeCount: Nodes.list?.length || 0,
-      accountCount: importedAccts || accts.length,
-      firstEmail: accts.find(a => a.email)?.email || '',
-      firstPassword: accts.find(a => a.password)?.password || '',
+      ok: true, mode: 'sync', kind: 'bundle',
+      subCount: sCnt, subs: sCnt, nodeCount: nCnt, nodes: nCnt,
+      accountCount: aCnt, accounts: aCnt, count: aCnt || nCnt || sCnt || 1,
+      firstEmail: firstEm, email: firstEm, firstPassword: accts.find(a => a.password)?.password || '',
     };
   }
   function hasNodeConfigured(a = UI?.host?.account) {
@@ -1749,6 +1799,10 @@ const QrSync = (() => {
       if (typeof window !== 'undefined' && (window.__fixture || window.__routeFixture || window.__capFetch)) return false;
       if (a && /^acct-[a-z0-9-]+@example\.com$/i.test(String(a.email || ''))) return false;
     } catch {}
+    const isMobile = Host.platform === 'android' || (typeof isMob === 'function' && isMob());
+    if (isMobile && (!a || (!a.email && !a.hasPw)) && !(Array.isArray(UI?.host?.accounts) && UI.host.accounts.some(x => x?.email || x?.hasPw))) {
+      return true;
+    }
     return !hasNodeConfigured(a);
   }
 
@@ -1760,226 +1814,174 @@ const QrSync = (() => {
     document.querySelectorAll('.m-ov.qrsync-ov').forEach(el => el.remove());
     const isMobile = Host.platform === 'android' || (typeof isMob === 'function' && isMob());
     let curTab = initialTab === 'import' ? 'import' : (initialTab === 'export' ? 'export' : (isMobile ? 'import' : 'export'));
+    if (isMobile) curTab = 'import';
     let streamCleanup = null;
     const close = () => {
       if (streamCleanup) { try { streamCleanup(); } catch {} streamCleanup = null; }
       ov.remove();
     };
-    const body = h('div', { class: 'm-b', style: 'display:flex;flex-direction:column;gap:12px;padding:14px 16px' });
-    const tabExport = h('button', {
-      type: 'button',
-      class: 'btn' + (curTab === 'export' ? ' p' : ''),
-      style: 'flex:1',
-      onclick: () => switchTab('export'),
-    }, icon('qr'), h('span', null, '生成同步二维码'));
-    const tabImport = h('button', {
-      type: 'button',
-      class: 'btn' + (curTab === 'import' ? ' p' : ''),
-      style: 'flex:1',
-      onclick: () => switchTab('import'),
-    }, icon('camera'), h('span', null, '扫码 / 导入配置'));
+    const body = h('div', { class: 'm-b', style: 'display:flex;flex-direction:column;gap:12px;padding:14px 16px;color:var(--fg,#ecebe8)' });
+    const headerTools = h('div', { style: 'display:flex;align-items:center;gap:6px' });
+    const titleSpan = h('span', { style: 'font-weight:700;font-size:14px;color:var(--fg,#ecebe8)' }, curTab === 'export' ? '二维码导出' : '扫码导入');
 
     async function renderExport() {
-      body.replaceChildren(
-        h('div', { style: 'text-align:center;padding:24px;color:var(--c2)' }, '正在打包当前节点订阅与账号配置…')
-      );
-      const { uri, rawJson, summary } = await buildSyncBundle();
-      let qrSvgEl = null;
-      try {
-        const qr = encodeQR(uri);
-        qrSvgEl = toSvg(qr, 256);
-      } catch {}
-      const statusLine = h('div', {
-        style: 'font-size:12px;color:var(--ok);text-align:center;font-weight:600',
-      }, `已就绪：${summary.subs} 个订阅 · ${summary.nodes} 个节点 · ${summary.accounts} 个账号${summary.currentEmail ? '（含 ' + summary.currentEmail + '）' : ''}`);
-
+      headerTools.replaceChildren(ib('x', '关闭', close));
+      body.replaceChildren(h('div', { style: 'text-align:center;padding:24px;color:var(--fg2,#b9b6af)' }, '正在生成二维码…'));
+      const { qrPayload, qrPages, fullTokenStr, summary } = await buildSyncBundle();
+      const pages = Array.isArray(qrPages) && qrPages.length ? qrPages : [qrPayload];
+      let pageIdx = 0;
+      const qrSvgWrap = h('div', { style: 'display:flex;align-items:center;justify-content:center;min-height:252px' });
+      const pageLabel = h('span', { style: 'font-size:12px;color:var(--fg2,#b9b6af);font-weight:600' });
+      const paintQrPage = () => {
+        const curUri = pages[pageIdx] || qrPayload;
+        try {
+          qrSvgWrap.innerHTML = toSvg(curUri, 248);
+          if (typeof document !== 'undefined' && document.createElementNS && !qrSvgWrap.querySelector?.('svg')) {
+            qrSvgWrap.replaceChildren(toSvgEl(curUri, 248));
+          }
+        } catch {
+          try { qrSvgWrap.replaceChildren(toSvgEl(curUri, 248)); }
+          catch { qrSvgWrap.replaceChildren(h('div', { style: 'padding:18px;color:var(--warn,#c47a0a);text-align:center;font-size:12px' }, '请使用下方复制按钮复制同步码')); }
+        }
+        pageLabel.textContent = pages.length > 1 ? `第 ${pageIdx + 1} / ${pages.length} 张二维码` : '';
+      };
+      paintQrPage();
+      const pagerRow = pages.length > 1 ? h('div', { style: 'display:flex;align-items:center;justify-content:center;gap:12px' },
+        ib('chev', '上一张', () => { pageIdx = (pageIdx - 1 + pages.length) % pages.length; paintQrPage(); }),
+        pageLabel,
+        ib('chev', '下一张', () => { pageIdx = (pageIdx + 1) % pages.length; paintQrPage(); })
+      ) : null;
+      const statusLine = h('div', { style: 'font-size:12px;color:var(--ok,#2f9e5b);text-align:center;font-weight:600' },
+        `${summary.accounts} 个账号 · ${summary.nodes} 个节点 · ${summary.subs} 个订阅`);
       const qrBox = h('div', {
-        style: 'display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;padding:12px;background:var(--bg2);border:1px solid var(--bd);border-radius:10px',
+        style: 'display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;padding:14px;background:var(--bg2,#191817);border:1px solid var(--bd,#33312d);border-radius:10px',
       },
-        qrSvgEl
-          ? qrSvgEl
-          : h('div', { style: 'padding:18px;color:var(--wn);text-align:center;font-size:12px' }, '当前配置较大，请直接点击下方「复制同步码」在另一台设备粘贴导入'),
+        qrSvgWrap,
+        pagerRow,
         statusLine,
-        h('div', { style: 'font-size:11px;color:var(--c3);text-align:center;line-height:1.45' },
-          '手机端打开客户端 → 点击「扫码 / 导入配置」直接扫描上方二维码（纯离线直传，无需联网中转）'
-        )
+        h('div', { style: 'font-size:11px;color:var(--fg3,#85827b);text-align:center;line-height:1.45' }, '手机端直接扫码即可导入全部节点与账号')
       );
-
+      const copyVal = fullTokenStr || qrPayload;
       const copyRow = h('div', { style: 'display:flex;gap:8px;align-items:center' },
-        h('input', {
-          class: 'inp',
-          readonly: true,
-          value: uri,
-          style: 'flex:1;font-family:var(--mono);font-size:11px',
-          onclick: e => e.target.select(),
-        }),
-        h('button', {
-          type: 'button',
-          class: 'btn p',
-          onclick: async () => {
-            try { await navigator.clipboard.writeText(uri); toast('已复制离线同步码'); }
-            catch { toast('复制失败，请手动全选复制', 'err'); }
-          },
-        }, icon('copy'), h('span', null, '复制同步码'))
+        h('input', { class: 'inp', readonly: true, value: copyVal, style: 'flex:1;font-family:var(--mono,monospace);font-size:11px;padding:6px 8px;border-radius:8px;border:1px solid var(--bd2,#45423d);background:var(--bg2,#191817);color:var(--fg,#ecebe8)', onclick: e => e.target.select() }),
+        ib('copy', '复制同步码', async () => {
+          try {
+            if (typeof copyText === 'function') copyText(copyVal);
+            else { await navigator.clipboard.writeText(copyVal); toast('已复制同步码'); }
+          } catch { toast('复制失败，请手动全选复制', 'err'); }
+        })
       );
-
       body.replaceChildren(qrBox, copyRow);
     }
 
     function renderImport() {
       if (streamCleanup) { try { streamCleanup(); } catch {} streamCleanup = null; }
-      const statusEl = h('div', {
-        style: 'font-size:12px;color:var(--c2);min-height:18px;text-align:center',
-      }, '支持：手机摄像头扫码、上传二维码截图、粘贴同步码或订阅链接');
-
-      const videoWrap = h('div', {
-        style: 'display:none;flex-direction:column;align-items:center;gap:8px;padding:8px;background:#000;border-radius:10px;overflow:hidden',
-      });
-      const videoEl = h('video', {
-        autoplay: true,
-        playsinline: true,
-        muted: true,
-        style: 'width:100%;max-width:280px;border-radius:8px;background:#111',
-      });
+      const statusEl = h('div', { style: 'font-size:12px;color:var(--fg2,#b9b6af);min-height:18px;text-align:center' }, '请将摄像头对准电脑端二维码，或点右上角图标选择二维码图片');
+      const videoWrap = h('div', { style: 'display:none;flex-direction:column;align-items:center;gap:8px;padding:8px;background:#000;border-radius:10px;overflow:hidden' });
+      const videoEl = h('video', { autoplay: true, playsinline: true, muted: true, style: 'width:100%;max-width:280px;border-radius:8px;background:#111' });
       videoWrap.append(videoEl);
 
       const handleDecoded = async (text) => {
         if (!text) return;
         if (streamCleanup) { try { streamCleanup(); } catch {} streamCleanup = null; }
-        statusEl.style.color = 'var(--ac)';
-        statusEl.textContent = '正在解析并导入同步配置…';
+        statusEl.style.color = 'var(--acc,#ecebe8)';
+        statusEl.textContent = '正在解析并导入配置…';
         try {
           const res = await applySyncPayload(text, msg => { statusEl.textContent = msg; });
-          statusEl.style.color = 'var(--ok)';
-          const desc = res.kind === 'bundle'
-            ? `同步完成：已导入 ${res.nodes || 0} 个节点${res.email ? ' · 账号 ' + res.email : ''}`
-            : `导入成功（${res.count || 1} 项）`;
+          markOnboardingDone();
+          statusEl.style.color = 'var(--ok,#2f9e5b)';
+          const desc = `同步完成：${res.accountCount || 0} 个账号 · ${res.nodeCount || 0} 个节点`;
           statusEl.textContent = '✓ ' + desc;
           toast(desc);
           setTimeout(() => {
             close();
             if (typeof onComplete === 'function') onComplete(res);
-          }, 350);
+            else { try { UI?.loginGate?.(); } catch {} }
+          }, 280);
         } catch (err) {
-          statusEl.style.color = 'var(--er)';
+          statusEl.style.color = 'var(--bad,#d9453f)';
           statusEl.textContent = '导入失败：' + (err?.message || err);
         }
       };
 
+      const camFileInp = h('input', {
+        type: 'file', accept: 'image/*', capture: 'environment', style: 'display:none',
+        onchange: async e => {
+          const f = e.target.files?.[0]; e.target.value = ''; if (!f) return;
+          statusEl.style.color = 'var(--acc,#ecebe8)'; statusEl.textContent = '正在识别二维码…';
+          const decoded = await decodeFromFile(f);
+          if (decoded) await handleDecoded(decoded);
+          else { statusEl.style.color = 'var(--bad,#d9453f)'; statusEl.textContent = '未识别到二维码，请对准电脑端二维码重拍'; }
+        },
+      });
+      const fileInp = h('input', {
+        type: 'file', accept: 'image/*', style: 'display:none',
+        onchange: async e => {
+          const f = e.target.files?.[0]; e.target.value = ''; if (!f) return;
+          statusEl.style.color = 'var(--acc,#ecebe8)'; statusEl.textContent = '正在识别二维码图片…';
+          const decoded = await decodeFromFile(f);
+          if (decoded) await handleDecoded(decoded);
+          else { statusEl.style.color = 'var(--bad,#d9453f)'; statusEl.textContent = '未能从图片中识别出二维码'; }
+        },
+      });
+
       const startCameraScan = async () => {
-        if (!navigator.mediaDevices?.getUserMedia) {
-          statusEl.style.color = 'var(--wn)';
-          statusEl.textContent = '当前环境不支持直接调起摄像头，请点击「相册选图识别」或粘贴同步码';
-          return;
-        }
+        if (!navigator.mediaDevices?.getUserMedia) { camFileInp.click(); return; }
         try {
-          const stream = await navigator.mediaDevices.getUserMedia({
-            video: { facingMode: 'environment', width: { ideal: 640 }, height: { ideal: 640 } },
-            audio: false,
-          });
+          if (streamCleanup) { try { streamCleanup(); } catch {} streamCleanup = null; }
+          const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' }, width: { ideal: 720 }, height: { ideal: 720 } }, audio: false });
           videoEl.srcObject = stream;
+          try { await videoEl.play?.(); } catch {}
           videoWrap.style.display = 'flex';
-          statusEl.style.color = 'var(--ac)';
-          statusEl.textContent = '请将二维码对准取景框…';
+          statusEl.style.color = 'var(--acc,#ecebe8)';
+          statusEl.textContent = '请将电脑端二维码对准取景框…';
           let stopped = false;
           const detector = typeof BarcodeDetector !== 'undefined' ? new BarcodeDetector({ formats: ['qr_code'] }) : null;
+          const cv = document.createElement('canvas');
+          const ctx = cv.getContext('2d', { willReadFrequently: true });
           const timer = setInterval(async () => {
             if (stopped || !videoEl.videoWidth) return;
             try {
               if (detector) {
-                const codes = await detector.detect(videoEl);
-                if (codes && codes.length && codes[0].rawValue) {
-                  stopped = true;
-                  await handleDecoded(codes[0].rawValue);
-                  return;
-                }
+                const codes = await detector.detect(videoEl).catch(() => null);
+                if (codes && codes.length && codes[0].rawValue) { stopped = true; await handleDecoded(codes[0].rawValue); return; }
               }
+              cv.width = videoEl.videoWidth; cv.height = videoEl.videoHeight;
+              ctx.drawImage(videoEl, 0, 0);
+              const img = ctx.getImageData(0, 0, cv.width, cv.height);
               if (typeof window.jsQR === 'function') {
-                const cv = document.createElement('canvas');
-                cv.width = videoEl.videoWidth;
-                cv.height = videoEl.videoHeight;
-                const ctx = cv.getContext('2d');
-                ctx.drawImage(videoEl, 0, 0);
-                const img = ctx.getImageData(0, 0, cv.width, cv.height);
                 const hit = window.jsQR(img.data, img.width, img.height);
-                if (hit?.data) {
-                  stopped = true;
-                  await handleDecoded(hit.data);
-                }
+                if (hit?.data) { stopped = true; await handleDecoded(hit.data); return; }
               }
+              const decoded = await decodeFromImageData(img);
+              if (decoded) { stopped = true; await handleDecoded(decoded); }
             } catch {}
-          }, 260);
+          }, 220);
           streamCleanup = () => {
-            stopped = true;
-            clearInterval(timer);
+            stopped = true; clearInterval(timer);
             try { stream.getTracks().forEach(t => t.stop()); } catch {}
             videoWrap.style.display = 'none';
           };
-        } catch (err) {
-          statusEl.style.color = 'var(--wn)';
-          statusEl.textContent = '摄像头未授权或不可用，可使用「相册选图识别」或直接粘贴同步码';
+        } catch {
+          statusEl.style.color = 'var(--warn,#c47a0a)';
+          statusEl.textContent = '点右上角相机或相册图标拍照/选图识别二维码';
         }
       };
 
-      const fileInp = h('input', {
-        type: 'file',
-        accept: 'image/*',
-        style: 'display:none',
-        onchange: async e => {
-          const f = e.target.files?.[0];
-          if (!f) return;
-          statusEl.style.color = 'var(--ac)';
-          statusEl.textContent = '正在识别图片中的二维码…';
-          const decoded = await decodeFromFile(f);
-          if (decoded) {
-            await handleDecoded(decoded);
-          } else {
-            statusEl.style.color = 'var(--er)';
-            statusEl.textContent = '未能从图片中识别出二维码，请尝试更清晰的截图或直接粘贴同步码';
-          }
-          e.target.value = '';
-        },
-      });
-
-      const pasteTa = h('textarea', {
-        class: 'inp m-ta',
-        rows: 3,
-        placeholder: '在此粘贴 brana-sync:// 离线同步码、https:// 节点订阅链接、vless:// 节点或 ARENA-ACCOUNTS-V1 账号包…',
-        style: 'font-family:var(--mono);font-size:11px',
-      });
-
-      const actionRow = h('div', { style: 'display:flex;gap:8px;flex-wrap:wrap' },
-        h('button', {
-          type: 'button',
-          class: 'btn p',
-          style: 'flex:1;min-width:130px',
-          onclick: startCameraScan,
-        }, icon('camera'), h('span', null, '开启摄像头扫码')),
-        h('button', {
-          type: 'button',
-          class: 'btn',
-          style: 'flex:1;min-width:130px',
-          onclick: () => fileInp.click(),
-        }, icon('upload'), h('span', null, '选择二维码图片')),
-        fileInp
+      headerTools.replaceChildren(
+        ib('camera', '摄像头扫码', startCameraScan),
+        ib('upload', '从相册选择二维码图片', () => fileInp.click()),
+        ib('x', '关闭', close)
       );
 
-      const applyBtn = h('button', {
-        type: 'button',
-        class: 'btn p',
-        style: 'width:100%',
-        onclick: () => handleDecoded(pasteTa.value),
-      }, icon('check'), h('span', null, '立即同步并应用配置'));
-
-      body.replaceChildren(actionRow, videoWrap, pasteTa, applyBtn, statusEl);
-    }
-
-    function switchTab(t) {
-      curTab = t;
-      tabExport.className = 'btn' + (curTab === 'export' ? ' p' : '');
-      tabImport.className = 'btn' + (curTab === 'import' ? ' p' : '');
-      if (curTab === 'export') void renderExport();
-      else renderImport();
+      const pasteInp = h('input', {
+        class: 'inp', type: 'text', placeholder: '或粘贴同步码 / 订阅链接…',
+        style: 'flex:1;font-family:var(--mono,monospace);font-size:11px;padding:6px 8px;border-radius:8px;border:1px solid var(--bd2,#45423d);background:var(--bg2,#191817);color:var(--fg,#ecebe8)',
+        onkeydown: e => { if (e.key === 'Enter') { e.preventDefault(); void handleDecoded(pasteInp.value); } },
+      });
+      const pasteRow = h('div', { style: 'display:flex;gap:8px;align-items:center' }, pasteInp, ib('check', '立即导入', () => handleDecoded(pasteInp.value)));
+      body.replaceChildren(videoWrap, statusEl, pasteRow, fileInp, camFileInp);
+      setTimeout(() => { void startCameraScan(); }, 60);
     }
 
     const ov = h('div', {
@@ -1987,40 +1989,43 @@ const QrSync = (() => {
       style: 'position:fixed;inset:0;z-index:10000;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,0.62);padding:16px',
       onclick: e => { if (e.target === ov) close(); },
     },
-      h('div', { class: 'm-box', style: 'width:460px;max-width:94vw;background:var(--bg1);border:1px solid var(--bd);border-radius:14px;box-shadow:0 16px 48px rgba(0,0,0,0.45);overflow:hidden' },
-        h('div', { class: 'm-h', style: 'display:flex;align-items:center;justify-content:space-between;padding:12px 16px;border-bottom:1px solid var(--bd)' },
-          h('span', { style: 'font-weight:700;font-size:14px' }, '二维码离线同步（节点订阅 + 账号配置）'),
-          ib('x', '关闭', close)
-        ),
-        h('div', { style: 'display:flex;gap:8px;padding:12px 16px 0' }, tabExport, tabImport),
+      h('div', { class: 'm-box', style: 'width:380px;max-width:94vw;background:var(--bg,#1f1e1c);color:var(--fg,#ecebe8);border:1px solid var(--bd,#33312d);border-radius:14px;box-shadow:0 16px 48px rgba(0,0,0,0.45);overflow:hidden' },
+        h('div', { class: 'm-h', style: 'display:flex;align-items:center;justify-content:space-between;padding:12px 16px;border-bottom:1px solid var(--bd,#33312d)' }, titleSpan, headerTools),
         body
       )
     );
     document.body.append(ov);
-    switchTab(curTab);
+    if (curTab === 'export') void renderExport();
+    else renderImport();
     return ov;
   }
 
   function renderFirstTimeOnboarding(v, a, reason, goStep2) {
     v.replaceChildren();
-    const errEl = h('div', {
-      class: 'lerr',
-      style: 'min-height:20px;margin:6px 0;color:var(--c2);text-align:center',
-    }, reason || '');
-    const subInp = h('input', {
-      class: 'inp',
-      type: 'text',
-      placeholder: '请粘贴 EdgeTunnel 订阅地址 (https://...) 或 vless:// 节点链接',
-      style: 'width:100%',
-    });
+    const isMobile = Host.platform === 'android' || (typeof isMob === 'function' && isMob());
+    const errEl = h('div', { class: 'lerr', style: 'min-height:20px;margin:6px 0;color:var(--fg2,#b9b6af);text-align:center' }, reason || '');
+    if (isMobile) {
+      const scanBtn = h('button', {
+        type: 'button', class: 'ib mobile-onboard-qr-btn', title: '扫描电脑端二维码', 'aria-label': '扫描电脑端二维码',
+        style: 'width:76px;height:76px;margin:10px auto;border-radius:20px;border:1px solid var(--bd,#33312d);background:var(--bg2,#191817);color:var(--acc,#ecebe8);display:flex;align-items:center;justify-content:center;box-shadow:0 8px 24px rgba(0,0,0,0.28)',
+        onclick: () => openModal('import', res => { markOnboardingDone(); goStep2(res); }),
+      }, icon('qr'));
+      v.append(h('div', { class: 'lwrap' },
+        h('div', { class: 'lcard', style: 'max-width:420px;text-align:center' },
+          h('div', { class: 'llogo' }, 'A'),
+          h('div', { class: 'ltitle' }, '扫描电脑端二维码'),
+          h('div', { class: 'lsub' }, '打开电脑端「导出账号合集」点击右上角二维码图标，手机直接扫码即可一键导入节点与账号'),
+          scanBtn,
+          errEl
+        )
+      ));
+      return;
+    }
+    const subInp = h('input', { class: 'inp', type: 'text', placeholder: '请粘贴 EdgeTunnel 订阅地址 (https://...) 或 vless:// 节点链接', style: 'width:100%' });
     const doImportAndNext = async (raw) => {
       const val = String(raw ?? subInp.value ?? '').trim();
       if (!val) {
-        if (hasNodeConfigured(a)) {
-          markOnboardingDone();
-          goStep2(null);
-          return;
-        }
+        if (hasNodeConfigured(a)) { markOnboardingDone(); goStep2(null); return; }
         errEl.style.color = 'var(--er)';
         errEl.textContent = '请先填写 EdgeTunnel 订阅地址，配置好节点后才能登录或注册账号';
         subInp.focus();
@@ -2030,7 +2035,7 @@ const QrSync = (() => {
       errEl.textContent = '正在拉取并配置 EdgeTunnel 订阅节点…';
       try {
         const res = await applySyncPayload(val, m => { errEl.textContent = m; });
-        if (!hasNodeConfigured(a) && !(res && (res.email || res.accounts > 0))) {
+        if (!hasNodeConfigured(a) && !(res && (res.email || res.firstEmail || res.accounts > 0 || res.accountCount > 0))) {
           throw new Error('未能从该地址获取到可用节点，请检查 EdgeTunnel 订阅地址是否正确');
         }
         markOnboardingDone();
@@ -2042,19 +2047,8 @@ const QrSync = (() => {
         errEl.textContent = String(e?.message || e || 'EdgeTunnel 订阅配置失败，请检查地址后重试');
       }
     };
-    subInp.onkeydown = (e) => {
-      if (e.key === 'Enter') {
-        e.preventDefault();
-        void doImportAndNext();
-      }
-    };
-    const subBtn = h('button', {
-      type: 'button',
-      class: 'btn p lbtn',
-      style: 'width:100%;height:40px;font-weight:700',
-      onclick: () => void doImportAndNext(),
-    }, icon('globe'), h('span', null, '配置 EdgeTunnel 订阅并继续（登录 / 注册）'));
-
+    subInp.onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); void doImportAndNext(); } };
+    const subBtn = h('button', { type: 'button', class: 'btn p lbtn', style: 'width:100%;height:40px;font-weight:700', onclick: () => void doImportAndNext() }, icon('globe'), h('span', null, '配置 EdgeTunnel 订阅并继续（登录 / 注册）'));
     const card = h('div', { class: 'lwrap' },
       h('div', { class: 'lcard', style: 'max-width:460px' },
         h('div', { class: 'llogo' }, 'A'),
@@ -2065,16 +2059,8 @@ const QrSync = (() => {
           subInp,
           subBtn,
           h('div', { style: 'display:flex;gap:8px;justify-content:center;margin-top:4px;flex-wrap:wrap' },
-            h('button', {
-              type: 'button',
-              class: 'btn',
-              onclick: () => Nodes.openModal(),
-            }, icon('globe'), h('span', null, '节点订阅管理')),
-            h('button', {
-              type: 'button',
-              class: 'btn',
-              onclick: () => Pool.openModal(),
-            }, icon('shield'), h('span', null, 'ProxyIP 池'))
+            h('button', { type: 'button', class: 'btn', onclick: () => Nodes.openModal() }, icon('globe'), h('span', null, '节点订阅管理')),
+            h('button', { type: 'button', class: 'btn', onclick: () => Pool.openModal() }, icon('shield'), h('span', null, 'ProxyIP 池'))
           )
         )
       )
@@ -2082,7 +2068,7 @@ const QrSync = (() => {
     v.append(card);
     setTimeout(() => { try { subInp.focus(); } catch {} }, 40);
   }
-  return { encodeQR, toSvg, decodeFromFile, buildSyncBundle, applySyncPayload, hasNodeConfigured, isFirstTimeNoCache, markOnboardingDone, openModal, renderFirstTimeOnboarding };
+  return { encodeQR, toSvg, decodeFromImageData, decodeFromFile, buildSyncBundle, applySyncPayload, hasNodeConfigured, isFirstTimeNoCache, markOnboardingDone, openModal, renderFirstTimeOnboarding };
 })();
 if (typeof window !== 'undefined') window.QrSync = QrSync;
 
@@ -2593,17 +2579,14 @@ const Recaptcha = (() => {
       const beforeFrames = new Set(document.querySelectorAll('iframe')), beforeRoots = new Set(document.body.children);
       const ownFrames = new Set(), ownRoots = new Set(), detachedParents = new Map();
       const wrap = document.createElement('div'); wrap.className = 'modal-back rc-back'; wrap.dataset.noghost = '1';
-      wrap.innerHTML = `<div class="modal small rc-modal"><div class="modal-h">人机验证</div><div class="modal-b"><p class="muted rc-why">Brana 判定需要人工验证：勾选下面的方框，按提示完成即可自动继续。</p><div class="rc-box"></div><p class="rc-st dim"></p></div><div class="modal-f"><button class="btn ghost" data-r>重新验证</button><button class="btn ghost" data-route title="验证图片 / 验证框加载不出来时：只给 Google 验证码换线路">换线路</button><span class="grow"></span><button class="btn ghost" data-x>取消</button></div></div>`;
+      wrap.innerHTML = `<div class="modal small rc-modal"><div class="modal-h">人机验证</div><div class="modal-b"><p class="muted rc-why">人机验证进行中，正在自动完成…</p><div class="rc-box"></div><p class="rc-st dim"></p></div><div class="modal-f"><button class="btn ghost" data-r>重新验证</button><button class="btn ghost" data-route title="验证图片 / 验证框加载不出来时：只给 Google 验证码换线路">换线路</button><span class="grow"></span><button class="btn ghost" data-x>取消</button></div></div>`;
       document.body.appendChild(wrap);
       const box = wrap.querySelector('.rc-box'), stEl = wrap.querySelector('.rc-st');
-      try { if (typeof Gacha !== 'undefined' && Gacha.run?.needCaptcha) wrap.querySelector('.rc-why').textContent = '抽卡已暂停' + (Gacha.run.capAuto ? '（已自动冷却重试 ' + Gacha.run.capAuto + ' 次仍未通过）' : '') + '：勾选下面的方框完成官方验证，通过后自动从断点继续抽卡；不操作也会每 4 分钟自动再试。'; } catch {}
+      try { if (typeof Gacha !== 'undefined' && Gacha.run?.needCaptcha) wrap.querySelector('.rc-why').textContent = '人机验证进行中，完成后将自动继续抽卡…'; } catch {}
       let wid = null, fin = false, poll = 0, mo = null, raf = 0, generation = 0;
-      // 图片验证框上方的常驻操作条：图片框会盖住下面弹窗的按钮，卡住时在这里「重新验证 / 取消」
       const bar = document.createElement('div'); bar.className = 'rc-bar'; bar.hidden = true;
-      bar.innerHTML = '<span>人机验证 · 卡住不动时</span><button type="button" data-r2>重新验证</button><button type="button" data-route2>换线路</button><button type="button" data-x2>取消</button>';
+      bar.innerHTML = '<span>人机验证进行中…</span><button type="button" data-r2>重新验证</button><button type="button" data-route2>换线路</button><button type="button" data-x2>取消</button>';
       document.body.appendChild(bar);
-      // 顺便显示图片是走本机网络还是走节点（走节点时图片常加载不出来 / 点验证没反应）
-      Host.gnet?.()?.then?.(r => { const sp = bar.querySelector('span'); if (sp && r) sp.textContent = '人机验证 · ' + (r.on ? '本机网络' : '经节点') + ' · 卡住时'; })?.catch?.(() => {});
       const isV2Frame = f => {
         try { const u = new URL(f.src); return ['www.google.com', 'google.com', 'www.recaptcha.net', 'recaptcha.net'].includes(u.hostname) && /\/recaptcha\/(?:enterprise|api2)\/bframe$/.test(u.pathname) && u.searchParams.get('k') === RC_V2; } catch { return false; }
       };
@@ -2649,7 +2632,7 @@ const Recaptcha = (() => {
         if (fin) return;
         captureMutations(mo?.takeRecords() || []);
         fin = true; clearInterval(poll); mo?.disconnect(); cancelAnimationFrame(raf); raf = 0;
-        removeEventListener('resize', fit); const owned = clearChal(); wrap.remove(); bar.remove();
+        removeEventListener('resize', fit); removeEventListener('message', onExpMsg); const owned = clearChal(); wrap.remove(); bar.remove();
         // Google may reattach the completed widget while its close animation finishes.
         // Only already-owned DOM references are removed, for a bounded interval.
         const cleanLate = () => {
@@ -2699,21 +2682,26 @@ const Recaptcha = (() => {
         try {
           wid = grecaptcha.enterprise.render(el, { sitekey: RC_V2, ...(hl() ? { hl: hl() } : {}), theme: document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light', size: innerWidth < 340 ? 'compact' : 'normal',
             callback: t => { if (gen === generation && typeof t === 'string' && t) done(true, t); },
-            'expired-callback': () => { if (fin || gen !== generation) return; stEl.textContent = '验证已过期，请重新勾选'; try { grecaptcha.enterprise.reset(wid); } catch {} },
-            'error-callback': () => { if (fin || gen !== generation) return; stEl.textContent = '验证组件出错（多半是网络 / 代理），点「重新验证」再试'; } });
+            'expired-callback': () => { if (fin || gen !== generation) return; stEl.textContent = '验证已过期，正在自动重新验证…'; try { grecaptcha.enterprise.reset(wid); } catch {} },
+            'error-callback': () => { if (fin || gen !== generation) return; stEl.textContent = '验证网络异常，可点「换线路」或「重新验证」'; } });
         } catch (e) { stEl.textContent = '验证组件加载失败：' + (e.message || e); }
         if (fin) { clearChal(); return; } fit();
       };
       wrap.querySelector('[data-x]').onclick = () => done(false);
-      v2Cancel = () => done(false);   // 抽卡自动重试已通过：代码关掉还开着的验证框
+      v2Cancel = () => done(false);
       bar.querySelector('[data-x2]').onclick = () => done(false);
       const restart = () => {
         if (fin) return;
         captureMutations(mo?.takeRecords() || []); generation++; unfit();
         try { if (wid != null) grecaptcha.enterprise.reset(wid); } catch {}
         clearChal(); wid = null; bar.hidden = true; render();
-        stEl.textContent = '已重置：请重新勾选上面的方框';
+        stEl.textContent = '正在重新自动验证…';
       };
+      const onExpMsg = ev => {
+        const d = ev?.data;
+        if (d && (d.__af_captcha_expired || (d.__mcp && d.type === 'mcp-captcha-status' && d.status === 'expired'))) restart();
+      };
+      addEventListener('message', onExpMsg);
       bar.querySelector('[data-r2]').onclick = restart;
       // 验证框 / 图片加载不出来：只给 Google 验证码换线路（本机网络 / 备用代理），保存后自动重置验证
       const reroute = async () => { if (fin) return; if (await CapRoute.offer().catch(() => false)) { await sleep(1200); restart(); } };
@@ -3047,6 +3035,40 @@ const MsgCache = (() => {
   let dbp = null; const timers = new Map(), memHot = new Map(), MAX = 600, CAP = 6e6, HOT_MAX = 2, HOT_CAP = 48000;
   const db = () => dbp ||= new Promise(res => { try { const r = indexedDB.open('anc-msgs', 1); r.onupgradeneeded = () => r.result.createObjectStore('c'); r.onsuccess = () => res(r.result); r.onerror = () => res(null); } catch { res(null); } });
   const idx = () => Store.get('mc:idx', {}) || {};
+  function isSameAsstTurnChunk(prev, cur) {
+    if (!prev || !cur || prev.role !== 'assistant' || cur.role !== 'assistant') return false;
+    if (prev.id && cur.id && prev.id === cur.id) return true;
+    const pStart = Number(prev.metadata?.timing?.startedAt) || 0;
+    const pEnd = Number(prev.metadata?.timing?.completedAt) || Number(prev._finishedAt) || 0;
+    const cStart = Number(cur.metadata?.timing?.startedAt) || 0;
+    const pIdTs = typeof idTime === 'function' ? (idTime(prev.id) || 0) : 0;
+    const cIdTs = typeof idTime === 'function' ? (idTime(cur.id) || 0) : 0;
+    if (cStart > 0 && pEnd > 0 && cStart <= pEnd + 2000) return true;
+    if (cIdTs > 0 && pIdTs > 0 && cIdTs < pIdTs) return true;
+    if (!pStart && pEnd > 0 && cStart > 0 && cStart < pEnd) return true;
+    const pHasTool = Array.isArray(prev.parts) && prev.parts.some(p => p && (
+      p.type === 'dynamic-tool' ||
+      String(p.type || '').startsWith('tool-') ||
+      (p.type === 'text' && /<function_calls>|<invoke\b/i.test(String(p.text || '')))
+    ));
+    const pFin = prev.metadata?.finishReason || '';
+    const pHasFinalFinish = pFin === 'stop' || pFin === 'end-turn';
+    if (pHasTool && !pHasFinalFinish) {
+      if (cStart > 0 && (pEnd || pIdTs) > 0 && cStart <= (pEnd || pIdTs) + 5000) return true;
+      if (!cStart && cIdTs > 0 && (pEnd || pIdTs) > 0 && Math.abs(cIdTs - (pEnd || pIdTs)) < 600000) return true;
+    }
+    return false;
+  }
+  function firstAsstIdxOfTurn(arr, idx) {
+    let k = idx;
+    while (k > 0 && arr[k - 1]?.role === 'assistant' && isSameAsstTurnChunk(arr[k - 1], arr[k])) k--;
+    return k;
+  }
+  function lastAsstIdxOfTurn(arr, idx) {
+    let k = idx;
+    while (k + 1 < arr.length && arr[k + 1]?.role === 'assistant' && isSameAsstTurnChunk(arr[k], arr[k + 1])) k++;
+    return k;
+  }
   function sanitizeCachedMsgs(msgs) {
     if (!Array.isArray(msgs)) return msgs;
     for (const m of msgs) {
@@ -3059,10 +3081,11 @@ const MsgCache = (() => {
         if (p._parsedInputVal !== undefined) delete p._parsedInputVal;
       }
     }
+    if (msgs.length < 2) return msgs;
     const tsOf = m => {
       if (!m || typeof m !== 'object') return 0;
       const idAt = typeof idTime === 'function' ? idTime(m.id) : 0;
-      if (m._sentAt && m._sentAt > 1.6e12) return m._sentAt;
+      if (m._sentAt && m._sentAt > 1.6e12 && (!idAt || Math.abs(m._sentAt - idAt) <= 600000)) return m._sentAt;
       const tStart = m.metadata?.timing?.startedAt;
       const sMs = typeof tStart === 'number' ? tStart : (typeof tStart === 'string' ? Date.parse(tStart) : 0);
       if (sMs && sMs > 1.6e12) return sMs;
@@ -3071,22 +3094,112 @@ const MsgCache = (() => {
       const cMs = typeof tComp === 'number' ? tComp : (typeof tComp === 'string' ? Date.parse(tComp) : 0);
       return (cMs && cMs > 1.6e12) ? cMs : (m._finishedAt || 0);
     };
-    const endTsOf = m => {
+    const endTsOf = (m, arr, idx) => {
       if (!m || typeof m !== 'object') return 0;
       const tComp = m.metadata?.timing?.completedAt;
       const cMs = typeof tComp === 'number' ? tComp : (typeof tComp === 'string' ? Date.parse(tComp) : 0);
-      return Math.max(tsOf(m), (cMs && cMs > 1.6e12) ? cMs : 0, m._finishedAt || 0);
+      const tStart = m.metadata?.timing?.startedAt;
+      const sMs = typeof tStart === 'number' ? tStart : (typeof tStart === 'string' ? Date.parse(tStart) : 0);
+      const fin = Number(m._finishedAt) || 0;
+      if ((cMs && cMs > 1.6e12) || (sMs && sMs > 1.6e12)) {
+        return Math.max((cMs && cMs > 1.6e12) ? cMs : 0, (sMs && sMs > 1.6e12) ? sMs : 0);
+      }
+      if (fin && fin > 1.6e12) return fin;
+      if (Array.isArray(arr) && typeof idx === 'number' && m.role === 'assistant') {
+        const fIdx = firstAsstIdxOfTurn(arr, idx);
+        const lIdx = lastAsstIdxOfTurn(arr, idx);
+        let best = 0;
+        for (let k = fIdx; k <= lIdx; k++) {
+          const cm = arr[k];
+          const tc = cm?.metadata?.timing?.completedAt;
+          const ts = cm?.metadata?.timing?.startedAt;
+          const cmC = typeof tc === 'number' ? tc : (typeof tc === 'string' ? Date.parse(tc) : 0);
+          const cmS = typeof ts === 'number' ? ts : (typeof ts === 'string' ? Date.parse(ts) : 0);
+          const cmF = Number(cm?._finishedAt) || 0;
+          const v = Math.max(cmC > 1.6e12 ? cmC : 0, cmS > 1.6e12 ? cmS : 0, cmF > 1.6e12 ? cmF : 0);
+          if (v > best) best = v;
+        }
+        if (best > 0) return best;
+      }
+      return tsOf(m);
     };
     const uTxtOf = m => m?.role === 'user' ? (m.parts || []).filter(p => p?.type === 'text').map(p => String(p.text || '')).join('').replace(/\s+/g, ' ').trim() : '';
+
+    // 1. Deduplicate identical message IDs in-place (keep earlier slot, merge fresher parts/metadata)
+    const seenIdIdx = new Map();
+    for (let i = 0; i < msgs.length; i++) {
+      const m = msgs[i];
+      if (!m) continue;
+      if (m.id && seenIdIdx.has(m.id)) {
+        const prevIdx = seenIdIdx.get(m.id);
+        const prev = msgs[prevIdx];
+        if (prev && prev !== m) {
+          const prevLen = Array.isArray(prev.parts) ? prev.parts.length : 0;
+          const curLen = Array.isArray(m.parts) ? m.parts.length : 0;
+          if (curLen >= prevLen) msgs[prevIdx] = Object.assign(prev, m);
+        }
+        msgs.splice(i, 1);
+        i--;
+        continue;
+      }
+      if (m.id) seenIdIdx.set(m.id, i);
+    }
+
+    // 2. Remove out-of-order historical user messages (>60s older than maxEarlierTurnTs) & earlier duplicates
+    let maxEarlierTurnTs = 0;
+    const earlierUserTexts = new Set();
+    for (let i = 0; i < msgs.length; i++) {
+      const m = msgs[i];
+      if (!m) continue;
+      if (m.role === 'assistant') {
+        const aTs = endTsOf(m, msgs, i);
+        if (aTs > maxEarlierTurnTs && (maxEarlierTurnTs === 0 || aTs >= maxEarlierTurnTs - 3600000)) {
+          maxEarlierTurnTs = aTs;
+        }
+        continue;
+      }
+      if (m.role === 'user') {
+        const uTs = tsOf(m);
+        const uTxt = uTxtOf(m);
+        const prevM = i > 0 ? msgs[i - 1] : null;
+        const nextM = i + 1 < msgs.length ? msgs[i + 1] : null;
+        const nextAsstStart = nextM?.role === 'assistant' ? tsOf(nextM) : 0;
+        const isAnsweredByNextAsst = Boolean(
+          nextM?.role === 'assistant' &&
+          !(prevM?.role === 'assistant' && isSameAsstTurnChunk(prevM, nextM)) &&
+          uTs > 0 && nextAsstStart > 0 &&
+          nextAsstStart >= uTs - 5000 && nextAsstStart <= uTs + 900000 &&
+          (!maxEarlierTurnTs || uTs >= maxEarlierTurnTs - 300000)
+        );
+        const isOutOfOrderOld = !isAnsweredByNextAsst && maxEarlierTurnTs > 0 && uTs > 0 && uTs < maxEarlierTurnTs - 60000;
+        const isDupOfEarlier = Boolean(uTxt && earlierUserTexts.has(uTxt) && (m._local || (!isAnsweredByNextAsst && maxEarlierTurnTs > 0 && uTs > 0 && uTs < maxEarlierTurnTs - 2000)));
+        if (isOutOfOrderOld || isDupOfEarlier) {
+          msgs.splice(i, 1);
+          i--;
+          continue;
+        }
+        if (uTs > maxEarlierTurnTs) maxEarlierTurnTs = uTs;
+        if (uTxt) earlierUserTexts.add(uTxt);
+      }
+    }
+
+    // 3. Clean adjacent user duplicates or stale stacked user messages
     for (let i = msgs.length - 1; i >= 1; i--) {
       const cur = msgs[i], prev = msgs[i - 1];
       if (cur?.role === 'user' && prev?.role === 'user' && !cur.failed && !prev.failed) {
         const ct = uTxtOf(cur), pt = uTxtOf(prev);
         if (cur.id === prev.id || (ct && ct === pt)) {
           msgs.splice(cur._local && !prev._local ? i : (prev._local && !cur._local ? i - 1 : i), 1);
+          continue;
+        }
+        const u1Ts = tsOf(prev), u2Ts = tsOf(cur);
+        if (u1Ts > 0 && u2Ts > 0 && (u1Ts > u2Ts + 60000 || ((prev._local || cur._local) && u2Ts - u1Ts > 1800000))) {
+          msgs.splice(u1Ts < u2Ts ? i - 1 : i, 1);
+          continue;
         }
       }
     }
+
     let lastAIdx = -1;
     for (let i = msgs.length - 1; i >= 0; i--) {
       if (msgs[i]?.role === 'assistant') { lastAIdx = i; break; }
@@ -3100,22 +3213,29 @@ const MsgCache = (() => {
       }
     }
     if (lastAIdx >= 0 && lastAIdx < msgs.length - 1) {
-      const lastAEnd = endTsOf(msgs[lastAIdx]);
-      const earlierUsers = msgs.slice(0, lastAIdx).filter(x => x && x.role === 'user');
+      const firstLastTurnIdx = firstAsstIdxOfTurn(msgs, lastAIdx);
+      const lastAEnd = endTsOf(msgs[lastAIdx], msgs, lastAIdx);
+      const earlierUsers = msgs.slice(0, firstLastTurnIdx).filter(x => x && x.role === 'user');
       for (let i = msgs.length - 1; i > lastAIdx; i--) {
         const tm = msgs[i];
         if (!tm || tm.role !== 'user') continue;
-        const uTs = tsOf(tm), uTxt = uTxtOf(tm), lastA = msgs[lastAIdx], lastAStart = tsOf(lastA);
+        const uTs = tsOf(tm), uTxt = uTxtOf(tm), lastA = msgs[firstLastTurnIdx], lastAStart = tsOf(lastA);
         const isDupOfEarlier = earlierUsers.some(x => x.id === tm.id || (tm._prevAsstId && x._prevAsstId && tm._prevAsstId === x._prevAsstId && uTxt && uTxtOf(x) === uTxt) || (uTxt && uTxtOf(x) === uTxt && uTs > 0 && tsOf(x) > 0 && Math.abs(uTs - tsOf(x)) < 5000));
-        if (!isDupOfEarlier && lastAIdx >= 1 && msgs[lastAIdx - 1]?.role === 'assistant' && (!lastAStart || !uTs || uTs >= lastAStart - 120000)) {
+        if (
+          !isDupOfEarlier &&
+          firstLastTurnIdx >= 1 &&
+          msgs[firstLastTurnIdx - 1]?.role === 'assistant' &&
+          !isSameAsstTurnChunk(msgs[firstLastTurnIdx - 1], msgs[firstLastTurnIdx]) &&
+          lastAStart > 0 && uTs > 0 && uTs >= lastAStart - 300000 && uTs <= lastAStart + 30000
+        ) {
           msgs.splice(i, 1);
-          msgs.splice(lastAIdx, 0, tm);
-          tm._prevAsstId = msgs[lastAIdx - 1]?.id || tm._prevAsstId;
+          msgs.splice(firstLastTurnIdx, 0, tm);
+          tm._prevAsstId = msgs[firstLastTurnIdx - 1]?.id || tm._prevAsstId;
           lastAIdx++;
           continue;
         }
-        const lastAHasUser = lastAIdx >= 1 && msgs[lastAIdx - 1]?.role === 'user';
-        const isOlderThanLastAsst = lastAHasUser && lastAEnd > 0 && uTs > 0 && uTs < lastAEnd - 30000 && tm._prevAsstId !== lastA?.id && (!lastAStart || lastAStart > uTs + 30000);
+        const lastAHasUser = firstLastTurnIdx >= 1 && msgs[firstLastTurnIdx - 1]?.role === 'user';
+        const isOlderThanLastAsst = lastAHasUser && lastAEnd > 0 && uTs > 0 && uTs < lastAEnd - 30000 && tm._prevAsstId !== msgs[lastAIdx]?.id && (!lastAStart || lastAStart > uTs + 30000);
         if (isOlderThanLastAsst || isDupOfEarlier) {
           msgs.splice(i, 1);
         }
@@ -3146,8 +3266,18 @@ const MsgCache = (() => {
       parts: Array.isArray(m?.parts) ? m.parts.map(p => {
         if (!p || typeof p !== 'object') return p;
         const { _mdEl, _mdSrc, _parsedInputRaw, _parsedInputVal, ...rest } = p;
-        if (typeof rest.inputText === 'string' && rest.inputText.length > strLim) rest.inputText = trunc(rest.inputText);
-        if (rest.input !== undefined) rest.input = slimObj(rest.input);
+        const isPvHtml = /\.(?:html?|svg)$/i.test(String(rest.input?.path || rest.input?.file_path || ''));
+        const pvLim = isPvHtml ? Math.max(strLim, 65536) : strLim;
+        if (typeof rest.inputText === 'string' && rest.inputText.length > pvLim) rest.inputText = rest.inputText.slice(0, pvLim) + '\n…[cached]';
+        if (rest.input !== undefined) {
+          if (isPvHtml && rest.input && typeof rest.input === 'object' && !Array.isArray(rest.input)) {
+            const ni = { ...rest.input };
+            for (const k of Object.keys(ni)) if (typeof ni[k] === 'string' && ni[k].length > pvLim) ni[k] = ni[k].slice(0, pvLim) + '\n…[cached]';
+            rest.input = ni;
+          } else {
+            rest.input = slimObj(rest.input);
+          }
+        }
         if (rest.output !== undefined) rest.output = slimObj(rest.output);
         if (rest.type === 'reasoning' && typeof rest.text === 'string' && rest.text.length > strLim) rest.text = trunc(rest.text);
         return rest;
@@ -3160,7 +3290,9 @@ const MsgCache = (() => {
     const last = ms.at(-1);
     const prev = ms.length > 1 ? ms[ms.length - 2] : null;
     const lastP = last?.parts?.at(-1);
-    const lastPLen = typeof lastP?.text === 'string' ? lastP.text.length : (typeof lastP?.inputText === 'string' ? lastP.inputText.length : 0);
+    const partsInLen = (last?.parts || []).reduce((n, p) => n + (typeof p?.input?.content === 'string' ? p.input.content.length : typeof p?.input?.text === 'string' ? p.input.text.length : 0) + (typeof p?.inputText === 'string' ? p.inputText.length : 0), 0);
+    const hasStubIn = (last?.parts || []).some(p => typeof p?.input?.content === 'string' && p.input.content.includes('…[cached]')) ? 'S' : '';
+    const lastPLen = (typeof lastP?.text === 'string' ? lastP.text.length : (typeof lastP?.inputText === 'string' ? lastP.inputText.length : 0)) + ':' + partsInLen + hasStubIn;
     return `${ms.length}:${last?.id || ''}:${last?.v || 0}:${last?.parts?.length || 0}:${lastPLen}:${last?.failed ? 1 : 0}:${last?.done ? 1 : 0}:${last?.settled ? 1 : 0}:${(last?.text || last?.content || '').length}:${prev?.id || ''}:${prev?.v || 0}:${prev?.failed ? 1 : 0}:${chat?.lastSeq || ''}:${chat?.token || ''}:${chat?.triggerAddress || ''}:${chat?.hasMore ? 1 : 0}`;
   }
   function putHot(sid, rec, approxLen = 0) {
@@ -3228,10 +3360,10 @@ const MsgCache = (() => {
           const hot = getSync(sid);
           let r = q.result || hot || null;
           if (q.result && hot && ((hot.at || 0) > (q.result.at || 0) || +(hot.lastSeq || 0) > +(q.result.lastSeq || 0))) {
-            if (!hot._hotSlice && Array.isArray(hot.messages) && hot.messages.length >= (q.result.messages?.length || 0)) {
+            const hasHotStub = v => { try { return JSON.stringify(v || '').includes('…[cached]'); } catch { return false; } };
+            if (!hot._hotSlice && !hasHotStub(hot.messages) && Array.isArray(hot.messages) && hot.messages.length >= (q.result.messages?.length || 0)) {
               r = hot;
             } else if (Array.isArray(q.result.messages) && Array.isArray(hot.messages) && hot.messages.length) {
-              const hasHotStub = v => { try { return JSON.stringify(v || '').includes('\n…[cached]'); } catch { return false; } };
               const hotById = new Map(hot.messages.filter(m => m?.id).map(m => [m.id, m]));
               const merged = q.result.messages.map(m => {
                 const hm = m?.id ? hotById.get(m.id) : null;
@@ -3240,7 +3372,22 @@ const MsgCache = (() => {
                 return hm;
               });
               const knownIds = new Set(merged.map(m => m?.id).filter(Boolean));
-              for (const hm of hot.messages) if (hm?.id && !knownIds.has(hm.id)) merged.push(hm);
+              let lastSharedHotIdx = -1;
+              for (let hi = hot.messages.length - 1; hi >= 0; hi--) {
+                if (hot.messages[hi]?.id && knownIds.has(hot.messages[hi].id)) { lastSharedHotIdx = hi; break; }
+              }
+              if (lastSharedHotIdx >= 0) {
+                const lastBase = merged[merged.length - 1];
+                const baseLastTs = Number(lastBase?._sentAt) || Number(lastBase?.metadata?.timing?.completedAt) || Number(lastBase?.metadata?.timing?.startedAt) || (typeof idTime === 'function' ? idTime(lastBase?.id) : 0) || 0;
+                for (let hi = lastSharedHotIdx + 1; hi < hot.messages.length; hi++) {
+                  const hm = hot.messages[hi];
+                  if (!hm?.id || knownIds.has(hm.id)) continue;
+                  const hmTs = Number(hm._sentAt) || Number(hm.metadata?.timing?.completedAt) || Number(hm.metadata?.timing?.startedAt) || (typeof idTime === 'function' ? idTime(hm.id) : 0) || 0;
+                  if (baseLastTs > 0 && hmTs > 0 && hmTs < baseLastTs - 5000) continue;
+                  merged.push(hm);
+                  knownIds.add(hm.id);
+                }
+              }
               r = { ...q.result, ...hot, messages: merged, more: Boolean(q.result.more), _hotSlice: false };
             }
           }
@@ -3292,7 +3439,8 @@ const MsgCache = (() => {
     let msgs = rawMsgs.filter((m, idx) => (!m._local || m._appendAccepted || m?.role === 'user') && (!m.failed || (idx === rawMsgs.length - 1 && m?.role === 'user'))).slice(-200).map(rawM => {
       if (rawM && typeof rawM === 'object') {
         const lp = Array.isArray(rawM.parts) && rawM.parts.length ? rawM.parts[rawM.parts.length - 1] : null;
-        const mSig = (rawM.v || 0) + ':' + (rawM.parts?.length || 0) + ':' + (lp?.text?.length || 0) + ':' + (lp?.state || '') + ':' + (rawM.failed ? 1 : 0) + ':' + (isBigChat ? 1 : 0);
+        const mInLen = (rawM.parts || []).reduce((n, p) => n + (typeof p?.input?.content === 'string' ? p.input.content.length : typeof p?.inputText === 'string' ? p.inputText.length : 0), 0);
+        const mSig = (rawM.v || 0) + ':' + (rawM.parts?.length || 0) + ':' + (lp?.text?.length || 0) + ':' + mInLen + ':' + (lp?.state || '') + ':' + (rawM.failed ? 1 : 0) + ':' + (isBigChat ? 1 : 0);
         const hit = _compactMsgMemo.get(rawM);
         if (hit && hit.sig === mSig) return hit.val;
         const { v, ...m } = rawM;
@@ -3352,14 +3500,14 @@ const MsgCache = (() => {
     const d = await db(); if (!d) return;
     try {
       const st = d.transaction('c', 'readwrite').objectStore('c');
-      if (js.includes('\n…[cached]')) {
+      if (js.includes('…[cached]')) {
         const prevReq = st.get(chat.sid);
         prevReq.onsuccess = () => {
           try {
             const prev = prevReq.result;
             if (prev && Array.isArray(prev.messages) && prev.messages.length) {
               const prevById = new Map(prev.messages.filter(m => m?.id).map(m => [m.id, m]));
-              const hasStub = v => { try { return JSON.stringify(v || '').includes('\n…[cached]'); } catch { return false; } };
+              const hasStub = v => { try { return JSON.stringify(v || '').includes('…[cached]'); } catch { return false; } };
               rec.messages = rec.messages.map(m => {
                 const pm = m?.id ? prevById.get(m.id) : null;
                 return (pm && hasStub(m.parts) && !hasStub(pm.parts)) ? pm : m;
@@ -3473,7 +3621,7 @@ const SentUserLog = (() => {
       if (m.role === 'user' && !m.failed && isPelicanPromptText(extractMsgText(m))) return true;
       if (m.role === 'assistant') {
         const aTxt = extractMsgText(m) + ' ' + (Array.isArray(m.parts) ? m.parts.map(p => String(p?.inputText || p?.output || p?.input?.content || p?.input?.path || '')).join(' ') : '');
-        if (/(?:<!doctype\s+html|<html|<svg)/i.test(aTxt) && /(?:pelican|鹈鹕|鵜鶘|ペリカン|bồ\s*nông|pélican|pelikan)/i.test(aTxt)) return true;
+        if (/(?:<!doctype\s+html|<html|<svg)/i.test(aTxt) && /(?:pelican|鹈鹕|鵜鶘|ペリカン|펠리컨|bồ\s*nông|pélican|pelikan)/i.test(aTxt)) return true;
       }
     }
     return false;
@@ -3481,7 +3629,7 @@ const SentUserLog = (() => {
   const getMsgTs = m => {
     if (!m || typeof m !== 'object') return 0;
     const idAt = typeof idTime === 'function' ? idTime(m.id) : 0;
-    if (m._sentAt && m._sentAt > 1.6e12) return m._sentAt;
+    if (m._sentAt && m._sentAt > 1.6e12 && (!idAt || Math.abs(m._sentAt - idAt) <= 600000)) return m._sentAt;
     const tStart = m.metadata?.timing?.startedAt;
     const sMs = typeof tStart === 'number' ? tStart : (typeof tStart === 'string' ? Date.parse(tStart) : 0);
     if (sMs && sMs > 1.6e12) return sMs;
@@ -3590,7 +3738,7 @@ const SentUserLog = (() => {
   function record(sid, msg, prevAsstId = null) {
     if (!sid || !msg || !msg.id) return;
     try {
-      const txt = extractMsgText(msg), tNow = msg._sentAt || now();
+      const txt = extractMsgText(msg), tNow = msg._sentAt || (typeof idTime === 'function' ? idTime(msg.id) : 0) || now();
       if (!prevAsstId && msg._prevAsstId) prevAsstId = msg._prevAsstId;
       msg._sentAt = tNow;
       if (prevAsstId) msg._prevAsstId = prevAsstId;
@@ -3606,12 +3754,47 @@ const SentUserLog = (() => {
       Store.set(keyOf(sid), list);
     } catch {}
   }
+  function isSameAsstTurnChunk(prev, cur) {
+    if (!prev || !cur || prev.role !== 'assistant' || cur.role !== 'assistant') return false;
+    if (prev.id && cur.id && prev.id === cur.id) return true;
+    const pStart = Number(prev.metadata?.timing?.startedAt) || 0;
+    const pEnd = Number(prev.metadata?.timing?.completedAt) || Number(prev._finishedAt) || 0;
+    const cStart = Number(cur.metadata?.timing?.startedAt) || 0;
+    const pIdTs = typeof idTime === 'function' ? (idTime(prev.id) || 0) : 0;
+    const cIdTs = typeof idTime === 'function' ? (idTime(cur.id) || 0) : 0;
+    if (cStart > 0 && pEnd > 0 && cStart <= pEnd + 2000) return true;
+    if (cIdTs > 0 && pIdTs > 0 && cIdTs < pIdTs) return true;
+    if (!pStart && pEnd > 0 && cStart > 0 && cStart < pEnd) return true;
+    const pHasTool = Array.isArray(prev.parts) && prev.parts.some(p => p && (
+      p.type === 'dynamic-tool' ||
+      String(p.type || '').startsWith('tool-') ||
+      (p.type === 'text' && /<function_calls>|<invoke\b/i.test(String(p.text || '')))
+    ));
+    const pFin = prev.metadata?.finishReason || '';
+    const pHasFinalFinish = pFin === 'stop' || pFin === 'end-turn';
+    if (pHasTool && !pHasFinalFinish) {
+      if (cStart > 0 && (pEnd || pIdTs) > 0 && cStart <= (pEnd || pIdTs) + 5000) return true;
+      if (!cStart && cIdTs > 0 && (pEnd || pIdTs) > 0 && Math.abs(cIdTs - (pEnd || pIdTs)) < 600000) return true;
+    }
+    return false;
+  }
+  function firstAsstIdxOfTurn(arr, idx) {
+    let k = idx;
+    while (k > 0 && arr[k - 1]?.role === 'assistant' && isSameAsstTurnChunk(arr[k - 1], arr[k])) k--;
+    return k;
+  }
+  function lastAsstIdxOfTurn(arr, idx) {
+    let k = idx;
+    while (k + 1 < arr.length && arr[k + 1]?.role === 'assistant' && isSameAsstTurnChunk(arr[k], arr[k + 1])) k++;
+    return k;
+  }
   function hasAdjacentAsstGap(msgs) {
     if (!Array.isArray(msgs) || msgs.length < 2) return false;
     for (let i = 1; i < msgs.length; i++) {
       const prev = msgs[i - 1], cur = msgs[i];
       if (prev?.role === 'assistant' && cur?.role === 'assistant') {
         if (prev.participantPosition && cur.participantPosition && prev.participantPosition !== cur.participantPosition) continue;
+        if (isSameAsstTurnChunk(prev, cur)) continue;
         return true;
       }
     }
@@ -3687,12 +3870,16 @@ const SentUserLog = (() => {
     for (let i = chat.messages.length - 1; i >= 0; i--) {
       if (chat.messages[i]?.role === 'assistant') { lastAsstIdx = i; break; }
     }
+    const firstLastTurnIdx = lastAsstIdx >= 0 ? firstAsstIdxOfTurn(chat.messages, lastAsstIdx) : -1;
     const lastAsst = lastAsstIdx >= 0 ? chat.messages[lastAsstIdx] : null;
     const lastAsstEndTs = getMsgEndTs(lastAsst);
+    const firstChatMsg = chat.messages.find(m => m && !m._local) || chat.messages[0] || null;
+    const firstChatTs = getMsgTs(firstChatMsg);
     for (const entry of entries) {
       if (!entry || !entry.id) continue;
       const entryTxt = normTxt(entry.text || extractMsgText(entry));
-      const entryTime = entry._sentAt || (typeof idTime === 'function' ? idTime(entry.id) : 0) || 0;
+      const entryIdAt = typeof idTime === 'function' ? idTime(entry.id) : 0;
+      const entryTime = (entry._sentAt && (!entryIdAt || Math.abs(entry._sentAt - entryIdAt) <= 600000)) ? entry._sentAt : (entryIdAt || entry._sentAt || 0);
       const isPureHitl = Array.isArray(entry.parts) && entry.parts.length > 0 && entry.parts.every(p => p?.type === 'data-tool-results');
       const isCurrentSessionOutbox = Boolean(typeof Drafts !== 'undefined' && Drafts.sess?.has?.(entry.id));
       const isActivelyAwaiting = Boolean(chat.awaitId && chat.awaitId === entry.id && (chat.busy || chat.sending || chat.preSend));
@@ -3704,26 +3891,33 @@ const SentUserLog = (() => {
         try { if (typeof Drafts !== 'undefined' && Drafts.ack) Drafts.ack(entry.id); } catch {}
         continue;
       }
+      if (!isActivelyAwaiting && firstChatTs > 0 && entryTime > 0 && entryTime < firstChatTs - 60000 && chat.messages.length >= 2) {
+        remove(chat.sid, entry.id, entryTxt, entryTime);
+        try { if (typeof Drafts !== 'undefined' && Drafts.ack) Drafts.ack(entry.id); } catch {}
+        continue;
+      }
       let prevIdx = entry.prevAsstId ? chat.messages.findIndex(m => m && (m.id === entry.prevAsstId || m._localId === entry.prevAsstId)) : -1;
+      if (prevIdx >= 0) prevIdx = lastAsstIdxOfTurn(chat.messages, prevIdx);
       if (prevIdx < 0 && chat.messages.length >= 2) {
         for (let i = chat.messages.length - 1; i >= 1; i--) {
           const p = chat.messages[i - 1], c = chat.messages[i];
           if (p?.role === 'assistant' && c?.role === 'assistant') {
             if (p.participantPosition && c.participantPosition && p.participantPosition !== c.participantPosition) continue;
-            const pStart = (typeof idTime === 'function' ? idTime(p.id) : 0) || getMsgTs(p);
-            const cStart = (typeof idTime === 'function' ? idTime(c.id) : 0) || getMsgTs(c);
-            if ((!pStart || !entryTime || entryTime >= pStart - 60000) && (!cStart || !entryTime || entryTime <= cStart + 300000)) {
+            if (isSameAsstTurnChunk(p, c)) continue;
+            const pEnd = getMsgEndTs(p) || (typeof idTime === 'function' ? idTime(p.id) : 0);
+            const cStart = getMsgTs(c) || (typeof idTime === 'function' ? idTime(c.id) : 0);
+            if ((!pEnd || !entryTime || entryTime >= pEnd - 60000) && (!cStart || !entryTime || (entryTime >= cStart - 300000 && entryTime <= cStart + 30000))) {
               prevIdx = i - 1; break;
             }
           }
         }
       }
-      const lastAsstStartTs = (typeof idTime === 'function' ? idTime(lastAsst?.id) : 0) || getMsgTs(lastAsst);
+      const lastAsstStartTs = (firstLastTurnIdx >= 0 ? getMsgTs(chat.messages[firstLastTurnIdx]) : 0) || getMsgTs(lastAsst) || (typeof idTime === 'function' ? idTime(lastAsst?.id) : 0);
       const hasNewAsstAfterPrev = prevIdx >= 0
-        ? chat.messages.slice(prevIdx + 1).some(m => m && m.role === 'assistant' && m.id !== entry.prevAsstId && m.id !== chat.messages[prevIdx]?.id)
-        : Boolean(lastAsst && entry.prevAsstId && lastAsst.id && lastAsst.id !== entry.prevAsstId && (!entryTime || !lastAsstStartTs || lastAsstStartTs >= entryTime - 5000));
-      const fillsAdjacentAsstGap = Boolean(prevIdx >= 0 && chat.messages[prevIdx + 1]?.role === 'assistant' && chat.messages[prevIdx + 1]?.id !== chat.messages[prevIdx]?.id);
-      const lastAsstHasPrecedingUser = lastAsstIdx >= 1 && chat.messages[lastAsstIdx - 1]?.role === 'user';
+        ? chat.messages.slice(prevIdx + 1).some(m => m && m.role === 'assistant' && m.id !== entry.prevAsstId && m.id !== chat.messages[prevIdx]?.id && !isSameAsstTurnChunk(chat.messages[prevIdx], m))
+        : Boolean(lastAsst && entry.prevAsstId && lastAsst.id && lastAsst.id !== entry.prevAsstId && (!entryTime || !lastAsstStartTs || (lastAsstStartTs >= entryTime - 5000 && lastAsstStartTs <= entryTime + 300000)));
+      const fillsAdjacentAsstGap = Boolean(prevIdx >= 0 && chat.messages[prevIdx + 1]?.role === 'assistant' && chat.messages[prevIdx + 1]?.id !== chat.messages[prevIdx]?.id && !isSameAsstTurnChunk(chat.messages[prevIdx], chat.messages[prevIdx + 1]));
+      const lastAsstHasPrecedingUser = firstLastTurnIdx >= 1 && chat.messages[firstLastTurnIdx - 1]?.role === 'user';
       const isSupersededByNewerAsst = prevIdx >= 0
         ? (lastAsstIdx > prevIdx && !fillsAdjacentAsstGap)
         : (lastAsstHasPrecedingUser && lastAsstEndTs > 0 && entryTime > 0 && entryTime < lastAsstEndTs - 30000 && (!lastAsstStartTs || lastAsstStartTs > entryTime + 30000));
@@ -3765,7 +3959,7 @@ const SentUserLog = (() => {
         continue;
       }
       if (byIdIdx >= 0) {
-        if (prevIdx >= 0 && byIdIdx > prevIdx + 1 && chat.messages[prevIdx + 1]?.role === 'assistant') {
+        if (prevIdx >= 0 && byIdIdx > prevIdx + 1 && chat.messages[prevIdx + 1]?.role === 'assistant' && !isSameAsstTurnChunk(chat.messages[prevIdx], chat.messages[prevIdx + 1])) {
           chat.messages.splice(byIdIdx, 1);
           chat.messages.splice(prevIdx + 1, 0, byId);
           byId._prevAsstId = chat.messages[prevIdx]?.id || byId._prevAsstId;
@@ -3830,14 +4024,22 @@ const SentUserLog = (() => {
         }
         continue;
       }
-      if (prevIdx >= 0) { chat.messages.splice(prevIdx + 1, 0, userObj); changed = true; continue; }
+      if (prevIdx >= 0) {
+        const prevEnd = getMsgEndTs(chat.messages[prevIdx]);
+        if (!isActivelyAwaiting && prevEnd > 0 && entryTime > 0 && entryTime < prevEnd - 60000) {
+          remove(chat.sid, entry.id, entryTxt, entryTime);
+          continue;
+        }
+        chat.messages.splice(prevIdx + 1, 0, userObj); changed = true; continue;
+      }
       let gapIdx = -1;
       for (let i = chat.messages.length - 1; i >= 1; i--) {
         const p = chat.messages[i - 1], c = chat.messages[i];
         if (p?.role === 'assistant' && c?.role === 'assistant') {
           if (p.participantPosition && c.participantPosition && p.participantPosition !== c.participantPosition) continue;
+          if (isSameAsstTurnChunk(p, c)) continue;
           const pEnd = getMsgEndTs(p), cStart = getMsgTs(c);
-          if ((!pEnd || !entryTime || entryTime >= pEnd - 60000) && (!cStart || !entryTime || entryTime <= cStart + 60000)) {
+          if ((!pEnd || !entryTime || entryTime >= pEnd - 60000) && (!cStart || !entryTime || (entryTime >= cStart - 300000 && entryTime <= cStart + 60000))) {
             gapIdx = i; break;
           }
         }
@@ -3845,10 +4047,11 @@ const SentUserLog = (() => {
       if (gapIdx >= 1) { userObj._prevAsstId = chat.messages[gapIdx - 1]?.id || null; chat.messages.splice(gapIdx, 0, userObj); changed = true; continue; }
       const lastM = chat.messages.at(-1);
       const isTailAsstActive = lastM?.role === 'assistant' && Boolean(lastM.metadata?.pending || lastM._incomplete || lastM === chat.live || (typeof isIncompleteAssistantMsg === 'function' && isIncompleteAssistantMsg(lastM)));
-      if ((isTailAsstActive || (lastM?.role === 'assistant' && entry._appendAccepted)) && chat.messages.length >= 1 && chat.messages.at(-2)?.role !== 'user') {
-        const tailAsstStart = (typeof idTime === 'function' ? idTime(lastM.id) : 0) || getMsgTs(lastM);
-        if (isActivelyAwaiting || !tailAsstStart || !entryTime || (entryTime >= tailAsstStart - 120000 && now() - entryTime < 1800000)) {
-          chat.messages.splice(chat.messages.length - 1, 0, userObj); changed = true; continue;
+      const tailTurnStartIdx = lastM?.role === 'assistant' ? firstAsstIdxOfTurn(chat.messages, chat.messages.length - 1) : -1;
+      if ((isTailAsstActive || (lastM?.role === 'assistant' && entry._appendAccepted)) && tailTurnStartIdx >= 0 && (tailTurnStartIdx === 0 || chat.messages[tailTurnStartIdx - 1]?.role !== 'user')) {
+        const tailAsstStart = getMsgTs(chat.messages[tailTurnStartIdx]) || getMsgTs(lastM) || (typeof idTime === 'function' ? idTime(lastM.id) : 0);
+        if (isActivelyAwaiting || !tailAsstStart || !entryTime || (entryTime >= tailAsstStart - 120000 && entryTime <= tailAsstStart + 30000 && now() - entryTime < 1800000)) {
+          chat.messages.splice(tailTurnStartIdx, 0, userObj); changed = true; continue;
         }
       }
       if (!isActivelyAwaiting && lastAsstHasPrecedingUser && lastAsstEndTs > 0 && entryTime > 0 && entryTime < lastAsstEndTs - 30000 && (!lastAsstStartTs || entryTime < lastAsstStartTs - 30000)) {
@@ -3862,7 +4065,7 @@ const SentUserLog = (() => {
     }
     return changed;
   }
-  return { record, remove, markFailed, hasFailed, readList, restoreInto, hasAdjacentAsstGap, extractMsgText, measureAsstWeight, demoteToQueue, isPelicanPromptText, isGachaProbeText, hasPelicanTurnInChat };
+  return { record, remove, markFailed, hasFailed, readList, restoreInto, hasAdjacentAsstGap, isSameAsstTurnChunk, firstAsstIdxOfTurn, lastAsstIdxOfTurn, extractMsgText, measureAsstWeight, demoteToQueue, isPelicanPromptText, isGachaProbeText, hasPelicanTurnInChat };
 })();
 try { if (typeof window !== 'undefined') window.SentUserLog = SentUserLog; } catch {}
 
@@ -4314,8 +4517,14 @@ class Chat {
                   if (lp.toolCallId && srvByTool.has(lp.toolCallId)) {
                     const sp = srvByTool.get(lp.toolCallId);
                     srvByTool.delete(lp.toolCallId);
-                    if (sp.output !== undefined && lp.output === undefined) return { ...lp, ...sp, state: sp.state || 'output-available' };
-                    return { ...sp, ...lp, output: lp.output !== undefined ? lp.output : sp.output, state: lp.state === 'output-available' ? 'output-available' : (sp.state || lp.state) };
+                    const lpStub = lp.input && JSON.stringify(lp.input).includes('…[cached]');
+                    const spStub = sp.input && JSON.stringify(sp.input).includes('…[cached]');
+                    const bestInput = (sp.input !== undefined && (!lp.input || lpStub) && !spStub) ? sp.input : (lp.input !== undefined ? lp.input : sp.input);
+                    const mergedP = (sp.output !== undefined && lp.output === undefined)
+                      ? { ...lp, ...sp, input: bestInput, state: sp.state || 'output-available' }
+                      : { ...sp, ...lp, input: bestInput, output: lp.output !== undefined ? lp.output : sp.output, state: lp.state === 'output-available' ? 'output-available' : (sp.state || lp.state) };
+                    if (mergedP.input !== undefined) { delete mergedP.inputText; delete mergedP._parsedInputRaw; delete mergedP._parsedInputVal; }
+                    return mergedP;
                   }
                   return lp;
                 });
@@ -4332,7 +4541,12 @@ class Chat {
                   if (!sp) return sp;
                   if (sp.toolCallId && localTools.has(sp.toolCallId)) {
                     const lt = localTools.get(sp.toolCallId);
-                    return { ...lt, ...sp, output: sp.output !== undefined ? sp.output : lt.output, state: sp.output !== undefined ? (sp.state || 'output-available') : (lt.state === 'output-available' ? 'output-available' : (sp.state || lt.state)) };
+                    const ltStub = lt.input && JSON.stringify(lt.input).includes('…[cached]');
+                    const spStub = sp.input && JSON.stringify(sp.input).includes('…[cached]');
+                    const bestInput = (sp.input !== undefined && (!lt.input || ltStub) && !spStub) ? sp.input : (lt.input !== undefined ? lt.input : sp.input);
+                    const mergedP = { ...lt, ...sp, input: bestInput, output: sp.output !== undefined ? sp.output : lt.output, state: sp.output !== undefined ? (sp.state || 'output-available') : (lt.state === 'output-available' ? 'output-available' : (sp.state || lt.state)) };
+                    if (mergedP.input !== undefined) { delete mergedP.inputText; delete mergedP._parsedInputRaw; delete mergedP._parsedInputVal; }
+                    return mergedP;
                   }
                   let outP = (sp.type === 'reasoning' || sp.type === 'text') && !sp.id && lIds[sp.type]?.[idxMap[sp.type]]?.id ? { ...sp, id: lIds[sp.type][idxMap[sp.type]++].id } : sp;
                   if (outP.type === 'reasoning' && !outP.text && localNonEmptyReason[rTextIdx]?.text) {
@@ -4347,12 +4561,14 @@ class Chat {
             if (o._fmt || m._fmt) extra._fmt = o._fmt || m._fmt;
             if (o._sseMeta || m._sseMeta) extra._sseMeta = o._sseMeta || m._sseMeta;
             if (o._sentAt || m._sentAt) extra._sentAt = o._sentAt || m._sentAt;
-            if (!m.metadata?.pending && (o._finishedAt || m._finishedAt)) extra._finishedAt = o._finishedAt || m._finishedAt;
+            const mDoneOnLoad = Boolean(m.metadata?.timing?.completedAt || m.metadata?.finishReason === 'stop' || m.metadata?.finishReason === 'end-turn' || m.metadata?.aborted || m.metadata?.error || (o._finishedAt && !o._forcedFinish && (!c.lastEventId || !this.lastSeq || +c.lastEventId <= +this.lastSeq)));
+            if ((o._finishedAt && !o._forcedFinish) || !m.metadata?.pending || mDoneOnLoad) extra._finishedAt = o._finishedAt || m._finishedAt || (mDoneOnLoad ? (Date.parse(m.metadata?.timing?.completedAt || m.createdAt || '') || idTime(m.id) || now()) : undefined);
             if (o._turnModelLabel || m._turnModelLabel) extra._turnModelLabel = o._turnModelLabel || m._turnModelLabel;
-            if (o._incomplete && (m === srv.at(-1) || m.metadata?.pending)) extra._incomplete = true;
+            if (o._incomplete && !mDoneOnLoad && (m === srv.at(-1) || m.metadata?.pending)) extra._incomplete = true;
             if (o._appendAccepted || m._appendAccepted) extra._appendAccepted = true;
             if (o._prevAsstId || m._prevAsstId) extra._prevAsstId = o._prevAsstId || m._prevAsstId;
-            return { ...m, parts: mergedParts, ...extra };
+            const loadMeta = (m.metadata?.pending && mDoneOnLoad) ? { ...m.metadata, pending: false } : m.metadata;
+            return { ...m, metadata: loadMeta, parts: mergedParts, ...extra };
           });
           let lastSrvInOldIdx = -1;
           for (let i = this.messages.length - 1; i >= 0; i--) {
@@ -4385,10 +4601,11 @@ class Chat {
               try { SentUserLog.remove?.(this.sid, m.id); } catch {}
               return false;
             }
-            const isAheadOfSrv = idx > lastSrvInOldIdx;
+            const isAheadOfSrv = lastSrvInOldIdx >= 0 && idx > lastSrvInOldIdx;
             const prevInOld = idx > 0 ? this.messages[idx - 1] : null;
-            const isCachedActiveTailAsst = m.role === 'assistant' && idx === this.messages.length - 1 && (mergedSrv.at(-1)?.role === 'user' || prevInOld?.role === 'user' || isAheadOfSrv) && (m.metadata?.pending || m._incomplete || (Array.isArray(m.parts) && m.parts.some(p => p && (p.toolCallId || p.text))));
-            const isRecentTailUser = m.role === 'user' && (idx > lastSrvInOldIdx || idx >= this.messages.length - 2) && (m._appendAccepted || isAheadOfSrv || (this.messages[idx + 1]?.role === 'assistant' && (ids.has(this.messages[idx + 1]?.id) || this.messages[idx + 1]?._incomplete || this.messages[idx + 1]?.metadata?.pending)));
+            const mTailTs = Number(m?.metadata?.timing?.completedAt) || Number(m?.metadata?.timing?.startedAt) || Number(m?._finishedAt) || idTime(m?.id) || 0;
+            const isCachedActiveTailAsst = m.role === 'assistant' && idx === this.messages.length - 1 && (!srvLastTimeForLoad || !mTailTs || mTailTs >= srvLastTimeForLoad - 5000) && (mergedSrv.at(-1)?.role === 'user' || prevInOld?.role === 'user' || isAheadOfSrv) && (m.metadata?.pending || m._incomplete || (Array.isArray(m.parts) && m.parts.some(p => p && (p.toolCallId || p.text))));
+            const isRecentTailUser = m.role === 'user' && (isAheadOfSrv || idx >= this.messages.length - 2) && (m._appendAccepted || isAheadOfSrv || (this.messages[idx + 1]?.role === 'assistant' && (ids.has(this.messages[idx + 1]?.id) || this.messages[idx + 1]?._incomplete || this.messages[idx + 1]?.metadata?.pending)));
             if (!m._local && !m._appendAccepted && !isRecentTailUser && !isCachedActiveTailAsst) return false;
             if (m.role === 'user') {
               if (m.metadata?.nodeId && (ids.has(m.metadata.nodeId) || srvUserNodes.has(m.metadata.nodeId))) return false;
@@ -4416,18 +4633,21 @@ class Chat {
                 return false;
               }
               if (!isAwaitingThis && srvLastTimeForLoad > 0 && uTime > 0 && uTime < srvLastTimeForLoad - 30000) {
-                const srvLastStartForLoad = idTime(srvLastForLoad?.id) || Date.parse(srvLastForLoad?.metadata?.timing?.startedAt || '') || 0;
-                const fillsLoadGap = (pIdxInSrv >= 0 && mergedSrv[pIdxInSrv + 1]?.role === 'assistant') || (mergedSrv.length >= 2 && mergedSrv.at(-1)?.role === 'assistant' && mergedSrv.at(-2)?.role === 'assistant') || (srvLastStartForLoad > 0 && uTime >= srvLastStartForLoad - 60000);
+                const srvLastStartForLoad = Number(srvLastMsgForLoad?.metadata?.timing?.startedAt) || Date.parse(srvLastMsgForLoad?.metadata?.timing?.startedAt || '') || idTime(srvLastMsgForLoad?.id) || 0;
+                const pEndIdxInSrv = pIdxInSrv >= 0 && typeof SentUserLog !== 'undefined' && SentUserLog.lastAsstIdxOfTurn ? SentUserLog.lastAsstIdxOfTurn(mergedSrv, pIdxInSrv) : pIdxInSrv;
+                const fillsLoadGap = (pEndIdxInSrv >= 0 && mergedSrv[pEndIdxInSrv + 1]?.role === 'assistant' && !(typeof SentUserLog !== 'undefined' && SentUserLog.isSameAsstTurnChunk?.(mergedSrv[pEndIdxInSrv], mergedSrv[pEndIdxInSrv + 1]))) || (mergedSrv.length >= 2 && mergedSrv.at(-1)?.role === 'assistant' && mergedSrv.at(-2)?.role === 'assistant' && !(typeof SentUserLog !== 'undefined' && SentUserLog.isSameAsstTurnChunk?.(mergedSrv.at(-2), mergedSrv.at(-1))) && uTime >= (idTime(mergedSrv.at(-2)?.id) || 0) - 60000) || (srvLastStartForLoad > 0 && uTime >= srvLastStartForLoad - 60000);
                 if (!fillsLoadGap) return false;
               }
             }
             return true;
           });
-          const nextMsgs = [...olderPrefix, ...mergedSrv];
+          const localPendingIds = new Set(localPending.map(x => x?.id).filter(Boolean));
+          const nextMsgs = [...olderPrefix.filter(x => !x?.id || !localPendingIds.has(x.id)), ...mergedSrv];
           for (let lIdx = 0; lIdx < localPending.length; lIdx++) {
             const lm = localPending[lIdx];
             if (lm.role === 'user' && lm._prevAsstId) {
-              const pIdx = nextMsgs.findIndex(x => x && x.id === lm._prevAsstId);
+              let pIdx = nextMsgs.findIndex(x => x && x.id === lm._prevAsstId);
+              if (pIdx >= 0 && typeof SentUserLog !== 'undefined' && SentUserLog.lastAsstIdxOfTurn) pIdx = SentUserLog.lastAsstIdxOfTurn(nextMsgs, pIdx);
               if (pIdx >= 0 && nextMsgs[pIdx + 1]?.role !== 'user') {
                 nextMsgs.splice(pIdx + 1, 0, lm);
                 continue;
@@ -4435,14 +4655,16 @@ class Chat {
             }
             const hasAsstAfterInLocal = localPending.slice(lIdx + 1).some(x => x && x.role === 'assistant');
             if (lm.role === 'user' && !lm._held && !hasAsstAfterInLocal && nextMsgs.at(-1)?.role === 'assistant') {
-              const lastA = nextMsgs.at(-1);
-              const prevBeforeA = nextMsgs.length >= 2 ? nextMsgs[nextMsgs.length - 2] : null;
+              const firstTailIdx = (typeof SentUserLog !== 'undefined' && SentUserLog.firstAsstIdxOfTurn) ? SentUserLog.firstAsstIdxOfTurn(nextMsgs, nextMsgs.length - 1) : (nextMsgs.length - 1);
+              const lastA = nextMsgs[firstTailIdx] || nextMsgs.at(-1);
+              const prevBeforeA = firstTailIdx >= 1 ? nextMsgs[firstTailIdx - 1] : null;
               const missingUserBeforeA = !prevBeforeA || prevBeforeA.role === 'assistant';
               const isAwaitingThisUser = Boolean(this.awaitId && (this.awaitId === lm.id || this.awaitId === lm.metadata?.nodeId));
               const uTime = lm._sentAt || idTime(lm.id) || 0;
-              const aTime = idTime(lastA.id) || 0;
-              if (missingUserBeforeA || ((lastA.metadata?.pending || lastA._incomplete || (this.live && lastA === this.live)) && (isAwaitingThisUser || !uTime || !aTime || aTime >= uTime - 300000))) {
-                nextMsgs.splice(nextMsgs.length - 1, 0, lm);
+              const aTime = Number(lastA?.metadata?.timing?.startedAt) || idTime(lastA?.id) || 0;
+              const timeMatchesTail = isAwaitingThisUser || !uTime || !aTime || (uTime >= aTime - 300000 && uTime <= aTime + 30000);
+              if (timeMatchesTail && (missingUserBeforeA || (lastA.metadata?.pending || lastA._incomplete || (this.live && lastA === this.live)))) {
+                nextMsgs.splice(firstTailIdx, 0, lm);
                 continue;
               }
             }
@@ -5121,6 +5343,13 @@ class Chat {
       }
       this.preSend = false;
       this.turnInput = null;
+      if (typeof Fmt !== 'undefined' && Fmt.fresh) {
+        this.fmt = Fmt.fresh(this.sentAt);
+        this.fmtGuess = null;
+      }
+      this.thinkStopped = false;
+      this._hadOpenThinkStop = false;
+      this._openSourceMarked = false;
       if (this.live) {
         this.live.metadata = { ...(this.live.metadata || {}), pending: false };
         this.live = null;
@@ -5254,7 +5483,7 @@ class Chat {
           if (errNow) {
             const needV2 = promptFailed(errNow?.status, eBody) || (errNow?.status === 403 && /recaptcha|人机|验证失败|verification required/i.test(eBody)) || (errNow?.status === 429 && /verification required/i.test(eBody));
             if (opt.v2 || !needV2) throw errNow;
-            this.phase = promptFailed(errNow?.status, eBody) ? 'Brana 要求人工验证（重复指令）' : 'Brana 要求人工验证（reCAPTCHA）'; this.emit();
+            this.phase = '人机验证进行中…'; this.emit();
             const tok = await Recaptcha.v2().catch(() => null);
             if (!tok) throw Object.assign(new Error('已取消人机验证，这条没有发送，可以点重试'), { status: 0 });
             this.phase = '发送中'; this.emit(); ar = await this.append(body(tok, null));
@@ -5367,7 +5596,7 @@ class Chat {
         const needV2 = promptFailed(e?.status, eBody) || (e?.status === 403 && /recaptcha|人机|验证失败/i.test(eBody)) || (e?.status === 429 && /verification required/i.test(eBody));
         if (opt.v2 || !needV2) throw e;
         if (this.rcV3 && e?.status === 403) { this.rcV3 = false; try { IPRep.note('rc'); } catch {} }
-        this.phase = 'Brana 要求人工验证（reCAPTCHA）'; this.emit();
+        this.phase = '人机验证进行中…'; this.emit();
         const tok = await Recaptcha.v2().catch(() => null);
         if (!tok) throw Object.assign(new Error('已取消人机验证，请点重试'), { status: 0 });
         this.phase = '重新生成'; this.emit();
@@ -5380,12 +5609,14 @@ class Chat {
   // 突然出现有内容的思考时按用户开关停止；这不能证明开源或改派，已知闭源不误触发。一开始就有思考的对话不停。
 
   thinkGuard(p) {
-    if ((typeof ThinkingStatus !== 'undefined' && ThinkingStatus.isClosed(this)) || (typeof Fingerprint !== 'undefined' && Fingerprint.isClosedSourceStream?.(this))) return;
+    if (typeof Fingerprint !== 'undefined' && Fingerprint.isClosedSourceStream?.(this, this.live)) return;
     if (Fingerprint.isRunning(this) || Prefs.thinkStop === false || this._allowOpenThink || this._hadOpenThinkStop || this.stopReq || this.thinkStopped || !this.busy) return;
     const isOpenTcId = id => /^(?:call_\d+_|call_[0-9a-f]{24}$|functions\.|_\d+_[0-9a-f]{6,}|chatcmpl-tool-)/i.test(String(id || ''));
     const isClosedTcId = id => { const s = String(id || ''); return /^(?:toolu_|srvtoolu_|msg_01)/i.test(s) || (/^call_[A-Za-z0-9_-]{20,}$/.test(s) && !isOpenTcId(s)); };
-    if ((this.live?.parts || []).some(lp => lp && lp.toolCallId && lp.state === 'output-available')) {
-      if (!this._closedLockedModel && !(this.live?.parts || []).some(lp => isClosedTcId(lp?.toolCallId)) && typeof BillingProbe !== 'undefined' && typeof BillingProbe.markAsOpenSourceModel === 'function') {
+    if ((this.live?.parts || []).some(lp => lp && isClosedTcId(lp.toolCallId))) return;
+    const isGachaActive = Boolean(this.gacha || (typeof Gacha !== 'undefined' && Gacha.busy?.() && (Gacha.isGachaChat?.(this.sid) || Gacha.sidNo?.(this.sid))));
+    if (!isGachaActive && (this.live?.parts || []).some(lp => lp && lp.toolCallId && lp.state === 'output-available' && !isOpenTcId(lp.toolCallId))) {
+      if (!this._closedLockedModel && typeof BillingProbe !== 'undefined' && typeof BillingProbe.markAsOpenSourceModel === 'function') {
         try { BillingProbe.markAsOpenSourceModel(this); } catch {}
       }
       return;
@@ -5394,12 +5625,6 @@ class Chat {
     let priorHadClosed = false, priorHadOpenThink = false;
     const mName = String((typeof Models !== 'undefined' && Models.get(this.sid)?.name) || this._routeBaseline?.label || '');
     if (mName && !/开源|compat|qwen|deepseek|glm|kimi|minimax|llama|mistral|nemotron|inkling|beam|caveman|gemma|step-|hy4|mimo/i.test(mName)) priorHadClosed = true;
-    if (priorMsgs.length >= 1) {
-      const firstAsst = priorMsgs[0];
-      const firstHadOpen = Boolean(firstAsst?.metadata?.openThinkStopped || (firstAsst?.parts || []).some(pp => (pp?.type === 'reasoning' && /[^\s.…·。]/.test(String(pp.text || ''))) || isOpenTcId(pp?.toolCallId)));
-      const firstHadClosed = (firstAsst?.parts || []).some(pp => (pp?.type === 'reasoning' && !/[^\s.…·。]/.test(String(pp.text || ''))) || isClosedTcId(pp?.toolCallId));
-      if (!firstHadOpen && firstHadClosed) priorHadClosed = true;
-    }
     for (const pm of priorMsgs) {
       if (pm?.metadata?.openThinkStopped) priorHadOpenThink = true;
       for (const pp of pm.parts || []) {
@@ -5411,36 +5636,47 @@ class Chat {
         if (pp.toolCallId && isOpenTcId(pp.toolCallId)) priorHadOpenThink = true;
       }
     }
-    if (priorHadOpenThink && !this.gacha) {
+    if (priorHadOpenThink && !isGachaActive) {
       this._allowOpenThink = true;
-      if (!priorHadClosed && typeof BillingProbe !== 'undefined' && typeof BillingProbe.markAsOpenSourceModel === 'function') {
-        try { BillingProbe.markAsOpenSourceModel(this); } catch {}
+      if (typeof BillingProbe !== 'undefined' && typeof BillingProbe.markAsOpenSourceModel === 'function') {
+        try { this._closedLockedModel = false; BillingProbe.markAsOpenSourceModel(this); } catch {}
       }
       return;
     }
-    if (!priorHadClosed && typeof BillingProbe !== 'undefined' && typeof BillingProbe.markAsOpenSourceModel === 'function') {
-      try { BillingProbe.markAsOpenSourceModel(this, { silent: true }); } catch {}
+    this._closedLockedModel = false;
+    if (typeof BillingProbe !== 'undefined' && typeof BillingProbe.markAsOpenSourceModel === 'function') {
+      try { BillingProbe.markAsOpenSourceModel(this, { silent: isGachaActive }); } catch {}
     }
-    if (!this.gacha) return;
+    if (this.gacha && this.gacha.skipCompatThinking !== false && typeof Fingerprint !== 'undefined') {
+      try { Fingerprint.maybeStopCompat?.(this); } catch {}
+    }
+    if (!isGachaActive && !priorHadClosed) { if (!this.gacha) return; }
+    // 出现开源思考（路由开源模型），自动暂停
     this.thinkStopped = true; this.routedThink = true; this._routePaused = true; this._hadOpenThinkStop = true;
     if (this.live) this.live.metadata = { ...(this.live.metadata || {}), openThinkStopped: true };
-    // 出现开源思考（路由开源模型），自动暂停
-    const isGachaPause = Boolean(this.gacha || (typeof Gacha !== 'undefined' && (Gacha.isGachaChat?.(this.sid) || Gacha.sidNo?.(this.sid))));
-    this.phase = isGachaPause ? '抽卡到开源思考已经暂停' : '路由到开源模型已暂停';
+    this.phase = isGachaActive ? '抽卡到开源思考已经暂停' : '路由到开源模型已暂停';
     Trace.note?.(this.sid, this.phase, 'warn');
     toast(this.phase, 'err');
     setTimeout(() => this.stop(), 0);
   }
   checkMidStreamRoute(t, ch) {
-    if (!this.busy || this.stopReq || this.gacha || this._midRoutePrompted || Fingerprint.isRunning(this)) return;
+    if (!this.busy || this.stopReq || this.gacha || Fingerprint.isRunning(this)) return;
+    const curTurnKey = String(this.live?.id || (this.messages || []).length || '');
+    if (this._midRouteTurnKey !== curTurnKey) {
+      this._midRouteTurnKey = curTurnKey;
+      this._midRouteChecked = false;
+      this._midRoutePrompted = false;
+    }
+    if (this._midRoutePrompted) return;
     const priorMsgs = (this.messages || []).filter(m => m && m.role === 'assistant' && m !== this.live && !m.metadata?.pending);
     let priorToolFam = '', priorHiddenThink = false;
-    const isStrictOpenAiToolId = id => /^call_[A-Za-z0-9]{24}$/.test(String(id || '')) && !/^call_[0-9a-f]{24}$/i.test(String(id || '')) && !/^call_\d+_/i.test(String(id || ''));
+    const isOpenTcId = id => /^(?:call_\d+_|call_[0-9a-f]{24}$|functions\.|_\d+_[0-9a-f]{6,}|chatcmpl-tool-)/i.test(String(id || ''));
+    const isStrictOpenAiToolId = id => (/^(?:tc|fc)_[A-Za-z0-9_-]{16,}$/i.test(String(id || '')) || (/^call_[A-Za-z0-9_-]{18,}$/.test(String(id || '')) && !isOpenTcId(id)));
     for (const pm of priorMsgs) {
       for (const pp of pm.parts || []) {
         if (pp.type === 'reasoning' && !/[^\s.…·。]/.test(String(pp.text || ''))) priorHiddenThink = true;
         if (pp.toolCallId) {
-          if (/^(?:toolu_|srvtoolu_)/i.test(pp.toolCallId)) priorToolFam = 'claude';
+          if (/^(?:toolu_|srvtoolu_|msg_01)/i.test(pp.toolCallId)) priorToolFam = 'claude';
           else if (isStrictOpenAiToolId(pp.toolCallId)) priorToolFam = 'openai';
         }
       }
@@ -5448,20 +5684,79 @@ class Chat {
     if (!priorToolFam && this.live?.parts?.length) {
       for (const lp of this.live.parts) {
         if (lp?.toolCallId && lp.toolCallId !== ch?.toolCallId) {
-          if (/^(?:toolu_|srvtoolu_)/i.test(lp.toolCallId)) { priorToolFam = 'claude'; break; }
+          if (/^(?:toolu_|srvtoolu_|msg_01)/i.test(lp.toolCallId)) { priorToolFam = 'claude'; break; }
           if (isStrictOpenAiToolId(lp.toolCallId)) { priorToolFam = 'openai'; break; }
         }
       }
     }
-    if (!priorMsgs.length && !priorToolFam) return;
     const baseLabel = this._routeBaseline?.label || (typeof Models !== 'undefined' && Models.get(this.sid)?.name) || '';
-    if (t === 'tool-input-start' && ch?.toolCallId && priorToolFam) {
-      const curToolFam = /^(?:toolu_|srvtoolu_)/i.test(ch.toolCallId) ? 'claude' : (isStrictOpenAiToolId(ch.toolCallId) ? 'openai' : '');
+    if (!priorToolFam && baseLabel) {
+      if (/claude|opus|sonnet|haiku|fable/i.test(baseLabel)) priorToolFam = 'claude';
+      else if (/gpt|\bsol\b|\bluna\b|\bastra\b|\bterra\b/i.test(baseLabel)) priorToolFam = 'openai';
+      else if (/gemini|argon|barium|carbon/i.test(baseLabel)) priorToolFam = 'google';
+    }
+    if (!priorMsgs.length && !priorToolFam) return;
+    const priorClosed = Boolean(priorToolFam || priorHiddenThink || (baseLabel && !/开源|compat|qwen|deepseek|glm|kimi|minimax|llama|mistral|nemotron|inkling|beam|caveman|gemma|step-|hy4|mimo/i.test(baseLabel)));
+    if (priorClosed && ((t === 'reasoning-delta' && /[^\s.…·。]/.test(String(ch?.delta || ''))) || (t === 'tool-input-start' && isOpenTcId(ch?.toolCallId)))) {
+      this._midRoutePrompted = true;
+      const fromLbl = baseLabel || (priorToolFam === 'claude' ? 'Claude 系列' : priorToolFam === 'openai' ? 'GPT 系列' : '闭源模型');
+      const fmtGuess = this.fmt && typeof Fmt !== 'undefined' ? String(Fmt.guess(this.fmt)?.name || '').trim() : '';
+      const toLbl = (fmtGuess && !/未知|闭源/i.test(fmtGuess)) ? fmtGuess : '开源模型';
+      this.routed = true;
+      this.routeFrom = fromLbl;
+      this.routeTo = toLbl;
+      if (this.live) {
+        const turnIdx = priorMsgs.length + 1;
+        this.live._routeNotice = {
+          type: 'model',
+          fromTurn: 1,
+          toTurn: turnIdx,
+          fromLabel: fromLbl,
+          toLabel: toLbl,
+          text: `路由提示：对话由 ${fromLbl} 路由至 ${toLbl}`,
+        };
+        this.lastRouteNotice = this.live._routeNotice;
+      }
+      try {
+        if (typeof Models !== 'undefined' && this.sid) {
+          const curM = Models.get(this.sid) || {};
+          Models.put(this.sid, { ...curM, name: toLbl, routed: true, routeFrom: fromLbl, routeTo: toLbl, routeType: 'model' });
+        }
+      } catch {}
+      if ((typeof Prefs === 'undefined' || Prefs.routePausePrompt !== false) && typeof RouteConfirm !== 'undefined' && typeof RouteConfirm.askModelRoute === 'function') {
+        void RouteConfirm.askModelRoute(this, {
+          routeType: 'model',
+          fromLabel: fromLbl,
+          toLabel: toLbl,
+          reason: t === 'reasoning-delta' ? '前序轮次为闭源模型，本轮出现明文思考，检测到路由至开源模型' : '前序轮次为闭源模型，本轮出现开源工具调用前缀',
+        });
+      }
+      return;
+    }
+    if ((t === 'tool-input-start' || t === 'text-delta' || t === 'reasoning-delta') && priorToolFam) {
+      let curToolFam = '';
+      if (t === 'tool-input-start' && ch?.toolCallId) {
+        curToolFam = /^(?:toolu_|srvtoolu_|msg_01)/i.test(ch.toolCallId) ? 'claude' : (isStrictOpenAiToolId(ch.toolCallId) ? 'openai' : '');
+      } else if (this.fmt?.ids?.length) {
+        const lastPair = this.fmt.ids.at(-1);
+        const lastId = String(Array.isArray(lastPair) ? lastPair[1] : lastPair || '');
+        if (/^(?:toolu_|srvtoolu_|msg_01[1-9A-HJ-NP-Za-km-z]{18,})/i.test(lastId)) curToolFam = 'claude';
+        else if (/^(?:rs|fc|fo|tc)_[A-Za-z0-9_-]{16,}/i.test(lastId)) curToolFam = 'openai';
+      }
       if (curToolFam && curToolFam !== priorToolFam) {
         this._midRoutePrompted = true;
-        const fromLbl = baseLabel || (priorToolFam === 'claude' ? 'Claude 系列' : 'GPT 系列');
+        const fromLbl = baseLabel || (priorToolFam === 'claude' ? 'Claude 系列' : priorToolFam === 'openai' ? 'GPT 系列' : 'Gemini 系列');
         const fmtGuess = this.fmt && typeof Fmt !== 'undefined' ? String(Fmt.guess(this.fmt)?.name || '').trim() : '';
         const toLbl = (fmtGuess && !/未知|compat/i.test(fmtGuess)) ? fmtGuess : (curToolFam === 'claude' ? 'Claude 系列' : 'GPT 系列');
+        this.routed = true;
+        this.routeFrom = fromLbl;
+        this.routeTo = toLbl;
+        try {
+          if (typeof Models !== 'undefined' && this.sid) {
+            const curM = Models.get(this.sid) || {};
+            Models.put(this.sid, { ...curM, name: toLbl, routed: true, routeFrom: fromLbl, routeTo: toLbl, routeType: 'model' });
+          }
+        } catch {}
         const liveTools = (this.live?.parts || []).filter(p => String(p?.type || '').startsWith('tool-') || p?.type === 'dynamic-tool');
         const liveBash = liveTools.filter(p => /^(bash|shell|run_command)$/i.test(String(p?.toolName || String(p?.type || '').replace(/^tool-/, '')))).length;
         const curToolPart = liveTools.find(p => p.toolCallId === ch.toolCallId) || liveTools.at(-1);
@@ -5663,10 +5958,10 @@ class Chat {
         if (headers && !failed && !got && !sawDone && this.busy && !peek && !routeTimeout && now() - this.connAt < 5000 && typeof AutoRoute !== 'undefined') AutoRoute.fault(new Error('实时连接提前断开'), 'stream');
         this.dbg?.('stream', { ev: 'end', got, sawDone, failed, turnDone, headers, peek, settled: serverSettled, seq: this.lastSeq });
         if (turnDone || my !== this.gen) break;
-        if (!peek && (serverSettled || sawDone) && !failed && sawDone && !got && this.busy && this.live) {
+        if (!peek && (serverSettled || sawDone) && !failed && !got && this.busy && this.live) {
           this._lastConvergeSrvPend = false;
           const convOk = typeof this.converge === 'function' ? await this.converge().catch(() => false) : false;
-          if (this._lastConvergeSrvPend && this.busy) {
+          if (this._lastConvergeSrvPend && !serverSettled && this.busy) {
             await sleep(1200);
             continue;
           }
@@ -5676,7 +5971,7 @@ class Chat {
           }
           break;
         }
-        if ((peek || ((serverSettled || sawDone) && !failed && (!this.busy || (!this.live && now() - (this.sentAt || 0) > 15000)))) && sawDone && !got) {
+        if ((peek || ((serverSettled || sawDone) && !failed && (!this.busy || (!this.live && now() - (this.sentAt || 0) > 15000)))) && !got) {
           if (this.status === 'streaming' && !this.live) { this.status = 'idle'; this.phase = ''; this.emit(); }
           break;
         }
@@ -6511,7 +6806,7 @@ class Chat {
           }
           this.parts.set(key, p);
         }
-        if (p.type === 'reasoning' && /[^\s.…·。]/.test(String(ch.delta || ''))) { const firstVis = !/[^\s.…·。]/.test(p.text); const isClosed = (typeof ThinkingStatus !== 'undefined' && ThinkingStatus.isClosed(this)) || (typeof Fingerprint !== 'undefined' && Fingerprint.isClosedSourceStream?.(this)); if (!isClosed) { if (firstVis) { this.thinkGuard(p); try { if (typeof BillingProbe !== 'undefined' && typeof BillingProbe.markAsOpenSourceModel === 'function') BillingProbe.markAsOpenSourceModel(this); } catch {} } try { if (this.gacha?.skipCompatThinking && typeof Fingerprint !== 'undefined') Fingerprint.maybeStopCompat?.(this); } catch {} if (firstVis && this.gacha?.stopThink && !this.stopReq && P.some(x => x !== p && x.type === 'text' && String(x.text || '').trim())) { this.thinkStopped = true; this.routedThink = true; if (this.live) this.live.metadata = { ...(this.live.metadata || {}), openThinkStopped: true }; setTimeout(() => this.stop(), 0); } } }
+        if (p.type === 'reasoning' && /[^\s.…·。]/.test(String(ch.delta || ''))) { const firstVis = !/[^\s.…·。]/.test(p.text); const nextRText = String(p.text || '') + String(ch.delta || ''); const isGemBold = /^\s*\*\*[^\n*]{2,80}\*\*/.test(nextRText) && P.every(pt => !pt?.id || /^\d+$/.test(String(pt.id))); const isClosed = isGemBold || (typeof Fingerprint !== 'undefined' && Fingerprint.isClosedSourceStream?.(this, this.live)); if (!isClosed) { this._closedLockedModel = false; if (firstVis || !this.thinkStopped) { this.thinkGuard(p); try { if (typeof BillingProbe !== 'undefined' && typeof BillingProbe.markAsOpenSourceModel === 'function') BillingProbe.markAsOpenSourceModel(this); } catch {} } try { if (this.gacha && this.gacha.skipCompatThinking !== false && typeof Fingerprint !== 'undefined') Fingerprint.maybeStopCompat?.(this); } catch {} if (firstVis && this.gacha?.stopThink && !this.stopReq && P.some(x => x !== p && x.type === 'text' && String(x.text || '').trim())) { this.thinkStopped = true; this.routedThink = true; if (this.live) this.live.metadata = { ...(this.live.metadata || {}), openThinkStopped: true }; setTimeout(() => this.stop(), 0); } } }
         const dStr = ch.delta || '';
         if (typeof p._replayBuf === 'string') {
           p._replayBuf += dStr;
@@ -6522,7 +6817,7 @@ class Chat {
         } else {
           p.text += dStr;
         }
-        if (t === 'text-delta') this.checkMidStreamRoute(t, ch);
+        if (t === 'text-delta' || t === 'reasoning-delta') this.checkMidStreamRoute(t, ch);
         if (now() - (this._streamCacheAt || 0) > 1500) { this._streamCacheAt = now(); this.saveCache?.(); }
         break;
       }
@@ -6533,11 +6828,17 @@ class Chat {
           p = { type: ch.dynamic ? 'dynamic-tool' : 'tool-' + ch.toolName, toolName: ch.toolName, toolCallId: ch.toolCallId, state: 'input-streaming', inputText: '', _startAt: this.recTs || now() };
           P.push(p);
         } else if (p.state !== 'output-available' && p.state !== 'input-available') {
-          p.inputText = '';
+          if (!p.input && !p.inputText) p.inputText = '';
           p.state = 'input-streaming';
         }
         this.parts.set('tool:' + ch.toolCallId, p);
         this.phase = '调用 ' + ch.toolName;
+        if (/^(?:call_\d+_|call_[0-9a-f]{24}$|functions\.|_\d+_[0-9a-f]{6,}|chatcmpl-tool-)/i.test(String(ch.toolCallId || ''))) {
+          this._closedLockedModel = false;
+          try { if (typeof BillingProbe !== 'undefined' && typeof BillingProbe.markAsOpenSourceModel === 'function') BillingProbe.markAsOpenSourceModel(this); } catch {}
+          try { if (this.gacha && this.gacha.skipCompatThinking !== false && typeof Fingerprint !== 'undefined') Fingerprint.maybeStopCompat?.(this); } catch {}
+          this.thinkGuard({ text: String(ch.toolCallId) });
+        }
         this.checkMidStreamRoute(t, ch);
         this.saveCache?.();
         break;
@@ -6546,7 +6847,9 @@ class Chat {
       case 'tool-input-available': case 'tool-input-error': {
         let p = find('tool:' + ch.toolCallId) || P.find(x => x && x.toolCallId === ch.toolCallId);
         if (!p) { p = { type: ch.dynamic ? 'dynamic-tool' : 'tool-' + ch.toolName, toolName: ch.toolName, toolCallId: ch.toolCallId, _startAt: this.recTs || now() }; P.push(p); this.parts.set('tool:' + ch.toolCallId, p); } else if (!p._startAt) { p._startAt = this.recTs || now(); }
-        p.input = ch.input; if (p.state !== 'output-available') p.state = t === 'tool-input-error' ? 'output-error' : 'input-available'; if (ch.errorText) p.errorText = ch.errorText;
+        if (ch.input !== undefined) { p.input = ch.input; delete p.inputText; delete p._parsedInputRaw; delete p._parsedInputVal; }
+        if (p.state !== 'output-available') p.state = t === 'tool-input-error' ? 'output-error' : 'input-available';
+        if (ch.errorText) p.errorText = ch.errorText;
         // 提问工具的参数能解析出题目：按「等待回答」显示面板（和网页一致），报错文字只留作诊断
         if (t === 'tool-input-error' && Hitl.name(p) === 'ask_user' && Array.isArray(Hitl.input(p)?.questions)) { p.state = 'input-available'; p.softError = ch.errorText || ''; }
         this.phase = '执行 ' + (ch.toolName || p.toolName || '工具');
@@ -6949,10 +7252,10 @@ Object.assign(Chat.prototype, {
     });
     const first = srv.findIndex(m => loc.has(m.id) || (m.metadata?.nodeId && loc.has(m.metadata.nodeId)));
     let head;
-    if (first < 0) head = this.messages.filter(m => !m._local && !m._appendAccepted && !(typeof isPhantomFinishStub === 'function' && isPhantomFinishStub(m)) && idTime(m.id) && idTime(m.id) < idTime(srv[0].id));
+    if (first < 0) head = [];
     else {
       const firstLocIdx = loc.get(srv[first].id) ?? loc.get(srv[first].metadata?.nodeId) ?? 0;
-      head = this.messages.slice(0, firstLocIdx).filter(m => !srv.some(x => x.id === m.id || (x.metadata?.nodeId && (x.metadata.nodeId === m.id || x.metadata.nodeId === m.metadata?.nodeId))) && !(typeof isPhantomFinishStub === 'function' && isPhantomFinishStub(m)));
+      head = this.messages.slice(0, firstLocIdx).filter(m => m && !m._local && (!keep || (m !== keep && m.id !== keep.id)) && !srv.some(x => x.id === m.id || (x.metadata?.nodeId && (x.metadata.nodeId === m.id || x.metadata.nodeId === m.metadata?.nodeId))) && !(typeof isPhantomFinishStub === 'function' && isPhantomFinishStub(m)));
     }
     const sig = m => {
       const ps = m.parts || [], n = ps.length;
@@ -6960,7 +7263,9 @@ Object.assign(Chat.prototype, {
       for (let i = Math.max(0, n - 8); i < n; i++) {
         const p = ps[i]; if (!p) continue;
         const oLen = p.output === undefined ? -1 : typeof p.output === 'string' ? p.output.length : (p.output?.stdout?.length || 0) + (p.output?.stderr?.length || 0);
-        s += ';' + p.type + ':' + (p.state || '') + ':' + (p.text?.length || 0) + ':' + (p.inputText?.length || 0) + ':' + oLen + ':' + (p.errorText ? 1 : 0);
+        const iLen = typeof p.input?.content === 'string' ? p.input.content.length : (typeof p.input?.text === 'string' ? p.input.text.length : (p.input !== undefined ? 1 : 0));
+        const iStub = (typeof p.input?.content === 'string' && p.input.content.includes('…[cached]')) ? 'S' : '';
+        s += ';' + p.type + ':' + (p.state || '') + ':' + (p.text?.length || 0) + ':' + (p.inputText?.length || 0) + ':' + iLen + iStub + ':' + oLen + ':' + (p.errorText ? 1 : 0);
       }
       let openScore = 0;
       for (let i = 0; i < n; i++) { const p = ps[i]; if (p?.toolCallId && p.state !== 'output-available' && p.state !== 'output-error' && p.state !== 'output-denied') openScore += (i + 1); }
@@ -6974,12 +7279,17 @@ Object.assign(Chat.prototype, {
         if (!sp) continue;
         if (sp.toolCallId && byTool.has(sp.toolCallId)) {
           const lp = byTool.get(sp.toolCallId);
+          const lpHasStub = lp.input && JSON.stringify(lp.input).includes('…[cached]');
+          const spHasStub = sp.input && JSON.stringify(sp.input).includes('…[cached]');
+          if (sp.input !== undefined && (!lp.input || lpHasStub) && !spHasStub) {
+            lp.input = sp.input; delete lp.inputText; delete lp._parsedInputRaw; delete lp._parsedInputVal;
+            if (!lp.state || lp.state === 'input-streaming') lp.state = sp.state || 'input-available';
+            patched = true;
+          }
           if (sp.output !== undefined && (lp.output === undefined || lp.state !== sp.state)) {
             lp.output = sp.output; lp.state = sp.state || 'output-available'; lp.preliminary = !!sp.preliminary; delete lp.errorText; delete lp._interruptedPending; patched = true;
           } else if (lp.state === 'output-error' && (lp.errorText === '未返回结果' || lp._interruptedPending) && sp.state && sp.state !== 'output-error') {
-            lp.state = sp.state; if (sp.input && !lp.input) lp.input = sp.input; delete lp.errorText; delete lp._interruptedPending; patched = true;
-          } else if (sp.input && !lp.input) {
-            lp.input = sp.input; if (!lp.state || lp.state === 'input-streaming') lp.state = sp.state || 'input-available'; patched = true;
+            lp.state = sp.state; delete lp.errorText; delete lp._interruptedPending; patched = true;
           }
         } else if (sp.toolCallId && !byTool.has(sp.toolCallId)) { o.parts.push(sp); byTool.set(sp.toolCallId, sp); patched = true; }
       }
@@ -7059,7 +7369,9 @@ Object.assign(Chat.prototype, {
       }
       if (p.toolCallId || String(p.type || '').startsWith('tool-') || p.type === 'dynamic-tool') {
         const hasRealOut = p.output !== undefined && !(p.state === 'output-error' && (p.errorText === '未返回结果' || p._interruptedPending));
-        return acc + 50 + (hasRealOut ? 50 : 0);
+        const inStr = typeof p.input?.content === 'string' ? p.input.content : (typeof p.input?.text === 'string' ? p.input.text : '');
+        const hasFullIn = p.input !== undefined && !inStr.includes('…[cached]');
+        return acc + 50 + (hasRealOut ? 50 : 0) + (hasFullIn ? 30 : 0);
       }
       return acc + 5;
     }, 0);
@@ -7154,7 +7466,7 @@ Object.assign(Chat.prototype, {
         });
       }
       const mExplicitDone = Boolean(m.metadata?.timing?.completedAt || m.metadata?.finishReason === 'stop' || m.metadata?.finishReason === 'end-turn' || m.metadata?.aborted || m.metadata?.error);
-      const srvMPend = Boolean(m.role === 'assistant' && m.metadata?.pending && sIdx === srv.length - 1 && !mExplicitDone && !(!o?.metadata?.pending && o?._finishedAt && !o?._forcedFinish && (now() - o._finishedAt < 60000) && o !== keep));
+      const srvMPend = Boolean(m.role === 'assistant' && m.metadata?.pending && sIdx === srv.length - 1 && !mExplicitDone && !(!o?.metadata?.pending && o?._finishedAt && !o?._forcedFinish && o !== keep));
       const mergedMeta = (m.role === 'assistant' && m.metadata?.pending && !srvMPend) ? { ...m.metadata, pending: false } : m.metadata;
       if (m.role === 'assistant' && srvMPend && Array.isArray(mergedParts)) {
         mergedParts = mergedParts.map(sp => (sp?.toolCallId && sp.state === 'output-error' && (sp.errorText === '未返回结果' || sp._interruptedPending)) ? { ...sp, state: 'input-available', errorText: undefined, _interruptedPending: undefined } : sp);
@@ -7192,7 +7504,7 @@ Object.assign(Chat.prototype, {
         const hasUnmatchedPrevUser = Boolean(prevMsg && prevMsg.role === 'user' && !ids.has(prevMsg.id) && !matchedLocal.has(prevMsg));
         if (idx < this.messages.length - 1 || (srv.at(-1)?.role === 'assistant' && !hasUnmatchedPrevUser)) return false;
         const recFin = m._finishedAt && !m._forcedFinish && (now() - m._finishedAt < 60000);
-        const isTrailing = idx >= this.messages.length - 2 || idx > lastSrvInOldIdx;
+        const isTrailing = idx >= this.messages.length - 2 || (lastSrvInOldIdx >= 0 && idx > lastSrvInOldIdx);
         const mTime = idTime(m.id) || 0;
         if (recFin || (isTrailing && (!srvLastTime || !mTime || mTime >= srvLastTime))) return true;
       }
@@ -7230,7 +7542,7 @@ Object.assign(Chat.prototype, {
         return false;
       }
       if (typeof isPhantomFinishStub === 'function' && isPhantomFinishStub(m)) return false;
-      const isAheadOfSrv = idx > lastSrvInOldIdx;
+      const isAheadOfSrv = lastSrvInOldIdx >= 0 && idx > lastSrvInOldIdx;
       if (keep && m === keep) return true;
       if (m._local || m._appendAccepted) {
         if (m.role === 'user') {
@@ -7262,8 +7574,11 @@ Object.assign(Chat.prototype, {
           }
           if (isAwaitingThis) return true;
           if (srvLastEndTime > 0 && uTime > 0 && uTime < srvLastEndTime - 30000) {
-            const srvLastStartTime = idTime(srvLastMsg?.id) || Date.parse(srvLastMsg?.metadata?.timing?.startedAt || '') || 0;
-            const fillsSrvGap = hasLocalAsstAfterP || (pIdx >= 0 && srv[pIdx + 1]?.role === 'assistant') || (srv.length >= 2 && srv.at(-1)?.role === 'assistant' && srv.at(-2)?.role === 'assistant' && uTime >= (idTime(srv.at(-2)?.id) || 0) - 60000) || (srvLastStartTime > 0 && uTime >= srvLastStartTime - 60000 && (srv.length < 2 || srv.at(-2)?.role !== 'user'));
+            const firstSrvLastIdx = (typeof SentUserLog !== 'undefined' && SentUserLog.firstAsstIdxOfTurn && srvLastMsg?.role === 'assistant') ? SentUserLog.firstAsstIdxOfTurn(srv, srv.length - 1) : (srv.length - 1);
+            const firstSrvLastMsg = srv[firstSrvLastIdx] || srvLastMsg;
+            const srvLastStartTime = Number(firstSrvLastMsg?.metadata?.timing?.startedAt) || Date.parse(firstSrvLastMsg?.metadata?.timing?.startedAt || '') || idTime(firstSrvLastMsg?.id) || 0;
+            const pEndIdx = pIdx >= 0 && typeof SentUserLog !== 'undefined' && SentUserLog.lastAsstIdxOfTurn ? SentUserLog.lastAsstIdxOfTurn(srv, pIdx) : pIdx;
+            const fillsSrvGap = hasLocalAsstAfterP || (pEndIdx >= 0 && srv[pEndIdx + 1]?.role === 'assistant' && !(typeof SentUserLog !== 'undefined' && SentUserLog.isSameAsstTurnChunk?.(srv[pEndIdx], srv[pEndIdx + 1]))) || (srv.length >= 2 && srv.at(-1)?.role === 'assistant' && srv.at(-2)?.role === 'assistant' && !(typeof SentUserLog !== 'undefined' && SentUserLog.isSameAsstTurnChunk?.(srv.at(-2), srv.at(-1))) && uTime >= (idTime(srv.at(-2)?.id) || 0) - 60000) || (srvLastStartTime > 0 && uTime >= srvLastStartTime - 60000 && (firstSrvLastIdx < 1 || srv[firstSrvLastIdx - 1]?.role !== 'user'));
             if (!fillsSrvGap) {
               try { if (typeof SentUserLog !== 'undefined' && SentUserLog.remove) SentUserLog.remove(this.sid, m.id, uTxt, uTime); } catch {}
               return false;
@@ -7274,13 +7589,15 @@ Object.assign(Chat.prototype, {
       }
       if (m.role === 'user' && (isAheadOfSrv || idx >= this.messages.length - 2)) {
         const nextLocal = this.messages[idx + 1];
-        if (isAheadOfSrv || (nextLocal && (willKeepTailAsst(nextLocal, idx + 1, true) || (ids.has(nextLocal.id) && mid.at(-1)?.role === 'assistant' && mid.at(-2)?.role === 'assistant')))) {
+        const midTailGap = mid.length >= 2 && mid.at(-1)?.role === 'assistant' && mid.at(-2)?.role === 'assistant' && !(typeof SentUserLog !== 'undefined' && SentUserLog.isSameAsstTurnChunk?.(mid.at(-2), mid.at(-1)));
+        if (isAheadOfSrv || (nextLocal && (willKeepTailAsst(nextLocal, idx + 1, true) || (ids.has(nextLocal.id) && midTailGap)))) {
           lagged = true;
           return true;
         }
       }
       if (m.role === 'assistant' && (partWeight(m.parts) > 0 || m._incomplete || m.metadata?.pending)) {
-        if (m._incomplete || m.metadata?.pending) { lagged = true; return true; }
+        const mTailTs = Number(m?.metadata?.timing?.completedAt) || Number(m?.metadata?.timing?.startedAt) || Number(m?._finishedAt) || idTime(m?.id) || 0;
+        if ((m._incomplete || m.metadata?.pending) && (!srvLastEndTime || !mTailTs || mTailTs >= srvLastEndTime - 5000)) { lagged = true; return true; }
         if (m._awaitingSnapshot) {
           const srvLast = srv.at(-1);
           if (srvLast && srvLast.role === 'user' && srvLast.id !== this.messages[idx - 1]?.id) {
@@ -7304,11 +7621,13 @@ Object.assign(Chat.prototype, {
       return false;
     });
     this._srvLagged = lagged;
-    const next = [...head, ...mid];
+    const tailIdSet = new Set(tail.map(x => x?.id).filter(Boolean));
+    const next = [...head.filter(x => !x?.id || !tailIdSet.has(x.id)), ...mid];
     for (let tIdx = 0; tIdx < tail.length; tIdx++) {
       const tm = tail[tIdx];
       if (tm && tm.role === 'user' && tm._prevAsstId) {
-        const pIdx = next.findIndex(x => x && (x.id === tm._prevAsstId || x._localId === tm._prevAsstId));
+        let pIdx = next.findIndex(x => x && (x.id === tm._prevAsstId || x._localId === tm._prevAsstId));
+        if (pIdx >= 0 && typeof SentUserLog !== 'undefined' && SentUserLog.lastAsstIdxOfTurn) pIdx = SentUserLog.lastAsstIdxOfTurn(next, pIdx);
         if (pIdx >= 0 && next[pIdx + 1]?.role !== 'user') {
           next.splice(pIdx + 1, 0, tm);
           changed = true;
@@ -7317,14 +7636,16 @@ Object.assign(Chat.prototype, {
       }
       const hasAsstAfterInTail = tail.slice(tIdx + 1).some(x => x && x.role === 'assistant');
       if (tm && tm.role === 'user' && !tm._held && !hasAsstAfterInTail && next.at(-1)?.role === 'assistant') {
-        const lastA = next.at(-1);
-        const prevBeforeA = next.length >= 2 ? next[next.length - 2] : null;
+        const firstTailIdx = (typeof SentUserLog !== 'undefined' && SentUserLog.firstAsstIdxOfTurn) ? SentUserLog.firstAsstIdxOfTurn(next, next.length - 1) : (next.length - 1);
+        const lastA = next[firstTailIdx] || next.at(-1);
+        const prevBeforeA = firstTailIdx >= 1 ? next[firstTailIdx - 1] : null;
         const missingUserBeforeA = !prevBeforeA || prevBeforeA.role === 'assistant';
         const isAwaitingThisUser = Boolean(this.awaitId && (this.awaitId === tm.id || this.awaitId === tm.metadata?.nodeId));
         const uTime = tm._sentAt || idTime(tm.id) || 0;
-        const aTime = idTime(lastA.id) || 0;
-        if (missingUserBeforeA || ((lastA.metadata?.pending || lastA._incomplete || (keep && lastA === keep)) && (isAwaitingThisUser || !uTime || !aTime || aTime >= uTime - 300000))) {
-          next.splice(next.length - 1, 0, tm);
+        const aTime = Number(lastA?.metadata?.timing?.startedAt) || idTime(lastA?.id) || 0;
+        const timeMatchesTail = isAwaitingThisUser || !uTime || !aTime || (uTime >= aTime - 300000 && uTime <= aTime + 30000);
+        if (timeMatchesTail && (missingUserBeforeA || (lastA.metadata?.pending || lastA._incomplete || (keep && lastA === keep)))) {
+          next.splice(firstTailIdx, 0, tm);
           changed = true;
           continue;
         }
@@ -7361,12 +7682,14 @@ Object.assign(Chat.prototype, {
       }
     }
     if (lastAIdx >= 0 && lastAIdx < this.messages.length - 1) {
+      const firstLastTurnIdx = (typeof SentUserLog !== 'undefined' && SentUserLog.firstAsstIdxOfTurn) ? SentUserLog.firstAsstIdxOfTurn(this.messages, lastAIdx) : lastAIdx;
       const lastAMsg = this.messages[lastAIdx];
+      const firstLastAMsg = this.messages[firstLastTurnIdx] || lastAMsg;
       const lastACompRaw = lastAMsg?.metadata?.timing?.completedAt || lastAMsg?.metadata?.timing?.startedAt;
       const lastACompMs = typeof lastACompRaw === 'number' ? lastACompRaw : (typeof lastACompRaw === 'string' ? Date.parse(lastACompRaw) : 0);
       const lastAEnd = Math.max(idTime(lastAMsg?.id) || 0, Number.isFinite(lastACompMs) ? lastACompMs : 0, lastAMsg?._finishedAt || 0);
-      const earlierUsers = this.messages.slice(0, lastAIdx).filter(x => x && x.role === 'user');
-      const lastAStart = idTime(lastAMsg?.id) || Date.parse(lastAMsg?.metadata?.timing?.startedAt || '') || 0;
+      const earlierUsers = this.messages.slice(0, firstLastTurnIdx).filter(x => x && x.role === 'user');
+      const lastAStart = Number(firstLastAMsg?.metadata?.timing?.startedAt) || Date.parse(firstLastAMsg?.metadata?.timing?.startedAt || '') || idTime(firstLastAMsg?.id) || 0;
       for (let i = this.messages.length - 1; i > lastAIdx; i--) {
         const tm = this.messages[i];
         if (!tm || tm.role !== 'user') continue;
@@ -7375,15 +7698,15 @@ Object.assign(Chat.prototype, {
         const uTs = tm._sentAt || idTime(tm.id) || 0;
         const uTxt = normUText(tm);
         const isDupOfEarlier = earlierUsers.some(x => x.id === tm.id || (uTxt && normUText(x) === uTxt && ((tm._prevAsstId && x._prevAsstId && tm._prevAsstId === x._prevAsstId) || (!tm._prevAsstId && (!uTs || !(x._sentAt || idTime(x.id)) || Math.abs(uTs - (x._sentAt || idTime(x.id) || 0)) < 15000)))));
-        if (!isDupOfEarlier && lastAIdx >= 1 && this.messages[lastAIdx - 1]?.role === 'assistant' && (!lastAStart || !uTs || uTs >= lastAStart - 120000)) {
+        if (!isDupOfEarlier && firstLastTurnIdx >= 1 && this.messages[firstLastTurnIdx - 1]?.role === 'assistant' && !(typeof SentUserLog !== 'undefined' && SentUserLog.isSameAsstTurnChunk?.(this.messages[firstLastTurnIdx - 1], this.messages[firstLastTurnIdx])) && (!lastAStart || !uTs || (uTs >= lastAStart - 120000 && uTs <= lastAStart + 30000))) {
           this.messages.splice(i, 1);
-          this.messages.splice(lastAIdx, 0, tm);
-          tm._prevAsstId = this.messages[lastAIdx - 1]?.id || tm._prevAsstId;
+          this.messages.splice(firstLastTurnIdx, 0, tm);
+          tm._prevAsstId = this.messages[firstLastTurnIdx - 1]?.id || tm._prevAsstId;
           lastAIdx++;
           changed = true;
           continue;
         }
-        const lastAHasUser = lastAIdx >= 1 && this.messages[lastAIdx - 1]?.role === 'user';
+        const lastAHasUser = firstLastTurnIdx >= 1 && this.messages[firstLastTurnIdx - 1]?.role === 'user';
         const isOlderThanLastAsst = lastAHasUser && lastAEnd > 0 && uTs > 0 && uTs < lastAEnd - 30000 && (!lastAStart || uTs < lastAStart - 30000);
         if (isOlderThanLastAsst || isDupOfEarlier) {
           this.messages.splice(i, 1);
@@ -7393,6 +7716,7 @@ Object.assign(Chat.prototype, {
         }
       }
     }
+    try { if (typeof MsgCache !== 'undefined' && typeof MsgCache.sanitize === 'function') MsgCache.sanitize(this.messages); } catch {}
     return changed;
   },
   // 和服务器对一次账（提问卡片的回答 / 别处提交的回答 / 别的设备发的消息）：正在输出的那条保持原对象不动
@@ -7431,7 +7755,7 @@ Object.assign(Chat.prototype, {
       const last = c.messages.at(-1);
       const locLast = last ? (this.messages || []).find(m => m && m.id === last.id) : null;
       const noNewSrvEvents = Boolean(c.lastEventId != null && this.lastSeq != null && +c.lastEventId <= +this.lastSeq);
-      const lastExplicitDone = Boolean(last?.metadata?.timing?.completedAt || last?.metadata?.finishReason === 'stop' || last?.metadata?.finishReason === 'end-turn' || last?.metadata?.aborted || last?.metadata?.error || (locLast?._finishedAt && !locLast?._forcedFinish && (noNewSrvEvents || now() - locLast._finishedAt < 60000)));
+      const lastExplicitDone = Boolean(last?.metadata?.timing?.completedAt || last?.metadata?.finishReason === 'stop' || last?.metadata?.finishReason === 'end-turn' || last?.metadata?.aborted || last?.metadata?.error || (locLast?._finishedAt && !locLast?._forcedFinish));
       const srvPend = !!last && ((last.role === 'user' && !locLast?.failed) || (last.metadata?.pending && !lastExplicitDone && !(typeof isDeadAssistantMsg === 'function' && isDeadAssistantMsg(last)))) && !(last.role === 'assistant' && Hitl.idleWait(this));
       this.dbg?.('reconcile', { n: c.messages.length, changed: !!ch, live: !!this.live, lagged, srvPend });
       if (c.publicAccessToken && !this.token) this.setToken(c.publicAccessToken);
@@ -7491,7 +7815,7 @@ Object.assign(Chat.prototype, {
       const live = this.live, last = c.messages.at(-1);
       const locLast = last ? (this.messages || []).find(m => m && m.id === last.id) : null;
       const noNewSrvEvents = Boolean(c.lastEventId != null && this.lastSeq != null && +c.lastEventId <= +this.lastSeq);
-      const lastExplicitDone = Boolean(last?.metadata?.timing?.completedAt || last?.metadata?.finishReason === 'stop' || last?.metadata?.finishReason === 'end-turn' || last?.metadata?.aborted || last?.metadata?.error || (locLast?._finishedAt && noNewSrvEvents));
+      const lastExplicitDone = Boolean(last?.metadata?.timing?.completedAt || last?.metadata?.finishReason === 'stop' || last?.metadata?.finishReason === 'end-turn' || last?.metadata?.aborted || last?.metadata?.error || (locLast?._finishedAt && !locLast?._forcedFinish));
       const lastHasOpenTool = Boolean(last?.role === 'assistant' && !lastExplicitDone && !noNewSrvEvents && Array.isArray(last.parts) && last.parts.some(p => p?.toolCallId && !Hitl.name(p) && /^(input-streaming|input-available)$/.test(p.state || '')) && (now() - (idTime(last.id) || now()) < 15 * 60000));
       const srvPend = !!last && ((last.role === 'user' && !locLast?.failed) || (last.metadata?.pending && !lastExplicitDone && !(typeof isDeadAssistantMsg === 'function' && isDeadAssistantMsg(last))) || lastHasOpenTool) && !(last.role === 'assistant' && Hitl.idleWait(this));
       this._lastConvergeSrvPend = srvPend;
@@ -7554,7 +7878,7 @@ Object.assign(Chat.prototype, {
       });
       const svSubstantive = typeof hasSubstantiveAssistantWork === 'function' ? hasSubstantiveAssistantWork(sv) : sp.length > 0;
       const svExplicitDone = Boolean(sv.metadata?.timing?.completedAt || sv.metadata?.aborted || sv.metadata?.error || sv.metadata?.finishReason === 'stop' || sv.metadata?.finishReason === 'end-turn' || sv._finishedAt);
-      const srvDone = !sv.metadata?.pending && (sp.length > lp.length || svExplicitDone || live.metadata?.pending === false || ((svSubstantive || lp.length > 0) && sp.length >= lp.length));
+      const srvDone = !sv.metadata?.pending && (sp.length > lp.length || svExplicitDone || live.metadata?.pending === false || svSubstantive || lp.length > 0);
       const tail = lp.at(-1), localAsk = !!tail && Hitl.awaiting(tail) && tail.state !== 'input-streaming' && (Hitl.name(tail) !== 'ask_user' || hasQuestions(tail));
       if (!srvAsk && !srvDone && !localAsk) {
         const patchFn = typeof this._patchAssistantParts === 'function' ? this._patchAssistantParts : null;
@@ -7623,24 +7947,34 @@ Object.assign(Chat.prototype, {
     }
   },
   // 发现别的设备开了新一轮：拉最新消息 → 这一轮还在跑就从开头接上实时流，已经跑完就直接显示结果
+  _hf(c) {
+    if (!Array.isArray(c?.files) || !c.files.length || !Array.isArray(c?.messages)) return;
+    for (const m of c.messages) {
+      for (const p of (m.parts || [])) {
+        if (p?.type !== 'tool-invocation' || !p.input?.path) continue;
+        const rawTxt = String(p.input.content || p.input.file_text || '');
+        if (!rawTxt.includes('…[cached]')) continue;
+        const reqPath = String(p.input.path).replace(/^\/home\/user\/?/, '');
+        const baseName = reqPath.split('/').pop();
+        const fMatch = c.files.find(f => f?.content && !String(f.content).includes('…[cached]') && (f.path === reqPath || f.path === p.input.path || String(f.path || '').split('/').pop() === baseName));
+        if (fMatch) {
+          if (p.input.file_text !== undefined) p.input.file_text = fMatch.content;
+          else p.input.content = fMatch.content;
+          if (typeof p.inputText === 'string') p.inputText = JSON.stringify(p.input);
+        }
+      }
+    }
+  },
   async remoteSync(hit) {
     if (this.busy || this.syncing || this.gacha) return; this.syncing = true;
     try {
-      const from = this.lastSeq;
-      if (hit?.seq != null && (this.lastSeq == null || hit.rewind)) this.lastSeq = hit.seq > 0 ? String(hit.seq - 1) : null;
-      const info = await this.drain(1500, { keepIfFinished: !!hit?.pend });
-      const snap = (this._remoteSyncSnap && now() - (this._remoteSyncSnap.at || 0) < 5000) ? this._remoteSyncSnap.c : null;
-      this._remoteSyncSnap = null;
-      const c = hit?.chatSnap || snap || ((ReadLimit.active() && (info?.open || info?.run)) ? null : await api('/api/chat/' + this.sid + '?includeStreamToken=false', { timeout: 35000, bg: true, noApiRetry: true }).catch(() => null));
-      if (this.busy || (this.streaming && !this.peeking)) return;
+      const from = this.lastSeq, s = this._remoteSyncSnap; this._remoteSyncSnap = null;
+      if (hit?.seq != null && (from == null || hit.rewind)) this.lastSeq = hit.seq > 0 ? String(hit.seq - 1) : null;
+      const info = await this.drain(1500, { keepIfFinished: !!hit?.pend }), snap = (s && now() - (s.at || 0) < 5000) ? s.c : null, c = hit?.chatSnap || snap || ((ReadLimit.active() && (info?.open || info?.run)) ? null : await api('/api/chat/' + this.sid + '?includeStreamToken=false', { timeout: 35000, bg: true, noApiRetry: true }).catch(() => null));
+      if (this.busy || (this.streaming && !this.peeking)) return; this._hf(c);
       if (c?.messages?.length && typeof this.mergeServer === 'function') this.mergeServer(c.messages, null);
-      if (c?.publicAccessToken) this.setToken(c.publicAccessToken);
-      const last = c?.messages?.at(-1);
-      const srvPend = !!last && (last.role === 'user' || (last.metadata?.pending && !(typeof isDeadAssistantMsg === 'function' && isDeadAssistantMsg(last)))) && !(last.role === 'assistant' && Hitl.idleWait(this));
-      const isStreamOpen = Boolean(info?.open || info?.run);
-      const act = (isStreamOpen || srvPend) ? (hit?.mid ? (info?.runSeq ?? info?.act ?? null) : (info?.runSeq ?? info?.act ?? (hit?.seq && this.lastSeq === from ? hit.seq : null))) : null;
-      if (isStreamOpen || srvPend) {
-        const startSeq = act ?? info?.runSeq ?? hit?.seq ?? (c?.lastEventId != null ? Math.max(1, +c.lastEventId - 1200) : (info?.max ?? 1));
+      if (c?.publicAccessToken) this.setToken(c.publicAccessToken); const isStreamOpen = Boolean(info?.open || info?.run); const last = c?.messages?.at(-1), loc = this.messages.at(-1), lm = last?.metadata, done = !!(lm?.timing?.completedAt || /^(stop|end-turn)$/.test(lm?.finishReason) || lm?.aborted || lm?.error || (loc?.id === last?.id && loc?._finishedAt && !loc._forcedFinish)), srvPend = !!last && (last.role === 'user' || (isStreamOpen && lm?.pending && !done && !isDeadAssistantMsg(last))) && !Hitl.idleWait(this), act = (isStreamOpen || srvPend) ? (info?.runSeq ?? info?.act ?? (!hit?.mid && hit?.seq && this.lastSeq === from ? hit.seq : null)) : null;
+      if (isStreamOpen || srvPend) { const startSeq = act ?? info?.runSeq ?? hit?.seq ?? (c?.lastEventId != null ? Math.max(1, +c.lastEventId - 1200) : (info?.max ?? 1));
         this.lastSeq = String(Math.max(0, startSeq - 1)); this.fence = Math.max(0, startSeq - 1);
         this.status = 'streaming'; this.phase = '接收回复中'; this.remote = true; this.error = null;
         this.sentAt = now(); this.respAt = 0; this.finAt = 0; this.endAt = 0;
@@ -8273,7 +8607,7 @@ async function createChat0(text, opt = {}) {
         }
         if (opt.gacha) break;
         if (res.status === 403 && !opt.v2) { try { IPRep.note('rc'); } catch {} }
-        escalated = true; opt.onRetry?.(isPf ? 'Brana 要求人工验证（重复指令），请完成验证' : 'Brana 要求人工验证（reCAPTCHA），请完成验证');
+        escalated = true; opt.onRetry?.('人机验证进行中…');
         const tok = await Recaptcha.v2().catch(() => null);
         if (!tok) throw Object.assign(new Error('已取消人机验证，这条没有发送'), { status: 0 });
         body.recaptchaV2Token = tok; body.recaptchaV3Token = null; continue;
@@ -8734,7 +9068,7 @@ const History = {
             if (typeof Tabs !== 'undefined' && Tabs.cur?.sid === se.id && c) {
               if (c.loaded && !c.loading && !c.busy && !(c.watching && !c.wFails)) c.quickSync?.(true);
               else if (!c.loaded && !c.loading) void c.load(true).catch(() => {});
-            } else if (c && !c.loading && !c.busy) {
+            } else if (c && !c.loading && !c.busy && !(c.loaded && !c.live && c.messages?.at(-1)?.role === 'assistant' && c.messages?.at(-1)?._finishedAt)) {
               c.loaded = false; c.cached = true;
             }
           }
@@ -9071,7 +9405,7 @@ const KS_SEL = '[data-ks], .modal-back, .dlg-back, #lppop, #gpop, .gacha, .lpick
   f.__ks = true; Element.prototype.replaceChildren = f;
 })();
 // 送达状态每秒刷新一次（只改回复占位里的一行文字）
-setInterval(() => { const el = document.querySelector('#view .typing-st'); if (!el) return; const c = typeof UI !== 'undefined' ? UI.els?.chat : null; const t = c?.dlvText?.() || ''; if (el.textContent !== t) el.textContent = t; }, 1000);
+setInterval(() => { const el = document.querySelector('#view .typing-st'); if (!el) return; const row = el.closest?.('.typing-row'); const pht = row?.querySelector?.('.ph-t'); if (pht) { if (el.textContent !== '') el.textContent = ''; const c = typeof UI !== 'undefined' ? UI.els?.chat : null; if (c && !c.live) { const dlvRaw = (c.dlvText?.() || '').replace(/\s+\d+s$/, '').trim(); const rawP = (typeof ThinkingStatus !== 'undefined' && ThinkingStatus.phase) ? ThinkingStatus.phase(c) : (c.phase || '进行中'); const nextP = (!rawP || rawP === '发送中' || rawP === '进行中') && dlvRaw ? dlvRaw : rawP; if (nextP && pht.textContent !== nextP) pht.textContent = nextP; } return; } const c = typeof UI !== 'undefined' ? UI.els?.chat : null; const t = c?.dlvText?.() || ''; if (el.textContent !== t) el.textContent = t; }, 1000);
 // 手机输入法占位：切换页面时焦点临时交给它，输入法不收起；换完页面还在它身上（比如切到抽卡页）就松开
 const KB = {
   el: null,

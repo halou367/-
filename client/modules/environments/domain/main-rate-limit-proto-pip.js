@@ -516,6 +516,33 @@ function runNativeWorkingSetTrim() {
       for (const k of KIDS) if (k?.pid) pids.push(String(k.pid));
     }
     if (!pids.length) return;
+    if (globalThis._branaWin32Addon === undefined) {
+      globalThis._branaWin32Addon = null;
+      for (const np of [
+        process.resourcesPath && path.join(process.resourcesPath, 'bin', 'brana-win32.node'),
+        path.join(__dirname, '..', 'resources', 'bin', 'brana-win32.node'),
+        path.join(__dirname, '..', 'bin', 'brana-win32.node'),
+        path.join(__dirname, '..', '..', '..', 'runtime-resources', 'bin', 'brana-win32.node'),
+      ].filter(Boolean)) {
+        try { if (fs.existsSync(np)) { globalThis._branaWin32Addon = require(np); break; } } catch {}
+      }
+    }
+    const addon = globalThis._branaWin32Addon;
+    if (addon && typeof addon.trimPid === 'function') {
+      const execInProcTrim = () => {
+        try {
+          global.gc?.();
+          try { addon.trimSelf?.(); } catch {}
+          for (const p of pids) { try { addon.trimPid(Number(p)); } catch {} }
+          if (typeof wins !== 'undefined' && wins instanceof Map) {
+            for (const w of wins.values()) if (w && !w.isDestroyed() && !w.__hidden) applyWindowTaskMgrTitle(w);
+          }
+        } catch {}
+      };
+      setTimeout(execInProcTrim, 240).unref?.();
+      if (totalWsKb > 105 * 1024) setTimeout(execInProcTrim, 850).unref?.();
+      return;
+    }
     const cands = [
       process.resourcesPath && path.join(process.resourcesPath, 'bin', 'win-mem-trim.exe'),
       path.join(__dirname, '..', 'resources', 'bin', 'win-mem-trim.exe'),
