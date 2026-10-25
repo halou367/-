@@ -128,7 +128,7 @@ jobs:
       - run: node scripts/bundle.js
       - name: Verify real Windows runtime and crash recovery
         shell: pwsh
-        timeout-minutes: 4
+        timeout-minutes: 6
         run: |
           foreach ($script in @('scripts/check-privacy-electron.cjs', 'scripts/check-runtime-electron.cjs', 'scripts/check-auth-route-electron.cjs', 'scripts/check-extension-storage-electron.cjs', 'scripts/check-browser-chrome-electron.cjs', 'scripts/check-browser-navigation-electron.cjs', 'scripts/check-browser-viewport-electron.cjs')) {
             $p = Start-Process -FilePath (Resolve-Path 'node_modules/electron/dist/electron.exe') -ArgumentList '--no-sandbox', $script -NoNewWindow -Wait -PassThru

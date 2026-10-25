@@ -55,6 +55,7 @@
     nsExec::Exec /TIMEOUT=60000 `"$1" -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File "$PLUGINSDIR\brana-close-app.ps1" -ConfigFile "$PLUGINSDIR\brana-close-app.cfg"`
     Pop $0
   _brana_skip_ps_close:
+  Delete "$INSTDIR\BranaAI-*.exe"
   Delete "$PLUGINSDIR\brana-close-app.cfg"
   ${if} $0 != 0
     DetailPrint "Unable to close the old application (exit $0). Installation stopped."
