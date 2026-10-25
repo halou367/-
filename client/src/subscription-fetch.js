@@ -70,6 +70,12 @@ function createSubscriptionFetcher({request=fetchText,discoverPorts=discover,tot
   const failure=(phase,e,proxy)=>attempts.push({phase,code:publicError(e),...(proxy?{proxy:proxy.scheme+'://'+(proxy.host==='::1'?'[::1]':proxy.host)+':'+proxy.port}:{})});
   try{
    try{const r=await request(parsed.href,{signal:life.signal,timeoutMs:Math.min(directMs,left())});return {...r,via:'直连',elapsedMs:Date.now()-start};}catch(e){failure('direct',e);}
+   const ghM=/^https:\/\/raw\.githubusercontent\.com\/([^/]+)\/([^/]+)\/(?:refs\/heads\/)?([^/]+)\/(.+)$/i.exec(parsed.href);
+   if(ghM&&!life.signal.aborted){
+    const [,ghO,ghR,ghB,ghP]=ghM;
+    const mirrors=[`https://testingcf.jsdelivr.net/gh/${ghO}/${ghR}@${ghB}/${ghP}`,`https://fastly.jsdelivr.net/gh/${ghO}/${ghR}@${ghB}/${ghP}`,`https://cdn.jsdelivr.net/gh/${ghO}/${ghR}@${ghB}/${ghP}`,`https://gcore.jsdelivr.net/gh/${ghO}/${ghR}@${ghB}/${ghP}`,`https://ghfast.top/${parsed.href}`];
+    try{const mr=await Promise.any(mirrors.map(mu=>request(mu,{signal:life.signal,timeoutMs:Math.min(directMs,left())}).then(x=>{if(x&&typeof x.text==='string'&&x.text.trim())return x;throw error('EMPTY');})));return {...mr,via:'镜像直连',elapsedMs:Date.now()-start};}catch{}
+   }
    if(life.signal.aborted)throw life.signal.reason;
    const open=await discoverPorts(candidatePorts(preferredPorts),{signal:life.signal});
    const queue=open.flatMap(p=>[{...p,scheme:'http'},{...p,scheme:'socks5'}]);let next=0,settled=false;

@@ -307,7 +307,7 @@ const NodeRoutes = (() => {
         if(flushJob)await flushJob;
         if(pendingBatch.length)await flushBatch();
         if(!workLive(j))return;
-        if(r?.cancelled){fatal=r.error||'检测已取消';return;}
+        if(r?.cancelled){if(r?.timedOut&&workLive(j))continue;fatal=r.error||'检测已取消';return;}
         if(Array.isArray(r)){
           const rest=[];
           for(const k of part){if(!seen.has(k)){seen.add(k);rest.push([k,r.find(x=>x.pip===k)||{error:'未返回检测结果'}]);}}
@@ -324,9 +324,9 @@ const NodeRoutes = (() => {
           const unrated=part.filter(k=>isManualPing?Boolean(P.d?.ips?.[k]?.ok===true&&!P.d.ips[k].gone&&!P.banned?.(k)&&!IPRep.trusted?.(k)):needsLiveRate(k));
           if(unrated.length){if(isManualPing)await IPRep.rate(unrated,[],{force:true}).catch(()=>{});else await IPRep.rate(unrated).catch(()=>{});await P.purgeImpureAndUnstable?.().catch(()=>{});IPRep.invalidate?.();if(workLive(j))paintPoolSoon();}
         }
-        if(consecFail>=24&&okSeen===0){fatal='连续 '+consecFail+' 个候选连接失败，已自动熔断停止全量扫描（可直接点「应用更改」使用节点自身代理兜底）';return;}
+        if(consecFail>=24&&consecFail>=120&&okSeen===0){fatal='连续 '+consecFail+' 个候选连接失败，已自动熔断停止全量扫描（可直接点「应用更改」使用节点自身代理兜底）';return;}
       }};
-      await Promise.all(Array.from({length:Math.min(2,q.length)},worker));return fatal;
+      await Promise.all(Array.from({length:Math.min(Host.platform==='android'?1:2,q.length)},worker));return fatal;
     }
     async function probeDomains(force){
       if(!force)return;
@@ -434,6 +434,11 @@ const NodeRoutes = (() => {
       const j=startPoolWork(regionLabel(cc));if(!j)return;j.phase='resolve';paintWork();
       try{
         await P.load();if(!workLive(j))return;
+        const etFeed=P.edgeTunnelCountryFeed?.(j.region)||'';
+        if(etFeed&&Array.isArray(P.d?.src)&&P.d.src.includes('proxyip.cmliussss.net')&&!P.d.src.includes(etFeed)){
+          await P.mutate(d=>{if(!d.src.includes(etFeed))d.src.push(etFeed);});
+          if(!workLive(j))return;
+        }
         const lines=[...srcLines(j.region)];j.sources=lines.length;paintWork();
         const queue=lines.slice();
         const resolveOne=async()=>{while(queue.length&&workLive(j)){const l=queue.shift();let r;try{r=await P.refreshSrc(l,force,{cancelled:()=>!workLive(j)});}catch(e){r={err:String(e?.message||e)};}
@@ -449,7 +454,7 @@ const NodeRoutes = (() => {
     // 「确认」时自动测 Google（仅节点线路；本机代理 / 直连测不了）：不通只提示，不拦保存，只影响 Google 登录
     async function googleCheck(c){
       if(!c?.proxy||!/^vless:/i.test(c.proxy)||!Host.urlTest)return null;
-      try{const r=(await Host.urlTest({items:[{link:c.proxy,pip:c.proxyIp||''}],timeout:8000}))?.[0];return r?.ok?{ok:true,ms:r.ms}:{ok:false,error:r?.error||'无结果'};}
+      try{const r=(await Host.urlTest({items:[{link:c.proxy,pip:c.proxyIp||''}],timeout:4000}))?.[0];return r?.ok?{ok:true,ms:r.ms}:{ok:false,error:r?.error||'无结果'};}
       catch(e){return {ok:false,error:friendly(e)};}
     }
     const testsLine=(g,r)=>(g==null?'':g.ok?'Google 连接正常 · ':'Google 不通（'+g.error+'；Google 登录可能受影响） · ')+'Brana 检测通过（建连 + 3 次请求共 '+(r.ms>=1000?(r.ms/1000).toFixed(1)+' s':r.ms+' ms')+'）'+(r.ip?' · 出口 '+r.ip:'')+(r.loc?' · '+regionLabel(r.loc):'');
@@ -695,6 +700,7 @@ const NodeRoutes = (() => {
           if(authForm){const d=UI.authDraft(a);Store.set('auth-route-draft',{accountId:a.id,email:d.email,name:d.name||'',mode:authForm.dataset.authMode||'login',at:Date.now()});}
           applying=true;paint();step(78,'检测通过，正在应用…');
           if((candidate?.proxyIp||(r?.ip&&(r?.pure||r?.ipa)))&&P?.mutate){try{await P.mutate(d=>{if(r?.ip&&r?.pure&&typeof IPRep!=='undefined')IPRep.putPu?.(d,r.ip,r.pure);if(r?.ip&&r?.ipa&&typeof IPRep!=='undefined')IPRep.putIpa?.(d,r.ip,r.ipa);if(candidate?.proxyIp){d.ips||={};const it=d.ips[candidate.proxyIp]||={ip:String(candidate.proxyIp).split(':')[0]};it.ok=true;it.gone=false;it.banned=false;it.cool=0;if(r?.loc)it.loc=r.loc;if(r?.ip)it.eg=r.ip;if(r?.ms)it.ms=r.ms;if(d.ban)delete d.ban[String(candidate.proxyIp).toLowerCase()];}});}catch{}}
+          const g2Promise=googleCheck(candidate);
           const saved=await selector({...io,cancelled:stale}).apply(data.account,candidate,wanted,r);warm.delete(routeKey(candidate));cache.delete(routeKey(candidate));lastBrana=null;pre=null;
           Object.assign(a,saved);current=Policy.fields(saved);changed=false;if(P&&State.isNode(saved)&&saved.nodeId){if(P.d)P.d.node=saved.nodeId;if(!UI.host?.routeDraft)void P.setNode(saved.nodeId).catch(()=>{});}UI.host=await Host.info();UI.renderAcct?.();
           // 刚手动换好：记录手动选路锁定窗口（自动模式仅短暂防抖 15 秒，手动指定节点/IP 则锁定 10 分钟防止后台误切走）
@@ -704,11 +710,11 @@ const NodeRoutes = (() => {
           const effective=State.isNode(saved)?'节点 '+(nodes.find(n=>n.id===saved.nodeId)?.name||saved.nodeId||''):isDirectP(saved.proxy)?'直连':'本机代理 '+maskProxy(saved.proxy);
           // 出口 IP 就用刚才检测这条线路时测到的（同一条线路），不再等 /cdn-cgi/trace（最多 6 秒）；实时出口在后台刷新
           const exit=r.ip||(typeof IP!=='undefined'&&IP.ip&&!IP.err?IP.ip:'');
-          if(typeof IP!=='undefined'){if(r.ip){IP.ip=r.ip;if(r.loc)IP.loc=r.loc;IP.err=null;IP.rttFail=0;IP.at=now();IP.checkedAt=now();}else{IP.ip='';IP.at=0;IP.checkedAt=0;}void Promise.resolve(IP.polling).then(()=>IP.poll()).catch(()=>{});}
+          if(typeof IP!=='undefined'){IP.err=null;IP.failures=0;IP.rttFail=0;if(r.ip){IP.ip=r.ip;if(r.loc)IP.loc=r.loc;IP.err=null;IP.rttFail=0;IP.at=now();IP.checkedAt=now();if(r.ms)IP.recordRtt?.(r.ms);}else{IP.ip='';IP.at=0;IP.checkedAt=0;}void Promise.resolve(IP.polling).then(()=>IP.poll()).catch(()=>{});}
           try{if(typeof Chats!=='undefined'&&typeof Chats.onRouteSwitched==='function')Chats.onRouteSwitched();}catch{}
-          const g2=await googleCheck(candidate);if(stale())return;
+          const g2=await g2Promise;if(stale())return;
           tests={google:g2,brana:r};paintSummary();
-          const postNodeErr=(g2&&!g2.ok)?('切后节点异常：节点连通性检测未通过（'+g2.error+'）'):(typeof IP!=='undefined'&&IP.err)?('切后节点异常：'+IP.err):'';
+          const postNodeErr=(!r?.ok&&g2&&!g2.ok)?('切后节点异常：节点连通性检测未通过（'+g2.error+'）'):'';
           if(postNodeErr){
             error=postNodeErr;
             say('已切换至 '+effective+(saved.proxyIp?' · '+saved.proxyIp:'')+'，但检测到异常：\n'+postNodeErr,true);
@@ -805,8 +811,8 @@ const NodeRoutes = (() => {
     queueMicrotask(()=>void load());
     return {inp:wrap,hint:status,selectMode:chooseMode,get busy(){return applying||probing||saving;},block:()=>wrap,refresh:load,check,commit,save,draftRoute:!live,testedRoute:true,setRegion(c){if(c!==cc||regAuto)void pickRegion(c);},
       get mode(){return State.isNode(current)?'node':strategy==='direct'?'direct':'local';},get routeMode(){return strategy;},
-      get proxy(){return current.proxy;},get proxyIp(){return current.proxyIp;},get nodeId(){return current.nodeId;},get region(){return current.region;},get exit(){try{return lastBrana&&lastBrana.key===routeKey(current)?String(lastBrana.result?.loc||''):'';}catch{return '';}},
-      err(){return loading||applying||probing||saving?'线路正在读取、检测或保存，请等待结果':error||'';}};
+      get dirty(){return changed;},get proxy(){return current.proxy;},get proxyIp(){return current.proxyIp;},get nodeId(){return current.nodeId;},get region(){return current.region;},get exit(){try{return lastBrana&&lastBrana.key===routeKey(current)?String(lastBrana.result?.loc||''):'';}catch{return '';}},
+      err(){return ((!live||changed)&&loading)||applying||probing||saving?'线路正在读取、检测或保存，请等待结果':error||'';}};
   }
   return {selector,rank,usable,cache,adapter,field,friendly,get manual(){return manualBusy;}};
 })();

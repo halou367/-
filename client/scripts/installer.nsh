@@ -32,12 +32,29 @@
   FileOpen $2 "$PLUGINSDIR\brana-close-app.cfg" w
   FileWriteUTF16LE $2 "$INSTDIR$\r$\n$0$\r$\n$1$\r$\n${APP_EXECUTABLE_FILENAME}$\r$\n"
   FileClose $2
-  ; NSIS is 32-bit. Use native PowerShell on 64-bit Windows for CIM support.
-  StrCpy $1 "$SYSDIR\WindowsPowerShell\v1.0\powershell.exe"
-  IfFileExists "$WINDIR\SysNative\WindowsPowerShell\v1.0\powershell.exe" 0 +2
-    StrCpy $1 "$WINDIR\SysNative\WindowsPowerShell\v1.0\powershell.exe"
-  nsExec::Exec /TIMEOUT=60000 `"$1" -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File "$PLUGINSDIR\brana-close-app.ps1" -ConfigFile "$PLUGINSDIR\brana-close-app.cfg"`
-  Pop $0
+  StrCpy $0 "0"
+  Delete "$INSTDIR\BranaAI-*.exe"
+  ${if} ${isUpdated}
+    DeleteRegValue HKCU "${UNINSTALL_REGISTRY_KEY}" "UninstallString"
+    DeleteRegValue HKCU "${UNINSTALL_REGISTRY_KEY}" "QuietUninstallString"
+    DeleteRegValue HKLM "${UNINSTALL_REGISTRY_KEY}" "UninstallString"
+    DeleteRegValue HKLM "${UNINSTALL_REGISTRY_KEY}" "QuietUninstallString"
+  ${endif}
+  IfFileExists "$INSTDIR\${APP_EXECUTABLE_FILENAME}" 0 _brana_skip_ps_close
+    ClearErrors
+    FileOpen $2 "$INSTDIR\${APP_EXECUTABLE_FILENAME}" a
+    ${ifNot} ${Errors}
+      FileClose $2
+      Goto _brana_skip_ps_close
+    ${endif}
+    ClearErrors
+    ; NSIS is 32-bit. Use native PowerShell on 64-bit Windows for CIM support only when executable is locked.
+    StrCpy $1 "$SYSDIR\WindowsPowerShell\v1.0\powershell.exe"
+    IfFileExists "$WINDIR\SysNative\WindowsPowerShell\v1.0\powershell.exe" 0 +2
+      StrCpy $1 "$WINDIR\SysNative\WindowsPowerShell\v1.0\powershell.exe"
+    nsExec::Exec /TIMEOUT=60000 `"$1" -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File "$PLUGINSDIR\brana-close-app.ps1" -ConfigFile "$PLUGINSDIR\brana-close-app.cfg"`
+    Pop $0
+  _brana_skip_ps_close:
   Delete "$PLUGINSDIR\brana-close-app.cfg"
   ${if} $0 != 0
     DetailPrint "Unable to close the old application (exit $0). Installation stopped."

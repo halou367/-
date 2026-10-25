@@ -180,6 +180,11 @@ const ModeState = {
 
   inferEntryMode(entry) {
     if (!entry || typeof entry !== 'object') return 'agent';
+    const sid = entry.id || entry.sid || '';
+    const cObj = sid && typeof Chats !== 'undefined' ? Chats.get(sid) : null;
+    if (cObj?.isEvaluation && (cObj.evalMode === 'direct' || cObj.evalMode === 'battle')) return cObj.evalMode;
+    const mi = sid && typeof Models !== 'undefined' ? Models.get(sid) : null;
+    if (mi?.directMode) return 'direct';
     if (
       entry.type === 'evaluation' ||
       entry.mode === 'battle' ||
@@ -194,6 +199,14 @@ const ModeState = {
         (entry.modelAId && !entry.modelBId && entry.mode !== 'battle')
       ) {
         return 'direct';
+      }
+      if (!entry.mode && sid) {
+        const cached = readLocalEvalCache(sid);
+        if (cached && (cached.mode === 'direct' || (cached.modelAId && !cached.modelBId))) {
+          entry.mode = 'direct';
+          if (cached.modelAId && !entry.modelAId) entry.modelAId = cached.modelAId;
+          return 'direct';
+        }
       }
       return 'battle';
     }
@@ -300,10 +313,25 @@ const parseEvalFlightFromHtml = (html) => {
   if (!html || typeof html !== 'string') return { initialState: null, initialModels: null };
   updateWebDeploymentIdFromHtml(html);
   const chunks = [];
-  const re = /self\.__next_f\.push\(\[1,("(?:\\.|[^"\\])*")\]\)/g;
-  let m;
-  while ((m = re.exec(html)) !== null) {
-    try { chunks.push(JSON.parse(m[1])); } catch {}
+  const marker = 'self.__next_f.push([1,"';
+  let pos = 0;
+  while (pos < html.length) {
+    const idx = html.indexOf(marker, pos);
+    if (idx < 0) break;
+    const qStart = idx + marker.length - 1;
+    let p = qStart + 1;
+    while (p < html.length) {
+      const ch = html.charCodeAt(p);
+      if (ch === 92) { p += 2; continue; }
+      if (ch === 34) break;
+      p++;
+    }
+    if (p < html.length && html.startsWith('])', p + 1)) {
+      try { chunks.push(JSON.parse(html.slice(qStart, p + 1))); } catch {}
+      pos = p + 3;
+    } else {
+      pos = idx + marker.length;
+    }
   }
   if (!chunks.length) return { initialState: null, initialModels: null };
   const full = chunks.join('');
@@ -377,25 +405,25 @@ const ModelCatalog = (() => {
 
   const FALLBACK_MODELS = [
     // Real Arena UUID-keyed Direct-selectable models (from Arena SSR initialModels)
+    { id: '019ce973-84c9-7030-9f88-1ebbf2edeb14', slug: 'claude-opus-4-6', name: 'claude-opus-4-6', publicName: 'Claude Opus 4.6', displayName: 'Claude Opus 4.6', organization: 'Anthropic', provider: 'anthropic', modalities: ['chat', 'webdev', 'search'], rank: 1, rankByModality: { chat: 1, webdev: 1, search: 1 }, userSelectable: true },
+    { id: '019cbd0a-d2e9-7540-9651-8fb7bc7bc483', slug: 'claude-sonnet-4-6', name: 'claude-sonnet-4-6', publicName: 'Claude Sonnet 4.6', displayName: 'Claude Sonnet 4.6', organization: 'Anthropic', provider: 'anthropic', modalities: ['chat', 'webdev', 'search'], rank: 2, rankByModality: { chat: 2, webdev: 2, search: 2 }, userSelectable: true },
+    { id: '019d3995-9b7a-730d-b779-227ad61ecc9b', slug: 'gpt-5.4-high', name: 'gpt-5.4-high', publicName: 'GPT-5.4 High', displayName: 'GPT-5.4 High', organization: 'OpenAI', provider: 'openai', modalities: ['chat', 'webdev', 'search'], rank: 3, rankByModality: { chat: 3, webdev: 3, search: 3 }, userSelectable: true },
     { id: '01a0681c-b561-76b6-b338-a44ff0cff460', slug: 'gemini-3.8-flash-high', name: 'gemini-3.8-flash-high', publicName: 'Gemini 3.8 Flash High', displayName: 'Gemini 3.8 Flash High', organization: 'Google', provider: 'google', modalities: ['chat', 'webdev', 'search'], rank: 9, rankByModality: { chat: 9 }, userSelectable: true },
     { id: '019f19f2-41f1-7c6d-9891-48d02fd9952c', slug: 'claude-sonnet-5-high', name: 'claude-sonnet-5-high', publicName: 'Claude Sonnet 5 High', displayName: 'Claude Sonnet 5 High', organization: 'Anthropic', provider: 'anthropic', modalities: ['chat', 'webdev', 'search'], rank: 10, rankByModality: { chat: 58 }, userSelectable: true },
-    { id: '019ce973-84c9-7030-9f88-1ebbf2edeb14', slug: 'claude-opus-4-6', name: 'claude-opus-4-6', publicName: 'Claude Opus 4.6', displayName: 'Claude Opus 4.6', organization: 'Anthropic', provider: 'anthropic', modalities: ['chat', 'webdev', 'search'], rank: 11, rankByModality: { chat: 23, webdev: 3, search: 4 }, userSelectable: true },
-    { id: '019cbd0a-d2e9-7540-9651-8fb7bc7bc483', slug: 'claude-sonnet-4-6', name: 'claude-sonnet-4-6', publicName: 'Claude Sonnet 4.6', displayName: 'Claude Sonnet 4.6', organization: 'Anthropic', provider: 'anthropic', modalities: ['chat', 'webdev', 'search'], rank: 12, rankByModality: { chat: 30, webdev: 5, search: 11 }, userSelectable: true },
-    { id: '019d3995-9b7a-730d-b779-227ad61ecc9b', slug: 'gpt-5.4-high', name: 'gpt-5.4-high', publicName: 'GPT-5.4 High', displayName: 'GPT-5.4 High', organization: 'OpenAI', provider: 'openai', modalities: ['chat', 'webdev', 'search'], rank: 13, rankByModality: { chat: 26, webdev: 8, search: 5 }, userSelectable: true },
     { id: '019e71ea-1e1d-740f-9c2d-dab5869ff108', slug: 'gpt-5.5-instant', name: 'gpt-5.5-instant', publicName: 'GPT-5.5 Instant', displayName: 'GPT-5.5 Instant', organization: 'OpenAI', provider: 'openai', modalities: ['chat', 'webdev', 'search'], rank: 14, rankByModality: { chat: 43 }, userSelectable: true },
     { id: '019b82a4-f728-72bf-b563-bd8fd0fb9db6', slug: 'gpt-5.2-high', name: 'gpt-5.2-high', publicName: 'GPT-5.2 High', displayName: 'GPT-5.2 High', organization: 'OpenAI', provider: 'openai', modalities: ['chat', 'webdev', 'search'], rank: 15, rankByModality: { chat: 42, webdev: 17 }, userSelectable: true },
     { id: '019cbfae-9988-799f-833f-d9ef5fb8b92e', slug: 'gemini-3.1-pro-preview', name: 'gemini-3.1-pro-preview', publicName: 'Gemini 3.1 Pro', displayName: 'Gemini 3.1 Pro', organization: 'Google', provider: 'google', modalities: ['chat', 'webdev', 'search'], rank: 16, rankByModality: { chat: 25, webdev: 9, search: 9 }, userSelectable: true },
     { id: '019773f3-3a42-772b-b4f5-c2eeb5fb22d6', slug: 'gemini-2.5-pro', name: 'gemini-2.5-pro', publicName: 'Gemini 2.5 Pro', displayName: 'Gemini 2.5 Pro', organization: 'Google', provider: 'google', modalities: ['chat', 'webdev', 'search'], rank: 17, rankByModality: { chat: 59, webdev: 38, search: 22 }, userSelectable: true },
     { id: '019ff69c-dae8-708a-ae20-1ce80775d94d', slug: 'grok-4.6-high', name: 'grok-4.6-high', publicName: 'Grok 4.6 High', displayName: 'Grok 4.6 High', organization: 'xAI', provider: 'xai', modalities: ['chat', 'webdev', 'search'], rank: 18, rankByModality: { chat: 70 }, userSelectable: true },
     { id: '01982bb3-7f7a-75c6-86c8-334a0db9b245', slug: 'grok-4', name: 'grok-4', publicName: 'Grok 4', displayName: 'Grok 4', organization: 'xAI', provider: 'xai', modalities: ['chat', 'webdev', 'search'], rank: 19, rankByModality: { chat: 109, search: 18 }, userSelectable: true },
-    { id: '019fc887-69e7-7308-a353-36da657fc18e', slug: 'qwen3.8-max', name: 'qwen3.8-max', publicName: 'Qwen 3.8 Max', displayName: 'Qwen 3.8 Max', organization: 'Alibaba', provider: 'qwen', modalities: ['chat', 'webdev'], rank: 20, rankByModality: { webdev: 12, chat: 35 }, userSelectable: true },
-    { id: '019e128d-bc7d-744c-8854-67a38b15b3a1', slug: 'qwen3.7-max-preview', name: 'qwen3.7-max-preview', publicName: 'Qwen 3.7 Max Preview', displayName: 'Qwen 3.7 Max Preview', organization: 'Alibaba', provider: 'qwen', modalities: ['chat', 'webdev'], rank: 21, rankByModality: { chat: 41, webdev: 14 }, userSelectable: true },
-    { id: '01a14ae7-0d76-74af-80ac-33cf2b2322aa', slug: 'deepseek-v4.1-flash-max', name: 'deepseek-v4.1-flash-max', publicName: 'DeepSeek V4.1 Flash Max', displayName: 'DeepSeek V4.1 Flash Max', organization: 'DeepSeek', provider: 'deepseek', modalities: ['chat', 'webdev'], rank: 22, rankByModality: { webdev: 13, chat: 38 }, userSelectable: true },
-    { id: '019ebf6a-94d4-7649-b704-1dbbd5eb0942', slug: 'glm-5.2 (max)', name: 'glm-5.2 (max)', publicName: 'GLM 5.2 (Max)', displayName: 'GLM 5.2 (Max)', organization: 'Zhipu', provider: 'zhipu', modalities: ['chat', 'webdev'], rank: 23, rankByModality: { chat: 32, webdev: 6 }, userSelectable: true },
-    { id: '019b7b2f-fc57-7c65-b4ef-fd8db34f448e', slug: 'deepseek-v3.2', name: 'deepseek-v3.2', publicName: 'DeepSeek V3.2', displayName: 'DeepSeek V3.2', organization: 'DeepSeek', provider: 'deepseek', modalities: ['chat', 'webdev'], rank: 26, rankByModality: { chat: 77, webdev: 37 }, userSelectable: true },
-    { id: '01980d0b-8126-7f5b-a749-bd6ef7bc7f56', slug: 'qwen3-235b-a22b-instruct-2507', name: 'qwen3-235b-a22b-instruct-2507', publicName: 'Qwen3 235B A22B', displayName: 'Qwen3 235B A22B', organization: 'Alibaba', provider: 'qwen', modalities: ['chat', 'webdev'], rank: 27, rankByModality: { chat: 78, webdev: 45 }, userSelectable: true },
-    { id: '01999a31-f487-73a1-8e8f-2a5256f74a38', slug: 'glm-4.6', name: 'glm-4.6', publicName: 'GLM-4.6', displayName: 'GLM-4.6', organization: 'Zhipu', provider: 'zhipu', modalities: ['chat', 'webdev'], rank: 28, rankByModality: { chat: 86, webdev: 35 }, userSelectable: true },
-    { id: '019ca4eb-110d-7271-9040-811b08a19686', slug: 'kimi-k2.5', name: 'kimi-k2.5', publicName: 'Kimi K2.5', displayName: 'Kimi K2.5', organization: 'Moonshot', provider: 'moonshot', modalities: ['chat', 'webdev'], rank: 29, rankByModality: { chat: 44, webdev: 10 }, userSelectable: true },
+    { id: '019fc887-69e7-7308-a353-36da657fc18e', slug: 'qwen3.8-max', name: 'qwen3.8-max', publicName: 'Qwen 3.8 Max', displayName: 'Qwen 3.8 Max', organization: 'Alibaba', provider: 'qwen', modalities: ['chat', 'webdev', 'search'], rank: 20, rankByModality: { webdev: 12, chat: 35 }, userSelectable: true },
+    { id: '019e128d-bc7d-744c-8854-67a38b15b3a1', slug: 'qwen3.7-max-preview', name: 'qwen3.7-max-preview', publicName: 'Qwen 3.7 Max Preview', displayName: 'Qwen 3.7 Max Preview', organization: 'Alibaba', provider: 'qwen', modalities: ['chat', 'webdev', 'search'], rank: 21, rankByModality: { chat: 41, webdev: 14 }, userSelectable: true },
+    { id: '01a14ae7-0d76-74af-80ac-33cf2b2322aa', slug: 'deepseek-v4.1-flash-max', name: 'deepseek-v4.1-flash-max', publicName: 'DeepSeek V4.1 Flash Max', displayName: 'DeepSeek V4.1 Flash Max', organization: 'DeepSeek', provider: 'deepseek', modalities: ['chat', 'webdev', 'search'], rank: 22, rankByModality: { webdev: 13, chat: 38 }, userSelectable: true },
+    { id: '019ebf6a-94d4-7649-b704-1dbbd5eb0942', slug: 'glm-5.2 (max)', name: 'glm-5.2 (max)', publicName: 'GLM 5.2 (Max)', displayName: 'GLM 5.2 (Max)', organization: 'Zhipu', provider: 'zhipu', modalities: ['chat', 'webdev', 'search'], rank: 23, rankByModality: { chat: 32, webdev: 6 }, userSelectable: true },
+    { id: '019b7b2f-fc57-7c65-b4ef-fd8db34f448e', slug: 'deepseek-v3.2', name: 'deepseek-v3.2', publicName: 'DeepSeek V3.2', displayName: 'DeepSeek V3.2', organization: 'DeepSeek', provider: 'deepseek', modalities: ['chat', 'webdev', 'search'], rank: 26, rankByModality: { chat: 77, webdev: 37 }, userSelectable: true },
+    { id: '01980d0b-8126-7f5b-a749-bd6ef7bc7f56', slug: 'qwen3-235b-a22b-instruct-2507', name: 'qwen3-235b-a22b-instruct-2507', publicName: 'Qwen3 235B A22B', displayName: 'Qwen3 235B A22B', organization: 'Alibaba', provider: 'qwen', modalities: ['chat', 'webdev', 'search'], rank: 27, rankByModality: { chat: 78, webdev: 45 }, userSelectable: true },
+    { id: '01999a31-f487-73a1-8e8f-2a5256f74a38', slug: 'glm-4.6', name: 'glm-4.6', publicName: 'GLM-4.6', displayName: 'GLM-4.6', organization: 'Zhipu', provider: 'zhipu', modalities: ['chat', 'webdev', 'search'], rank: 28, rankByModality: { chat: 86, webdev: 35 }, userSelectable: true },
+    { id: '019ca4eb-110d-7271-9040-811b08a19686', slug: 'kimi-k2.5', name: 'kimi-k2.5', publicName: 'Kimi K2.5', displayName: 'Kimi K2.5', organization: 'Moonshot', provider: 'moonshot', modalities: ['chat', 'webdev', 'search'], rank: 29, rankByModality: { chat: 44, webdev: 10 }, userSelectable: true },
     { id: '019b7b1f-fa1d-7d5c-96f9-4731f5ca5a0f', slug: 'gpt-image-1.5', name: 'gpt-image-1.5', publicName: 'GPT Image 1.5', displayName: 'GPT Image 1.5', organization: 'OpenAI', provider: 'openai', modalities: ['image'], rank: 1, rankByModality: { image: 1 }, userSelectable: true },
     { id: '0197c947-98b0-7768-8696-c7a5f32d9c95', slug: 'imagen-4.0-generate-preview', name: 'imagen-4.0-generate-preview', publicName: 'Imagen 4', displayName: 'Imagen 4', organization: 'Google', provider: 'google', modalities: ['image'], rank: 2, rankByModality: { image: 8 }, userSelectable: true },
     { id: '0196a1fa-682f-769b-9067-7ff3472e21f7', slug: 'flux-1.1-pro-ultra', name: 'flux-1.1-pro-ultra', publicName: 'FLUX 1.1 Pro Ultra', displayName: 'FLUX 1.1 Pro Ultra', organization: 'Black Forest Labs', provider: 'bfl', modalities: ['image'], rank: 3, rankByModality: { image: 17 }, userSelectable: true },
@@ -415,13 +443,13 @@ const ModelCatalog = (() => {
     { id: 'google/gemini-4-argon', name: 'gemini-4-argon', publicName: 'Gemini 4 Argon', displayName: 'Gemini 4 Argon', organization: 'Google', provider: 'google', modalities: ['chat', 'webdev', 'search'], rank: 109, userSelectable: false },
     { id: 'google/gemini-3.8-flash', name: 'gemini-3.8-flash', publicName: 'Gemini 3.8 Flash', displayName: 'Gemini 3.8 Flash', organization: 'Google', provider: 'google', modalities: ['chat', 'webdev', 'search'], rank: 110, userSelectable: false },
     { id: 'xai/grok-4.7', name: 'grok-4.7', publicName: 'Grok 4.7', displayName: 'Grok 4.7', organization: 'xAI', provider: 'xai', modalities: ['chat', 'webdev', 'search'], rank: 111, userSelectable: false },
-    { id: 'deepseek/deepseek-v4.1-flash-1017', name: 'deepseek-v4.1-flash', publicName: 'DeepSeek V4.1 Flash', displayName: 'DeepSeek V4.1 Flash', organization: 'DeepSeek', provider: 'deepseek', modalities: ['chat', 'webdev'], rank: 112, userSelectable: false },
-    { id: 'alibaba/qwen3.8-max', name: 'qwen-3.8-max', publicName: 'Qwen 3.8 Max', displayName: 'Qwen 3.8 Max', organization: 'Alibaba', provider: 'qwen', modalities: ['chat', 'webdev'], rank: 113, userSelectable: false },
-    { id: 'zhipu/glm-5.3', name: 'glm-5.3', publicName: 'GLM 5.3', displayName: 'GLM 5.3', organization: 'Zhipu', provider: 'zhipu', modalities: ['chat', 'webdev'], rank: 114, userSelectable: false },
-    { id: 'moonshot/kimi-k3', name: 'kimi-k3', publicName: 'Kimi K3', displayName: 'Kimi K3', organization: 'Moonshot', provider: 'moonshot', modalities: ['chat', 'webdev'], rank: 115, userSelectable: false },
-    { id: 'reflection/beam-1.0-501b-a23b', name: 'beam-1.0-501b-a23b', publicName: 'Beam 1.0 501B A23B', displayName: 'Beam 1.0 501B A23B', organization: 'Reflection AI', provider: 'reflection', modalities: ['chat', 'webdev'], rank: 116, userSelectable: false },
-    { id: 'meta/muse-spark-1.3', name: 'muse-spark-1.3', publicName: 'Muse Spark 1.3', displayName: 'Muse Spark 1.3', organization: 'Meta', provider: 'meta', modalities: ['chat', 'webdev'], rank: 117, userSelectable: false },
-    { id: 'deepseek-r1-0528', name: 'deepseek-r1-0528', publicName: 'DeepSeek R1 0528', displayName: 'DeepSeek R1 0528', organization: 'DeepSeek', provider: 'deepseek', modalities: ['chat', 'webdev'], rank: 125, userSelectable: false },
+    { id: 'deepseek/deepseek-v4.1-flash-1017', name: 'deepseek-v4.1-flash', publicName: 'DeepSeek V4.1 Flash', displayName: 'DeepSeek V4.1 Flash', organization: 'DeepSeek', provider: 'deepseek', modalities: ['chat', 'webdev', 'search'], rank: 112, userSelectable: false },
+    { id: 'alibaba/qwen3.8-max', name: 'qwen-3.8-max', publicName: 'Qwen 3.8 Max', displayName: 'Qwen 3.8 Max', organization: 'Alibaba', provider: 'qwen', modalities: ['chat', 'webdev', 'search'], rank: 113, userSelectable: false },
+    { id: 'zhipu/glm-5.3', name: 'glm-5.3', publicName: 'GLM 5.3', displayName: 'GLM 5.3', organization: 'Zhipu', provider: 'zhipu', modalities: ['chat', 'webdev', 'search'], rank: 114, userSelectable: false },
+    { id: 'moonshot/kimi-k3', name: 'kimi-k3', publicName: 'Kimi K3', displayName: 'Kimi K3', organization: 'Moonshot', provider: 'moonshot', modalities: ['chat', 'webdev', 'search'], rank: 115, userSelectable: false },
+    { id: 'reflection/beam-1.0-501b-a23b', name: 'beam-1.0-501b-a23b', publicName: 'Beam 1.0 501B A23B', displayName: 'Beam 1.0 501B A23B', organization: 'Reflection AI', provider: 'reflection', modalities: ['chat', 'webdev', 'search'], rank: 116, userSelectable: false },
+    { id: 'meta/muse-spark-1.3', name: 'muse-spark-1.3', publicName: 'Muse Spark 1.3', displayName: 'Muse Spark 1.3', organization: 'Meta', provider: 'meta', modalities: ['chat', 'webdev', 'search'], rank: 117, userSelectable: false },
+    { id: 'deepseek-r1-0528', name: 'deepseek-r1-0528', publicName: 'DeepSeek R1 0528', displayName: 'DeepSeek R1 0528', organization: 'DeepSeek', provider: 'deepseek', modalities: ['chat', 'webdev', 'search'], rank: 125, userSelectable: false },
   ];
 
   let models = [...FALLBACK_MODELS];
@@ -467,7 +495,7 @@ const ModelCatalog = (() => {
         modalities: [],
         rank: Number.isFinite(Number(item.rank)) ? Number(item.rank) : (idx + 1),
         rankByModality: {},
-        userSelectable: item.userSelectable !== false && item.isSelectable !== false,
+        userSelectable: item.userSelectable !== false && item.isSelectable !== false && item.isDeprecated !== true && item.deprecated !== true && item.status !== 'archived' && item.status !== 'disabled',
       };
       if (item.rankByModality && typeof item.rankByModality === 'object') {
         Object.assign(existing.rankByModality, item.rankByModality);
@@ -480,8 +508,8 @@ const ModelCatalog = (() => {
       const outCap = item.capabilities?.outputCapabilities;
       if (outCap && typeof outCap === 'object') {
         if (outCap.text && !existing.modalities.includes('chat')) existing.modalities.push('chat');
-        if (outCap.code && !existing.modalities.includes('webdev')) existing.modalities.push('webdev');
-        if (outCap.search && !existing.modalities.includes('search')) existing.modalities.push('search');
+        if ((outCap.code || outCap.webdev) && !existing.modalities.includes('webdev')) existing.modalities.push('webdev');
+        if ((outCap.search || outCap.webSearch) && !existing.modalities.includes('search')) existing.modalities.push('search');
         if (outCap.image && !existing.modalities.includes('image')) existing.modalities.push('image');
         if (outCap.video && !existing.modalities.includes('video')) existing.modalities.push('video');
       }
@@ -3260,20 +3288,22 @@ const EvalEngine = (() => {
 
     const allMsgs = Array.isArray(chat.messages) ? chat.messages : [];
     const assts = allMsgs.filter(m => m && m.role === 'assistant');
+    let lastUserIdx = -1;
+    for (let i = allMsgs.length - 1; i >= 0; i--) {
+      if (allMsgs[i]?.role === 'user') { lastUserIdx = i; break; }
+    }
+    const turnSlice = lastUserIdx >= 0 ? allMsgs.slice(lastUserIdx + 1).filter(m => m && m.role === 'assistant') : assts;
     let msgA = opts?.messageAId ? assts.find(m => m.id === opts.messageAId) : null;
     let msgB = opts?.messageBId ? assts.find(m => m.id === opts.messageBId) : null;
-    if (!msgA || !msgB) {
-      let lastUserIdx = -1;
-      for (let i = allMsgs.length - 1; i >= 0; i--) {
-        if (allMsgs[i]?.role === 'user') { lastUserIdx = i; break; }
-      }
-      const turnSlice = lastUserIdx >= 0 ? allMsgs.slice(lastUserIdx + 1).filter(m => m && m.role === 'assistant') : assts;
-      msgA = msgA || [...turnSlice].reverse().find(m => m.participantPosition === 'a') || [...assts].reverse().find(m => m.participantPosition === 'a') || assts[0];
-      msgB = msgB || [...turnSlice].reverse().find(m => m.participantPosition === 'b' && m !== msgA) || [...assts].reverse().find(m => m.participantPosition === 'b' && m !== msgA) || assts.find(m => m !== msgA);
+    if (!msgA && !opts?.messageAId) {
+      msgA = [...turnSlice].reverse().find(m => m.participantPosition === 'a') || (turnSlice.length === 2 && !turnSlice[0].participantPosition ? turnSlice[0] : null);
+    }
+    if (!msgB && !opts?.messageBId) {
+      msgB = [...turnSlice].reverse().find(m => m.participantPosition === 'b' && m !== msgA) || (turnSlice.length === 2 && !turnSlice[1].participantPosition && turnSlice[1] !== msgA ? turnSlice[1] : null);
     }
     if (!msgA || !msgB || msgA === msgB) throw new Error('当前轮次尚未生成完整的 A/B 双侧回复');
-    if (msgA.status === 'streaming' || msgB.status === 'streaming' || msgA.metadata?.pending || msgB.metadata?.pending) {
-      throw new Error('当前轮次仍有模型正在生成中，请等待双侧完成后再投票');
+    if (msgA.status === 'streaming' || msgB.status === 'streaming' || msgA.status === 'pending' || msgB.status === 'pending' || msgA.status === 'failed' || msgB.status === 'failed' || msgA.failed || msgB.failed || msgA._incomplete || msgB._incomplete || msgA.metadata?.pending || msgB.metadata?.pending) {
+      throw new Error('当前轮次仍有模型正在生成中或存在未完成/失败回复，请等待双侧完成后再投票');
     }
 
     chat.voteState = { ...(chat.voteState || {}), submitting: true, value: voteValue };
@@ -3384,7 +3414,7 @@ const EvalEngine = (() => {
         }
       }
 
-      if (!modelAId || !modelBId) {
+      {
         const prevDpl = cachedWebDeploymentId;
         const prevAct = cachedVoteActionId;
         const evalObj = await fetchEvalSessionData(sid).catch(() => null);
@@ -3398,8 +3428,8 @@ const EvalEngine = (() => {
           if ((!modelAId || !modelBId) && Array.isArray(evalObj.messages)) {
             for (const m of evalObj.messages) {
               if (m?.role === 'assistant' && m.modelId) {
-                if (m.participantPosition === 'b') modelBId = modelBId || m.modelId;
-                else modelAId = modelAId || m.modelId;
+                if (m.id === msgB.id || m.participantPosition === 'b') modelBId = modelBId || m.modelId;
+                else if (m.id === msgA.id || m.participantPosition === 'a') modelAId = modelAId || m.modelId;
               }
             }
           }
@@ -3474,8 +3504,8 @@ const EvalEngine = (() => {
         if (Array.isArray(lsCur.messages)) {
           for (const m of lsCur.messages) {
             if (!m || m.role !== 'assistant') continue;
-            if (m.id === msgA.id || m.participantPosition === 'a') m.modelId = modelAId;
-            else if (m.id === msgB.id || m.participantPosition === 'b') m.modelId = modelBId;
+            if (m.id === msgA.id) m.modelId = modelAId;
+            else if (m.id === msgB.id) m.modelId = modelBId;
           }
         }
         lsCur.pairwiseFeedbacks = [...(Array.isArray(lsCur.pairwiseFeedbacks) ? lsCur.pairwiseFeedbacks : []), fbItem];
@@ -3493,16 +3523,62 @@ const EvalEngine = (() => {
       const modelAName = ModelCatalog.resolveModelName(modelAId, revealedModels);
       const modelBName = ModelCatalog.resolveModelName(modelBId, revealedModels);
 
+      msgA.participantPosition = 'a';
+      if (modelAId) msgA.modelId = modelAId;
+      msgA.revealedModelName = modelAName;
+      msgB.participantPosition = 'b';
+      if (modelBId) msgB.modelId = modelBId;
+      msgB.revealedModelName = modelBName;
+      const freezeSideSnap = (m, pos, mId, mName) => {
+        const cloneParts = Array.isArray(m.parts) ? JSON.parse(JSON.stringify(m.parts)) : [];
+        const cloneWebdev = m.webdev ? JSON.parse(JSON.stringify(m.webdev)) : undefined;
+        const manifest = Array.isArray(cloneWebdev?.files) ? cloneWebdev.files.map(f => ({ path: String(f?.path || ''), size: String(f?.content || '').length })) : [];
+        const dig = (typeof ChatHabitFingerprint !== 'undefined' && typeof ChatHabitFingerprint.computeMessagesDigest === 'function')
+          ? ChatHabitFingerprint.computeMessagesDigest([{ ...m, parts: cloneParts, webdev: cloneWebdev }])
+          : String(m.id || '');
+        return {
+          id: m.id,
+          participantPosition: pos,
+          status: m.status || 'success',
+          modelId: mId || m.modelId || null,
+          modelName: mName || null,
+          retryRegenerationCount: m.retryRegenerationCount || 0,
+          contentDigest: dig,
+          artifactManifest: manifest,
+          message: { ...m, participantPosition: pos, modelId: mId || m.modelId || null, revealedModelName: mName || null, parts: cloneParts, webdev: cloneWebdev },
+        };
+      };
+      const attemptId = `${sid}:turn-${lastUserIdx}:a-${msgA.id || ''}-r${msgA.retryRegenerationCount || 0}:b-${msgB.id || ''}-r${msgB.retryRegenerationCount || 0}`;
+      const finalBattleRecord = {
+        sid,
+        attemptId,
+        votedAt: Date.now(),
+        vote: voteValue,
+        messageAId: msgA.id,
+        messageBId: msgB.id,
+        modelAId,
+        modelBId,
+        modelAName,
+        modelBName,
+        sideA: freezeSideSnap(msgA, 'a', modelAId, modelAName),
+        sideB: freezeSideSnap(msgB, 'b', modelBId, modelBName),
+      };
+      chat.finalBattleRecord = finalBattleRecord;
+
       chat.voteState = {
         voted: true,
         submitting: false,
         value: voteValue,
+        attemptId,
+        messageAId: msgA.id,
+        messageBId: msgB.id,
         modelAId,
         modelBId,
         modelAName,
         modelBName,
         revealedAt: Date.now(),
         learnedAt: chat.voteState?.learnedAt || null,
+        learnedReceipt: chat.voteState?.learnedReceipt || null,
       };
 
       const hRow = typeof History !== 'undefined' ? History.byId?.(sid) : null;
@@ -3540,13 +3616,18 @@ const EvalEngine = (() => {
       } catch {}
       if (typeof Bus !== 'undefined' && typeof Bus.emit === 'function') {
         try { Bus.emit('history'); } catch {}
+        const emittedFinalRecord = chat.finalBattleRecord;
         setTimeout(() => {
           try {
             Bus.emit('eval:vote-revealed', {
               sid,
               chat,
-              modelA: { id: modelAId, name: modelAName },
-              modelB: { id: modelBId, name: modelBName },
+              attemptId: emittedFinalRecord?.attemptId || null,
+              messageAId: msgA.id,
+              messageBId: msgB.id,
+              finalRecord: emittedFinalRecord || null,
+              modelA: { id: modelAId, name: modelAName, messageId: msgA.id, contentDigest: emittedFinalRecord?.sideA?.contentDigest || null },
+              modelB: { id: modelBId, name: modelBName, messageId: msgB.id, contentDigest: emittedFinalRecord?.sideB?.contentDigest || null },
               value: voteValue,
               fromHistory: false,
             });
@@ -3575,17 +3656,25 @@ const EvalEngine = (() => {
     const startNow = Date.now();
     if (!Array.isArray(targetMsg._versionArchive)) targetMsg._versionArchive = [];
     if ((Array.isArray(targetMsg.parts) && targetMsg.parts.length) || targetMsg.content || targetMsg.webdev?.files?.length) {
+      const clonedArchiveParts = Array.isArray(targetMsg.parts) ? JSON.parse(JSON.stringify(targetMsg.parts)) : [];
+      const clonedArchiveWebdev = targetMsg.webdev ? JSON.parse(JSON.stringify(targetMsg.webdev)) : undefined;
       targetMsg._versionArchive.push({
+        originalMessageId: targetMsg.id || null,
+        attemptSeq: Number(targetMsg.retryRegenerationCount) || 0,
         v: targetMsg.v || 0,
         at: startNow,
         status: targetMsg.status || 'ready',
-        parts: Array.isArray(targetMsg.parts) ? targetMsg.parts.map(p => ({ ...p })) : [],
+        parts: clonedArchiveParts,
         content: targetMsg.content || '',
         reasoning: targetMsg.reasoning || '',
-        webdev: targetMsg.webdev ? JSON.parse(JSON.stringify(targetMsg.webdev)) : undefined,
+        webdev: clonedArchiveWebdev,
+        artifactManifest: Array.isArray(clonedArchiveWebdev?.files) ? clonedArchiveWebdev.files.map(f => ({ path: String(f?.path || ''), size: String(f?.content || '').length })) : [],
+        modelId: targetMsg.modelId || null,
+        revealedModelName: targetMsg.revealedModelName || null,
       });
     }
     targetMsg.retryRegenerationCount = (targetMsg.retryRegenerationCount || 0) + 1;
+    if (chat.finalBattleRecord) delete chat.finalBattleRecord;
     targetMsg.parts = [];
     targetMsg.content = '';
     targetMsg.reasoning = '';
@@ -3767,8 +3856,8 @@ const EvalEngine = (() => {
       try {
         if (chat.evalMode === 'battle' && typeof ChatHabitFingerprint !== 'undefined' && typeof ChatHabitFingerprint.analyzeBattleChat === 'function') {
           ChatHabitFingerprint.analyzeBattleChat(chat);
-          if (hasValidOutput && targetMsg.status !== 'failed' && !opts?.skipAutoLearn && chat.voteState?.voted && chat.voteState.modelAName && chat.voteState.modelBName && typeof ChatHabitFingerprint.learnBattleReveal === 'function') {
-            ChatHabitFingerprint.learnBattleReveal(chat, { modelA: { name: chat.voteState.modelAName }, modelB: { name: chat.voteState.modelBName }, vote: chat.voteState.value || 'tie', forceResync: true });
+          if (hasValidOutput && targetMsg.status !== 'failed' && opts?.allowRetryAutoLearn === true && !opts?.skipAutoLearn && chat.finalBattleRecord && chat.voteState?.voted && chat.voteState.modelAName && chat.voteState.modelBName && typeof ChatHabitFingerprint.learnBattleReveal === 'function') {
+            ChatHabitFingerprint.learnBattleReveal(chat, { finalRecord: chat.finalBattleRecord, modelA: { name: chat.voteState.modelAName }, modelB: { name: chat.voteState.modelBName }, vote: chat.voteState.value || 'tie', forceResync: true });
           }
         } else if (chat.evalMode === 'direct' && chat.modelAId && typeof ChatHabitFingerprint !== 'undefined' && typeof ChatHabitFingerprint.learnDirectSession === 'function') {
           const mName = chat.directModelName || ModelCatalog.resolveModelName(chat.modelAId, chat.revealedModels || []);

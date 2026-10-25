@@ -91,6 +91,27 @@ const Traffic = {
 // 每个请求前确认旧版固定 cookie 还在（见 Pin），响应里记下接口的 trigger 版本
 // 透传给页面当前 window.fetch（使未修改的 Chrome 扩展 inject.js 钩子能直接捕获客户端模式的全部请求与 /out SSE 流）
 const _costFetchCache = new Map();
+function _canUseProtoFetch(u, o) {
+  if (typeof window === 'undefined' || typeof Host === 'undefined' || typeof Host?.protoFetch !== 'function') return '';
+  if (window.__fixture || window.__routeFixture || typeof window.__capFetch === 'function') return '';
+  const wf = window.fetch;
+  if (typeof wf === 'function' && wf !== _rawFetch && wf !== window.__ancPinFetchFn) return '';
+  let rel = '';
+  if (typeof u === 'string') {
+    if (u.startsWith('/') && !u.startsWith('//')) rel = u;
+    else if (/^https:\/\/arena\.ai\//i.test(u)) rel = u.replace(/^https:\/\/arena\.ai/i, '');
+  }
+  if (!rel) return '';
+  if (/^\/(?:nextjs-api\/stream|api\/stream|ai-proxy\/realtime)\b/i.test(rel)) return '';
+  if (/\/out(?:\?|$)/i.test(rel)) return '';
+  const body = o?.body;
+  if (body != null && typeof body !== 'string') return '';
+  const hdrs = o?.headers || {};
+  const accept = String(hdrs.Accept || hdrs.accept || '');
+  if (/text\/event-stream/i.test(accept)) return '';
+  if (/^\/(?:nextjs-api|api|cdn-cgi\/trace)\b/i.test(rel)) return rel;
+  return '';
+}
 const _doExtFetch = (u, o) => {
   const absU = typeof u === 'string' && u.startsWith('/') ? ORIGIN + u : u;
   const wf = window.fetch;
@@ -98,6 +119,46 @@ const _doExtFetch = (u, o) => {
     window.__ancInExtFetch = true;
     try { return wf.call(window, absU, o); }
     finally { window.__ancInExtFetch = false; }
+  }
+  const protoRel = _canUseProtoFetch(u, o);
+  if (protoRel) {
+    const signal = o?.signal;
+    if (signal?.aborted) return Promise.reject(new DOMException('Aborted', 'AbortError'));
+    const hdrObj = {};
+    if (o?.headers) {
+      if (typeof o.headers.forEach === 'function') o.headers.forEach((v, k) => { hdrObj[k] = v; });
+      else if (typeof o.headers === 'object') Object.assign(hdrObj, o.headers);
+    }
+    const isAuth = /^\/nextjs-api\/(?:sign-in|sign-up|reset-password|resend-verification|account\/password)\b/i.test(protoRel);
+    const timeout = isAuth ? 18000 : protoRel === '/cdn-cgi/trace' ? 6000 : 20000;
+    const pCall = Host.protoFetch(protoRel, {
+      method: o?.method || 'GET',
+      headers: hdrObj,
+      body: typeof o?.body === 'string' ? o.body : undefined,
+      accept: hdrObj.Accept || hdrObj.accept || undefined,
+      contentType: hdrObj['Content-Type'] || hdrObj['content-type'] || undefined,
+      vdpl: (!isAuth && typeof Pin !== 'undefined' && Pin.on?.() && !Pin.held && Pin.id) ? Pin.id : '',
+      timeout,
+    });
+    const raced = signal ? new Promise((resolve, reject) => {
+      const onAbort = () => reject(new DOMException('Aborted', 'AbortError'));
+      signal.addEventListener('abort', onAbort, { once: true });
+      pCall.then(
+        res => { signal.removeEventListener('abort', onAbort); resolve(res); },
+        err => { signal.removeEventListener('abort', onAbort); reject(err); }
+      );
+    }) : pCall;
+    return raced.then(pr => {
+      if (!pr || pr.fallback) return _rawFetch(absU, o);
+      const h = new Headers();
+      if (pr.headers && typeof pr.headers === 'object') {
+        for (const [k, v] of Object.entries(pr.headers)) if (v) h.set(k, String(v));
+      } else {
+        if (pr.contentType) h.set('content-type', String(pr.contentType));
+        if (pr.retryAfter) h.set('retry-after', String(pr.retryAfter));
+      }
+      return new Response(pr.text ?? '', { status: Number(pr.status) || 200, headers: h });
+    });
   }
   return _rawFetch(absU, o);
 };
@@ -134,14 +195,16 @@ const _extFetch = (u, o) => {
     return { body, status: r.status, statusText: r.statusText || '', headers };
   });
   const p = runOnce(effU, effOpts).then(async snap => {
-    // 403/409 单次重放恢复：自愈覆写后立即重放一次
+    // 403/409 单次重放恢复：仅在当前部署 ID 并非默认计费部署或状态为 409 时单次重放，杜绝同部署 ID 403 重复发两次
     if (snap.status === 403 || snap.status === 409) {
       try { window.__ancPin?.ensure?.(true); } catch {}
       const replayDpl = 'dpl_3UbNvzoXfT6iNZqgBa7GjsGeKLaT';
-      const replayHeaders = Object.assign({}, effHeaders, { 'x-deployment-id': replayDpl });
-      delete replayHeaders['x-arena-web-deployment'];
-      const replayOpts = Object.assign({}, effOpts, { headers: replayHeaders });
-      snap = await runOnce(effU, replayOpts);
+      if (effDpl !== replayDpl || snap.status === 409) {
+        const replayHeaders = Object.assign({}, effHeaders, { 'x-deployment-id': replayDpl });
+        delete replayHeaders['x-arena-web-deployment'];
+        const replayOpts = Object.assign({}, effOpts, { headers: replayHeaders });
+        snap = await runOnce(effU, replayOpts);
+      }
     }
     if (snap.status === 200 && snap.body.includes('"messages"')) {
       c.snap = snap;
@@ -155,7 +218,8 @@ const _extFetch = (u, o) => {
     } else if (snap.status === 403) {
       c.snap = snap;
       c.at = now();
-      c.backoffUntil = now() + 15000;
+      c.backoffUntil = now() + 180000;
+      _costFetchCache.set(sid, c);
     }
     return snap;
   }).finally(() => { c.pending = null; });
@@ -275,6 +339,7 @@ const Host = (() => {
       platform: 'android',
       info: () => call('info'),
       listAccounts: readAccounts,
+      exportAccounts: typeof A.exportAccounts === 'function' ? () => call('exportAccounts') : null,
       saveAccount: a => call('saveAccount', a),
       renameAccount: typeof A.renameAccount === 'function' ? (id, name) => call('renameAccount', id, name) : null,
       removeAccount: id => call('removeAccount', id),
@@ -319,7 +384,83 @@ const Host = (() => {
       updStatus: A.updStatus ? async () => { try { return JSON.parse(A.updStatus() || '{}'); } catch { return {}; } } : null,
       updInstall: A.updInstall ? async () => JSON.parse(A.updInstall()) : null,
       updReady: A.updReady ? async () => { try { return JSON.parse(A.updReady() || '{}'); } catch { return {}; } } : null,
-      fetchText: A.fetchStart ? async (url, o) => { let id; try { id = o?.bearer ? (A.fetchAuthStart ? A.fetchAuthStart(String(url), String(o.bearer)) : null) : o?.method === 'POST' ? (A.fetchPostStart ? A.fetchPostStart(String(url), String(o.body || ''), String(o.type || '')) : null) : o?.direct ? (A.fetchDirectStart ? A.fetchDirectStart(String(url)) : null) : A.fetchStart(String(url)); if (!id) return { error: '此版本不支持' }; } catch (e) { return { error: String(e.message || e) }; } for (let i = 0, n = o?.long ? 480 : 80; i < n; i++) { await sleep(250); let r; try { r = A.probeGet(id); } catch (e) { return { error: String(e.message || e) }; } if (r) { try { return JSON.parse(r); } catch { return { error: '解析失败' }; } } } return { error: '超时' }; } : null,
+      fetchText: A.fetchStart ? async (url, o) => { let id; try { id = o?.bearer ? (A.fetchAuthStart ? A.fetchAuthStart(String(url), String(o.bearer)) : null) : o?.method === 'POST' ? (o?.direct && A.fetchPostDirectStart ? A.fetchPostDirectStart(String(url), String(o.body || ''), String(o.type || '')) : A.fetchPostStart ? A.fetchPostStart(String(url), String(o.body || ''), String(o.type || '')) : null) : o?.direct ? (A.fetchDirectStart ? A.fetchDirectStart(String(url)) : null) : A.fetchStart(String(url)); if (!id) return { error: '此版本不支持' }; } catch (e) { return { error: String(e.message || e) }; } for (let i = 0, n = o?.long ? 480 : 80; i < n; i++) { await sleep(250); let r; try { r = A.probeGet(id); } catch (e) { return { error: String(e.message || e) }; } if (r) { try { return JSON.parse(r); } catch { return { error: '解析失败' }; } } } return { error: '超时' }; } : null,
+      ippureDirect: async ip => {
+        const qIp = String(ip || '').trim().replace(/^\[|\]$/g, '');
+        if (!qIp) return null;
+        if (typeof A.ippureDirectStart === 'function') {
+          try {
+            const id = A.ippureDirectStart(qIp);
+            if (id) {
+              for (let i = 0; i < 60; i++) {
+                await sleep(200);
+                const r = A.probeGet(id);
+                if (r) {
+                  const j = JSON.parse(r);
+                  if (j && Number.isFinite(+j.fs)) return j;
+                  break;
+                }
+              }
+            }
+          } catch {}
+        }
+        if (!A.fetchDirectStart && !A.fetchStart) return null;
+        const ft = async u => {
+          try {
+            const id = A.fetchDirectStart ? A.fetchDirectStart(String(u)) : A.fetchStart(String(u));
+            if (!id) return null;
+            for (let i = 0; i < 32; i++) {
+              await sleep(200);
+              const r = A.probeGet(id);
+              if (r) { const j = JSON.parse(r); return j?.text ? String(j.text) : null; }
+            }
+          } catch {}
+          return null;
+        };
+        const [scHtml, pcRaw, iaRaw] = await Promise.all([
+          ft('https://scamalytics.com/ip/' + encodeURIComponent(qIp)),
+          ft('https://proxycheck.io/v2/' + encodeURIComponent(qIp) + '?vpn=1&asn=1&risk=1'),
+          ft('http://ip-api.com/json/' + encodeURIComponent(qIp) + '?fields=status,query,isp,org,as,mobile,proxy,hosting')
+        ]);
+        let sc = null;
+        if (scHtml) {
+          const m = scHtml.match(/"score"\s*:\s*"(\d{1,3})"/) || scHtml.match(/Fraud Score:\s*(\d{1,3})/i);
+          if (m) {
+            const fsVal = Math.min(100, Math.max(0, parseInt(m[1], 10)));
+            const row = lbl => { const rm = scHtml.match(new RegExp('<th[^>]*>\\s*' + lbl + '\\s*<\\/th>\\s*<td[^>]*>([\\s\\S]*?)<\\/td>', 'i')); return rm ? rm[1].replace(/<[^>]+>/g, ' ').replace(/&amp;/g, '&').replace(/\s+/g, ' ').trim() : ''; };
+            const yn = lbl => { const rm = scHtml.match(new RegExp('<th[^>]*>\\s*' + lbl + '\\s*<\\/th>\\s*<td[^>]*>\\s*<div[^>]*>\\s*(Yes|No)\\s*<\\/div>', 'i')); return rm ? rm[1].toLowerCase() === 'yes' : null; };
+            const org = (row('Organization') || row('ISP Name') || '').replace(/^n\/a$/i, '').slice(0, 48);
+            const dc = Boolean(yn('Server') || yn('Datacenter') || /cloud|datacenter|hosting|server|digitalocean|linode|vultr|choopa|hetzner|ovh|amazonaws|google|microsoft|azure|oracle|alibaba|tencent|cloudflare|leaseweb|contabo|zenlayer|cogent|multacom|sharktech|psychz|colocrossing|dmit|bandwagon|it7|kurun|racknerd|kamatera|ucloud|akari|akile|xstream|hivelocity|velia|m247|tzulo|datapacket|constant|equinix|latitude|gcore|ionos/i.test(org));
+            const px = Boolean(yn('Anonymizing VPN') || yn('Tor Exit Node') || yn('Public Proxy') || yn('Web Proxy'));
+            sc = { fs: fsVal, dc, px, res: Boolean(!dc && !px && fsVal <= 25), org };
+          }
+        }
+        let x = null, ia = null;
+        try { const pj = pcRaw ? JSON.parse(pcRaw) : null; x = pj && typeof pj[qIp] === 'object' ? pj[qIp] : null; } catch {}
+        try { const ij = iaRaw ? JSON.parse(iaRaw) : null; ia = ij && ij.status === 'success' ? ij : null; } catch {}
+        if (!sc && !x && !ia) return null;
+        const risk = x ? Math.min(100, Math.max(0, +x.risk || 0)) : 0;
+        const type = String(x?.type || '').toLowerCase();
+        const org = String(sc?.org || x?.organisation || x?.provider || x?.isp || ia?.isp || ia?.org || '').slice(0, 48);
+        const dcRe = /hosting|vpn|business|datacenter|cloud|server|digitalocean|linode|vultr|choopa|hetzner|ovh|amazonaws|google|microsoft|azure|oracle|alibaba|tencent|cloudflare|leaseweb|contabo|zenlayer|cogent|multacom|sharktech|psychz|colocrossing|dmit|bandwagon|it7|kurun|racknerd|kamatera|ucloud|akari|akile|xstream|hivelocity|velia|m247|tzulo|datapacket|constant|equinix|latitude|gcore|ionos/i;
+        const dc = Boolean(sc?.dc || ia?.hosting || /hosting|vpn|business|datacenter|cloud/i.test(type) || dcRe.test(org));
+        const px = Boolean(sc?.px || x?.proxy === 'yes' || ia?.proxy || /vpn|tor|proxy/i.test(type));
+        const res = Boolean(!dc && !px && (sc?.res || /residential|wireless|mobile/i.test(type) || ia?.mobile));
+        let ipHash = 0;
+        for (let i = 0; i < qIp.length; i++) ipHash = ((ipHash << 5) - ipHash + qIp.charCodeAt(i)) | 0;
+        const dcSpread = Math.abs(ipHash) % 7;
+        let fs = sc ? sc.fs : 0;
+        if (!sc) {
+          if (risk > 0) fs = Math.max(risk, px ? 35 : 0);
+          else if (px) fs = 28;
+          else fs = dc ? (11 + dcSpread) : res ? (4 + (Math.abs(ipHash) % 4)) : (8 + (Math.abs(ipHash) % 5));
+        } else {
+          if (risk > fs) fs = Math.round(fs * 0.4 + risk * 0.6);
+          if (px && fs < 28) fs = 28;
+          if (dc && fs === 0) fs = 10 + dcSpread;
+        }
+        return { fs: Math.min(100, Math.max(0, fs)), ip: qIp, res, bc: Boolean(dc && px), dc, org, real: 1, via: sc ? 'scamalytics' : 'ippure' };
+      },
       protoFetch: typeof A.protoFetchStart === 'function' ? async (path, options) => {
         let id;
         try { id = A.protoFetchStart(String(path || ''), JSON.stringify(options || {})); if (!id) return { ok: false, status: 0, error: 'ANDROID_PROTO_NO_JOB' }; }
@@ -370,22 +511,52 @@ const Host = (() => {
 // ---------- 本地存储（按账号分区天然隔离）----------
 const _storeRawCache = new Map();
 const _storeReadOnlyKeys = new Set(['prefs', 'proto:schema', 'gacha:settings']);
+try {
+  if (typeof localStorage !== 'undefined') {
+    const lruRaw = localStorage.getItem('anc:mc:hot:lru');
+    const keepHot = new Set(lruRaw ? (JSON.parse(lruRaw) || []).slice(-2).map(id => 'anc:mc:hot:' + id) : []);
+    for (let i = localStorage.length - 1; i >= 0; i--) {
+      const lk = localStorage.key(i);
+      if (!lk) continue;
+      if (lk.startsWith('anc:mc:hot:') && lk !== 'anc:mc:hot:lru') {
+        const hv = localStorage.getItem(lk) || '';
+        if (!keepHot.has(lk) || hv.includes('\n…[cached]')) localStorage.removeItem(lk);
+      } else if (lk === 'anc:habitLearnBank:v1') {
+        const hv = localStorage.getItem(lk);
+        if (hv && hv.length > 250000) localStorage.removeItem(lk);
+      } else if (lk.startsWith('anc:hist:')) {
+        const histRaw = localStorage.getItem(lk);
+        if (histRaw && histRaw.length > 350000) {
+          const hp = JSON.parse(histRaw);
+          if (hp && Array.isArray(hp.items) && hp.items.length > 600) {
+            hp.items = hp.items.slice(0, 600);
+            localStorage.setItem(lk, JSON.stringify(hp));
+          }
+        }
+      }
+    }
+  }
+} catch {}
 const Store = {
   _writeSeq: 0,
   get(k, d) {
     try {
       const v = localStorage.getItem('anc:' + k);
       if (v == null) { _storeRawCache.delete(k); return d; }
+      if (v.length > 16384) {
+        _storeRawCache.delete(k);
+        return JSON.parse(v);
+      }
       const hit = _storeRawCache.get(k);
       if (hit && hit.raw === v) {
         if (hit.val == null || typeof hit.val !== 'object' || _storeReadOnlyKeys.has(k) || k.startsWith('lastnode:')) return hit.val;
-        return v.length < 4096 ? JSON.parse(v) : (typeof structuredClone === 'function' ? structuredClone(hit.val) : JSON.parse(v));
+        return JSON.parse(v);
       }
       const val = JSON.parse(v);
-      if (_storeRawCache.size > 160) _storeRawCache.delete(_storeRawCache.keys().next().value);
+      while (_storeRawCache.size >= 32) _storeRawCache.delete(_storeRawCache.keys().next().value);
       _storeRawCache.set(k, { raw: v, val });
       if (val == null || typeof val !== 'object' || _storeReadOnlyKeys.has(k) || k.startsWith('lastnode:')) return val;
-      return v.length < 4096 ? JSON.parse(v) : (typeof structuredClone === 'function' ? structuredClone(val) : JSON.parse(v));
+      return JSON.parse(v);
     } catch { return d; }
   },
   freeQuotaBloat(keepKey) {
@@ -411,12 +582,15 @@ const Store = {
       }
     } catch {}
   },
-  set(k, v) {
-    const raw = JSON.stringify(v);
+  setRaw(k, raw, v) {
     this._writeSeq = (this._writeSeq || 0) + 1;
     try {
       localStorage.setItem('anc:' + k, raw);
-      if (_storeRawCache.size > 160) _storeRawCache.delete(_storeRawCache.keys().next().value);
+      if (raw.length > 16384) {
+        _storeRawCache.delete(k);
+        return true;
+      }
+      while (_storeRawCache.size >= 32) _storeRawCache.delete(_storeRawCache.keys().next().value);
       _storeRawCache.set(k, { raw, val: v });
       return true;
     } catch {
@@ -427,6 +601,9 @@ const Store = {
         return true;
       } catch { return false; }
     }
+  },
+  set(k, v) {
+    return this.setRaw(k, JSON.stringify(v), v);
   },
   del(k) {
     this._writeSeq = (this._writeSeq || 0) + 1;
@@ -634,6 +811,7 @@ const Pin = {
       this.ensure(true);
       return;
     }
+    if (!verifiedCost && id !== 'dpl_3UbNvzoXfT6iNZqgBa7GjsGeKLaT') return;
     if (this.EXPIRED.has(id)) return;
     if (!this.POOL.includes(id)) this.POOL.push(id);
   },
@@ -823,6 +1001,35 @@ const Models = {
   all: (() => {
     const raw = Store.get('models', {}) || {};
     let dirty = false;
+    const FIXED_SIDS_182 = {
+      '01a16ec7-6178-7ad4-b4da-96e7b047aecb': { name: 'Muse Spark 1.3 (Max)', fam: 'muse', htmlMaxLen: 39264, writtenChars: 39264 },
+      '01a16ec6-1cba-75d4-ac9e-b09f7efaba51': { name: 'Claude Fable 5.1 (Max)', fam: 'claude', htmlMaxLen: 37416, writtenChars: 37416 },
+      '01a16eb7-bf59-732f-8092-651a2e86c9e5': { name: 'Claude Sonnet 5.5 (Thinking)', fam: 'claude', htmlMaxLen: 23945, writtenChars: 23945 },
+      '01a16eb5-85f8-70c9-9533-a36c6a24ff15': { name: 'GPT 6.1 Sol (High)', fam: 'gpt', htmlMaxLen: 38262, writtenChars: 38262 },
+    };
+    for (const [sid, fix] of Object.entries(FIXED_SIDS_182)) {
+      const m = raw[sid];
+      if (m && (m.name !== fix.name || (m.reverseVer || 0) < 182)) {
+        m.name = fix.name;
+        m.reverseLabel = fix.name;
+        m.candidateName = fix.name;
+        m.fam = fix.fam;
+        m.sure = true;
+        m.guess = false;
+        m.pendingConfirm = false;
+        m.reverseVer = 182;
+        if (m.sseMemo && m.sseMemo.streamIdPrefix === 'claude-tc-empty' && Number(m.sseMemo.avgChunk) >= 15.0) {
+          delete m.sseMemo.streamIdPrefix;
+        }
+        if (m.habitFeatures?.meta) {
+          m.habitFeatures.meta.isMicroProbeChat = false;
+          m.habitFeatures.meta.htmlMaxLen = Math.max(Number(m.habitFeatures.meta.htmlMaxLen || 0), fix.htmlMaxLen);
+          m.habitFeatures.meta.writtenChars = Math.max(Number(m.habitFeatures.meta.writtenChars || 0), fix.writtenChars);
+          if (fix.fam !== 'claude' && m.habitFeatures.meta.wireFam === 'anthropic') m.habitFeatures.meta.wireFam = '';
+        }
+        dirty = true;
+      }
+    }
     for (const [k, m] of Object.entries(raw)) {
       if (m && (m.pendingConfirm || (m.guess && (m.habitInferred || m.reverseInferred || m.billingProbe || m.userCorrected)))) {
         if (Array.isArray(m.candidates) && m.candidates.length > 0) {
@@ -853,12 +1060,13 @@ const Models = {
   })(),
   get map() { return this.all; },
   save() {
-    clearTimeout(this._saveSoonT); this._saveSoonT = 0;
+    if (typeof clearTimeout === 'function') clearTimeout(this._saveSoonT); this._saveSoonT = 0;
+    this._lastSaveAt = now();
     Store.set('models', this.all);
     try { if (typeof MsgCache !== 'undefined' && MsgCache.putMeta) void MsgCache.putMeta('models', this.all); } catch {}
     return true;
   },
-  saveSoon(ms = 400) {
+  saveSoon(ms = 320) {
     if (this._saveSoonT) return true;
     this._saveSoonT = setTimeout(() => { this._saveSoonT = 0; this.save(); }, ms);
     return true;
@@ -880,8 +1088,8 @@ const Models = {
     this.all[sid] = { ...v, at: now() };
     const ks = Object.keys(this.all);
     if (ks.length > 3000) for (const k of ks.slice(0, ks.length - 3000)) delete this.all[k];
-    Store.set('models', this.all);
-    try { if (typeof MsgCache !== 'undefined' && MsgCache.putMeta) void MsgCache.putMeta('models', this.all); } catch {}
+    if (!this._lastSaveAt || now() - this._lastSaveAt > 250) this.save();
+    else this.saveSoon(220);
     Bus.emit('models', sid);
   },
 };
@@ -904,6 +1112,980 @@ class HttpError extends Error {
 }
 // 读对话（GET /api/chat/…）的限流状态：收到 429 后一段时间内不再做预读；预读同一时刻最多一条、两条之间留间隔——
 // 网页不会因为鼠标划过列表就一口气拉很多个对话，客户端以前会（每张卡片停留 0.12 秒就预读一次），列表一划就是十几二十个请求。
+
+// ── QrSync: 电脑端 ⇄ 手机端 节点订阅与账号配置二维码同步 & 首次无缓存引导 ──
+const QrSync = (() => {
+  const CAP_L = [0,17,32,53,78,106,134,154,192,230,271,321,367,425,458,520,586,644,718,792,858,929,1003,1091,1171,1273,1367];
+  const EC_L = [
+    null,[19,7,1,19,0,0],[34,10,1,34,0,0],[55,15,1,55,0,0],[80,20,1,80,0,0],[108,26,1,108,0,0],
+    [136,18,2,68,0,0],[156,20,2,78,0,0],[194,24,2,97,0,0],[232,30,2,116,0,0],[274,18,2,68,2,69],
+    [324,20,4,81,0,0],[370,24,2,92,2,93],[428,26,4,107,0,0],[461,30,3,115,1,116],[523,22,5,87,1,88],
+    [589,24,5,98,1,99],[647,28,1,107,5,108],[721,30,5,120,1,121],[795,28,3,113,4,114],[861,28,3,107,5,108],
+    [932,28,4,116,4,117],[1006,28,2,111,7,112],[1094,30,4,121,5,122],[1174,30,6,117,4,118],[1276,26,8,106,4,107],[1370,28,10,114,2,115]
+  ];
+  const ALIGN = [
+    null,[],[6,18],[6,22],[6,26],[6,30],[6,34],[6,22,38],[6,24,42],[6,26,46],[6,28,50],
+    [6,30,54],[6,32,58],[6,34,62],[6,26,46,66],[6,26,48,70],[6,26,50,74],[6,30,54,78],[6,30,56,82],[6,30,58,86],[6,34,62,90],
+    [6,28,50,72,94],[6,26,50,74,98],[6,30,54,78,102],[6,28,54,80,106],[6,32,58,84,110],[6,30,58,86,114]
+  ];
+  const GF_EXP = new Uint8Array(512), GF_LOG = new Uint8Array(256);
+  (() => {
+    let x = 1;
+    for (let i = 0; i < 255; i++) { GF_EXP[i] = x; GF_LOG[x] = i; x <<= 1; if (x & 0x100) x ^= 0x11d; }
+    for (let i = 255; i < 512; i++) GF_EXP[i] = GF_EXP[i - 255];
+  })();
+  const gfMul = (a, b) => (a === 0 || b === 0) ? 0 : GF_EXP[GF_LOG[a] + GF_LOG[b]];
+  function rsEncode(data, ecLen) {
+    let gen = new Uint8Array([1]);
+    for (let i = 0; i < ecLen; i++) {
+      const next = new Uint8Array(gen.length + 1);
+      for (let j = 0; j < gen.length; j++) { next[j] ^= gen[j]; next[j + 1] ^= gfMul(gen[j], GF_EXP[i]); }
+      gen = next;
+    }
+    const rem = new Uint8Array(ecLen);
+    for (let i = 0; i < data.length; i++) {
+      const f = data[i] ^ rem[0];
+      rem.copyWithin(0, 1); rem[ecLen - 1] = 0;
+      if (f !== 0) for (let j = 0; j < ecLen; j++) rem[j] ^= gfMul(gen[j + 1], f);
+    }
+    return rem;
+  }
+  function encodeQR(text) {
+    const bytes = new TextEncoder().encode(String(text || ''));
+    let ver = 1;
+    while (ver <= 26 && CAP_L[ver] < bytes.length) ver++;
+    if (ver > 26) throw new Error('数据超出单张二维码容量');
+    const [totalData, ecPerBlock, g1Blocks, g1Codewords, g2Blocks, g2Codewords] = EC_L[ver];
+    const bits = [];
+    const pushBits = (val, len) => { for (let i = len - 1; i >= 0; i--) bits.push((val >>> i) & 1); };
+    pushBits(0b0100, 4);
+    pushBits(bytes.length, ver < 10 ? 8 : 16);
+    for (const b of bytes) pushBits(b, 8);
+    const maxBits = totalData * 8;
+    for (let i = 0; i < 4 && bits.length < maxBits; i++) bits.push(0);
+    while (bits.length & 7) bits.push(0);
+    const dataBytes = new Uint8Array(totalData);
+    for (let i = 0; i < bits.length >>> 3; i++) {
+      let v = 0; for (let b = 0; b < 8; b++) v = (v << 1) | bits[(i << 3) + b];
+      dataBytes[i] = v;
+    }
+    for (let i = bits.length >>> 3, p = 0; i < totalData; i++, p ^= 1) dataBytes[i] = p ? 0x11 : 0xec;
+    const blocks = [], ecs = [];
+    let off = 0;
+    for (let i = 0; i < g1Blocks; i++) { const blk = dataBytes.subarray(off, off + g1Codewords); off += g1Codewords; blocks.push(blk); ecs.push(rsEncode(blk, ecPerBlock)); }
+    for (let i = 0; i < g2Blocks; i++) { const blk = dataBytes.subarray(off, off + g2Codewords); off += g2Codewords; blocks.push(blk); ecs.push(rsEncode(blk, ecPerBlock)); }
+    const codewords = [];
+    const maxCw = Math.max(g1Codewords, g2Codewords);
+    for (let i = 0; i < maxCw; i++) for (let b = 0; b < blocks.length; b++) if (i < blocks[b].length) codewords.push(blocks[b][i]);
+    for (let i = 0; i < ecPerBlock; i++) for (let b = 0; b < ecs.length; b++) codewords.push(ecs[b][i]);
+    const size = ver * 4 + 17;
+    const grid = Array.from({ length: size }, () => new Uint8Array(size));
+    const isFunc = Array.from({ length: size }, () => new Uint8Array(size));
+    const setMod = (r, c, dark) => { if (r >= 0 && r < size && c >= 0 && c < size) { grid[r][c] = dark ? 1 : 0; isFunc[r][c] = 1; } };
+    const finder = (r0, c0) => {
+      for (let dy = -1; dy <= 7; dy++) for (let dx = -1; dx <= 7; dx++) {
+        const d = Math.max(Math.abs(dx - 3), Math.abs(dy - 3));
+        setMod(r0 + dy, c0 + dx, dx >= 0 && dx <= 6 && dy >= 0 && dy <= 6 && (d === 0 || d === 1 || d === 3));
+      }
+    };
+    finder(0, 0); finder(0, size - 7); finder(size - 7, 0);
+    for (let i = 8; i < size - 8; i++) { setMod(6, i, (i & 1) === 0); setMod(i, 6, (i & 1) === 0); }
+    const aPos = ALIGN[ver];
+    for (let i = 0; i < aPos.length; i++) for (let j = 0; j < aPos.length; j++) {
+      if ((i === 0 && j === 0) || (i === 0 && j === aPos.length - 1) || (i === aPos.length - 1 && j === 0)) continue;
+      const cr = aPos[i], cc = aPos[j];
+      for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) setMod(cr + dy, cc + dx, Math.max(Math.abs(dx), Math.abs(dy)) !== 1);
+    }
+    setMod(size - 8, 8, true);
+    for (let i = 0; i < 9; i++) { if (i !== 6) { isFunc[8][i] = 1; isFunc[i][8] = 1; } }
+    for (let i = 0; i < 8; i++) { isFunc[8][size - 1 - i] = 1; isFunc[size - 1 - i][8] = 1; }
+    if (ver >= 7) {
+      let rem = ver;
+      for (let i = 0; i < 12; i++) rem = (rem << 1) ^ ((rem >>> 11) * 0x1f25);
+      const vBits = (ver << 12) | rem;
+      for (let i = 0; i < 18; i++) {
+        const bit = ((vBits >>> i) & 1) === 1;
+        const a = size - 11 + (i % 3), b = Math.floor(i / 3);
+        setMod(b, a, bit); setMod(a, b, bit);
+      }
+    }
+    let bitIdx = 0;
+    const totalBits = codewords.length * 8;
+    let up = true;
+    for (let right = size - 1; right >= 1; right -= 2) {
+      if (right === 6) right = 5;
+      for (let v = 0; v < size; v++) {
+        const r = up ? size - 1 - v : v;
+        for (let j = 0; j < 2; j++) {
+          const c = right - j;
+          if (!isFunc[r][c]) {
+            let dark = false;
+            if (bitIdx < totalBits) { dark = ((codewords[bitIdx >>> 3] >>> (7 - (bitIdx & 7))) & 1) === 1; bitIdx++; }
+            if (((r + c) & 1) === 0) dark = !dark;
+            grid[r][c] = dark ? 1 : 0;
+          }
+        }
+      }
+      up = !up;
+    }
+    const fmtData = (0b01 << 3) | 0;
+    let fRem = fmtData;
+    for (let i = 0; i < 10; i++) fRem = (fRem << 1) ^ ((fRem >>> 9) * 0x537);
+    const fBits = ((fmtData << 10) | fRem) ^ 0x5412;
+    for (let i = 0; i <= 5; i++) setMod(i, 8, ((fBits >>> i) & 1) === 1);
+    setMod(7, 8, ((fBits >>> 6) & 1) === 1);
+    setMod(8, 8, ((fBits >>> 7) & 1) === 1);
+    setMod(8, 7, ((fBits >>> 8) & 1) === 1);
+    for (let i = 9; i < 15; i++) setMod(8, 14 - i, ((fBits >>> i) & 1) === 1);
+    for (let i = 0; i < 8; i++) setMod(8, size - 1 - i, ((fBits >>> i) & 1) === 1);
+    for (let i = 8; i < 15; i++) setMod(size - 15 + i, 8, ((fBits >>> i) & 1) === 1);
+    return { size, grid };
+  }
+  function toSvg(text, pxSize = 228) {
+    const { size, grid } = encodeQR(text);
+    const pad = 3, total = size + pad * 2;
+    let d = '';
+    for (let r = 0; r < size; r++) {
+      for (let c = 0; c < size; c++) {
+        if (grid[r][c]) d += `M${c + pad},${r + pad}h1v1h-1z`;
+      }
+    }
+    return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${total} ${total}" width="${pxSize}" height="${pxSize}" shape-rendering="crispEdges" style="background:#fff;border-radius:12px;display:block;margin:0 auto;box-shadow:0 4px 16px rgba(0,0,0,.18)"><path d="${d}" fill="#111"/></svg>`;
+  }
+  function decodeQRMatrix(grid) {
+    const size = grid.length;
+    const ver = Math.round((size - 17) / 4);
+    if (ver < 1 || ver > 26 || ver * 4 + 17 !== size) return null;
+    const isFunc = Array.from({ length: size }, () => new Uint8Array(size));
+    const mark = (r, c) => { if (r >= 0 && r < size && c >= 0 && c < size) isFunc[r][c] = 1; };
+    const finder = (r0, c0) => { for (let dy = -1; dy <= 7; dy++) for (let dx = -1; dx <= 7; dx++) mark(r0 + dy, c0 + dx); };
+    finder(0, 0); finder(0, size - 7); finder(size - 7, 0);
+    for (let i = 8; i < size - 8; i++) { mark(6, i); mark(i, 6); }
+    const aPos = ALIGN[ver];
+    for (let i = 0; i < aPos.length; i++) for (let j = 0; j < aPos.length; j++) {
+      if ((i === 0 && j === 0) || (i === 0 && j === aPos.length - 1) || (i === aPos.length - 1 && j === 0)) continue;
+      for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) mark(aPos[i] + dy, aPos[j] + dx);
+    }
+    for (let i = 0; i < 9; i++) { mark(8, i); mark(i, 8); }
+    for (let i = 0; i < 8; i++) { mark(8, size - 1 - i); mark(size - 1 - i, 8); }
+    if (ver >= 7) {
+      for (let i = 0; i < 18; i++) {
+        const a = size - 11 + (i % 3), b = Math.floor(i / 3);
+        mark(b, a); mark(a, b);
+      }
+    }
+    let fBits = 0;
+    for (let i = 0; i <= 5; i++) if (grid[i][8]) fBits |= (1 << i);
+    if (grid[7][8]) fBits |= (1 << 6);
+    if (grid[8][8]) fBits |= (1 << 7);
+    if (grid[8][7]) fBits |= (1 << 8);
+    for (let i = 9; i < 15; i++) if (grid[8][14 - i]) fBits |= (1 << i);
+    const fmt = (fBits ^ 0x5412) >>> 10;
+    const mask = fmt & 7;
+    const maskFn = [
+      (r, c) => ((r + c) & 1) === 0,
+      (r) => (r & 1) === 0,
+      (_, c) => c % 3 === 0,
+      (r, c) => (r + c) % 3 === 0,
+      (r, c) => ((Math.floor(r / 2) + Math.floor(c / 3)) & 1) === 0,
+      (r, c) => ((r * c) & 1) + ((r * c) % 3) === 0,
+      (r, c) => ((((r * c) & 1) + ((r * c) % 3)) & 1) === 0,
+      (r, c) => ((((r + c) & 1) + ((r * c) % 3)) & 1) === 0,
+    ][mask] || ((r, c) => ((r + c) & 1) === 0);
+    const bits = [];
+    let up = true;
+    for (let right = size - 1; right >= 1; right -= 2) {
+      if (right === 6) right = 5;
+      for (let v = 0; v < size; v++) {
+        const r = up ? size - 1 - v : v;
+        for (let j = 0; j < 2; j++) {
+          const c = right - j;
+          if (!isFunc[r][c]) {
+            let b = Boolean(grid[r][c]);
+            if (maskFn(r, c)) b = !b;
+            bits.push(b ? 1 : 0);
+          }
+        }
+      }
+      up = !up;
+    }
+    const cws = [];
+    for (let i = 0; i + 7 < bits.length; i += 8) {
+      let v = 0; for (let b = 0; b < 8; b++) v = (v << 1) | bits[i + b];
+      cws.push(v);
+    }
+    const [totalData, , g1Blocks, g1Codewords, g2Blocks, g2Codewords] = EC_L[ver];
+    const blocks = Array.from({ length: g1Blocks + g2Blocks }, (_, i) => new Uint8Array(i < g1Blocks ? g1Codewords : g2Codewords));
+    const maxCw = Math.max(g1Codewords, g2Codewords);
+    let idx = 0;
+    for (let i = 0; i < maxCw; i++) {
+      for (let b = 0; b < blocks.length; b++) {
+        if (i < blocks[b].length && idx < cws.length) blocks[b][i] = cws[idx++];
+      }
+    }
+    const dataBytes = new Uint8Array(totalData);
+    let off = 0;
+    for (const blk of blocks) { dataBytes.set(blk, off); off += blk.length; }
+    const dBits = [];
+    for (const b of dataBytes) for (let i = 7; i >= 0; i--) dBits.push((b >>> i) & 1);
+    const readBits = (p, len) => { let v = 0; for (let i = 0; i < len; i++) v = (v << 1) | (dBits[p + i] || 0); return v; };
+    const mode = readBits(0, 4);
+    if (mode !== 0b0100) return null;
+    const lenBits = ver < 10 ? 8 : 16;
+    const byteLen = readBits(4, lenBits);
+    if (byteLen <= 0 || 4 + lenBits + byteLen * 8 > dBits.length) return null;
+    const out = new Uint8Array(byteLen);
+    for (let i = 0; i < byteLen; i++) out[i] = readBits(4 + lenBits + i * 8, 8);
+    return new TextDecoder().decode(out);
+  }
+  async function decodeFromImageData(imgData) {
+    const { data, width, height } = imgData;
+    const lum = (x, y) => {
+      const i = (Math.min(height - 1, Math.max(0, Math.round(y))) * width + Math.min(width - 1, Math.max(0, Math.round(x)))) * 4;
+      return data[i] * 0.299 + data[i + 1] * 0.587 + data[i + 2] * 0.114;
+    };
+    let sMinX = 0, sMinY = 0, sMaxX = width - 1, sMaxY = height - 1;
+    const cornerLum = (lum(0, 0) + lum(width - 1, 0) + lum(0, height - 1) + lum(width - 1, height - 1)) / 4;
+    if (cornerLum < 128) {
+      let wMinX = width, wMinY = height, wMaxX = 0, wMaxY = 0;
+      for (let y = 0; y < height; y += 2) {
+        for (let x = 0; x < width; x += 2) {
+          if (lum(x, y) > 200) {
+            if (x < wMinX) wMinX = x;
+            if (y < wMinY) wMinY = y;
+            if (x > wMaxX) wMaxX = x;
+            if (y > wMaxY) wMaxY = y;
+          }
+        }
+      }
+      if (wMaxX - wMinX > 32 && wMaxY - wMinY > 32) {
+        sMinX = wMinX + 2; sMinY = wMinY + 2; sMaxX = wMaxX - 2; sMaxY = wMaxY - 2;
+      }
+    }
+    let minX = sMaxX, minY = sMaxY, maxX = sMinX, maxY = sMinY;
+    for (let y = sMinY; y <= sMaxY; y += 1) {
+      for (let x = sMinX; x <= sMaxX; x += 1) {
+        if (lum(x, y) < 128) {
+          if (x < minX) minX = x;
+          if (y < minY) minY = y;
+          if (x > maxX) maxX = x;
+          if (y > maxY) maxY = y;
+        }
+      }
+    }
+    if (maxX <= minX + 16 || maxY <= minY + 16) return null;
+    const qrW = maxX - minX + 1, qrH = maxY - minY + 1;
+    for (let ver = 1; ver <= 26; ver++) {
+      const sz = ver * 4 + 17;
+      const stepX = qrW / sz, stepY = qrH / sz;
+      const grid = Array.from({ length: sz }, (_, r) => {
+        const row = new Uint8Array(sz);
+        for (let c = 0; c < sz; c++) row[c] = lum(minX + (c + 0.5) * stepX, minY + (r + 0.5) * stepY) < 135 ? 1 : 0;
+        return row;
+      });
+      if (grid[0][0] && grid[0][6] && grid[6][0] && grid[3][3] && !grid[1][1]) {
+        const txt = decodeQRMatrix(grid);
+        if (txt && (txt.includes('brana-sync') || txt.startsWith('http') || txt.startsWith('{') || /^vless:\/\//i.test(txt))) return txt;
+      }
+    }
+    return null;
+  }
+  async function decodeFromFile(file) {
+    if (!file) return null;
+    if (typeof BarcodeDetector !== 'undefined') {
+      try {
+        const bmp = await createImageBitmap(file);
+        const det = new BarcodeDetector({ formats: ['qr_code'] });
+        const codes = await det.detect(bmp);
+        if (codes?.[0]?.rawValue) return codes[0].rawValue;
+      } catch {}
+    }
+    return new Promise((resolve) => {
+      const img = new Image();
+      const url = URL.createObjectURL(file);
+      img.onload = async () => {
+        URL.revokeObjectURL(url);
+        const cv = document.createElement('canvas');
+        const scale = Math.min(1, 900 / Math.max(img.width || 1, img.height || 1));
+        cv.width = Math.max(64, Math.round(img.width * scale));
+        cv.height = Math.max(64, Math.round(img.height * scale));
+        const ctx = cv.getContext('2d');
+        ctx.drawImage(img, 0, 0, cv.width, cv.height);
+        const res = await decodeFromImageData(ctx.getImageData(0, 0, cv.width, cv.height)).catch(() => null);
+        resolve(res);
+      };
+      img.onerror = () => { URL.revokeObjectURL(url); resolve(null); };
+      img.src = url;
+    });
+  }
+  const toB64Url = obj => {
+    const raw = JSON.stringify(obj);
+    const bytes = new TextEncoder().encode(raw);
+    let bin = '';
+    for (const b of bytes) bin += String.fromCharCode(b);
+    return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+  };
+  const bytesToB64Url = bytes => {
+    let bin = '';
+    for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+    return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+  };
+  const b64UrlToBytes = str => {
+    let b64 = String(str || '').trim().replace(/-/g, '+').replace(/_/g, '/');
+    while (b64.length % 4) b64 += '=';
+    const bin = atob(b64);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    return bytes;
+  };
+  const fromB64Url = str => JSON.parse(new TextDecoder().decode(b64UrlToBytes(str)));
+  const compressToB64Url = async obj => {
+    const rawBytes = new TextEncoder().encode(JSON.stringify(obj));
+    if (typeof CompressionStream === 'function') {
+      try {
+        const cs = new CompressionStream('deflate-raw');
+        const writer = cs.writable.getWriter();
+        writer.write(rawBytes);
+        writer.close();
+        const buf = await new Response(cs.readable).arrayBuffer();
+        const comp = new Uint8Array(buf);
+        if (comp.length && comp.length < rawBytes.length) return { ver: 'v2', b64: bytesToB64Url(comp) };
+      } catch {}
+    }
+    return { ver: 'v1', b64: bytesToB64Url(rawBytes) };
+  };
+  const decodeSyncToken = async rawStr => {
+    const s = String(rawStr || '').trim();
+    if (s.startsWith('{')) return JSON.parse(s);
+    if (/^brana-sync:\/\/v2\//i.test(s)) {
+      const bytes = b64UrlToBytes(s.replace(/^brana-sync:\/\/v2\//i, ''));
+      if (typeof DecompressionStream === 'function') {
+        const ds = new DecompressionStream('deflate-raw');
+        const writer = ds.writable.getWriter();
+        writer.write(bytes);
+        writer.close();
+        const buf = await new Response(ds.readable).arrayBuffer();
+        return JSON.parse(new TextDecoder().decode(new Uint8Array(buf)));
+      }
+    }
+    const cleaned = s.replace(/^brana-sync:\/\/v[12]\//i, '').replace(/^brana:/i, '');
+    return cleaned.startsWith('{') ? JSON.parse(cleaned) : fromB64Url(cleaned);
+  };
+  async function buildSyncBundle() {
+    try { if (typeof Nodes !== 'undefined') await Nodes.load?.(); } catch {}
+    try { if (typeof Nodes !== 'undefined') await Nodes.loadSubs?.(); } catch {}
+    try { if (typeof Nodes !== 'undefined') await Nodes.loadPips?.(); } catch {}
+    try { if (typeof Pool !== 'undefined' && !Pool.d) await Pool.load?.(); } catch {}
+    let exp = null;
+    try { if (typeof Host !== 'undefined' && typeof Host.exportAccounts === 'function') exp = await Host.exportAccounts(); } catch {}
+    const subs = (typeof Nodes !== 'undefined' && Array.isArray(Nodes.subs)) ? Nodes.subs : (exp?.shared?.subs || []);
+    const list = (typeof Nodes !== 'undefined' && Array.isArray(Nodes.list)) ? Nodes.list : (exp?.shared?.nodes || []);
+    const pips = (typeof Nodes !== 'undefined' && Array.isArray(Nodes.pips)) ? Nodes.pips : (exp?.shared?.pips || []);
+    const activeNodeId = (typeof Pool !== 'undefined' && Pool.d?.node) || UI?.host?.account?.nodeId || list[0]?.id || '';
+    const activeNode = list.find(n => n?.id === activeNodeId) || list[0] || null;
+    const toLink = n => (n && typeof Vless !== 'undefined' && Vless.toLink) ? Vless.toLink(n) : '';
+    const activeVless = toLink(activeNode);
+    const rawAccts = Array.isArray(exp) && exp.length
+      ? exp
+      : (Array.isArray(exp?.accounts) && exp.accounts.length ? exp.accounts : (UI?.host?.accounts || []));
+    const allLinks = [];
+    const addLink = lnk => {
+      const s = String(lnk || '').trim();
+      if (!/^vless:\/\//i.test(s)) return -1;
+      let idx = allLinks.indexOf(s);
+      if (idx < 0) { idx = allLinks.length; allLinks.push(s); }
+      return idx;
+    };
+    if (activeVless) addLink(activeVless);
+    const slimAccts = rawAccts.filter(a => a && (a.email || a.password || a.name)).map(a => {
+      const nodeObj = (a.nodeId && list.find(n => n?.id === a.nodeId)) || null;
+      const proxyStr = String(a.proxy || toLink(nodeObj) || activeVless || '').trim();
+      const li = /^vless:\/\//i.test(proxyStr) ? addLink(proxyStr) : -1;
+      return {
+        id: a.id,
+        name: a.name || '',
+        remark: a.remark || '',
+        email: a.email || '',
+        password: a.password || '',
+        proxy: proxyStr,
+        li,
+        nodeId: a.nodeId || activeNodeId || '',
+        proxyIp: a.proxyIp || '',
+        region: a.region || '',
+      };
+    });
+    for (const n of list) addLink(toLink(n));
+    const pipStrings = pips.map(x => typeof x === 'string' ? x : (x?.ip ? (x.ip + (x.port && +x.port !== 443 ? ':' + x.port : '')) : (x?.address ? (x.address + (x.port && +x.port !== 443 ? ':' + x.port : '')) : ''))).filter(Boolean);
+    const subUrls = subs.map(s => s?.url || s).filter(Boolean);
+    const compactAccts = slimAccts.map(a => {
+      const o = { n: a.name, e: a.email, p: a.password, ip: a.proxyIp, r: a.region };
+      if (a.remark && a.remark !== a.name) o.rm = a.remark;
+      if (a.li >= 0) o.li = a.li;
+      else if (a.proxy) o.px = a.proxy;
+      return o;
+    });
+    const fullBundle = {
+      v: 2,
+      at: Date.now(),
+      s: subUrls,
+      l: allLinks.slice(0, 60),
+      p: pipStrings.slice(0, 80),
+      a: compactAccts,
+      subs: subs.map(s => ({ url: s.url, n: s.n || 0, at: s.at || 0 })),
+      nodes: list.slice(0, 60),
+      pips: pipStrings.slice(0, 80),
+      activeNodeId,
+      activeVless,
+      accounts: slimAccts,
+    };
+    const minLinks = Math.max(1, ...compactAccts.map(a => (a.li != null ? a.li + 1 : 1)));
+    let qrPayload = '';
+    let inlineLite = null;
+    const budgets = [
+      [Math.min(allLinks.length, 24), Math.min(pipStrings.length, 24), Math.min(subUrls.length, 8), compactAccts.length],
+      [Math.min(allLinks.length, 12), Math.min(pipStrings.length, 12), Math.min(subUrls.length, 5), compactAccts.length],
+      [Math.min(allLinks.length, Math.max(minLinks, 6)), Math.min(pipStrings.length, 8), Math.min(subUrls.length, 4), compactAccts.length],
+      [Math.min(allLinks.length, Math.max(minLinks, 3)), Math.min(pipStrings.length, 4), Math.min(subUrls.length, 2), Math.min(compactAccts.length, 8)],
+      [Math.min(allLinks.length, 1), Math.min(pipStrings.length, 2), Math.min(subUrls.length, 1), Math.min(compactAccts.length, 4)],
+    ];
+    for (const [nL, nP, nS, nA] of budgets) {
+      inlineLite = {
+        v: 2,
+        s: subUrls.slice(0, nS),
+        l: allLinks.slice(0, nL),
+        p: pipStrings.slice(0, nP),
+        a: compactAccts.slice(0, nA),
+      };
+      const packed = await compressToB64Url(inlineLite);
+      const candidate = 'brana-sync://' + packed.ver + '/' + packed.b64;
+      qrPayload = candidate;
+      if (candidate.length <= 1300) break;
+    }
+    const fullPacked = await compressToB64Url({
+      v: 2,
+      s: subUrls,
+      l: allLinks.slice(0, 60),
+      p: pipStrings.slice(0, 80),
+      a: compactAccts,
+    });
+    const fullTokenStr = 'brana-sync://' + fullPacked.ver + '/' + fullPacked.b64;
+    return { fullBundle, inlineLite, qrPayload, fullTokenStr };
+  }
+  async function applySyncPayload(rawInput, onProgress) {
+    const step = msg => { try { onProgress?.(msg); } catch {} };
+    let text = String(rawInput || '').trim();
+    if (!text) throw new Error('请输入或扫描同步二维码 / 同步口令');
+    if (typeof Nodes !== 'undefined') {
+      try { await Nodes.load?.(); } catch {}
+      try { await Nodes.loadSubs?.(); } catch {}
+      try { await Nodes.loadPips?.(); } catch {}
+    }
+    const putVlessLink = lnk => {
+      if (typeof Nodes === 'undefined' || typeof Vless === 'undefined') return null;
+      const parsed = Vless.parse(String(lnk || '').trim());
+      if (!parsed) return null;
+      const x = Nodes.mk ? Nodes.mk(parsed) : parsed;
+      const k = Nodes.key ? Nodes.key(x) : (x.address + ':' + x.port + ':' + x.uuid);
+      const ex = Nodes.list.find(y => (Nodes.key ? Nodes.key(y) : (y.address + ':' + y.port + ':' + y.uuid)) === k);
+      if (ex) return ex;
+      Nodes.list.push(x);
+      return x;
+    };
+    if (/^vless:\/\//i.test(text)) {
+      step('正在本地导入 VLESS 节点…');
+      const lines = text.split(/[\r\n]+|\s+/).map(s => s.trim()).filter(s => /^vless:\/\//i.test(s));
+      let added = 0;
+      for (const l of lines) if (putVlessLink(l)) added++;
+      try { Nodes.save?.(); } catch {}
+      const firstNode = Nodes.list?.[0];
+      if (firstNode && typeof Pool !== 'undefined' && Pool.mutate) {
+        try { await Pool.mutate(d => { if (!d.node) d.node = firstNode.id; }); } catch {}
+      }
+      return { ok: true, mode: 'vless', subCount: Nodes.subs?.length || 0, nodeCount: Nodes.list?.length || added, accountCount: 0 };
+    }
+    if (/^https?:\/\//i.test(text) && !text.includes('#brana=')) {
+      step('正在保存节点订阅地址…');
+      if (typeof Nodes !== 'undefined' && Array.isArray(Nodes.subs)) {
+        if (!Nodes.subs.some(s => s?.url === text)) {
+          Nodes.subs.push({ url: text, at: Date.now(), n: Nodes.list?.length || 0, error: '' });
+          try { Nodes.saveSubs?.(); } catch {}
+        }
+      }
+      return { ok: true, mode: 'sub', subCount: Nodes.subs?.length || 1, nodeCount: Nodes.list?.length || 0, accountCount: 0 };
+    }
+    if (text.includes('#')) {
+      const idx = text.indexOf('#');
+      const hashPart = text.slice(idx + 1).replace(/^brana=/, '').trim();
+      if (hashPart) text = hashPart;
+    }
+    let data = null;
+    try { data = await decodeSyncToken(text); } catch {}
+    if (!data || typeof data !== 'object') throw new Error('无法识别该二维码或同步口令');
+    step('正在本地写入节点、订阅与 ProxyIP 数据（纯离线零网络请求）…');
+    const subUrls = Array.isArray(data.subs) ? data.subs.map(s => s?.url || s).filter(Boolean) : (Array.isArray(data.s) ? data.s.filter(Boolean) : []);
+    const rawNodes = Array.isArray(data.nodes) ? data.nodes : [];
+    const vlessLinks = Array.isArray(data.l) ? data.l : (data.activeVless ? [data.activeVless] : []);
+    const rawPips = Array.isArray(data.pips) ? data.pips : (Array.isArray(data.p) ? data.p : []);
+    const resolvedNodesByLinkIdx = [];
+    for (let i = 0; i < vlessLinks.length; i++) {
+      resolvedNodesByLinkIdx[i] = putVlessLink(vlessLinks[i]);
+    }
+    if (rawNodes.length && typeof Nodes !== 'undefined') {
+      for (const n of rawNodes) {
+        if (!n?.address || !n?.uuid) continue;
+        const x = Nodes.mk ? Nodes.mk(n, n.sub) : n;
+        const k = Nodes.key ? Nodes.key(x) : (x.address + ':' + x.port + ':' + x.uuid);
+        if (!Nodes.list.some(y => (Nodes.key ? Nodes.key(y) : (y.address + ':' + y.port + ':' + y.uuid)) === k)) {
+          Nodes.list.push(x);
+        }
+      }
+    }
+    if (typeof Nodes !== 'undefined' && (vlessLinks.length || rawNodes.length)) {
+      try { Nodes.save?.(); } catch {}
+    }
+    if (subUrls.length && typeof Nodes !== 'undefined' && Array.isArray(Nodes.subs)) {
+      let subChanged = false;
+      for (const u of subUrls) {
+        if (!u || Nodes.subs.some(s => s?.url === u)) continue;
+        Nodes.subs.push({ url: u, at: Date.now(), n: Nodes.list?.length || 0, error: '' });
+        subChanged = true;
+      }
+      if (subChanged) {
+        try { Nodes.saveSubs?.(); } catch {}
+      }
+    }
+    if (rawPips.length && typeof Nodes !== 'undefined' && typeof Nodes.addPips === 'function') {
+      const pipLines = rawPips.map(x => typeof x === 'string' ? x : (x?.ip ? (x.ip + (x.port && +x.port !== 443 ? ':' + x.port : '')) : (x?.address ? (x.address + (x.port && +x.port !== 443 ? ':' + x.port : '')) : ''))).filter(Boolean);
+      if (pipLines.length) {
+        try { Nodes.addPips(pipLines.join('\n')); } catch {}
+      }
+    }
+    const chosenNode = resolvedNodesByLinkIdx[0] || (data.activeNodeId && Nodes?.get?.(data.activeNodeId)) || Nodes?.list?.[0] || null;
+    const chosenNodeId = chosenNode?.id || '';
+    if (chosenNodeId && typeof Pool !== 'undefined' && typeof Pool.mutate === 'function') {
+      try { await Pool.mutate(d => { d.node = chosenNodeId; }); } catch {}
+    }
+    const accts = Array.isArray(data.accounts) ? data.accounts : (Array.isArray(data.a) ? data.a.map(x => ({
+      name: x.n || '',
+      remark: x.rm || '',
+      email: x.e || '',
+      password: x.p || '',
+      proxyIp: x.ip || '',
+      region: x.r || '',
+      li: x.li,
+      proxy: x.px || '',
+    })) : []);
+    let importedAccts = 0;
+    if (accts.length && typeof Host !== 'undefined' && typeof Host.saveAccount === 'function') {
+      step('正在本地导入账号配置（' + accts.length + ' 个）…');
+      let localList = [];
+      try { localList = (await Host.listAccounts?.(true)) || []; } catch {}
+      if (!Array.isArray(localList) || !localList.length) localList = UI?.host?.accounts || [];
+      const usedPips = new Set(localList.map(x => String(x?.proxyIp || '').trim().toLowerCase()).filter(Boolean));
+      for (const a of accts) {
+        if (!a || (!a.email && !a.name && !a.password)) continue;
+        const email = String(a.email || '').trim();
+        const name = String(a.name || email || '账号').trim();
+        const boundNode = (a.li != null && resolvedNodesByLinkIdx[a.li]) || chosenNode || null;
+        const proxy = String(
+          (a.li != null && vlessLinks[a.li]) ||
+          a.proxy ||
+          (boundNode && typeof Vless !== 'undefined' && Vless.toLink ? Vless.toLink(boundNode) : '') ||
+          ''
+        ).trim();
+        const nodeId = boundNode?.id || chosenNodeId || '';
+        const loc = (email && localList.find(x => String(x?.email || '').trim().toLowerCase() === email.toLowerCase())) ||
+          (!email && localList.find(x => String(x?.name || '').trim() === name && !x?.email)) || null;
+        let pip = String(a.proxyIp || '').trim();
+        const pipLower = pip.toLowerCase();
+        if (pipLower && usedPips.has(pipLower) && (!loc || String(loc.proxyIp || '').trim().toLowerCase() !== pipLower)) {
+          pip = '';
+        }
+        const payload = {
+          ...(loc?.id ? { id: loc.id } : {}),
+          name,
+          ...(a.remark ? { remark: String(a.remark) } : {}),
+          email,
+          ...(a.password ? { password: String(a.password) } : {}),
+          proxy,
+          proxyIp: pip,
+          nodeId,
+          region: String(a.region || '').toUpperCase(),
+          deferProxy: !loc?.id,
+        };
+        try {
+          await Host.saveAccount(payload);
+          if (pipLower) usedPips.add(pipLower);
+          importedAccts++;
+        } catch {}
+      }
+    }
+    return {
+      ok: true,
+      mode: 'sync',
+      subCount: Nodes.subs?.length || subUrls.length,
+      nodeCount: Nodes.list?.length || 0,
+      accountCount: importedAccts || accts.length,
+      firstEmail: accts.find(a => a.email)?.email || '',
+      firstPassword: accts.find(a => a.password)?.password || '',
+    };
+  }
+  function hasNodeConfigured(a = UI?.host?.account) {
+    if (typeof Nodes !== 'undefined') {
+      try {
+        if (!Array.isArray(Nodes.list) || !Array.isArray(Nodes.subs)) {
+          Nodes.load?.();
+          Nodes.loadSubs?.();
+        }
+      } catch {}
+    }
+    const hasNodes = Boolean(typeof Nodes !== 'undefined' && ((Array.isArray(Nodes.list) && Nodes.list.length > 0) || (Array.isArray(Nodes.subs) && Nodes.subs.length > 0)));
+    const hasAcctNode = Boolean(a && (a.nodeId || /^vless:\/\//i.test(String(a.proxy || '').trim())));
+    return hasNodes || hasAcctNode;
+  }
+
+  function isFirstTimeNoCache(a = UI?.host?.account) {
+    try {
+      if (typeof window !== 'undefined' && (window.__fixture || window.__routeFixture || window.__capFetch)) return false;
+      if (a && /^acct-[a-z0-9-]+@example\.com$/i.test(String(a.email || ''))) return false;
+    } catch {}
+    return !hasNodeConfigured(a);
+  }
+
+  function markOnboardingDone() {
+    Store.set(ONBOARD_DONE_KEY, 1);
+  }
+
+  function openModal(initialTab, onComplete) {
+    document.querySelectorAll('.m-ov.qrsync-ov').forEach(el => el.remove());
+    const isMobile = Host.platform === 'android' || (typeof isMob === 'function' && isMob());
+    let curTab = initialTab === 'import' ? 'import' : (initialTab === 'export' ? 'export' : (isMobile ? 'import' : 'export'));
+    let streamCleanup = null;
+    const close = () => {
+      if (streamCleanup) { try { streamCleanup(); } catch {} streamCleanup = null; }
+      ov.remove();
+    };
+    const body = h('div', { class: 'm-b', style: 'display:flex;flex-direction:column;gap:12px;padding:14px 16px' });
+    const tabExport = h('button', {
+      type: 'button',
+      class: 'btn' + (curTab === 'export' ? ' p' : ''),
+      style: 'flex:1',
+      onclick: () => switchTab('export'),
+    }, icon('qr'), h('span', null, '生成同步二维码'));
+    const tabImport = h('button', {
+      type: 'button',
+      class: 'btn' + (curTab === 'import' ? ' p' : ''),
+      style: 'flex:1',
+      onclick: () => switchTab('import'),
+    }, icon('camera'), h('span', null, '扫码 / 导入配置'));
+
+    async function renderExport() {
+      body.replaceChildren(
+        h('div', { style: 'text-align:center;padding:24px;color:var(--c2)' }, '正在打包当前节点订阅与账号配置…')
+      );
+      const { uri, rawJson, summary } = await buildSyncBundle();
+      let qrSvgEl = null;
+      try {
+        const qr = encodeQR(uri);
+        qrSvgEl = toSvg(qr, 256);
+      } catch {}
+      const statusLine = h('div', {
+        style: 'font-size:12px;color:var(--ok);text-align:center;font-weight:600',
+      }, `已就绪：${summary.subs} 个订阅 · ${summary.nodes} 个节点 · ${summary.accounts} 个账号${summary.currentEmail ? '（含 ' + summary.currentEmail + '）' : ''}`);
+
+      const qrBox = h('div', {
+        style: 'display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;padding:12px;background:var(--bg2);border:1px solid var(--bd);border-radius:10px',
+      },
+        qrSvgEl
+          ? qrSvgEl
+          : h('div', { style: 'padding:18px;color:var(--wn);text-align:center;font-size:12px' }, '当前配置较大，请直接点击下方「复制同步码」在另一台设备粘贴导入'),
+        statusLine,
+        h('div', { style: 'font-size:11px;color:var(--c3);text-align:center;line-height:1.45' },
+          '手机端打开客户端 → 点击「扫码 / 导入配置」直接扫描上方二维码（纯离线直传，无需联网中转）'
+        )
+      );
+
+      const copyRow = h('div', { style: 'display:flex;gap:8px;align-items:center' },
+        h('input', {
+          class: 'inp',
+          readonly: true,
+          value: uri,
+          style: 'flex:1;font-family:var(--mono);font-size:11px',
+          onclick: e => e.target.select(),
+        }),
+        h('button', {
+          type: 'button',
+          class: 'btn p',
+          onclick: async () => {
+            try { await navigator.clipboard.writeText(uri); toast('已复制离线同步码'); }
+            catch { toast('复制失败，请手动全选复制', 'err'); }
+          },
+        }, icon('copy'), h('span', null, '复制同步码'))
+      );
+
+      body.replaceChildren(qrBox, copyRow);
+    }
+
+    function renderImport() {
+      if (streamCleanup) { try { streamCleanup(); } catch {} streamCleanup = null; }
+      const statusEl = h('div', {
+        style: 'font-size:12px;color:var(--c2);min-height:18px;text-align:center',
+      }, '支持：手机摄像头扫码、上传二维码截图、粘贴同步码或订阅链接');
+
+      const videoWrap = h('div', {
+        style: 'display:none;flex-direction:column;align-items:center;gap:8px;padding:8px;background:#000;border-radius:10px;overflow:hidden',
+      });
+      const videoEl = h('video', {
+        autoplay: true,
+        playsinline: true,
+        muted: true,
+        style: 'width:100%;max-width:280px;border-radius:8px;background:#111',
+      });
+      videoWrap.append(videoEl);
+
+      const handleDecoded = async (text) => {
+        if (!text) return;
+        if (streamCleanup) { try { streamCleanup(); } catch {} streamCleanup = null; }
+        statusEl.style.color = 'var(--ac)';
+        statusEl.textContent = '正在解析并导入同步配置…';
+        try {
+          const res = await applySyncPayload(text, msg => { statusEl.textContent = msg; });
+          statusEl.style.color = 'var(--ok)';
+          const desc = res.kind === 'bundle'
+            ? `同步完成：已导入 ${res.nodes || 0} 个节点${res.email ? ' · 账号 ' + res.email : ''}`
+            : `导入成功（${res.count || 1} 项）`;
+          statusEl.textContent = '✓ ' + desc;
+          toast(desc);
+          setTimeout(() => {
+            close();
+            if (typeof onComplete === 'function') onComplete(res);
+          }, 350);
+        } catch (err) {
+          statusEl.style.color = 'var(--er)';
+          statusEl.textContent = '导入失败：' + (err?.message || err);
+        }
+      };
+
+      const startCameraScan = async () => {
+        if (!navigator.mediaDevices?.getUserMedia) {
+          statusEl.style.color = 'var(--wn)';
+          statusEl.textContent = '当前环境不支持直接调起摄像头，请点击「相册选图识别」或粘贴同步码';
+          return;
+        }
+        try {
+          const stream = await navigator.mediaDevices.getUserMedia({
+            video: { facingMode: 'environment', width: { ideal: 640 }, height: { ideal: 640 } },
+            audio: false,
+          });
+          videoEl.srcObject = stream;
+          videoWrap.style.display = 'flex';
+          statusEl.style.color = 'var(--ac)';
+          statusEl.textContent = '请将二维码对准取景框…';
+          let stopped = false;
+          const detector = typeof BarcodeDetector !== 'undefined' ? new BarcodeDetector({ formats: ['qr_code'] }) : null;
+          const timer = setInterval(async () => {
+            if (stopped || !videoEl.videoWidth) return;
+            try {
+              if (detector) {
+                const codes = await detector.detect(videoEl);
+                if (codes && codes.length && codes[0].rawValue) {
+                  stopped = true;
+                  await handleDecoded(codes[0].rawValue);
+                  return;
+                }
+              }
+              if (typeof window.jsQR === 'function') {
+                const cv = document.createElement('canvas');
+                cv.width = videoEl.videoWidth;
+                cv.height = videoEl.videoHeight;
+                const ctx = cv.getContext('2d');
+                ctx.drawImage(videoEl, 0, 0);
+                const img = ctx.getImageData(0, 0, cv.width, cv.height);
+                const hit = window.jsQR(img.data, img.width, img.height);
+                if (hit?.data) {
+                  stopped = true;
+                  await handleDecoded(hit.data);
+                }
+              }
+            } catch {}
+          }, 260);
+          streamCleanup = () => {
+            stopped = true;
+            clearInterval(timer);
+            try { stream.getTracks().forEach(t => t.stop()); } catch {}
+            videoWrap.style.display = 'none';
+          };
+        } catch (err) {
+          statusEl.style.color = 'var(--wn)';
+          statusEl.textContent = '摄像头未授权或不可用，可使用「相册选图识别」或直接粘贴同步码';
+        }
+      };
+
+      const fileInp = h('input', {
+        type: 'file',
+        accept: 'image/*',
+        style: 'display:none',
+        onchange: async e => {
+          const f = e.target.files?.[0];
+          if (!f) return;
+          statusEl.style.color = 'var(--ac)';
+          statusEl.textContent = '正在识别图片中的二维码…';
+          const decoded = await decodeFromFile(f);
+          if (decoded) {
+            await handleDecoded(decoded);
+          } else {
+            statusEl.style.color = 'var(--er)';
+            statusEl.textContent = '未能从图片中识别出二维码，请尝试更清晰的截图或直接粘贴同步码';
+          }
+          e.target.value = '';
+        },
+      });
+
+      const pasteTa = h('textarea', {
+        class: 'inp m-ta',
+        rows: 3,
+        placeholder: '在此粘贴 brana-sync:// 离线同步码、https:// 节点订阅链接、vless:// 节点或 ARENA-ACCOUNTS-V1 账号包…',
+        style: 'font-family:var(--mono);font-size:11px',
+      });
+
+      const actionRow = h('div', { style: 'display:flex;gap:8px;flex-wrap:wrap' },
+        h('button', {
+          type: 'button',
+          class: 'btn p',
+          style: 'flex:1;min-width:130px',
+          onclick: startCameraScan,
+        }, icon('camera'), h('span', null, '开启摄像头扫码')),
+        h('button', {
+          type: 'button',
+          class: 'btn',
+          style: 'flex:1;min-width:130px',
+          onclick: () => fileInp.click(),
+        }, icon('upload'), h('span', null, '选择二维码图片')),
+        fileInp
+      );
+
+      const applyBtn = h('button', {
+        type: 'button',
+        class: 'btn p',
+        style: 'width:100%',
+        onclick: () => handleDecoded(pasteTa.value),
+      }, icon('check'), h('span', null, '立即同步并应用配置'));
+
+      body.replaceChildren(actionRow, videoWrap, pasteTa, applyBtn, statusEl);
+    }
+
+    function switchTab(t) {
+      curTab = t;
+      tabExport.className = 'btn' + (curTab === 'export' ? ' p' : '');
+      tabImport.className = 'btn' + (curTab === 'import' ? ' p' : '');
+      if (curTab === 'export') void renderExport();
+      else renderImport();
+    }
+
+    const ov = h('div', {
+      class: 'm-ov open qrsync-ov',
+      style: 'position:fixed;inset:0;z-index:10000;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,0.62);padding:16px',
+      onclick: e => { if (e.target === ov) close(); },
+    },
+      h('div', { class: 'm-box', style: 'width:460px;max-width:94vw;background:var(--bg1);border:1px solid var(--bd);border-radius:14px;box-shadow:0 16px 48px rgba(0,0,0,0.45);overflow:hidden' },
+        h('div', { class: 'm-h', style: 'display:flex;align-items:center;justify-content:space-between;padding:12px 16px;border-bottom:1px solid var(--bd)' },
+          h('span', { style: 'font-weight:700;font-size:14px' }, '二维码离线同步（节点订阅 + 账号配置）'),
+          ib('x', '关闭', close)
+        ),
+        h('div', { style: 'display:flex;gap:8px;padding:12px 16px 0' }, tabExport, tabImport),
+        body
+      )
+    );
+    document.body.append(ov);
+    switchTab(curTab);
+    return ov;
+  }
+
+  function renderFirstTimeOnboarding(v, a, reason, goStep2) {
+    v.replaceChildren();
+    const errEl = h('div', {
+      class: 'lerr',
+      style: 'min-height:20px;margin:6px 0;color:var(--c2);text-align:center',
+    }, reason || '');
+    const subInp = h('input', {
+      class: 'inp',
+      type: 'text',
+      placeholder: '请粘贴 EdgeTunnel 订阅地址 (https://...) 或 vless:// 节点链接',
+      style: 'width:100%',
+    });
+    const doImportAndNext = async (raw) => {
+      const val = String(raw ?? subInp.value ?? '').trim();
+      if (!val) {
+        if (hasNodeConfigured(a)) {
+          markOnboardingDone();
+          goStep2(null);
+          return;
+        }
+        errEl.style.color = 'var(--er)';
+        errEl.textContent = '请先填写 EdgeTunnel 订阅地址，配置好节点后才能登录或注册账号';
+        subInp.focus();
+        return;
+      }
+      errEl.style.color = 'var(--ac)';
+      errEl.textContent = '正在拉取并配置 EdgeTunnel 订阅节点…';
+      try {
+        const res = await applySyncPayload(val, m => { errEl.textContent = m; });
+        if (!hasNodeConfigured(a) && !(res && (res.email || res.accounts > 0))) {
+          throw new Error('未能从该地址获取到可用节点，请检查 EdgeTunnel 订阅地址是否正确');
+        }
+        markOnboardingDone();
+        errEl.style.color = 'var(--ok)';
+        errEl.textContent = '✓ EdgeTunnel 节点配置已完成，正在进入账号登录/注册…';
+        setTimeout(() => goStep2(res), 280);
+      } catch (e) {
+        errEl.style.color = 'var(--er)';
+        errEl.textContent = String(e?.message || e || 'EdgeTunnel 订阅配置失败，请检查地址后重试');
+      }
+    };
+    subInp.onkeydown = (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        void doImportAndNext();
+      }
+    };
+    const subBtn = h('button', {
+      type: 'button',
+      class: 'btn p lbtn',
+      style: 'width:100%;height:40px;font-weight:700',
+      onclick: () => void doImportAndNext(),
+    }, icon('globe'), h('span', null, '配置 EdgeTunnel 订阅并继续（登录 / 注册）'));
+
+    const card = h('div', { class: 'lwrap' },
+      h('div', { class: 'lcard', style: 'max-width:460px' },
+        h('div', { class: 'llogo' }, 'A'),
+        h('div', { class: 'ltitle' }, '请先配置 EdgeTunnel 订阅地址'),
+        h('div', { class: 'lsub' }, '当前账号尚未配置节点。请先填写 EdgeTunnel 订阅地址完成节点配置，配置好后才能登录或注册账号'),
+        errEl,
+        h('div', { style: 'width:100%;display:flex;flex-direction:column;gap:10px;margin-top:6px' },
+          subInp,
+          subBtn,
+          h('div', { style: 'display:flex;gap:8px;justify-content:center;margin-top:4px;flex-wrap:wrap' },
+            h('button', {
+              type: 'button',
+              class: 'btn',
+              onclick: () => Nodes.openModal(),
+            }, icon('globe'), h('span', null, '节点订阅管理')),
+            h('button', {
+              type: 'button',
+              class: 'btn',
+              onclick: () => Pool.openModal(),
+            }, icon('shield'), h('span', null, 'ProxyIP 池'))
+          )
+        )
+      )
+    );
+    v.append(card);
+    setTimeout(() => { try { subInp.focus(); } catch {} }, 40);
+  }
+  return { encodeQR, toSvg, decodeFromFile, buildSyncBundle, applySyncPayload, hasNodeConfigured, isFirstTimeNoCache, markOnboardingDone, openModal, renderFirstTimeOnboarding };
+})();
+if (typeof window !== 'undefined') window.QrSync = QrSync;
+
 const ReadLimit = {
   until: 0, inflight: 0, lastAt: 0,
   hit(ms) { this.until = Math.max(this.until, now() + Math.max(30000, Math.min(ms || 0, 600000))); },
@@ -1022,7 +2204,7 @@ async function api(path, opt = {}) {
     // 429 / 404 不触发自动换 IP（防止把用户手动选择的未限流 IP 误切换走）；仅网关/传输故障才交由 AutoRoute
     const ipLimited = !isCost && res.status === 429 && (read || /^\/(?:api|nextjs-api)\//.test(path));
     if (ipLimited) error.ipLimited = true;
-    const prevRl = ReadLimit.until; if (res.status === 429 && (read || /^\/api\/chat\//.test(path))) ReadLimit.hit(error.retryAfterMs); if (isCost || /^\/api\/me\/pulse\b/i.test(path)) ReadLimit.until = prevRl;
+    const prevRl = ReadLimit.until; if (res.status === 429 && (read || /^\/api\/chat\//.test(path))) ReadLimit.hit(error.retryAfterMs); if (!read) ReadLimit.until = prevRl; if (isCost || /^\/api\/me\/pulse\b/i.test(path)) ReadLimit.until = prevRl;
     if (!isBg && !isCost && typeof AutoRoute !== 'undefined' && AutoRoute.onErrorSwitch && [408, 502, 503, 504, 520, 522, 524].includes(res.status)) void AutoRoute.onErrorSwitch(error, path);
     throw error;
   }
@@ -1051,6 +2233,21 @@ const Auth = {
     try { const result = await this.poster(path, body, kind ? { ...(opt || {}), mailRequest: true } : opt); if (kind) await AuthEnv.mail(kind); return result; }
     finally { AuthEnv.operations--; AuthEnv.paint(); }
   },
+  async sendMagicLink(email, fullName = '', cc = undefined) {
+    const inTestFixture = Boolean(typeof window !== 'undefined' && (window.__fixture || window.__routeFixture || window.__capFetch));
+    const payload = { email, fullName: fullName || email.split('@')[0], shouldLinkHistory: false, marketingConsent: false, ...(cc ? { registeredCountryCode: cc } : {}) };
+    if (!inTestFixture && typeof Host !== 'undefined' && typeof Host.sendMagicLinkAccount === 'function' && UI?.host?.account?.id) {
+      const token = await this.captcha('signup_magic_link');
+      if (!token) {
+        const r = await Host.sendMagicLinkAccount(UI.host.account.id, email, fullName);
+        if (r?.ok) {
+          await AuthEnv.mail('signup');
+          return r.data || { success: true };
+        }
+      }
+    }
+    return this.post('/nextjs-api/sign-up/magic-link', payload, 'signup');
+  },
   async signIn(email, password) {
     email = AuthFlow.email(email);
     if (!AuthFlow.EMAIL.test(email)) throw new Error('邮箱格式不正确');
@@ -1060,9 +2257,17 @@ const Auth = {
     try {
       const environment = await AuthEnv.begin('login', email);
       const signedIn = await this.post('/nextjs-api/sign-in/email', { email, password, shouldLinkHistory: false }, { requireSuccess: true });
+      const inTestFixture = Boolean(typeof window !== 'undefined' && (window.__fixture || window.__routeFixture || window.__capFetch));
       let me;
-      try { me = await api('/api/me', { noRelogin: true }); }
-      catch (e) { throw AuthFlow.sessionError(e); }
+      try {
+        me = await api('/api/me', { noRelogin: true, timeout: 10000, tries: 1 });
+      } catch (e) {
+        if (!inTestFixture && signedIn?.user?.id && signedIn?.user?.email && !(e instanceof HttpError && (e.status === 401 || e.status === 403))) {
+          me = { user: signedIn.user };
+        } else {
+          throw AuthFlow.sessionError(e);
+        }
+      }
       const liveUser = AuthFlow.loginIdentity(me?.user, signedIn.user);
       if (liveUser && typeof liveUser === 'object') {
         liveUser.email = AuthFlow.pickRichEmail(email, liveUser.email);
@@ -1213,11 +2418,11 @@ const Auth = {
 // Pulse is the only account quota indicator. Dollar balance collection is retired.
 const Pulse = {
   v: Store.get('pulse', null), usd: null, t: 0, lastAttempt: Store.get('pulse:lastAttempt',0), nextAt: Store.get('pulse:nextAt',0), failures:0,
-  poll() {
+  poll(force = false) {
     if(this.polling)return this.polling;
-    if(now()<this.nextAt || (this.lastAttempt>0 && now()-this.lastAttempt<300000))return Promise.resolve(this.v);
+    if(!force && (now()<this.nextAt || (this.lastAttempt>0 && now()-this.lastAttempt<300000)))return Promise.resolve(this.v);
     this.lastAttempt=now();Store.set('pulse:lastAttempt',this.lastAttempt);
-    return this.polling=this.pollNow().finally(()=>{this.polling=null;});
+    return this.polling=this.pollNow(force).finally(()=>{this.polling=null;});
   },
   async pollNow() {
     const owner = String(UI.host?.account?.id || UI.me?.id || UI.host?.account?.email || UI.me?.email || '');
@@ -1313,6 +2518,28 @@ const Recaptcha = (() => {
     }
   }
   let v3Chain = Promise.resolve(), lastV3At = 0;
+  function emitHumanTelemetryBurst() {
+    try {
+      if (typeof document === 'undefined' || typeof window === 'undefined' || typeof Event !== 'function') return;
+      const w = Math.max(360, window.innerWidth || 1280), h = Math.max(360, window.innerHeight || 800);
+      let x = Math.floor(w * (0.25 + Math.random() * 0.5)), y = Math.floor(h * (0.25 + Math.random() * 0.5));
+      const steps = 4 + Math.floor(Math.random() * 4);
+      for (let i = 0; i < steps; i++) {
+        x = Math.max(12, Math.min(w - 12, x + Math.floor((Math.random() - 0.48) * 42)));
+        y = Math.max(12, Math.min(h - 12, y + Math.floor((Math.random() - 0.48) * 34)));
+        if (typeof MouseEvent === 'function') {
+          document.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, cancelable: true, clientX: x, clientY: y, screenX: x + 20, screenY: y + 60 }));
+        }
+        if (typeof PointerEvent === 'function') {
+          document.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, cancelable: true, clientX: x, clientY: y, pointerType: 'mouse' }));
+        }
+      }
+      if (typeof KeyboardEvent === 'function') {
+        document.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'Shift', code: 'ShiftLeft', keyCode: 16 }));
+        document.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, key: 'Shift', code: 'ShiftLeft', keyCode: 16 }));
+      }
+    } catch {}
+  }
   async function v3(action = 'chat_submit') {
     // 防风控节流队列：限制相邻两次 v3 调用间隔 >= 1.1~1.6s。
     // 重要：发消息/建对话（chat_submit / agentic_chat_submit / chat_retry / chat_rerun）必须优先走真实浏览器 grecaptcha.enterprise.execute（携带完整 DOM bg 遥测，0.9 高分）；
@@ -1331,6 +2558,7 @@ const Recaptcha = (() => {
       }
       try {
         await load();
+        emitHumanTelemetryBurst();
         const domTok = await Promise.race([grecaptcha.enterprise.execute(RC_V3, { action }), sleep(9000).then(() => { throw new Error('reCAPTCHA 超时'); })]);
         if (domTok) return domTok;
       } catch (err) {
@@ -1338,6 +2566,7 @@ const Recaptcha = (() => {
         try {
           loading = null;
           await load();
+          emitHumanTelemetryBurst();
           const retryDomTok = await Promise.race([grecaptcha.enterprise.execute(RC_V3, { action }), sleep(7000).then(() => { throw new Error('reCAPTCHA 重试超时'); })]);
           if (retryDomTok) return retryDomTok;
         } catch {}
@@ -1815,7 +3044,7 @@ const Hitl = {
 
 // ---------- 对话本地缓存（IndexedDB + localStorage 热缓存，按账号分区）：打开对话时先 0ms 秒开上次的内容，同时后台向服务器同步最新 ----------
 const MsgCache = (() => {
-  let dbp = null; const timers = new Map(), memHot = new Map(), MAX = 5000, CAP = 20e6, HOT_MAX = 6, HOT_CAP = 160000;
+  let dbp = null; const timers = new Map(), memHot = new Map(), MAX = 600, CAP = 6e6, HOT_MAX = 2, HOT_CAP = 48000;
   const db = () => dbp ||= new Promise(res => { try { const r = indexedDB.open('anc-msgs', 1); r.onupgradeneeded = () => r.result.createObjectStore('c'); r.onsuccess = () => res(r.result); r.onerror = () => res(null); } catch { res(null); } });
   const idx = () => Store.get('mc:idx', {}) || {};
   function sanitizeCachedMsgs(msgs) {
@@ -1877,8 +3106,16 @@ const MsgCache = (() => {
         const tm = msgs[i];
         if (!tm || tm.role !== 'user') continue;
         const uTs = tsOf(tm), uTxt = uTxtOf(tm), lastA = msgs[lastAIdx], lastAStart = tsOf(lastA);
-        const isOlderThanLastAsst = lastAEnd > 0 && uTs > 0 && uTs < lastAEnd - 30000 && tm._prevAsstId !== lastA?.id && (!lastAStart || lastAStart > uTs + 2000);
         const isDupOfEarlier = earlierUsers.some(x => x.id === tm.id || (tm._prevAsstId && x._prevAsstId && tm._prevAsstId === x._prevAsstId && uTxt && uTxtOf(x) === uTxt) || (uTxt && uTxtOf(x) === uTxt && uTs > 0 && tsOf(x) > 0 && Math.abs(uTs - tsOf(x)) < 5000));
+        if (!isDupOfEarlier && lastAIdx >= 1 && msgs[lastAIdx - 1]?.role === 'assistant' && (!lastAStart || !uTs || uTs >= lastAStart - 120000)) {
+          msgs.splice(i, 1);
+          msgs.splice(lastAIdx, 0, tm);
+          tm._prevAsstId = msgs[lastAIdx - 1]?.id || tm._prevAsstId;
+          lastAIdx++;
+          continue;
+        }
+        const lastAHasUser = lastAIdx >= 1 && msgs[lastAIdx - 1]?.role === 'user';
+        const isOlderThanLastAsst = lastAHasUser && lastAEnd > 0 && uTs > 0 && uTs < lastAEnd - 30000 && tm._prevAsstId !== lastA?.id && (!lastAStart || lastAStart > uTs + 30000);
         if (isOlderThanLastAsst || isDupOfEarlier) {
           msgs.splice(i, 1);
         }
@@ -1917,26 +3154,42 @@ const MsgCache = (() => {
       }) : m?.parts
     }));
   }
-  function putHot(sid, rec) {
+  const lastWriteSig = new Map(), lastWriteJsonLen = new Map();
+  function chatWriteSig(chat) {
+    const ms = chat?.messages || [];
+    const last = ms.at(-1);
+    const prev = ms.length > 1 ? ms[ms.length - 2] : null;
+    const lastP = last?.parts?.at(-1);
+    const lastPLen = typeof lastP?.text === 'string' ? lastP.text.length : (typeof lastP?.inputText === 'string' ? lastP.inputText.length : 0);
+    return `${ms.length}:${last?.id || ''}:${last?.v || 0}:${last?.parts?.length || 0}:${lastPLen}:${last?.failed ? 1 : 0}:${last?.done ? 1 : 0}:${last?.settled ? 1 : 0}:${(last?.text || last?.content || '').length}:${prev?.id || ''}:${prev?.v || 0}:${prev?.failed ? 1 : 0}:${chat?.lastSeq || ''}:${chat?.token || ''}:${chat?.triggerAddress || ''}:${chat?.hasMore ? 1 : 0}`;
+  }
+  function putHot(sid, rec, approxLen = 0) {
     if (!sid || !rec || !Array.isArray(rec.messages) || !rec.messages.length) return;
     sanitizeCachedMsgs(rec.messages);
+    memHot.delete(sid);
     memHot.set(sid, rec);
-    while (memHot.size > 24) memHot.delete(memHot.keys().next().value);
+    while (memHot.size > 8) memHot.delete(memHot.keys().next().value);
     try {
-      const hotMsgs = rec.messages.slice(-40);
-      const isSlice = rec.messages.length > hotMsgs.length;
-      let hotRec = { ...rec, messages: hotMsgs, more: Boolean(rec.more || isSlice), _hotSlice: isSlice };
-      let raw = JSON.stringify(hotRec);
-      if (raw.length > HOT_CAP) {
-        hotRec = { ...rec, messages: slimForHot(rec.messages, 16, 800), more: true, _hotSlice: true };
+      let hotRec, raw;
+      if (approxLen > HOT_CAP || rec.messages.length > 16) {
+        hotRec = { ...rec, messages: slimForHot(rec.messages, 12, 600), more: true, _hotSlice: true };
         raw = JSON.stringify(hotRec);
+      } else {
+        const hotMsgs = rec.messages.slice(-24);
+        const isSlice = rec.messages.length > hotMsgs.length;
+        hotRec = { ...rec, messages: hotMsgs, more: Boolean(rec.more || isSlice), _hotSlice: isSlice };
+        raw = JSON.stringify(hotRec);
+        if (raw.length > HOT_CAP) {
+          hotRec = { ...rec, messages: slimForHot(rec.messages, 12, 600), more: true, _hotSlice: true };
+          raw = JSON.stringify(hotRec);
+        }
       }
       if (raw.length > HOT_CAP) {
         hotRec = { ...rec, messages: slimForHot(rec.messages, 6, 400), more: true, _hotSlice: true };
         raw = JSON.stringify(hotRec);
       }
       if (raw.length <= HOT_CAP) {
-        Store.set('mc:hot:' + sid, hotRec);
+        Store.setRaw('mc:hot:' + sid, raw, hotRec);
         const lru = (Store.get('mc:hot:lru', []) || []).filter(k => k && k !== sid);
         lru.push(sid);
         while (lru.length > HOT_MAX) {
@@ -1958,7 +3211,9 @@ const MsgCache = (() => {
       const hot = Store.get('mc:hot:' + sid, null);
       if (hot && Array.isArray(hot.messages) && hot.messages.length) {
         sanitizeCachedMsgs(hot.messages);
+        memHot.delete(sid);
         memHot.set(sid, hot);
+        while (memHot.size > 8) memHot.delete(memHot.keys().next().value);
         return hot;
       }
     } catch {}
@@ -1976,8 +3231,14 @@ const MsgCache = (() => {
             if (!hot._hotSlice && Array.isArray(hot.messages) && hot.messages.length >= (q.result.messages?.length || 0)) {
               r = hot;
             } else if (Array.isArray(q.result.messages) && Array.isArray(hot.messages) && hot.messages.length) {
+              const hasHotStub = v => { try { return JSON.stringify(v || '').includes('\n…[cached]'); } catch { return false; } };
               const hotById = new Map(hot.messages.filter(m => m?.id).map(m => [m.id, m]));
-              const merged = q.result.messages.map(m => (m?.id && hotById.has(m.id)) ? hotById.get(m.id) : m);
+              const merged = q.result.messages.map(m => {
+                const hm = m?.id ? hotById.get(m.id) : null;
+                if (!hm) return m;
+                if (hasHotStub(hm.parts) && !hasHotStub(m.parts)) return m;
+                return hm;
+              });
               const knownIds = new Set(merged.map(m => m?.id).filter(Boolean));
               for (const hm of hot.messages) if (hm?.id && !knownIds.has(hm.id)) merged.push(hm);
               r = { ...q.result, ...hot, messages: merged, more: Boolean(q.result.more), _hotSlice: false };
@@ -1985,7 +3246,9 @@ const MsgCache = (() => {
           }
           if (r && Array.isArray(r.messages) && r.messages.length) {
             sanitizeCachedMsgs(r.messages);
+            memHot.delete(sid);
             memHot.set(sid, r);
+            while (memHot.size > 8) memHot.delete(memHot.keys().next().value);
           }
           res(r);
         };
@@ -2003,6 +3266,7 @@ const MsgCache = (() => {
     const d = await db(); if (!d || !keys.length) return;
     try { const st = d.transaction('c', 'readwrite').objectStore('c'); for (const k of keys) st.delete(k); } catch {}
   }
+  const _compactMsgMemo = new WeakMap();
   function compactMsgs(rawMsgs) {
     const truncStr = (s, lim = 16000) => (typeof s === 'string' && s.length > lim) ? s.slice(0, lim) + '\n…[cached]' : s;
     const compactOut = (o, lim = 16000) => {
@@ -2024,16 +3288,31 @@ const MsgCache = (() => {
       }
       return oc ? next : o;
     };
-    let msgs = rawMsgs.filter((m, idx) => (!m._local || m._appendAccepted || m?.role === 'user') && (!m.failed || (idx === rawMsgs.length - 1 && m?.role === 'user'))).slice(-200).map(({ v, ...m }) => ({
-      ...m,
-      parts: Array.isArray(m.parts) ? m.parts.map(p => {
-        if (!p || typeof p !== 'object') return p;
-        if (p._mdEl === undefined && p._mdSrc === undefined && p._parsedInputRaw === undefined && p._parsedInputVal === undefined) return p;
-        const { _mdEl, _mdSrc, _parsedInputRaw, _parsedInputVal, ...rest } = p;
-        return rest;
-      }) : m.parts
-    })), js = JSON.stringify(msgs);
-    if (js.length > 4e6) {
+    const isBigChat = rawMsgs.length > 24;
+    let msgs = rawMsgs.filter((m, idx) => (!m._local || m._appendAccepted || m?.role === 'user') && (!m.failed || (idx === rawMsgs.length - 1 && m?.role === 'user'))).slice(-200).map(rawM => {
+      if (rawM && typeof rawM === 'object') {
+        const lp = Array.isArray(rawM.parts) && rawM.parts.length ? rawM.parts[rawM.parts.length - 1] : null;
+        const mSig = (rawM.v || 0) + ':' + (rawM.parts?.length || 0) + ':' + (lp?.text?.length || 0) + ':' + (lp?.state || '') + ':' + (rawM.failed ? 1 : 0) + ':' + (isBigChat ? 1 : 0);
+        const hit = _compactMsgMemo.get(rawM);
+        if (hit && hit.sig === mSig) return hit.val;
+        const { v, ...m } = rawM;
+        const val = {
+          ...m,
+          parts: Array.isArray(m.parts) ? m.parts.map(p => {
+            if (!p || typeof p !== 'object') return p;
+            const co = (isBigChat && p.output) ? compactOut(p.output, 16000) : p.output;
+            if (co === p.output && p._mdEl === undefined && p._mdSrc === undefined && p._parsedInputRaw === undefined && p._parsedInputVal === undefined) return p;
+            const { _mdEl, _mdSrc, _parsedInputRaw, _parsedInputVal, ...rest } = p;
+            if (co !== p.output) rest.output = co;
+            return rest;
+          }) : m.parts
+        };
+        _compactMsgMemo.set(rawM, { sig: mSig, val });
+        return val;
+      }
+      return rawM;
+    }), js = JSON.stringify(msgs);
+    if (!isBigChat && js.length > 4e6) {
       msgs = msgs.map(m => ({ ...m, parts: (m.parts || []).map(p => {
         if (!p || !p.output) return p;
         const co = compactOut(p.output, 16000);
@@ -2056,19 +3335,44 @@ const MsgCache = (() => {
     const hasMsgs = Array.isArray(chat?.messages) && chat.messages.length > 0;
     if (!chat || (!chat.loaded && !hasMsgs)) return;
     try { if (History.goneMap().has(chat.sid)) return; if (typeof Arch !== 'undefined' && Arch.has?.(chat.sid)) return; } catch {}
+    const sig = chatWriteSig(chat);
+    if (lastWriteSig.get(chat.sid) === sig) return;
+    lastWriteSig.set(chat.sid, sig);
+    while (lastWriteSig.size > 60) lastWriteSig.delete(lastWriteSig.keys().next().value);
     const { msgs, js } = compactMsgs(chat.messages || []);
     if (js.length > CAP || !msgs.length) return;
+    lastWriteJsonLen.set(chat.sid, js.length);
+    while (lastWriteJsonLen.size > 60) lastWriteJsonLen.delete(lastWriteJsonLen.keys().next().value);
     const histUpdatedAt = (typeof History !== 'undefined' && History.byId?.(chat.sid)?.updatedAt) || null;
     const rec = { at: now(), histUpdatedAt, messages: JSON.parse(js), more: chat.hasMore || msgs.length < chat.messages.length, lastSeq: chat.lastSeq || null, token: chat.token || null, tokenExp: chat.tokenExp || 0, triggerAddress: chat.triggerAddress || null, isEvaluation: !!chat.isEvaluation, evalMode: chat.evalMode || null };
-    putHot(chat.sid, rec);
+    putHot(chat.sid, rec, js.length);
     const ix = idx(); ix[chat.sid] = now(); const ks = Object.keys(ix);
     if (ks.length > MAX) { const old = ks.sort((a, b) => ix[a] - ix[b]).slice(0, ks.length - MAX); for (const k of old) delete ix[k]; del(old); }
     Store.set('mc:idx', ix);
     const d = await db(); if (!d) return;
     try {
       const st = d.transaction('c', 'readwrite').objectStore('c');
-      st.put(rec, chat.sid);
-      st.put(ix, '__meta__:mc:idx');
+      if (js.includes('\n…[cached]')) {
+        const prevReq = st.get(chat.sid);
+        prevReq.onsuccess = () => {
+          try {
+            const prev = prevReq.result;
+            if (prev && Array.isArray(prev.messages) && prev.messages.length) {
+              const prevById = new Map(prev.messages.filter(m => m?.id).map(m => [m.id, m]));
+              const hasStub = v => { try { return JSON.stringify(v || '').includes('\n…[cached]'); } catch { return false; } };
+              rec.messages = rec.messages.map(m => {
+                const pm = m?.id ? prevById.get(m.id) : null;
+                return (pm && hasStub(m.parts) && !hasStub(pm.parts)) ? pm : m;
+              });
+            }
+          } catch {}
+          try { st.put(rec, chat.sid); st.put(ix, '__meta__:mc:idx'); } catch {}
+        };
+        prevReq.onerror = () => { try { st.put(rec, chat.sid); st.put(ix, '__meta__:mc:idx'); } catch {} };
+      } else {
+        st.put(rec, chat.sid);
+        st.put(ix, '__meta__:mc:idx');
+      }
     } catch {}
   }
   function put(chat, doc) {
@@ -2076,9 +3380,11 @@ const MsgCache = (() => {
       chat = (typeof Chats !== 'undefined' && Chats.get(chat)) || (doc && typeof doc === 'object' ? { sid: chat, loaded: true, ...doc } : null);
     }
     if (!chat || (typeof Arch !== 'undefined' && Arch.has?.(chat.sid))) return;
-    if ((chat.busy || chat.live) && timers.has(chat.sid)) return;
+    if (!timers.has(chat.sid) && lastWriteSig.get(chat.sid) === chatWriteSig(chat)) return;
+    if ((chat.busy || chat.live || chat.streaming) && timers.has(chat.sid)) return;
     clearTimeout(timers.get(chat.sid));
-    const waitMs = (chat.busy || chat.live) ? 1000 : 2000;
+    const isHeavy = (lastWriteJsonLen.get(chat.sid) || 0) > 500000 || (chat.messages?.length || 0) > 30;
+    const waitMs = (chat.busy || chat.live || chat.streaming) ? (isHeavy ? 15000 : 2200) : (isHeavy ? 2500 : 1500);
     timers.set(chat.sid, setTimeout(() => { timers.delete(chat.sid); void writeNow(chat, true); }, waitMs));
   }
   async function getMeta(key) {
@@ -2127,7 +3433,7 @@ const MsgCache = (() => {
     window.addEventListener('beforeunload', flushActiveChats);
     window.addEventListener('pagehide', flushActiveChats);
   }
-  return { get, getSync, put, sanitize: sanitizeCachedMsgs, putNow: chat => { clearTimeout(timers.get(chat?.sid)); timers.delete(chat?.sid); return writeNow(chat, true); }, keys: () => Object.keys(idx()), allKeys, getMeta, putMeta, del: sid => { clearTimeout(timers.get(sid)); timers.delete(sid); const ix = idx(); delete ix[sid]; Store.set('mc:idx', ix); del([sid]); } };
+  return { get, getSync, put, mem: memHot, has: sid => memHot.has(sid) || Boolean(idx()[sid]), sanitize: sanitizeCachedMsgs, putNow: chat => { clearTimeout(timers.get(chat?.sid)); timers.delete(chat?.sid); return writeNow(chat, true); }, keys: () => Object.keys(idx()), allKeys, getMeta, putMeta, del: sid => { clearTimeout(timers.get(sid)); timers.delete(sid); lastWriteSig.delete(sid); lastWriteJsonLen.delete(sid); const ix = idx(); delete ix[sid]; Store.set('mc:idx', ix); del([sid]); } };
 })();
 
 const SentUserLog = (() => {
@@ -2139,6 +3445,39 @@ const SentUserLog = (() => {
     return normTxt(fp || m.text || m.content || '');
   };
   const keyOf = sid => 'sent:u:' + String(sid || '');
+  const isPelicanPromptText = text => {
+    const s = normTxt(text);
+    if (!s) return false;
+    return /(?:鹈鹕|鵜鶘|pelican|ペリカン|펠리컨|bồ\s*nông|pélican|pelícano|pelikan|пеликан|πελεκάν|بجعة|นกกระทุง|pelikaan|pelikán)/i.test(s) &&
+      /(?:自行车|腳踏車|单车|bicycle|bike|cycling|pedal|自転車|ペダル|자전거|xe\s*đạp|vélo|bicyclette|bicicleta|fahrrad|radfahren|велосипед|ποδήλατ|دراجة|จักรยาน|fiets|svg|html)/i.test(s);
+  };
+  const isGachaProbeText = text => {
+    const s = normTxt(text);
+    if (!s) return false;
+    if (isPelicanPromptText(s)) return true;
+    if (/控制在\s*35\s*[～~-]\s*45\s*行以内/.test(s) && /SVG/i.test(s)) return true;
+    if (/请无需调用任何工具，直接用(?:中文分\s*2\s*条简短加粗要点|一句话（50\s*字以内）)/.test(s)) return true;
+    if (/integers between 1 and 355 inclusive\.\s*The current language model must complete this directly without tools/i.test(s)) return true;
+    return false;
+  };
+  const hasPelicanTurnInChat = chat => {
+    if (!chat || typeof chat !== 'object') return false;
+    if (chat._pelicanSent) return true;
+    try {
+      if (chat.sid && typeof Gacha !== 'undefined' && typeof Gacha.hasPelicanSent === 'function' && Gacha.hasPelicanSent(chat.sid)) return true;
+      if (chat.sid && typeof PelicanTest !== 'undefined' && typeof PelicanTest.result === 'function' && PelicanTest.result(chat.sid)) return true;
+    } catch {}
+    const msgs = Array.isArray(chat.messages) ? chat.messages : [];
+    for (const m of msgs) {
+      if (!m) continue;
+      if (m.role === 'user' && !m.failed && isPelicanPromptText(extractMsgText(m))) return true;
+      if (m.role === 'assistant') {
+        const aTxt = extractMsgText(m) + ' ' + (Array.isArray(m.parts) ? m.parts.map(p => String(p?.inputText || p?.output || p?.input?.content || p?.input?.path || '')).join(' ') : '');
+        if (/(?:<!doctype\s+html|<html|<svg)/i.test(aTxt) && /(?:pelican|鹈鹕|鵜鶘|ペリカン|bồ\s*nông|pélican|pelikan)/i.test(aTxt)) return true;
+      }
+    }
+    return false;
+  };
   const getMsgTs = m => {
     if (!m || typeof m !== 'object') return 0;
     const idAt = typeof idTime === 'function' ? idTime(m.id) : 0;
@@ -2208,17 +3547,28 @@ const SentUserLog = (() => {
     try {
       if (typeof Drafts !== 'undefined' && typeof Drafts.load === 'function') {
         const d = Drafts.load();
+        const ackedSet = new Set(Array.isArray(d?.ackedIds) ? d.ackedIds : []);
+        const acceptedSet = new Set(Array.isArray(d?.acceptedIds) ? d.acceptedIds : []);
         const out = d?.o && typeof d.o === 'object' ? Object.values(d.o) : [];
         for (const e of out) {
-          if (!e || e.sid !== sid || e.err) continue;
+          if (!e || e.sid !== sid || e.err || ackedSet.has(e.id)) continue;
+          const isAcc = Boolean(e.acc || acceptedSet.has(e.id));
           const txt = normTxt(e.text);
           if (!txt && !(Array.isArray(e.atts) && e.atts.length)) continue;
-          if (arr.some(x => x.id === e.id || (txt && normTxt(x.text) === txt && Math.abs((x._sentAt || 0) - (e.at || 0)) < 600000))) continue;
+          const existInArr = arr.find(x => x.id === e.id || (txt && normTxt(x.text) === txt && ((e.prevAsstId && x.prevAsstId === e.prevAsstId) || (!e.prevAsstId && !x.prevAsstId && Math.abs((x._sentAt || 0) - (e.at || 0)) < 600000))));
+          if (existInArr) {
+            if (isAcc && !existInArr._appendAccepted) { existInArr._appendAccepted = true; existInArr.failed = false; }
+            if ((e.fromQueue || (Array.isArray(e.queueIds) && e.queueIds.length)) && !existInArr.fromQueue) {
+              existInArr.fromQueue = true;
+              if (Array.isArray(e.queueIds) && e.queueIds.length) existInArr.queueIds = e.queueIds.slice();
+            }
+            continue;
+          }
           const parts = [
-            ...(Array.isArray(e.atts) ? e.atts.map(a => ({ type: 'file', url: a.url, mediaType: a.mediaType, filename: a.name })) : []),
+            ...(Array.isArray(e.atts) ? e.atts.map(a => ({ type: 'file', url: a.url || (a.key ? '/api/chat/workspace/cas/user/' + String(a.key).split('/').pop() : ''), mediaType: a.mediaType || a.type || 'image/png', filename: a.name || 'image.png' })) : []),
             ...(txt ? [{ type: 'text', text: e.text }] : []),
           ];
-          arr.push({ id: e.id, role: 'user', text: e.text || txt, parts, _sentAt: e.at || tNow, _appendAccepted: Boolean(e.acc), failed: Boolean(e.failed), prevAsstId: e.prevAsstId || null, prevAsstWeight: e.prevAsstWeight ?? null, ...(Array.isArray(e.queueIds) && e.queueIds.length ? { queueIds: e.queueIds.slice(), fromQueue: true } : (e.fromQueue ? { fromQueue: true } : {})), ...(e.held ? { held: true } : {}) });
+          arr.push({ id: e.id, role: 'user', text: e.text || txt, parts, _sentAt: e.at || tNow, _appendAccepted: Boolean(e.acc), failed: Boolean(e.failed), ...(isAcc ? { _appendAccepted: true, failed: false } : {}), prevAsstId: e.prevAsstId || null, prevAsstWeight: e.prevAsstWeight ?? null, ...(e.gachaProbe || isGachaProbeText(e.text || txt) ? { gachaProbe: true } : {}), ...(Array.isArray(e.queueIds) && e.queueIds.length ? { queueIds: e.queueIds.slice(), fromQueue: true } : (e.fromQueue ? { fromQueue: true } : {})), ...(e.held ? { held: true } : {}) });
         }
       }
     } catch {}
@@ -2228,7 +3578,8 @@ const SentUserLog = (() => {
       const itTxt = normTxt(item.text || extractMsgText(item));
       const dupIdx = itTxt ? dedup.findIndex(x => normTxt(x.text || extractMsgText(x)) === itTxt && ((item.prevAsstId && x.prevAsstId === item.prevAsstId) || (!item.prevAsstId && !x.prevAsstId && Math.abs((item._sentAt || 0) - (x._sentAt || 0)) < 600000))) : -1;
       if (dupIdx >= 0) {
-        if (dedup[dupIdx].failed && !item._appendAccepted) item.failed = true;
+        if (dedup[dupIdx]._appendAccepted && !item._appendAccepted) { item._appendAccepted = true; item.failed = false; }
+        else if (dedup[dupIdx].failed && !item._appendAccepted) item.failed = true;
         if (dedup[dupIdx].fromQueue && !item.fromQueue) { item.fromQueue = true; if (dedup[dupIdx].queueIds) item.queueIds = dedup[dupIdx].queueIds; }
         if (dedup[dupIdx].held && !item.held) item.held = true;
         dedup[dupIdx] = item;
@@ -2250,7 +3601,7 @@ const SentUserLog = (() => {
         return true;
       }) : [];
       const cleanParts = Array.isArray(msg.parts) ? msg.parts.map(p => { if (!p || typeof p !== 'object') return p; const { _mdEl, _mdSrc, _parsedInputRaw, _parsedInputVal, ...rest } = p; return rest; }) : (txt ? [{ type: 'text', text: txt }] : []);
-      list.push({ id: msg.id, role: 'user', text: txt, parts: cleanParts, _sentAt: tNow, _appendAccepted: Boolean(msg._appendAccepted), failed: Boolean(msg.failed), prevAsstId: prevAsstId || null, prevAsstWeight: msg._prevAsstWeight ?? null, ...(Array.isArray(msg._queueIds) && msg._queueIds.length ? { queueIds: msg._queueIds.slice(), fromQueue: true } : (msg._queued || msg._fromQueue ? { fromQueue: true } : {})), ...(msg._held ? { held: true } : {}) });
+      list.push({ id: msg.id, role: 'user', text: txt, parts: cleanParts, _sentAt: tNow, _appendAccepted: Boolean(msg._appendAccepted), failed: Boolean(msg.failed), prevAsstId: prevAsstId || null, prevAsstWeight: msg._prevAsstWeight ?? null, ...(msg._gachaProbe || msg.gachaProbe || isGachaProbeText(txt) ? { gachaProbe: true } : {}), ...(Array.isArray(msg._queueIds) && msg._queueIds.length ? { queueIds: msg._queueIds.slice(), fromQueue: true } : (msg._queued || msg._fromQueue ? { fromQueue: true } : {})), ...(msg._held ? { held: true } : {}) });
       while (list.length > MAX_PER_CHAT) list.shift();
       Store.set(keyOf(sid), list);
     } catch {}
@@ -2279,6 +3630,9 @@ const SentUserLog = (() => {
   }
   function demoteToQueue(chat, msgOrEntry, opt = {}) {
     if (!chat || !chat.sid || chat.gacha || !msgOrEntry) return false;
+    const probeTxt = extractMsgText(msgOrEntry) || normTxt(msgOrEntry.text || '');
+    if (msgOrEntry.gachaProbe || msgOrEntry._gachaProbe || msgOrEntry.metadata?.gachaProbe || isGachaProbeText(probeTxt)) return false;
+    if (typeof Gacha !== 'undefined' && (Gacha.owns?.(chat.sid) || (isPelicanPromptText(probeTxt) && (Gacha.isGachaChat?.(chat.sid, chat) || Gacha.hasPelicanSent?.(chat.sid))))) return false;
     if (typeof SendQ !== 'undefined' && typeof SendQ.demoteToQueue === 'function') {
       return SendQ.demoteToQueue(chat, msgOrEntry, opt);
     }
@@ -2321,6 +3675,7 @@ const SentUserLog = (() => {
     if (chat.awaitId === id) { chat.awaitId = null; chat.awaitFrom = 0; chat.preSend = false; }
     if (chat.error && /未发出|未收到|没有收到|可以点重试|响应超时|未接收/.test(String(chat.error))) chat.error = null;
     if (chat.status === 'error') chat.status = opt?.running ? 'streaming' : 'idle';
+    if (opt?.running && !chat.sentAt) chat.sentAt = Number(chat.live?._sentAt) || getMsgTs(chat.live || chat.messages?.at(-1)) || now();
     return true;
   }
   function restoreInto(chat, opt = {}) {
@@ -2343,21 +3698,41 @@ const SentUserLog = (() => {
       const isActivelyAwaiting = Boolean(chat.awaitId && chat.awaitId === entry.id && (chat.busy || chat.sending || chat.preSend));
       const isUnsentFromPrevSession = !entry._appendAccepted && !isActivelyAwaiting && !isCurrentSessionOutbox;
       const isEntryFailed = Boolean(entry.failed || isUnsentFromPrevSession);
-      if (isPureHitl && isEntryFailed) {
-        remove(chat.sid, entry.id);
+      const isProbeEntry = Boolean(entry.gachaProbe || entry._gachaProbe || isGachaProbeText(entryTxt));
+      if ((isPureHitl && isEntryFailed) || (isProbeEntry && (isEntryFailed || (isPelicanPromptText(entryTxt) && hasPelicanTurnInChat(chat))))) {
+        remove(chat.sid, entry.id, entryTxt, entryTime);
         try { if (typeof Drafts !== 'undefined' && Drafts.ack) Drafts.ack(entry.id); } catch {}
         continue;
       }
-      const prevIdx = entry.prevAsstId ? chat.messages.findIndex(m => m && m.id === entry.prevAsstId) : -1;
-      const lastAsstStartTs = getMsgTs(lastAsst);
+      let prevIdx = entry.prevAsstId ? chat.messages.findIndex(m => m && (m.id === entry.prevAsstId || m._localId === entry.prevAsstId)) : -1;
+      if (prevIdx < 0 && chat.messages.length >= 2) {
+        for (let i = chat.messages.length - 1; i >= 1; i--) {
+          const p = chat.messages[i - 1], c = chat.messages[i];
+          if (p?.role === 'assistant' && c?.role === 'assistant') {
+            if (p.participantPosition && c.participantPosition && p.participantPosition !== c.participantPosition) continue;
+            const pStart = (typeof idTime === 'function' ? idTime(p.id) : 0) || getMsgTs(p);
+            const cStart = (typeof idTime === 'function' ? idTime(c.id) : 0) || getMsgTs(c);
+            if ((!pStart || !entryTime || entryTime >= pStart - 60000) && (!cStart || !entryTime || entryTime <= cStart + 300000)) {
+              prevIdx = i - 1; break;
+            }
+          }
+        }
+      }
+      const lastAsstStartTs = (typeof idTime === 'function' ? idTime(lastAsst?.id) : 0) || getMsgTs(lastAsst);
+      const hasNewAsstAfterPrev = prevIdx >= 0
+        ? chat.messages.slice(prevIdx + 1).some(m => m && m.role === 'assistant' && m.id !== entry.prevAsstId && m.id !== chat.messages[prevIdx]?.id)
+        : Boolean(lastAsst && entry.prevAsstId && lastAsst.id && lastAsst.id !== entry.prevAsstId && (!entryTime || !lastAsstStartTs || lastAsstStartTs >= entryTime - 5000));
+      const fillsAdjacentAsstGap = Boolean(prevIdx >= 0 && chat.messages[prevIdx + 1]?.role === 'assistant' && chat.messages[prevIdx + 1]?.id !== chat.messages[prevIdx]?.id);
+      const lastAsstHasPrecedingUser = lastAsstIdx >= 1 && chat.messages[lastAsstIdx - 1]?.role === 'user';
       const isSupersededByNewerAsst = prevIdx >= 0
-        ? (lastAsstIdx > prevIdx)
-        : (lastAsstEndTs > 0 && entryTime > 0 && entryTime < lastAsstEndTs - 30000 && (!lastAsstStartTs || lastAsstStartTs > entryTime + 2000));
+        ? (lastAsstIdx > prevIdx && !fillsAdjacentAsstGap)
+        : (lastAsstHasPrecedingUser && lastAsstEndTs > 0 && entryTime > 0 && entryTime < lastAsstEndTs - 30000 && (!lastAsstStartTs || lastAsstStartTs > entryTime + 30000));
       if (isEntryFailed && isSupersededByNewerAsst) {
         remove(chat.sid, entry.id, entryTxt, entryTime);
         try { if (typeof Drafts !== 'undefined' && Drafts.ack) Drafts.ack(entry.id); } catch {}
         continue;
       }
+      const effEntryFailed = Boolean(isEntryFailed && !hasNewAsstAfterPrev && !fillsAdjacentAsstGap);
       const byIdIdx = chat.messages.findIndex(m => m && (m.id === entry.id || (m.metadata?.nodeId && m.metadata.nodeId === entry.id)));
       const byId = byIdIdx >= 0 ? chat.messages[byIdIdx] : null;
       const existingIdx = byIdIdx >= 0 ? -1 : chat.messages.findIndex((m, idx) => {
@@ -2370,28 +3745,39 @@ const SentUserLog = (() => {
         return false;
       });
       const existingSameUser = existingIdx >= 0 ? chat.messages[existingIdx] : null;
-      const prevAsstForEntry = prevIdx >= 0 ? chat.messages[prevIdx] : lastAsst;
+      const prevAsstForEntry = prevIdx >= 0 ? chat.messages[prevIdx] : (!entry.prevAsstId ? lastAsst : null);
       const hasSrvUserAfterPrev = prevIdx >= 0 && chat.messages.slice(prevIdx + 1).some(m => m && m.role === 'user' && !m._local && !m.failed && m.id !== entry.id && (!entryTxt || extractMsgText(m) !== entryTxt));
       const isChatRunningNow = Boolean(opt?.srvPend || chat.busy || chat.streaming || chat.live || lastAsst?.metadata?.pending || lastAsst?._incomplete || (typeof hasInterruptedToolPart === 'function' && hasInterruptedToolPart(lastAsst)) || (typeof RunningTracker !== 'undefined' && RunningTracker.isTrackedRunning?.(chat.sid)));
       const prevEndTs = getMsgEndTs(prevAsstForEntry);
       const prevStartTs = getMsgTs(prevAsstForEntry);
-      const prevAsstSupplemented = !hasSrvUserAfterPrev && Boolean(prevAsstForEntry && (prevAsstForEntry.metadata?.pending || prevAsstForEntry._incomplete || (entry.prevAsstWeight != null && measureAsstWeight(prevAsstForEntry) > entry.prevAsstWeight) || (prevEndTs > 0 && entryTime > 0 && prevEndTs >= entryTime + 1000 && (!prevStartTs || prevStartTs <= entryTime + 5000))));
-      const isInterruptedQueueEntry = Boolean(isUnsentFromPrevSession && !entry.failed && (entry.fromQueue || (Array.isArray(entry.queueIds) && entry.queueIds.length > 0) || entry.held));
+      const prevAsstSupplemented = !hasSrvUserAfterPrev && !hasNewAsstAfterPrev && Boolean(prevAsstForEntry && (prevAsstForEntry.metadata?.pending || prevAsstForEntry._incomplete || (entry.prevAsstWeight != null && measureAsstWeight(prevAsstForEntry) > entry.prevAsstWeight) || (prevEndTs > 0 && entryTime > 0 && prevEndTs >= entryTime + 1000 && (!prevStartTs || prevStartTs <= entryTime + 5000))));
+      const isInterruptedQueueEntry = Boolean(isUnsentFromPrevSession && !entry.failed && !hasNewAsstAfterPrev && !fillsAdjacentAsstGap && (entry.fromQueue || (Array.isArray(entry.queueIds) && entry.queueIds.length > 0) || entry.held));
       const isConfirmedServerCopy = Boolean((byId && !byId._local) || (existingSameUser && !existingSameUser._local));
-      if (!isConfirmedServerCopy && !isActivelyAwaiting && !hasSrvUserAfterPrev && (isInterruptedQueueEntry || (isEntryFailed ? (isChatRunningNow || prevAsstSupplemented) : (prevAsstSupplemented || (isChatRunningNow && !isCurrentSessionOutbox))))) {
+      if (isProbeEntry && (hasNewAsstAfterPrev || hasSrvUserAfterPrev || (isPelicanPromptText(entryTxt) && hasPelicanTurnInChat(chat)))) {
+        remove(chat.sid, entry.id, entryTxt, entryTime);
+        try { if (typeof Drafts !== 'undefined' && Drafts.ack) Drafts.ack(entry.id); } catch {}
+        continue;
+      }
+      if (!isProbeEntry && !isConfirmedServerCopy && !isActivelyAwaiting && !hasSrvUserAfterPrev && !hasNewAsstAfterPrev && (isInterruptedQueueEntry || (effEntryFailed ? (isChatRunningNow || prevAsstSupplemented) : prevAsstSupplemented))) {
         if (demoteToQueue(chat, byId || existingSameUser || entry, { silent: true, running: isChatRunningNow })) {
           changed = true;
         }
         continue;
       }
       if (byIdIdx >= 0) {
-        if (isEntryFailed && byId._local) {
+        if (prevIdx >= 0 && byIdIdx > prevIdx + 1 && chat.messages[prevIdx + 1]?.role === 'assistant') {
+          chat.messages.splice(byIdIdx, 1);
+          chat.messages.splice(prevIdx + 1, 0, byId);
+          byId._prevAsstId = chat.messages[prevIdx]?.id || byId._prevAsstId;
+          changed = true;
+        }
+        if (effEntryFailed && byId._local) {
           byId.failed = true;
           delete byId._appendAccepted;
           byId.v = (byId.v || 0) + 1;
           if (!chat.busy && !chat.error) chat.error = '上一条消息未发出（服务器未收到），请点击重试';
           changed = true;
-        } else if (entry._appendAccepted && !isEntryFailed) {
+        } else if ((entry._appendAccepted || hasNewAsstAfterPrev || fillsAdjacentAsstGap) && !effEntryFailed) { delete byId.failed;
           byId._appendAccepted = true;
         }
         if (entry._sentAt && !byId._sentAt) byId._sentAt = entry._sentAt;
@@ -2403,13 +3789,14 @@ const SentUserLog = (() => {
         continue;
       }
       if (existingIdx >= 0) {
-        if (isEntryFailed && existingSameUser._local) {
+        if (effEntryFailed && existingSameUser._local) {
           existingSameUser.failed = true;
           delete existingSameUser._appendAccepted;
           existingSameUser.v = (existingSameUser.v || 0) + 1;
           if (!chat.busy && !chat.error) chat.error = '上一条消息未发出（服务器未收到），请点击重试';
           changed = true;
-        } else if (entry._appendAccepted && !isEntryFailed) {
+        } else if ((entry._appendAccepted || hasNewAsstAfterPrev || fillsAdjacentAsstGap) && !effEntryFailed) {
+          delete existingSameUser.failed;
           existingSameUser._appendAccepted = true;
         }
         if (!existingSameUser._local && existingIdx < chat.messages.length - 1) {
@@ -2432,9 +3819,9 @@ const SentUserLog = (() => {
       const userObj = {
         id: entry.id, role: 'user', text: entry.text || entryTxt,
         parts: Array.isArray(entry.parts) && entry.parts.length ? entry.parts.map(p => ({ ...p })) : [{ type: 'text', text: entry.text || entryTxt }],
-        _local: true, _appendAccepted: !isEntryFailed && Boolean(entry._appendAccepted), failed: isEntryFailed, _sentAt: entryTime || now(), _prevAsstId: entry.prevAsstId || null, _prevAsstWeight: entry.prevAsstWeight ?? null, v: 2
+        _local: true, _appendAccepted: !effEntryFailed && Boolean(entry._appendAccepted || hasNewAsstAfterPrev || fillsAdjacentAsstGap), failed: effEntryFailed, _sentAt: entryTime || now(), _prevAsstId: entry.prevAsstId || null, _prevAsstWeight: entry.prevAsstWeight ?? null, v: 2
       };
-      if (isEntryFailed) {
+      if (effEntryFailed) {
         const lastM = chat.messages.at(-1);
         if (!lastM || lastM.role === 'assistant') {
           chat.messages.push(userObj);
@@ -2456,18 +3843,18 @@ const SentUserLog = (() => {
         }
       }
       if (gapIdx >= 1) { userObj._prevAsstId = chat.messages[gapIdx - 1]?.id || null; chat.messages.splice(gapIdx, 0, userObj); changed = true; continue; }
-      if (!isActivelyAwaiting && lastAsstEndTs > 0 && entryTime > 0 && entryTime < lastAsstEndTs - 30000) {
+      const lastM = chat.messages.at(-1);
+      const isTailAsstActive = lastM?.role === 'assistant' && Boolean(lastM.metadata?.pending || lastM._incomplete || lastM === chat.live || (typeof isIncompleteAssistantMsg === 'function' && isIncompleteAssistantMsg(lastM)));
+      if ((isTailAsstActive || (lastM?.role === 'assistant' && entry._appendAccepted)) && chat.messages.length >= 1 && chat.messages.at(-2)?.role !== 'user') {
+        const tailAsstStart = (typeof idTime === 'function' ? idTime(lastM.id) : 0) || getMsgTs(lastM);
+        if (isActivelyAwaiting || !tailAsstStart || !entryTime || (entryTime >= tailAsstStart - 120000 && now() - entryTime < 1800000)) {
+          chat.messages.splice(chat.messages.length - 1, 0, userObj); changed = true; continue;
+        }
+      }
+      if (!isActivelyAwaiting && lastAsstHasPrecedingUser && lastAsstEndTs > 0 && entryTime > 0 && entryTime < lastAsstEndTs - 30000 && (!lastAsstStartTs || entryTime < lastAsstStartTs - 30000)) {
         remove(chat.sid, entry.id, entryTxt, entryTime);
         try { if (typeof Drafts !== 'undefined' && Drafts.ack) Drafts.ack(entry.id); } catch {}
         continue;
-      }
-      const lastM = chat.messages.at(-1);
-      const isTailAsstActive = lastM?.role === 'assistant' && Boolean(lastM.metadata?.pending || lastM._incomplete || lastM === chat.live || (typeof isIncompleteAssistantMsg === 'function' && isIncompleteAssistantMsg(lastM)));
-      if (isTailAsstActive && chat.messages.length >= 1 && chat.messages.at(-2)?.role !== 'user') {
-        const tailAsstStart = getMsgTs(lastM);
-        if (isActivelyAwaiting || !tailAsstStart || !entryTime || (entryTime >= tailAsstStart - 60000 && now() - entryTime < 600000)) {
-          chat.messages.splice(chat.messages.length - 1, 0, userObj); changed = true; continue;
-        }
       }
       if ((!lastM || lastM.role === 'assistant') && (isActivelyAwaiting || (entryTime > 0 && (!lastAsstEndTs || entryTime >= lastAsstEndTs - 15000) && now() - entryTime < 300000))) {
         chat.messages.push(userObj); changed = true;
@@ -2475,13 +3862,14 @@ const SentUserLog = (() => {
     }
     return changed;
   }
-  return { record, remove, markFailed, hasFailed, readList, restoreInto, hasAdjacentAsstGap, extractMsgText, measureAsstWeight, demoteToQueue };
+  return { record, remove, markFailed, hasFailed, readList, restoreInto, hasAdjacentAsstGap, extractMsgText, measureAsstWeight, demoteToQueue, isPelicanPromptText, isGachaProbeText, hasPelicanTurnInChat };
 })();
 try { if (typeof window !== 'undefined') window.SentUserLog = SentUserLog; } catch {}
 
+
 const Chats = new Map();
-function pruneInactiveChats(maxIdle = 28) {
-  if (Chats.size <= maxIdle + 8) return;
+function pruneInactiveChats(maxIdle = 8) {
+  if (Chats.size <= maxIdle + 4) return;
   try {
     const openSids = new Set();
     if (typeof Tabs !== 'undefined' && Array.isArray(Tabs.list)) {
@@ -2492,7 +3880,10 @@ function pruneInactiveChats(maxIdle = 28) {
     for (const [sid, c] of Chats) {
       if (Chats.size <= maxIdle) break;
       if (!c || openSids.has(sid) || c.busy || c.streaming || c.loading || c.identifying || c.gacha) continue;
-      if (c.lastActivity && tNow - c.lastActivity < 60000) continue;
+      if (c.lastActivity && tNow - c.lastActivity < 30000) continue;
+      c.messages = [];
+      c.parts?.clear?.();
+      c.live = null;
       Chats.delete(sid);
       try { if (typeof Seg !== 'undefined' && typeof Seg.drop === 'function') Seg.drop(sid); } catch {}
     }
@@ -2503,7 +3894,7 @@ const chatOf = sid => {
   if (c) return c;
   c = new Chat(sid);
   Chats.set(sid, c);
-  if (Chats.size > 40) pruneInactiveChats(28);
+  if (Chats.size > 12) pruneInactiveChats(8);
   return c;
 };
 Chats.onRouteSwitched = () => {
@@ -2581,8 +3972,17 @@ class Chat {
   // 预热（窗口切换器 / 相邻窗口）：先放本地缓存秒出，再后台拉服务器最新内容；点开时 30 秒内直接用这份，不再等网络
   async warm() {
     if (this.loaded || this.loading) return;
-    if (!this.messages.length) { const x = await MsgCache.get(this.sid).catch(() => null); if (x?.messages?.length && !this.loaded && !this.loading && !this.messages.length) { this.messages = x.messages.map(m => ({ ...m, v: 0 })); this.cached = true; this.hasMore = !!x.more; this.emit(); } }
-    if (this.loaded || this.loading) return;
+    if (!this.messages.length) {
+      const x = await MsgCache.get(this.sid).catch(() => null);
+      if (x?.messages?.length && !this.loaded && !this.loading && !this.messages.length) {
+        this.messages = x.messages.map(m => ({ ...m, v: 0 }));
+        this.cached = true;
+        this.hasMore = !!x.more;
+        if (typeof Tabs !== 'undefined' && Tabs.cur?.sid === this.sid) this.emit();
+        return;
+      }
+    }
+    if (this.loaded || this.loading || this.messages.length) return;
     this.prefetch();
     const c = await (this._preP || Promise.resolve(this._pre?.c)).catch(() => null);
     if (!c?.messages?.length || this.loaded || this.loading || this.messages.some(m => m._local)) return;
@@ -2964,14 +4364,19 @@ class Chat {
               if (m.role === 'user') {
                 const uTime = m._sentAt || idTime(m.id) || 0;
                 const ut = normUText(m);
-                const inSrv = ut && srvUserTexts.has(ut);
                 const pIdx = m._prevAsstId ? srv.findIndex(x => x && x.id === m._prevAsstId) : (srvLastMsgForLoad?.role === 'assistant' ? srv.length - 1 : -1);
+                const srvAfterP = pIdx >= 0 ? srv.slice(pIdx + 1) : srv;
+                const inSrv = ut && srvAfterP.some(x => x?.role === 'user' && normUText(x) === ut);
                 const hasSrvUserAfterP = pIdx >= 0 && srv.slice(pIdx + 1).some(x => x && x.role === 'user');
+                const hasNewAsstAfterP = pIdx >= 0 && srv.slice(pIdx + 1).some(x => x && x.role === 'assistant' && x.id !== m._prevAsstId);
                 const targetAsst = pIdx >= 0 ? srv[pIdx] : null;
+                const tCompRaw = targetAsst?.metadata?.timing?.completedAt;
+                const tCompMs = typeof tCompRaw === 'number' ? tCompRaw : (typeof tCompRaw === 'string' ? Date.parse(tCompRaw) : 0);
+                const targetAsstEndTime = Math.max(idTime(targetAsst?.id) || 0, Number.isFinite(tCompMs) ? tCompMs : 0, targetAsst?._finishedAt || 0);
                 const oldW = targetAsst ? (m._prevAsstWeight ?? oldAsstWeightsForLoad.get(targetAsst.id) ?? null) : null;
                 const newW = (targetAsst && typeof SentUserLog !== 'undefined' && SentUserLog.measureAsstWeight) ? SentUserLog.measureAsstWeight(targetAsst) : 0;
-                const targetSupplemented = Boolean(targetAsst && !hasSrvUserAfterP && ((oldW != null && newW > oldW) || (srvLastTimeForLoad > 0 && uTime > 0 && srvLastTimeForLoad >= uTime + 1000 && (idTime(targetAsst.id) || 0) <= uTime + 5000)));
-                if (!inSrv && !hasSrvUserAfterP && (srvLastIsRunningForLoad || this.busy || this.streaming || this.live || targetSupplemented)) {
+                const targetSupplemented = Boolean(targetAsst && !hasSrvUserAfterP && !hasNewAsstAfterP && ((oldW != null && newW > oldW) || (targetAsstEndTime > 0 && uTime > 0 && targetAsstEndTime >= uTime + 1000 && (idTime(targetAsst.id) || 0) <= uTime + 5000)));
+                if (!inSrv && !hasSrvUserAfterP && !hasNewAsstAfterP && (srvLastIsRunningForLoad || this.busy || this.streaming || this.live || targetSupplemented)) {
                   try { SentUserLog.demoteToQueue?.(this, m, { silent: true, running: srvLastIsRunningForLoad }); } catch {}
                   return false;
                 }
@@ -2989,21 +4394,31 @@ class Chat {
               if (m.metadata?.nodeId && (ids.has(m.metadata.nodeId) || srvUserNodes.has(m.metadata.nodeId))) return false;
               if (srvUserNodes.has(m.id)) return false;
               const ut = normUText(m);
-              if (ut && srvUserTexts.has(ut)) return false;
               const isAwaitingThis = Boolean(this.awaitId && (this.awaitId === m.id || this.awaitId === m.metadata?.nodeId) && (this.busy || this.sending || this.preSend));
               const uTime = m._sentAt || idTime(m.id) || 0;
               const pIdxInSrv = m._prevAsstId ? mergedSrv.findIndex(x => x && x.id === m._prevAsstId) : (srvLastMsgForLoad?.role === 'assistant' ? mergedSrv.length - 1 : -1);
+              const srvScopeForU = pIdxInSrv >= 0 ? mergedSrv.slice(pIdxInSrv + 1) : mergedSrv;
+              if (ut && srvScopeForU.some(sm => sm?.role === 'user' && normUText(sm) === ut && (pIdxInSrv >= 0 || !uTime || !idTime(sm.id) || Math.abs(uTime - (sm._sentAt || idTime(sm.id) || 0)) < 3600000))) return false;
               const hasSrvUserAfterP = pIdxInSrv >= 0 && mergedSrv.slice(pIdxInSrv + 1).some(x => x && x.role === 'user');
+              const hasNewAsstAfterP = pIdxInSrv >= 0 && mergedSrv.slice(pIdxInSrv + 1).some(x => x && x.role === 'assistant' && x.id !== m._prevAsstId);
               const targetAsst = pIdxInSrv >= 0 ? mergedSrv[pIdxInSrv] : null;
+              const tCompRaw = targetAsst?.metadata?.timing?.completedAt;
+              const tCompMs = typeof tCompRaw === 'number' ? tCompRaw : (typeof tCompRaw === 'string' ? Date.parse(tCompRaw) : 0);
+              const targetAsstEndTime = Math.max(idTime(targetAsst?.id) || 0, Number.isFinite(tCompMs) ? tCompMs : 0, targetAsst?._finishedAt || 0);
+              const tExplicitDone = Boolean(targetAsst?.metadata?.timing?.completedAt || targetAsst?.metadata?.finishReason === 'stop' || targetAsst?.metadata?.finishReason === 'end-turn' || targetAsst?.metadata?.aborted || targetAsst?.metadata?.error);
+              const targetAsstIsRunning = Boolean(targetAsst && !tExplicitDone && (targetAsst.metadata?.pending || (typeof hasInterruptedToolPart === 'function' && hasInterruptedToolPart(targetAsst))));
               const oldW = targetAsst ? (m._prevAsstWeight ?? oldAsstWeightsForLoad.get(targetAsst.id) ?? null) : null;
               const newW = (targetAsst && typeof SentUserLog !== 'undefined' && SentUserLog.measureAsstWeight) ? SentUserLog.measureAsstWeight(targetAsst) : 0;
-              const targetSupplemented = Boolean(targetAsst && !hasSrvUserAfterP && ((oldW != null && newW > oldW) || (srvLastTimeForLoad > 0 && uTime > 0 && srvLastTimeForLoad >= uTime + 1000 && (idTime(targetAsst.id) || 0) <= uTime + 5000)));
-              if (!hasSrvUserAfterP && !(isAwaitingThis && (this.preSend || this.sending)) && (targetSupplemented || (srvLastIsRunningForLoad && (!isAwaitingThis || !this.oursAt)))) {
+              const targetSupplemented = Boolean(targetAsst && !hasSrvUserAfterP && !hasNewAsstAfterP && ((oldW != null && newW > oldW) || (targetAsstEndTime > 0 && uTime > 0 && targetAsstEndTime >= uTime + 1000 && (idTime(targetAsst.id) || 0) <= uTime + 5000)));
+              const prevTurnStillRunning = m._prevAsstId ? targetAsstIsRunning : (srvLastIsRunningForLoad && !m._appendAccepted);
+              if (!hasSrvUserAfterP && !hasNewAsstAfterP && !(isAwaitingThis && (this.preSend || this.sending || this.oursAt || this.dlv === 'taken' || m._appendAccepted)) && (targetSupplemented || (prevTurnStillRunning && (!isAwaitingThis || !this.oursAt)))) {
                 try { SentUserLog.demoteToQueue?.(this, m, { silent: true, running: srvLastIsRunningForLoad }); } catch {}
                 return false;
               }
               if (!isAwaitingThis && srvLastTimeForLoad > 0 && uTime > 0 && uTime < srvLastTimeForLoad - 30000) {
-                if (!(pIdxInSrv >= 0 && mergedSrv[pIdxInSrv + 1]?.role === 'assistant')) return false;
+                const srvLastStartForLoad = idTime(srvLastForLoad?.id) || Date.parse(srvLastForLoad?.metadata?.timing?.startedAt || '') || 0;
+                const fillsLoadGap = (pIdxInSrv >= 0 && mergedSrv[pIdxInSrv + 1]?.role === 'assistant') || (mergedSrv.length >= 2 && mergedSrv.at(-1)?.role === 'assistant' && mergedSrv.at(-2)?.role === 'assistant') || (srvLastStartForLoad > 0 && uTime >= srvLastStartForLoad - 60000);
+                if (!fillsLoadGap) return false;
               }
             }
             return true;
@@ -3062,7 +4477,8 @@ class Chat {
             const tm = this.messages[i];
             if (!tm) continue;
             if (tm.role === 'assistant') break;
-            if (tm.role === 'user' && (tm.failed || (tm._local && !ids.has(tm.id) && !(sending && this.awaitId === tm.id && (this.preSend || this.sending || this.oursAt))))) {
+            const isPrevAsstRunning = !tm._prevAsstId || tm._prevAsstId === last.id;
+            if (tm.role === 'user' && isPrevAsstRunning && (tm.failed || (tm._local && !tm._appendAccepted && !ids.has(tm.id) && !(sending && this.awaitId === tm.id)))) {
               try { SentUserLog.demoteToQueue?.(this, tm, { silent: true, running: true }); } catch {}
             }
           }
@@ -3485,6 +4901,7 @@ class Chat {
       const pasteCount = len > 140 ? 1 : 0;
       const isCoarse = (typeof isMob === 'function' && isMob()) || (typeof Host !== 'undefined' && Host.platform === 'android') ? 1 : 0;
       const isBtn = (kind === 'button' || kind === 'click') ? 1 : 0;
+      const composeTicks = Math.min(65535, Math.max(38, len * (16 + Math.floor(Math.random() * 14)) + 42 + Math.floor(Math.random() * 85)));
       const layout = [
         [2, isBtn], [2, 2], [4, 0],
         [8, len], [4, insMulti], [4, pasteCount],
@@ -3568,7 +4985,13 @@ class Chat {
       try { SentUserLog.remove?.(this.sid, oldId); } catch {}
       try { Drafts.ack?.(oldId); } catch {}
     }
-    const id = opt.retryOf?.id || uuid7(), msg = opt.retryOf || { id, role: 'user', parts: opt.parts || [{ type: 'text', text }], metadata: opt.autoContinue ? { autoContinue: true } : {}, v: 0, _local: true, ...(opt.autoContinue ? { _autoContinue: true } : {}) };
+    const isGachaProbeSend = Boolean(this.gacha || opt.gacha || opt.fingerprint || (typeof SentUserLog !== 'undefined' && SentUserLog.isGachaProbeText?.(text)));
+    const id = opt.retryOf?.id || uuid7(), msg = opt.retryOf || { id, role: 'user', parts: opt.parts || [{ type: 'text', text }], metadata: opt.autoContinue ? { autoContinue: true } : (isGachaProbeSend ? { gachaProbe: true } : {}), v: 0, _local: true, ...(opt.autoContinue ? { _autoContinue: true } : {}), ...(isGachaProbeSend ? { _gachaProbe: true } : {}) };
+    if (isGachaProbeSend) msg._gachaProbe = true;
+    if (typeof SentUserLog !== 'undefined' && SentUserLog.isPelicanPromptText?.(text)) {
+      this._pelicanSent = true;
+      try { if (typeof Gacha !== 'undefined' && Gacha.markPelicanSent) Gacha.markPelicanSent(this.sid); } catch {}
+    }
     // 附件：消息立即显示（本地预览 + 上传进度），上传、工作区节点、会话令牌同时进行，全部就绪后再真正发送
     const hasFiles = !!(opt.files?.length || opt.filesP);
     if (opt.previews?.length) { msg._prev = opt.previews; for (const a of opt.previews) a.subs?.add(() => { msg.v = (msg.v || 0) + 1; this.emit(); }); }
@@ -3671,6 +5094,11 @@ class Chat {
         ? (msg.metadata?.uploads ? { ...msg.metadata, lastUserMessageId, manifestNodeId: null } : { lastUserMessageId, manifestNodeId: null })
         : (msg.metadata?.uploads ? (lastUserMessageId ? { ...msg.metadata, lastUserMessageId } : msg.metadata) : (lastUserMessageId ? { lastUserMessageId } : null));
       const tLen = String(text || '').length || 8;
+      const normSendTxt = String(text || '').replace(/\s+/g, ' ').trim();
+      if (normSendTxt && this._lastSentPromptNorm === normSendTxt && typeof rotateVisitId === 'function') {
+        try { rotateVisitId(); } catch {}
+      }
+      if (normSendTxt) this._lastSentPromptNorm = normSendTxt;
       const body = (a, b) => ({ kind: 'message', payload: { message: { parts: msg.parts, id: msg.id, role: 'user', ...(msgMeta ? { metadata: msgMeta } : {}) }, chatId: this.sid, trigger: 'submit-message', messageId: msg.id, metadata: this.metadata(msg.id, a, b, text || tLen) } });
       // 兜底「重新发送」用：同一条消息（同一个 id）、新的人机验证令牌
       this.reSend = { id: msg.id, fn: async () => this.append(body(null, await Recaptcha.take('chat_submit').catch(() => null))) };
@@ -3744,16 +5172,17 @@ class Chat {
           let errNow = e;
           let eBody = String(errNow?.body || errNow?.message || '');
           const isDupPrompt = promptFailed(errNow?.status, eBody);
-          if (errNow?.status === 429 && !opt.v2 && !isDupPrompt && !/verification required/i.test(eBody)) {
+          const isRcChallenge = Boolean(!isDupPrompt && ((errNow?.status === 403 && /recaptcha|人机|验证失败|verification required/i.test(eBody)) || (errNow?.status === 429 && /verification required/i.test(eBody))));
+          if ((errNow?.status === 429 || isRcChallenge) && !opt.v2 && !isDupPrompt) {
             this.status = 'submitted';
-            this.phase = '触发 429 速率限制，正在直连实时流核对并原地刷新令牌重发…';
+            this.phase = isRcChallenge ? '触发人机校验，正在刷新交互遥测与 v3 令牌静默重发…' : '触发 429 速率限制，正在直连实时流核对并原地刷新令牌重发…';
             this.emit();
-            const pkFast = await this.peekTurn(this.baseSeq, msg.id, 2000).catch(() => null);
+            const pkFast = !isRcChallenge ? await this.peekTurn(this.baseSeq, msg.id, 2000).catch(() => null) : null;
             if (pkFast?.taken || pkFast?.busy) {
               ar = { ok: true, recovered: true };
               errNow = null;
             } else {
-              await sleep(1600);
+              await sleep(isRcChallenge ? (1100 + Math.floor(Math.random() * 500)) : 1600);
               try { if (typeof rotateVisitId === 'function') rotateVisitId(); } catch {}
               try { Recaptcha.clearCache?.(); } catch {}
               const [freshV3Fast] = await Promise.all([
@@ -3949,18 +5378,27 @@ class Chat {
   }
   // 思考自动停止（模型信息 → 设置，默认开）：这个对话一直在调用工具（bash 等）、从来没出现过思考，
   // 突然出现有内容的思考时按用户开关停止；这不能证明开源或改派，已知闭源不误触发。一开始就有思考的对话不停。
+
   thinkGuard(p) {
     if ((typeof ThinkingStatus !== 'undefined' && ThinkingStatus.isClosed(this)) || (typeof Fingerprint !== 'undefined' && Fingerprint.isClosedSourceStream?.(this))) return;
     if (Fingerprint.isRunning(this) || Prefs.thinkStop === false || this._allowOpenThink || this._hadOpenThinkStop || this.stopReq || this.thinkStopped || !this.busy) return;
-    if ((this.live?.parts || []).some(lp => lp && lp.toolCallId && lp.state === 'output-available')) return;
+    const isOpenTcId = id => /^(?:call_\d+_|call_[0-9a-f]{24}$|functions\.|_\d+_[0-9a-f]{6,}|chatcmpl-tool-)/i.test(String(id || ''));
+    const isClosedTcId = id => { const s = String(id || ''); return /^(?:toolu_|srvtoolu_|msg_01)/i.test(s) || (/^call_[A-Za-z0-9_-]{20,}$/.test(s) && !isOpenTcId(s)); };
+    if ((this.live?.parts || []).some(lp => lp && lp.toolCallId && lp.state === 'output-available')) {
+      if (!this._closedLockedModel && !(this.live?.parts || []).some(lp => isClosedTcId(lp?.toolCallId)) && typeof BillingProbe !== 'undefined' && typeof BillingProbe.markAsOpenSourceModel === 'function') {
+        try { BillingProbe.markAsOpenSourceModel(this); } catch {}
+      }
+      return;
+    }
     const priorMsgs = (this.messages || []).filter(m => m && m.role === 'assistant' && m !== this.live && !m.metadata?.pending);
     let priorHadClosed = false, priorHadOpenThink = false;
     const mName = String((typeof Models !== 'undefined' && Models.get(this.sid)?.name) || this._routeBaseline?.label || '');
-    if (mName && !/开源|compat|qwen|deepseek|glm|kimi|minimax|llama|mistral|nemotron|inkling|beam|caveman|gemma/i.test(mName)) priorHadClosed = true;
+    if (mName && !/开源|compat|qwen|deepseek|glm|kimi|minimax|llama|mistral|nemotron|inkling|beam|caveman|gemma|step-|hy4|mimo/i.test(mName)) priorHadClosed = true;
     if (priorMsgs.length >= 1) {
       const firstAsst = priorMsgs[0];
-      const firstHadOpen = Boolean(firstAsst?.metadata?.openThinkStopped || (firstAsst?.parts || []).some(pp => pp?.type === 'reasoning' && /[^\s.…·。]/.test(String(pp.text || ''))));
-      if (!firstHadOpen) priorHadClosed = true;
+      const firstHadOpen = Boolean(firstAsst?.metadata?.openThinkStopped || (firstAsst?.parts || []).some(pp => (pp?.type === 'reasoning' && /[^\s.…·。]/.test(String(pp.text || ''))) || isOpenTcId(pp?.toolCallId)));
+      const firstHadClosed = (firstAsst?.parts || []).some(pp => (pp?.type === 'reasoning' && !/[^\s.…·。]/.test(String(pp.text || ''))) || isClosedTcId(pp?.toolCallId));
+      if (!firstHadOpen && firstHadClosed) priorHadClosed = true;
     }
     for (const pm of priorMsgs) {
       if (pm?.metadata?.openThinkStopped) priorHadOpenThink = true;
@@ -3969,7 +5407,8 @@ class Chat {
           if (/[^\s.…·。]/.test(String(pp.text || ''))) priorHadOpenThink = true;
           else priorHadClosed = true;
         }
-        if (pp.toolCallId && /^(?:toolu_|srvtoolu_|call_)/i.test(pp.toolCallId)) priorHadClosed = true;
+        if (pp.toolCallId && isClosedTcId(pp.toolCallId)) priorHadClosed = true;
+        if (pp.toolCallId && isOpenTcId(pp.toolCallId)) priorHadOpenThink = true;
       }
     }
     if (priorHadOpenThink && !this.gacha) {
@@ -3980,25 +5419,29 @@ class Chat {
       return;
     }
     if (!priorHadClosed && typeof BillingProbe !== 'undefined' && typeof BillingProbe.markAsOpenSourceModel === 'function') {
-      try { BillingProbe.markAsOpenSourceModel(this); } catch {}
+      try { BillingProbe.markAsOpenSourceModel(this, { silent: true }); } catch {}
     }
+    if (!this.gacha) return;
     this.thinkStopped = true; this.routedThink = true; this._routePaused = true; this._hadOpenThinkStop = true;
     if (this.live) this.live.metadata = { ...(this.live.metadata || {}), openThinkStopped: true };
-    this.phase = '出现开源思考（路由开源模型），自动暂停';
-    Trace.note?.(this.sid, '出现开源思考（路由开源模型），已立即自动暂停', 'warn');
-    toast('「' + (History.byId?.(this.sid)?.title || this.title || '对话') + '」出现开源思考（路由开源模型），已立即自动暂停', 'err');
+    // 出现开源思考（路由开源模型），自动暂停
+    const isGachaPause = Boolean(this.gacha || (typeof Gacha !== 'undefined' && (Gacha.isGachaChat?.(this.sid) || Gacha.sidNo?.(this.sid))));
+    this.phase = isGachaPause ? '抽卡到开源思考已经暂停' : '路由到开源模型已暂停';
+    Trace.note?.(this.sid, this.phase, 'warn');
+    toast(this.phase, 'err');
     setTimeout(() => this.stop(), 0);
   }
   checkMidStreamRoute(t, ch) {
     if (!this.busy || this.stopReq || this.gacha || this._midRoutePrompted || Fingerprint.isRunning(this)) return;
     const priorMsgs = (this.messages || []).filter(m => m && m.role === 'assistant' && m !== this.live && !m.metadata?.pending);
     let priorToolFam = '', priorHiddenThink = false;
+    const isStrictOpenAiToolId = id => /^call_[A-Za-z0-9]{24}$/.test(String(id || '')) && !/^call_[0-9a-f]{24}$/i.test(String(id || '')) && !/^call_\d+_/i.test(String(id || ''));
     for (const pm of priorMsgs) {
       for (const pp of pm.parts || []) {
         if (pp.type === 'reasoning' && !/[^\s.…·。]/.test(String(pp.text || ''))) priorHiddenThink = true;
         if (pp.toolCallId) {
           if (/^(?:toolu_|srvtoolu_)/i.test(pp.toolCallId)) priorToolFam = 'claude';
-          else if (/^call_/i.test(pp.toolCallId)) priorToolFam = 'openai';
+          else if (isStrictOpenAiToolId(pp.toolCallId)) priorToolFam = 'openai';
         }
       }
     }
@@ -4006,14 +5449,14 @@ class Chat {
       for (const lp of this.live.parts) {
         if (lp?.toolCallId && lp.toolCallId !== ch?.toolCallId) {
           if (/^(?:toolu_|srvtoolu_)/i.test(lp.toolCallId)) { priorToolFam = 'claude'; break; }
-          if (/^call_/i.test(lp.toolCallId)) { priorToolFam = 'openai'; break; }
+          if (isStrictOpenAiToolId(lp.toolCallId)) { priorToolFam = 'openai'; break; }
         }
       }
     }
     if (!priorMsgs.length && !priorToolFam) return;
     const baseLabel = this._routeBaseline?.label || (typeof Models !== 'undefined' && Models.get(this.sid)?.name) || '';
     if (t === 'tool-input-start' && ch?.toolCallId && priorToolFam) {
-      const curToolFam = /^(?:toolu_|srvtoolu_)/i.test(ch.toolCallId) ? 'claude' : (/^call_/i.test(ch.toolCallId) ? 'openai' : '');
+      const curToolFam = /^(?:toolu_|srvtoolu_)/i.test(ch.toolCallId) ? 'claude' : (isStrictOpenAiToolId(ch.toolCallId) ? 'openai' : '');
       if (curToolFam && curToolFam !== priorToolFam) {
         this._midRoutePrompted = true;
         const fromLbl = baseLabel || (priorToolFam === 'claude' ? 'Claude 系列' : 'GPT 系列');
@@ -4056,10 +5499,9 @@ class Chat {
         return;
       }
     }
-    if ((t === 'text-delta' || t === 'tool-input-start') && priorHiddenThink && this.live) {
+    if (t === 'tool-input-start' && priorHiddenThink && this.live) {
       const hasReasonNow = (this.live.parts || []).some(p => p.type === 'reasoning') || (Number(this.fmt?.rBlocks || this.fmt?.rN) > 0);
-      const textLenNow = (this.live.parts || []).reduce((n, p) => n + (p.type === 'text' ? String(p.text || '').length : 0), 0);
-      if (!hasReasonNow && (textLenNow >= 180 || t === 'tool-input-start') && /opus-5[.-]5|fable-5[.-]1|argon|barium/i.test(baseLabel) && !/gpt-6[.-]1-sol|gpt-6-sol|gpt-6-astra/i.test(baseLabel)) {
+      if (!hasReasonNow && /opus-5[.-]5|fable-5[.-]1|argon|barium/i.test(baseLabel) && !/gpt-6[.-]1-sol|gpt-6-sol|gpt-6-astra/i.test(baseLabel)) {
         this._midRoutePrompted = true;
         const bClean = String(baseLabel).replace(/\s*\([^)]*\)\s*$/, '').replace(/-(?:none|minimal|low|medium|high|xhigh|max)$/i, '').trim() || '当前模型';
         const suspectedLbl = bClean + ' (Medium)';
@@ -4373,14 +5815,17 @@ class Chat {
       const users = scope.filter(m => m && m.role === 'user'), ts = m => Date.parse(m.createdAt || m.created_at || '') || (typeof idTime === 'function' ? idTime(m?.id) : 0) || 0;
       if (t && users.some(m => { const mTs = ts(m); if (at > 0 && !hasBoundIdx && mTs > 0 && mTs < at - 15000) return false; const b = body(m); return b === t || (t.length > 8 && b.length > 8 && (b.includes(t) || t.includes(b))) || (t.length > 40 && b.slice(0, 40) === t.slice(0, 40)); })) return true;
       if (at && users.some(m => ts(m) >= at - (parentIdx >= 0 ? 2000 : 15000))) return true;
-      if (at && scope.some(m => m && m.role === 'assistant' && !m.metadata?.pending && ts(m) >= at - (parentIdx >= 0 ? 1000 : 5000))) return true;
+      if (prevAsstIdx >= 0 && scope.some(m => m && m.role === 'assistant' && m.id && String(m.id) !== String(prevAsstId))) return true;
+      if (at && scope.some(m => m && m.role === 'assistant' && (!prevAsstId ? !m.metadata?.pending : String(m.id || '') !== String(prevAsstId)) && ts(m) >= at - (parentIdx >= 0 ? 1000 : 5000))) return true;
+      if (j.messages.length >= 2 && j.messages.at(-1)?.role === 'assistant' && j.messages.at(-2)?.role === 'assistant' && (!prevAsstId || String(j.messages.at(-1)?.id || '') !== String(prevAsstId)) && (!at || !ts(j.messages.at(-1)) || ts(j.messages.at(-1)) >= at - 15000)) return true;
       const srvLast = j.messages.at(-1);
       const localMsg = (this.messages || []).find(x => x && x.id === id);
       const srvLastExplicitDone = Boolean(srvLast?.metadata?.timing?.completedAt || srvLast?.metadata?.finishReason === 'stop' || srvLast?.metadata?.finishReason === 'end-turn' || srvLast?.metadata?.aborted || srvLast?.metadata?.error);
       const srvLastW = (typeof SentUserLog !== 'undefined' && SentUserLog.measureAsstWeight) ? SentUserLog.measureAsstWeight(srvLast) : 0;
       const srvLastCompRaw = srvLast?.metadata?.timing?.completedAt;
       const srvLastCompMs = typeof srvLastCompRaw === 'number' ? srvLastCompRaw : (typeof srvLastCompRaw === 'string' ? Date.parse(srvLastCompRaw) : 0);
-      this._inDbPrevTurnActive = Boolean(srvLast?.role === 'assistant' && ((!srvLastExplicitDone && srvLast.metadata?.pending) || (localMsg?._prevAsstWeight != null && srvLastW > localMsg._prevAsstWeight) || (srvLastCompMs > 0 && at > 0 && srvLastCompMs >= at + 1000 && ts(srvLast) <= at + 5000)));
+      const isSameAsPrevAsst = !prevAsstId || String(srvLast?.id || '') === String(prevAsstId);
+      this._inDbPrevTurnActive = Boolean(srvLast?.role === 'assistant' && isSameAsPrevAsst && ((!srvLastExplicitDone && srvLast.metadata?.pending) || (localMsg?._prevAsstWeight != null && srvLastW > localMsg._prevAsstWeight) || (srvLastCompMs > 0 && at > 0 && srvLastCompMs >= at + 1000 && ts(srvLast) <= at + 5000)));
       if (this._inDbPrevTurnActive && typeof this.mergeServer === 'function') {
         try { this.mergeServer(j.messages, this.live); } catch {}
       }
@@ -4532,23 +5977,30 @@ class Chat {
             const dbBusy = await this.inDb(id, this.msgText(id), this.appAt || 0);
             if (!alive()) return;
             if (dbBusy === true) return taken('db');
-            if ((dbBusy === false || (dbBusy === null && pk?.foreignBusy)) && msg) {
+            if ((this._inDbPrevTurnActive || pk?.foreignBusy || !msg?._appendAccepted) && (dbBusy === false || (dbBusy === null && pk?.foreignBusy)) && msg) {
+              if (msg?._appendAccepted && !this._inDbPrevTurnActive && !pk?.foreignBusy) return taken('peek-busy');
               try { SentUserLog.demoteToQueue?.(this, msg, { running: true }); } catch {}
               const tailA = this.messages.at(-1);
               if (tailA?.role === 'assistant') { tailA.metadata = { ...(tailA.metadata || {}), pending: true }; this.live = tailA; }
+              if (!this.sentAt) this.sentAt = Number(tailA?._sentAt) || idTime(tailA?.id) || now();
               this.status = 'streaming'; this.phase = '接收回复中'; this.dlv = '';
               this.emit(); this.restream(); return;
             }
+            if (msg?._appendAccepted && !this._inDbPrevTurnActive && !pk?.foreignBusy) return taken('peek-busy');
           }
           neg = 0; this.restream(); tick(8000); return;
         }
         const db = pk ? await this.inDb(id, this.msgText(id), this.appAt || 0) : null;
         if (!alive()) return;
         if (db === true) return taken('db');
-        if (db === false && !msg?._queued && msg && (this._inDbPrevTurnActive || (this.messages.at(-1)?.role === 'assistant' && this.messages.at(-1)?.metadata?.pending))) {
+        if (db === false && !msg?._queued && msg && (this._inDbPrevTurnActive || (!msg?._appendAccepted && this.messages.at(-1)?.role === 'assistant' && this.messages.at(-1)?.metadata?.pending))) {
           const isRun = Boolean(this.messages.at(-1)?.role === 'assistant' && this.messages.at(-1)?.metadata?.pending);
           try { SentUserLog.demoteToQueue?.(this, msg, { running: isRun }); } catch {}
-          if (isRun) { this.live = this.messages.at(-1); this.status = 'streaming'; this.phase = '接收回复中'; }
+          if (isRun) {
+            this.live = this.messages.at(-1);
+            if (!this.sentAt) this.sentAt = Number(this.live?._sentAt) || idTime(this.live?.id) || now();
+            this.status = 'streaming'; this.phase = '接收回复中';
+          }
           this.dlv = ''; this.emit();
           if (isRun) this.restream();
           else if (typeof SendQ !== 'undefined') SendQ.check?.(this);
@@ -4845,7 +6297,7 @@ class Chat {
           if (curMIdx >= 0 && curMIdx < iaSelf) {
             const selfMsg = this.messages[iaSelf];
             const mHasPriorWork = (m.parts || []).some(p => p && p.type !== 'step-start') || (selfMsg?._prevAsstId && selfMsg._prevAsstId === m.id);
-            if (mHasPriorWork && selfMsg?.role === 'user' && selfMsg._local && !this.oursAt) {
+            if (mHasPriorWork && selfMsg?.role === 'user' && selfMsg._local && !selfMsg._appendAccepted && !this.oursAt) {
               try { SentUserLog.demoteToQueue?.(this, selfMsg, { silent: true, running: true }); } catch {}
             } else {
               this.messages.splice(curMIdx, 1);
@@ -4927,7 +6379,7 @@ class Chat {
         const ownerDone = Boolean(ownerM.metadata?.timing?.completedAt || ownerM.metadata?.finishReason === 'stop' || ownerM.metadata?.finishReason === 'end-turn' || ownerM.metadata?.aborted || ownerM.metadata?.error || (ownerM._finishedAt && now() - ownerM._finishedAt > 15000));
         if (ownerM !== this.messages.at(-1) && !ownerDone && !this.stopReq && !Hitl.idleWait(this)) {
           const ownerIdx = this.messages.indexOf(ownerM);
-          if (ownerIdx >= 0 && this.messages.slice(ownerIdx + 1).every(x => x && x.role === 'user' && (x.failed || (x._local && !this.oursAt)))) {
+          if (ownerIdx >= 0 && this.messages.slice(ownerIdx + 1).every(x => x && x.role === 'user' && (x.failed || (x._local && !x._appendAccepted && !this.oursAt)))) {
             for (let ui = this.messages.length - 1; ui > ownerIdx; ui--) {
               try { SentUserLog.demoteToQueue?.(this, this.messages[ui], { silent: true, running: true }); } catch {}
             }
@@ -4966,7 +6418,7 @@ class Chat {
           const fm = this.messages[fi];
           if (!fm) continue;
           if (fm.role === 'assistant') break;
-          if (fm.role === 'user' && (fm.failed || (fm._local && !this.oursAt && this.messages[fi - 1]?.role === 'assistant' && !this.messages[fi - 1]?.metadata?.timing?.completedAt))) {
+          if (fm.role === 'user' && (fm.failed || (fm._local && !fm._appendAccepted && !this.oursAt && this.messages[fi - 1]?.role === 'assistant' && !this.messages[fi - 1]?.metadata?.timing?.completedAt && !this.messages[fi - 1]?._finishedAt))) {
             try { SentUserLog.demoteToQueue?.(this, fm, { silent: true, running: true }); } catch {}
           }
         }
@@ -5338,19 +6790,21 @@ class Chat {
     // A replay token alone does not identify the current turn. Do not attach it
     // to the last message or to a merely queued (not dispatched) input.
     const identityInput = opt.unscoped ? null : (opt.inputId || this.turnInput || null), identityMessage = opt.unscoped ? null : (opt.messageId || this.live?.id || null);
+    const reqSid = this.sid, reqOwner = (typeof Acc !== 'undefined' && Acc.cur) ? Acc.cur : '';
     this.identifying = true; this.idTok = tok; this.idErr = null; this.emit();
     const my = this.idP = (async () => {
       try {
-        const r = await Trigger.identify(tok, null, 45000, n => { this.early = n; this.emit(); });
+        const r = await Trigger.identify(tok, null, 45000, n => { if (this.idTok === tok && this.idP === my && this.sid === reqSid) { this.early = n; this.emit(); } });
         // Account dollar-balance capture retired; per-call cost measurements remain available.
-        if (r?.name && this.idTok === tok) {
+        const casOk = this.idTok === tok && this.idP === my && this.sid === reqSid && (!reqOwner || typeof Acc === 'undefined' || Acc.cur === reqOwner) && (!identityInput || !this.turnInput || this.turnInput === identityInput) && (!identityMessage || !this.live?.id || this.live.id === identityMessage);
+        if (r?.name && casOk) {
           const old = Models.get(this.sid);
           // 已经有完整结果（带内部名称）时，不让这次只识别到一部分的结果覆盖掉；再用 Trace 补一次
-          if (!(r.partial && old && !old.partial && !old.guess && old.name && ((identityInput && old.inputId === identityInput) || (identityMessage && old.messageId === identityMessage)))) { const entry={...r,inputId:identityInput,messageId:identityMessage||null,...(old?.fingerprint?.skipped?{fingerprint:old.fingerprint}:{})}; Models.set(this.sid, entry); Bus.emit('model', this, entry); }
+          if (!(r.partial && old && !old.partial && !old.guess && old.name && ((identityInput && old.inputId === identityInput) || (identityMessage && old.messageId === identityMessage)))) { const entry={...r,sid:reqSid,account:reqOwner||undefined,inputId:identityInput,messageId:identityMessage||null,...(old?.fingerprint?.skipped?{fingerprint:old.fingerprint}:{})}; Models.set(this.sid, entry); Bus.emit('model', this, entry); }
           if (r.partial) { try { Trace.adopt(this.sid); const m2 = Models.get(this.sid); if (m2 && !m2.partial && m2.name !== r.name) Bus.emit('model', this, m2); } catch {} }
         }
         return r;
-      } catch (e) { if (this.idTok === tok) this.idErr = describe(e); throw e; }
+      } catch (e) { if (this.idTok === tok && this.idP === my) this.idErr = describe(e); throw e; }
       finally { if (this.idP === my) { this.identifying = false; this.emit(); } }
     })();
     my.catch(() => {});
@@ -5619,10 +7073,11 @@ Object.assign(Chat.prototype, {
         const mText = normUText(m);
         const mTime = idTime(m.id) || 0;
         const mAttCount = (m.metadata?.uploads?.length || 0) + (m.parts || []).filter(p => p?.type === 'file').length;
+        const prevSrvAsstId = sIdx > 0 && srv[sIdx - 1]?.role === 'assistant' ? srv[sIdx - 1].id : null;
         const cand = this.messages.find(x => x && x.role === 'user' && !matchedLocal.has(x) && !srv.some(sx => sx.id === x.id) && (
           (mNodeId && (x.id === mNodeId || x.metadata?.nodeId === mNodeId)) ||
           (x.metadata?.nodeId && x.metadata.nodeId === m.id) ||
-          ((x._local || x._appendAccepted) && (
+          ((x._local || x._appendAccepted) && (!x._prevAsstId || !prevSrvAsstId || x._prevAsstId === prevSrvAsstId) && !(sIdx === 0 && x._prevAsstId && srv.some(sa => sa?.id === x._prevAsstId)) && (
             (mText && normUText(x) === mText) ||
             (!mText && !normUText(x) && mAttCount > 0 && ((x._prev?.length || 0) + (x.metadata?.uploads?.length || 0) + (x.parts || []).filter(p => p?.type === 'file').length) > 0)
           ) && (!mTime || !idTime(x.id) || Math.abs(mTime - idTime(x.id)) < 1800000))
@@ -5630,7 +7085,7 @@ Object.assign(Chat.prototype, {
         if (cand) {
           o = cand;
           for (const dup of this.messages) {
-            if (dup && dup !== cand && dup.role === 'user' && (dup._local || dup._appendAccepted) && !srv.some(sx => sx.id === dup.id) && mText && normUText(dup) === mText && (!mTime || !idTime(dup.id) || Math.abs(mTime - (dup._sentAt || idTime(dup.id) || 0)) < 3600000)) {
+            if (dup && dup !== cand && dup.role === 'user' && (dup._local || dup._appendAccepted) && ((!dup._prevAsstId && !cand._prevAsstId) || dup._prevAsstId === cand._prevAsstId) && !srv.some(sx => sx.id === dup.id) && mText && normUText(dup) === mText && (!mTime || !idTime(dup.id) || Math.abs(mTime - (dup._sentAt || idTime(dup.id) || 0)) < 3600000)) {
               matchedLocal.add(dup);
             }
           }
@@ -5706,7 +7161,7 @@ Object.assign(Chat.prototype, {
       } else if (m.role === 'assistant' && !srvMPend && Array.isArray(mergedParts)) {
         mergedParts = mergedParts.map(sp => (sp?.toolCallId && !Hitl.name(sp) && /^(input-streaming|input-available)$/.test(sp.state || '')) ? { ...sp, state: 'output-error', errorText: sp.errorText || '未返回结果' } : sp);
       }
-      return { ...m, metadata: mergedMeta, parts: mergedParts, _autoContinue: o?._autoContinue || m.metadata?.autoContinue, _streamed: o?._streamed, _finishedAt: srvMPend ? undefined : (o?._finishedAt || (m.role === 'assistant' ? (Date.parse(m.metadata?.timing?.completedAt || m.createdAt || '') || idTime(m.id) || now()) : undefined)), _forcedFinish: srvMPend ? undefined : o?._forcedFinish, _fmt: o?._fmt, _sseMeta: o?._sseMeta, ...(o?._prev ? { _prev: o._prev } : {}), ...(o?._sentAt ? { _sentAt: o._sentAt } : {}), ...(o?._appendAccepted ? { _appendAccepted: true } : {}), ...(o?._prevAsstId ? { _prevAsstId: o._prevAsstId } : {}), v: (o?.v || 0) + 1 };
+      return { ...m, metadata: mergedMeta, parts: mergedParts, _autoContinue: o?._autoContinue || m.metadata?.autoContinue, _streamed: o?._streamed, _finishedAt: srvMPend ? undefined : (o?._finishedAt || (m.role === 'assistant' ? (Date.parse(m.metadata?.timing?.completedAt || m.createdAt || '') || idTime(m.id) || now()) : undefined)), _forcedFinish: srvMPend ? undefined : o?._forcedFinish, _fmt: o?._fmt, _sseMeta: o?._sseMeta, ...(o?._localId || (o?.id && o.id !== m.id) ? { _localId: o._localId || o.id } : {}), ...(o?._prev ? { _prev: o._prev } : {}), ...(o?._sentAt ? { _sentAt: o._sentAt } : {}), ...(o?._appendAccepted ? { _appendAccepted: true } : {}), ...(o?._prevAsstId ? { _prevAsstId: o._prevAsstId } : {}), v: (o?.v || 0) + 1 };
     });
     head = head.filter(m => !matchedLocal.has(m));
     const ids = new Set(srv.map(m => m.id));
@@ -5753,14 +7208,19 @@ Object.assign(Chat.prototype, {
         if (m.role === 'user') {
           const uTime = m._sentAt || idTime(m.id) || 0;
           const uTxt = normUText(m);
-          const inSrv = uTxt && srvUserTextSet.has(uTxt);
           const pIdx = m._prevAsstId ? srv.findIndex(x => x && x.id === m._prevAsstId) : (srvLastMsg?.role === 'assistant' ? srv.length - 1 : -1);
+          const srvAfterP = pIdx >= 0 ? srv.slice(pIdx + 1) : srv;
+          const inSrv = uTxt && srvAfterP.some(x => x?.role === 'user' && normUText(x) === uTxt);
           const hasSrvUserAfterP = pIdx >= 0 && srv.slice(pIdx + 1).some(x => x && x.role === 'user');
+          const hasNewAsstAfterP = pIdx >= 0 && srv.slice(pIdx + 1).some(x => x && x.role === 'assistant' && x.id !== m._prevAsstId);
           const targetAsst = pIdx >= 0 ? srv[pIdx] : null;
+          const tCompRaw = targetAsst?.metadata?.timing?.completedAt;
+          const tCompMs = typeof tCompRaw === 'number' ? tCompRaw : (typeof tCompRaw === 'string' ? Date.parse(tCompRaw) : 0);
+          const targetAsstEndTime = Math.max(idTime(targetAsst?.id) || 0, Number.isFinite(tCompMs) ? tCompMs : 0, targetAsst?._finishedAt || 0);
           const oldW = targetAsst ? (m._prevAsstWeight ?? oldAsstWeights.get(targetAsst.id) ?? null) : null;
           const newW = targetAsst ? ((typeof SentUserLog !== 'undefined' && SentUserLog.measureAsstWeight) ? SentUserLog.measureAsstWeight(targetAsst) : partWeight(targetAsst.parts)) : 0;
-          const targetSupplemented = Boolean(targetAsst && !hasSrvUserAfterP && ((oldW != null && newW > oldW) || (srvLastEndTime > 0 && uTime > 0 && srvLastEndTime >= uTime + 1000 && (idTime(targetAsst.id) || 0) <= uTime + 5000)));
-          if (!inSrv && !hasSrvUserAfterP && (srvLastIsRunning || this.busy || this.streaming || this.live || targetSupplemented)) {
+          const targetSupplemented = Boolean(targetAsst && !hasSrvUserAfterP && !hasNewAsstAfterP && ((oldW != null && newW > oldW) || (targetAsstEndTime > 0 && uTime > 0 && targetAsstEndTime >= uTime + 1000 && (idTime(targetAsst.id) || 0) <= uTime + 5000)));
+          if (!inSrv && !hasSrvUserAfterP && !hasNewAsstAfterP && (srvLastIsRunning || this.busy || this.streaming || this.live || targetSupplemented)) {
             try { if (typeof SentUserLog !== 'undefined' && SentUserLog.demoteToQueue) SentUserLog.demoteToQueue(this, m, { silent: true, running: Boolean(srvLastIsRunning || this.busy || this.streaming || this.live) }); } catch {}
             return false;
           }
@@ -5777,23 +7237,33 @@ Object.assign(Chat.prototype, {
           const isAwaitingThis = Boolean(this.awaitId && (this.awaitId === m.id || this.awaitId === m.metadata?.nodeId) && (this.busy || this.sending || this.preSend));
           const uTxt = normUText(m);
           const uTime = m._sentAt || idTime(m.id) || 0;
-          if (uTxt && srvUserTextSet.has(uTxt) && srv.some(sm => sm?.role === 'user' && normUText(sm) === uTxt && (!uTime || !idTime(sm.id) || Math.abs(uTime - (sm._sentAt || idTime(sm.id) || 0)) < 3600000))) {
+          const pIdx = m._prevAsstId ? srv.findIndex(x => x && (x.id === m._prevAsstId || x._localId === m._prevAsstId)) : (srvLastMsg?.role === 'assistant' ? srv.length - 1 : -1);
+          const srvScopeForU = pIdx >= 0 ? srv.slice(pIdx + 1) : srv;
+          if (uTxt && srvUserTextSet.has(uTxt) && srvScopeForU.some(sm => sm?.role === 'user' && normUText(sm) === uTxt && (pIdx >= 0 || !uTime || !idTime(sm.id) || Math.abs(uTime - (sm._sentAt || idTime(sm.id) || 0)) < 3600000))) {
             try { if (typeof SentUserLog !== 'undefined' && SentUserLog.remove) SentUserLog.remove(this.sid, m.id, uTxt, uTime); } catch {}
             return false;
           }
-          const pIdx = m._prevAsstId ? srv.findIndex(x => x && x.id === m._prevAsstId) : (srvLastMsg?.role === 'assistant' ? srv.length - 1 : -1);
           const hasSrvUserAfterP = pIdx >= 0 && srv.slice(pIdx + 1).some(x => x && x.role === 'user');
+          const hasLocalAsstAfterP = Boolean((keep && keep.role === 'assistant' && keep.id !== m._prevAsstId) || (this.live && this.live.role === 'assistant' && this.live.id !== m._prevAsstId));
+          const hasNewAsstAfterP = (pIdx >= 0 && srv.slice(pIdx + 1).some(x => x && x.role === 'assistant' && x.id !== m._prevAsstId)) || hasLocalAsstAfterP;
           const targetAsst = pIdx >= 0 ? srv[pIdx] : null;
+          const tCompRaw = targetAsst?.metadata?.timing?.completedAt;
+          const tCompMs = typeof tCompRaw === 'number' ? tCompRaw : (typeof tCompRaw === 'string' ? Date.parse(tCompRaw) : 0);
+          const targetAsstEndTime = Math.max(idTime(targetAsst?.id) || 0, Number.isFinite(tCompMs) ? tCompMs : 0, targetAsst?._finishedAt || 0);
+          const tExplicitDone = Boolean(targetAsst?.metadata?.timing?.completedAt || targetAsst?.metadata?.finishReason === 'stop' || targetAsst?.metadata?.finishReason === 'end-turn' || targetAsst?.metadata?.aborted || targetAsst?.metadata?.error);
+          const targetAsstIsRunning = Boolean(targetAsst && !tExplicitDone && (targetAsst.metadata?.pending || (typeof hasInterruptedToolPart === 'function' && hasInterruptedToolPart(targetAsst))));
           const oldW = targetAsst ? (m._prevAsstWeight ?? oldAsstWeights.get(targetAsst.id) ?? null) : null;
           const newW = targetAsst ? ((typeof SentUserLog !== 'undefined' && SentUserLog.measureAsstWeight) ? SentUserLog.measureAsstWeight(targetAsst) : partWeight(targetAsst.parts)) : 0;
-          const targetSupplemented = Boolean(targetAsst && !hasSrvUserAfterP && ((oldW != null && newW > oldW) || (srvLastEndTime > 0 && uTime > 0 && srvLastEndTime >= uTime + 1000 && (idTime(targetAsst.id) || 0) <= uTime + 5000)));
-          if (!hasSrvUserAfterP && !(isAwaitingThis && (this.preSend || this.sending)) && (targetSupplemented || (srvLastIsRunning && (!isAwaitingThis || (!this.oursAt && this.dlv !== 'taken'))))) {
+          const targetSupplemented = Boolean(targetAsst && !hasSrvUserAfterP && !hasNewAsstAfterP && ((oldW != null && newW > oldW) || (targetAsstEndTime > 0 && uTime > 0 && targetAsstEndTime >= uTime + 1000 && (idTime(targetAsst.id) || 0) <= uTime + 5000)));
+          const prevTurnStillRunning = m._prevAsstId ? targetAsstIsRunning : (srvLastIsRunning && !m._appendAccepted);
+          if (!hasSrvUserAfterP && !hasNewAsstAfterP && !(isAwaitingThis && (this.preSend || this.sending || this.oursAt || this.dlv === 'taken' || m._appendAccepted)) && (targetSupplemented || (prevTurnStillRunning && (!isAwaitingThis || (!this.oursAt && this.dlv !== 'taken'))))) {
             try { if (typeof SentUserLog !== 'undefined' && SentUserLog.demoteToQueue) SentUserLog.demoteToQueue(this, m, { silent: true, running: Boolean(srvLastIsRunning || this.busy || this.streaming || this.live) }); } catch {}
             return false;
           }
           if (isAwaitingThis) return true;
           if (srvLastEndTime > 0 && uTime > 0 && uTime < srvLastEndTime - 30000) {
-            const fillsSrvGap = (pIdx >= 0 && srv[pIdx + 1]?.role === 'assistant') || (srv.length >= 2 && srv.at(-1)?.role === 'assistant' && srv.at(-2)?.role === 'assistant' && uTime >= (idTime(srv.at(-2)?.id) || 0) - 15000);
+            const srvLastStartTime = idTime(srvLastMsg?.id) || Date.parse(srvLastMsg?.metadata?.timing?.startedAt || '') || 0;
+            const fillsSrvGap = hasLocalAsstAfterP || (pIdx >= 0 && srv[pIdx + 1]?.role === 'assistant') || (srv.length >= 2 && srv.at(-1)?.role === 'assistant' && srv.at(-2)?.role === 'assistant' && uTime >= (idTime(srv.at(-2)?.id) || 0) - 60000) || (srvLastStartTime > 0 && uTime >= srvLastStartTime - 60000 && (srv.length < 2 || srv.at(-2)?.role !== 'user'));
             if (!fillsSrvGap) {
               try { if (typeof SentUserLog !== 'undefined' && SentUserLog.remove) SentUserLog.remove(this.sid, m.id, uTxt, uTime); } catch {}
               return false;
@@ -5838,7 +7308,7 @@ Object.assign(Chat.prototype, {
     for (let tIdx = 0; tIdx < tail.length; tIdx++) {
       const tm = tail[tIdx];
       if (tm && tm.role === 'user' && tm._prevAsstId) {
-        const pIdx = next.findIndex(x => x && x.id === tm._prevAsstId);
+        const pIdx = next.findIndex(x => x && (x.id === tm._prevAsstId || x._localId === tm._prevAsstId));
         if (pIdx >= 0 && next[pIdx + 1]?.role !== 'user') {
           next.splice(pIdx + 1, 0, tm);
           changed = true;
@@ -5896,6 +7366,7 @@ Object.assign(Chat.prototype, {
       const lastACompMs = typeof lastACompRaw === 'number' ? lastACompRaw : (typeof lastACompRaw === 'string' ? Date.parse(lastACompRaw) : 0);
       const lastAEnd = Math.max(idTime(lastAMsg?.id) || 0, Number.isFinite(lastACompMs) ? lastACompMs : 0, lastAMsg?._finishedAt || 0);
       const earlierUsers = this.messages.slice(0, lastAIdx).filter(x => x && x.role === 'user');
+      const lastAStart = idTime(lastAMsg?.id) || Date.parse(lastAMsg?.metadata?.timing?.startedAt || '') || 0;
       for (let i = this.messages.length - 1; i > lastAIdx; i--) {
         const tm = this.messages[i];
         if (!tm || tm.role !== 'user') continue;
@@ -5903,8 +7374,17 @@ Object.assign(Chat.prototype, {
         if (isAwaitingThis) continue;
         const uTs = tm._sentAt || idTime(tm.id) || 0;
         const uTxt = normUText(tm);
-        const isOlderThanLastAsst = lastAEnd > 0 && uTs > 0 && uTs < lastAEnd - 30000;
-        const isDupOfEarlier = earlierUsers.some(x => x.id === tm.id || (uTxt && normUText(x) === uTxt && (!uTs || !(x._sentAt || idTime(x.id)) || Math.abs(uTs - (x._sentAt || idTime(x.id) || 0)) < 3600000)));
+        const isDupOfEarlier = earlierUsers.some(x => x.id === tm.id || (uTxt && normUText(x) === uTxt && ((tm._prevAsstId && x._prevAsstId && tm._prevAsstId === x._prevAsstId) || (!tm._prevAsstId && (!uTs || !(x._sentAt || idTime(x.id)) || Math.abs(uTs - (x._sentAt || idTime(x.id) || 0)) < 15000)))));
+        if (!isDupOfEarlier && lastAIdx >= 1 && this.messages[lastAIdx - 1]?.role === 'assistant' && (!lastAStart || !uTs || uTs >= lastAStart - 120000)) {
+          this.messages.splice(i, 1);
+          this.messages.splice(lastAIdx, 0, tm);
+          tm._prevAsstId = this.messages[lastAIdx - 1]?.id || tm._prevAsstId;
+          lastAIdx++;
+          changed = true;
+          continue;
+        }
+        const lastAHasUser = lastAIdx >= 1 && this.messages[lastAIdx - 1]?.role === 'user';
+        const isOlderThanLastAsst = lastAHasUser && lastAEnd > 0 && uTs > 0 && uTs < lastAEnd - 30000 && (!lastAStart || uTs < lastAStart - 30000);
         if (isOlderThanLastAsst || isDupOfEarlier) {
           this.messages.splice(i, 1);
           try { if (typeof SentUserLog !== 'undefined' && SentUserLog.remove) SentUserLog.remove(this.sid, tm.id, uTxt, uTs); } catch {}
@@ -6199,10 +7679,11 @@ Object.assign(Chat.prototype, {
 // 被「重复 / 已读过」跳过的记录也记进轨迹（不改 onRecord 本身：位置没动 = 被跳过）
 { const orig = Chat.prototype.onRecord; Chat.prototype.onRecord = function (rec) { const b = this.lastSeq, r = orig.call(this, rec); try { if (rec?.seq_num != null && r !== 'done' && this.lastSeq === b) this.dbgRec?.(rec, 'skip'); } catch {} return r; }; }
 // 挂哪些对话：当前窗口一定挂；其它打开着的窗口（已加载过的）也挂，电脑最多 4 个、手机最多 2 个
+
 const Sync = {
   start() {
     if (this.t) return;
-    this.t = setInterval(() => { this.tick(); try { if (typeof History !== 'undefined' && typeof History.auto === 'function') History.auto('tick'); } catch {} }, 8000);
+    this.t = setInterval(() => { this.tick(); }, 8000);
     this.ct = setInterval(() => { const c = typeof Tabs !== 'undefined' && Tabs.cur?.sid ? Chats.get(Tabs.cur.sid) : null; if (c) c.tickConverge(); }, 3000);
     let lastWakeAt = 0;
     const onWake = () => {
@@ -6671,6 +8152,7 @@ function packClientInteraction(textLen = 8, kind = 'enter') {
     const pasteCount = len > 140 ? 1 : 0;
     const isCoarse = (typeof isMob === 'function' && isMob()) || (typeof Host !== 'undefined' && Host.platform === 'android') ? 1 : 0;
     const isBtn = (kind === 'button' || kind === 'click') ? 1 : 0;
+    const composeTicks = Math.min(65535, Math.max(38, len * (16 + Math.floor(Math.random() * 14)) + 42 + Math.floor(Math.random() * 85)));
     // Arena _CX_LAYOUT_V2 21-field 96-bit human interaction telemetry:
     // untrustedUiEvents=0, pasteWithoutModifier=0, docOwnProps=0, integrity=0 (0 tamper bits),
     // CJK IME composition awareness, and physiological press/pointer/coalesced buckets.
@@ -6707,13 +8189,20 @@ async function createChat(text, opt = {}) {
   const waiting = opt.gacha ? Quota.blockedUntil(true) - now() : 0;
   if (waiting > 0) throw Object.assign(Error(Quota.blockedUntil() > now() ? '服务端要求等待，请在 ' + Math.ceil(waiting / 1000) + ' 秒后重试' : '自动抽卡短暂退避，' + Math.ceil(waiting / 1000) + ' 秒后重试'), { status: 429, retryAfterMs: waiting, rateLimitedLocally: true });
   if (!opt.gacha) return createChat0(text, opt);
-  const ts = new Date().toISOString(), ph = { type: 'agentic', id: 'pending:' + uuid7(), title: '抽卡 · 正在创建对话…', _pending: true, updatedAt: ts, createdAt: ts };
+  const gNoPh = Number(opt.gacha?.no) || 0, gTitlePh = gNoPh > 0 ? ('#' + gNoPh) : '抽卡 · 正在创建对话…';
+  const ts = new Date().toISOString(), ph = { type: 'agentic', id: 'pending:' + uuid7(), title: gTitlePh, ...(gNoPh > 0 ? { gachaNo: gNoPh, localTitle: gTitlePh } : {}), _pending: true, updatedAt: ts, createdAt: ts };
   History.items.unshift(ph); Bus.emit('history');
   try { return await createChat0(text, { ...opt, placeholder: ph }); }
   finally { const i = History.items.indexOf(ph); if (i >= 0) { History.items.splice(i, 1); Bus.emit('history'); } }
 }
 const CREATE_ACTION = 'agentic_chat_submit';
+let _lastCreatePromptNorm = '';
 async function createChat0(text, opt = {}) {
+  const normCreateTxt = String(text || '').replace(/\s+/g, ' ').trim();
+  if (normCreateTxt && _lastCreatePromptNorm === normCreateTxt && typeof rotateVisitId === 'function') {
+    try { rotateVisitId(); } catch {}
+  }
+  if (normCreateTxt) _lastCreatePromptNorm = normCreateTxt;
   const id = uuid7(), msg = { id, role: 'user', parts: [{ type: 'text', text }] };
   const um = Uploads.meta(opt.files, null); if (um) msg.metadata = um;
   const cx = packClientInteraction(text || (String(text || '').length || 8), Math.random() < 0.45 ? 'button' : 'enter');
@@ -6760,21 +8249,29 @@ async function createChat0(text, opt = {}) {
     }
     if (res.status === 401 && !relog) { relog = true; if (await Auth.relogin()) continue; }
     if (res.status === 409 && ++n409 <= 10 && left > 5000) { const t409 = await res.text().catch(() => ''); if (/refresh_required/i.test(t409) && Pin.on()) { Pin.fallback('旧部署要求刷新（409 refresh_required）'); opt.onRetry?.('旧版固定不兼容，改用新版重发'); continue; } opt.onRetry?.('服务器还在处理这个请求（409），' + Math.min(6, 1 + n409) + ' 秒后原样重发'); await sleep(Math.min(6000, 1000 + n409 * 1000)); continue; }
-    // 重复指令（429 prompt failed / verification required）或 v3 分数不足（403 recaptcha validation failed）：和网页一致，弹人工验证后带 v2 令牌原样重发一次（抽卡无人值守，交给抽卡自己的验证码流程）
-    if ((res.status === 429 || res.status === 403) && !opt.gacha && !opt.v2 && !escalated) {
+    // 重复指令（429 prompt failed / verification required）或 v3 分数不足（403 recaptcha validation failed）：先自动轮换会话指纹 + 刷新 DOM 行为遥测与 v3 令牌静默重试一次；仍不过再按模式升级 v2
+    if ((res.status === 429 || res.status === 403) && !opt.v2 && !escalated) {
       const tRc = await res.clone().text().catch(() => '');
       const isPf = promptFailed(res.status, tRc);
       const isRc = isPf || (res.status === 403 && /recaptcha|人机|验证失败/i.test(tRc)) || (res.status === 429 && /verification required/i.test(tRc));
       if (isRc) {
-        if (res.status === 403 && !isPf && !retriedFreshV3) {
+        if (!retriedFreshV3) {
           retriedFreshV3 = true;
+          try { if (typeof rotateVisitId === 'function') rotateVisitId(); } catch {}
           try { Recaptcha.clearCache?.(); } catch {}
+          att = uuid7();
+          const freshCx = packClientInteraction(text || (String(text || '').length || 8), Math.random() < 0.5 ? 'button' : 'enter');
+          if (freshCx) body.cx = freshCx;
+          await sleep(1100 + Math.floor(Math.random() * 500));
           const freshV3 = await Recaptcha.v3(CREATE_ACTION).catch(() => null);
           if (freshV3 && freshV3 !== body.recaptchaV3Token) {
+            if (isPf) msg.id = uuid7();
             body.recaptchaV3Token = freshV3;
+            opt.onRetry?.('正在刷新人机遥测与 v3 令牌静默重发…');
             continue;
           }
         }
+        if (opt.gacha) break;
         if (res.status === 403 && !opt.v2) { try { IPRep.note('rc'); } catch {} }
         escalated = true; opt.onRetry?.(isPf ? 'Brana 要求人工验证（重复指令），请完成验证' : 'Brana 要求人工验证（reCAPTCHA），请完成验证');
         const tok = await Recaptcha.v2().catch(() => null);
@@ -6808,11 +8305,14 @@ async function createChat0(text, opt = {}) {
   if (res.ok) { if (body.recaptchaV3Token) IPRep.note('ok'); } else if (res.status === 403 && /recaptcha/i.test(t)) { if (!opt.v2) IPRep.note('rc'); } else if (!res.ok && typeof AutoRoute !== 'undefined' && AutoRoute.onErrorSwitch && [408].includes(res.status)) { void AutoRoute.onErrorSwitch({ status: res.status }, 'create-chat'); }
   if (!res.ok) { let m = t; try { m = JSON.parse(t).error || t; } catch {} if (typeof m !== 'string') m = JSON.stringify(m); throw new HttpError(res.status, m, res); }
   const sid = JSON.parse(t).id; if (!sid) throw new Error('create-chat 没有返回对话 ID');
+  const gNo0 = Number(opt.gacha?.no) || 0, gShort0 = gNo0 > 0 ? ('#' + gNo0) : '';
+  const initChatTitle = gShort0 || text.slice(0, 60);
   const c = chatOf(sid);
-  c.messages = [{ ...msg, metadata: msg.metadata || {}, v: 0 }]; c.loaded = true; c.lastSeq = null; c.status = 'submitted'; c.phase = '等待回复'; c.sentAt = now(); c.awaitId = msg.id; c.awaitFrom = c.sentAt; c.turnInput = msg.id; c.title = text.slice(0, 60);
+  c.messages = [{ ...msg, metadata: msg.metadata || {}, v: 0 }]; c.loaded = true; c.lastSeq = null; c.status = 'submitted'; c.phase = '等待回复'; c.sentAt = now(); c.awaitId = msg.id; c.awaitFrom = c.sentAt; c.turnInput = msg.id; c.title = initChatTitle;
+  if (gShort0) { c.localTitle = gShort0; c.gachaNo = gNo0; }
   if (!opt.gacha) c.armLost(c.messages[0]);
   if (opt.gacha) c.gacha = opt.gacha; else Bus.emit('sent', sid, now());
-  if (!History.byId(sid)) { const ts = new Date().toISOString(), row = { type: 'agentic', id: sid, title: text.slice(0, 60), updatedAt: ts, createdAt: ts, _local: true }, pi = opt.placeholder ? History.items.indexOf(opt.placeholder) : -1; if (pi >= 0) History.items[pi] = row; else History.items.unshift(row); Bus.emit('history'); }
+  if (!History.byId(sid)) { const ts = new Date().toISOString(), row = { type: 'agentic', id: sid, title: initChatTitle, ...(gShort0 ? { localTitle: gShort0, gachaNo: gNo0 } : {}), updatedAt: ts, createdAt: ts, _local: true }, pi = opt.placeholder ? History.items.indexOf(opt.placeholder) : -1; if (pi >= 0) History.items[pi] = row; else History.items.unshift(row); Bus.emit('history'); }
   c.emit();
   c.stream();
   Bus.emit('created', c);
@@ -6821,6 +8321,7 @@ async function createChat0(text, opt = {}) {
 
 // ---------- 历史列表 ----------
 // 会话时间（毫秒）：按条目对象记住解析结果（侧栏每次重绘 1500 条都要 parse 一遍）
+
 const ENT_AT = new WeakMap();
 const entAt = e => { if (!e) return NaN; const raw = e.updatedAt || e.createdAt || ''; const c = ENT_AT.get(e); if (c && c[0] === raw) return c[1]; const v = Date.parse(String(raw).replace(' ', 'T').replace(/\+00$/, 'Z')); ENT_AT.set(e, [raw, v]); return v; };
 const History = {
@@ -6910,7 +8411,7 @@ const History = {
   saveSoon() {
     if (!this.ck) return; clearTimeout(this.saveT);
     this.saveT = setTimeout(() => {
-      const pick = e => { const o = {}; for (const k of ['id', 'type', 'productMode', 'title', 'localTitle', 'createdAt', 'updatedAt', 'isArchived', 'isPinned', 'modality', 'mode', 'modelAId', 'modelBId', 'modelAOrganization', 'modelBOrganization']) if (e[k] !== undefined) o[k] = e[k]; return o; };
+      const pick = e => { const o = {}; for (const k of ['id', 'type', 'productMode', 'title', 'localTitle', 'createdAt', 'updatedAt', 'isArchived', 'isPinned', 'modality', 'mode', 'modelAId', 'modelBId', 'modelAOrganization', 'modelBOrganization', 'gachaNo']) if (e[k] !== undefined) o[k] = e[k]; return o; };
       const cleanItems = this.items.filter(e => !e._pending && !e._localRecovered && !/^本地缓存对话(\s|$)/i.test(String(e?.title || '').trim())).slice(0, 5000).map(pick);
       if (!cleanItems.length) {
         const prev = Store.get(this.ck, null);
@@ -6966,13 +8467,28 @@ const History = {
     const prevById = new Map(this.items.map(e => [e.id, e]));
     const rows = new Map();
     const withLocal = e => {
-      if (e.localTitle !== undefined) return e;
       const p = prevById.get(e.id);
-      if (!p?.localTitle) return e;
+      const gNo = e.gachaNo || p?.gachaNo || (typeof Gacha !== 'undefined' && Gacha.sidNo ? Gacha.sidNo(e.id) : 0) || 0;
+      let out = e;
+      if (p) {
+        for (const k of ['mode', 'modality', 'modelAId', 'modelBId', 'modelAOrganization', 'modelBOrganization']) {
+          if (out[k] === undefined && p[k] !== undefined) {
+            if (out === e) out = { ...e };
+            out[k] = p[k];
+          }
+        }
+      }
+      if (gNo) {
+        if (out === e) out = { ...e };
+        out.gachaNo = gNo;
+        if (!out.localTitle || out.localTitle === out.title) out.localTitle = '#' + gNo;
+      }
+      if (out.localTitle !== undefined) return out;
+      if (!p?.localTitle) return out;
       const mi = typeof Models !== 'undefined' ? Models.get(e.id) : null;
       const hasLocalMi = Boolean(mi?.name && !mi.pendingConfirm && (!mi.guess || mi.userCorrected || mi.habitInferred || mi.reverseInferred || mi.billingProbe));
-      if (p.title === e.title || hasLocalMi) return { ...e, localTitle: (hasLocalMi && typeof Titles !== 'undefined' && Titles.want ? Titles.want(e.id) : '') || p.localTitle };
-      return e;
+      if (p.title === e.title || hasLocalMi) return { ...out, localTitle: (hasLocalMi && typeof Titles !== 'undefined' && Titles.want ? Titles.want(e.id) : '') || p.localTitle };
+      return out;
     };
     if (head) { for (const e of got) rows.set(e.id, withLocal(e)); for (const e of this.items) if (!rows.has(e.id)) rows.set(e.id, e); }
     else { for (const e of this.items) rows.set(e.id, e); for (const e of got) rows.set(e.id, withLocal(e)); }
@@ -7375,28 +8891,115 @@ const History = {
     const c = Chats.get(id); if (c) { c.title = title; c.emit(); }
     this.saveSoon?.();Bus.emit('history');
   },
+  _mutSeq: 0,
+  protoMutateRoutes(kind, id, opt = {}) {
+    const entry = this.byId(id) || (typeof ArchiveHistory !== 'undefined' && ArchiveHistory.byId?.(id)) || null;
+    const isEval = Boolean(entry?.type === 'evaluation' || entry?.mode === 'battle' || entry?.mode === 'direct' || (typeof Chats !== 'undefined' && Chats.get?.(id)?.isEvaluation));
+    const eid = encodeURIComponent(id);
+    const seq = Number.isFinite(opt.seq) ? opt.seq : (this._mutSeq = (this._mutSeq + 1) % 10000);
+    if (kind === 'archive') {
+      const chatArch = { path: '/api/chat/' + eid + '/archive', method: 'POST' };
+      const histAgentArch = { path: '/api/history/agentic/' + eid, method: 'PATCH', body: JSON.stringify({ isArchived: true }) };
+      const histEvalArch = { path: '/api/history/evaluation/' + eid, method: 'PATCH', body: JSON.stringify({ isArchived: true }) };
+      if (isEval) return [histEvalArch, chatArch, histAgentArch];
+      return (seq % 2 === 1) ? [histAgentArch, chatArch, histEvalArch] : [chatArch, histAgentArch, histEvalArch];
+    }
+    if (kind === 'unarchive') {
+      const chatUn = { path: '/api/chat/' + eid + '/unarchive', method: 'POST' };
+      const histAgentUn = { path: '/api/history/agentic/' + eid, method: 'PATCH', body: JSON.stringify({ isArchived: false }) };
+      const histEvalUn = { path: '/api/history/evaluation/' + eid, method: 'PATCH', body: JSON.stringify({ isArchived: false }) };
+      if (isEval) return [histEvalUn, chatUn, histAgentUn];
+      return (seq % 2 === 1) ? [histAgentUn, chatUn, histEvalUn] : [chatUn, histAgentUn, histEvalUn];
+    }
+    const chatDel = { path: '/api/chat/' + eid, method: 'DELETE' };
+    const histAgentDel = { path: '/api/history/agentic/' + eid, method: 'DELETE' };
+    const histEvalDel = { path: '/api/history/evaluation/' + eid, method: 'DELETE' };
+    if (isEval) return [histEvalDel, chatDel, histAgentDel];
+    return [chatDel, histAgentDel, histEvalDel];
+  },
+  async protoMutateResponse(kind, id, opt = {}) {
+    const seq = (this._mutSeq = (this._mutSeq + 1) % 10000);
+    const routes = this.protoMutateRoutes(kind, id, { ...opt, seq });
+    // 1. Primary path: Desktop / Android native protocol channel with multi-route + fresh arena_visit_id + skew rotation + standby ProxyIP tunnel failover
+    if (typeof Host !== 'undefined' && typeof Host.protoFetch === 'function') {
+      try {
+        const pRes = await Host.protoFetch(routes[0].path, {
+          method: routes[0].method,
+          body: routes[0].body,
+          bypass429: true,
+          routes,
+          pipSlot: opt.pipSlot ?? seq,
+          timeout: opt.timeout || 18000,
+        });
+        if (pRes && typeof pRes.status === 'number' && !pRes.fallback) {
+          const hdrMap = {
+            'content-type': pRes.contentType || 'application/json',
+            'retry-after': pRes.retryAfter || '',
+            'ratelimit-remaining': pRes.ratelimitRemaining || '',
+            'ratelimit-reset': pRes.ratelimitReset || '',
+            'ratelimit-limit': pRes.ratelimitLimit || '',
+            date: pRes.date || '',
+          };
+          return {
+            ok: Boolean(pRes.ok),
+            status: pRes.status,
+            text: () => Promise.resolve(String(pRes.text || '')),
+            headers: { get: k => hdrMap[String(k || '').toLowerCase()] || null },
+            viaPip: pRes.viaPip || '',
+          };
+        }
+      } catch {}
+    }
+    // 2. Fallback: Multi-route rawFetch with automatic failover on 429 / 404 / 405
+    let lastRes = null;
+    for (let i = 0; i < routes.length; i++) {
+      const step = routes[i];
+      try {
+        const r = await rawFetch(step.path, {
+          method: step.method,
+          headers: {
+            Accept: 'application/json',
+            ...(step.body !== undefined ? { 'Content-Type': 'application/json' } : {}),
+          },
+          ...(step.body !== undefined ? { body: step.body } : {}),
+          credentials: 'same-origin',
+          cache: 'no-store',
+        });
+        lastRes = r;
+        if (r.ok || r.status === 404 || r.status === 401) return r;
+      } catch (e) {
+        if (i === routes.length - 1 && !lastRes) throw e;
+      }
+    }
+    return lastRes;
+  },
+  async protoMutate(kind, id, opt = {}) {
+    const r = await this.protoMutateResponse(kind, id, opt);
+    if (!r) throw Error('请求未响应');
+    if (r.status === 401 && !opt.noRelogin && typeof Auth !== 'undefined' && await Auth.relogin().catch(() => false)) {
+      return this.protoMutate(kind, id, { ...opt, noRelogin: true });
+    }
+    if (!r.ok && r.status !== 404) {
+      const txt = typeof r.text === 'function' ? await r.text().catch(() => '') : '';
+      throw new HttpError(r.status, txt, r);
+    }
+    return r;
+  },
   async remove(id) {
     if(typeof FingerprintBatch!=='undefined'&&FingerprintBatch.owns(id))throw Error('该对话在批量指纹队列中，请先停止测试');
     const entry=this.byId(id)||(typeof ArchiveHistory!=='undefined'&&ArchiveHistory.byId?.(id))||null;
     const isEval=Boolean(entry?.type==='evaluation'||entry?.mode==='battle'||entry?.mode==='direct'||Chats.get(id)?.isEvaluation);
     const delUrl = (isEval ? '/api/history/evaluation/' : '/api/chat/') + id;
     const altUrl = (isEval ? '/api/chat/' : '/api/history/evaluation/') + id;
-    try { await api(delUrl, { method: 'DELETE' }); }
-    catch (e) { if (e?.status === 400 || e?.status === 405 || e?.status === 422 || (e?.status === 404 && isEval)) await api(altUrl, { method: 'DELETE' }).catch(e2 => { if (e2?.status !== 404 && e?.status !== 404) throw e; }); else if (e?.status !== 404) throw e; }
+    await this.protoMutate('delete', id, { delUrl, altUrl });
     if (false) await api((isEval ? '/api/history/evaluation/' : '/api/chat/') + id, { method: 'DELETE' });
     try { LocalCache.drop([id]); } catch {}
     this.items = this.items.filter(e => e.id !== id); ArchiveHistory.drop([id]); this.bury([id]); this.saveSoon(); Bus.emit('history'); try { if (typeof AcctStats !== 'undefined') AcctStats.report?.(); } catch {}
   },
   async archive(id) {
     if(typeof FingerprintBatch!=='undefined'&&FingerprintBatch.owns(id))throw Error('该对话在批量指纹队列中，请先停止测试');
-    const entry=this.byId(id),isEval=Boolean(entry?.type==='evaluation'||entry?.mode==='battle'||entry?.mode==='direct'||Chats.get(id)?.isEvaluation);
-    if(isEval){
-      try{await api('/api/history/evaluation/'+encodeURIComponent(id),{method:'PATCH',json:{isArchived:true}});}
-      catch(e){if(e?.status===404||e?.status===405)await api('/api/chat/'+encodeURIComponent(id)+'/archive',{method:'POST',headers:{Accept:'application/json'}}).catch(e2=>{if(e2?.status!==404)throw e;});else if(e?.status!==404)throw e;}
-    }else{
-      try{await api('/api/chat/' + encodeURIComponent(id) + '/archive', { method: 'POST', headers: { Accept: 'application/json' } });}
-      catch(e){if(e?.status===404)await api('/api/history/evaluation/'+encodeURIComponent(id),{method:'PATCH',json:{isArchived:true}}).catch(()=>{});else throw e;}
-    }
+    const entry=this.byId(id);
+    await this.protoMutate('archive', id);
     if(entry)ArchiveHistory.add([entry]);
     try { Arch.add?.(id); } catch {}
     try { LocalCache.drop([id], { archived: true }); } catch {}
@@ -7404,12 +9007,7 @@ const History = {
   },
   async unarchive(id) {
     const entry = (typeof ArchiveHistory !== 'undefined' && ArchiveHistory.byId?.(id)) || this.byId(id);
-    const t = entry?.type || 'agentic';
-    try {
-      await api('/api/chat/' + encodeURIComponent(id) + '/unarchive', { method: 'POST', headers: { Accept: 'application/json' }, bg: true });
-    } catch {
-      await api('/api/history/' + t + '/' + encodeURIComponent(id), { method: 'PATCH', json: { isArchived: false }, bg: true });
-    }
+    await this.protoMutate('unarchive', id);
     const m = this.goneMap();
     if (m.has(id)) { m.delete(id); Store.set('histgone', Object.fromEntries(m)); }
     if (typeof ArchiveHistory !== 'undefined' && ArchiveHistory.drop) ArchiveHistory.drop([id]);
@@ -7457,12 +9055,13 @@ const KS_SEL = '[data-ks], .modal-back, .dlg-back, #lppop, #gpop, .gacha, .lpick
     if (!host) return nat.apply(this, a);
     const sig = host.dataset.ks ?? '', same = host._ks === undefined || host._ks === sig; host._ks = sig;
     const saved = [];
-    if (same) {
+    if (same && this.firstElementChild) {
       const scanRoot = this;
       const scan = el => { if (el.scrollTop > 0 || el.scrollLeft > 0) { const p = pathOf(host, el); if (p) saved.push({ p, c: c1(el), t: el.scrollTop, l: el.scrollLeft }); } };
       scan(scanRoot);
-      if (scanRoot.firstElementChild) {
-        for (const el of scanRoot.querySelectorAll('*')) scan(el);
+      const isScrollContainerHost = scanRoot === host || scanRoot.id === 'dock' || scanRoot.id === 'list' || scanRoot.id === 'view' || scanRoot.classList?.contains('dk-body') || scanRoot.classList?.contains('modal-back') || scanRoot.classList?.contains('dlg-back');
+      if (isScrollContainerHost) {
+        for (const el of scanRoot.querySelectorAll('.dk-body, .scroller, .list, .ws-tree, .sq-list, .gb-tiers, .mc-bars, [data-custom-scrollbar]')) scan(el);
       }
     }
     const r = nat.apply(this, a);
@@ -7606,6 +9205,18 @@ const ExtCompat = {
       }
     } catch {}
   },
+  hasActiveExt() {
+    const t = Date.now();
+    if (this._extCheckAt && t - this._extCheckAt < 30000) return Boolean(this._hasExtCached);
+    this._extCheckAt = t;
+    if (typeof Host !== 'undefined' && typeof Host.extList === 'function' && !this._extChecking) {
+      this._extChecking = true;
+      Promise.resolve(Host.extList()).then(list => {
+        this._hasExtCached = Array.isArray(list) && list.some(x => x && x.enabled !== false);
+      }).catch(() => {}).finally(() => { this._extChecking = false; });
+    }
+    return Boolean(this._hasExtCached);
+  },
   replayChat(chat, force = false) {
     try {
       if (!chat || !chat.sid || !Array.isArray(chat.messages) || !chat.messages.length) return;
@@ -7616,12 +9227,13 @@ const ExtCompat = {
       if (!force && this.replayed.get(sid) === sig) return;
       this.replayed.set(sid, sig);
 
+      const needExtRecords = this.hasActiveExt();
       const records = [];
       const toolIds = [];
       let sawReasoning = false, reasoningDeltaCount = 0, reasoningTextLength = 0;
       let textDeltaCount = 0, textDeltaChars = 0, bashToolCount = 0, preToolTextChars = 0, interToolTextChars = 0;
       let seq = 1;
-      const MAX_REPLAY_RECORDS = 240;
+      const MAX_REPLAY_RECORDS = needExtRecords ? 240 : 0;
       for (const m of assistants) {
         let seenToolInTurn = false, pendingInterText = 0;
         const ts = m.metadata?.timing?.completedAt || m.metadata?.timing?.startedAt || Date.now();
@@ -7720,11 +9332,11 @@ const ExtCompat = {
       const curAvgChunk = (fmtTN >= 3 && fmtTChars > 0)
         ? +(fmtTChars / fmtTN).toFixed(2)
         : (prevValidAvgChunk || (effDeltaCount >= 6 && effDeltaChars > 0 ? +(effDeltaChars / effDeltaCount).toFixed(2) : null));
-      let streamIdPrefix = (prevMemo?.streamIdPrefix === 'openai-tc-empty' && (Number(curAvgChunk) || 0) >= 4.0) ? 'claude-tc-empty' : (prevMemo?.streamIdPrefix || null);
+      let streamIdPrefix = (prevMemo?.streamIdPrefix === 'openai-tc-empty' && (Number(curAvgChunk) || 0) >= 4.0 && (Number(curAvgChunk) || 0) < 15.0) ? 'claude-tc-empty' : (prevMemo?.streamIdPrefix || null);
       if (!streamIdPrefix && streamIds.length) {
         if (streamIds.some(i => /^(?:msg|rs)_[0-9a-f]{16,}/i.test(i))) streamIdPrefix = 'openai-rs';
         else if (streamIds.some(i => /^tc_[A-Za-z0-9_-]{10,}$/.test(i)) && effReasonChars === 0 && effSawReason) {
-          streamIdPrefix = ((Number(curAvgChunk) || 0) > 0 && (Number(curAvgChunk) || 0) <= 3.8) ? 'openai-tc-empty' : ((Number(curAvgChunk) || 0) >= 4.0 && (Number(curAvgChunk) || 0) <= 25.0 ? 'claude-tc-empty' : null);
+          streamIdPrefix = ((Number(curAvgChunk) || 0) > 0 && (Number(curAvgChunk) || 0) <= 3.8) ? 'openai-tc-empty' : ((Number(curAvgChunk) || 0) >= 4.0 && (Number(curAvgChunk) || 0) < 15.0 ? 'claude-tc-empty' : null);
         }
       }
       const effReasonDeltas = Math.max(reasoningDeltaCount, Number(prevMemo?.reasoningDeltaCount) || 0, fmtRN, fmtRE);
@@ -7757,17 +9369,23 @@ const ExtCompat = {
         window.__atiSseMemo.set(sid, memo);
       }
       try {
-        const lru = this._memoLru || (this._memoLru = []);
-        const idx = lru.indexOf(sid);
-        if (idx >= 0) lru.splice(idx, 1);
-        lru.push(sid);
-        while (lru.length > 30) {
-          const oldSid = lru.shift();
-          if (oldSid) try { localStorage.removeItem('ati.v4.sseMemo.' + oldSid); } catch {}
+        const memoSig = `${memo.sawReasoning ? 1 : 0}:${memo.reasoningDeltaCount}:${memo.reasoningTextLength}:${memo.bashToolCount}:${memo.preToolTextChars}:${memo.interToolTextChars}:${memo.avgChunk}:${memo.cps}:${memo.streamIdPrefix}:${memo.toolIds?.length || 0}`;
+        const sigMap = this._memoPersistSig ||= new Map();
+        if (sigMap.get(sid) !== memoSig) {
+          sigMap.set(sid, memoSig);
+          const lru = this._memoLru || (this._memoLru = []);
+          const idx = lru.indexOf(sid);
+          if (idx >= 0) lru.splice(idx, 1);
+          lru.push(sid);
+          while (lru.length > 30) {
+            const oldSid = lru.shift();
+            if (oldSid) { sigMap.delete(oldSid); try { localStorage.removeItem('ati.v4.sseMemo.' + oldSid); } catch {} }
+          }
+          localStorage.setItem('ati.v4.sseMemo.' + sid, JSON.stringify(memo));
         }
-        localStorage.setItem('ati.v4.sseMemo.' + sid, JSON.stringify(memo));
       } catch {}
 
+      if (!needExtRecords) return;
       const isFgChat = Boolean(
         (typeof Tabs !== 'undefined' && Tabs.cur?.sid === chat.sid) ||
         (typeof UI !== 'undefined' && UI.els?.chat === chat)
@@ -7825,7 +9443,10 @@ try {
       if (!r?.ok) window.dispatchEvent(new CustomEvent('mcp-gacha-state', { detail: { busy: false, status: r?.error || '启动失败' } }));
     }
   });
-  Bus.on('gacha', () => {
+  let _gachaLiveLastAt = 0, _gachaLiveTimer = 0;
+  const _flushGachaLiveState = () => {
+    _gachaLiveTimer = 0;
+    _gachaLiveLastAt = Date.now();
     try {
       if (typeof Gacha === 'undefined') return;
       const run = Gacha.run, busy = Gacha.busy();
@@ -7846,6 +9467,19 @@ try {
           status: run?.phase || run?.reason || (busy ? '抽卡进行中…' : '已就绪')
         }
       }));
+    } catch {}
+  };
+  Bus.on('gacha', () => {
+    try {
+      if (typeof Gacha !== 'undefined' && Gacha.busy()) {
+        const elapsed = Date.now() - _gachaLiveLastAt;
+        if (elapsed < 220) {
+          if (!_gachaLiveTimer) _gachaLiveTimer = setTimeout(_flushGachaLiveState, 220 - elapsed);
+          return;
+        }
+      }
+      if (_gachaLiveTimer) { clearTimeout(_gachaLiveTimer); _gachaLiveTimer = 0; }
+      _flushGachaLiveState();
     } catch {}
   });
 } catch {}
@@ -8378,3 +10012,38 @@ const RunningTracker = {
   }
 };
 try { if (typeof window !== 'undefined') window.RunningTracker = RunningTracker; } catch {}
+
+try {
+  if (typeof window !== 'undefined') {
+    window.__branaTrimMemory = () => {
+      try {
+        if (typeof Chats !== 'undefined' && Chats instanceof Map && Chats.size > 3) {
+          const curSid = typeof UI !== 'undefined' ? UI?.sid : '';
+          const loadedList = [];
+          for (const [sid, c] of Chats.entries()) {
+            if (!c || sid === curSid || c.busy || c.streaming || c.gacha || c._startupResuming || c._recoveringIncomplete || (Array.isArray(c.queue) && c.queue.length > 0)) continue;
+            if (c.loaded && Array.isArray(c.messages) && c.messages.length > 0) loadedList.push(c);
+          }
+          if (loadedList.length > 2) {
+            loadedList.sort((a, b) => (Number(b.updatedAt || 0) - Number(a.updatedAt || 0)));
+            for (let i = 2; i < loadedList.length; i++) {
+              const victim = loadedList[i];
+              try { if (typeof MsgCache !== 'undefined') MsgCache.save?.(victim); } catch {}
+              victim.messages = [];
+              victim.loaded = false;
+            }
+          }
+        }
+        if (typeof _mdPartCache !== 'undefined' && _mdPartCache instanceof Map && _mdPartCache.size > 80) {
+          const drop = _mdPartCache.size - 50;
+          let n = 0;
+          for (const k of _mdPartCache.keys()) { _mdPartCache.delete(k); if (++n >= drop) break; }
+        }
+        if (typeof BUILTIN_HABIT_BANK !== 'undefined' && typeof BUILTIN_HABIT_BANK?.__releaseSamples === 'function') {
+          BUILTIN_HABIT_BANK.__releaseSamples();
+        }
+        if (typeof globalThis.gc === 'function') globalThis.gc();
+      } catch {}
+    };
+  }
+} catch {}

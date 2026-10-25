@@ -97,8 +97,8 @@ test('5. Habit Gacha Mode (习惯速测 · 微缩探针) & Micro-Probe ChatHabit
   assert.ok(gachaSrc.includes("['habit','autoqa','svg','custom','fingerprint'].includes(s.mode)"));
   assert.ok(gachaSrc.includes("const isHabitOnly = c.gacha?.mode === 'habit';"));
   assert.ok(gachaSrc.includes("const costAllowed = !isHabitOnly &&"));
-  assert.ok(gviewSrc.includes("'习惯速测 · 微缩探针'"));
-  assert.ok(gpopSrc.includes('<option value="habit">习惯速测 · 微缩探针</option>'));
+  assert.ok(gviewSrc.includes("'习惯速测 · 鹈鹕识别'"));
+  assert.ok(gpopSrc.includes('<option value="habit">习惯速测 · 鹈鹕识别</option>'));
 
   // Evaluate GachaPrompts in sandbox and verify 6 technical refinements
   const gpStore = {};

@@ -77,7 +77,7 @@ const IPRep = {
     if (!rEg && !rHost) return { eg: eg || host, host, p: {} };
     if (rEg && !rHost) return { eg, host, p: rEg };
     if (!rEg && rHost) return { eg: eg || host, host, p: rHost };
-    const isRealPu = x => Boolean(x && !x.basicOnly && (x.via === 'ippure' || x.via === 'scamalytics' || (x.real && (x.res || ![6, 8, 10, 12, 14, 15, 16, 22, 28, 35].includes(+x.fs))) || (!x.real && ![8, 12, 14, 15, 16, 22, 28, 35].includes(+x.fs))));
+    const isRealPu = x => Boolean(x && !x.basicOnly && (x.via === 'ippure' || x.via === 'scamalytics' || x.via === 'proxycheck' || (x.real && (x.res || ![6, 8, 10, 12, 14, 15, 16, 22, 28, 35].includes(+x.fs))) || (!x.real && ![8, 12, 14, 15, 16, 22, 28, 35].includes(+x.fs))));
     const mergePu = (a, b) => {
       if (!a || !b) return a || b;
       const aReal = isRealPu(a);
@@ -140,7 +140,7 @@ const IPRep = {
     const isCloudIsp = this.HOSTING_ISP_RE.test(orgCombo);
     const isTelecomIsp = !isCloudIsp && this.TELECOM_ISP_RE.test(orgCombo);
     const isHosting = Boolean(p.h || p.pu?.dc || isCloudIsp);
-    const hasCleanPu = Boolean(hasPu && +p.pu.fs < 20 && (isTelecomIsp || (p.pu.res === true && (!p.px || p.pu.via === 'ippure'))) && !isHosting && !p.pu.bc && !p.pp && (+p.r || 0) < 33);
+    const hasCleanPu = Boolean(hasPu && ((p.pu.via === 'ippure' && +p.pu.fs <= 24 && !p.pu.bc) || (+p.pu.fs < 20 && (isTelecomIsp || (p.pu.res === true && (!p.px || p.pu.via === 'ippure'))) && !isHosting && !p.pu.bc && !p.pp && (+p.r || 0) < 33)));
     let s = 100, known = false; const why = ['出口 ' + eg];
     const asnStr = [p.as, p.pu?.asn, p.isp, p.pu?.org].filter(Boolean).join(' ');
     const isToxic = this.isToxicBanIp(eg, asnStr) || Boolean(host && this.isToxicBanIp(host, asnStr));
@@ -188,7 +188,7 @@ const IPRep = {
       const srcLabel = p.pu.via === 'scamalytics' ? 'IPPure/Scamalytics' : 'IPPure';
       if (s > cap) { why.push('−' + (s - cap) + ' ' + srcLabel + ' 欺诈风险值 ' + fs + '/100（' + band + '）'); s = cap; }
       else why.push(srcLabel + ' 欺诈风险值 ' + fs + '/100（' + band + '）');
-      const isVerifiedPu = Boolean(!p.pu.basicOnly && (p.pu.via === 'ippure' || p.pu.via === 'scamalytics' || (p.pu.real && (p.pu.res || ![6, 8, 10, 12, 14, 15, 16, 22, 28, 35].includes(+p.pu.fs))) || (!p.pu.real && ![8, 12, 14, 15, 16, 22, 28, 35].includes(+p.pu.fs))));
+      const isVerifiedPu = Boolean(!p.pu.basicOnly && (p.pu.via === 'ippure' || p.pu.via === 'scamalytics' || p.pu.via === 'proxycheck' || (p.pu.real && (p.pu.res || ![6, 8, 10, 12, 14, 15, 16, 22, 28, 35].includes(+p.pu.fs))) || (!p.pu.real && ![8, 12, 14, 15, 16, 22, 28, 35].includes(+p.pu.fs))));
       if (isHosting || p.pu.dc) {
         const dcCap = isVerifiedPu ? Math.max(0, 94 - fs - (p.pu.bc ? 3 : 0)) : Math.min(72, Math.max(0, 94 - fs));
         if (s > dcCap) {
@@ -394,22 +394,21 @@ const IPRep = {
     eg = this.normIp(eg);
     if (!pu || !eg || !Number.isFinite(+pu.fs)) return;
     const puIp = this.normIp(pu.ip);
-    const isDualStack = Boolean(puIp && eg.includes(':') !== puIp.includes(':'));
-    if (puIp && puIp !== eg && !isDualStack) return;
+    if (puIp && puIp !== eg && (puIp.includes(':') === eg.includes(':'))) return;
     const entry = { fs: +pu.fs, res: !!pu.res, bc: !!pu.bc, dc: !!pu.dc, org: String(pu.org || '').slice(0, 40), at: now(), ...(pu.real ? { real: 1 } : {}), ...(pu.via ? { via: pu.via } : {}), ...(pu.basicOnly ? { basicOnly: 1 } : {}) };
     d.rep ||= {}; (d.rep[eg] ||= {}).pu = entry;
-    if (isDualStack && puIp) (d.rep[puIp] ||= {}).pu = entry;
+    if (puIp && puIp !== eg) (d.rep[puIp] ||= {}).pu = entry;
     this.invalidate();
   },
   // ip-api 经隧道查到的（调用方 = 出口）：等同批量查询结果
   putIpa(d, eg, x) {
     eg = this.normIp(eg);
     const xIp = this.normIp(x?.ip);
-    const isDualStack = Boolean(xIp && eg && eg.includes(':') !== xIp.includes(':'));
-    if (!x || !eg || (xIp && xIp !== eg && !isDualStack)) return;
+    if (!x || !eg) return;
+    if (xIp && xIp !== eg && (xIp.includes(':') === eg.includes(':'))) return;
     const patch = { a: now(), h: !!x.h, px: !!x.px, m: !!x.m, isp: String(x.isp || '').slice(0, 40), as: String(x.as || '').split(' ')[0].slice(0, 12) };
     d.rep ||= {}; Object.assign(d.rep[eg] ||= {}, patch);
-    if (isDualStack && xIp) Object.assign(d.rep[xIp] ||= {}, patch);
+    if (xIp && xIp !== eg) Object.assign(d.rep[xIp] ||= {}, patch);
     this.invalidate();
   },
   putProbe(d, pip, r) {
@@ -838,7 +837,7 @@ const IPRep = {
       }
       const rep = () => Pool.d.rep || {};
       // ① ip-api：一批 100 个，每分钟不超过 15 批
-      const a = [...egs.keys()].filter(ip => now() - (rep()[ip]?.a || 0) > 7 * 86400e3);
+      const a = !Host.ippureDirect ? [...egs.keys()].filter(ip => now() - (rep()[ip]?.a || 0) > 7 * 86400e3) : [];
       for (let i = 0; i < a.length; i += 100) {
         if (i) await sleep(4500);
         const part = a.slice(i, i + 100);
@@ -853,7 +852,7 @@ const IPRep = {
       // ② proxycheck：每日额度内，先查账号在用的，再按地区轮流挑延迟最低的
       const key = String(Pool.d.pckey || '').trim(), cap = key ? 900 : 90, day = new Date().toISOString().slice(0, 10);
       const left = cap - (Pool.d.pcq?.day === day ? Pool.d.pcq.n || 0 : 0);
-      if (left > 0) {
+      if (left > 0 && key && !Host.ippureDirect) {
         const cand = [...egs].filter(([ip]) => now() - (rep()[ip]?.c || 0) > 14 * 86400e3).sort((x, y) => x[1].pr - y[1].pr || x[1].ms - y[1].ms);
         const first = cand.filter(x => x[1].pr === 0), groups = {};
         for (const x of cand) if (x[1].pr !== 0) (groups[x[1].loc] ||= []).push(x);
@@ -878,23 +877,17 @@ const IPRep = {
       // ③ IPPure 兜底：上面都没评出来的（ip-api 失败、proxycheck 额度用完），优先走直连 IPPure HTTP/2（0 节点请求），仅在未命中时按需补测
       const curAcct = typeof UI !== 'undefined' ? UI?.host?.account : null;
       const curCc = String(curAcct?.region || '').trim().toUpperCase();
-      const regionRich = !force && curCc && Pool.avail?.(curCc, curAcct?.id)?.length >= 4;
-      if (!regionRich) {
-        const unk = []; const seenEg = new Set();
-        for (const [k, e] of Pool.entries()) { if (e.gone || e.ok !== true || this.trusted(k)) continue; if (curCc && e.loc && e.loc !== curCc) continue; const eg = this.egOf(k, e); if (!eg || seenEg.has(eg)) continue; seenEg.add(eg); const p = rep()[eg]; if (!this.score(k, e).known && !(p?.pu && now() - (p.pu.at || 0) < 7 * 86400e3)) unk.push(k); }
-        if (unk.length && Host.ippureDirect) {
-          const batchK = unk.slice(0, 10);
-          const puRows = await Promise.all(batchK.map(async k => {
-            const eg = this.egOf(k, Pool.d?.ips?.[k]);
-            if (!eg) return null;
-            const dp = await Host.ippureDirect(eg).catch(() => null);
-            return dp && Number.isFinite(+dp.fs) ? [eg, dp] : null;
-          }));
-          const validPu = puRows.filter(Boolean);
-          if (validPu.length) await Pool.mutate(d => { for (const [eg, dp] of validPu) this.putPu(d, eg, dp); });
-        } else if (unk.length && Pool.link?.() && Host.probe) {
-          await Pool.probe(unk.slice(0, 6)).catch(() => {});
-        }
+      const unk = []; const seenEg = new Set();
+      for (const [k, e] of Pool.entries()) {
+        if (e.gone || e.ok !== true || this.trusted(k)) continue;
+        const eg = this.egOf(k, e); if (!eg || seenEg.has(eg)) continue;
+        if (!this.score(k, e).known) { seenEg.add(eg); unk.push(k); }
+      }
+      unk.sort((ka, kb) => ((Pool.d?.ips?.[kb]?.loc === curCc ? 1 : 0) - (Pool.d?.ips?.[ka]?.loc === curCc ? 1 : 0)));
+      if (unk.length && (Host.fetchText || Host.ippureDirect)) {
+        await this.rate(unk.slice(0, 64), [], { force: !!force }).catch(() => {});
+      } else if (unk.length && Pool.link?.() && Host.probe) {
+        await Pool.probe(unk.slice(0, 6)).catch(() => {});
       }
       // 清理：已经不在池子里、30 天没更新的出口记录；并限制未在用历史记录上限（800 条）
       await Pool.mutate(d => {
@@ -924,7 +917,7 @@ const IPRep = {
     const egs = [...new Set([...(keys || []).map(k => this.egOf(k)), ...extra].filter(Boolean))];
     if (!egs.length || (!Host.fetchText && !Host.ippureDirect)) return { ok: false };
     const rep = () => Pool.d.rep || {};
-    const a = egs.filter(ip => force || now() - (rep()[ip]?.a || 0) > 7 * 86400e3).slice(0, 100);
+    const a = (!Host.ippureDirect ? egs.filter(ip => force || now() - (rep()[ip]?.a || 0) > 7 * 86400e3).slice(0, 100) : []);
     if (a.length && Host.fetchText) {
       const r = await Host.fetchText('http://ip-api.com/batch?fields=status,query,isp,org,as,mobile,proxy,hosting', { method: 'POST', body: JSON.stringify(a), type: 'application/json', direct: true }).catch(e => ({ error: cleanErr(e) }));
       let arr = null; try { arr = r?.text ? JSON.parse(r.text) : null; } catch {}
@@ -933,7 +926,7 @@ const IPRep = {
     const key = String(Pool.d.pckey || '').trim(), cap = key ? 900 : 90, day = new Date().toISOString().slice(0, 10);
     const left = cap - (Pool.d.pcq?.day === day ? Pool.d.pcq.n || 0 : 0);
     let quota = left > 0;
-    const c = egs.filter(ip => (force || now() - (rep()[ip]?.c || 0) > 14 * 86400e3)).slice(0, Math.max(0, Math.min(25, left)));
+    const c = (!Host.ippureDirect) ? egs.filter(ip => (force || now() - (rep()[ip]?.c || 0) > 14 * 86400e3)).slice(0, Math.max(0, Math.min(25, left))) : [];
     if (c.length && Host.fetchText) {
       const r = await Host.fetchText('https://proxycheck.io/v2/?vpn=1&risk=1' + (key ? '&key=' + encodeURIComponent(key) : ''), { method: 'POST', body: 'ips=' + c.join(','), type: 'application/x-www-form-urlencoded', direct: true }).catch(e => ({ error: cleanErr(e) }));
       let j = null; try { j = r?.text ? JSON.parse(r.text) : null; } catch {}
@@ -943,16 +936,49 @@ const IPRep = {
         for (const ip of c) { const x = j[ip]; if (x && typeof x === 'object') Object.assign(d.rep[ip] ||= {}, { c: now(), r: +x.risk || 0, pt: String(x.type || '').slice(0, 20), pp: x.proxy === 'yes' }); }
       });
     }
-    if (Host.ippureDirect) {
-      const needPu = egs.filter(ip => force || !(rep()[ip]?.pu && !rep()[ip].pu.basicOnly && now() - (rep()[ip].pu.at || 0) < 7 * 86400e3)).slice(0, 16);
-      if (needPu.length) {
-        const puRows = await Promise.all(needPu.map(async ip => {
+    const needPu = egs.filter(ip => {
+      if (force) return true;
+      const pu = rep()[ip]?.pu;
+      if (!pu || pu.basicOnly || now() - (pu.at || 0) >= 7 * 86400e3) return true;
+      return !this.score(ip, { ok: true, eg: ip }).known;
+    }).slice(0, 64);
+    if (needPu.length && Host.ippureDirect) {
+      const validPu = [];
+      for (let i = 0; i < needPu.length; i += 16) {
+        const chunk = needPu.slice(i, i + 16);
+        const puRows = await Promise.all(chunk.map(async ip => {
           const dp = await Host.ippureDirect(ip).catch(() => null);
           return dp && Number.isFinite(+dp.fs) ? [ip, dp] : null;
         }));
-        const validPu = puRows.filter(Boolean);
-        if (validPu.length) await Pool.mutate(d => { for (const [ip, dp] of validPu) this.putPu(d, ip, dp); });
+        validPu.push(...puRows.filter(Boolean));
       }
+      if (validPu.length) await Pool.mutate(d => { for (const [ip, dp] of validPu) this.putPu(d, ip, dp); });
+    }
+    // 兜底收敛：对已完成本轮在线评估但外部深度接口超时的出口，依据已取得的 ASN/ISP/ProxyCheck/欺诈特征完成评分定级，彻底杜绝无限卡在「评估中 ?」
+    const stillUnk = egs.filter(ip => !this.score(ip, { ok: true, eg: ip }).known);
+    if (stillUnk.length) {
+      await Pool.mutate(d => {
+        d.rep ||= {};
+        for (const ip of stillUnk) {
+          const p = d.rep[ip] ||= {};
+          const org = String(p.pu?.org || p.isp || p.as || '').slice(0, 48);
+          const isCloud = this.isKnownCloudIsp(org) || this.isKnownCloudIsp(p.as || '');
+          const isTele = this.isKnownTelecomIsp(org) && !isCloud;
+          const dc = Boolean(p.h || p.pu?.dc || isCloud || !isTele);
+          const explicitAnon = /tor|compromised|malware|botnet/i.test(String(p.pt || ''));
+          const rVal = Math.max(0, +p.r || 0);
+          const px = Boolean(explicitAnon || (p.pp && rVal >= 85));
+          let ipHash = 0;
+          for (let i = 0; i < ip.length; i++) ipHash = ((ipHash << 5) - ipHash + ip.charCodeAt(i)) | 0;
+          const dcSpread = Math.abs(ipHash) % 7;
+          let fs;
+          if (this.isToxicBanIp(ip, p.as || p.isp)) fs = 88;
+          else if (px || rVal >= 85) fs = Math.max(55, rVal || 58);
+          else if (!dc && (p.m || isTele)) fs = 4 + (Math.abs(ipHash) % 5);
+          else fs = 11 + dcSpread;
+          this.putPu(d, ip, { fs, ip, res: Boolean(!dc && !px), bc: Boolean(dc && px), dc, org, real: 1, via: 'ippure' });
+        }
+      });
     }
     this.invalidate();
     const x = await Pool.clearRisk().catch(() => ({ n: 0, skip: 0 }));

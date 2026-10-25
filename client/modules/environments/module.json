@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "id": "environments",
+  "title": "节点与代理环境",
+  "version": "1.0.0",
+  "status": "complete-v1.0-modularized-and-static-verified",
+  "scope": "完整节点代理、自动选路与多账号管理子系统（共 42 个文件）：VLESS/节点库/出口池/纯净度/测速/选路/自动故障转移（vless / nodes / pool / iprep / node-speed / node-routes / region-ip / auto-route）、主进程原生隧道与加密 DoH/ECH（route-native / proxy-dns / subscription-fetch/ipc / pool-probe-runtime）、认证环境锁与多账号管理（auth-route-guard / auth-flow / auth-environment / mail-token / account-auth / gbrowser / accounts / account-picker / account-management / mgr / mgr.html / update / runtime-log）；客户端核心宿主/存储/认证/限流底座（core-host-auth.js）与国旗字体资产（flags.woff2）；主进程宿主/账号库/隧道/UA隐私伪装（main-host-account-proxy.js）、主进程网络探测/NSIS热更新（main-network-probes-updater.js）及认证/选路/启动生命周期（main-auth-routes-startup.js）。",
+  "entrypoints": {
+    "node": "public.cjs",
+    "renderer": "public.browser.js"
+  },
+  "runtimeVerification": "not-run"
+}

@@ -2,59 +2,77 @@ plugins {
     id 'com.android.application'
 }
 
-def pkg = new groovy.json.JsonSlurper().parse(file('../../package.json'))
-def ver = pkg.version.toString()
-def parts = ver.tokenize('.-').take(3).collect { it.isInteger() ? it.toInteger() : 0 }
-while (parts.size() < 3) parts << 0
-def vcode = parts[0] * 10000 + parts[1] * 100 + parts[2]
+def pkg = new groovy.json.JsonSlurper().parseText(file('../../package.json').getText('UTF-8'))
+def vParts = pkg.version.tokenize('-')[0].tokenize('.').collect { it as int }
+def vCode = vParts[0] * 1000000 + vParts[1] * 10000 + vParts[2]
 
 android {
     namespace 'ai.arena.client'
-    compileSdk 34
+    compileSdk 35
 
     defaultConfig {
-        applicationId 'ai.arena.client'
-        minSdk 24
-        targetSdk 34
-        versionCode vcode
-        versionName ver
+        applicationId "ai.arena.client"
+        minSdk 26
+        targetSdk 35
+        versionCode vCode
+        versionName pkg.version
+        resConfigs "zh", "zh-rCN", "en"
+        ndk {
+            abiFilters "arm64-v8a"
+        }
     }
 
     signingConfigs {
         release {
-            // 可用环境变量覆盖（GitHub Secrets），否则使用仓库内置的签名，保证每个版本签名一致、可直接覆盖升级
-            def ks = System.getenv('ANDROID_KEYSTORE_FILE')
-            storeFile ks ? file(ks) : file('release.jks')
-            storeType 'pkcs12'
-            storePassword System.getenv('ANDROID_KEYSTORE_PASSWORD') ?: 'arenaclient'
-            keyAlias System.getenv('ANDROID_KEY_ALIAS') ?: 'arena'
-            keyPassword System.getenv('ANDROID_KEY_PASSWORD') ?: 'arenaclient'
+            def ks = file('release.keystore')
+            if (ks.exists()) {
+                storeFile ks
+                storePassword System.getenv('KS_PASS') ?: 'arena123'
+                keyAlias System.getenv('KEY_ALIAS') ?: 'arena'
+                keyPassword System.getenv('KEY_PASS') ?: 'arena123'
+            }
         }
     }
 
     buildTypes {
         release {
-            minifyEnabled false
-            signingConfig signingConfigs.release
+            minifyEnabled true
+            shrinkResources true
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+            def ks = file('release.keystore')
+            signingConfig ks.exists() ? signingConfigs.release : signingConfigs.debug
         }
-    }
-
-    lint {
-        checkReleaseBuilds false
-        abortOnError false
-    }
-
-    // 内置 xray 内核（libxray.so）：必须解压到 nativeLibraryDir 才能执行
-    packagingOptions {
-        jniLibs { useLegacyPackaging true }
+        debug {
+            ndk {
+                abiFilters "arm64-v8a"
+            }
+        }
     }
 
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_17
         targetCompatibility JavaVersion.VERSION_17
     }
+
+    packagingOptions {
+        jniLibs {
+            useLegacyPackaging true
+        }
+        resources {
+            excludes += [
+                'META-INF/*.kotlin_module',
+                'META-INF/DEPENDENCIES',
+                'META-INF/LICENSE*',
+                'META-INF/NOTICE*',
+                'META-INF/*.version',
+                'DebugProbesKt.bin',
+                'kotlin-tooling-metadata.json'
+            ]
+        }
+    }
 }
 
 dependencies {
+    implementation fileTree(dir: 'libs', include: ['*.jar', '*.aar'])
     implementation 'androidx.webkit:webkit:1.12.1'
 }

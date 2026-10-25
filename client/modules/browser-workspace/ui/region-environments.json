@@ -1,0 +1,1902 @@
+{
+  "AD": {
+    "locale": "ca-AD",
+    "timezone": "Europe/Andorra",
+    "zones": [
+      "Europe/Andorra"
+    ]
+  },
+  "AE": {
+    "locale": "ar-AE",
+    "timezone": "Asia/Dubai",
+    "zones": [
+      "Asia/Dubai"
+    ]
+  },
+  "AF": {
+    "locale": "fa-AF",
+    "timezone": "Asia/Kabul",
+    "zones": [
+      "Asia/Kabul"
+    ]
+  },
+  "AG": {
+    "locale": "en-AG",
+    "timezone": "America/Antigua",
+    "zones": [
+      "America/Antigua"
+    ]
+  },
+  "AI": {
+    "locale": "en-AI",
+    "timezone": "America/Anguilla",
+    "zones": [
+      "America/Anguilla"
+    ]
+  },
+  "AL": {
+    "locale": "sq-AL",
+    "timezone": "Europe/Tirane",
+    "zones": [
+      "Europe/Tirane"
+    ]
+  },
+  "AM": {
+    "locale": "hy-AM",
+    "timezone": "Asia/Yerevan",
+    "zones": [
+      "Asia/Yerevan"
+    ]
+  },
+  "AO": {
+    "locale": "pt-AO",
+    "timezone": "Africa/Luanda",
+    "zones": [
+      "Africa/Luanda"
+    ]
+  },
+  "AQ": {
+    "locale": "und-AQ",
+    "timezone": "Antarctica/McMurdo",
+    "zones": [
+      "Antarctica/McMurdo",
+      "Antarctica/Casey",
+      "Antarctica/Davis",
+      "Antarctica/DumontDUrville",
+      "Antarctica/Mawson",
+      "Antarctica/Palmer",
+      "Antarctica/Rothera",
+      "Antarctica/Syowa",
+      "Antarctica/Troll",
+      "Antarctica/Vostok"
+    ]
+  },
+  "AR": {
+    "locale": "es-AR",
+    "timezone": "America/Argentina/Buenos_Aires",
+    "zones": [
+      "America/Argentina/Buenos_Aires",
+      "America/Argentina/Cordoba",
+      "America/Argentina/Salta",
+      "America/Argentina/Jujuy",
+      "America/Argentina/Tucuman",
+      "America/Argentina/Catamarca",
+      "America/Argentina/La_Rioja",
+      "America/Argentina/San_Juan",
+      "America/Argentina/Mendoza",
+      "America/Argentina/San_Luis",
+      "America/Argentina/Rio_Gallegos",
+      "America/Argentina/Ushuaia"
+    ]
+  },
+  "AS": {
+    "locale": "sm-AS",
+    "timezone": "Pacific/Pago_Pago",
+    "zones": [
+      "Pacific/Pago_Pago"
+    ]
+  },
+  "AT": {
+    "locale": "de-AT",
+    "timezone": "Europe/Vienna",
+    "zones": [
+      "Europe/Vienna"
+    ]
+  },
+  "AU": {
+    "locale": "en-AU",
+    "timezone": "Australia/Sydney",
+    "zones": [
+      "Australia/Lord_Howe",
+      "Antarctica/Macquarie",
+      "Australia/Hobart",
+      "Australia/Melbourne",
+      "Australia/Sydney",
+      "Australia/Broken_Hill",
+      "Australia/Brisbane",
+      "Australia/Lindeman",
+      "Australia/Adelaide",
+      "Australia/Darwin",
+      "Australia/Perth",
+      "Australia/Eucla"
+    ]
+  },
+  "AW": {
+    "locale": "nl-AW",
+    "timezone": "America/Aruba",
+    "zones": [
+      "America/Aruba"
+    ]
+  },
+  "AX": {
+    "locale": "sv-AX",
+    "timezone": "Europe/Mariehamn",
+    "zones": [
+      "Europe/Mariehamn"
+    ]
+  },
+  "AZ": {
+    "locale": "az-AZ",
+    "timezone": "Asia/Baku",
+    "zones": [
+      "Asia/Baku"
+    ]
+  },
+  "BA": {
+    "locale": "bs-BA",
+    "timezone": "Europe/Sarajevo",
+    "zones": [
+      "Europe/Sarajevo"
+    ]
+  },
+  "BB": {
+    "locale": "en-BB",
+    "timezone": "America/Barbados",
+    "zones": [
+      "America/Barbados"
+    ]
+  },
+  "BD": {
+    "locale": "bn-BD",
+    "timezone": "Asia/Dhaka",
+    "zones": [
+      "Asia/Dhaka"
+    ]
+  },
+  "BE": {
+    "locale": "nl-BE",
+    "timezone": "Europe/Brussels",
+    "zones": [
+      "Europe/Brussels"
+    ]
+  },
+  "BF": {
+    "locale": "fr-BF",
+    "timezone": "Africa/Ouagadougou",
+    "zones": [
+      "Africa/Ouagadougou"
+    ]
+  },
+  "BG": {
+    "locale": "bg-BG",
+    "timezone": "Europe/Sofia",
+    "zones": [
+      "Europe/Sofia"
+    ]
+  },
+  "BH": {
+    "locale": "ar-BH",
+    "timezone": "Asia/Bahrain",
+    "zones": [
+      "Asia/Bahrain"
+    ]
+  },
+  "BI": {
+    "locale": "rn-BI",
+    "timezone": "Africa/Bujumbura",
+    "zones": [
+      "Africa/Bujumbura"
+    ]
+  },
+  "BJ": {
+    "locale": "fr-BJ",
+    "timezone": "Africa/Porto-Novo",
+    "zones": [
+      "Africa/Porto-Novo"
+    ]
+  },
+  "BL": {
+    "locale": "fr-BL",
+    "timezone": "America/St_Barthelemy",
+    "zones": [
+      "America/St_Barthelemy"
+    ]
+  },
+  "BM": {
+    "locale": "en-BM",
+    "timezone": "Atlantic/Bermuda",
+    "zones": [
+      "Atlantic/Bermuda"
+    ]
+  },
+  "BN": {
+    "locale": "ms-BN",
+    "timezone": "Asia/Brunei",
+    "zones": [
+      "Asia/Brunei"
+    ]
+  },
+  "BO": {
+    "locale": "es-BO",
+    "timezone": "America/La_Paz",
+    "zones": [
+      "America/La_Paz"
+    ]
+  },
+  "BQ": {
+    "locale": "nl-BQ",
+    "timezone": "America/Kralendijk",
+    "zones": [
+      "America/Kralendijk"
+    ]
+  },
+  "BR": {
+    "locale": "pt-BR",
+    "timezone": "America/Sao_Paulo",
+    "zones": [
+      "America/Noronha",
+      "America/Belem",
+      "America/Fortaleza",
+      "America/Recife",
+      "America/Araguaina",
+      "America/Maceio",
+      "America/Bahia",
+      "America/Sao_Paulo",
+      "America/Campo_Grande",
+      "America/Cuiaba",
+      "America/Santarem",
+      "America/Porto_Velho",
+      "America/Boa_Vista",
+      "America/Manaus",
+      "America/Eirunepe",
+      "America/Rio_Branco"
+    ]
+  },
+  "BS": {
+    "locale": "en-BS",
+    "timezone": "America/Nassau",
+    "zones": [
+      "America/Nassau"
+    ]
+  },
+  "BT": {
+    "locale": "dz-BT",
+    "timezone": "Asia/Thimphu",
+    "zones": [
+      "Asia/Thimphu"
+    ]
+  },
+  "BW": {
+    "locale": "en-BW",
+    "timezone": "Africa/Gaborone",
+    "zones": [
+      "Africa/Gaborone"
+    ]
+  },
+  "BY": {
+    "locale": "be-BY",
+    "timezone": "Europe/Minsk",
+    "zones": [
+      "Europe/Minsk"
+    ]
+  },
+  "BZ": {
+    "locale": "en-BZ",
+    "timezone": "America/Belize",
+    "zones": [
+      "America/Belize"
+    ]
+  },
+  "CA": {
+    "locale": "en-CA",
+    "timezone": "America/Toronto",
+    "zones": [
+      "America/St_Johns",
+      "America/Halifax",
+      "America/Glace_Bay",
+      "America/Moncton",
+      "America/Goose_Bay",
+      "America/Blanc-Sablon",
+      "America/Toronto",
+      "America/Iqaluit",
+      "America/Atikokan",
+      "America/Winnipeg",
+      "America/Resolute",
+      "America/Rankin_Inlet",
+      "America/Regina",
+      "America/Swift_Current",
+      "America/Edmonton",
+      "America/Cambridge_Bay",
+      "America/Inuvik",
+      "America/Vancouver",
+      "America/Creston",
+      "America/Dawson_Creek",
+      "America/Fort_Nelson",
+      "America/Whitehorse",
+      "America/Dawson"
+    ]
+  },
+  "CC": {
+    "locale": "en-CC",
+    "timezone": "Indian/Cocos",
+    "zones": [
+      "Indian/Cocos"
+    ]
+  },
+  "CD": {
+    "locale": "fr-CD",
+    "timezone": "Africa/Kinshasa",
+    "zones": [
+      "Africa/Kinshasa",
+      "Africa/Lubumbashi"
+    ]
+  },
+  "CF": {
+    "locale": "sg-CF",
+    "timezone": "Africa/Bangui",
+    "zones": [
+      "Africa/Bangui"
+    ]
+  },
+  "CG": {
+    "locale": "fr-CG",
+    "timezone": "Africa/Brazzaville",
+    "zones": [
+      "Africa/Brazzaville"
+    ]
+  },
+  "CH": {
+    "locale": "de-CH",
+    "timezone": "Europe/Zurich",
+    "zones": [
+      "Europe/Zurich"
+    ]
+  },
+  "CI": {
+    "locale": "fr-CI",
+    "timezone": "Africa/Abidjan",
+    "zones": [
+      "Africa/Abidjan"
+    ]
+  },
+  "CK": {
+    "locale": "en-CK",
+    "timezone": "Pacific/Rarotonga",
+    "zones": [
+      "Pacific/Rarotonga"
+    ]
+  },
+  "CL": {
+    "locale": "es-CL",
+    "timezone": "America/Santiago",
+    "zones": [
+      "America/Santiago",
+      "America/Coyhaique",
+      "America/Punta_Arenas",
+      "Pacific/Easter"
+    ]
+  },
+  "CM": {
+    "locale": "fr-CM",
+    "timezone": "Africa/Douala",
+    "zones": [
+      "Africa/Douala"
+    ]
+  },
+  "CN": {
+    "locale": "zh-CN",
+    "timezone": "Asia/Shanghai",
+    "zones": [
+      "Asia/Shanghai",
+      "Asia/Urumqi"
+    ]
+  },
+  "CO": {
+    "locale": "es-CO",
+    "timezone": "America/Bogota",
+    "zones": [
+      "America/Bogota"
+    ]
+  },
+  "CR": {
+    "locale": "es-CR",
+    "timezone": "America/Costa_Rica",
+    "zones": [
+      "America/Costa_Rica"
+    ]
+  },
+  "CU": {
+    "locale": "es-CU",
+    "timezone": "America/Havana",
+    "zones": [
+      "America/Havana"
+    ]
+  },
+  "CV": {
+    "locale": "pt-CV",
+    "timezone": "Atlantic/Cape_Verde",
+    "zones": [
+      "Atlantic/Cape_Verde"
+    ]
+  },
+  "CW": {
+    "locale": "pap-CW",
+    "timezone": "America/Curacao",
+    "zones": [
+      "America/Curacao"
+    ]
+  },
+  "CX": {
+    "locale": "en-CX",
+    "timezone": "Indian/Christmas",
+    "zones": [
+      "Indian/Christmas"
+    ]
+  },
+  "CY": {
+    "locale": "el-CY",
+    "timezone": "Asia/Nicosia",
+    "zones": [
+      "Asia/Nicosia",
+      "Asia/Famagusta"
+    ]
+  },
+  "CZ": {
+    "locale": "cs-CZ",
+    "timezone": "Europe/Prague",
+    "zones": [
+      "Europe/Prague"
+    ]
+  },
+  "DE": {
+    "locale": "de-DE",
+    "timezone": "Europe/Berlin",
+    "zones": [
+      "Europe/Berlin",
+      "Europe/Busingen"
+    ]
+  },
+  "DJ": {
+    "locale": "fr-DJ",
+    "timezone": "Africa/Djibouti",
+    "zones": [
+      "Africa/Djibouti"
+    ]
+  },
+  "DK": {
+    "locale": "da-DK",
+    "timezone": "Europe/Copenhagen",
+    "zones": [
+      "Europe/Copenhagen"
+    ]
+  },
+  "DM": {
+    "locale": "en-DM",
+    "timezone": "America/Dominica",
+    "zones": [
+      "America/Dominica"
+    ]
+  },
+  "DO": {
+    "locale": "es-DO",
+    "timezone": "America/Santo_Domingo",
+    "zones": [
+      "America/Santo_Domingo"
+    ]
+  },
+  "DZ": {
+    "locale": "ar-DZ",
+    "timezone": "Africa/Algiers",
+    "zones": [
+      "Africa/Algiers"
+    ]
+  },
+  "EC": {
+    "locale": "es-EC",
+    "timezone": "America/Guayaquil",
+    "zones": [
+      "America/Guayaquil",
+      "Pacific/Galapagos"
+    ]
+  },
+  "EE": {
+    "locale": "et-EE",
+    "timezone": "Europe/Tallinn",
+    "zones": [
+      "Europe/Tallinn"
+    ]
+  },
+  "EG": {
+    "locale": "ar-EG",
+    "timezone": "Africa/Cairo",
+    "zones": [
+      "Africa/Cairo"
+    ]
+  },
+  "EH": {
+    "locale": "ar-EH",
+    "timezone": "Africa/El_Aaiun",
+    "zones": [
+      "Africa/El_Aaiun"
+    ]
+  },
+  "ER": {
+    "locale": "ti-ER",
+    "timezone": "Africa/Asmara",
+    "zones": [
+      "Africa/Asmara"
+    ]
+  },
+  "ES": {
+    "locale": "es-ES",
+    "timezone": "Europe/Madrid",
+    "zones": [
+      "Europe/Madrid",
+      "Africa/Ceuta",
+      "Atlantic/Canary"
+    ]
+  },
+  "ET": {
+    "locale": "am-ET",
+    "timezone": "Africa/Addis_Ababa",
+    "zones": [
+      "Africa/Addis_Ababa"
+    ]
+  },
+  "FI": {
+    "locale": "fi-FI",
+    "timezone": "Europe/Helsinki",
+    "zones": [
+      "Europe/Helsinki"
+    ]
+  },
+  "FJ": {
+    "locale": "en-FJ",
+    "timezone": "Pacific/Fiji",
+    "zones": [
+      "Pacific/Fiji"
+    ]
+  },
+  "FK": {
+    "locale": "en-FK",
+    "timezone": "Atlantic/Stanley",
+    "zones": [
+      "Atlantic/Stanley"
+    ]
+  },
+  "FM": {
+    "locale": "en-FM",
+    "timezone": "Pacific/Chuuk",
+    "zones": [
+      "Pacific/Chuuk",
+      "Pacific/Pohnpei",
+      "Pacific/Kosrae"
+    ]
+  },
+  "FO": {
+    "locale": "fo-FO",
+    "timezone": "Atlantic/Faroe",
+    "zones": [
+      "Atlantic/Faroe"
+    ]
+  },
+  "FR": {
+    "locale": "fr-FR",
+    "timezone": "Europe/Paris",
+    "zones": [
+      "Europe/Paris"
+    ]
+  },
+  "GA": {
+    "locale": "fr-GA",
+    "timezone": "Africa/Libreville",
+    "zones": [
+      "Africa/Libreville"
+    ]
+  },
+  "GB": {
+    "locale": "en-GB",
+    "timezone": "Europe/London",
+    "zones": [
+      "Europe/London"
+    ]
+  },
+  "GD": {
+    "locale": "en-GD",
+    "timezone": "America/Grenada",
+    "zones": [
+      "America/Grenada"
+    ]
+  },
+  "GE": {
+    "locale": "ka-GE",
+    "timezone": "Asia/Tbilisi",
+    "zones": [
+      "Asia/Tbilisi"
+    ]
+  },
+  "GF": {
+    "locale": "fr-GF",
+    "timezone": "America/Cayenne",
+    "zones": [
+      "America/Cayenne"
+    ]
+  },
+  "GG": {
+    "locale": "en-GG",
+    "timezone": "Europe/Guernsey",
+    "zones": [
+      "Europe/Guernsey"
+    ]
+  },
+  "GH": {
+    "locale": "en-GH",
+    "timezone": "Africa/Accra",
+    "zones": [
+      "Africa/Accra"
+    ]
+  },
+  "GI": {
+    "locale": "en-GI",
+    "timezone": "Europe/Gibraltar",
+    "zones": [
+      "Europe/Gibraltar"
+    ]
+  },
+  "GL": {
+    "locale": "kl-GL",
+    "timezone": "America/Nuuk",
+    "zones": [
+      "America/Nuuk",
+      "America/Danmarkshavn",
+      "America/Scoresbysund",
+      "America/Thule"
+    ]
+  },
+  "GM": {
+    "locale": "en-GM",
+    "timezone": "Africa/Banjul",
+    "zones": [
+      "Africa/Banjul"
+    ]
+  },
+  "GN": {
+    "locale": "fr-GN",
+    "timezone": "Africa/Conakry",
+    "zones": [
+      "Africa/Conakry"
+    ]
+  },
+  "GP": {
+    "locale": "fr-GP",
+    "timezone": "America/Guadeloupe",
+    "zones": [
+      "America/Guadeloupe"
+    ]
+  },
+  "GQ": {
+    "locale": "es-GQ",
+    "timezone": "Africa/Malabo",
+    "zones": [
+      "Africa/Malabo"
+    ]
+  },
+  "GR": {
+    "locale": "el-GR",
+    "timezone": "Europe/Athens",
+    "zones": [
+      "Europe/Athens"
+    ]
+  },
+  "GS": {
+    "locale": "en-GS",
+    "timezone": "Atlantic/South_Georgia",
+    "zones": [
+      "Atlantic/South_Georgia"
+    ]
+  },
+  "GT": {
+    "locale": "es-GT",
+    "timezone": "America/Guatemala",
+    "zones": [
+      "America/Guatemala"
+    ]
+  },
+  "GU": {
+    "locale": "en-GU",
+    "timezone": "Pacific/Guam",
+    "zones": [
+      "Pacific/Guam"
+    ]
+  },
+  "GW": {
+    "locale": "pt-GW",
+    "timezone": "Africa/Bissau",
+    "zones": [
+      "Africa/Bissau"
+    ]
+  },
+  "GY": {
+    "locale": "en-GY",
+    "timezone": "America/Guyana",
+    "zones": [
+      "America/Guyana"
+    ]
+  },
+  "HK": {
+    "locale": "zh-Hant-HK",
+    "timezone": "Asia/Hong_Kong",
+    "zones": [
+      "Asia/Hong_Kong"
+    ]
+  },
+  "HN": {
+    "locale": "es-HN",
+    "timezone": "America/Tegucigalpa",
+    "zones": [
+      "America/Tegucigalpa"
+    ]
+  },
+  "HR": {
+    "locale": "hr-HR",
+    "timezone": "Europe/Zagreb",
+    "zones": [
+      "Europe/Zagreb"
+    ]
+  },
+  "HT": {
+    "locale": "ht-HT",
+    "timezone": "America/Port-au-Prince",
+    "zones": [
+      "America/Port-au-Prince"
+    ]
+  },
+  "HU": {
+    "locale": "hu-HU",
+    "timezone": "Europe/Budapest",
+    "zones": [
+      "Europe/Budapest"
+    ]
+  },
+  "ID": {
+    "locale": "id-ID",
+    "timezone": "Asia/Jakarta",
+    "zones": [
+      "Asia/Jakarta",
+      "Asia/Pontianak",
+      "Asia/Makassar",
+      "Asia/Jayapura"
+    ]
+  },
+  "IE": {
+    "locale": "en-IE",
+    "timezone": "Europe/Dublin",
+    "zones": [
+      "Europe/Dublin"
+    ]
+  },
+  "IL": {
+    "locale": "he-IL",
+    "timezone": "Asia/Jerusalem",
+    "zones": [
+      "Asia/Jerusalem"
+    ]
+  },
+  "IM": {
+    "locale": "en-IM",
+    "timezone": "Europe/Isle_of_Man",
+    "zones": [
+      "Europe/Isle_of_Man"
+    ]
+  },
+  "IN": {
+    "locale": "hi-IN",
+    "timezone": "Asia/Kolkata",
+    "zones": [
+      "Asia/Kolkata"
+    ]
+  },
+  "IO": {
+    "locale": "en-IO",
+    "timezone": "Indian/Chagos",
+    "zones": [
+      "Indian/Chagos"
+    ]
+  },
+  "IQ": {
+    "locale": "ar-IQ",
+    "timezone": "Asia/Baghdad",
+    "zones": [
+      "Asia/Baghdad"
+    ]
+  },
+  "IR": {
+    "locale": "fa-IR",
+    "timezone": "Asia/Tehran",
+    "zones": [
+      "Asia/Tehran"
+    ]
+  },
+  "IS": {
+    "locale": "is-IS",
+    "timezone": "Atlantic/Reykjavik",
+    "zones": [
+      "Atlantic/Reykjavik"
+    ]
+  },
+  "IT": {
+    "locale": "it-IT",
+    "timezone": "Europe/Rome",
+    "zones": [
+      "Europe/Rome"
+    ]
+  },
+  "JE": {
+    "locale": "en-JE",
+    "timezone": "Europe/Jersey",
+    "zones": [
+      "Europe/Jersey"
+    ]
+  },
+  "JM": {
+    "locale": "en-JM",
+    "timezone": "America/Jamaica",
+    "zones": [
+      "America/Jamaica"
+    ]
+  },
+  "JO": {
+    "locale": "ar-JO",
+    "timezone": "Asia/Amman",
+    "zones": [
+      "Asia/Amman"
+    ]
+  },
+  "JP": {
+    "locale": "ja-JP",
+    "timezone": "Asia/Tokyo",
+    "zones": [
+      "Asia/Tokyo"
+    ]
+  },
+  "KE": {
+    "locale": "sw-KE",
+    "timezone": "Africa/Nairobi",
+    "zones": [
+      "Africa/Nairobi"
+    ]
+  },
+  "KG": {
+    "locale": "ky-KG",
+    "timezone": "Asia/Bishkek",
+    "zones": [
+      "Asia/Bishkek"
+    ]
+  },
+  "KH": {
+    "locale": "km-KH",
+    "timezone": "Asia/Phnom_Penh",
+    "zones": [
+      "Asia/Phnom_Penh"
+    ]
+  },
+  "KI": {
+    "locale": "en-KI",
+    "timezone": "Pacific/Tarawa",
+    "zones": [
+      "Pacific/Tarawa",
+      "Pacific/Kanton",
+      "Pacific/Kiritimati"
+    ]
+  },
+  "KM": {
+    "locale": "ar-KM",
+    "timezone": "Indian/Comoro",
+    "zones": [
+      "Indian/Comoro"
+    ]
+  },
+  "KN": {
+    "locale": "en-KN",
+    "timezone": "America/St_Kitts",
+    "zones": [
+      "America/St_Kitts"
+    ]
+  },
+  "KP": {
+    "locale": "ko-KP",
+    "timezone": "Asia/Pyongyang",
+    "zones": [
+      "Asia/Pyongyang"
+    ]
+  },
+  "KR": {
+    "locale": "ko-KR",
+    "timezone": "Asia/Seoul",
+    "zones": [
+      "Asia/Seoul"
+    ]
+  },
+  "KW": {
+    "locale": "ar-KW",
+    "timezone": "Asia/Kuwait",
+    "zones": [
+      "Asia/Kuwait"
+    ]
+  },
+  "KY": {
+    "locale": "en-KY",
+    "timezone": "America/Cayman",
+    "zones": [
+      "America/Cayman"
+    ]
+  },
+  "KZ": {
+    "locale": "ru-KZ",
+    "timezone": "Asia/Almaty",
+    "zones": [
+      "Asia/Almaty",
+      "Asia/Qyzylorda",
+      "Asia/Qostanay",
+      "Asia/Aqtobe",
+      "Asia/Aqtau",
+      "Asia/Atyrau",
+      "Asia/Oral"
+    ]
+  },
+  "LA": {
+    "locale": "lo-LA",
+    "timezone": "Asia/Vientiane",
+    "zones": [
+      "Asia/Vientiane"
+    ]
+  },
+  "LB": {
+    "locale": "ar-LB",
+    "timezone": "Asia/Beirut",
+    "zones": [
+      "Asia/Beirut"
+    ]
+  },
+  "LC": {
+    "locale": "en-LC",
+    "timezone": "America/St_Lucia",
+    "zones": [
+      "America/St_Lucia"
+    ]
+  },
+  "LI": {
+    "locale": "de-LI",
+    "timezone": "Europe/Vaduz",
+    "zones": [
+      "Europe/Vaduz"
+    ]
+  },
+  "LK": {
+    "locale": "si-LK",
+    "timezone": "Asia/Colombo",
+    "zones": [
+      "Asia/Colombo"
+    ]
+  },
+  "LR": {
+    "locale": "en-LR",
+    "timezone": "Africa/Monrovia",
+    "zones": [
+      "Africa/Monrovia"
+    ]
+  },
+  "LS": {
+    "locale": "st-LS",
+    "timezone": "Africa/Maseru",
+    "zones": [
+      "Africa/Maseru"
+    ]
+  },
+  "LT": {
+    "locale": "lt-LT",
+    "timezone": "Europe/Vilnius",
+    "zones": [
+      "Europe/Vilnius"
+    ]
+  },
+  "LU": {
+    "locale": "fr-LU",
+    "timezone": "Europe/Luxembourg",
+    "zones": [
+      "Europe/Luxembourg"
+    ]
+  },
+  "LV": {
+    "locale": "lv-LV",
+    "timezone": "Europe/Riga",
+    "zones": [
+      "Europe/Riga"
+    ]
+  },
+  "LY": {
+    "locale": "ar-LY",
+    "timezone": "Africa/Tripoli",
+    "zones": [
+      "Africa/Tripoli"
+    ]
+  },
+  "MA": {
+    "locale": "ar-MA",
+    "timezone": "Africa/Casablanca",
+    "zones": [
+      "Africa/Casablanca"
+    ]
+  },
+  "MC": {
+    "locale": "fr-MC",
+    "timezone": "Europe/Monaco",
+    "zones": [
+      "Europe/Monaco"
+    ]
+  },
+  "MD": {
+    "locale": "ro-MD",
+    "timezone": "Europe/Chisinau",
+    "zones": [
+      "Europe/Chisinau"
+    ]
+  },
+  "ME": {
+    "locale": "sr-Latn-ME",
+    "timezone": "Europe/Podgorica",
+    "zones": [
+      "Europe/Podgorica"
+    ]
+  },
+  "MF": {
+    "locale": "fr-MF",
+    "timezone": "America/Marigot",
+    "zones": [
+      "America/Marigot"
+    ]
+  },
+  "MG": {
+    "locale": "mg-MG",
+    "timezone": "Indian/Antananarivo",
+    "zones": [
+      "Indian/Antananarivo"
+    ]
+  },
+  "MH": {
+    "locale": "en-MH",
+    "timezone": "Pacific/Majuro",
+    "zones": [
+      "Pacific/Majuro",
+      "Pacific/Kwajalein"
+    ]
+  },
+  "MK": {
+    "locale": "mk-MK",
+    "timezone": "Europe/Skopje",
+    "zones": [
+      "Europe/Skopje"
+    ]
+  },
+  "ML": {
+    "locale": "fr-ML",
+    "timezone": "Africa/Bamako",
+    "zones": [
+      "Africa/Bamako"
+    ]
+  },
+  "MM": {
+    "locale": "my-MM",
+    "timezone": "Asia/Yangon",
+    "zones": [
+      "Asia/Yangon"
+    ]
+  },
+  "MN": {
+    "locale": "mn-MN",
+    "timezone": "Asia/Ulaanbaatar",
+    "zones": [
+      "Asia/Ulaanbaatar",
+      "Asia/Hovd"
+    ]
+  },
+  "MO": {
+    "locale": "zh-Hant-MO",
+    "timezone": "Asia/Macau",
+    "zones": [
+      "Asia/Macau"
+    ]
+  },
+  "MP": {
+    "locale": "en-MP",
+    "timezone": "Pacific/Saipan",
+    "zones": [
+      "Pacific/Saipan"
+    ]
+  },
+  "MQ": {
+    "locale": "fr-MQ",
+    "timezone": "America/Martinique",
+    "zones": [
+      "America/Martinique"
+    ]
+  },
+  "MR": {
+    "locale": "ar-MR",
+    "timezone": "Africa/Nouakchott",
+    "zones": [
+      "Africa/Nouakchott"
+    ]
+  },
+  "MS": {
+    "locale": "en-MS",
+    "timezone": "America/Montserrat",
+    "zones": [
+      "America/Montserrat"
+    ]
+  },
+  "MT": {
+    "locale": "mt-MT",
+    "timezone": "Europe/Malta",
+    "zones": [
+      "Europe/Malta"
+    ]
+  },
+  "MU": {
+    "locale": "fr-MU",
+    "timezone": "Indian/Mauritius",
+    "zones": [
+      "Indian/Mauritius"
+    ]
+  },
+  "MV": {
+    "locale": "dv-MV",
+    "timezone": "Indian/Maldives",
+    "zones": [
+      "Indian/Maldives"
+    ]
+  },
+  "MW": {
+    "locale": "en-MW",
+    "timezone": "Africa/Blantyre",
+    "zones": [
+      "Africa/Blantyre"
+    ]
+  },
+  "MX": {
+    "locale": "es-MX",
+    "timezone": "America/Mexico_City",
+    "zones": [
+      "America/Mexico_City",
+      "America/Cancun",
+      "America/Merida",
+      "America/Monterrey",
+      "America/Matamoros",
+      "America/Chihuahua",
+      "America/Ciudad_Juarez",
+      "America/Ojinaga",
+      "America/Mazatlan",
+      "America/Bahia_Banderas",
+      "America/Hermosillo",
+      "America/Tijuana"
+    ]
+  },
+  "MY": {
+    "locale": "ms-MY",
+    "timezone": "Asia/Kuala_Lumpur",
+    "zones": [
+      "Asia/Kuala_Lumpur",
+      "Asia/Kuching"
+    ]
+  },
+  "MZ": {
+    "locale": "pt-MZ",
+    "timezone": "Africa/Maputo",
+    "zones": [
+      "Africa/Maputo"
+    ]
+  },
+  "NA": {
+    "locale": "en-NA",
+    "timezone": "Africa/Windhoek",
+    "zones": [
+      "Africa/Windhoek"
+    ]
+  },
+  "NC": {
+    "locale": "fr-NC",
+    "timezone": "Pacific/Noumea",
+    "zones": [
+      "Pacific/Noumea"
+    ]
+  },
+  "NE": {
+    "locale": "fr-NE",
+    "timezone": "Africa/Niamey",
+    "zones": [
+      "Africa/Niamey"
+    ]
+  },
+  "NF": {
+    "locale": "en-NF",
+    "timezone": "Pacific/Norfolk",
+    "zones": [
+      "Pacific/Norfolk"
+    ]
+  },
+  "NG": {
+    "locale": "en-NG",
+    "timezone": "Africa/Lagos",
+    "zones": [
+      "Africa/Lagos"
+    ]
+  },
+  "NI": {
+    "locale": "es-NI",
+    "timezone": "America/Managua",
+    "zones": [
+      "America/Managua"
+    ]
+  },
+  "NL": {
+    "locale": "nl-NL",
+    "timezone": "Europe/Amsterdam",
+    "zones": [
+      "Europe/Amsterdam"
+    ]
+  },
+  "NO": {
+    "locale": "nb-NO",
+    "timezone": "Europe/Oslo",
+    "zones": [
+      "Europe/Oslo"
+    ]
+  },
+  "NP": {
+    "locale": "ne-NP",
+    "timezone": "Asia/Kathmandu",
+    "zones": [
+      "Asia/Kathmandu"
+    ]
+  },
+  "NR": {
+    "locale": "en-NR",
+    "timezone": "Pacific/Nauru",
+    "zones": [
+      "Pacific/Nauru"
+    ]
+  },
+  "NU": {
+    "locale": "en-NU",
+    "timezone": "Pacific/Niue",
+    "zones": [
+      "Pacific/Niue"
+    ]
+  },
+  "NZ": {
+    "locale": "en-NZ",
+    "timezone": "Pacific/Auckland",
+    "zones": [
+      "Pacific/Auckland",
+      "Pacific/Chatham"
+    ]
+  },
+  "OM": {
+    "locale": "ar-OM",
+    "timezone": "Asia/Muscat",
+    "zones": [
+      "Asia/Muscat"
+    ]
+  },
+  "PA": {
+    "locale": "es-PA",
+    "timezone": "America/Panama",
+    "zones": [
+      "America/Panama"
+    ]
+  },
+  "PE": {
+    "locale": "es-PE",
+    "timezone": "America/Lima",
+    "zones": [
+      "America/Lima"
+    ]
+  },
+  "PF": {
+    "locale": "fr-PF",
+    "timezone": "Pacific/Tahiti",
+    "zones": [
+      "Pacific/Tahiti",
+      "Pacific/Marquesas",
+      "Pacific/Gambier"
+    ]
+  },
+  "PG": {
+    "locale": "tpi-PG",
+    "timezone": "Pacific/Port_Moresby",
+    "zones": [
+      "Pacific/Port_Moresby",
+      "Pacific/Bougainville"
+    ]
+  },
+  "PH": {
+    "locale": "en-PH",
+    "timezone": "Asia/Manila",
+    "zones": [
+      "Asia/Manila"
+    ]
+  },
+  "PK": {
+    "locale": "ur-PK",
+    "timezone": "Asia/Karachi",
+    "zones": [
+      "Asia/Karachi"
+    ]
+  },
+  "PL": {
+    "locale": "pl-PL",
+    "timezone": "Europe/Warsaw",
+    "zones": [
+      "Europe/Warsaw"
+    ]
+  },
+  "PM": {
+    "locale": "fr-PM",
+    "timezone": "America/Miquelon",
+    "zones": [
+      "America/Miquelon"
+    ]
+  },
+  "PN": {
+    "locale": "en-PN",
+    "timezone": "Pacific/Pitcairn",
+    "zones": [
+      "Pacific/Pitcairn"
+    ]
+  },
+  "PR": {
+    "locale": "es-PR",
+    "timezone": "America/Puerto_Rico",
+    "zones": [
+      "America/Puerto_Rico"
+    ]
+  },
+  "PS": {
+    "locale": "ar-PS",
+    "timezone": "Asia/Gaza",
+    "zones": [
+      "Asia/Gaza",
+      "Asia/Hebron"
+    ]
+  },
+  "PT": {
+    "locale": "pt-PT",
+    "timezone": "Europe/Lisbon",
+    "zones": [
+      "Europe/Lisbon",
+      "Atlantic/Madeira",
+      "Atlantic/Azores"
+    ]
+  },
+  "PW": {
+    "locale": "pau-PW",
+    "timezone": "Pacific/Palau",
+    "zones": [
+      "Pacific/Palau"
+    ]
+  },
+  "PY": {
+    "locale": "gn-PY",
+    "timezone": "America/Asuncion",
+    "zones": [
+      "America/Asuncion"
+    ]
+  },
+  "QA": {
+    "locale": "ar-QA",
+    "timezone": "Asia/Qatar",
+    "zones": [
+      "Asia/Qatar"
+    ]
+  },
+  "RE": {
+    "locale": "fr-RE",
+    "timezone": "Indian/Reunion",
+    "zones": [
+      "Indian/Reunion"
+    ]
+  },
+  "RO": {
+    "locale": "ro-RO",
+    "timezone": "Europe/Bucharest",
+    "zones": [
+      "Europe/Bucharest"
+    ]
+  },
+  "RS": {
+    "locale": "sr-RS",
+    "timezone": "Europe/Belgrade",
+    "zones": [
+      "Europe/Belgrade"
+    ]
+  },
+  "RU": {
+    "locale": "ru-RU",
+    "timezone": "Europe/Moscow",
+    "zones": [
+      "Europe/Kaliningrad",
+      "Europe/Moscow",
+      "Europe/Kirov",
+      "Europe/Volgograd",
+      "Europe/Astrakhan",
+      "Europe/Saratov",
+      "Europe/Ulyanovsk",
+      "Europe/Samara",
+      "Asia/Yekaterinburg",
+      "Asia/Omsk",
+      "Asia/Novosibirsk",
+      "Asia/Barnaul",
+      "Asia/Tomsk",
+      "Asia/Novokuznetsk",
+      "Asia/Krasnoyarsk",
+      "Asia/Irkutsk",
+      "Asia/Chita",
+      "Asia/Yakutsk",
+      "Asia/Khandyga",
+      "Asia/Vladivostok",
+      "Asia/Ust-Nera",
+      "Asia/Magadan",
+      "Asia/Sakhalin",
+      "Asia/Srednekolymsk",
+      "Asia/Kamchatka",
+      "Asia/Anadyr"
+    ]
+  },
+  "RW": {
+    "locale": "rw-RW",
+    "timezone": "Africa/Kigali",
+    "zones": [
+      "Africa/Kigali"
+    ]
+  },
+  "SA": {
+    "locale": "ar-SA",
+    "timezone": "Asia/Riyadh",
+    "zones": [
+      "Asia/Riyadh"
+    ]
+  },
+  "SB": {
+    "locale": "en-SB",
+    "timezone": "Pacific/Guadalcanal",
+    "zones": [
+      "Pacific/Guadalcanal"
+    ]
+  },
+  "SC": {
+    "locale": "fr-SC",
+    "timezone": "Indian/Mahe",
+    "zones": [
+      "Indian/Mahe"
+    ]
+  },
+  "SD": {
+    "locale": "ar-SD",
+    "timezone": "Africa/Khartoum",
+    "zones": [
+      "Africa/Khartoum"
+    ]
+  },
+  "SE": {
+    "locale": "sv-SE",
+    "timezone": "Europe/Stockholm",
+    "zones": [
+      "Europe/Stockholm"
+    ]
+  },
+  "SG": {
+    "locale": "en-SG",
+    "timezone": "Asia/Singapore",
+    "zones": [
+      "Asia/Singapore"
+    ]
+  },
+  "SH": {
+    "locale": "en-SH",
+    "timezone": "Atlantic/St_Helena",
+    "zones": [
+      "Atlantic/St_Helena"
+    ]
+  },
+  "SI": {
+    "locale": "sl-SI",
+    "timezone": "Europe/Ljubljana",
+    "zones": [
+      "Europe/Ljubljana"
+    ]
+  },
+  "SJ": {
+    "locale": "nb-SJ",
+    "timezone": "Arctic/Longyearbyen",
+    "zones": [
+      "Arctic/Longyearbyen"
+    ]
+  },
+  "SK": {
+    "locale": "sk-SK",
+    "timezone": "Europe/Bratislava",
+    "zones": [
+      "Europe/Bratislava"
+    ]
+  },
+  "SL": {
+    "locale": "en-SL",
+    "timezone": "Africa/Freetown",
+    "zones": [
+      "Africa/Freetown"
+    ]
+  },
+  "SM": {
+    "locale": "it-SM",
+    "timezone": "Europe/San_Marino",
+    "zones": [
+      "Europe/San_Marino"
+    ]
+  },
+  "SN": {
+    "locale": "wo-SN",
+    "timezone": "Africa/Dakar",
+    "zones": [
+      "Africa/Dakar"
+    ]
+  },
+  "SO": {
+    "locale": "so-SO",
+    "timezone": "Africa/Mogadishu",
+    "zones": [
+      "Africa/Mogadishu"
+    ]
+  },
+  "SR": {
+    "locale": "nl-SR",
+    "timezone": "America/Paramaribo",
+    "zones": [
+      "America/Paramaribo"
+    ]
+  },
+  "SS": {
+    "locale": "en-SS",
+    "timezone": "Africa/Juba",
+    "zones": [
+      "Africa/Juba"
+    ]
+  },
+  "ST": {
+    "locale": "pt-ST",
+    "timezone": "Africa/Sao_Tome",
+    "zones": [
+      "Africa/Sao_Tome"
+    ]
+  },
+  "SV": {
+    "locale": "es-SV",
+    "timezone": "America/El_Salvador",
+    "zones": [
+      "America/El_Salvador"
+    ]
+  },
+  "SX": {
+    "locale": "en-SX",
+    "timezone": "America/Lower_Princes",
+    "zones": [
+      "America/Lower_Princes"
+    ]
+  },
+  "SY": {
+    "locale": "ar-SY",
+    "timezone": "Asia/Damascus",
+    "zones": [
+      "Asia/Damascus"
+    ]
+  },
+  "SZ": {
+    "locale": "en-SZ",
+    "timezone": "Africa/Mbabane",
+    "zones": [
+      "Africa/Mbabane"
+    ]
+  },
+  "TC": {
+    "locale": "en-TC",
+    "timezone": "America/Grand_Turk",
+    "zones": [
+      "America/Grand_Turk"
+    ]
+  },
+  "TD": {
+    "locale": "ar-TD",
+    "timezone": "Africa/Ndjamena",
+    "zones": [
+      "Africa/Ndjamena"
+    ]
+  },
+  "TF": {
+    "locale": "fr-TF",
+    "timezone": "Indian/Kerguelen",
+    "zones": [
+      "Indian/Kerguelen"
+    ]
+  },
+  "TG": {
+    "locale": "fr-TG",
+    "timezone": "Africa/Lome",
+    "zones": [
+      "Africa/Lome"
+    ]
+  },
+  "TH": {
+    "locale": "th-TH",
+    "timezone": "Asia/Bangkok",
+    "zones": [
+      "Asia/Bangkok"
+    ]
+  },
+  "TJ": {
+    "locale": "tg-TJ",
+    "timezone": "Asia/Dushanbe",
+    "zones": [
+      "Asia/Dushanbe"
+    ]
+  },
+  "TK": {
+    "locale": "tkl-TK",
+    "timezone": "Pacific/Fakaofo",
+    "zones": [
+      "Pacific/Fakaofo"
+    ]
+  },
+  "TL": {
+    "locale": "pt-TL",
+    "timezone": "Asia/Dili",
+    "zones": [
+      "Asia/Dili"
+    ]
+  },
+  "TM": {
+    "locale": "tk-TM",
+    "timezone": "Asia/Ashgabat",
+    "zones": [
+      "Asia/Ashgabat"
+    ]
+  },
+  "TN": {
+    "locale": "ar-TN",
+    "timezone": "Africa/Tunis",
+    "zones": [
+      "Africa/Tunis"
+    ]
+  },
+  "TO": {
+    "locale": "to-TO",
+    "timezone": "Pacific/Tongatapu",
+    "zones": [
+      "Pacific/Tongatapu"
+    ]
+  },
+  "TR": {
+    "locale": "tr-TR",
+    "timezone": "Europe/Istanbul",
+    "zones": [
+      "Europe/Istanbul"
+    ]
+  },
+  "TT": {
+    "locale": "en-TT",
+    "timezone": "America/Port_of_Spain",
+    "zones": [
+      "America/Port_of_Spain"
+    ]
+  },
+  "TV": {
+    "locale": "tvl-TV",
+    "timezone": "Pacific/Funafuti",
+    "zones": [
+      "Pacific/Funafuti"
+    ]
+  },
+  "TW": {
+    "locale": "zh-Hant-TW",
+    "timezone": "Asia/Taipei",
+    "zones": [
+      "Asia/Taipei"
+    ]
+  },
+  "TZ": {
+    "locale": "sw-TZ",
+    "timezone": "Africa/Dar_es_Salaam",
+    "zones": [
+      "Africa/Dar_es_Salaam"
+    ]
+  },
+  "UA": {
+    "locale": "uk-UA",
+    "timezone": "Europe/Simferopol",
+    "zones": [
+      "Europe/Simferopol",
+      "Europe/Kyiv"
+    ]
+  },
+  "UG": {
+    "locale": "sw-UG",
+    "timezone": "Africa/Kampala",
+    "zones": [
+      "Africa/Kampala"
+    ]
+  },
+  "UM": {
+    "locale": "en-UM",
+    "timezone": "Pacific/Midway",
+    "zones": [
+      "Pacific/Midway",
+      "Pacific/Wake"
+    ]
+  },
+  "US": {
+    "locale": "en-US",
+    "timezone": "America/New_York",
+    "zones": [
+      "America/New_York",
+      "America/Detroit",
+      "America/Kentucky/Louisville",
+      "America/Kentucky/Monticello",
+      "America/Indiana/Indianapolis",
+      "America/Indiana/Vincennes",
+      "America/Indiana/Winamac",
+      "America/Indiana/Marengo",
+      "America/Indiana/Petersburg",
+      "America/Indiana/Vevay",
+      "America/Chicago",
+      "America/Indiana/Tell_City",
+      "America/Indiana/Knox",
+      "America/Menominee",
+      "America/North_Dakota/Center",
+      "America/North_Dakota/New_Salem",
+      "America/North_Dakota/Beulah",
+      "America/Denver",
+      "America/Boise",
+      "America/Phoenix",
+      "America/Los_Angeles",
+      "America/Anchorage",
+      "America/Juneau",
+      "America/Sitka",
+      "America/Metlakatla",
+      "America/Yakutat",
+      "America/Nome",
+      "America/Adak",
+      "Pacific/Honolulu"
+    ]
+  },
+  "UY": {
+    "locale": "es-UY",
+    "timezone": "America/Montevideo",
+    "zones": [
+      "America/Montevideo"
+    ]
+  },
+  "UZ": {
+    "locale": "uz-UZ",
+    "timezone": "Asia/Samarkand",
+    "zones": [
+      "Asia/Samarkand",
+      "Asia/Tashkent"
+    ]
+  },
+  "VA": {
+    "locale": "it-VA",
+    "timezone": "Europe/Vatican",
+    "zones": [
+      "Europe/Vatican"
+    ]
+  },
+  "VC": {
+    "locale": "en-VC",
+    "timezone": "America/St_Vincent",
+    "zones": [
+      "America/St_Vincent"
+    ]
+  },
+  "VE": {
+    "locale": "es-VE",
+    "timezone": "America/Caracas",
+    "zones": [
+      "America/Caracas"
+    ]
+  },
+  "VG": {
+    "locale": "en-VG",
+    "timezone": "America/Tortola",
+    "zones": [
+      "America/Tortola"
+    ]
+  },
+  "VI": {
+    "locale": "en-VI",
+    "timezone": "America/St_Thomas",
+    "zones": [
+      "America/St_Thomas"
+    ]
+  },
+  "VN": {
+    "locale": "vi-VN",
+    "timezone": "Asia/Ho_Chi_Minh",
+    "zones": [
+      "Asia/Ho_Chi_Minh"
+    ]
+  },
+  "VU": {
+    "locale": "bi-VU",
+    "timezone": "Pacific/Efate",
+    "zones": [
+      "Pacific/Efate"
+    ]
+  },
+  "WF": {
+    "locale": "fr-WF",
+    "timezone": "Pacific/Wallis",
+    "zones": [
+      "Pacific/Wallis"
+    ]
+  },
+  "WS": {
+    "locale": "sm-WS",
+    "timezone": "Pacific/Apia",
+    "zones": [
+      "Pacific/Apia"
+    ]
+  },
+  "YE": {
+    "locale": "ar-YE",
+    "timezone": "Asia/Aden",
+    "zones": [
+      "Asia/Aden"
+    ]
+  },
+  "YT": {
+    "locale": "fr-YT",
+    "timezone": "Indian/Mayotte",
+    "zones": [
+      "Indian/Mayotte"
+    ]
+  },
+  "ZA": {
+    "locale": "en-ZA",
+    "timezone": "Africa/Johannesburg",
+    "zones": [
+      "Africa/Johannesburg"
+    ]
+  },
+  "ZM": {
+    "locale": "en-ZM",
+    "timezone": "Africa/Lusaka",
+    "zones": [
+      "Africa/Lusaka"
+    ]
+  },
+  "ZW": {
+    "locale": "sn-ZW",
+    "timezone": "Africa/Harare",
+    "zones": [
+      "Africa/Harare"
+    ]
+  }
+}

@@ -42,6 +42,7 @@ const Strength = (() => {
     n = n.replace(/-([a-z][a-z0-9]{0,14})(?:-\1)+$/i, '-$1');   // fable-5-v2-v2 → fable-5-v2（后缀重复；只处理字母开头的，5-5 这种版本号不动）
     const m = /^[\w.\/:@+-]{3,90}$/.test(n) && /^([a-z][a-z0-9]{2,15})[-_]+(.+)$/i.exec(n);   // 只处理像型号 ID 的名字（不含空格）
     if (m && !Brand.of(m[1]) && !TIER_RE.test(m[1]) && vendorFirst(m[2])) { addCode(m[1]); return m[2] + '-' + m[1].toLowerCase() + (qm ? '?' : ''); }
+    n = n.replace(/^qwen-3\.(8|5)-/i, 'qwen3.$1-').replace(/^qwen3\.7-max\b/i, 'qwen-3.7-max').replace(/^solar-pro-4\b/i, 'solar-pro4').replace(/^hy-4-preview\b/i, 'hy4-preview');
     if (TIERLESS_BASE_RE.test(n)) n = n.toLowerCase();
     return n + (qm ? '?' : '');
   }
@@ -122,8 +123,9 @@ const Strength = (() => {
       const fastSc = (m.routed && okScore(m.reverseScore))
         ? m.reverseScore
         : (saneSc(bookScore(sid)) ?? (m.fingerprint && !m.fingerprint.skipped ? saneSc(m.fingerprint.reasoning?.score) : null) ?? saneSc(m.est?.score) ?? saneSc(m.reverseScore) ?? saneSc(m.habitScore));
-      const needBp = !okScore(fastSc) || Boolean(typeof Chats !== 'undefined' && Chats.get?.(sid)?.loaded);
-      const bp = (needBp && typeof BillingProbe !== 'undefined') ? BillingProbe.summary?.(sid) : null;
+      const isCurTab = typeof Tabs !== 'undefined' && Tabs.cur?.sid === sid;
+      const needBp = !okScore(fastSc) || Boolean(isCurTab && !(m.chargedUsd > 0 && m.reverseTokens?.output > 0) && typeof Chats !== 'undefined' && Chats.get?.(sid)?.loaded);
+      const bp = (needBp && typeof BillingProbe !== 'undefined') ? BillingProbe.summary?.(sid, { readOnly: true }) : null;
       const sc = okScore(fastSc) ? fastSc : reverseDepthScore(sid, m, bp, null);
       for (const otherName of Object.keys(S)) {
         if (otherName === n || !Array.isArray(S[otherName])) continue;
@@ -403,8 +405,9 @@ const Strength = (() => {
         const fastSc = ((m.routed || m.userCorrected || m.habitInferred || m.reverseInferred || m.billingProbe) && okScore(reidSc))
           ? reidSc
           : (bookScore(sid) ?? (m.fingerprint && !m.fingerprint.skipped ? m.fingerprint.reasoning?.score : null) ?? m.est?.score ?? reidSc);
-        const needBp = !okScore(fastSc) || Boolean(typeof Chats !== 'undefined' && Chats.get?.(sid)?.loaded);
-        const bp = (needBp && typeof BillingProbe !== 'undefined') ? BillingProbe.summary?.(sid) : null;
+        const isCurTab = typeof Tabs !== 'undefined' && Tabs.cur?.sid === sid;
+        const needBp = !okScore(fastSc) || Boolean(isCurTab && !(m.chargedUsd > 0 && m.reverseTokens?.output > 0) && typeof Chats !== 'undefined' && Chats.get?.(sid)?.loaded);
+        const bp = (needBp && typeof BillingProbe !== 'undefined') ? BillingProbe.summary?.(sid, { readOnly: true }) : null;
         const sc = okScore(fastSc) ? fastSc : reverseDepthScore(sid, m, bp, null);
         const charged = bp?.payment?.chargedUsd ?? m.chargedUsd;
         if (charged > 0) entry.usds.push(charged);
@@ -548,8 +551,9 @@ const Strength = (() => {
   }
   Bus.on('trace', sid => { if (sid) { try { collect(sid); } catch {} } });
   setTimeout(async () => { try { migrate(); } catch {} await pull(true); collectAll(); }, 2500);
-  setInterval(() => { if (!document.hidden) pull(); }, 60000);
-  addEventListener('focus', () => pull());
+  setInterval(() => { if (!(typeof document !== 'undefined' && document.hidden)) pull(); }, 60000);
+  let _lastFocusPullAt = 0;
+  addEventListener('focus', () => { const t = Date.now(); if (t - _lastFocusPullAt < 45000) return; _lastFocusPullAt = t; pull(); });
   function withEffort(name, lvl) {
     const raw = String(name || '').trim();
     if (!raw) return lvl ? String(lvl).toLowerCase() : '';
@@ -875,7 +879,7 @@ const PView = {
   },
   mount(view) {
     Strength.pull();
-    clearInterval(this.iv); this.iv = setInterval(() => { if (!this.el?.isConnected) { clearInterval(this.iv); return; } if (!document.hidden) Strength.pull(); }, 15000);
+    clearInterval(this.iv); this.iv = setInterval(() => { if (!this.el?.isConnected) { clearInterval(this.iv); return; } if (!(typeof document !== 'undefined' && document.hidden)) Strength.pull(); }, 15000);
     this.el = h('div', { class: 'gacha pview' });
     view.replaceChildren(this.el); this.render();
   },

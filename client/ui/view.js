@@ -25,6 +25,10 @@ ICON.undo = '<path d="M9 14L4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/
 ICON.pen = '<path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M13.5 6.5l4 4"/>';
 ICON.sort = '<path d="M7 4v16M3 16l4 4 4-4M17 20V4M13 8l4-4 4 4"/>';
 ICON.mic = '<rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/>';
+ICON.qr = '<rect x="3" y="3" width="7" height="7" rx="1"/><rect x="5.2" y="5.2" width="2.6" height="2.6" rx="0.4" fill="currentColor" stroke="none"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="16.2" y="5.2" width="2.6" height="2.6" rx="0.4" fill="currentColor" stroke="none"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="5.2" y="16.2" width="2.6" height="2.6" rx="0.4" fill="currentColor" stroke="none"/><path d="M14 14h3v3h-3zM18 14h3v3h-3zM14 18h3v3h-3zM18 18h3v3h-3z"/>';
+ICON.eye = '<path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/>';
+ICON[' eye'] = ICON.eye;
+ICON.RefreshCw = ICON.refresh;
 ICON.github = '<path fill="currentColor" stroke="none" d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"/>';   // 账号卡片的「已登录 GitHub」标记（GitHub 官方标志，实心）
 const isMob = () => document.body.classList.contains('m');
 const K = (...a) => a.flat().filter(x => x != null && x !== false);
@@ -72,11 +76,25 @@ function toast(msg, kind = '') {
 // 消息时间：uuid v7 的前 48 位就是毫秒时间戳（用户消息 / 回复的 id 都是 v7）
 const idTime = id => { const x = String(id || '').replace(/-/g, ''); if (!/^[0-9a-f]{32}$/i.test(x) || x[12] !== '7') return 0; const t = parseInt(x.slice(0, 12), 16); return t > 1.6e12 && t < 4.2e12 ? t : 0; };
 // 今天：14:05；今年：9月28日 14:05；更早：2025/9/28 14:05
+const _clockMemo = new Map();
+let _clockDayMin = 0;
 const clock = ms => {
-  if (!ms) return ''; const d = new Date(ms), n = new Date(), p = x => String(x).padStart(2, '0'), hm = p(d.getHours()) + ':' + p(d.getMinutes());
-  if (d.toDateString() === n.toDateString()) return hm;
-  const y = new Date(n); y.setDate(n.getDate() - 1); if (d.toDateString() === y.toDateString()) return '昨天 ' + hm;
-  return d.getFullYear() === n.getFullYear() ? (d.getMonth() + 1) + '月' + d.getDate() + '日 ' + hm : d.getFullYear() + '/' + (d.getMonth() + 1) + '/' + d.getDate() + ' ' + hm;
+  if (!ms) return '';
+  const nowMin = Math.floor(Date.now() / 60000);
+  if (nowMin !== _clockDayMin) { _clockDayMin = nowMin; if (_clockMemo.size > 600) _clockMemo.clear(); }
+  const k = Math.floor(ms / 60000);
+  const hit = _clockMemo.get(k);
+  if (hit !== undefined) return hit;
+  const d = new Date(ms), n = new Date(), p = x => String(x).padStart(2, '0'), hm = p(d.getHours()) + ':' + p(d.getMinutes());
+  let out;
+  if (d.toDateString() === n.toDateString()) out = hm;
+  else {
+    const y = new Date(n); y.setDate(n.getDate() - 1);
+    if (d.toDateString() === y.toDateString()) out = '昨天 ' + hm;
+    else out = d.getFullYear() === n.getFullYear() ? (d.getMonth() + 1) + '月' + d.getDate() + '日 ' + hm : d.getFullYear() + '/' + (d.getMonth() + 1) + '/' + d.getDate() + ' ' + hm;
+  }
+  _clockMemo.set(k, out);
+  return out;
 };
 const clockFull = ms => { if (!ms) return ''; const d = new Date(ms), p = x => String(x).padStart(2, '0'); return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) + ' ' + p(d.getHours()) + ':' + p(d.getMinutes()) + ':' + p(d.getSeconds()); };
 const durTxt = s => s < 60 ? s.toFixed(1) + 's' : s < 3600 ? Math.floor(s / 60) + '分' + Math.round(s % 60) + '秒' : Math.floor(s / 3600) + '小时' + Math.round(s % 3600 / 60) + '分';
@@ -134,30 +152,72 @@ const Drafts = {
     const d = this.load(), id = this.acct(); let r = null;
     if (id && Host.shared) try { r = await Host.shared('draft@' + id); } catch {}
     if (r && typeof r === 'object') {
-      const ids = new Set(d.o.map(x => x.id)); for (const x of Array.isArray(r.o) ? r.o : []) if (x?.id && !ids.has(x.id)) d.o.push(x);
+      const ackedIds = [...new Set([...(Array.isArray(d.ackedIds) ? d.ackedIds : []), ...(Array.isArray(r.ackedIds) ? r.ackedIds : [])])].slice(-128);
+      const acceptedIds = [...new Set([...(Array.isArray(d.acceptedIds) ? d.acceptedIds : []), ...(Array.isArray(r.acceptedIds) ? r.acceptedIds : [])])].slice(-128);
+      d.ackedIds = ackedIds;
+      d.acceptedIds = acceptedIds;
+      const ackedSet = new Set(ackedIds);
+      const acceptedSet = new Set(acceptedIds);
+      const isProbeTxt = t => typeof SentUserLog !== 'undefined' && typeof SentUserLog.isGachaProbeText === 'function' && SentUserLog.isGachaProbeText(t);
+      d.o = (Array.isArray(d.o) ? d.o : []).filter(x => x && x.id && !ackedSet.has(x.id) && !isProbeTxt(x.text));
+      const byOutId = new Map(d.o.map(x => [x.id, x]));
+      for (const x of Array.isArray(r.o) ? r.o : []) {
+        if (!x?.id || ackedSet.has(x.id) || isProbeTxt(x.text)) continue;
+        const ex = byOutId.get(x.id);
+        if (ex) {
+          if (x.acc && !ex.acc) ex.acc = x.acc;
+          if (acceptedSet.has(x.id) && !ex.acc) ex.acc = ex.at || now();
+        } else {
+          if (acceptedSet.has(x.id) && !x.acc) x.acc = x.at || now();
+          d.o.push(x);
+          byOutId.set(x.id, x);
+        }
+      }
+      for (const x of d.o) {
+        if (x && acceptedSet.has(x.id) && !x.acc) x.acc = x.at || now();
+      }
       for (const [k, v] of Object.entries(r.t || {})) if (v && (!d.t[k] || (v.at || 0) > (d.t[k].at || 0))) d.t[k] = v;
       for (const [k, v] of Object.entries(r.q || {})) {
         if (!v) continue;
+        const sentList = (typeof SentUserLog !== 'undefined' && typeof SentUserLog.readList === 'function') ? SentUserLog.readList(k) : [];
+        const sentQIds = new Set();
+        const sentTexts = new Set();
+        for (const sm of sentList) {
+          if (!sm || (!sm._appendAccepted && sm.failed)) continue;
+          if (sm.id) sentQIds.add(sm.id);
+          if (Array.isArray(sm.queueIds)) for (const qid of sm.queueIds) if (qid) sentQIds.add(qid);
+          const st = String(sm.text || '').trim();
+          if (st && sm.fromQueue) sentTexts.add(st);
+        }
         const lq = d.q[k];
-        if (!lq) { d.q[k] = v; continue; }
+        if (!lq) {
+          const vRemoved = new Set([...(v.removedIds || []), ...ackedIds, ...acceptedIds, ...sentQIds]);
+          const vClaimed = new Set(d.o.filter(o => o && o.sid === k).flatMap(o => o.queueIds || []));
+          const vItems = (Array.isArray(v.items) ? v.items : []).filter(it => it && it.id && !vRemoved.has(it.id) && !vClaimed.has(it.id) && !isProbeTxt(it.text) && !(it.text && sentTexts.has(String(it.text).trim())));
+          d.q[k] = { ...v, items: vItems };
+          continue;
+        }
         const vNewer = (v.at || 0) > (lq.at || 0);
         if (vNewer && (!Array.isArray(v.items) || !v.items.length)) {
           d.q[k] = v;
           continue;
         }
-        if (!vNewer && (!Array.isArray(lq.items) || !lq.items.length) && (lq.clearedAt || 0) >= (v.at || 0)) {
+        if (!vNewer && (!Array.isArray(lq.items) || !lq.items.length) && ((lq.at || 0) > 0 || (lq.clearedAt || 0) >= (v.at || 0))) {
+          const mergedRem = [...new Set([...(lq.removedIds || []), ...(v.removedIds || [])])].slice(-64);
+          if (mergedRem.length) lq.removedIds = mergedRem;
           continue;
         }
         const clearedAt = Math.max(lq.clearedAt || 0, v.clearedAt || 0);
-        const removedIds = [...new Set([...(lq.removedIds || []), ...(v.removedIds || [])])].slice(-32);
-        const removedSet = new Set(removedIds);
+        const removedIds = [...new Set([...(lq.removedIds || []), ...(v.removedIds || [])])].slice(-64);
+        const removedSet = new Set([...removedIds, ...ackedIds, ...acceptedIds, ...sentQIds]);
         const claimed = new Set(d.o.filter(o => o && o.sid === k).flatMap(o => o.queueIds || []));
         const mergedMap = new Map();
         const firstList = vNewer ? (lq.items || []) : (v.items || []);
         const secondList = vNewer ? (v.items || []) : (lq.items || []);
         for (const it of [...firstList, ...secondList]) {
           if (!it || !it.id) continue;
-          if (removedSet.has(it.id) || claimed.has(it.id)) continue;
+          if (removedSet.has(it.id) || claimed.has(it.id) || isProbeTxt(it.text)) continue;
+          if (it.text && sentTexts.has(String(it.text).trim())) continue;
           if (clearedAt && (it.at || 0) > 0 && (it.at || 0) <= clearedAt) continue;
           mergedMap.set(it.id, it);
         }
@@ -181,7 +241,15 @@ const Drafts = {
     try {
       if (typeof Chats !== 'undefined' && Chats && typeof Chats.values === 'function') {
         for (const c of Chats.values()) {
-          if (c && c.sid && !c.gacha) this.hydrateQ(c, true);
+          if (c && c.sid && !c.gacha) {
+            this.hydrateQ(c, true);
+            if (Array.isArray(c.messages) && c.messages.length && typeof SentUserLog !== 'undefined' && typeof SentUserLog.restoreInto === 'function') {
+              if (SentUserLog.restoreInto(c, { srvPend: Boolean(c.busy || c.streaming) })) {
+                try { if (typeof MsgCache !== 'undefined' && typeof MsgCache.put === 'function') MsgCache.put(c); } catch {}
+                try { c.emit?.(); } catch {}
+              }
+            }
+          }
         }
       }
       if (typeof UI !== 'undefined') UI.paintQ?.();
@@ -225,12 +293,29 @@ const Drafts = {
     if (Array.isArray(e?.removedIds) && e.removedIds.length) {
       chat._qRemovedIds = [...new Set([...(chat._qRemovedIds || []), ...e.removedIds])].slice(-32);
     }
-    const removedSet = new Set(chat._qRemovedIds || []);
+    const sentList = (typeof SentUserLog !== 'undefined' && typeof SentUserLog.readList === 'function') ? SentUserLog.readList(chat.sid) : [];
+    const sentQIds = new Set();
+    for (const sm of sentList) {
+      if (!sm || (!sm._appendAccepted && sm.failed)) continue;
+      if (sm.id) sentQIds.add(sm.id);
+      if (Array.isArray(sm.queueIds)) for (const qid of sm.queueIds) if (qid) sentQIds.add(qid);
+    }
+    const removedSet = new Set([...(chat._qRemovedIds || []), ...(Array.isArray(d.ackedIds) ? d.ackedIds : []), ...(Array.isArray(d.acceptedIds) ? d.acceptedIds : []), ...sentQIds]);
     const claimed = new Set(d.o.filter(o => o && o.sid === chat.sid).flatMap(o => o.queueIds || []));
+    const isProbeQ = txt => typeof SentUserLog !== 'undefined' && typeof SentUserLog.isGachaProbeText === 'function' && SentUserLog.isGachaProbeText(txt);
+    if (q.length) {
+      for (let qi = q.length - 1; qi >= 0; qi--) {
+        const qit = q[qi];
+        if (isProbeQ(qit?.text)) { changed = true; continue; }
+      if (!qit || (qit.id && (claimed.has(qit.id) || removedSet.has(qit.id))) || ((qit.at || 0) > 0 && (chat._qClearedAt || 0) >= (qit.at || 0))) {
+          q.splice(qi, 1);
+        }
+      }
+    }
     const existingIds = new Set(q.map(x => x?.id).filter(Boolean));
     if (e?.items?.length) {
       for (const i of e.items) {
-        if (!i) continue;
+        if (!i || isProbeQ(i.text)) continue;
         const iid = i.id || uuid7();
         if (claimed.has(iid) || removedSet.has(iid) || existingIds.has(iid)) continue;
         if ((i.at || 0) > 0 && (chat._qClearedAt || 0) >= (i.at || 0)) continue;
@@ -252,7 +337,7 @@ const Drafts = {
   // 发出的消息：服务器确认收到之前一直留着
   out(chat, msg, text, opt = {}) {
     const hasHitlText = Boolean((text && String(text).trim()) || (Array.isArray(opt.parts) && opt.parts.some(p => p?.type === 'text' && String(p.text || '').trim())));
-    if (!chat?.sid || chat.gacha || (opt.parts && !opt.queueIds?.length && !hasHitlText) || !msg?.id) return;
+    if (!chat?.sid || chat.gacha || opt.gacha || opt.fingerprint || msg?._gachaProbe || (typeof SentUserLog !== 'undefined' && SentUserLog.isGachaProbeText?.(text)) || (opt.parts && !opt.queueIds?.length && !hasHitlText) || !msg?.id) return;
     const d = this.load(), previous = d.o.find(x => x.id === msg.id); this.sess.add(msg.id);
     const previews = opt.previews || (opt.files || msg.metadata?.uploads || []).map(res => ({ res }));
     const atts = previews.map(a => this.attOut(a)).filter(Boolean), missing = this.missing(previews), queueIds = opt.queueIds || previous?.queueIds;
@@ -261,16 +346,50 @@ const Drafts = {
     if (prevAsstWeight != null && msg._prevAsstWeight == null) msg._prevAsstWeight = prevAsstWeight;
     const effText = text || (Array.isArray(opt.parts) ? opt.parts.filter(p => p?.type === 'text').map(p => p.text || '').join('\n') : '') || '';
     d.o = d.o.filter(x => x.id !== msg.id); d.o.push({ id: msg.id, sid: chat.sid, text: effText, at: now(), prevAsstId: msg._prevAsstId || prevAsst?.id || null, prevAsstWeight, atts, missing, ...(queueIds ? { queueIds: queueIds.slice(), fromQueue: true } : {}), ...(msg._held || chat.waitingForeign ? { held: true } : {}) });
-    if (opt.queueIds) { const ids = new Set(opt.queueIds); d.q[chat.sid] = this.queueRecord(chat, (chat.queue || []).filter(i => !ids.has(i.id))); }
+    if (opt.queueIds) {
+      const ids = new Set(opt.queueIds);
+      chat._qRemovedIds = [...new Set([...(chat._qRemovedIds || []), ...opt.queueIds])].slice(-64);
+      const remItems = (chat.queue || []).filter(i => !ids.has(i.id));
+      if (!remItems.length) chat._qClearedAt = now();
+      d.q[chat.sid] = this.queueRecord(chat, remItems, { removedIds: opt.queueIds, ...(!remItems.length ? { clearedAt: chat._qClearedAt } : {}) });
+    }
     if (!this.write(true, true)) { d.o = d.o.filter(x => x.id !== msg.id); if (previous) d.o.push(previous); if (opt.queueIds) d.q[chat.sid] = this.queueRecord(chat); this.sess.delete(msg.id); this.push(); return false; }
     for (const a of opt.previews || []) if (!a.res && a.p) a.p.then(() => { const e = this.load().o.find(x => x.id === msg.id); if (e) { e.atts = opt.previews.map(x => this.attOut(x)).filter(Boolean); e.missing = this.missing(opt.previews); this.write(); } }, () => {});
     return true;
   },
-  accepted(id) { const e = this.load().o.find(x => x.id === id); if (e && !e.acc) { e.acc = now(); this.write(true); } },
+  accepted(id) {
+    const d = this.load(), e = d.o.find(x => x.id === id);
+    const addAcc = [id, ...(Array.isArray(e?.queueIds) ? e.queueIds : [])].filter(Boolean);
+    if (addAcc.length) d.acceptedIds = [...new Set([...(Array.isArray(d.acceptedIds) ? d.acceptedIds : []), ...addAcc])].slice(-128);
+    if (e && Array.isArray(e.queueIds) && e.queueIds.length && e.sid && d.q?.[e.sid]) {
+      const qRec = d.q[e.sid];
+      const qSet = new Set(e.queueIds);
+      qRec.removedIds = [...new Set([...(qRec.removedIds || []), ...e.queueIds])].slice(-64);
+      if (Array.isArray(qRec.items)) {
+        qRec.items = qRec.items.filter(it => it && !qSet.has(it.id));
+        if (!qRec.items.length) qRec.clearedAt = Math.max(qRec.clearedAt || 0, now());
+      }
+      qRec.at = Math.max(now(), (+qRec.at || 0) + 1);
+    }
+    if (e && !e.acc) e.acc = now();
+    this.write(true);
+  },
   ack(id) {
     const d = this.load(), hit = d.o.find(x => x.id === id), n = d.o.length;
+    const addAck = [id, ...(Array.isArray(hit?.queueIds) ? hit.queueIds : [])].filter(Boolean);
+    if (addAck.length) d.ackedIds = [...new Set([...(Array.isArray(d.ackedIds) ? d.ackedIds : []), ...addAck])].slice(-128);
+    if (hit && Array.isArray(hit.queueIds) && hit.queueIds.length && hit.sid && d.q?.[hit.sid]) {
+      const qRec = d.q[hit.sid];
+      const qSet = new Set(hit.queueIds);
+      qRec.removedIds = [...new Set([...(qRec.removedIds || []), ...hit.queueIds])].slice(-64);
+      if (Array.isArray(qRec.items)) {
+        qRec.items = qRec.items.filter(it => it && !qSet.has(it.id));
+        if (!qRec.items.length) qRec.clearedAt = Math.max(qRec.clearedAt || 0, now());
+      }
+      qRec.at = Math.max(now(), (+qRec.at || 0) + 1);
+    }
     d.o = d.o.filter(x => x.id !== id);
-    if (d.o.length !== n) {
+    if (d.o.length !== n || addAck.length) {
       this.write(true);
       const c = hit?.sid && typeof Chats !== 'undefined' ? Chats.get(hit.sid) : null;
       if (c && typeof SendQ !== 'undefined' && (c.queue || []).length) try { SendQ.check(c); } catch {}
@@ -282,6 +401,7 @@ const Drafts = {
     const tailAsstAt = tailAsst ? (Date.parse(tailAsst.metadata?.timing?.completedAt || tailAsst.createdAt || '') || (typeof idTime === 'function' ? idTime(tailAsst.id) : 0) || tailAsst._finishedAt || 0) : 0;
     const doneAt = Math.max(chat.tcAt || 0, chat.endAt || 0, chat.finAt || 0, tailAsstAt);
     for (const e of d.o.filter(x => x.sid === chat.sid)) {
+      if (typeof SentUserLog !== 'undefined' && SentUserLog.isGachaProbeText?.(e.text)) { this.ack(e.id); continue; }
       const prevAIdx = e.prevAsstId ? (chat.messages || []).findIndex(x => x && x.id === e.prevAsstId) : -1;
       // 服务器已收下（POST 成功）且之后有一轮已经结束：输入已被处理，不管服务器用什么 id / 正文怎么存，都算送达
       const hasFinishedReplyAfter = !chat.busy && doneAt > (e.at || 0) && (chat.messages || []).some((x, idx) => x && x.role === 'assistant' && !x._local && !x.metadata?.pending && idx > prevAIdx && x.id !== e.prevAsstId && ((typeof idTime === 'function' ? idTime(x.id) : 0) || Date.parse(x.metadata?.timing?.completedAt || x.createdAt || '') || doneAt) >= (e.at || 0) - 5000);
@@ -316,6 +436,7 @@ const Drafts = {
     this.chk.delete(e.id);
     if (!this.load().o.some(x => x.id === e.id)) return 'done';   // 另一路核对已处理（避免重复放回队列）
     const eTxtNorm = String(e?.text || '').trim();
+    if (typeof SentUserLog !== 'undefined' && SentUserLog.isGachaProbeText?.(eTxtNorm)) { this.ack(e.id); return 'ok'; }
     const liveM = chat?.messages?.find(x => x && (x.id === e.id || (x.role === 'user' && x._local && eTxtNorm && ((x.parts || []).filter(p => p?.type === 'text').map(p => p.text).join('\n').trim() || String(x.text || '').trim()) === eTxtNorm))) || (m && chat?.messages?.includes(m) ? m : null);
     if (r === true) {
       this.ack(e.id);
@@ -323,13 +444,19 @@ const Drafts = {
       return 'ok';
     }
     if (r === false) {
-      const prevA = (e.prevAsstId && chat?.messages?.find(x => x && x.id === e.prevAsstId)) || [...(chat?.messages || [])].reverse().find(x => x && x.role === 'assistant');
+      const prevAIdx = e.prevAsstId ? (chat?.messages || []).findIndex(x => x && x.id === e.prevAsstId) : -1;
+      const prevA = prevAIdx >= 0 ? chat.messages[prevAIdx] : (!e.prevAsstId ? [...(chat?.messages || [])].reverse().find(x => x && x.role === 'assistant') : null);
+      const hasNewAsstAfterPrev = prevAIdx >= 0 && (chat?.messages || []).slice(prevAIdx + 1).some(x => x && x.role === 'assistant' && x.id !== e.prevAsstId);
+      if (hasNewAsstAfterPrev) {
+        this.ack(e.id);
+        return 'ok';
+      }
       const prevAW = (prevA && typeof SentUserLog !== 'undefined' && SentUserLog.measureAsstWeight) ? SentUserLog.measureAsstWeight(prevA) : 0;
       const prevACompRaw = prevA?.metadata?.timing?.completedAt;
       const prevACompMs = typeof prevACompRaw === 'number' ? prevACompRaw : (typeof prevACompRaw === 'string' ? Date.parse(prevACompRaw) : 0);
-      const prevASupplemented = Boolean(prevA && (prevA.metadata?.pending || prevA._incomplete || (e.prevAsstWeight != null && prevAW > e.prevAsstWeight) || (prevACompMs > 0 && (e.at || 0) > 0 && prevACompMs >= (e.at || 0) + 1000 && (typeof idTime === 'function' ? idTime(prevA.id) || 0 : 0) <= (e.at || 0) + 5000)));
+      const prevASupplemented = Boolean(prevA && !hasNewAsstAfterPrev && (prevA.metadata?.pending || prevA._incomplete || (e.prevAsstWeight != null && prevAW > e.prevAsstWeight) || (prevACompMs > 0 && (e.at || 0) > 0 && prevACompMs >= (e.at || 0) + 1000 && (typeof idTime === 'function' ? idTime(prevA.id) || 0 : 0) <= (e.at || 0) + 5000)));
       const isPrevSessUnacceptedQueue = Boolean(!this.sess.has(e.id) && !e.acc && (e.fromQueue || (Array.isArray(e.queueIds) && e.queueIds.length > 0) || e.held) && liveM);
-      const shouldDemoteToQueue = Boolean(chat && (chat.busy || chat.streaming || chat.live || chat._inDbPrevTurnActive || prevASupplemented || isPrevSessUnacceptedQueue));
+      const shouldDemoteToQueue = Boolean(chat && !hasNewAsstAfterPrev && (chat._inDbPrevTurnActive || prevASupplemented || isPrevSessUnacceptedQueue || (!e.acc && (chat.busy || chat.streaming || chat.live))));
       if (shouldDemoteToQueue && typeof SendQ !== 'undefined' && typeof SendQ.demoteToQueue === 'function') {
         if (SendQ.demoteToQueue(chat, liveM || m || e, { fromDraft: e, running: Boolean(chat.busy || chat.streaming || chat.live || prevA?.metadata?.pending) })) {
           return 'queued';
@@ -1845,7 +1972,12 @@ const R = {
     if (openThink) { lbl = String(lbl || '').replace(/^闭源思考/, '开源思考'); if (!/^开源/.test(lbl)) lbl = '开源思考 · ' + lbl; }
     const d = h('details', { class: 'reason not-prose' + (openThink ? ' open-think' : ''), 'data-state': open ? 'open' : 'closed', open: open || null, title: '有可见思考文字 = 开源模型；思考为空（只有「…」）= 闭源模型。已从运行记录确认型号时以型号为准。' }, h('summary', { role: 'button', 'aria-expanded': open ? 'true' : 'false', 'data-state': open ? 'open' : 'closed' }, icon('brain'), openThink ? h('span', { class: 'rs-open-badge' }, '开源思考') : null, h('span', { class: 'rs-t' }, lbl)));
     if (key) R.keep(d, key);
-    const b = h('div', { class: 'md prose muted', lang: '', translate: 'no' }); b.innerHTML = MD.render(p.text || '…'); d.append(b); return d;
+    const b = h('div', { class: 'md prose muted', lang: '', translate: 'no' });
+    let mdBuilt = false;
+    const ensureMd = () => { if (mdBuilt) return; mdBuilt = true; b.innerHTML = MD.render(p.text || '…'); };
+    if (open || (live && p.state === 'streaming')) ensureMd();
+    else d.addEventListener('toggle', () => { if (d.open) ensureMd(); });
+    d.append(b); return d;
   },
   tool(p) {
     const name = p.toolName || String(p.type).replace(/^tool-/, '');
@@ -2215,6 +2347,7 @@ const R = {
     if (appearSpan && isTurnActive) {
       const mountAppearAt = Date.now();
       const tickAppear = () => {
+        if (typeof document !== 'undefined' && document.hidden) return;
         if (!d.isConnected && Date.now() - mountAppearAt > 3000) { if (d.__appearTm) { clearInterval(d.__appearTm); d.__appearTm = null; } return; }
         const curP = d.__curPart || p;
         const cNow = R.chatOfEl(d);
@@ -2236,6 +2369,7 @@ const R = {
       const mountAt = Date.now();
       const timeoutMs = ((typeof Prefs !== 'undefined' && Number(Prefs.bashTimeoutMin) > 0) ? Number(Prefs.bashTimeoutMin) : 60) * 60000;
       const tickDur = () => {
+        if (typeof document !== 'undefined' && document.hidden) return;
         const curP = d.__curPart || p;
         const chat = R.chatOfEl(d);
         const chatActive = Boolean(chat && (typeof Hitl !== 'undefined' && typeof Hitl.blocked === 'function' ? Hitl.blocked(chat) : (chat.busy || chat.live)));
@@ -2324,7 +2458,7 @@ const R = {
         });
         box.__builtCount = segEntries.length;
       };
-      if (isOpen || segEntries.length <= 8) buildRows();
+      if (isOpen) buildRows();
       else d.addEventListener('toggle', () => { if (d.open) buildRows(); });
       d.append(box); wrap.append(d);
     };
@@ -2401,8 +2535,8 @@ const R = {
   extractInlineHtmlSegments(text, streaming = false) {
     const raw = String(text || '');
     if (raw.length < 100) return null;
-    let rawHash = 2166136261;
-    for (let hi = 0; hi < raw.length; hi += Math.max(1, raw.length > 8192 ? 4 : 1)) { rawHash ^= raw.charCodeAt(hi); rawHash = Math.imul(rawHash, 16777619) >>> 0; }
+    let rawHash = 2166136261 >>> 0;
+    for (let hi = 0; hi < raw.length; hi++) { rawHash ^= raw.charCodeAt(hi); rawHash = Math.imul(rawHash, 16777619) >>> 0; }
     const memoKey = (streaming ? '1:' : '0:') + raw.length + ':' + rawHash.toString(36) + ':' + raw.slice(0, 48) + ':' + raw.slice(-48);
     if (this._inlineHtmlMemoKey === memoKey) return this._inlineHtmlMemoVal;
     if (this._inlineHtmlMemoMap.has(memoKey)) {
@@ -3006,7 +3140,16 @@ const R = {
       }
       if (p.type === 'reasoning') {
         if (!p.text && p.state === 'done') return;
-        const key = mid + ':r' + i, d = Seg.box(mid, 'r:' + i, () => { const b = h('div', { class: 'md prose muted', lang: '', translate: 'no' }); const badge = h('span', { class: 'rs-open-badge', hidden: true }, '开源思考'); const x = R.keep(h('details', { class: 'reason not-prose' }, h('summary', { role: 'button' }, icon('brain'), badge, h('span', { class: 'rs-t' })), b), key); x.__b = b; x.__badge = badge; return x; });
+        const key = mid + ':r' + i, d = Seg.box(mid, 'r:' + i, () => {
+          const b = h('div', { class: 'md prose muted', lang: '', translate: 'no' });
+          const badge = h('span', { class: 'rs-open-badge', hidden: true }, '开源思考');
+          const x = R.keep(h('details', { class: 'reason not-prose' }, h('summary', { role: 'button' }, icon('brain'), badge, h('span', { class: 'rs-t' })), b), key);
+          x.__b = b; x.__badge = badge;
+          x.addEventListener('toggle', () => {
+            if (x.open && x.__rawTxt !== undefined) StreamMD.paint(b, x.__rawTxt || '…', !!x.__rawStream);
+          });
+          return x;
+        });
         const streaming = live && p.state === 'streaming', isClosedTurn = reasonAccess?.type === 'closed' || (typeof Fingerprint !== 'undefined' && Fingerprint.isClosedSourceStream?.(chat)), openThink = !isClosedTurn && ThinkingStatus.visible(p);
         d.classList.toggle('open-think', openThink);
         if (d.__badge) d.__badge.hidden = !openThink;
@@ -3020,7 +3163,9 @@ const R = {
         else if (d.__auto !== wantOpen) { d.__auto = wantOpen; d.open = wantOpen; }
         const st = d.open ? 'open' : 'closed'; d.dataset.state = st;
         const sm = d.querySelector(':scope > summary'); if (sm) { sm.setAttribute('aria-expanded', d.open ? 'true' : 'false'); sm.dataset.state = st; }
-        StreamMD.paint(d.__b, p.text || '…', streaming);
+        d.__rawTxt = p.text || '…';
+        d.__rawStream = streaming;
+        if (d.open) StreamMD.paint(d.__b, d.__rawTxt, streaming);
         segs.push(d); return;
       }
       const n = Seg.use(mid, 'p:' + i, pSig(p) + ':' + (p.url || '') + (live ? 'L' : ''), () => R.part(p, { live }));
@@ -3086,7 +3231,37 @@ const R = {
         title: rTitle
       }, icon('alert'), h('span', {}, rText))));
     }
-    if (live) segs.push(Seg.box(mid, 'typing', () => h('div', { class: 'typing', title: '正在生成与执行中…' }, h('i'), h('i'), h('i'))));
+    if (!live && isEvalMsg && (m.failed || m.status === 'failed' || m.metadata?.error) && !segs.length) {
+      const errMsg = String(m.metadata?.error || chat?.error || '该轮回复生成失败');
+      segs.push(Seg.use(mid, 'eval-fail', errMsg, () => h('div', { class: 'msg-route-alert is-eval-fail', role: 'status' },
+        icon('alert'),
+        h('span', { class: 'grow' }, errMsg),
+        h('button', { type: 'button', class: 'btn sm ghost', onclick: ev => { ev.stopPropagation(); void UI.regen(chat); } }, '↻ 重新生成')
+      )));
+    }
+    if (live) {
+      const tRow = Seg.box(mid, 'typing', () => h('div', { class: 'typing-row typing-live-row' },
+        h('div', { class: 'typing', title: '正在生成与执行中…' }, h('i'), h('i'), h('i')),
+        h('span', { class: 'phase typing-phase' }, h('span', { class: 'ph-t' }), h('span', { class: 'dim anc-since' }))
+      ));
+      const phTxt = (typeof ThinkingStatus !== 'undefined' && ThinkingStatus.phase) ? ThinkingStatus.phase(chat) : (chat?.phase || '生成中');
+      const phEl = tRow.querySelector('.ph-t');
+      if (phEl && phEl.textContent !== phTxt) phEl.textContent = phTxt;
+      const sinceEl = tRow.querySelector('.anc-since');
+      if (sinceEl) {
+        const effSince = Number(chat?.sentAt) || Number(chat?.oursAt) || (typeof getMsgTs === 'function' ? getMsgTs(m) : 0) || (typeof idTime === 'function' ? idTime(m?.id) : 0) || Number(chat?.recAt) || 0;
+        if (Number.isFinite(effSince) && effSince > 1e12) {
+          const sStr = String(effSince);
+          if (sinceEl.dataset.since !== sStr) sinceEl.dataset.since = sStr;
+          const secTxt = ' ' + Math.max(0, Math.floor((now() - effSince) / 1000)) + 's';
+          if (sinceEl.textContent !== secTxt) sinceEl.textContent = secTxt;
+        } else {
+          delete sinceEl.dataset.since;
+          if (sinceEl.textContent) sinceEl.textContent = '';
+        }
+      }
+      segs.push(tRow);
+    }
     patchKids(body, segs);
     const kids = [body];
     if (!live && !(seg?.hideFoot && !(m.metadata?.aborted || m.metadata?.feedback?.interruption === 'stop'))) {
@@ -3181,7 +3356,7 @@ const UI = {
     const kept = ExtensionNodes.detach(document);
     document.documentElement.innerHTML = '<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,minimum-scale=1,user-scalable=no,viewport-fit=cover"><title>Brana AI</title></head><body></body>';
     this.watchDrawer?.();   // <body> 刚被整个换掉：把抽屉监听重新挂到新 body 上
-    const st = document.createElement('style'); st.textContent = CSS; document.head.append(st);
+    const st = document.createElement('style'); st.textContent = CSS; document.head.append(st); try { CSS = ''; } catch {}
     window.__ANC_CLIENT_SHELL = true;
     document.documentElement.dataset.platform = Host.platform + (/Mac/.test(navigator.platform) ? ' mac' : '');
     this.applyTheme();
@@ -3222,7 +3397,8 @@ const UI = {
             h('div', { id: 'dockwrap' }, h('button', { id: 'dockfold', title: '收起 / 展开模型信息', onclick: () => Dock.toggle() }, icon('chevr')), h('div', { id: 'dockgrip', title: '拖动调整宽度' }), h('aside', { id: 'dock' }))))),
       h('div', { id: 'bar' }),
       // 手机：模型信息面板收在右边缘，平时只露一个小圆点头，点一下 / 从右边缘往左滑展开
-      h('button', { id: 'dockhandle', type: 'button', title: '模型信息', 'aria-label': '模型信息', onclick: () => Dock.toggle(true) })));
+      h('button', { id: 'dockhandle', type: 'button', title: '模型信息（可上下拖拽调整位置）', 'aria-label': '模型信息', onclick: e => { if (e.currentTarget?.dataset?.dragged === '1') { e.currentTarget.dataset.dragged = ''; return; } Dock.toggle(true); } }, h('span', { class: 'dh-mark' }, '>'))));
+    try { if (typeof Mob !== 'undefined' && typeof Mob.initDockHandle === 'function') Mob.initDockHandle(); } catch {}
     ExtensionNodes.restore(document, kept);
     this.paintThemeSeg(); try { ExtPop.refreshPins(); } catch {} try { WS.mount($('#ws')); } catch (e) { console.error(e); } try { HtmlPreview.mount($('#pv')); } catch (e) { console.error(e); } try { Dock.mount($('#dock')); } catch (e) { console.error(e); } try { Bar.mount($('#bar')); } catch (e) { console.error(e); } try { Mag.bind($('#list')); } catch (e) { console.error(e); }
     this.grip(); this.sbGrip(); this.dragBar(); this.layout(); ActiveFrame.mount();
@@ -3471,7 +3647,23 @@ const UI = {
     clearTimeout(this.searchListT);this.searchListT=0;
     if(document.hidden){this.listDirty=true;return;}
     const box = $('#list'); if (!box) return;
-    if (!box.__pull) { box.__pull = 1; ListPull.bind(box); }
+    if (!box.__pull) {
+      box.__pull = 1;
+      ListPull.bind(box);
+      box.addEventListener('scroll', () => {
+        this._scrollingList = true;
+        window.__ancLastScrollAt = Date.now();
+        clearTimeout(this._scrollListT);
+        this._scrollListT = setTimeout(() => {
+          this._scrollingList = false;
+          if (this._pendingListRender) { this._pendingListRender = false; this.renderListSoon?.(); }
+        }, 220);
+      }, { passive: true });
+    }
+    if (this._scrollingList && !($('#q')?.value || '').trim()) {
+      this._pendingListRender = true;
+      return;
+    }
     this.listDirty = false; SideTools.ensure();
     const q = ($('#q').value || '').trim().toLowerCase();
     const cur = Tabs.cur?.sid, vf = Prefs.vf || '';
@@ -3618,7 +3810,7 @@ const UI = {
       ontouchcancel: ev => { const el = ev.currentTarget; if (el._lpT) { clearTimeout(el._lpT); el._lpT = 0; } },
       onkeydown:ev=>{if(ev.target!==ev.currentTarget)return;if(ev.key===' '){ev.preventDefault();CardSelect.toggle(e.id);this.renderList();}else if(ev.key==='Enter'){ev.preventDefault();ev.currentTarget.click();}},
       onclick: ev => { if (now() - (this._menuOpenAt || 0) < 500) { ev.preventDefault(); ev.stopPropagation(); return; } if (ev.target.closest('.more,.card-check')) return; if(CardSelect.click(e.id,ev)){ev.preventDefault();this.renderList();return;} this.saveScroll(); const tHit = Tabs.list.find(x => x.sid === e.id); if (tHit) this.scrolls.delete(tHit.key); Tabs.open(e.id, { title: e.title }); const cTarget = Chats.get(e.id); if (cTarget?.loaded && !cTarget.loading) cTarget.quickSync?.(true); this.closeDrawer(); },
-      onmouseenter: () => { if(CardSelect.mode)return; clearTimeout(this._pfT); this._pfT = setTimeout(() => { try { chatOf(e.id).prefetch(); } catch {} }, 400); },
+      onmouseenter: () => { if(CardSelect.mode || Prefs.hoverPrefetch !== true) return; clearTimeout(this._pfT); this._pfT = setTimeout(() => { try { chatOf(e.id).prefetch(); } catch {} }, 400); },
       onmouseleave: () => clearTimeout(this._pfT),
       onauxclick: ev => { if (ev.button === 1) Tabs.open(e.id, { focus: false, title: e.title }); },
       oncontextmenu: ev => { ev.preventDefault(); const el = ev.currentTarget; if (el?._lpT) { clearTimeout(el._lpT); el._lpT = 0; } this._menuOpenAt = now(); this.itemMenu(ev, e); } },
@@ -3797,7 +3989,7 @@ const UI = {
     const thread = h('div', { class: 'thread', 'data-agent-transcript-thread': 'true' });
     // 回到底部按钮（电脑 / 手机都有）：离底部超过大半屏时出现在输入框上方，点一下平滑滚到最新；有新内容时带个小点
     const toBot = h('button', { class: 'tobot', type: 'button', title: '回到底部', 'aria-label': '回到底部', onclick: () => { P.stick = true; scroller.scrollTo({ top: scroller.scrollHeight, behavior: 'smooth' }); toBot.classList.remove('show', 'new'); } }, icon('chev'));
-    const scroller = h('div', { class: 'scroller', 'data-custom-scrollbar': 'true', role: 'log', 'aria-live': 'polite', onscroll: () => { if (typeof window !== 'undefined') window.__ancLastScrollAt = Date.now(); if (P._scrollRaf) return; P._scrollRaf = requestAnimationFrame(() => { P._scrollRaf = 0; const sc = scroller; if (!sc.isConnected) return; P.stick = sc.scrollTop + sc.clientHeight > sc.scrollHeight - 60; this.paintToBot(false, P); if (chat && sc.scrollTop < 80 && chat.hasMore) chat.loadOlder(true); }); } }, thread);
+    const scroller = h('div', { class: 'scroller', 'data-custom-scrollbar': 'true', role: 'log', 'aria-live': 'polite', onscroll: () => { if (P._progScrollAt && Date.now() - P._progScrollAt < 48) return; if (typeof window !== 'undefined') window.__ancLastScrollAt = Date.now(); if (P._scrollRaf) return; P._scrollRaf = requestAnimationFrame(() => { P._scrollRaf = 0; const sc = scroller; if (!sc.isConnected) return; P.stick = sc.scrollTop + sc.clientHeight > sc.scrollHeight - 60; this.paintToBot(false, P); if (chat && sc.scrollTop < 80 && chat.hasMore) chat.loadOlder(true); }); } }, thread);
     scroller.__reactFiber$extcompat = { memoizedProps: { get value() { const c = t?.sid ? Chats.get(t.sid) : null; return { id: c?.sid || '', status: !c ? 'ready' : c.busy ? 'streaming' : c.status === 'error' ? 'error' : 'ready', messages: c?.messages || [] }; } }, return: null };
     const head = h('div', { class: 'chead' });
     const errbar = h('div', { class: 'errbar' });
@@ -3884,7 +4076,7 @@ const UI = {
         ? `${chat.voteState.modelAName || 'Model A'} vs ${chat.voteState.modelBName || 'Model B'}`
         : 'Battle 盲测 · Model A vs Model B')
       : '';
-    const hsig = [phase, chat.sid, isBattleChat, isDirectChat, battleTitle, chat.voteState?.voted, chat.voteState?.value, typeof BillingProbe !== 'undefined' && BillingProbe.isRunning?.(chat), PelicanTest.isRunning(chat), !!mi?.fingerprint, !!chat.probeNumbers?.length, FingerprintBatch.busy, !!chat.gacha, Fingerprint.isRunning(chat), chat.probeProgress, tip, v.vid, st, v.note, v.model, v.plain, v.time, mi?.routed, chat.identifying, !mi && chat.idErr, WS.shown, chat.busy, chat.phase, chat.sentAt].join('\u0001');
+    const hsig = [chat.sid, isBattleChat, isDirectChat, battleTitle, chat.voteState?.voted, chat.voteState?.value, typeof BillingProbe !== 'undefined' && BillingProbe.isRunning?.(chat), PelicanTest.isRunning(chat), !!mi?.fingerprint, !!chat.probeNumbers?.length, FingerprintBatch.busy, !!chat.gacha, Fingerprint.isRunning(chat), chat.probeProgress, tip, v.vid, st, v.note, v.model, v.plain, v.time, mi?.routed, chat.identifying, !mi && chat.idErr, WS.shown, chat.busy].join('\u0001');
     if (E.hsig !== hsig) {
       E.hsig = hsig;
       if (isBattleChat) {
@@ -3897,8 +4089,7 @@ const UI = {
           ),
           h('span', { class: 'grow' }),
           this.renderPelicanMenuBtn(Tabs.cur, chat, 'battle'),
-          h('button', { class: 'ib mdbtn', title: '导出这个对话的全部内容为 Markdown', onclick: () => void ChatExport.run(chat) }, icon('doc')),
-          Hitl.blocked(chat) ? h('span', { class: 'phase' }, h('i', { class: 'spin' }), h('span', { class: 'ph-t' }, phase), chat.sentAt ? h('span', { class: 'dim anc-since', 'data-since': chat.sentAt }, '') : null) : null
+          h('button', { class: 'ib mdbtn', title: '导出这个对话的全部内容为 Markdown', onclick: () => void ChatExport.run(chat) }, icon('doc'))
         ));
       } else {
         E.head.replaceChildren(...K(h('div', { class: 'chead-t', title: tip, 'aria-label': 'Session cumulative cost' }, stLogo(v.vid || Brand.of(mi?.name), 18, st), h('span', { class: 'chead-n' }, ...[].concat(v.note || metricName(mi?.name || v.model, cardName) || v.plain || '对话')), v.note && (mi?.name || v.model) ? h('span', { class: 'chead-md' }, '-', ...[].concat(metricName(mi?.name || v.model, cardName))) : null),
@@ -3942,8 +4133,7 @@ const UI = {
           !isEvalChat ? this.renderProbeTestBtn(Tabs.cur, chat, 'agent') : null,
           !isEvalChat ? h('button', { class: 'ib pelbtn' + (PelicanTest.isRunning(chat) ? ' run' : ''), 'aria-label': PelicanTest.isRunning(chat) ? '停止鹈鹕' : '鹈鹕测试', disabled: (chat.busy && !PelicanTest.isRunning(chat)), title: PelicanTest.isRunning(chat) ? '停止鹈鹕测试' + (chat.probeProgress ? '（' + chat.probeProgress + '）' : '') : '鹈鹕测试：点一下直接发送 2D 鹈鹕骑车动态 SVG 标准测试题', onclick: e => { e.stopPropagation(); void PelicanTest.start(chat); } }, icon('pelican')) : isDirectChat ? this.renderPelicanMenuBtn(Tabs.cur, chat, 'direct') : null,
           h('button', { class: 'ib mdbtn', title: '导出这个对话的全部内容（正文、思考、bash 命令和输出、工具调用）为 Markdown，自己选保存位置', onclick: () => void ChatExport.run(chat) }, icon('doc')),
-          !isEvalChat ? h('button', { class: 'ib wsbtn', title: WS.shown ? '收起工作区' : '显示工作区（沙盒文件）', onclick: () => { WS.set(!WS.shown); scheduleChat(chat); } }, icon('folder')) : null,
-          Hitl.blocked(chat) ? h('span', { class: 'phase' }, h('i', { class: 'spin' }), h('span', { class: 'ph-t' }, phase), chat.sentAt ? h('span', { class: 'dim anc-since', 'data-since': chat.sentAt }, '') : null) : null));
+          !isEvalChat ? h('button', { class: 'ib wsbtn', title: WS.shown ? '收起工作区' : '显示工作区（沙盒文件）', onclick: () => { WS.set(!WS.shown); scheduleChat(chat); } }, icon('folder')) : null));
       }
     }
     // 消息
@@ -3975,62 +4165,68 @@ const UI = {
       let lastIdx = chat.messages.length - 1; while (lastIdx >= 0 && chat.messages[lastIdx]._held) lastIdx--;
       const isVisibleUser = u => u && u.role === 'user' && !u._held && !u._autoContinue && !u.metadata?.autoContinue && (((u.parts || []).some(p => (p.type === 'text' && String(p.text || '').trim()) || p.type === 'data-tool-results')) || userAtts(u).length > 0);
       const msgLen = chat.messages.length;
-      const segMeta = new Array(msgLen);
-      const visUser = new Uint8Array(Math.max(0, lastIdx + 1));
-      const prevAsstArr = new Int32Array(Math.max(0, lastIdx + 1)).fill(-1);
-      const firstIdxArr = new Int32Array(Math.max(0, lastIdx + 1)).fill(-1);
-      const nextAsstArr = new Int32Array(Math.max(0, lastIdx + 1)).fill(-1);
-      let runFirstAsst = -1, runLastAsst = -1;
-      for (let i = 0; i <= lastIdx; i++) {
-        const m = chat.messages[i];
-        if (!m || m._held) continue;
-        if (isVisibleUser(m)) {
-          visUser[i] = 1;
-          runFirstAsst = -1;
-          runLastAsst = -1;
-        } else if (m.role === 'assistant') {
-          prevAsstArr[i] = runLastAsst;
-          firstIdxArr[i] = runFirstAsst >= 0 ? runFirstAsst : i;
-          if (runFirstAsst < 0) runFirstAsst = i;
-          runLastAsst = i;
+      const lastMsgObj = lastIdx >= 0 ? chat.messages[lastIdx] : null;
+      const segMemoSig = `${msgLen}:${lastIdx}:${lastMsgObj?.id || ''}:${lastMsgObj?.role || ''}:${lastMsgObj?.metadata?.timing?.completedAt || 0}:${(lastMsgObj?.parts || []).some(p => p?.type === 'text' && String(p.text || '').trim()) ? 1 : 0}`;
+      let segMeta = (chat._segMetaMemo && chat._segMetaMemo.sig === segMemoSig) ? chat._segMetaMemo.arr : null;
+      if (!segMeta) {
+        segMeta = new Array(msgLen);
+        const visUser = new Uint8Array(Math.max(0, lastIdx + 1));
+        const prevAsstArr = new Int32Array(Math.max(0, lastIdx + 1)).fill(-1);
+        const firstIdxArr = new Int32Array(Math.max(0, lastIdx + 1)).fill(-1);
+        const nextAsstArr = new Int32Array(Math.max(0, lastIdx + 1)).fill(-1);
+        let runFirstAsst = -1, runLastAsst = -1;
+        for (let i = 0; i <= lastIdx; i++) {
+          const m = chat.messages[i];
+          if (!m || m._held) continue;
+          if (isVisibleUser(m)) {
+            visUser[i] = 1;
+            runFirstAsst = -1;
+            runLastAsst = -1;
+          } else if (m.role === 'assistant') {
+            prevAsstArr[i] = runLastAsst;
+            firstIdxArr[i] = runFirstAsst >= 0 ? runFirstAsst : i;
+            if (runFirstAsst < 0) runFirstAsst = i;
+            runLastAsst = i;
+          }
         }
-      }
-      let nextOverallAsst = null, runNextAsst = -1;
-      const nextOverallAsstByIdx = new Array(msgLen).fill(null);
-      for (let i = lastIdx; i >= 0; i--) {
-        const m = chat.messages[i];
-        if (!m || m._held) continue;
-        if (visUser[i]) {
-          runNextAsst = -1;
-          continue;
+        let nextOverallAsst = null, runNextAsst = -1;
+        const nextOverallAsstByIdx = new Array(msgLen).fill(null);
+        for (let i = lastIdx; i >= 0; i--) {
+          const m = chat.messages[i];
+          if (!m || m._held) continue;
+          if (visUser[i]) {
+            runNextAsst = -1;
+            continue;
+          }
+          if (m.role !== 'assistant') continue;
+          nextAsstArr[i] = runNextAsst;
+          runNextAsst = i;
+          nextOverallAsstByIdx[i] = nextOverallAsst;
+          if (m.id) nextOverallAsst = m;
         }
-        if (m.role !== 'assistant') continue;
-        nextAsstArr[i] = runNextAsst;
-        runNextAsst = i;
-        nextOverallAsstByIdx[i] = nextOverallAsst;
-        if (m.id) nextOverallAsst = m;
-      }
-      for (let i = 0; i <= lastIdx; i++) {
-        const m = chat.messages[i];
-        if (!m || m._held || m.role !== 'assistant') continue;
-        const prevAsst = prevAsstArr[i], nextAsst = nextAsstArr[i], firstIdx = firstIdxArr[i] >= 0 ? firstIdxArr[i] : i;
-        // Also merge consecutive tool-only segments that share the exact same completion minute even if separated by non-text records
-        const curT1 = m.metadata?.timing?.completedAt || 0;
-        const nextM = nextAsst >= 0 ? chat.messages[nextAsst] : null;
-        const nextT1 = nextM?.metadata?.timing?.completedAt || 0;
-        const hasText = (m.parts || []).some(p => p.type === 'text' && String(p.text || '').trim());
-        const sameClockAsNext = !!(nextM && curT1 && nextT1 && clock(curT1) === clock(nextT1));
-        const hasPrev = prevAsst >= 0, hasNext = nextAsst >= 0;
-        const firstMsg = chat.messages[firstIdx];
-        const turnStartAt = firstMsg?.metadata?.timing?.startedAt || idTime(firstMsg?.id) || 0;
-        segMeta[i] = {
-          head: !hasPrev && hasNext,
-          mid: hasPrev && hasNext,
-          tail: hasPrev && !hasNext,
-          hideFoot: hasNext && (!hasText || sameClockAsNext),
-          turnStartAt,
-          nextAsstMsg: nextOverallAsstByIdx[i]
-        };
+        for (let i = 0; i <= lastIdx; i++) {
+          const m = chat.messages[i];
+          if (!m || m._held || m.role !== 'assistant') continue;
+          const prevAsst = prevAsstArr[i], nextAsst = nextAsstArr[i], firstIdx = firstIdxArr[i] >= 0 ? firstIdxArr[i] : i;
+          // Also merge consecutive tool-only segments that share the exact same completion minute even if separated by non-text records
+          const curT1 = m.metadata?.timing?.completedAt || 0;
+          const nextM = nextAsst >= 0 ? chat.messages[nextAsst] : null;
+          const nextT1 = nextM?.metadata?.timing?.completedAt || 0;
+          const hasText = (m.parts || []).some(p => p.type === 'text' && String(p.text || '').trim());
+          const sameClockAsNext = !!(nextM && curT1 && nextT1 && clock(curT1) === clock(nextT1));
+          const hasPrev = prevAsst >= 0, hasNext = nextAsst >= 0;
+          const firstMsg = chat.messages[firstIdx];
+          const turnStartAt = firstMsg?.metadata?.timing?.startedAt || idTime(firstMsg?.id) || 0;
+          segMeta[i] = {
+            head: !hasPrev && hasNext,
+            mid: hasPrev && hasNext,
+            tail: hasPrev && !hasNext,
+            hideFoot: hasNext && (!hasText || sameClockAsNext),
+            turnStartAt,
+            nextAsstMsg: nextOverallAsstByIdx[i]
+          };
+        }
+        chat._segMetaMemo = { sig: segMemoSig, arr: segMeta };
       }
       chat.messages.forEach((m, i) => {
         if (m._held) return;
@@ -4050,7 +4246,7 @@ const UI = {
         const isRunningTail = !m.failed && !Hitl.idleWait(chat) && !(isSettledTailAsst && !chat?.streaming) && (chat.live === m || !!(i === lastIdx && m.role === 'assistant' && !isSettledTailAsst && ((Hitl.blocked(chat) && !chat.waitingForeign) || isIncTail)));
         const pArr = m.parts || [], pLen = pArr.length, lastP = pLen ? pArr[pLen - 1] : null;
         const cSig = pLen + ':' + (lastP?.type || '') + ':' + (lastP?.text?.length || 0) + ':' + (lastP?.state || '') + ':' + (m.text?.length || 0);
-        const key = (m.v || 0) + '|' + cSig + '|' + segKey + '|' + (i === lastIdx ? 'L' + chat.status + (chat.hitlStage?.size || 0) : '') + '|' + (m.failed ? 'f' : '') + '|' + (isRunningTail ? 'live' : '') + '|' + this.modelsV + ':' + modelVersion + '|' + (pArr.some(p=>p.type==='reasoning')?ThinkingStatus.label(chat,m,isRunningTail):'');
+        const key = (m.v || 0) + '|' + cSig + '|' + segKey + '|' + (i === lastIdx ? 'L' + chat.status + (chat.hitlStage?.size || 0) : '') + '|' + (m.failed ? 'f' : '') + '|' + (isRunningTail ? 'live:' + phase : '') + '|' + this.modelsV + ':' + modelVersion + '|' + (pArr.some(p=>p.type==='reasoning')?ThinkingStatus.label(chat,m,isRunningTail):'');
         let c = this.cache.get(m.id);
         if (!c || c.key !== key || !c.el || typeof c.el.nodeType !== 'number') {
           let el = null;
@@ -4067,8 +4263,24 @@ const UI = {
       });
       // 「正在输入」占位复用同一个节点：否则每帧都换新节点，整串消息被重新挂载、整页重排
       if (Hitl.blocked(chat) && chat.messages[lastIdx]?.role === 'user' && !chat.waitingForeign) {
-        const t = this.cache.get('__typing') || (() => { const t = h('div', { class: 'msg assistant' }, h('div', { class: 'msg-body typing-row' }, h('div', { class: 'typing' }, h('i'), h('i'), h('i')), h('span', { class: 'typing-st' }))); this.cache.set('__typing', t); return t; })();
-        const st = t.querySelector('.typing-st'); if (st) st.textContent = chat.dlvText?.() || ''; els.push(t);
+        const t = this.cache.get('__typing') || (() => { const t = h('div', { class: 'msg assistant' }, h('div', { class: 'msg-body typing-row' }, h('div', { class: 'typing' }, h('i'), h('i'), h('i')), h('span', { class: 'typing-st' }), h('span', { class: 'phase typing-phase' }, h('span', { class: 'ph-t' }), h('span', { class: 'dim anc-since' })))); this.cache.set('__typing', t); return t; })();
+        const st = t.querySelector('.typing-st'); if (st) st.textContent = chat.dlvText?.() || '';
+        const phEl = t.querySelector('.ph-t'); if (phEl && phEl.textContent !== phase) phEl.textContent = phase;
+        const sinceEl = t.querySelector('.anc-since');
+        if (sinceEl) {
+          const lastM = chat.messages[lastIdx];
+          const effSince = Number(chat.sentAt) || Number(chat.oursAt) || Number(lastM?._sentAt) || (typeof getMsgTs === 'function' ? getMsgTs(lastM) : 0) || (typeof idTime === 'function' ? idTime(lastM?.id) : 0) || Number(chat.recAt) || 0;
+          if (Number.isFinite(effSince) && effSince > 1e12) {
+            const sStr = String(effSince);
+            if (sinceEl.dataset.since !== sStr) sinceEl.dataset.since = sStr;
+            const secTxt = ' ' + Math.max(0, Math.floor((now() - effSince) / 1000)) + 's';
+            if (sinceEl.textContent !== secTxt) sinceEl.textContent = secTxt;
+          } else {
+            delete sinceEl.dataset.since;
+            if (sinceEl.textContent) sinceEl.textContent = '';
+          }
+        }
+        els.push(t);
       }
       if (!els.length) {
         if (!chat.loaded || chat.loading) {
@@ -4102,11 +4314,14 @@ const UI = {
         try { HtmlPreview.syncEval(chat); } catch {}
       }
     }
-    if (stick || full || E.wasHotOnly === false && E._forceBotOnce) { E._forceBotOnce = false; sc.scrollTop = sc.scrollHeight; }
-    else if (this.pane.stick !== false) sc.scrollTop = sc.scrollHeight;
-    { const hh = sc.scrollHeight, grew = !!E.lastSH && hh > E.lastSH + 4; E.lastSH = hh; this.paintToBot(grew && !stick); }
+    {
+      const hh = sc.scrollHeight;
+      let pinnedBot = false;
+      if (stick || full || E.wasHotOnly === false && E._forceBotOnce) { E._forceBotOnce = false; this.pane._progScrollAt = Date.now(); sc.scrollTop = hh; pinnedBot = true; }
+      else if (this.pane.stick !== false) { this.pane._progScrollAt = Date.now(); sc.scrollTop = hh; pinnedBot = true; }
+      const grew = !!E.lastSH && hh > E.lastSH + 4; E.lastSH = hh; this.paintToBot(grew && !stick, this.pane, pinnedBot);
+    }
     // 错误条
-    E.errbar.replaceChildren();
     if ((chat.busy || chat.streaming || chat.live) && Array.isArray(chat.messages) && typeof SendQ !== 'undefined' && typeof SendQ.demoteToQueue === 'function') {
       for (let i = chat.messages.length - 1; i >= 0; i--) {
         if (chat.messages[i]?.role === 'user' && chat.messages[i]?.failed) {
@@ -4115,6 +4330,7 @@ const UI = {
       }
     }
     const failedUserMsg = !chat.busy ? ([...(chat.messages || [])].reverse().find(m => m?.role === 'user' && m.failed) || null) : null;
+    if (E.errbar.firstChild) E.errbar.replaceChildren();
     if ((chat.error || failedUserMsg) && !chat.busy) {
       const errText = chat.error || '上一条消息未发出（服务器未收到），请点击重试';
       const cap = /recaptcha|captcha|人机验证/i.test(errText);
@@ -4154,9 +4370,9 @@ const UI = {
       }
     }
   },
-  paintToBot(grew, P = this.pane) {
+  paintToBot(grew, P = this.pane, pinnedBot = false) {
     const E = P?.els, b = E?.toBot, sc = E?.scroller; if (!b || !sc) return;
-    const far = sc.scrollHeight - sc.scrollTop - sc.clientHeight > Math.max(240, sc.clientHeight * 0.6);
+    const far = pinnedBot ? false : (sc.scrollHeight - sc.scrollTop - sc.clientHeight > Math.max(240, sc.clientHeight * 0.6));
     if (E._toBotFar !== far) { E._toBotFar = far; b.classList.toggle('show', far); }
     if (!far) b.classList.remove('new'); else if (grew) b.classList.add('new');
   },
@@ -4323,6 +4539,11 @@ const UI = {
       if (!chat.loaded && !chat.messages.length) {
         chat.error = null;
         await chat.reload('重试载入', true);
+        return;
+      }
+      if (chat.isEvaluation) {
+        const v2 = captcha ? await Recaptcha.v2() : null;
+        await chat.regenerate({ v2 });
         return;
       }
       const uncertain = lastUser || [...chat.messages].reverse().find(m => m.role === 'user');
@@ -4649,6 +4870,9 @@ const UI = {
     if (gpopBtn && resolvedMode === 'battle') {
       gpopBtn.style.display = 'none';
       gpopBtn.hidden = true;
+    } else if (gpopBtn && resolvedMode === 'direct') {
+      gpopBtn.style.display = 'none';
+      gpopBtn.hidden = true;
     }
     const box = h('div', { class: 'cbox', 'data-mode': resolvedMode, onclick: e => { if (e.target === e.currentTarget) ta.focus(); },
       ondragover: e => { if ([...(e.dataTransfer?.types || [])].includes('Files')) { e.preventDefault(); box.classList.add('drop'); } },
@@ -4843,7 +5067,7 @@ document.addEventListener('visibilitychange',()=>{if(document.hidden)ChatPaint.h
 // 计时：用实时的 class 集合（不用每秒全文档按属性查一遍），后台 / 没有计时的时候什么都不做
 try { Tabs.enforceLimit(Tabs.active); Tabs.save(); } catch {}
 if (typeof Bus !== 'undefined') {
-  Bus.on('history', () => { try { Tabs.enforceLimit(Tabs.active); Tabs.save(); UI.renderTabs?.(); } catch {} });
+  Bus.on('history', () => { try { Tabs.enforceLimit(Tabs.active); Tabs.save(); } catch {} });
   Bus.on('modechange', () => { try { UI.renderList(); UI.renderTabs?.(); UI.showTab(); } catch {} });
   Bus.on('modalitychange', () => { try { UI.showTab(); } catch {} });
   Bus.on('directmodelchange', () => { try { UI.showTab(); } catch {} });
@@ -4851,4 +5075,34 @@ if (typeof Bus !== 'undefined') {
   Bus.on('eval:stream', payload => { try { if (payload?.chat && UI.els?.chat === payload.chat) scheduleChat(payload.chat); } catch {} });
 }
 const SINCE = document.getElementsByClassName('anc-since');
-setInterval(() => { if (document.hidden || !SINCE.length) return; for (const e of [...SINCE]) { const t = ' ' + Math.floor((now() - +e.dataset.since) / 1000) + 's'; if (e.textContent !== t) e.textContent = t; } }, 1000);
+setInterval(() => {
+  if (document.hidden || !SINCE.length) return;
+  for (const e of [...SINCE]) {
+    const s = Number(e?.dataset?.since);
+    if (!Number.isFinite(s) || s <= 1e12) {
+      if (e.textContent) e.textContent = '';
+      continue;
+    }
+    const t = ' ' + Math.max(0, Math.floor((now() - s) / 1000)) + 's';
+    if (e.textContent !== t) e.textContent = t;
+  }
+}, 1000);
+try {
+  const _scrollHideTimers = typeof WeakMap !== 'undefined' ? new WeakMap() : null;
+  const _markScrolling = el => {
+    if (!el || !el.classList || !_scrollHideTimers) return;
+    el.classList.add('is-scrolling');
+    const prev = _scrollHideTimers.get(el);
+    if (prev) clearTimeout(prev);
+    _scrollHideTimers.set(el, setTimeout(() => {
+      _scrollHideTimers.delete(el);
+      try { el.classList.remove('is-scrolling'); } catch {}
+    }, 700));
+  };
+  document.addEventListener('scroll', e => {
+    const t = (e.target === document || e.target === document.documentElement)
+      ? (document.scrollingElement || document.documentElement)
+      : e.target;
+    _markScrolling(t);
+  }, { capture: true, passive: true });
+} catch {}

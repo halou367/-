@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "id": "billing",
+  "title": "余额与用量模式",
+  "version": "1.0.0",
+  "status": "complete-v1.0-modularized-and-static-verified",
+  "scope": "完整余额探测、成本核算与用量看板子系统：底层探测算法内核（billing-probe.js）、模型单价表/实时估算/预算管理（price.js：Price / LiveEst / Budget）、以及余额探测与供应商额度巡检 UI 总控（billing-probe-ui.js：BillingProbe）；主进程成本DPL自动发现、原生protoFetch与文件导出IPC（main-cost-proto-export-ipc.js）。",
+  "entrypoints": {
+    "node": "public.cjs",
+    "renderer": "public.browser.js"
+  },
+  "runtimeVerification": "not-run"
+}

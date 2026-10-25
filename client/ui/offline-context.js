@@ -8,6 +8,16 @@ const _aCall = (fn, arg) => {
     return Promise.resolve(r ? JSON.parse(r) : null);
   } catch (e) { return Promise.reject(e); }
 };
+const _aPoll = async (startFn, max = 120, step = 250) => {
+  let id; try { id = startFn(); } catch (e) { return { error: String(e?.message || e) }; }
+  if (!id) return { error: '此版本不支持' };
+  for (let i = 0; i < max; i++) {
+    await new Promise(r => setTimeout(r, step));
+    let raw; try { raw = _BA.probeGet(id); } catch (e) { return { error: String(e?.message || e) }; }
+    if (raw) { try { return JSON.parse(raw); } catch { return { error: '解析失败' }; } }
+  }
+  return { error: '超时' };
+};
 const Host = _BH ? {
   ..._BH,
   platform: 'desktop',
@@ -20,10 +30,15 @@ const Host = _BH ? {
   openAccount: id => _aCall('openAccount', String(id || '')),
   back: mode => _aCall('back', mode ? String(mode) : undefined),
   testIp: t => _aCall('testIp', t),
-  probe: o => _aCall('probe', o),
-  speedTest: o => _aCall('speedTest', o),
-  fetchText: u => _aCall('fetchText', String(u || '')),
-  shared: (k, v) => v === undefined ? _aCall('sharedGet', String(k)) : _aCall('sharedSet', JSON.stringify({ k, v })),
+  resolve: typeof _BA.resolveStart === 'function' ? host => _aPoll(() => _BA.resolveStart(String(host || '')), 40, 250).then(x => Array.isArray(x) ? x : null) : null,
+  ippureDirect: typeof _BA.ippureDirectStart === 'function' ? ip => _aPoll(() => _BA.ippureDirectStart(String(ip || '').trim()), 60, 200).then(j => j && Number.isFinite(+j.fs) ? j : null) : null,
+  probe: o => typeof _BA.probeStart === 'function' ? _aPoll(() => _BA.probeStart(JSON.stringify(o || {})), 400, 400) : _aCall('probe', o),
+  speedTest: o => typeof _BA.speedStart === 'function' ? _aPoll(() => _BA.speedStart(JSON.stringify(o || {})), 120, 250) : _aCall('speedTest', o),
+  fetchText: (u, o) => typeof _BA.fetchStart === 'function' ? _aPoll(() => o?.method === 'POST' ? (_BA.fetchPostStart ? _BA.fetchPostStart(String(u || ''), String(o.body || ''), String(o.type || 'application/json')) : '') : (o?.direct && _BA.fetchDirectStart) ? _BA.fetchDirectStart(String(u || '')) : _BA.fetchStart(String(u || '')), o?.long ? 480 : 80, 250) : _aCall('fetchText', String(u || '')),
+  shared: (k, v) => {
+    if (v === undefined) return _aCall('sharedGet', String(k));
+    try { const r = _BA.sharedSet(String(k), JSON.stringify(v ?? null)); return Promise.resolve(r ? JSON.parse(r) : null); } catch (e) { return Promise.reject(e); }
+  },
 } : {});
 const UI={host:null};
 const now=()=>Date.now(),sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));

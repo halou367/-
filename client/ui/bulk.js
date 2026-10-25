@@ -1,41 +1,26 @@
 // Background batch queue executor for conversation archiving, restoration, and cleanup with rate-limit backoff
 const Bulk = {
   K: {
-    arch: { name: '一键归档', verb: '归档', store: 'archBlQ', conc: 4, cls: 'arch', ic: 'archive',
+    arch: { name: '一键归档', verb: '归档', store: 'archBlQ', conc: 5, cls: 'arch', ic: 'archive',
       req: async id => {
-        const e = typeof History !== 'undefined' ? History.byId?.(id) : null;
-        if (e?.type === 'evaluation' || e?.mode === 'battle' || e?.mode === 'direct') {
-          const r = await rawFetch('/api/history/evaluation/' + encodeURIComponent(id), { method: 'PATCH', headers: { 'Content-Type': 'application/json', Accept: 'application/json' }, body: JSON.stringify({ isArchived: true }), credentials: 'same-origin', cache: 'no-store' });
-          if (r.ok || r.status === 401 || r.status === 429) return r;
+        if (typeof History !== 'undefined' && typeof History.protoMutateResponse === 'function') {
+          return History.protoMutateResponse('archive', id);
         }
         return rawFetch('/api/chat/' + encodeURIComponent(id) + '/archive', { method: 'POST', headers: { Accept: 'application/json' }, credentials: 'same-origin', cache: 'no-store' });
       } },
-    unarch: { name: '恢复到对话', verb: '恢复', store: 'archUnQ', conc: 4, cls: 'unarch', ic: 'refresh',
+    unarch: { name: '恢复到对话', verb: '恢复', store: 'archUnQ', conc: 5, cls: 'unarch', ic: 'refresh',
       req: async id => {
-        const e = (typeof ArchiveHistory !== 'undefined' && ArchiveHistory.byId?.(id)) || (typeof History !== 'undefined' && History.byId?.(id));
-        const t = e?.type || 'agentic';
-        if (t === 'evaluation') {
-          const rEval = await rawFetch('/api/history/evaluation/' + encodeURIComponent(id), { method: 'PATCH', headers: { 'Content-Type': 'application/json', Accept: 'application/json' }, body: JSON.stringify({ isArchived: false }), credentials: 'same-origin', cache: 'no-store' });
-          if (rEval.ok || rEval.status === 401 || rEval.status === 429) return rEval;
+        if (typeof History !== 'undefined' && typeof History.protoMutateResponse === 'function') {
+          return History.protoMutateResponse('unarchive', id);
         }
-        const r = await rawFetch('/api/chat/' + encodeURIComponent(id) + '/unarchive', { method: 'POST', headers: { Accept: 'application/json' }, credentials: 'same-origin', cache: 'no-store' });
-        if (r.ok || r.status === 401 || r.status === 429) return r;
-        return rawFetch('/api/history/' + t + '/' + encodeURIComponent(id), { method: 'PATCH', headers: { 'Content-Type': 'application/json', Accept: 'application/json' }, body: JSON.stringify({ isArchived: false }), credentials: 'same-origin', cache: 'no-store' });
+        return rawFetch('/api/chat/' + encodeURIComponent(id) + '/unarchive', { method: 'POST', headers: { Accept: 'application/json' }, credentials: 'same-origin', cache: 'no-store' });
       } },
     del: { name: '批量删除对话', verb: '删除', store: 'archDelQ', conc: 6, cls: 'del', ic: 'trash',
       req: async id => {
-        const e = (typeof History !== 'undefined' && History.byId?.(id)) || (typeof ArchiveHistory !== 'undefined' && ArchiveHistory.byId?.(id));
-        const isEval = Boolean(e?.type === 'evaluation' || e?.mode === 'battle' || e?.mode === 'direct' || (typeof Chats !== 'undefined' && Chats.get?.(id)?.isEvaluation));
-        if (isEval) {
-          const r = await rawFetch('/api/history/evaluation/' + encodeURIComponent(id), { method: 'DELETE', credentials: 'same-origin', cache: 'no-store' });
-          if (r.ok || r.status === 401 || r.status === 429) return r;
+        if (typeof History !== 'undefined' && typeof History.protoMutateResponse === 'function') {
+          return History.protoMutateResponse('delete', id);
         }
-        const rChat = await rawFetch('/api/chat/' + encodeURIComponent(id), { method: 'DELETE', credentials: 'same-origin', cache: 'no-store' });
-        if (!isEval && (rChat.status === 404 || rChat.status === 400 || rChat.status === 405)) {
-          const rEval = await rawFetch('/api/history/evaluation/' + encodeURIComponent(id), { method: 'DELETE', credentials: 'same-origin', cache: 'no-store' }).catch(() => null);
-          if (rEval && (rEval.ok || rEval.status === 401 || rEval.status === 429)) return rEval;
-        }
-        return rChat;
+        return rawFetch('/api/chat/' + encodeURIComponent(id), { method: 'DELETE', credentials: 'same-origin', cache: 'no-store' });
       } },
   },
   q: {},          // kind → 正在跑的任务

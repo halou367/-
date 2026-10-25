@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "id": "workspace-lists",
+  "title": "列表与工作区",
+  "version": "1.0.0",
+  "status": "complete-v1.0-modularized-and-static-verified",
+  "scope": "工作区路径、文件树抽屉与隔离预览（workspace-path / workspace-preview-host / workspace-preview / dock）、会话标题编解码/加密同步与侧栏管理（title-compact / title-flex / title-cipher / title-sync / titles / conversation-labels / sidebar-tools / bulk）、命令面板与移动端布局适配（palette / plus / mobile / panel-work / render-work / account-panel-size / account-vendor-fold）；历史列表与运行追踪（core-history-tracker.js）、DOM/标签栏组件（view-primitives-tabs.js）、主界面工作区框架（view-workspace-ui.js）、启动初始化入口（boot-app-init.js）与主样式表（app.css）；桌面应用全套图标资产（ui/assets/icon.{ico,png,svg}）。",
+  "entrypoints": {
+    "node": "public.cjs",
+    "renderer": "public.browser.js"
+  },
+  "runtimeVerification": "not-run"
+}

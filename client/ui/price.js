@@ -56,11 +56,23 @@ const Price = (() => {
 const LiveEst = (() => {
   const SYS = 6603;   // 新计费默认系统提示前缀缓存 token 基线（OpenAI 6603 / Anthropic 11748）
   const _ofMemo = new WeakMap();
+  const _partTokMemo = new WeakMap();
   const tk = s => {
     s = String(s || '');
     const len = s.length;
     if (!len) return 0;
     let cjk = 0;
+    if (len > 4096) {
+      const step = Math.ceil(len / 2048);
+      let sampled = 0;
+      for (let i = 0; i < len; i += step) {
+        sampled++;
+        const c = s.charCodeAt(i);
+        if ((c >= 0x3000 && c <= 0x9fff) || (c >= 0xac00 && c <= 0xd7af) || (c >= 0xff00 && c <= 0xffef)) cjk++;
+      }
+      cjk = Math.round(cjk * (len / Math.max(1, sampled)));
+      return Math.round(cjk + (len - cjk) / 3.6);
+    }
     for (let i = 0; i < len; i++) {
       const c = s.charCodeAt(i);
       if ((c >= 0x3000 && c <= 0x9fff) || (c >= 0xac00 && c <= 0xd7af) || (c >= 0xff00 && c <= 0xffef)) cjk++;
@@ -68,8 +80,24 @@ const LiveEst = (() => {
     return Math.round(cjk + (len - cjk) / 3.6);
   };
   const js = v => v == null ? '' : typeof v === 'string' ? v : (() => { try { return JSON.stringify(v); } catch { return ''; } })();
-  const inTok = p => p.type === 'text' || p.type === 'reasoning' ? tk(p.text) : p.toolCallId ? tk(p.inputText || js(p.input)) : 0;
-  const resTok = p => p.toolCallId ? tk(js(p.output)) + tk(p.errorText) : p.type === 'file' ? 1500 : 0;
+  const inTok = p => {
+    if (!p || typeof p !== 'object') return 0;
+    let ce = _partTokMemo.get(p);
+    if (ce && ce.inVal !== undefined && ce.type === p.type && ce.text === p.text && ce.inputText === p.inputText && ce.input === p.input) return ce.inVal;
+    const val = (p.type === 'text' || p.type === 'reasoning') ? tk(p.text) : p.toolCallId ? tk(p.inputText || js(p.input)) : 0;
+    if (!ce) { ce = {}; _partTokMemo.set(p, ce); }
+    ce.type = p.type; ce.text = p.text; ce.inputText = p.inputText; ce.input = p.input; ce.inVal = val;
+    return val;
+  };
+  const resTok = p => {
+    if (!p || typeof p !== 'object') return 0;
+    let ce = _partTokMemo.get(p);
+    if (ce && ce.resVal !== undefined && ce.output === p.output && ce.errorText === p.errorText && ce.type === p.type) return ce.resVal;
+    const val = p.toolCallId ? tk(js(p.output)) + tk(p.errorText) : p.type === 'file' ? 1500 : 0;
+    if (!ce) { ce = {}; _partTokMemo.set(p, ce); }
+    ce.type = p.type; ce.output = p.output; ce.errorText = p.errorText; ce.resVal = val;
+    return val;
+  };
   function of(chat) {
     if (!chat) return null;
     const msgs = chat.messages || [];
@@ -108,28 +136,27 @@ const LiveEst = (() => {
       }
       if (i === idx - 1 && m.role === 'user') userNewTok += mTok;
       else priorHistoryTok += mTok;
-      if (i >= lastCheckpointIdx) postCheckpointTok += mTok;
+      if (lastCheckpointIdx >= 0 && i >= lastCheckpointIdx && i !== idx - 1) postCheckpointTok += mTok;
     }
-    let ctx = sysTok + priorHistoryTok + userNewTok;
-    let activeWindowTokens = sysTok + (lastCheckpointIdx >= 0 ? postCheckpointTok : (priorHistoryTok + userNewTok));
+    const effHistTok = Math.min(lastCheckpointIdx >= 0 ? postCheckpointTok : priorHistoryTok, 160000);
+    let ctx = effHistTok + userNewTok;
+    let activeWindowTokens = effHistTok + userNewTok;
     const steps = []; let cur = null;
     for (const p of live.parts || []) { if (p.type === 'step-start' || !cur) { cur = []; steps.push(cur); if (p.type === 'step-start') continue; } cur.push(p); }
-    // 首步缓存：前缀 sysTok + priorHistoryTok 走缓存读取（Claude 首轮无历史时 sysTok 走缓写），本轮用户新输入走未缓存 input
-    let prev = (priorHistoryTok > 0 || !isClaude) ? (sysTok + priorHistoryTok) : 0;
-    let firstCw = (priorHistoryTok === 0 && isClaude) ? sysTok : 0;
-    let inTot = 0, cached = 0, out = 0, rs = 0, tools = 0, usd = 0; const per = [];
+    let prev = effHistTok > 0 ? effHistTok : 0;
+    let inTot = 0, cached = null, out = 0, rs = 0, tools = 0, usd = 0, toolResTot = 0; const per = [];
     for (let si = 0; si < steps.length; si++) {
       const st = steps[si];
-      const input = Math.min(ctx, 1e6), cr = Math.min(prev, input), cw = si === 0 ? Math.min(firstCw, Math.max(0, input - cr)) : 0;
-      let o = 0;
-      for (const p of st) { const v = inTok(p); o += v; if (p.type === 'reasoning') rs += v; if (p.toolCallId) tools++; }
-      inTot += input; cached += cr; out += o;
+      const input = Math.max(1, ctx), cr = Math.min(prev, input), cw = 0;
+      let o = 0, stepRt = 0;
+      for (const p of st) { const v = inTok(p); o += v; if (p.type === 'reasoning') rs += v; if (p.toolCallId) { tools++; stepRt += resTok(p); } }
+      out += o; toolResTot += stepRt;
       const c = Price.chargedCost({ input, cacheRead: cr, cacheWrite: cw, output: o });
       usd += c;
       per.push({ input, output: o, usd: c });
-      prev = input + o; ctx += o; activeWindowTokens += o;
-      for (const p of st) { const rt = resTok(p); ctx += rt; activeWindowTokens += rt; }
+      prev = input + o; ctx += o + stepRt; activeWindowTokens += o + stepRt;
     }
+    inTot = effHistTok + userNewTok + toolResTot;
     // 若 BillingProbe 已拿到本轮 /cost 账单或反推原像，优先对齐精确账单与原像 Token
     try {
       const bpState = typeof BillingProbe !== 'undefined' && BillingProbe.state ? BillingProbe.state(sid) : null;
@@ -147,7 +174,7 @@ const LiveEst = (() => {
           : (Number.isFinite(payRow?.basePriceUsd) && payRow.basePriceUsd > 0 ? payRow.basePriceUsd * 2
           : (Number.isFinite(payRow?.upstreamUsd) && payRow.upstreamUsd > 0 ? payRow.upstreamUsd : null));
         if (effUsd != null) {
-          const exactOut = { steps: steps.length, tools, input: Math.round(inTot), cached: Math.round(cached), output: Math.round(out), reasoning: Math.round(rs), ctx: Math.round(ctx), activeWindowTokens: Math.round(activeWindowTokens), usd: effUsd, exactUsd: Number.isFinite(payRow?.chargedUsd) && payRow.chargedUsd > 0, model, scale: 1, calN: steps.length, partialHistory: !!chat.hasMore, since: chat.runAt || live.metadata?.createdAt || null };
+          const exactOut = { steps: steps.length, tools, input: Math.round(inTot), cached: cached != null && cached > 0 ? Math.round(cached) : null, output: Math.round(out), reasoning: rs > 0 ? Math.round(rs) : null, ctx: Math.round(ctx), activeWindowTokens: Math.round(activeWindowTokens), usd: effUsd, exactUsd: Number.isFinite(payRow?.chargedUsd) && payRow.chargedUsd > 0, model, scale: 1, calN: steps.length, partialHistory: !!chat.hasMore, since: chat.runAt || live.metadata?.createdAt || null };
           _ofMemo.set(chat, { key: memoKey, val: exactOut });
           return exactOut;
         }
@@ -159,7 +186,7 @@ const LiveEst = (() => {
       const n = Math.min(t.calls.length, per.length), real = t.calls.slice(0, n).reduce((a, c) => a + (c.tok || 0), 0), est = per.slice(0, n).reduce((a, x) => a + x.input + x.output, 0);
       if (real > 0 && est > 0) { scale = Math.max(0.3, Math.min(5, real / est)); calN = n; }
     }
-    const finalOut = { steps: steps.length, tools, input: Math.round(inTot * scale), cached: Math.round(cached * scale), output: Math.round(out * scale), reasoning: Math.round(rs * scale), ctx: Math.round(ctx * scale), activeWindowTokens: Math.round(activeWindowTokens * scale), usd: usd * scale, model, scale, calN, partialHistory: !!chat.hasMore, since: chat.runAt || live.metadata?.createdAt || null };
+    const finalOut = { steps: steps.length, tools, input: Math.round(inTot * scale), cached: cached != null && cached > 0 ? Math.round(cached * scale) : null, output: Math.round(out * scale), reasoning: rs > 0 ? Math.round(rs * scale) : null, ctx: Math.round(ctx * scale), activeWindowTokens: Math.round(activeWindowTokens * scale), usd: usd * scale, model, scale, calN, partialHistory: !!chat.hasMore, since: chat.runAt || live.metadata?.createdAt || null };
     _ofMemo.set(chat, { key: memoKey, val: finalOut });
     return finalOut;
   }
@@ -389,10 +416,34 @@ const Budget = (() => {
     }
     return rawBud ? { ...rawBud, hjb } : (pulse != null ? { pulse, dp: 0, ds: 0, total: null, remaining: null, cands: pool, lo: floorUsd, hi: Infinity, source: 'charged', transitions: 0, status: 'collecting', hjb } : null);
   }
+  const _ctxLifeMemo = new WeakMap();
   function sessionContextLife(sidOrChat) {
     try {
       const chat = typeof sidOrChat === 'object' && sidOrChat ? sidOrChat : (typeof Chats !== 'undefined' && sidOrChat ? Chats.get(sidOrChat) : null);
       const msgs = chat?.messages || [];
+      if (chat && typeof chat === 'object' && msgs.length > 0) {
+        const lastM = msgs.at(-1);
+        const memoKey = `${msgs.length}:${lastM?.id || ''}:${lastM?.v || 0}:${lastM?.parts?.length || 0}:${typeof lastM?.text === 'string' ? lastM.text.length : 0}`;
+        const hit = _ctxLifeMemo.get(chat);
+        if (hit && hit.key === memoKey) return hit.val;
+        let chars = 0, userTurns = 0;
+        for (const m of msgs) {
+          if (m?.role === 'user') userTurns++;
+          for (const p of m?.parts || []) if (typeof p?.text === 'string') chars += p.text.length;
+          if (typeof m?.text === 'string') chars += m.text.length;
+        }
+        if (!userTurns && !chars) return null;
+        const maxChars = 420000, maxTurns = 95;
+        const n = Math.max(1, userTurns);
+        const kvCacheRatio = Math.round(((1 + 0.18 * (n - 1)) / n) * 1000) / 1000;
+        const charRatio = Math.min(1, chars / maxChars);
+        const turnRatio = Math.min(1, userTurns / maxTurns);
+        const usedRatio = Math.max(charRatio, turnRatio);
+        const remainingPct = Math.round(Math.max(0, (1 - usedRatio) * 100) * 10) / 10;
+        const val = { turns: userTurns, chars, maxTurns, maxChars, kvCacheRatio, remainingPct, handoverAlert: remainingPct <= 15 };
+        _ctxLifeMemo.set(chat, { key: memoKey, val });
+        return val;
+      }
       let chars = 0, userTurns = 0;
       for (const m of msgs) {
         if (m?.role === 'user') userTurns++;

@@ -51,13 +51,13 @@ if (window.top === window && ['https:', 'chrome-extension:'].includes(location.p
   }));
 }
 // Start the small browser chrome before page scripts and load-blocking resources finish.
-if(window.top===window&&['https:','chrome-extension:'].includes(location.protocol)){
+if(window.top===window&&['https:','chrome-extension:'].includes(location.protocol)&&!(location.origin==='https://arena.ai'&&location.pathname==='/robots.txt')){
   try{const source=ipcRenderer.sendSync('browser:chromeSync');if(source)void webFrame.executeJavaScript(source).catch(()=>{});}catch{}
 }
 if ((location.origin === 'https://arena.ai' || location.protocol === 'file:') && window.top === window) {
   const call = (ch, ...a) => ipcRenderer.invoke('host:' + ch, ...a);
   contextBridge.exposeInMainWorld('BranaHost', {
-    platform: 'desktop', extensionCompatibilityTest: (() => { try { const p = require('../package.json'); return Boolean(p.extensionCompatibilityTest || p.name === 'brana-ai-extension-test' || /-beta\b/i.test(String(p.version || ''))); } catch { return false; } })(),
+    platform: 'desktop', extensionCompatibilityTest: (() => { try { const p = require('../package.json'); return Boolean(p.extensionCompatibilityTest || p.name === 'brana-ai-extension-test' || /-ext\b/i.test(String(p.version || ''))); } catch { return false; } })(),
     info: () => call('info'),
     listAccounts: lite => call('listAccounts', !!lite),
     saveAccount: a => call('saveAccount', a),
@@ -98,6 +98,7 @@ if ((location.origin === 'https://arena.ai' || location.protocol === 'file:') &&
     genFp: () => call('genFp'),
     getCred: () => call('getCred'),
     noteAccount: o => call('noteAccount', o),
+    staticBankSync: id => ipcRenderer.sendSync('host:staticBankSync', String(id || '')),
     fingerprintStore: (op, revision, payload) => call('fingerprintStore', op, revision, payload),
     shared: (k, v) => v === undefined ? call('shared', k) : call('shared', k, v),
     setShared: (k, v) => call('shared', k, v),
@@ -111,6 +112,7 @@ if ((location.origin === 'https://arena.ai' || location.protocol === 'file:') &&
     gbCancel: () => call('gbCancel'),
     winDrag: phase => call('winDrag', phase),
     signInAccount: id => call('signInAccount', id),
+    sendMagicLinkAccount: (id, email, fullName) => call('sendMagicLinkAccount', id, email, fullName),
     registerTokenAccount: (id, opt) => call('registerTokenAccount', id, opt),
     setCookies: (id, list) => call('setCookies', id, list),
     refreshQuotas: force => call('refreshQuotas', !!force),
@@ -125,3 +127,16 @@ if ((location.origin === 'https://arena.ai' || location.protocol === 'file:') &&
     onCmd: cb => { ipcRenderer.on('anc-cmd', (e, m) => { try { cb(m); } catch {} }); },
   });
 }
+
+// Periodic renderer cache & V8 heap trimmer
+(() => {
+  const trimRendererMem = () => {
+    try { webFrame.clearCache(); } catch {}
+    try { if (typeof globalThis.gc === 'function') globalThis.gc(); } catch {}
+  };
+  try { ipcRenderer.on('host:trimMem', trimRendererMem); } catch {}
+  setTimeout(trimRendererMem, 2200);
+  setTimeout(trimRendererMem, 7500);
+  setTimeout(trimRendererMem, 18000);
+  setInterval(trimRendererMem, 60000);
+})();

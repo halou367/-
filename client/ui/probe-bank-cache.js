@@ -29,7 +29,7 @@ const ProbeBankCache = (() => {
     if (!initializing) initializing=(async()=>{
       const cached=Store.get(KEY,null);
       if(cached)try { const r=await validateRecord(cached); if(compare(r.version,PIN.version)>=0){current=r;return current;} } catch { lastError='本地缓存校验失败，使用随包库'; }
-      current={ bank:ProbeLib.seedBank || ProbeLib.bank, source:'WhatsMyLLM v'+PIN.version+' · 随包21型号', fallback:false, version:PIN.version, sha:PIN.sha, url:PIN.url, persistent:false };
+      current={ get bank(){ return ProbeLib.seedBank || ProbeLib.bank; }, source:'WhatsMyLLM v'+PIN.version+' · 随包21型号', fallback:false, version:PIN.version, sha:PIN.sha, url:PIN.url, persistent:false };
       return current;
     })();
     return initializing;
@@ -82,6 +82,6 @@ const ProbeBankCache = (() => {
     void refresh(); // Return a stable snapshot immediately; this run never changes banks mid-way.
     return current;
   }
-  function status(){return {version:current?.version || PIN.version,source:current?.source || '随包21型号',models:current?.bank.models.length || 21,updating:!!updating,error:lastError};}
+  function status(){return {version:current?.version || PIN.version,source:current?.source || '随包21型号',models:(current?.persistent ? current?.bank?.models?.length : 21) || 21,updating:!!updating,error:lastError};}
   return {load,refresh,status,descriptor,validateRecord,KEY,PIN};
 })();

@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "id": "browser-workspace",
+  "title": "浏览器模式",
+  "version": "1.0.0",
+  "status": "complete-v1.0-modularized-and-static-verified",
+  "scope": "完整浏览器模式子系统：客户端 ↔ 浏览器切换导航、地区/WebRTC 隐私锁定、书签存储与弹窗管理（bookmarks-window / bookmarks.html/css/js）、MV3 扩展安装/兼容/共享存储与弹窗管理（extensions-window / extensions.html/css/js）、第三方站点登录检测、Shadow DOM 顶部/底部网页浏览条；浏览器模式悬浮层与顶栏/底栏/侧栏启动控制器（boot-web-overlay.js）；主进程多账号窗口与WebBar/导航IPC（main-windows-accounts-ipc.js）、主窗口预加载桥接（main-window-preload.js）及打包态扩展自检器（extension-packaged-self-test.js）。",
+  "entrypoints": {
+    "node": "public.cjs"
+  },
+  "runtimeVerification": "not-run"
+}

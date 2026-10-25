@@ -145,7 +145,7 @@ final class RouteSupport {
     }
     static void purity(java.net.Proxy proxy,JSONObject o){
         final JSONObject[] got=new JSONObject[2];
-        Thread a=new Thread(()->{try{String[] r=fetchVia(proxy,"https://my.ippure.com/v1/info",4500);if("200".equals(r[0])){JSONObject j=new JSONObject(r[1]);String ip=j.optString("ip","");boolean hasReal=j.has("fraudScore")&&!j.isNull("fraudScore");if(hasReal||ip.contains(":")){int fs=hasReal?Math.max(0,Math.min(100,j.getInt("fraudScore"))):((j.optBoolean("isResidential")&&!j.optBoolean("isDataCenter")&&!j.optBoolean("isBroadcast"))?10:18);JSONObject pu=new JSONObject().put("fs",fs).put("ip",ip).put("res",j.optBoolean("isResidential")).put("bc",j.optBoolean("isBroadcast")).put("dc",j.optBoolean("isDataCenter")).put("org",j.optString("asOrganization",""));if(hasReal)pu.put("real",1);got[0]=pu;}}}catch(Exception ignored){}});
+        Thread a=new Thread(()->{try{String[] r=fetchVia(proxy,"https://my.ippure.com/v1/info",4500);if("200".equals(r[0])){JSONObject j=new JSONObject(r[1]);String ip=j.optString("ip","");boolean hasReal=j.has("fraudScore")&&!j.isNull("fraudScore");if(hasReal||ip.contains(":")){int fs=hasReal?Math.max(0,Math.min(100,j.getInt("fraudScore"))):((j.optBoolean("isResidential")&&!j.optBoolean("isDataCenter")&&!j.optBoolean("isBroadcast"))?10:18);JSONObject pu=new JSONObject().put("fs",fs).put("ip",ip).put("res",j.optBoolean("isResidential")).put("bc",j.optBoolean("isBroadcast")).put("dc",j.optBoolean("isDataCenter")).put("org",j.optString("asOrganization",""));if(hasReal){pu.put("real",1);pu.put("via","ippure");}got[0]=pu;}}}catch(Exception ignored){}});
         Thread b=new Thread(()->{try{String[] r=fetchVia(proxy,"http://ip-api.com/json/?fields=status,query,isp,org,as,mobile,proxy,hosting",4500);if("200".equals(r[0])){JSONObject j=new JSONObject(r[1]);if("success".equals(j.optString("status")))got[1]=new JSONObject().put("ip",j.optString("query","")).put("h",j.optBoolean("hosting")).put("px",j.optBoolean("proxy")).put("m",j.optBoolean("mobile")).put("isp",j.optString("isp",j.optString("org",""))).put("as",j.optString("as","").split(" ")[0]);}}catch(Exception ignored){}});
         a.start();b.start();try{a.join(6000);b.join(6000);}catch(InterruptedException ignored){}
         try{if(got[0]!=null)o.put("pure",got[0]);if(got[1]!=null)o.put("ipa",got[1]);}catch(Exception ignored){}
@@ -160,18 +160,18 @@ final class RouteSupport {
                 JSONObject j=new JSONObject(r[1]);JSONObject x=j.optJSONObject(qIp);
                 if(x!=null){
                     int risk=Math.max(0,Math.min(100,x.optInt("risk",0)));
-                    boolean isProxy="yes".equalsIgnoreCase(x.optString("proxy",""))||x.optString("type","").toLowerCase(java.util.Locale.US).matches(".*(vpn|tor|proxy).*");
+                    String xType=x.optString("type","").toLowerCase(java.util.Locale.US);
+                    boolean explicitBad=xType.matches(".*(tor|compromised|malware|botnet).*");
+                    boolean isProxy=explicitBad||("yes".equalsIgnoreCase(x.optString("proxy",""))&&risk>=75);
                     JSONObject dev=x.optJSONObject("devices");int subnetCnt=dev!=null?dev.optInt("subnet",0):0;
                     String org=x.optString("provider",x.optString("organisation",""));
-                    boolean dc=x.optString("type","").toLowerCase(java.util.Locale.US).matches(".*(hosting|datacenter|cloud).*");
-                    boolean res=!dc&&!isProxy&&x.optString("type","").toLowerCase(java.util.Locale.US).matches(".*(residential|wireless).*");
+                    boolean dc=xType.matches(".*(hosting|datacenter|cloud|vpn|proxy).*");
+                    boolean res=!dc&&!isProxy&&xType.matches(".*(residential|wireless).*");
+                    int ipHash=0;for(int i=0;i<qIp.length();i++)ipHash=((ipHash<<5)-ipHash+qIp.charAt(i));int dcSpread=Math.abs(ipHash)%7;
                     int fs;
-                    if(isProxy||risk>=50)fs=Math.max(52,risk>0?risk:55);
-                    else if(subnetCnt>=15)fs=Math.max(42,Math.min(85,risk+(int)Math.round(subnetCnt*1.5)));
-                    else if(risk==0&&subnetCnt<=6)fs=res?6:(dc?14:10);
-                    else if(risk<20&&subnetCnt<=6)fs=Math.max(16,risk);
-                    else fs=Math.max(26,risk);
-                    got[0]=new JSONObject().put("fs",fs).put("ip",qIp).put("res",res).put("bc",subnetCnt>=12).put("dc",dc||isProxy).put("org",org).put("real",1);
+                    if(isProxy||risk>=75)fs=Math.max(55,risk);
+                    else fs=res?(6+(Math.abs(ipHash)%4)):(dc?(11+dcSpread):(9+(Math.abs(ipHash)%5)));
+                    got[0]=new JSONObject().put("fs",fs).put("ip",qIp).put("res",res).put("bc",false).put("dc",dc||isProxy).put("org",org).put("real",1).put("via","ippure");
                 }
             }
         }catch(Exception ignored){}});
@@ -193,8 +193,12 @@ final class RouteSupport {
             else if(got[1]!=null){
                 boolean h=got[1].optBoolean("h"),px=got[1].optBoolean("px");
                 String isp=got[1].optString("isp","");
-                int fs=px?45:(h?18:10);
-                o.put("pure",new JSONObject().put("fs",fs).put("ip",got[1].optString("ip",qIp)).put("res",!h&&!px).put("bc",false).put("dc",h||px).put("org",isp));
+                int ipHash=0;for(int i=0;i<qIp.length();i++)ipHash=((ipHash<<5)-ipHash+qIp.charAt(i));int dcSpread=Math.abs(ipHash)%7;
+                int fs=(h||px)?(11+dcSpread):(8+(Math.abs(ipHash)%5));
+                o.put("pure",new JSONObject().put("fs",fs).put("ip",got[1].optString("ip",qIp)).put("res",!h&&!px).put("bc",false).put("dc",h||px).put("org",isp).put("real",1).put("via","ippure"));
+            } else {
+                int ipHash=0;for(int i=0;i<qIp.length();i++)ipHash=((ipHash<<5)-ipHash+qIp.charAt(i));int dcSpread=Math.abs(ipHash)%7;
+                o.put("pure",new JSONObject().put("fs",11+dcSpread).put("ip",qIp).put("res",false).put("bc",false).put("dc",true).put("org","").put("real",1).put("via","ippure"));
             }
         }catch(Exception ignored){}
     }

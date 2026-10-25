@@ -445,8 +445,8 @@
     const effToolCount = Math.max(toolIds.length, allToolCalls.length);
     const isMuseBufferedToolChunk = Boolean(
       !isOpenAiTcChunk && rWireDeltas === 0 && !hasSharedTcId &&
-      totalReasonParts >= 3 && msgs.length <= 2 && effToolCount >= 2 &&
-      ((fmtTidCount > 0 && fmtTidCount <= 6 && fmtTidAvg >= 1800) || (totalPreToolChars >= 55 && (emDashCount >= 2 || boxCommentCount >= 1)))
+      totalReasonParts >= 2 && msgs.length <= 3 && effToolCount >= 1 &&
+      ((fmtTidCount > 0 && fmtTidCount <= 6 && fmtTidAvg >= 1800) || (totalPreToolChars >= 55 && (emDashCount >= 2 || boxCommentCount >= 1 || prefersReducedMotion >= 1)) || avgChunk >= 15.0)
     );
     const isSingleWriteNoReason = Boolean(
       !isOpenAiTcChunk && totalReasonParts === 0 && rWireDeltas === 0 && fmtTidCount === 0 &&
@@ -912,7 +912,7 @@
           }
         }).catch(e => {
           if (s._reqSeq !== reqSeq || account() !== owner) return;
-          if (e?.rateLimitedLocally) { s.nextAt = clock() + 3000; return; }
+          if (e?.rateLimitedLocally) { const dLoc = e.status === 403 ? Math.max(120000, Number(e.retryAfterMs) || 0) : 3000; s.nextAt = clock() + dLoc; s.retryAt = s.nextAt; if (e.status === 403) { s.httpStatus = 403; s.status = 'forbidden'; } return; }
           s.httpStatus = Number.isInteger(e.status) ? e.status : null;
           s.status = [401,403].includes(e.status) ? 'forbidden' : 'error';
           s.error = e.responseFormat ? '计费接口返回网页或验证页面（HTTP ' + e.status + '），请在官方页面完成验证后重试' : e.status === 401 ? '计费接口登录已失效（HTTP 401），请重新登录后重试' : e.status === 403 ? '计费接口拒绝读取（HTTP 403），请在官方页面检查费用显示与账号权限' : e.status === 429 ? '计费接口限流（HTTP 429），请等待服务端重试时间' : '计费读取失败：' + String(e.message || e).slice(0,160);

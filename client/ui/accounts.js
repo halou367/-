@@ -265,6 +265,15 @@ Object.assign(UI, {
     this.authed = true; setTimeout(() => this.shown(), 0);
     if (this.me === null) { const tl = $('#tablist'); if (tl) tl.replaceChildren(); }
     const a = this.host?.account || {}, v = $('#view'), draft = this.authDraft(a);
+    if (typeof QrSync !== 'undefined' && QrSync.isFirstTimeNoCache?.() && !this._onboardStep2) {
+      QrSync.renderFirstTimeOnboarding(v, a, reason, (syncRes) => {
+        this._onboardStep2 = true;
+        if (syncRes?.firstEmail && !a.email) { a.email = syncRes.firstEmail; draft.email = syncRes.firstEmail; }
+        if (syncRes?.firstPassword && !draft.password) draft.password = syncRes.firstPassword;
+        this.loginGate(reason);
+      });
+      return;
+    }
     const epoch = this.authEpoch = (this.authEpoch || 0) + 1, current = () => this.authEpoch === epoch && this.host?.account?.id === a.id;
     const email = h('input', { type: 'email', value: draft.email, placeholder: 'name@example.com', autocomplete: 'username', 'aria-label': '邮箱' });
     const pw = pwField(draft.password, '输入密码');
@@ -316,12 +325,17 @@ Object.assign(UI, {
     const form = h('form', { class: 'lform auth-form', 'data-auth-mode': 'login', onsubmit: async e => {
       e.preventDefault(); if (go.disabled) return;
       const em = email.value.trim(), p = pw.inp.value, px = pf.proxy, pxi = pf.proxyIp, keepPassword = remember.checked;
+      if (!(typeof window !== 'undefined' && (window.__fixture || window.__routeFixture || window.__capFetch)) && typeof QrSync !== 'undefined' && typeof QrSync.hasNodeConfigured === 'function' && !QrSync.hasNodeConfigured(a) && !pf.nodeId && !/^vless:\/\//i.test(String(px || '').trim())) {
+        msg.textContent = '请先填写 EdgeTunnel 订阅地址完成节点配置，配置好后才能登录或注册账号'; msg.className = 'lmsg bad';
+        this.loginGate('请先填写 EdgeTunnel 订阅地址完成节点配置，配置好后才能登录或注册账号');
+        return;
+      }
       if (!EMAIL_RE.test(em)) { msg.textContent = '邮箱格式不正确'; msg.className = 'lmsg bad'; email.focus(); return; }
       if (!p) { msg.textContent = '请输入密码'; msg.className = 'lmsg bad'; pw.inp.focus(); return; }
       if (pf.err()) { msg.textContent = pf.err(); msg.className = 'lmsg bad'; return; }
       this.authControls(form, true); go.replaceChildren(h('i', { class: 'spin' }), '登录中…'); msg.className = 'lmsg';
       try {
-        if (px !== (a.proxy || '') || pxi !== (a.proxyIp || '') || pf.region !== (a.region || '')) {
+        if (pf.dirty || px !== (a.proxy || '') || pxi !== (a.proxyIp || '') || (pf.nodeId || '') !== (a.nodeId || '') || pf.region !== (a.region || '')) {
           msg.textContent = '正在切换代理…';
           await this.switchProxy(a, pf, msg);
         }
@@ -336,7 +350,14 @@ Object.assign(UI, {
         this.authDrafts.clear(a);
         try { localStorage.removeItem('anc-auth'); localStorage.removeItem('anc-auth-email'); } catch {}
         msg.textContent = '登录成功（' + user.email + '），正在进入…'; msg.className = 'lmsg ok';
-        setTimeout(() => { if (current()) location.reload(); }, 400);
+        setTimeout(() => {
+          if (!current()) return;
+          if (typeof this.activateAuthedSession === 'function' && !(typeof window !== 'undefined' && (window.__fixture || window.__routeFixture || window.__capFetch))) {
+            void this.activateAuthedSession(user);
+          } else {
+            location.reload();
+          }
+        }, 180);
       } catch (err) {
         if (!current()) return; this.authControls(form, false);
         msg.textContent = cleanErr(err); msg.className = 'lmsg bad'; go.replaceChildren('登录');
@@ -361,7 +382,13 @@ Object.assign(UI, {
     const ic = gIcon();
     const lab = h('span', {}, label);
     const b = h('button', { type: 'button', class: 'btn big gsign', title: '和 arena.ai 登录页的「Continue with Google」同一个入口；在这个账号的窗口里完成，走这个账号的 IP', onclick: async () => {
-      if (b.disabled) return; b.disabled = true; lab.textContent = '正在打开 Google…'; msg.className = 'lmsg';
+      if (b.disabled) return;
+      if (!(typeof window !== 'undefined' && (window.__fixture || window.__routeFixture || window.__capFetch)) && typeof QrSync !== 'undefined' && typeof QrSync.hasNodeConfigured === 'function' && !QrSync.hasNodeConfigured(a) && !pf.nodeId && !/^vless:\/\//i.test(String(pf.proxy || '').trim())) {
+        msg.textContent = '请先填写 EdgeTunnel 订阅地址完成节点配置，配置好后才能登录或注册账号'; msg.className = 'lmsg bad';
+        this.loginGate('请先填写 EdgeTunnel 订阅地址完成节点配置，配置好后才能登录或注册账号');
+        return;
+      }
+      b.disabled = true; lab.textContent = '正在打开 Google…'; msg.className = 'lmsg';
       try {
         if (pf.err()) throw new Error(pf.err());
         await this.applyFormProxy(a, pf, msg);
@@ -450,8 +477,13 @@ Object.assign(UI, {
         const curMode = (typeof Chats !== 'undefined' && curSid && Chats.get(curSid)?.evalMode) || (typeof ModeState !== 'undefined' && ModeState.getMode ? ModeState.getMode() : null);
         sessionStorage.setItem('anc:fast-return', JSON.stringify({ at: Date.now(), sid: curSid, evalUrl: isEval, evalMode: isEval ? (curMode === 'direct' ? 'direct' : 'battle') : null }));
         sessionStorage.setItem('anc:mode-switching', JSON.stringify({ at: Date.now(), sid: curSid, target: tgt }));
-        if (typeof Chats !== 'undefined' && typeof MsgCache !== 'undefined' && MsgCache.putNow) {
-          await Promise.all([...Chats.values()].filter(c => c?.loaded).slice(0, 6).map(c => MsgCache.putNow(c).catch(() => {})));
+        if (typeof Chats !== 'undefined') {
+          for (const c of Chats.values()) {
+            try { c.ctl?.abort?.(); c.esCtl?.abort?.(); } catch {}
+          }
+          if (typeof MsgCache !== 'undefined' && MsgCache.putNow) {
+            await Promise.all([...Chats.values()].filter(c => c?.loaded).slice(0, 6).map(c => MsgCache.putNow(c).catch(() => {})));
+          }
         }
       } catch {}
       try { if (window.__ANC_CLIENT_SHELL && location.pathname !== '/robots.txt') history.replaceState(null, '', '/robots.txt'); } catch {}
@@ -603,7 +635,7 @@ Object.assign(UI, {
   },
   // 表单里改了 IP / 代理：先测试再保存到账号（注册 / 登录请求都要走这个账号自己的出口）
   async applyFormProxy(a, pf, msg) {
-    if (pf.proxy === (a.proxy || '') && pf.proxyIp === (a.proxyIp || '') && (pf.nodeId || '') === (a.nodeId || '') && pf.region === (a.region || '')) return a;
+    if (!pf.dirty && pf.proxy === (a.proxy || '') && pf.proxyIp === (a.proxyIp || '') && (pf.nodeId || '') === (a.nodeId || '') && pf.region === (a.region || '')) return a;
     msg.textContent = '正在切换 IP / 代理…'; msg.className = 'lmsg';
     await this.switchProxy(a, pf, msg);
     return this.host?.account || a;
@@ -625,6 +657,12 @@ Object.assign(UI, {
   authGate(mode, opt = {}) {
     setTimeout(() => this.shown(), 0);
     const a = this.host?.account || {}, v = $('#view'), draft = this.authDraft(a, opt);
+    if (v && (mode === 'signup' || mode === 'forgot') && typeof QrSync !== 'undefined' && QrSync.isFirstTimeNoCache && QrSync.isFirstTimeNoCache(a)) {
+      QrSync.renderFirstTimeOnboarding(v, a, opt.err || '请先配置 EdgeTunnel 订阅地址完成节点配置，配置好后才能登录或注册账号', (res) => {
+        this.authGate(mode, { ...opt, email: res?.email || opt.email });
+      });
+      return;
+    }
     const epoch = this.authEpoch = (this.authEpoch || 0) + 1, current = () => this.authEpoch === epoch && this.host?.account?.id === a.id;
     if (mode === 'signup' || mode === 'forgot') this.authKind = mode;
     const msg = h('div', { class: 'lmsg' + (opt.err ? ' bad' : '') }, opt.err || '');
@@ -643,6 +681,11 @@ Object.assign(UI, {
       form = h('form', { class: 'lform auth-form', 'data-auth-mode': mode, onsubmit: async e => {
         e.preventDefault(); if (go.disabled) return;
         const em = email.value.trim();
+        if (!(typeof window !== 'undefined' && (window.__fixture || window.__routeFixture || window.__capFetch)) && typeof QrSync !== 'undefined' && typeof QrSync.hasNodeConfigured === 'function' && !QrSync.hasNodeConfigured(a) && !pf.nodeId && !/^vless:\/\//i.test(String(pf.proxy || '').trim())) {
+          fail(form, '请先填写 EdgeTunnel 订阅地址完成节点配置，配置好后才能登录或注册账号');
+          this.authGate(mode, { ...opt, err: '请先填写 EdgeTunnel 订阅地址完成节点配置，配置好后才能登录或注册账号' });
+          return;
+        }
         if (!EMAIL_RE.test(em)) { fail(form, '邮箱格式不正确'); email.focus(); return; }
         if (pf.err()) { fail(form, pf.err()); return; }
         const fullName = name.value.trim() || em.split('@')[0];
@@ -654,7 +697,8 @@ Object.assign(UI, {
           const sentAt = Date.now();
           if (signup) {
             const cc = /^[A-Z]{2}$/.test(IP.loc || '') ? IP.loc : undefined;
-            await this.authPost('/nextjs-api/sign-up/magic-link', { email: em, fullName, shouldLinkHistory: false, marketingConsent: false, ...(cc ? { registeredCountryCode: cc } : {}) });
+            if (typeof Auth.sendMagicLink === 'function') await Auth.sendMagicLink(em, fullName, cc);
+            else await this.authPost('/nextjs-api/sign-up/magic-link', { email: em, fullName, shouldLinkHistory: false, marketingConsent: false, ...(cc ? { registeredCountryCode: cc } : {}) });
           } else await this.authPost('/nextjs-api/reset-password/request', { email: em, shouldLinkHistory: false });
           if (!current()) return;
           try { localStorage.setItem('anc-auth-email', em); } catch {}
@@ -809,6 +853,7 @@ Object.assign(UI, {
 
   // ----- 账号切换面板 -----
   async acctMenu(e, page=0) {
+    if (e?.target?.closest?.('.acct-quota-ring, .acct-refresh, .acct-qr-link, .acct-qrsync')) return;
     e?.stopPropagation?.();
     // 再点一次底部当前账号 = 收起面板
     if (e && !isMob() && document.querySelector('.amenu:not(.anc-gh)')) { document.querySelectorAll('.menu:not(.anc-gh)').forEach(m => m.remove()); return; }
@@ -842,6 +887,7 @@ Object.assign(UI, {
     const gLab = h('span', {}, '使用 Google 添加账号');
     const gGo = h('button', { type: 'button', class: 'btn big gsign', title: '不用填邮箱和密码：新建账号后切过去，在它自己的窗口里用官方 Google 登录（走这个账号的 IP）', onclick: async () => {
       if (gGo.disabled) return;
+      if (typeof needEdgeTunnelGuard === 'function' && needEdgeTunnelGuard()) { msg.textContent = '请先填写 EdgeTunnel 订阅地址完成节点配置，配置好后才能登录或注册账号'; msg.className = 'lmsg bad'; return; }
       if (pf.err()) { msg.textContent = pf.err(); msg.className = 'lmsg bad'; msg.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); return; }
       gGo.disabled = true; go.disabled = true; back.dataset.busy = '1'; msg.className = 'lmsg'; msg.textContent = '正在新建账号…';
       // CAPTCHA starts only in the new account's own session, after its tested route is ready.
@@ -859,6 +905,7 @@ Object.assign(UI, {
     // 注册新账号：按上面选的节点 / ProxyIP 先建好账号，切到它自己的窗口（独立指纹环境 + 该账号出口）里打开注册页，邮箱已填好
     const reg = h('button', { type: 'button', hidden: true, title: '用这里选的节点、ProxyIP 和该账号自己的指纹环境注册新的 Brana 账号（填邮箱即可，密码在注册邮件链接里设置）', onclick: async () => {
       if (reg.disabled) return;
+      if (typeof needEdgeTunnelGuard === 'function' && needEdgeTunnelGuard()) { msg.textContent = '请先填写 EdgeTunnel 订阅地址完成节点配置，配置好后才能登录或注册账号'; msg.className = 'lmsg bad'; return; }
       let tok = null;
       if (mode === 'token') {
         const rawLines = String(tokInp.value || '').split(/\r?\n/).map(s => s.trim()).filter(Boolean);
@@ -993,7 +1040,29 @@ Object.assign(UI, {
     // 取消 → 右上角 X
     { const hd = back.querySelector('.modal-h'), head = h('div', { class: 'rip-head' }), x = h('button', { type: 'button', class: 'rip-x', title: '关闭', 'aria-label': '关闭', onclick: () => { if (!back.dataset.busy) back.remove(); } }, icon('x')); hd.replaceWith(head); head.append(hd, x); }
     setMode(mode);
+    const needEdgeTunnelGuard = () => !(typeof window !== 'undefined' && (window.__fixture || window.__routeFixture || window.__capFetch)) && typeof QrSync !== 'undefined' && typeof QrSync.hasNodeConfigured === 'function' && !QrSync.hasNodeConfigured() && !pf.nodeId && !/^vless:\/\//i.test(String(pf.proxy || '').trim());
+    if (needEdgeTunnelGuard()) {
+      const subRowInp = h('input', { type: 'text', class: 'inp', placeholder: '请先粘贴 EdgeTunnel 订阅地址 (https://...) 配置节点', style: 'flex:1;font-size:12px' });
+      const subRowBtn = h('button', { type: 'button', class: 'btn sm p', onclick: async () => {
+        const u = subRowInp.value.trim();
+        if (!u) { msg.textContent = '请先填写 EdgeTunnel 订阅地址，配置好节点后才能登录或注册账号'; msg.className = 'lmsg bad'; subRowInp.focus(); return; }
+        msg.textContent = '正在配置 EdgeTunnel 订阅节点…'; msg.className = 'lmsg';
+        try {
+          await QrSync.applySyncPayload(u, m => { msg.textContent = m; });
+          msg.textContent = '✓ EdgeTunnel 节点配置成功，现在可以继续登录或注册账号'; msg.className = 'lmsg ok';
+          subBanner.remove();
+        } catch (e) {
+          msg.textContent = cleanErr(e); msg.className = 'lmsg bad';
+        }
+      } }, '配置订阅');
+      const subBanner = h('div', { class: 'edgetunnel-req-banner', style: 'display:flex;flex-direction:column;gap:6px;padding:8px 10px;margin-bottom:8px;border:1px solid var(--wn);border-radius:8px;background:var(--bg2)' },
+        h('div', { style: 'font-size:12px;font-weight:600;color:var(--wn)' }, '⚠ 当前尚未配置节点，请先填写 EdgeTunnel 订阅地址后再登录或注册'),
+        h('div', { style: 'display:flex;gap:6px;align-items:center' }, subRowInp, subRowBtn)
+      );
+      seg.before(subBanner);
+    }
     go.onclick = async () => {
+      if (needEdgeTunnelGuard()) { msg.textContent = '请先填写 EdgeTunnel 订阅地址完成节点配置，配置好后才能登录或注册账号'; msg.className = 'lmsg bad'; return; }
       if (mode !== 'login') return reg.click();
       const em = email.value.trim(), p = pw.inp.value, px = pf.proxy;
       if (!EMAIL_RE.test(em)) { msg.textContent = '邮箱格式不正确'; msg.className = 'lmsg bad'; return; }
@@ -1003,8 +1072,8 @@ Object.assign(UI, {
       try {
         const a = await saveConnection({ name: em, email: em, password: p });
         if (!a) throw new Error('保存失败');
-        // 按地区：先实测挑一个能用的 ProxyIP（不通自动换下一个，节点坏了自动换节点）
-        if (pf.mode === 'region' && pf.region) { const q = await Pool.acquire(a, pf.region, { prefer: pf.proxyIp, log: s => { msg.textContent = s; } }); if (!q.ok) throw new Error(regionLabel(pf.region) + '：' + q.error); }
+        // 按地区：若 saveConnection 已完成实测选路，则不再重复调用 Pool.acquire
+        if (!pf.testedRoute && pf.mode === 'region' && pf.region) { const q = await Pool.acquire(a, pf.region, { prefer: pf.proxyIp, log: s => { msg.textContent = s; } }); if (!q.ok) throw new Error(regionLabel(pf.region) + '：' + q.error); }
         msg.textContent = '正在用 ' + (pf.region ? regionLabel(pf.region) : maskProxy(px)) + ' 登录…';
         const r = await Host.signInAccount(a.id).catch(e => ({ error: cleanErr(e) }));
         if (r?.error) throw new Error(r.error);
@@ -1146,13 +1215,38 @@ Object.assign(UI, {
   // ----- 导出账号合集（与油猴「账号切换」脚本互通：ARENA-ACCOUNTS-V1）-----
   async exportAccounts() {
     const all = (await Host.exportAccounts().catch(() => []) || []).filter(a => a.email);
-    if (!all.length) { toast('还没有带邮箱的账号可导出', 'err'); return; }
-    const pack = PACK_PREFIX + utf8b64(JSON.stringify({ v: 1, from: 'brana-client', at: now(), accounts: all.map(a => ({ email: a.email, pw: a.password || undefined, name: a.name && a.name !== a.email ? a.name : undefined, remark: a.remark || undefined, proxy: a.proxy || undefined, proxyIp: a.proxyIp || undefined, region: a.region || undefined, nodeId: a.nodeId || undefined })) }));
+    const pack = all.length ? (PACK_PREFIX + utf8b64(JSON.stringify({ v: 1, from: 'brana-client', at: now(), accounts: all.map(a => ({ email: a.email, pw: a.password || undefined, name: a.name && a.name !== a.email ? a.name : undefined, remark: a.remark || undefined, proxy: a.proxy || undefined, proxyIp: a.proxyIp || undefined, region: a.region || undefined, nodeId: a.nodeId || undefined })) }))) : '';
     const np = all.filter(a => a.password).length;
-    const ta = h('textarea', { class: 'packbox', readonly: true, rows: 6 }, pack);
-    const back = modal('导出账号合集', K(h('p', { class: 'muted' }, `共 ${all.length} 个账号（${np} 个带密码）${all.length - np ? '，没有密码的账号导入后需要手动登录' : ''}。内含密码，请勿发给他人。可粘贴到本客户端或油猴「账号切换」脚本的「导入账号」。`), ta),
-      K(h('button', { class: 'btn ghost', onclick: () => back.remove() }, '关闭'), h('button', { class: 'btn', onclick: () => copyText(pack) }, '复制')), 'small');
-    copyText(pack); ta.select?.();
+    const ta = h('textarea', { class: 'packbox', readonly: true, rows: 6, placeholder: '暂无带邮箱的账号可导出文本合集，可直接使用上方二维码按钮同步节点与订阅配置' }, pack);
+    const openQrSync = () => {
+      if (typeof QrSync !== 'undefined' && QrSync.openModal) {
+        QrSync.openModal(Host.platform === 'android' ? 'import' : 'export');
+      }
+    };
+    const qrSyncBar = h('div', {
+      class: 'export-qr-bar',
+      style: 'display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 10px;margin-bottom:8px;border:1px solid var(--bd);border-radius:8px;background:var(--bg2)',
+    },
+      h('span', { style: 'font-size:12px;color:var(--c2)' }, '手机 ⇄ 电脑离线扫码同步节点订阅与账号配置'),
+      h('button', {
+        type: 'button',
+        class: 'ib export-qr-sync-btn',
+        title: '二维码同步（离线扫码导出/导入节点订阅与账号）',
+        style: 'width:auto;padding:0 10px;height:28px;gap:5px;border:1px solid var(--bd);border-radius:6px;color:var(--ac)',
+        onclick: openQrSync,
+      }, icon('qr'), h('span', { style: 'font-size:12px;font-weight:600' }, '二维码同步'))
+    );
+    const back = modal('导出账号合集', K(
+      qrSyncBar,
+      h('p', { class: 'muted' }, all.length ? `共 ${all.length} 个账号（${np} 个带密码）${all.length - np ? '，没有密码的账号导入后需要手动登录' : ''}。内含密码，请勿发给他人。可粘贴到本客户端或油猴「账号切换」脚本的「导入账号」。` : '当前暂无已保存邮箱的账号，可点击上方二维码图标同步节点订阅或扫码导入账号。'),
+      ta
+    ),
+      K(
+        h('button', { type: 'button', class: 'btn ghost export-qr-footer-btn', title: '二维码同步', onclick: openQrSync }, icon('qr'), '二维码同步'),
+        h('button', { class: 'btn ghost', onclick: () => back.remove() }, '关闭'),
+        h('button', { class: 'btn', onclick: () => pack ? copyText(pack) : openQrSync() }, pack ? '复制' : '打开二维码')
+      ), 'small');
+    if (pack) { copyText(pack); ta.select?.(); }
   },
 
   // ----- 导入账号 -----

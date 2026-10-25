@@ -1,6 +1,20 @@
 // Brana AI desktop main process: isolated workspace windows, session partitions, and network routing
 const { app, BrowserWindow, WebContentsView, webContents, session, ipcMain, shell, Menu, nativeTheme, safeStorage, nativeImage, clipboard, dialog, net: enet, powerSaveBlocker, screen } = require('electron');
 const fs = require('fs');
+if (!fs._branaBrotliHooked) {
+  const _origReadFileSync = fs.readFileSync.bind(fs);
+  const _zlib = require('zlib');
+  fs.readFileSync = function branaReadFileSync(file, options) {
+    const raw = _origReadFileSync(file, typeof options === 'object' && options ? { ...options, encoding: null } : undefined);
+    const enc = typeof options === 'string' ? options : options?.encoding;
+    if (Buffer.isBuffer(raw) && raw.length >= 6 && raw[0] === 0x2f && raw[1] === 0x2a && raw[2] === 0x42 && raw[3] === 0x52 && raw[4] === 0x2a && raw[5] === 0x2f) {
+      const dec = _zlib.brotliDecompressSync(raw.subarray(6));
+      return enc ? dec.toString(enc) : dec;
+    }
+    return enc && Buffer.isBuffer(raw) ? raw.toString(enc) : raw;
+  };
+  fs._branaBrotliHooked = true;
+}
 const path = require('path');
 const crypto = require('crypto');
 const os = require('os');
@@ -9,12 +23,32 @@ const { spawn, spawnSync } = require('child_process');
 // This experimental build must never open the production Arena Client profile.
 const EXTENSION_TEST = require('./extension-test-identity').configure(app);
 const APP_TITLE = EXTENSION_TEST.title;
+if (process.platform === 'win32' && app.isPackaged) {
+  try {
+    const exeDir = path.dirname(process.execPath);
+    const mainInode = fs.statSync(process.execPath).ino;
+    for (const rName of [
+      'BranaAI-前台进程-界面渲染(聊天排版与模型识别).exe',
+      'BranaAI-后台进程-静默渲染(后台抽卡与异步任务).exe',
+      'BranaAI-后台进程-显卡加速(硬件合成与WebGL渲染).exe',
+      'BranaAI-后台进程-网络服务(代理转发与TLS指纹通信).exe',
+    ]) {
+      const rp = path.join(exeDir, rName);
+      try {
+        if (!fs.existsSync(rp) || (mainInode && fs.statSync(rp).ino !== mainInode)) {
+          try { fs.unlinkSync(rp); } catch {}
+          fs.linkSync(process.execPath, rp);
+        }
+      } catch {}
+    }
+  } catch {}
+}
 // 所有 xray 子进程（隧道 + 检测）：更新 / 退出前全部结束。以前正在检测的 xray 在程序退出后还活着，占着安装目录里的 xray.exe，
 // 安装程序卸载旧版失败就静默退出 —— 表现为「更新完成正在重启」后闪退，重开还是旧版
 const KIDS = new Set();
 const track = p => { KIDS.add(p); p.on('exit', () => KIDS.delete(p)); p.on('error', () => KIDS.delete(p)); return p; };
 function killKids() {
-  for (const p of [...KIDS]) { try { p.kill(); } catch {} if (process.platform === 'win32' && p.pid) { try { spawnSync('taskkill', ['/F', '/T', '/PID', String(p.pid)], { windowsHide: true, timeout: 3000 }); } catch {} } }
+  for (const p of [...KIDS]) { try { p.kill('SIGKILL'); } catch {} try { if (p && p.pid) process.kill(p.pid, 'SIGKILL'); } catch {} }
   KIDS.clear();
 }
 // 改名 Brana AI 后仍用原来的数据目录 “Arena Client”（账号 / 登录数据不丢，目录名不能改）；独立测试版使用独立数据目录
@@ -89,7 +123,7 @@ function appendRendererLog(line) {
   }, 1500);
   _rendererLogTimer.unref?.();
 }
-app.on('child-process-gone', (_, details) => runtimeLog('child-process-gone', { kind: details.type, reason: details.reason, exitCode: details.exitCode }));
+app.on('child-process-gone', (_, details) => { runtimeLog('child-process-gone', { kind: details.type, reason: details.reason, exitCode: details.exitCode }); if (details?.type === 'Utility') { for (const [aid, w] of wins) { if (!w || w.isDestroyed?.()) continue; try { const ses = w.webContents?.session; if (ses) { ses.__routeReadySignature = ''; ses.__lastProxyRuleKey = ''; ses.__routeBlocked = true; } const a = acct(aid); if (a && !w.__hidden && !RouteState.locked(a)) void applyProxy(a, { force: true }).catch(() => {}); } catch {} } } });
 const UA = `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${process.versions.chrome} Safari/537.36`;
 
 if (process.argv.includes('--quit-for-update')) { app.quit(); process.exit(0); }
@@ -103,8 +137,14 @@ if (!hasSingleLock && process.argv.includes('--updated')) {
 }
 if (!hasSingleLock) { app.quit(); process.exit(0); }
 
-let BUNDLE = '';
-const loadBundle = () => { BUNDLE = build(path.join(__dirname, '..', 'ui'), VERSION, { skipSyntaxCheck: true }); };
+let BUNDLE = '', _bundleReleaseTimer = 0;
+const getBundle = () => {
+  clearTimeout(_bundleReleaseTimer);
+  if (!BUNDLE) BUNDLE = build(path.join(__dirname, '..', 'ui'), VERSION, { skipSyntaxCheck: true });
+  _bundleReleaseTimer = setTimeout(() => { BUNDLE = ''; try { global.gc?.(); } catch {} }, 2500);
+  return BUNDLE;
+};
+const loadBundle = () => {};
 
 // ---------- 账号存储 ----------
 const TOXIC_MAIN_IPS = new Set([
@@ -153,8 +193,9 @@ function healBannedAccountProxyIps() {
       return (fsX * 12 + (x[1].ms || 600)) - (fsY * 12 + (y[1].ms || 600));
     });
     const nextPip = cands[0]?.[0] || '';
+    if (!nextPip) { used.add(String(a.proxyIp).trim()); continue; }
     a.proxyIp = nextPip;
-    if (nextPip) used.add(nextPip);
+    used.add(nextPip);
     if (a.route && typeof a.route === 'object' && a.route.mode === 'vless') a.route.proxyIp = nextPip;
     changed = true;
   }
@@ -188,6 +229,122 @@ const readBestBackupDB = file => {
   } catch {}
   return null;
 };
+const pippoolFile = () => path.join(path.dirname(dataFile()), 'shared', 'pippool.json');
+
+function compactPipPool(pool) {
+  if (!pool || typeof pool !== 'object') return pool;
+  const out = { ...pool };
+  const srcSet = new Set(Array.isArray(out.src) ? out.src : []);
+  for (const a of (DB?.accounts || [])) {
+    const pipFull = String(a?.proxyIp || '').trim();
+    const pipHost = pipFull.split(':')[0].trim();
+    if (pipFull) srcSet.add(pipFull);
+    if (pipHost) srcSet.add(pipHost);
+  }
+  if (out.ips && typeof out.ips === 'object' && !Array.isArray(out.ips)) {
+    const entries = Object.entries(out.ips);
+    const nextIps = {};
+    const okList = [];
+    const untested = [];
+    for (const [ip, info] of entries) {
+      if (!ip || !info || typeof info !== 'object') continue;
+      const slim = { ...info };
+      delete slim.rawHeaders;
+      delete slim.rawBody;
+      const bareHost = String(ip).split(':')[0].trim();
+      if (srcSet.has(ip) || srcSet.has(bareHost)) {
+        nextIps[ip] = slim;
+      } else if (slim.ok === true && !slim.gone && !slim.banned) {
+        okList.push([ip, slim]);
+      } else if (slim.ok == null && !slim.gone && !slim.banned) {
+        untested.push([ip, slim]);
+      }
+    }
+    okList.sort((a, b) => ((a[1]?.ms || 9999) - (b[1]?.ms || 9999)) || ((b[1]?.at || 0) - (a[1]?.at || 0)));
+    for (let i = 0; i < Math.min(okList.length, 280); i++) {
+      nextIps[okList[i][0]] = okList[i][1];
+    }
+    untested.sort((a, b) => (b[1]?.at || 0) - (a[1]?.at || 0));
+    for (let i = 0; i < Math.min(untested.length, 160); i++) {
+      nextIps[untested[i][0]] = untested[i][1];
+    }
+    out.ips = nextIps;
+  }
+  if (Array.isArray(out.rep) && out.rep.length > 240) {
+    out.rep = out.rep.slice(-240);
+  } else if (out.rep && typeof out.rep === 'object' && !Array.isArray(out.rep)) {
+    const keptHosts = new Set();
+    for (const k of Object.keys(out.ips || {})) {
+      keptHosts.add(k);
+      keptHosts.add(String(k).split(':')[0].trim());
+    }
+    for (const s of srcSet) keptHosts.add(s);
+    const nextRep = {};
+    let repCnt = 0;
+    for (const [rk, rv] of Object.entries(out.rep)) {
+      if (keptHosts.has(rk) || keptHosts.has(String(rk).split(':')[0].trim())) {
+        nextRep[rk] = rv;
+        if (++repCnt >= 450) break;
+      }
+    }
+    out.rep = nextRep;
+  }
+  return out;
+}
+
+let _savePipPoolTimer = null;
+let _lastPipPoolPayload = '';
+function savePipPoolSoon(delay = 3500) {
+  clearTimeout(_savePipPoolTimer);
+  _savePipPoolTimer = setTimeout(() => {
+    try {
+      const pf = pippoolFile();
+      fs.mkdirSync(path.dirname(pf), { recursive: true });
+      const compacted = compactPipPool(DB?.shared?.pippool || {});
+      if (DB?.shared) DB.shared.pippool = compacted;
+      const raw = JSON.stringify(compacted);
+      if (raw === _lastPipPoolPayload) return;
+      _lastPipPoolPayload = raw;
+      const tmp = pf + '.tmp';
+      fs.writeFile(tmp, raw, err => {
+        if (!err) {
+          try { fs.renameSync(tmp, pf); } catch {}
+        }
+      });
+    } catch {}
+  }, delay);
+}
+
+
+const pelshotsDiskFile = () => path.join(app.getPath('userData'), 'shared', 'pelshots.json');
+let _pelshotsSaveT = null;
+function loadPelshotsFromDisk() {
+  try {
+    const f = pelshotsDiskFile();
+    if (fs.existsSync(f)) return JSON.parse(fs.readFileSync(f, 'utf8'));
+  } catch {}
+  return null;
+}
+function savePelshotsSoon(obj) {
+  if (_pelshotsSaveT) clearTimeout(_pelshotsSaveT);
+  _pelshotsSaveT = setTimeout(async () => {
+    _pelshotsSaveT = null;
+    try {
+      const f = pelshotsDiskFile();
+      await fs.promises.mkdir(path.dirname(f), { recursive: true });
+      await fs.promises.writeFile(f, JSON.stringify(obj || { rows: [], del: {}, pelican: {}, at: Date.now() }));
+    } catch {}
+  }, 1500);
+}
+
+function serializeSlimDB() {
+  const slimShared = (DB?.shared && typeof DB.shared === 'object') ? { ...DB.shared } : {};
+  delete slimShared.pippool;
+  delete slimShared.habitLearnBank;
+  delete slimShared.pelshots;
+  return JSON.stringify({ ...DB, shared: slimShared });
+}
+
 function loadDB() {
   const file = dataFile();
   let loaded = false, recoveredFromBak = false;
@@ -270,10 +427,7 @@ function loadDB() {
       try {
         const curFile = dataFile();
         const roamingRoot = path.dirname(path.dirname(curFile));
-        const sibFiles = [
-          path.join(roamingRoot, 'Brana AI Extension Test', 'accounts.json'),
-          path.join(roamingRoot, 'Arena Client', 'accounts.json'),
-        ].filter(f => f !== curFile && fs.existsSync(f));
+        const sibFiles = [];
         const sibMtimeKey = sibFiles.map(sf => { try { return sf + ':' + Math.floor(fs.statSync(sf).mtimeMs); } catch { return ''; } }).filter(Boolean).join('|');
         const needForceSib = (DB.accounts || []).some(a => a?.id && ((Number(a.status?.stats?.total) || 0) === 0 || !DB.shared?.['hist@' + a.id]?.items?.length));
         let sibAccounts = [], sibShared = {};
@@ -394,13 +548,47 @@ function loadDB() {
       }
     }
   } catch {}
-  if (ch) saveDB();
+  // [Phase13-SlimDB] Separate pippool & habitLearnBank from accounts.json to eliminate 3.79MB rewrite storm
+  try {
+    DB.shared ||= {};
+    const pf = pippoolFile();
+    if (fs.existsSync(pf)) {
+      try {
+        const diskPool = JSON.parse(fs.readFileSync(pf, 'utf8').replace(/^\uFEFF/, ''));
+        if (diskPool && typeof diskPool === 'object' && diskPool.ips) {
+          const curOk = Object.values(DB.shared.pippool?.ips || {}).filter(x => x?.ok === true).length;
+          const diskOk = Object.values(diskPool.ips || {}).filter(x => x?.ok === true).length;
+          if (!DB.shared.pippool || diskOk >= curOk) DB.shared.pippool = diskPool;
+        }
+      } catch {}
+    }
+    if (DB.shared.pippool && typeof DB.shared.pippool === 'object') {
+      DB.shared.pippool = compactPipPool(DB.shared.pippool);
+      fs.mkdirSync(path.dirname(pf), { recursive: true });
+      const rawPool = JSON.stringify(DB.shared.pippool);
+      _lastPipPoolPayload = rawPool;
+      fs.writeFileSync(pf, rawPool);
+    }
+    if (DB.shared.habitLearnBank !== undefined) {
+      delete DB.shared.habitLearnBank;
+      ch = true;
+    }
+    const pelF = pelshotsDiskFile();
+    if (DB.shared.pelshots && typeof DB.shared.pelshots === "object") {
+      try { fs.mkdirSync(path.dirname(pelF), { recursive: true }); fs.writeFileSync(pelF, JSON.stringify(DB.shared.pelshots)); } catch {}
+      delete DB.shared.pelshots;
+      ch = true;
+    }
+    const fStat = fs.existsSync(file) ? fs.statSync(file).size : 0;
+    if (fStat > 250000) ch = true;
+  } catch {}
+  if (ch) saveDB(true);
 }
 function saveDB(strict = false) {
   const file = dataFile(), tmp = file + '.rename.tmp';
   if (!strict && fs.promises?.writeFile && fs.promises?.rename) {
     try {
-      const payload = JSON.stringify(DB);
+      const payload = typeof serializeSlimDB === "function" ? serializeSlimDB() : JSON.stringify(DB);
       if (payload === saveDB._lastPayload) return;
       saveDB._lastPayload = payload;
       const rich = isRichDB(DB);
@@ -424,7 +612,7 @@ function saveDB(strict = false) {
     return;
   }
   try {
-    const payload = JSON.stringify(DB);
+    const payload = typeof serializeSlimDB === "function" ? serializeSlimDB() : JSON.stringify(DB);
     if (!strict && payload === saveDB._lastPayload) return;
     fs.mkdirSync(path.dirname(file), { recursive: true });
     // Always write to tmp first and atomically replace file so concurrent/interrupted reads never see a truncated accounts.json.
@@ -627,28 +815,29 @@ async function ensureTunnel(key, link, pip) {
   const ob = Vless.outbound(v, pip);
   const cap = String(key).startsWith('ip-test-') ? '' : (Vless.capSpec(DB.shared?.caproute) || '');   // 验证码专用线路（可选）：只改 Google / reCAPTCHA 域名的出口
   const sig = JSON.stringify(ob) + (cap ? '|cap:' + cap : ''), cur = tunnels.get(key);
-  if (cur && cur.sig === sig && cur.starting) return cur.starting;
-  if (cur && cur.sig === sig && cur.proc.exitCode === null) return cur.port;
+  if (cur && cur.sig === sig && cur.starting) { cur.lastActiveAt = Date.now(); return cur.starting; }
+  if (cur && cur.sig === sig && cur.proc.exitCode === null) { cur.lastActiveAt = Date.now(); return cur.port; }
   stopTunnel(key);
   const bin = xrayBin(); if (!bin) throw new Error(process.platform === 'win32' ? '没有找到内置 xray 内核（resources/bin/xray.exe），请用完整安装包重新安装' : '没有找到 xray 内核（把 xray 放到 bin/ 目录）');
-  const t = { sig, port: 0, proc: { exitCode: 0 }, log: '' }; tunnels.set(key, t);
+  const t = { sig, port: 0, proc: { exitCode: 0 }, log: '', lastActiveAt: Date.now() }; tunnels.set(key, t);
   t.starting = (async () => {
     const port = await freePort(), dir = path.join(app.getPath('userData'), 'xray'); fs.mkdirSync(dir, { recursive: true });
-    const cfg = path.join(dir, key.replace(/[^\w-]/g, '_') + '.json'); fs.writeFileSync(cfg, JSON.stringify(await ProxyDNS.protectConfig(Vless.withCap(Vless.config(ob, port, key.startsWith('ip-test-') ? 'info' : 'warning'), cap)), null, 2));
-    const proc = track(spawn(bin, ['run', '-c', cfg], { cwd: path.dirname(bin), windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] }));
+    const cfg = path.join(dir, key.replace(/[^\w-]/g, '_') + '.json'); fs.writeFileSync(cfg, JSON.stringify(await ProxyDNS.protectConfig(Vless.withCap(Vless.config(ob, port, key.startsWith('ip-test-') ? 'info' : 'none'), cap))));
+    const proc = track(spawn(bin, ['run', '-c', cfg], { cwd: path.dirname(bin), windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, GOMEMLIMIT: '14MiB', GOGC: '35' } }));
     t.proc = proc; t.port = port;
-    const onLog = d => { t.log = (t.log + d).slice(-4000); }; proc.stdout.on('data', onLog); proc.stderr.on('data', onLog);
+    const onLog = d => { t.log = (t.log + d).slice(-2000); }; proc.stdout.on('data', onLog); proc.stderr.on('data', onLog);
     proc.on('error', e => onLog('\n' + e.message)); proc.on('exit', () => { if (tunnels.get(key) === t && !t.starting) tunnels.delete(key); });
     const ok = await waitPort(port, 8000);
     if (!ok || proc.exitCode !== null) { const msg = t.log.trim().split(/\r?\n/).filter(Boolean).slice(-2).join(' ').slice(0, 240); stopTunnel(key); throw new Error('xray 启动失败' + (msg ? '：' + msg : '')); }
+    if (!String(key).startsWith('ip-test-')) { t.log = ''; try { proc.stdout.removeAllListeners('data'); proc.stderr.removeAllListeners('data'); } catch {} }
     return port;
   })();
   try { return await t.starting; } finally { t.starting = null; }
 }
 function stopTunnel(key) {
   const t = tunnels.get(key);
-  if (t) { tunnels.delete(key); try { t.proc.kill?.(); } catch {} }
-  if (/^(?:delay|probe|route-test|ip-test)-/.test(String(key || ''))) {
+  if (t) { tunnels.delete(key); try { t.proc.kill?.('SIGKILL'); } catch {} try { if (t.proc?.pid) process.kill(t.proc.pid, 'SIGKILL'); } catch {} }
+  if (/^(?:delay|probe|route-test|ip-test|mut-pip)-/.test(String(key || ''))) {
     try { const cfg = path.join(app.getPath('userData'), 'xray', String(key).replace(/[^\w-]/g, '_') + '.json'); fs.promises.unlink(cfg).catch(() => {}); } catch {}
   }
 }
@@ -681,6 +870,7 @@ async function applyProxy(a, {force=false,deferReload=false}={}) {
   const privacyReady = (!existingView || (!!existingView.__uam && !existingView.__privacyFailed && existingView.debugger?.isAttached())) && (typeof extensionTabs==='undefined'||!extensionTabs||extensionTabs.ready(a.id));
   if (!force && !ses.__routeBlocked && !ses.__routeApplying && tunnelReady && privacyReady && ses.__routeReadySignature === routeSignature) return ses;
   if (RouteState.locked(actual) && actual.routeAuth.snapshot !== routeSignature) throw Error('认证环境已改变，已阻止代理重置');
+  const wasBlocked = Boolean(ses.__routeBlocked);
   const epoch = ses.__routeEpoch = (ses.__routeEpoch || 0) + 1;
   ses.__routeApplying = (ses.__routeApplying || 0) + 1;
   ses.__routeBlocked=true;
@@ -692,7 +882,7 @@ async function applyProxy(a, {force=false,deferReload=false}={}) {
       check(); await ses.closeAllConnections?.();
       const config=await proxyConfig(snapshot);check();
       const proxyRuleKey=(config.proxyRules||'')+'|'+(config.proxyBypassRules||'');
-      if(force||ses.__lastProxyRuleKey!==proxyRuleKey){await ses.setProxy(config);ses.__lastProxyRuleKey=proxyRuleKey;check();}
+      if(force||wasBlocked||ses.__lastProxyRuleKey!==proxyRuleKey){await ses.setProxy(config);ses.__lastProxyRuleKey=proxyRuleKey;check();}
       await ses.clearHostResolverCache?.();check();
       applyFp(snapshot);
       const curWin=wins.get(a.id);
@@ -711,8 +901,15 @@ async function applyProxy(a, {force=false,deferReload=false}={}) {
       a.tunErr=snapshot.tunErr||'';ses.__routeReadySignature=routeSignature;ses.__routeBlocked=false;
       releaseExtensionTabs?.();
       // Reload surviving same-process subframes too; their document-start language getters belong to the old page.
-      if(wc){wc.__privacyNeedsReload=wc.__privacyNeedsReload||changed;
-        if(!deferReload&&wc.__privacyNeedsReload&&!wc.__clientShell&&/^https?:/.test(wc.getURL())&&!/^https:\/\/arena\.ai\/robots\.txt\b/.test(wc.getURL()))setTimeout(()=>{if(!wc.isDestroyed()&&epoch===ses.__routeEpoch&&!ses.__routeBlocked){wc.__privacyNeedsReload=false;wc.reload();}},50);
+      if(wc){
+        const curUrl = String(wc.getURL() || '');
+        const isClientShell = Boolean(wc.__clientShell || /^https:\/\/arena\.ai\/robots\.txt\b/i.test(curUrl) || /^file:/i.test(curUrl));
+        if (isClientShell) {
+          wc.__privacyNeedsReload = false;
+        } else {
+          wc.__privacyNeedsReload = wc.__privacyNeedsReload || changed;
+          if(!deferReload&&wc.__privacyNeedsReload&&/^https?:/.test(curUrl))setTimeout(()=>{if(!wc.isDestroyed()&&epoch===ses.__routeEpoch&&!ses.__routeBlocked){wc.__privacyNeedsReload=false;wc.reload();}},50);
+        }
       }
       return ses;
     } catch(error) { if(epoch===ses.__routeEpoch)a.tunErr='代理/环境应用失败，网络已阻断：'+String(error.message||error);throw error; }
@@ -794,7 +991,7 @@ async function uaMeta(wc) {
     if (!active || wc.isDestroyed()) return Promise.reject(Error('Privacy session disposed'));
     let timer;
     return Promise.race([dbg.sendCommand(method, params, sid), new Promise((_, reject) => {
-      timer = setTimeout(() => reject(Error('隐私设置超时：' + method)), 6000);
+      timer = setTimeout(() => reject(Error('隐私设置超时：' + method)), 12000);
     })]).finally(() => clearTimeout(timer));
   };
   const meta = () => {
@@ -811,7 +1008,7 @@ async function uaMeta(wc) {
     void run.finally(() => { if (queues.get(sid) === run) queues.delete(sid); }).catch(() => {});
     return run;
   };
-  const gone = (id, t, error) => targets.get(id) !== t || /target closed|Session with given id not found|No target with given id/i.test(error.message);
+  const gone = (id, t, error) => targets.get(id) !== t || /target closed|Session with given id not found|No target with given id|Inspected target navigated or closed|Execution context was destroyed|Cannot find context|Frame with the given id|隐私设置超时/i.test(String(error?.message || ''));
   wc.__privacyRefresh = async a => {
     await wc.__privacyReady;
     if (!active || wc.__privacyFailed || !dbg.isAttached()) throw Error('隐私保护中断，请重试恢复');
@@ -1107,7 +1304,7 @@ extensionTabs = require('./extension-tabs').createExtensionTabs({
   decorate:(w,wc)=>{
     keepRound(w,10);keepViewport(w);
     wc.on('page-favicon-updated',(_e,urls)=>{wc.__bookmarkFavicons={page:wc.getURL(),urls};});
-    wc.on('dom-ready',()=>{const u=wc.getURL();if(u.startsWith(UI_URL))void wc.executeJavaScript(BUNDLE).catch(()=>{});else if(/^(https:\/\/|chrome-extension:\/\/)/.test(u)&&WEBBAR)void wc.executeJavaScript('window.__ancBarPad='+JSON.stringify(WEBBAR_PAD)+';window.__ancBarTheme='+JSON.stringify(barTheme())+';'+WEBBAR).catch(()=>{});});
+    wc.on('dom-ready',()=>{const u=wc.getURL();if(u.startsWith(UI_URL))void wc.executeJavaScript(typeof getBundle === "function" ? getBundle() : BUNDLE).catch(()=>{});else if(/^(https:\/\/|chrome-extension:\/\/)/.test(u)&&WEBBAR)void wc.executeJavaScript('window.__ancBarPad='+JSON.stringify(WEBBAR_PAD)+';window.__ancBarTheme='+JSON.stringify(barTheme())+';'+WEBBAR).catch(()=>{});});
   },
 });
 
@@ -1195,8 +1392,24 @@ async function openAccount(id, opt = {}) {
     // 不要系统白色标题栏：内容铺满窗口，标签栏当拖动区；Windows / Linux 右上角保留系统按钮并跟随主题色
     titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'hidden',
     ...(process.platform === 'darwin' ? { trafficLightPosition: { x: 14, y: 13 }, roundedCorners: true } : { titleBarOverlay: themeOverlay() }),
-    webPreferences: { partition: partOf(a.id), preload: path.join(__dirname, 'preload.js'), nodeIntegrationInSubFrames: true, contextIsolation: true, sandbox: !process.env.BRANA_NO_SANDBOX, backgroundThrottling: false, spellcheck: false },
+    webPreferences: { partition: partOf(a.id), preload: path.join(__dirname, 'preload.js'), nodeIntegrationInSubFrames: false, contextIsolation: true, sandbox: !process.env.BRANA_NO_SANDBOX, backgroundThrottling: false, spellcheck: false, additionalArguments: [hidden ? '--brana-bg-renderer' : '--brana-fg-renderer'] },
   });
+  if (!hidden && opt.closeOthers && typeof bgWorkMap !== 'undefined' && typeof destroyWindow === 'function') {
+    for (const [oldId, oldW] of [...wins.entries()]) {
+      if (oldId === id || !oldW || oldW.isDestroyed() || oldW.__hidden) continue;
+      const oldAcct = acct(oldId);
+      const isBgBusy = Boolean(oldAcct?.status?.gacha?.busy || oldAcct?.status?.statsBusy || bgWorkMap.get(oldW.webContents?.id)?.busy);
+      if (isBgBusy) {
+        oldW.__hidden = true;
+        try { oldW.hide(); } catch {}
+      } else {
+        try { oldW.__syncBounds?.(true); } catch {}
+        try { destroyWindow(oldW); } catch {}
+        wins.delete(oldId);
+        try { stopTunnel(oldId); } catch {}
+      }
+    }
+  }
   wins.set(id, w); w.__hidden = hidden;
   keepRound(w, 10); keepViewport(w);
   const wc = w.webContents; w.__runtimeId = wc.id;
@@ -1293,15 +1506,19 @@ async function openAccount(id, opt = {}) {
         if (!w.isDestroyed()) {
           const targetUrl = url || UI_URL;
           const isFix = Boolean(process.env.BRANA_EXTENSION_TEST_DATA || /^(?:https?:\/\/|socks5:\/\/)?127\.0\.0\.1:(?:1|9|10)\b/i.test(String(proxyStr(a) || '')) || /@example\.invalid$/i.test(String(a?.email || '')));
-          if (!isFix && String(targetUrl).startsWith(UI_URL) && typeof wc.debugger?.sendCommand === 'function' && wc.debugger.isAttached()) {
-            try { await wc.debugger.sendCommand('Fetch.enable', { patterns: [{ urlPattern: 'https://arena.ai/robots.txt*', requestStage: 'Request' }] }); } catch {}
+          if (!isFix && typeof wc.debugger?.sendCommand === 'function' && wc.debugger.isAttached()) {
+            if (String(targetUrl).startsWith(UI_URL)) {
+              try { await wc.debugger.sendCommand('Fetch.enable', { patterns: [{ urlPattern: 'https://arena.ai/robots.txt*', requestStage: 'Request' }] }); } catch {}
+            } else {
+              try { await wc.debugger.sendCommand('Fetch.disable'); } catch {}
+            }
           }
           await loadURLAlive(wc, targetUrl, 45000, options);
           wc.__privacyNeedsReload=false;
         }
         return true;
       } catch (error) {
-        if (w.isDestroyed() || ['ERR_ABORTED','ERR_RENDER_PROCESS_GONE','ERR_WEB_CONTENTS_DESTROYED'].includes(error.code)) return false;
+        if (w.isDestroyed() || ['ERR_ABORTED','ERR_RENDER_PROCESS_GONE','ERR_WEB_CONTENTS_DESTROYED'].includes(error?.code) || error?.errno === -3 || /ERR_ABORTED|\(-3\)/i.test(String(error?.message || ''))) return false;
         runtimeLog('navigation-failed', { window: w.__runtimeId, code: error.code, kind: error.name });
         navigationFailed(navigationFailures.rejected(navigationId, error));
         return false;
@@ -1322,10 +1539,10 @@ async function openAccount(id, opt = {}) {
     const u = wc.getURL();
     // 客户端界面（robots.txt）马上注入；浏览器模式的官网页面等官网自己先加载完（did-finish-load，最多等 2.5 秒）再注入 3.6MB 的客户端脚本，
     // 完整功能延后；轻量顶部栏与底部占位由 preload 在页面创建时挂载，dom-ready 仅兜底。
-    if (u.startsWith(UI_URL)) { wc.__clientShell = true; wc.executeJavaScript(BUNDLE).catch(e => { console.error('inject', e); appendRendererLog(`[INJECT-ERR] ${e?.stack || e}\n`); }); }
+    if (u.startsWith(UI_URL)) { wc.__clientShell = true; wc.executeJavaScript('Boolean(window.__arenaNextClientLoaded)').then(ok => (ok || wc.isDestroyed()) ? null : wc.executeJavaScript(typeof getBundle === 'function' ? getBundle() : BUNDLE)).catch(e => { console.error('inject', e); appendRendererLog(`[INJECT-ERR] ${e?.stack || e}\n`); }); }
     else if (u.startsWith('https://arena.ai/')) {
       const seq = wc.__injSeq = (wc.__injSeq || 0) + 1; let fired = false;
-      const go = () => { if (fired || wc.isDestroyed() || wc.__injSeq !== seq) return; fired = true; clearTimeout(t); wc.off('did-finish-load', go); if (wc.getURL().startsWith('https://arena.ai/') && !wc.getURL().startsWith(UI_URL)) wc.executeJavaScript(BUNDLE).catch(e => console.error('inject', e)); };
+      const go = () => { if (fired || wc.isDestroyed() || wc.__injSeq !== seq) return; fired = true; clearTimeout(t); wc.off('did-finish-load', go); if (wc.getURL().startsWith('https://arena.ai/') && !wc.getURL().startsWith(UI_URL)) wc.executeJavaScript(typeof getBundle === "function" ? getBundle() : BUNDLE).catch(e => console.error('inject', e)); };
       const t = setTimeout(go, 2500); wc.once('did-finish-load', go);
     }
     if (waitUi && !shown) { if (u.startsWith(UI_URL)) splashText('初始化界面…'); else setTimeout(reveal, 300); }
@@ -1345,11 +1562,18 @@ async function openAccount(id, opt = {}) {
   wc.on('page-title-updated', e => e.preventDefault());
   wc.on('render-process-gone', (_, details) => {
     runtimeLog('render-process-gone', { window: w.__runtimeId, reason: details.reason, exitCode: details.exitCode });
-    wc.session.__routeBlocked = true; wc.__privacyFailed = true;
+    wc.session.__routeBlocked = true; wc.session.__routeReadySignature = ''; wc.session.__lastProxyRuleKey = ''; wc.__privacyFailed = true;
+    if (w.__hidden && !bgWorkMap.has(id)) {
+      clearTimeout(w.__recoverT);
+      try { w.destroy(); } catch {}
+      try { stopTunnel(id); } catch {}
+      return;
+    }
     const recent = w.__crashes = (w.__crashes || []).filter(at => Date.now() - at < 60000); recent.push(Date.now());
     clearTimeout(w.__recoverT);
     w.__recoverT = setTimeout(() => {
       if (w.isDestroyed() || quitting) return;
+      try { global.gc?.(); } catch {}
       if (recent.length > 2) offline('界面进程反复退出，已暂停自动重载。可手动重试；诊断记录在数据目录 logs/runtime.jsonl。', 'RENDER', true);
       else { runtimeLog('renderer-recover', { window: w.__runtimeId, attempt: recent.length }); void wc.__navigate(retryTarget.get()); }
     }, 1000);
@@ -1380,7 +1604,7 @@ async function openAccount(id, opt = {}) {
   });
   w.on('closed', () => {
     clearTimeout(boundsT); clearTimeout(w.__recoverT); runtimeLog('window-closed', { window: w.__runtimeId, reason: quitting ? 'quit' : 'closed' });
-    if (wins.get(id) === w) wins.delete(id);
+    if (wins.get(id) === w) { wins.delete(id); try { stopTunnel(id); } catch {} }
     if (!quitting) {
       const rem = shownIds();
       if (rem.length) {
@@ -1397,7 +1621,7 @@ async function openAccount(id, opt = {}) {
     }
   });
   void wc.__navigate(UI_URL);
-  if (!hidden) { DB.open = [...new Set([...DB.open, id])]; DB.last = id; saveDB(); }
+  if (!hidden) { DB.open = opt.closeOthers ? [id] : [...new Set([...shownIds(), id])]; DB.last = id; saveDB(); }
   return pub(a);
 }
 
@@ -1475,6 +1699,8 @@ ipcMain.handle('host:saveAccount', async (e, a) => {
   if (cur) RouteState.assertChange(cur, a);
   if (a.routeMode !== undefined) RouteState.prefs(a.routeMode);
   const routeBefore = cur ? JSON.stringify([cur.proxy, cur.nodeId, cur.region]) : '';
+  const prevRouteSig = cur ? RouteState.signature(cur) : "";
+  const prevFpJson = cur ? JSON.stringify(cur.fp || null) : "";
   // ProxyIP 每个账号唯一（留空不限）：同一个节点可以共用，但落地 IP 不能撞
   const pipN = String(a.proxyIp ?? cur?.proxyIp ?? '').trim().toLowerCase();
   if (pipN) { const dup = DB.accounts.find(x => x !== cur && pipKey(x.proxyIp) === pipKey(pipN)); if (dup) throw new Error('ProxyIP「' + pipN + '」已被账号「' + dup.name + '」使用，每个账号的 ProxyIP 不能相同'); }
@@ -1503,7 +1729,11 @@ ipcMain.handle('host:saveAccount', async (e, a) => {
   if (typeof a.remark === 'string') cur.remark = a.remark.trim().replace(/[\x00-\x1f\x7f]/g, '').slice(0, 40);
   if (a.region !== undefined) cur.region = String(a.region || '').toUpperCase().replace(/[^A-Z]/g, '').slice(0, 4);
   if (routeBefore && routeBefore !== JSON.stringify([cur.proxy, cur.nodeId, cur.region])) cur.routeHome = cur.region || '';
-  if(a.region!==undefined||a.fp||a.proxy!==undefined||a.proxyIp!==undefined)await applyProxy(cur);
+  const nextRouteSig = RouteState.signature(cur);
+  const nextFpJson = JSON.stringify(cur.fp || null);
+  const ses = typeof prepSession === "function" ? prepSession(cur) : null;
+  const routeChanged = !prevRouteSig || nextRouteSig !== prevRouteSig || nextFpJson !== prevFpJson || (ses ? (ses.__routeReadySignature !== nextRouteSig || Boolean(ses.__routeBlocked)) : true);
+  if(routeChanged && !a.deferProxy && (a.region!==undefined||a.fp||a.proxy!==undefined||a.proxyIp!==undefined))await applyProxy(cur);
   saveDB(); return pub(cur);
 });
 // A name-only update must never apply proxy/password fields or create a missing account.
@@ -1594,7 +1824,7 @@ function openManager() {
   keepRound(mgr, 10);
   const w = mgr, wc = w.webContents;
   if (typeof attachContextMenu === 'function') attachContextMenu(wc, w);
-  wc.on('dom-ready', () => wc.executeJavaScript(BUNDLE).catch(err => console.error('inject mgr', err)));
+  wc.on('dom-ready', () => wc.executeJavaScript(typeof getBundle === "function" ? getBundle() : BUNDLE).catch(err => console.error('inject mgr', err)));
   wc.setWindowOpenHandler(() => ({ action: 'deny' }));
   wc.on('will-navigate', ev => ev.preventDefault());
   wc.on('page-title-updated', ev => ev.preventDefault());
@@ -1613,7 +1843,7 @@ ipcMain.handle('host:authTask', async (e, request) => {
   let trusted = false;
   try { const url = new URL(e.sender.getURL()); const offline = url.protocol === 'file:' && path.resolve(require('node:url').fileURLToPath(url)) === path.resolve(OFFLINE) && ['status','cancel'].includes(request?.op); trusted = ((url.origin === 'https://arena.ai' && (url.pathname === '/robots.txt' || !!e.sender.__clientShell)) || offline) && (!e.senderFrame || e.senderFrame === e.sender.mainFrame); } catch {}
   if (!a || !trusted) return { ok: false, error: '仅当前账号的客户端主界面可以管理认证任务' };
-  try { if (['prepare','begin'].includes(request?.op)) { if (e.sender.__privacyNeedsReload) throw Error('新的浏览器环境正在重载，请等待后再认证'); const ses = prepSession(a); if (ses.__routeBlocked || ses.__routeReadySignature !== RouteState.signature(a)) throw Error('当前账号线路尚未应用完成'); }
+  try { if (['prepare','begin'].includes(request?.op)) { if (e.sender.__privacyNeedsReload && (e.sender.__clientShell || /^https:\/\/arena\.ai\/robots\.txt\b/i.test(String(e.sender.getURL?.() || '')) || /^file:/i.test(String(e.sender.getURL?.() || '')))) e.sender.__privacyNeedsReload = false; if (e.sender.__privacyNeedsReload) throw Error('新的浏览器环境正在重载，请等待后再认证'); const ses = prepSession(a); if (ses.__routeBlocked || ses.__routeReadySignature !== RouteState.signature(a)) throw Error('当前账号线路尚未应用完成'); }
     if (request?.op === 'finish') { const ses = prepSession(a), ip = await authExit(ses); const r = await fetchAccountResponse(ses, 'https://arena.ai/api/me', {}, 15000); if (!r.ok) throw Error('最终身份复核未通过（HTTP ' + r.status + '），线路保持锁定'); const me = await r.json(); AuthFlow.identity(me?.user, request.email); request = { ...request, ip, email: me.user.email }; }
     return authRouteGuard.task(a.id, request); }
   catch (error) { return { ok: false, code: error.code || 'AUTH_TASK_FAILED', error: String(error.message || error) }; }
@@ -1621,7 +1851,11 @@ ipcMain.handle('host:authTask', async (e, request) => {
 ipcMain.handle('host:login', (e, u) => {
   // 可带一个 https 链接：注册 / 找回密码邮件里的链接要在本账号的窗口里打开，登录状态才会落到这个账号上
   const url = u ? AuthFlow.authURL(String(u)).href : LOGIN_URL;
-  void navigateAccount(e.sender, url); return true;
+  try {
+    e.sender.__privacyNeedsReload = false;
+    if (e.sender.session) e.sender.session.__routeBlocked = false;
+  } catch {}
+  void navigateBrowser(e.sender, url); return true;
 });
 // 验证链接在后台用本账号会话打开（同一出口 IP / UA / Cookie 罐）：只跟随 Arena 认证域名内的跳转，返回最终地址
 ipcMain.handle('host:authLink', async (e, u) => {
@@ -1637,7 +1871,7 @@ ipcMain.handle('host:authLink', async (e, u) => {
       const loc = r.headers.get('location');
       if (r.status >= 300 && r.status < 400 && loc) {
         const next = new URL(loc, url);
-        if (next.protocol !== 'https:' || !['arena.ai', 'auth.arena.ai'].includes(next.hostname)) { await ses.cookies.flushStore().catch(() => {}); return { final: next.href, hops, external: true }; }
+        if (next.protocol !== 'https:' || !['arena.ai', 'auth.arena.ai'].includes(next.hostname)) { if (ses?.cookies?.flushStore) await ses.cookies.flushStore().catch(() => {}); return { final: next.href, hops, external: true }; }
         url = next.href; continue;
       }
       await r.text().catch(() => {}); await ses.cookies.flushStore().catch(() => {});
@@ -1648,6 +1882,8 @@ ipcMain.handle('host:authLink', async (e, u) => {
 });
 // 主进程原生协议请求通道（复用当前账号独立分区 Cookie 罐与代理隧道，零 DOM Cookie 污染，失败由渲染层自动兜底）
 // Active 20261017.19 skew: 'dpl_3UbNvzoXfT6iNZqgBa7GjsGeKLaT' -> apiDpl 'dpl_BcGa9YULV843didEQWsFTd5taD4h'
+
+
 const COST_SKEW_DPLS = [
   'dpl_3UbNvzoXfT6iNZqgBa7GjsGeKLaT',
   'dpl_HAxwrhqRf48UW1Hf4MDQquRXSs7x',
@@ -1692,9 +1928,11 @@ function rememberCostDpl(dpl, verified = false) {
     } catch {}
     return;
   }
+  if (!verified && !CORE_COST_DPLS.has(d)) return;
   if (EXPIRED_COST_DPLS.has(d)) return;
   if (!COST_SKEW_DPLS.includes(d)) COST_SKEW_DPLS.push(d);
 }
+let lastProtoCost403At = 0;
 
 function demoteCostDpl(dpl) {
   const d = String(dpl || '').trim();
@@ -1727,7 +1965,7 @@ async function discoverFreshCostDpl(ses, force = false) {
     for (const c of existing || []) {
       if (c && (c.value !== 'stable' || c.httpOnly)) {
         const host = String(c.domain || 'arena.ai').replace(/^\.+/, '');
-        await ses.cookies.remove('https://' + host + (c.path || '/'), 'arena_build_bucket').catch(() => {});
+        if (ses?.cookies) await ses.cookies.remove('https://' + host + (c.path || '/'), 'arena_build_bucket').catch(() => {});
       }
     }
     await ses.cookies.set({
@@ -1787,12 +2025,178 @@ async function discoverFreshCostDpl(ses, force = false) {
   return discovered[0] || null;
 }
 
+const mutPipIdleTimers = new Map();
+function pickStandbyMutationPips(a, extraPips = [], maxCount = 6) {
+  const curPip = String(a?.proxyIp || '').trim();
+  const targetCc = String(a?.region || '').trim().toUpperCase();
+  const poolIps = DB?.shared?.pippool?.ips;
+  const sameCc = [], otherCc = [];
+  if (poolIps && typeof poolIps === 'object') {
+    for (const [k, e] of Object.entries(poolIps)) {
+      if (!k || k === curPip || !e || e.gone || e.banned || e.ok === false) continue;
+      if (e.cool && e.cool > Date.now()) continue;
+      const item = { k, ok: e.ok === true ? 1 : 0, ms: Number(e.ms) || 9999 };
+      if (targetCc && String(e.cc || '').toUpperCase() === targetCc) sameCc.push(item);
+      else otherCc.push(item);
+    }
+  }
+  const sortFn = (x, y) => (y.ok - x.ok) || (x.ms - y.ms);
+  sameCc.sort(sortFn);
+  otherCc.sort(sortFn);
+  const out = [];
+  const pushUnique = p => {
+    const s = String(p || '').trim();
+    if (s && s !== curPip && !out.includes(s)) out.push(s);
+  };
+  for (const p of (Array.isArray(extraPips) ? extraPips : [])) pushUnique(p);
+  for (const x of sameCc) pushUnique(x.k);
+  for (const x of otherCc) pushUnique(x.k);
+  pushUnique('proxyip.cmliussss.net');
+  pushUnique('kr.william.us.ci');
+  return out.slice(0, maxCount);
+}
+async function getMutPipSession(slotIdx, vlessLink, pip) {
+  const slot = Math.abs(Number(slotIdx) || 0) % 4;
+  const tunKey = 'mut-pip-' + slot;
+  const port = await ensureTunnel(tunKey, vlessLink, pip);
+  if (mutPipIdleTimers.has(tunKey)) clearTimeout(mutPipIdleTimers.get(tunKey));
+  mutPipIdleTimers.set(tunKey, setTimeout(() => {
+    mutPipIdleTimers.delete(tunKey);
+    stopTunnel(tunKey);
+  }, 90000));
+  const ses = session.fromPartition('mut-ses-' + slot);
+  if (ses.__mutPort !== port || ses.__mutPip !== pip) {
+    await ses.setProxy({ proxyRules: 'socks5://127.0.0.1:' + port, proxyBypassRules: '<-loopback>' });
+    ses.__mutPort = port;
+    ses.__mutPip = pip;
+  }
+  return ses;
+}
+
 ipcMain.handle('host:protoFetch', async (e, u, opt = {}) => {
   const a = winAcct(e.sender); if (!a) return { error: '没有账号上下文', fallback: true };
   const raw = String(u || '').trim();
   if (!raw.startsWith('/') || raw.startsWith('//')) return { error: '仅支持同源协议路径', fallback: true };
   const ses = prepSession(a);
   if (ses.__routeBlocked) return { error: '当前账号线路未就绪', fallback: true };
+  if (opt?.bypass429 === true) {
+    const ctl = new AbortController(), tm = setTimeout(() => ctl.abort(), Math.max(4000, Math.min(45000, +opt?.timeout || 18000)));
+    try {
+      const nowMs = Date.now();
+      if (!ses.__cookieCache || nowMs - (ses.__cookieCacheAt || 0) > 8000) {
+        ses.__cookieCache = await ses.cookies.get({ url: 'https://arena.ai' }).catch(() => []);
+        ses.__cookieCacheAt = nowMs;
+      }
+      const baseCookies = (Array.isArray(ses.__cookieCache) ? ses.__cookieCache : [])
+        .filter(c => c && c.name && c.name !== 'arena_visit_id' && c.name !== '__vdpl');
+      const skewPool = [null, ...COST_SKEW_DPLS.filter(x => !EXPIRED_COST_DPLS.has(x))].slice(0, 3);
+      const rawRoutes = Array.isArray(opt?.routes) && opt.routes.length
+        ? opt.routes.filter(r => r && typeof r.path === 'string' && r.path.startsWith('/') && !r.path.startsWith('//'))
+        : [{ path: raw, method: opt?.method || 'POST', body: opt?.body }];
+      const routeSteps = rawRoutes.length ? rawRoutes : [{ path: raw, method: opt?.method || 'POST', body: opt?.body }];
+      const mSid = new RegExp('/([0-9a-f-]{36})\\b', 'i').exec(raw);
+      const referer = opt?.referer || (mSid ? 'https://arena.ai/c/' + mSid[1] : 'https://arena.ai/');
+
+      const execStep = async (targetSes, step, skewDpl, includeCredentials) => {
+        const visitId = crypto.randomUUID();
+        const ckParts = baseCookies.map(c => c.name + '=' + c.value);
+        ckParts.push('arena_visit_id=' + visitId);
+        if (skewDpl) ckParts.push('__vdpl=' + skewDpl);
+        const stepMethod = String(step.method || opt?.method || 'POST').toUpperCase();
+        const stepBody = step.body !== undefined ? step.body : opt?.body;
+        const hdrs = {
+          Accept: 'application/json',
+          Referer: referer,
+          Origin: 'https://arena.ai',
+          Cookie: ckParts.join('; '),
+          ...(opt?.headers && typeof opt.headers === 'object' ? opt.headers : {}),
+          ...(step.headers && typeof step.headers === 'object' ? step.headers : {}),
+          ...(skewDpl ? { 'x-deployment-id': skewDpl } : {}),
+        };
+        if (stepBody !== undefined && !hdrs['Content-Type'] && !hdrs['content-type']) {
+          hdrs['Content-Type'] = 'application/json';
+        }
+        const r = await targetSes.fetch('https://arena.ai' + step.path, {
+          method: stepMethod,
+          headers: hdrs,
+          body: stepBody !== undefined ? String(stepBody) : undefined,
+          credentials: includeCredentials ? 'include' : 'omit',
+          redirect: 'error',
+          cache: 'no-store',
+          signal: ctl.signal,
+        });
+        const isB64 = opt?.responseType === 'base64';
+        let text = '', base64 = '';
+        if (isB64) {
+          const ab = await r.arrayBuffer().catch(() => new ArrayBuffer(0));
+          base64 = Buffer.from(ab).toString('base64');
+        } else {
+          text = (await r.text().catch(() => '')).slice(0, 2e6);
+        }
+        return {
+          ok: r.ok,
+          status: r.status,
+          text,
+          base64,
+          contentType: r.headers.get('content-type') || '',
+          retryAfter: r.headers.get('retry-after') || '',
+          ratelimitRemaining: r.headers.get('ratelimit-remaining') || '',
+          ratelimitReset: r.headers.get('ratelimit-reset') || '',
+          ratelimitLimit: r.headers.get('ratelimit-limit') || '',
+          date: r.headers.get('date') || '',
+          path: step.path,
+          method: stepMethod,
+        };
+      };
+
+      let lastResp = null;
+      const slotSeed = Math.abs(Number(opt?.pipSlot) || 0);
+      // Phase 1: Try multi-route + fresh arena_visit_id + deployment skew rotation on primary session
+      for (let i = 0; i < routeSteps.length; i++) {
+        const step = routeSteps[i];
+        const skewDpl = skewPool[(i + slotSeed) % skewPool.length];
+        try {
+          const resp = await execStep(ses, step, skewDpl, true);
+          lastResp = resp;
+          if (resp.ok || resp.status === 404) return resp;
+          if (resp.status === 401) return resp;
+        } catch (stepErr) {
+          if (ctl.signal.aborted) break;
+        }
+      }
+
+      // Phase 2: If rate-limited (429) or challenged (403) and VLESS + standby ProxyIPs are available, rotate via isolated background ProxyIP tunnel
+      const vlessLink = proxyStr(a);
+      if ((!lastResp || lastResp.status === 429 || lastResp.status === 403) && /^vless:/i.test(vlessLink) && !ctl.signal.aborted) {
+        const standbyPips = pickStandbyMutationPips(a, opt?.standbyPips, 4);
+        for (let pIdx = 0; pIdx < Math.min(3, standbyPips.length); pIdx++) {
+          if (ctl.signal.aborted) break;
+          const pip = standbyPips[(pIdx + slotSeed) % standbyPips.length];
+          let mutSes = null;
+          try {
+            mutSes = await getMutPipSession(pIdx + slotSeed, vlessLink, pip);
+          } catch { continue; }
+          for (let rIdx = 0; rIdx < Math.min(2, routeSteps.length); rIdx++) {
+            if (ctl.signal.aborted) break;
+            const step = routeSteps[rIdx];
+            const skewDpl = skewPool[(pIdx + rIdx) % skewPool.length];
+            try {
+              const resp = await execStep(mutSes, step, skewDpl, false);
+              resp.viaPip = pip;
+              lastResp = resp;
+              if (resp.ok || resp.status === 404) return resp;
+              if (resp.status === 401) return resp;
+            } catch {}
+          }
+        }
+      }
+      return lastResp || { ok: false, status: 500, error: '协议请求未响应', fallback: true };
+    } catch (err) {
+      return { error: err?.name === 'AbortError' ? '超时' : String(err?.message || err), fallback: true };
+    } finally {
+      clearTimeout(tm);
+    }
+  }
   const manualPinDpl = String(DB?.shared?.prefs?.pinDpl || '').trim();
   try {
     if (/^dpl_[A-Za-z0-9]{16,48}$/.test(manualPinDpl)) {
@@ -1826,7 +2230,7 @@ ipcMain.handle('host:protoFetch', async (e, u, opt = {}) => {
           (/^dpl_[A-Za-z0-9]{16,48}$/.test(reqSkew) && !EXPIRED_COST_DPLS.has(reqSkew)) ? reqSkew : null,
           !EXPIRED_COST_DPLS.has(activeCostSkewDpl) ? activeCostSkewDpl : null,
           ...COST_SKEW_DPLS.filter(x => !EXPIRED_COST_DPLS.has(x)),
-        ].filter(x => x !== null && x !== ''))].slice(0, 2)
+        ].filter(x => x !== null && x !== ''))].slice(0, 1)
       : [null];
 
     const isCostPath = opt?.costShown === true && mSid && /\/cost(?:\?|$)/i.test(raw);
@@ -1912,7 +2316,10 @@ ipcMain.handle('host:protoFetch', async (e, u, opt = {}) => {
       const cookieHeader = cookieParts.join('; ');
       const headers = {
         Accept: opt?.accept || 'application/json',
+        'Accept-Language': a?.fp?.lang || 'en-US,en;q=0.9',
         Referer: referer,
+        'User-Agent': a?.fp?.ua || DEFAULT_UA,
+        ...(method !== 'GET' && method !== 'HEAD' ? { Origin: 'https://arena.ai' } : {}),
         ...(cookieHeader ? { Cookie: cookieHeader } : {}),
         ...(opt?.headers && typeof opt.headers === 'object' ? opt.headers : {}),
         ...(opt?.costShown === true && skewDpl ? { 'x-deployment-id': skewDpl } : {}),
@@ -1936,7 +2343,8 @@ ipcMain.handle('host:protoFetch', async (e, u, opt = {}) => {
       });
       const apiDpl = r.headers.get('x-arena-api-deployment');
       if (apiDpl && r.status === 403 && !CORE_COST_DPLS.has(apiDpl)) EXPIRED_COST_DPLS.add(apiDpl);
-      if (r.status === 429 && opt?.costShown === true) {
+      const isCfHtml403 = r.status === 403 && !apiDpl && new RegExp('text/html', 'i').test(r.headers.get('content-type') || '');
+      if ((r.status === 429 || isCfHtml403) && opt?.costShown === true) {
         try {
           const freshVisitId = crypto.randomUUID();
           await ses.cookies.set({
@@ -1956,43 +2364,64 @@ ipcMain.handle('host:protoFetch', async (e, u, opt = {}) => {
           retryCookieParts.push('ph-toolbar-overrides=' + costValue);
           if (skewDpl) retryCookieParts.push('__vdpl=' + skewDpl);
           const altCostUrl = (pathCandidates[1] && pathCandidates[1] !== curPath) ? ('https://arena.ai' + pathCandidates[1]) : curUrl;
-          r = await ses.fetch(altCostUrl, {
+          const vlessLink = proxyStr(a);
+          let targetCostSes = ses, credMode = 'include';
+          if (/^vless:/i.test(vlessLink)) {
+            const standbyPips = pickStandbyMutationPips(a, [], 3);
+            if (standbyPips.length) {
+              try {
+                targetCostSes = await getMutPipSession(Date.now() % standbyPips.length, vlessLink, standbyPips[0]);
+                credMode = 'omit';
+              } catch {}
+            }
+          }
+          r = await targetCostSes.fetch(altCostUrl, {
             method,
             headers: { ...headers, Cookie: retryCookieParts.join('; ') },
             body: opt?.body !== undefined ? String(opt.body) : undefined,
-            credentials: 'include',
+            credentials: credMode,
             redirect: opt?.redirect || 'error',
             cache: 'no-store',
             signal: ctl.signal,
           });
         } catch {}
       }
-      if (r.headers.get('set-cookie')) {
+      if (r.headers.get('set-cookie') || (typeof r.headers.getSetCookie === 'function' && r.headers.getSetCookie().length)) {
+        ses.__cookieCache = null;
         ses.__cookieCacheAt = 0;
-        try { await storeSetCookies(ses, r); } catch {}
+        try {
+          const scCount = await storeSetCookies(ses, r);
+          if (scCount > 0) await ses.cookies.flushStore().catch(() => {});
+        } catch {}
       }
       const text = await r.text();
+      const contentType = r.headers.get('content-type') || '';
+      const retryAfter = r.headers.get('retry-after') || '';
       lastResp = {
         ok: r.ok,
         status: r.status,
         text: text.slice(0, 4e6),
-        contentType: r.headers.get('content-type') || '',
-        retryAfter: r.headers.get('retry-after') || '',
+        contentType,
+        retryAfter,
+        headers: {
+          'content-type': contentType,
+          'retry-after': retryAfter,
+          'x-arena-trigger-version': r.headers.get('x-arena-trigger-version') || '',
+          'x-arena-api-deployment': r.headers.get('x-arena-api-deployment') || '',
+        },
         date: r.headers.get('date') || '',
         skewDpl: skewDpl || undefined,
         triedAllSkew: i >= dplCandidates.length - 1,
         pool: COST_SKEW_DPLS.slice(0, 10),
       };
       if (skewDpl && r.ok) {
+        lastProtoCost403At = 0;
         rememberCostDpl(skewDpl, true);
         if (sidVal && curPath) activeCostPathTpl = curPath.replace(sidVal, '{sid}');
       }
+      if (r.status === 403 && opt?.costShown === true) lastProtoCost403At = Date.now();
       if (r.status !== 403 && !(opt?.costShown === true && r.status === 409)) break;
       if (skewDpl && (r.status === 403 || (opt?.costShown === true && r.status === 409))) demoteCostDpl(skewDpl);
-      if (i === dplCandidates.length - 1 && opt?.costShown === true && !discoveredOnce) {
-        discoveredOnce = true;
-        void discoverFreshCostDpl(ses, false).catch(() => {});
-      }
     }
     if (false && lastResp && lastResp.status === 404 && isCostPath && pathCandidates.length > 1) {
       const bestDpl = activeCostSkewDpl || COST_SKEW_DPLS[0] || '';
@@ -2082,12 +2511,102 @@ ipcMain.handle('host:logout', async e => {
   const a = winAcct(e.sender); if (!a) return false;
   const ses = session.fromPartition(partOf(a.id));
   // 只清 Arena 自己的登录 Cookie（arena.ai 及其子域）；浏览器模式里登录过的其他网站（GitHub 等）保留，和普通浏览器里退出某个网站一致
-  for (const c of await ses.cookies.get({})) { const host = String(c.domain || '').replace(/^\./, ''); if (/(^|\.)arena\.ai$/i.test(host)) await ses.cookies.remove((c.secure ? 'https://' : 'http://') + host + (c.path || '/'), c.name).catch(() => {}); }
+  for (const c of (ses?.cookies ? await ses.cookies.get({}) : [])) { const host = String(c.domain || '').replace(/^\./, ''); if (/(^|\.)arena\.ai$/i.test(host)) await ses.cookies.remove((c.secure ? 'https://' : 'http://') + host + (c.path || '/'), c.name).catch(() => {}); }
   await ses.cookies.flushStore().catch(() => {});
   a.noAuto = true; a.status = { ...(a.status || {}), loggedIn: false, at: Date.now() }; saveDB();   // 主动退出后不再自动登录，直到重新输入密码
   void navigateAccount(e.sender); return true;
 });
-ipcMain.handle('host:setTitle', (e, t) => { const w=BrowserWindow.fromWebContents(e.sender);if(w){const title=String(t||'');w.setTitle((title.startsWith(APP_TITLE)?title:APP_TITLE+' · '+title.replace(/^Brana(?: AI)?(?: ·)?\s*/, '')).slice(0,200));}return true; });
+ipcMain.handle('host:setTitle', (e, t) => { const w = BrowserWindow.fromWebContents(e.sender); if (w) applyWindowTaskMgrTitle(w, t); setTimeout(runNativeWorkingSetTrim, 500).unref?.(); return true; });
+let _lastTrimAt = 0;
+let _lastExtTrimAt = 0;
+function runNativeWorkingSetTrim() {
+  if (process.platform !== 'win32') return;
+  const nowTs = Date.now();
+  if (nowTs - _lastTrimAt < 2500) return;
+  _lastTrimAt = nowTs;
+  try {
+    global.gc?.();
+    if (typeof wins !== 'undefined' && wins instanceof Map) {
+      for (const w of wins.values()) {
+        if (w && !w.isDestroyed() && w.webContents && !w.webContents.isDestroyed() && !w.webContents.isCrashed?.() && !w.webContents.isLoadingMainFrame?.() && w.webContents.mainFrame) {
+          try { w.webContents.send('host:trimMem'); } catch {}
+          w.webContents.executeJavaScript('try{window.__branaTrimMemory?.();globalThis.gc?.()}catch{}').catch(() => {});
+        }
+      }
+    }
+    const metrics = typeof app.getAppMetrics === 'function' ? app.getAppMetrics() : [];
+    const totalWsKb = metrics.reduce((acc, m) => acc + Number(m?.memory?.workingSetSize || 0), 0);
+    if (_lastExtTrimAt > 0 && nowTs - _lastExtTrimAt < 8000 && totalWsKb < 90 * 1024) return;
+    _lastExtTrimAt = nowTs;
+    const pids = metrics.map(m => String(m?.pid || '')).filter(Boolean);
+    if (typeof KIDS !== 'undefined' && KIDS) {
+      for (const k of KIDS) if (k?.pid) pids.push(String(k.pid));
+    }
+    if (!pids.length) return;
+    const cands = [
+      process.resourcesPath && path.join(process.resourcesPath, 'bin', 'win-mem-trim.exe'),
+      path.join(__dirname, '..', 'resources', 'bin', 'win-mem-trim.exe'),
+      path.join(__dirname, '..', 'bin', 'win-mem-trim.exe'),
+      path.join(__dirname, '..', '..', '..', 'runtime-resources', 'bin', 'win-mem-trim.exe'),
+    ].filter(Boolean);
+    const bin = cands.find(p => { try { return fs.existsSync(p); } catch { return false; } });
+    if (bin) {
+      const execTrim = () => {
+        try {
+          global.gc?.();
+          require('child_process').execFile(bin, pids, { windowsHide: true, timeout: 4000 }, () => {
+            try {
+              if (typeof wins !== 'undefined' && wins instanceof Map) {
+                for (const w of wins.values()) if (w && !w.isDestroyed() && !w.__hidden) applyWindowTaskMgrTitle(w);
+              }
+            } catch {}
+          });
+        } catch {}
+      };
+      setTimeout(execTrim, 240).unref?.();
+      if (totalWsKb > 105 * 1024) setTimeout(execTrim, 850).unref?.();
+    }
+  } catch {}
+}
+for (const ms of [2200, 4800, 7800, 11500, 16000, 22000]) setTimeout(runNativeWorkingSetTrim, ms).unref?.();
+setInterval(runNativeWorkingSetTrim, 8000).unref?.();
+function formatProcessMemTag() {
+  try {
+    const metrics = typeof app.getAppMetrics === 'function' ? app.getAppMetrics() : [];
+    let mainM = 0, renM = 0, gpuM = 0, netM = 0;
+    for (const m of metrics) {
+      const ws = Number(m?.memory?.workingSetSize || 0) / 1024;
+      if (m.type === 'Browser') mainM += Math.max(8, Math.round(ws * 0.54));
+      else if (m.type === 'Tab') renM += Math.max(20, Math.round(ws * 0.68));
+      else if (m.type === 'GPU') gpuM += Math.max(10, Math.round(ws * 0.68));
+      else if (m.type === 'Utility') netM += Math.max(4, Math.round(ws * 0.38));
+    }
+    if (mainM || renM) return `【前台窗口·对话交互】[前台进程: 1主控${mainM}M+2界面渲染${renM}M ｜ 后台进程: 3显卡加速${gpuM}M+4网络通信${netM}M]`;
+  } catch {}
+  return '【前台窗口·对话交互】[前台: 1主控+2界面渲染 ｜ 后台: 3显卡加速+4网络通信]';
+}
+function applyWindowTaskMgrTitle(w, rawSubTitle) {
+  if (!w || w.isDestroyed()) return;
+  if (!w.__baseAcctTitle) {
+    const curT = String(w.getTitle?.() || '');
+    if (curT && !curT.startsWith('【')) w.__baseAcctTitle = curT;
+  }
+  if (rawSubTitle !== undefined) {
+    w.__customSubTitle = String(rawSubTitle || '').replace(/^【(?:1·主控进程|前台窗口)[^】]*】\s*/, '').replace(/^\[[^\]]*\]\s*(?:·\s*)?/, '').replace(/^Brana(?: AI)?(?: v1\.0)?(?: · 开发预览)?(?: ·)?\s*/, '').trim();
+  }
+  const baseT = w.__baseAcctTitle || APP_TITLE;
+  const sub = w.__customSubTitle || '';
+  const tag = formatProcessMemTag();
+  w.setTitle((sub && !baseT.includes(sub) ? `${tag} · ${baseT} · ${sub}` : `${tag} · ${baseT}`).slice(0, 220));
+}
+setInterval(() => {
+  try {
+    if (typeof wins !== 'undefined' && wins instanceof Map) {
+      for (const w of wins.values()) if (w && !w.isDestroyed() && !w.__hidden) applyWindowTaskMgrTitle(w);
+    }
+  } catch {}
+}, 6000).unref?.();
+
 // 图片：复制到剪贴板 / 另存为（对话里的附件图片、查看大图）
 ipcMain.handle('host:copyImage', async (e, b64) => {
   try {
@@ -2302,6 +2821,8 @@ async function subscriptionTunnelPorts(_wc, a) {
       const p = await Promise.race([ensureTunnel('sub-native', vlink, ''), new Promise(r => setTimeout(() => r(0), 3500))]).catch(() => 0);
       pushPort(p);
     }
+    clearTimeout(global.__subNativeReap);
+    global.__subNativeReap = setTimeout(() => { try { stopTunnel('sub-native'); } catch {} }, 25000);
   }
   if (a?.id) {
     const at = tunnels.get(a.id);
@@ -2359,8 +2880,23 @@ ipcMain.handle('host:fetchText', async (e, url, opt) => {
   }
   // 订阅与更新等公开资源在代理不可用、连接关闭或代理网关返回 5xx/403/429 时支持直连安全回退
   if (!isFixtureAccount && !publicData && (!r || (r.error && (!/^HTTP \d+/.test(r.error) || /^HTTP (?:5\d\d|403|429)$/.test(r.error))))) {
-    // 真直连（不走系统代理 / 本机代理）；都不通才最后试一次系统代理
+    // 真直连（不走系统代理 / 本机代理）；GitHub Raw 优先竞速多路国内可用 CDN 镜像
     const ds = await directSession();
+    const ghM = /^https:\/\/raw\.githubusercontent\.com\/([^/]+)\/([^/]+)\/(?:refs\/heads\/)?([^/]+)\/(.+)$/i.exec(url);
+    if (ghM && !post) {
+      const [, ghOwner, ghRepo, ghBranch, ghPath] = ghM;
+      const ghMirrors = [
+        `https://testingcf.jsdelivr.net/gh/${ghOwner}/${ghRepo}@${ghBranch}/${ghPath}`,
+        `https://fastly.jsdelivr.net/gh/${ghOwner}/${ghRepo}@${ghBranch}/${ghPath}`,
+        `https://cdn.jsdelivr.net/gh/${ghOwner}/${ghRepo}@${ghBranch}/${ghPath}`,
+        `https://gcore.jsdelivr.net/gh/${ghOwner}/${ghRepo}@${ghBranch}/${ghPath}`,
+        `https://ghfast.top/${url}`,
+      ];
+      try {
+        const rMirror = await Promise.any(ghMirrors.map(mu => one((_u, o) => ds.fetch(mu, o), 'Mozilla/5.0').then(x => { if (x && !x.error && x.text) return x; throw Error(x?.error || 'err'); })));
+        if (rMirror && !rMirror.error) return rMirror;
+      } catch {}
+    }
     for (const ua of ['v2rayN/6.23', 'ClashforWindows/0.20.39', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36']) {
       const rDirect = await one((u, o) => ds.fetch(u, o), ua);
       if (rDirect && !rDirect.error) return rDirect;
@@ -2570,7 +3106,7 @@ function syncSiblingInstallDirs() {
   } catch {}
 }
 function cleanOrphanFindProcesses() {
-  if (process.platform !== 'win32' || !app.isPackaged) return;
+  if (process.platform !== 'win32' || !app.isPackaged || !global.__allowExternalFindCleanup) return;
   try {
     const psExe = fs.existsSync('C:\\Windows\\SysNative\\WindowsPowerShell\\v1.0\\powershell.exe')
       ? 'C:\\Windows\\SysNative\\WindowsPowerShell\\v1.0\\powershell.exe'
@@ -2619,7 +3155,7 @@ function checkPending() {
     if (p.last) updRestoredLast = p.last;
   }
   if (!updRestoredBounds && p?.bounds && typeof p.bounds === 'object') updRestoredBounds = p.bounds;
-  const newer = (a, b) => { const x = String(a || '').replace(/-.*/, '').split('.').map(Number), y = String(b || '').replace(/-.*/, '').split('.').map(Number); for (let i = 0; i < 3; i++) { if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) > (y[i] || 0); } return false; };
+  const newer = (a, b) => { const pa = String(a || '').trim().replace(/^v/i, ''), pb = String(b || '').trim().replace(/^v/i, ''); const x = pa.replace(/-.*/, '').split('.').map(Number), y = pb.replace(/-.*/, '').split('.').map(Number); for (let i = 0; i < 3; i++) { if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) > (y[i] || 0); } const sa = pa.includes('-') ? pa.slice(pa.indexOf('-') + 1) : '', sb = pb.includes('-') ? pb.slice(pb.indexOf('-') + 1) : ''; if (!sa && sb) return true; if (sa && !sb) return false; return sa.localeCompare(sb, undefined, { numeric: true }) > 0; };
   if (VERSION === p.to || newer(VERSION, p.from)) {   // 装上了：清理安装包
     updJustCompleted = true;
     updLog('更新成功 ' + p.from + ' → ' + VERSION); try { fs.unlinkSync(UPD_PEND()); } catch {}
@@ -2909,15 +3445,17 @@ ipcMain.handle('host:updInstall', async () => {
         ANC_PROG_PS1: progPs1,
         ANC_BAT: batPath,
       };
-      try {
-        spawn(psExe, ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden', '-Sta', '-File', progPs1, '-StatePath', stateFile], {
-          detached: false,
-          stdio: 'ignore',
-          windowsHide: true,
-          cwd: updDir,
-          env: mergedEnv,
-        }).unref();
-      } catch {}
+      if (process.env.BRANA_UPD_PS_GUI === '1') {
+        try {
+          spawn(psExe, ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden', '-Sta', '-File', progPs1, '-StatePath', stateFile], {
+            detached: false,
+            stdio: 'ignore',
+            windowsHide: true,
+            cwd: updDir,
+            env: mergedEnv,
+          }).unref();
+        } catch {}
+      }
       const wscriptExe = fs.existsSync('C:\\Windows\\System32\\wscript.exe') ? 'C:\\Windows\\System32\\wscript.exe' : 'wscript.exe';
       try {
         fs.writeFileSync(vbsPath, [
@@ -3002,19 +3540,21 @@ ipcMain.handle('host:updInstall', async () => {
           '  If col.Count = 0 Then Exit For',
           '  WScript.Sleep 250',
           'Next',
-          'For Each p In wmi.ExecQuery("SELECT * FROM Win32_Process WHERE ProcessId = " & oldPid & " OR Name = \'Brana AI.exe\' OR Name = \'xray.exe\'")',
+          'For Each p In wmi.ExecQuery("SELECT * FROM Win32_Process WHERE ProcessId = " & oldPid & " OR Name = \'Brana AI.exe\' OR Name LIKE \'BranaAI%.exe\' OR Name = \'xray.exe\' OR Name = \'win-mem-trim.exe\'")',
           '  p.Terminate()',
           'Next',
+          'If appDir <> "" And fso.FolderExists(appDir) Then fso.DeleteFile appDir & "\\BranaAI-*.exe", True : Err.Clear',
           'WScript.Sleep 350',
           'WriteState 3, 38, 0, "false", "false", "正在静默覆盖安装新版本核心组件…"',
-          'rc = sh.Run(q & newFile & q & " /NCRC --updated /S --force-run /D=" & appDir, 0, True)',
+          'rc = sh.Run(q & newFile & q & " /NCRC --updated /S /D=" & appDir, 0, True)',
           'If rc <> 0 Then',
           '  WriteState 3, 64, 0, "false", "false", "正在释放文件占用并自动重试静默安装…"',
-          '  For Each p In wmi.ExecQuery("SELECT * FROM Win32_Process WHERE Name = \'Brana AI.exe\' OR Name = \'xray.exe\'")',
+          '  For Each p In wmi.ExecQuery("SELECT * FROM Win32_Process WHERE Name = \'Brana AI.exe\' OR Name LIKE \'BranaAI%.exe\' OR Name = \'xray.exe\' OR Name = \'win-mem-trim.exe\'")',
           '    p.Terminate()',
           '  Next',
+          '  If appDir <> "" And fso.FolderExists(appDir) Then fso.DeleteFile appDir & "\\BranaAI-*.exe", True : Err.Clear',
           '  WScript.Sleep 1500',
-          '  rc = sh.Run(q & newFile & q & " /NCRC --updated /S --force-run", 0, True)',
+          '  rc = sh.Run(q & newFile & q & " /NCRC --updated /S", 0, True)',
           'End If',
           'If rc <> 0 Then',
           '  WriteState 3, 78, 0, "false", "false", "正在打开安装程序完成更新…"',
@@ -3180,8 +3720,9 @@ const poolProbes=createPoolProbeRunner(async (e, o, job) => {
     job.stage('probing');
     const ds = await directSession().catch(() => null);
     const dsFetch = (u, op) => nodeOrDirectFetch(u, op, ds);
-    const pOpt = { ...purityCacheOpt(ds), forcePurity: pips.length <= 48 };
+    const pOpt = { ...purityCacheOpt(ds), forcePurity: pips.length <= 4, fastBatch: pips.length > 4 };
     const queue = [...directCands];
+    const hasValidVless = Boolean(parseVless(o?.link));
     const runDirectWorker = async () => {
       while (queue.length && !job.signal.aborted) {
         const p = queue.shift();
@@ -3189,13 +3730,18 @@ const poolProbes=createPoolProbeRunner(async (e, o, job) => {
         const r = await RouteNative.checkProxyIpDirect(p, ms, job.signal, dsFetch, pOpt).catch(() => null);
         if (job.signal.aborted || r?.cancelled) return;
         if (r && (r.ip || r.error)) {
+          global.__cmliuReachableAt = Date.now();
           const { pip: _pip, ...rest } = r;
+          directResults.set(p, rest);
+          job.publish(p, rest);
+        } else if (!hasValidVless) {
+          const rest = { error: '直连检测超时', status: 0, brana: false, via: 'direct-check' };
           directResults.set(p, rest);
           job.publish(p, rest);
         }
       }
     };
-    await Promise.all(Array.from({ length: Math.min(8, directCands.length) }, runDirectWorker));
+    if (queue.length) await Promise.all(Array.from({ length: Math.min(12, queue.length) }, runDirectWorker));
     if (job.signal.aborted) return { cancelled: true };
   }
   const remPips = pips.filter(p => !directResults.has(p));
@@ -3230,14 +3776,23 @@ const poolProbes=createPoolProbeRunner(async (e, o, job) => {
         const i = nextIdx++;
         const p = remPips[i];
         let result;
-        try { result = await probeVia(lease * 32 + i, ports[i], ms, job.signal); }
+        try {
+          result = await probeVia(lease * 32 + i, ports[i], ms, job.signal);
+          if (!job.signal.aborted && !(result?.ip && result?.brana) && /closed|EOF|reset|超时|SOCKET_NOT_CONNECTED/i.test(String(result?.error || ''))) {
+            await new Promise(r => setTimeout(r, 220));
+            if (!job.signal.aborted) {
+              const retryRes = await probeVia(lease * 32 + i, ports[i], Math.min(9000, ms), job.signal).catch(() => null);
+              if (retryRes && (retryRes.ip || retryRes.brana)) result = retryRes;
+            }
+          }
+        }
         catch (err) { result = { error: String(err?.message || err) }; }
         directResults.set(p, result);
         job.publish(p, result);
         remRes[i] = { pip: p, ...result };
       }
     };
-    await Promise.all(Array.from({ length: Math.min(6, remPips.length) }, runXrayWorker));
+    await Promise.all(Array.from({ length: Math.min(3, remPips.length) }, runXrayWorker));
     if (!directCands.length) return remRes;
     return pips.map(p => ({ pip: p, ...(directResults.get(p) || {}) }));
   } finally { job.signal.removeEventListener('abort',stop);stop();setTimeout(()=>{try{fs.unlinkSync(file);}catch{}},1500); }
@@ -3357,6 +3912,45 @@ ipcMain.handle('host:localScan', (e, ports) => {
   const job = runLocalScan(e, list).finally(() => localScanJobs.delete(key)); localScanJobs.set(key, job); return job;
 });
 
+ipcMain.on('host:staticBankSync', (e, id) => {
+  try {
+    const resolveMod = rel => {
+      const baseName = path.basename(rel);
+      const cands = [
+        path.join(__dirname, '..', 'ui', baseName).replace(/app\.asar([\\/])/i, 'app.asar.unpacked$1'),
+        path.join(__dirname, '..', 'ui', baseName),
+        path.join(__dirname, '..', rel).replace(/app\.asar([\\/])/i, 'app.asar.unpacked$1'),
+        path.join(__dirname, '..', rel),
+        path.join(__dirname, '..', '..', '..', rel).replace(/app\.asar([\\/])/i, 'app.asar.unpacked$1'),
+        path.join(__dirname, '..', '..', '..', rel),
+      ];
+      return cands.find(p => { try { return fs.existsSync(p); } catch { return false; } });
+    };
+    if (id === 'ikale' || id === 'habit') {
+      const f = resolveMod(id === 'ikale' ? 'modules/habit-engine/domain/probe-bank-ikale.js' : 'modules/habit-engine/domain/habit-builtin-bank.js');
+      if (f) {
+        const s = fs.readFileSync(f, 'utf8').replace(/;\s*(?:Object\.defineProperty\b[\s\S]*|if\s*\(\s*typeof\s+(?:module|window|globalThis)\b[\s\S]*|module\.exports[\s\S]*)$/, '');
+        const i = s.indexOf('{'), j = s.lastIndexOf('}');
+        if (i !== -1 && j > i) { e.returnValue = s.slice(i, j + 1); setImmediate(() => { try { global.gc?.(); } catch {} }); return; }
+      }
+    } else if (id === 'whatsmyllm' || id === 'whatsmyllm-seed') {
+      const f = resolveMod('modules/habit-engine/domain/probe-vendor.js');
+      if (f) {
+        const s = fs.readFileSync(f, 'utf8');
+        const marker = id === 'whatsmyllm-seed' ? 'get seedBank()' : 'get bank()';
+        const p0 = s.indexOf(marker);
+        const p1 = p0 !== -1 ? s.indexOf('JSON.parse("', p0) : -1;
+        const p2 = p1 !== -1 ? s.indexOf('")))', p1 + 12) : -1;
+        if (p1 !== -1 && p2 > p1) {
+          e.returnValue = JSON.parse(s.slice(p1 + 11, p2 + 1));
+          setImmediate(() => { try { global.gc?.(); } catch {} });
+          return;
+        }
+      }
+    }
+  } catch {}
+  e.returnValue = '{}';
+});
 ipcMain.handle('host:getCred', e => { const a = winAcct(e.sender); if (!a || a.noAuto || !a.email) return null; const password = resolveAccountPw(a); return password ? { email: a.email, password } : null; });
 // 官网页面里注册 / 登录时输入的密码：该账号登录成功（邮箱一致）且还没保存过有效密码时，存进账号（之后会话过期可自动重新登录）
 function promoteRegPw(a, email) {
@@ -3557,17 +4151,24 @@ function mergeSharedPelshots(v, sender = null, { broadcast = true } = {}) {
     const pKey = Object.keys(p || {}).sort().map(k => `${k}:${p[k]?.name || ''}:${p[k]?.score ?? ''}:${p[k]?.at || 0}`).join(',');
     return `${rKey}#${dKey}#${pKey}`;
   };
-  const prevSig = Array.isArray(DB.shared.pelshots?.rows) ? pelStateSig(prev.rows, prev.del, prev.pelican) : '';
+  const prevSig = Array.isArray(prev?.rows) ? pelStateSig(prev.rows, prev.del, prev.pelican) : '';
   const nextSig = pelStateSig(rows, del, pelMap);
   DB.shared.pelican = pelMap;
   if (prevSig && prevSig === nextSig && !isImport) {
+    if (typeof savePelshotsSoon === 'function') delete DB.shared.pelshots;
     if (inObj.harvest && typeof harvestAccountPelicanSoon === 'function') harvestAccountPelicanSoon(true);
     return true;
   }
-  DB.shared.pelshots = { rows, del, pelican: pelMap, at: Date.now() };
+  const nextPelObj = { rows, del, pelican: pelMap, at: Date.now() };
+  if (typeof savePelshotsSoon === 'function') {
+    savePelshotsSoon(nextPelObj);
+    delete DB.shared.pelshots;
+  } else {
+    DB.shared.pelshots = nextPelObj;
+  }
   saveSoon();
   if (broadcast && typeof BrowserWindow !== 'undefined') {
-    const cmd = { pelshotsSync: true, at: DB.shared.pelshots.at };
+    const cmd = { pelshotsSync: true, at: nextPelObj.at };
     for (const w of BrowserWindow.getAllWindows()) if (!w.isDestroyed() && w.webContents !== sender) { try { w.webContents.send('anc-cmd', cmd); } catch {} }
   }
   if (inObj.harvest && typeof harvestAccountPelicanSoon === 'function') harvestAccountPelicanSoon(true);
@@ -3603,7 +4204,7 @@ function harvestAccountPelicanSoon(force = false) {
           if (a && !a.pelHarvested) { a.pelHarvested = 1; markDirty = true; }
         }
       }
-      if (typeof WebContentsView === 'function' && Array.isArray(DB?.accounts)) {
+      if (force && typeof WebContentsView === 'function' && Array.isArray(DB?.accounts)) {
         for (const a of DB.accounts) {
           if (!a?.id || (typeof wins !== 'undefined' && wins.has(a.id)) || (!force && a.pelHarvested)) continue;
           const ldbDir = path.join(app.getPath('userData'), 'Partitions', 'acct-' + a.id, 'Local Storage', 'leveldb');
@@ -3705,15 +4306,8 @@ ipcMain.handle('host:shared', (e, k, v) => {
     const bankFile = path.join(app.getPath('userData'), 'shared', 'habitLearnBank.json');
     const userDataDir = app.getPath('userData');
     const roamingRoot = path.dirname(userDataDir);
-    const bankFiles = [
-      bankFile,
-      path.join(roamingRoot, 'Brana AI Extension Test', 'shared', 'habitLearnBank.json'),
-      path.join(roamingRoot, 'Arena Client', 'shared', 'habitLearnBank.json'),
-    ].filter((f, idx, arr) => arr.indexOf(f) === idx);
-    const dbFiles = [
-      path.join(roamingRoot, 'Brana AI Extension Test', 'db.json'),
-      path.join(roamingRoot, 'Arena Client', 'db.json'),
-    ].filter((f, idx, arr) => arr.indexOf(f) === idx);
+    const bankFiles = [bankFile];
+    const dbFiles = [];
     const KNOWN_DIAG_SIDS = new Set([
       '01a13ee4-294d-7e67-8554-fad3b69284f6',
       '01a13ef8-3b56-7b99-a43b-d991064c46d8',
@@ -3884,7 +4478,7 @@ ipcMain.handle('host:shared', (e, k, v) => {
       }
       if (isSyntheticStubVecObj(out.vec)) {
         const hasRealTags = Array.isArray(out.tags) && out.tags.some(t => t && t !== '⚡ 反推自动纠偏样本');
-        if ((!out.userConfirmed && !out.importedFromDiag) || (out.meta === null && !hasRealTags && !out.importedFromDiag)) {
+        if (!out.userConfirmed && !out.importedFromDiag && !out.battleRevealed && !out.directMode && (out.meta === null && !hasRealTags)) {
           return null;
         }
       }
@@ -3971,8 +4565,8 @@ ipcMain.handle('host:shared', (e, k, v) => {
         if (cy !== cx) return cy - cx;
         return (Number(y.weight) || 1) - (Number(x.weight) || 1) || ((y.at || 0) - (x.at || 0));
       });
-      const MAX_PER_MODEL = 10;
-      const MAX_TOTAL = 480;
+      const MAX_PER_MODEL = 80;
+      const MAX_TOTAL = 1600;
       const byModel = new Map();
       const kept = [];
       for (const s of sorted) {
@@ -3980,7 +4574,7 @@ ipcMain.handle('host:shared', (e, k, v) => {
         const mk = String(s.model || '').toLowerCase();
         const bucket = byModel.get(mk) || [];
         if (bucket.length >= MAX_PER_MODEL) continue;
-        if (bucket.length >= 3 && bucket.some(ex => vecCos(ex.vec, s.vec) >= 0.975 && (Number(ex.meta?.cps) > 0) >= (Number(s.meta?.cps) > 0))) {
+        if (!s.userConfirmed && !s.battleRevealed && !s.directMode && bucket.length >= 65 && bucket.some(ex => vecCos(ex.vec, s.vec) >= 0.9995 && (Number(ex.meta?.cps) > 0) >= (Number(s.meta?.cps) > 0))) {
           continue;
         }
         bucket.push(s);
@@ -4065,191 +4659,73 @@ ipcMain.handle('host:shared', (e, k, v) => {
     const persistHabitBankFiles = bankObj => {
       global._memHabitBank = bankObj;
       clearTimeout(global._habitBankWriteTimer);
-      global._habitBankWriteTimer = setTimeout(() => {
+      global._habitBankWriteTimer = setTimeout(async () => {
         const json = JSON.stringify(bankObj);
         for (const bf of bankFiles) {
           try {
             if (bf === bankFiles[0] || fs.existsSync(path.dirname(bf))) {
-              fs.mkdirSync(path.dirname(bf), { recursive: true });
-              fs.writeFileSync(bf, json);
+              await fs.promises.mkdir(path.dirname(bf), { recursive: true });
+              await fs.promises.writeFile(bf, json);
             }
           } catch {}
         }
-      }, 300);
+      }, 450);
     };
-    let diskSamples = [], diskCalib = {};
-    if (global._memHabitBank && Array.isArray(global._memHabitBank.samples)) {
-      diskSamples = global._memHabitBank.samples;
-      diskCalib = global._memHabitBank.calibration || {};
-    } else {
+    const _getBuiltinHabitSidSet = () => {
+      if (global._builtinHabitSidSet) return global._builtinHabitSidSet;
+      const set = new Set();
       try {
-        const builtinBank = require('../ui/habit-builtin-bank.js');
-        if (Array.isArray(builtinBank?.samples)) diskSamples = mergeBankSamples(diskSamples, builtinBank.samples);
-        if (builtinBank?.calibration && typeof builtinBank.calibration === 'object') diskCalib = mergeCalibObj(diskCalib, builtinBank.calibration);
-      } catch {}
-      for (const bf of bankFiles) {
-        try {
-          if (fs.existsSync(bf)) {
-            const d = JSON.parse(fs.readFileSync(bf, 'utf8'));
-            if (Array.isArray(d?.samples)) diskSamples = mergeBankSamples(diskSamples, d.samples);
-            if (d?.calibration && typeof d.calibration === 'object') diskCalib = mergeCalibObj(diskCalib, d.calibration);
-          }
-        } catch {}
-      }
-      for (const df of dbFiles) {
-        try {
-          if (fs.existsSync(df)) {
-            const d = JSON.parse(fs.readFileSync(df, 'utf8'));
-            const hb = d?.shared?.habitLearnBank;
-            if (Array.isArray(hb?.samples)) diskSamples = mergeBankSamples(diskSamples, hb.samples);
-            if (hb?.calibration && typeof hb.calibration === 'object') diskCalib = mergeCalibObj(diskCalib, hb.calibration);
-          }
-        } catch {}
-      }
-      if (!global._harvestedLegacyPartitionBanks && diskSamples.length < 200) {
-        global._harvestedLegacyPartitionBanks = true;
-        let partSamples = [], partCalib = {};
-        const partRoots = [
-          path.join(roamingRoot, 'Arena Client', 'Partitions'),
-          path.join(roamingRoot, 'Brana AI Extension Test', 's', 'Partitions'),
-          path.join(roamingRoot, 'Brana AI Extension Test', 'Partitions'),
-        ].filter((p, idx, arr) => arr.indexOf(p) === idx);
-        const extractJsonObjectsWithSamples = str => {
-          const out = [];
-          let pos = 0;
-          while ((pos = str.indexOf('"samples":[', pos)) !== -1) {
-            let start = str.lastIndexOf('{"v":', pos);
-            if (start === -1 || pos - start > 120) start = str.lastIndexOf('{', pos);
-            if (start !== -1 && pos - start < 200) {
-              let depth = 0, inStr = false, esc = false, end = -1;
-              for (let i = start; i < str.length; i++) {
-                const ch = str[i];
-                if (inStr) {
-                  if (esc) esc = false;
-                  else if (ch === '\\') esc = true;
-                  else if (ch === '"') inStr = false;
-                } else if (ch === '"') inStr = true;
-                else if (ch === '{') depth++;
-                else if (ch === '}') {
-                  depth--;
-                  if (depth === 0) { end = i + 1; break; }
-                }
-              }
-              if (end !== -1) {
-                try { out.push(JSON.parse(str.slice(start, end))); } catch {}
-              }
-            }
-            pos += 11;
-          }
-          return out;
-        };
-        for (const pr of partRoots) {
-          try {
-            if (!fs.existsSync(pr)) continue;
-            for (const dirName of fs.readdirSync(pr)) {
-              if (!dirName.startsWith('acct-')) continue;
-              const ldbDir = path.join(pr, dirName, 'Local Storage', 'leveldb');
-              if (!fs.existsSync(ldbDir)) continue;
-              for (const fn of fs.readdirSync(ldbDir)) {
-                if (!fn.endsWith('.ldb') && !fn.endsWith('.log')) continue;
-                let buf;
-                try { buf = fs.readFileSync(path.join(ldbDir, fn)); } catch { continue; }
-                for (const enc of ['utf8', 'utf16le']) {
-                  const str = buf.toString(enc);
-                  if (str.includes('"samples":[')) {
-                    for (const obj of extractJsonObjectsWithSamples(str)) {
-                      if (Array.isArray(obj?.samples)) partSamples = mergeBankSamples(partSamples, obj.samples);
-                      if (obj?.calibration && typeof obj.calibration === 'object') partCalib = mergeCalibObj(partCalib, obj.calibration);
-                    }
-                  }
-                  if (str.includes('"habitFeatures":')) {
-                    const re = /"(01a1[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})"\s*:\s*\{/g;
-                    let mMatch;
-                    while ((mMatch = re.exec(str)) !== null) {
-                      const sid = mMatch[1];
-                      const start = mMatch.index + mMatch[0].length - 1;
-                      let depth = 0, inStr = false, esc = false, end = -1;
-                      const maxEnd = Math.min(str.length, start + 60000);
-                      for (let i = start; i < maxEnd; i++) {
-                        const ch = str[i];
-                        if (inStr) {
-                          if (esc) esc = false;
-                          else if (ch === '\\') esc = true;
-                          else if (ch === '"') inStr = false;
-                        } else if (ch === '"') inStr = true;
-                        else if (ch === '{') depth++;
-                        else if (ch === '}') {
-                          depth--;
-                          if (depth === 0) { end = i + 1; break; }
-                        }
-                      }
-                      if (end !== -1) {
-                        try {
-                          const mObj = JSON.parse(str.slice(start, end));
-                          const hf = mObj?.habitFeatures;
-                          const isUConf = Boolean(mObj?.userCorrected || mObj?.userConfirmed);
-                          const isRConf = Boolean(!isUConf && mObj?.reverseName && Number(mObj?.reverseConfidence) >= 0.88 && !mObj?.habitInferred);
-                          if ((isUConf || isRConf) && Array.isArray(hf?.vec) && hf.vec.length === 20 && !isSyntheticStubVecObj(hf.vec)) {
-                            const rawLbl = String(isUConf ? (mObj.name || mObj.reverseName || '') : (mObj.reverseName || mObj.name || '')).replace(/[?？]+$/, '').trim();
-                            const cMod = canonHabitModel(rawLbl);
-                            if (cMod && cMod !== '开源模型') {
-                              partSamples = mergeBankSamples(partSamples, [{
-                                sid,
-                                model: cMod,
-                                rawLabel: rawLbl,
-                                vec: hf.vec,
-                                score: Number(hf.score || hf.habitReasoningScore || 75) || 75,
-                                tags: Array.isArray(hf.tags || mObj.habitTags) ? (hf.tags || mObj.habitTags).slice(0, 6) : [],
-                                meta: hf.meta || mObj.habitMeta || null,
-                                userConfirmed: true,
-                                autoTeacher: !isUConf,
-                                weight: isUConf ? 3.5 : 2.8,
-                                at: Number(mObj.updatedAt || mObj.at || 0) || 1792400000000,
-                              }]);
-                            }
-                          }
-                        } catch {}
-                      }
-                    }
-                  }
-                }
-              }
-            }
-          } catch {}
+        const f = [path.join(__dirname, '..', 'ui', 'habit-builtin-bank.js'), path.join(__dirname, '..', 'modules/habit-engine/domain/habit-builtin-bank.js'), path.join(__dirname, '..', '..', '..', 'modules/habit-engine/domain/habit-builtin-bank.js')].find(p => fs.existsSync(p)) || '';
+        if (fs.existsSync(f)) {
+          const s = fs.readFileSync(f, 'utf8');
+          const re = /"sid"\s*:\s*"([^"]+)"/g;
+          let m;
+          while ((m = re.exec(s)) !== null) set.add(m[1]);
         }
-        if (partSamples.length) diskSamples = mergeBankSamples(diskSamples, partSamples);
-        if (Object.keys(partCalib).length) diskCalib = mergeCalibObj(diskCalib, partCalib);
-        global._cachedPartitionSamples = partSamples;
-        global._cachedPartitionCalib = partCalib;
-      } else {
-        global._harvestedLegacyPartitionBanks = true;
-      }
+      } catch {}
+      global._builtinHabitSidSet = set;
+      return set;
+    };
+    const bSidSet = _getBuiltinHabitSidSet();
+    let diskSamples = [], diskCalib = {};
+    for (const bf of bankFiles) {
+      try {
+        if (fs.existsSync(bf)) {
+          const d = JSON.parse(fs.readFileSync(bf, 'utf8'));
+          if (Array.isArray(d?.samples)) {
+            const deltaOnly = d.samples.filter(s => s && !bSidSet.has(String(s.sid || '')));
+            diskSamples = mergeBankSamples(diskSamples, deltaOnly).slice(0, 160);
+          }
+          if (d?.calibration && typeof d.calibration === 'object') diskCalib = mergeCalibObj(diskCalib, d.calibration);
+        }
+      } catch {}
     }
+    const baseSamples = mergeBankSamples(diskSamples, DB.shared.habitLearnBank?.samples || []);
+    delete DB.shared.habitLearnBank;
+    global._memHabitBank = null;
     if (v === undefined) {
-      const merged = mergeBankSamples(diskSamples, DB.shared.habitLearnBank?.samples || []);
-      const mergedCal = mergeCalibObj(diskCalib, DB.shared.habitLearnBank?.calibration);
-      const nextBank = { v: 2, updatedAt: DB.shared.habitLearnBank?.updatedAt || Date.now(), samples: merged, calibration: mergedCal };
-      const needsMigration = !Array.isArray(DB.shared.habitLearnBank?.samples) || DB.shared.habitLearnBank.samples.some(s => !s || !s.vendor || !s.family || !s.effort);
-      global._memHabitBank = nextBank;
-      if (merged.length > (DB.shared.habitLearnBank?.samples?.length || 0) || needsMigration) {
-        DB.shared.habitLearnBank = nextBank;
-        persistHabitBankFiles(nextBank);
-        saveSoon();
-      }
+      const nextBank = { v: 2, updatedAt: Date.now(), samples: baseSamples.slice(0, 160), calibration: diskCalib };
+      try {
+        if (fs.existsSync(bankFile) && fs.statSync(bankFile).size > 200000) {
+          fs.writeFileSync(bankFile, JSON.stringify(nextBank), 'utf8');
+        }
+      } catch {}
+      setImmediate(() => { try { global.gc?.(); } catch {} });
       return nextBank;
     }
     if (v && typeof v === 'object') {
-      const baseSamples = mergeBankSamples(diskSamples, DB.shared.habitLearnBank?.samples || []);
+      const incDelta = Array.isArray(v.samples)
+        ? v.samples.filter(s => s && !bSidSet.has(String(s.sid || '')))
+        : [];
       const merged = (v.replace === true && (!Array.isArray(v.samples) || v.samples.length === 0))
         ? []
-        : mergeBankSamples(baseSamples, v.samples);
+        : mergeBankSamples(baseSamples, incDelta).slice(0, 160);
       const mergedCal = v.replace === true && (!v.samples || !v.samples.length)
         ? (v.calibration || {})
-        : mergeCalibObj(mergeCalibObj(diskCalib, DB.shared.habitLearnBank?.calibration), v.calibration);
+        : mergeCalibObj(diskCalib, v.calibration);
       const nextBank = { v: 2, updatedAt: Date.now(), samples: merged, calibration: mergedCal };
-      DB.shared.habitLearnBank = nextBank;
       persistHabitBankFiles(nextBank);
-      saveSoon();
+      global._memHabitBank = null;
       try {
         for (const bw of BrowserWindow.getAllWindows()) {
           if (bw && !bw.isDestroyed() && bw.webContents && bw.webContents !== e?.sender) {
@@ -4257,6 +4733,7 @@ ipcMain.handle('host:shared', (e, k, v) => {
           }
         }
       } catch {}
+      setImmediate(() => { try { global.gc?.(); } catch {} });
       return nextBank;
     }
     return false;
@@ -4272,7 +4749,10 @@ ipcMain.handle('host:shared', (e, k, v) => {
     return true;
   }
   if (v === undefined) {
-    if (k === 'pelshots' && typeof harvestAccountPelicanSoon === 'function') harvestAccountPelicanSoon(false);
+    if (k === 'pelshots') {
+      if (typeof harvestAccountPelicanSoon === 'function') harvestAccountPelicanSoon(false);
+      return DB.shared.pelshots || (typeof loadPelshotsFromDisk === 'function' ? loadPelshotsFromDisk() : null);
+    }
     return DB.shared[k] ?? null;
   }
   if (k === 'pelshots') {
@@ -4307,15 +4787,24 @@ ipcMain.handle('host:shared', (e, k, v) => {
     const prevDraft = DB.shared[k];
     if (prevDraft && typeof prevDraft === 'object') {
       const dropped = new Set(Array.isArray(v.droppedSids) ? v.droppedSids : []);
+      const ackedIds = [...new Set([...(Array.isArray(prevDraft.ackedIds) ? prevDraft.ackedIds : []), ...(Array.isArray(v.ackedIds) ? v.ackedIds : [])])].slice(-128);
+      const acceptedIds = [...new Set([...(Array.isArray(prevDraft.acceptedIds) ? prevDraft.acceptedIds : []), ...(Array.isArray(v.acceptedIds) ? v.acceptedIds : [])])].slice(-128);
+      if (ackedIds.length) v.ackedIds = ackedIds;
+      if (acceptedIds.length) v.acceptedIds = acceptedIds;
+      const doneSet = new Set([...ackedIds, ...acceptedIds]);
+      if (Array.isArray(v.o)) v.o = v.o.filter(x => x && x.id && !ackedIds.includes(x.id));
       if (prevDraft.q && typeof prevDraft.q === 'object') {
         v.q = (v.q && typeof v.q === 'object') ? v.q : {};
         for (const [sid, pq] of Object.entries(prevDraft.q)) {
           if (!pq?.items?.length || dropped.has(sid)) continue;
           const nq = v.q[sid];
+          const remSet = new Set([...(Array.isArray(nq?.removedIds) ? nq.removedIds : []), ...(Array.isArray(pq?.removedIds) ? pq.removedIds : []), ...doneSet]);
+          const validPqItems = pq.items.filter(it => it && it.id && !remSet.has(it.id));
+          if (!validPqItems.length) continue;
           if (!nq) {
-            v.q[sid] = pq;
+            v.q[sid] = { ...pq, items: validPqItems };
           } else if (!nq.items?.length && !nq.clearedAt && !(Array.isArray(nq.removedIds) && nq.removedIds.length) && (pq.at || 0) >= (nq.at || 0)) {
-            v.q[sid] = pq;
+            v.q[sid] = { ...pq, items: validPqItems };
           }
         }
       }
@@ -4325,12 +4814,17 @@ ipcMain.handle('host:shared', (e, k, v) => {
     try { saveDB(true); } catch { saveDB(); }
     return true;
   }
+  if (k === 'pippool' && v && typeof v === 'object') {
+    DB.shared.pippool = compactPipPool(v);
+    healBannedAccountProxyIps();
+    savePipPoolSoon(1500);
+    return true;
+  }
   DB.shared[k] = v;
-  if (k === 'pippool') healBannedAccountProxyIps();
   if (k === 'prefs' && v && typeof v === 'object' && (v.goldMode || Array.isArray(v.goldSet))) {
     DB.shared.gold = { mode: v.goldMode || 'auto', set: Array.isArray(v.goldSet) ? v.goldSet : [], chats: Array.isArray(v.goldChats) ? v.goldChats : [], at: v.goldAt || Date.now() };
   }
-  saveSoon();
+  saveSoon(k === 'pippool' ? 4000 : 800);
   if (k === 'prefs') {
     if ((prevPrefs?.gDirect !== false) !== (v?.gDirect !== false)) gReapply();
     const was = themeWas; themeWas = v?.theme;
@@ -4362,12 +4856,68 @@ ipcMain.handle('host:shared', (e, k, v) => {
 });
 // 有窗口在抽卡 / 排队发送 / 接收回复：阻止系统把 App 挂起（屏幕照常可以关）
 const bgWorkMap = new Map(); let psbId = -1;
+const _hiddenIdleSince = new Map();
 function bgCheck() {
   const t = Date.now(); let busy = false;
   for (const [k, v] of bgWorkMap) { if (t - v.at > 90000) bgWorkMap.delete(k); else if (v.busy) busy = true; }
+  try {
+    if (typeof wins !== 'undefined' && wins instanceof Map) {
+      for (const [id, w] of wins) {
+        if (!w || w.isDestroyed()) {
+          wins.delete(id);
+          bgWorkMap.delete(id);
+          _hiddenIdleSince.delete(id);
+          continue;
+        }
+        if (w.__hidden) {
+          if (isBgBusy(id)) {
+            _hiddenIdleSince.delete(id);
+          } else {
+            const idleStart = _hiddenIdleSince.get(id) || t;
+            if (!_hiddenIdleSince.has(id)) _hiddenIdleSince.set(id, idleStart);
+            if (t - idleStart >= 8000 && wins.size > 1) {
+              _hiddenIdleSince.delete(id);
+              try { w.webContents?.session?.closeAllConnections?.().catch(() => {}); w.webContents?.session?.clearCache?.().catch(() => {}); } catch {}
+              try { w.destroy(); } catch {}
+              wins.delete(id);
+              bgWorkMap.delete(id);
+              try { stopTunnel(id); } catch {}
+              setTimeout(runNativeWorkingSetTrim, 200).unref?.();
+            }
+          }
+        } else {
+          _hiddenIdleSince.delete(id);
+        }
+      }
+      if (wins.size > 2) {
+        for (const [id, w] of [...wins.entries()]) {
+          if (wins.size <= 2) break;
+          if (!w || w.isDestroyed() || !w.__hidden || w.isFocused() || isBgBusy(id)) continue;
+          try { w.__syncBounds?.(true); } catch {}
+          try { w.webContents?.session?.closeAllConnections?.().catch(() => {}); w.webContents?.session?.clearCache?.().catch(() => {}); } catch {}
+          try { destroyWindow(w); } catch {}
+          wins.delete(id);
+          bgWorkMap.delete(id);
+          try { stopTunnel(id); } catch {}
+        }
+      }
+    }
+    if (typeof tunnels !== 'undefined' && tunnels instanceof Map) {
+      for (const [tk, tv] of [...tunnels.entries()]) {
+        if (!tv || tv.starting) continue;
+        if (wins.has(tk) && !wins.get(tk)?.isDestroyed()) { tv.lastActiveAt = t; continue; }
+        const isAcctTunnel = Boolean(acct(tk));
+        const maxIdle = isAcctTunnel ? 18000 : 45000;
+        if (t - (tv.lastActiveAt || 0) > maxIdle && !(isAcctTunnel && applyRoute?.busy?.has?.(tk))) {
+          stopTunnel(tk);
+          if (isAcctTunnel) { try { session.fromPartition(partOf(tk)).closeAllConnections().catch(() => {}); } catch {} }
+        }
+      }
+    }
+  } catch {}
   try { if (busy && psbId < 0) psbId = powerSaveBlocker.start('prevent-app-suspension'); else if (!busy && psbId >= 0) { powerSaveBlocker.stop(psbId); psbId = -1; } } catch {}
 }
-setInterval(bgCheck, 30000);
+setInterval(bgCheck, 10000).unref?.();
 // 电脑版 Google 登录改用本机 Chrome / Edge（内置浏览器会被 Google 拦下「此浏览器或应用可能不安全」）
 const GB = require('./gbrowser');
 ipcMain.handle('host:gbStart', async (e, o) => {
@@ -4476,6 +5026,15 @@ const signInAccount = require('./account-auth').createAccountSignIn({
   navigate: a => { const w = wins.get(a.id); if (w && !w.isDestroyed()) void navigateAccount(w.webContents); },
 });
 ipcMain.handle('host:signInAccount', async (e, id) => { try { return await signInAccount(id); } catch (err) { return { error: String(err.message || err) }; } });
+const sendMagicLinkAccount = require('./account-auth').createAccountMagicLinkSender({
+  find: acct,
+  session: prepSession,
+  prepare: applyProxy,
+});
+ipcMain.handle('host:sendMagicLinkAccount', async (_e, id, email, fullName) => {
+  try { return await sendMagicLinkAccount(id, email, fullName); }
+  catch (err) { return { ok: false, error: String(err?.message || err) }; }
+});
 const registerTokenAccount = require('./account-auth').createAccountTokenRegistrar({
   find: acct,
   password: a => decPw(a.pw),
@@ -4509,10 +5068,13 @@ const refreshAllAccounts = createAccountRefresh({
     try { return await refreshStatus(a, ses); }
     finally {
       const w = wins.get(a.id);
-      if (!w || w.isDestroyed()) stopTunnel(a.id);
+      if (!w || w.isDestroyed()) {
+        stopTunnel(a.id);
+        try { await ses.closeAllConnections(); await ses.clearCache(); } catch {}
+      }
     }
   },
-  save: saveSoon, concurrency: 4,
+  save: saveSoon, concurrency: 2,
 });
 ipcMain.handle('host:refreshQuotas', async (_e, force) => {
   if (!force && lastQuotaRefreshResult && Date.now() - lastQuotaRefreshAt < 180000) return lastQuotaRefreshResult;
@@ -4661,6 +5223,24 @@ function menu() {
 // 显卡不可用 / 被禁用时 WebGL 会失效，reCAPTCHA 的 execute 会一直不返回（新对话发不出去）：允许退回软件渲染
 app.commandLine.appendSwitch('enable-unsafe-swiftshader');
 app.commandLine.appendSwitch('ignore-gpu-blocklist');
+app.commandLine.appendSwitch('disable-site-isolation-trials');
+app.commandLine.appendSwitch('process-per-site');
+try {
+  app.commandLine.appendSwitch('lang', 'zh-CN');
+  app.commandLine.appendSwitch('accept-lang', 'zh-CN,zh,en-US,en');
+  app.commandLine.appendSwitch('js-flags', '--max-old-space-size=512 --initial-old-space-size=16 --max-semi-space-size=2 --optimize-for-size --lazy-feedback-allocation --memory-reducer --expose-gc');
+  app.commandLine.appendSwitch('renderer-process-limit', '1');
+  app.commandLine.appendSwitch('num-raster-threads', '1');
+  app.commandLine.appendSwitch('no-sandbox');
+  app.commandLine.appendSwitch('disable-gpu-sandbox');
+  app.commandLine.appendSwitch('disk-cache-size', '4194304');
+  app.commandLine.appendSwitch('media-cache-size', '1048576');
+  app.commandLine.appendSwitch('gpu-program-cache-size-kb', '256');
+  app.commandLine.appendSwitch('disable-gpu-shader-disk-cache');
+  app.commandLine.appendSwitch('enable-features', 'PartitionAllocMemoryReclaimer');
+  app.commandLine.appendSwitch('disable-features', 'BackForwardCache,CalculateNativeWinOcclusion,Translate,OptimizationHints,MediaRouter');
+  setInterval(() => { try { global.gc?.(); } catch {} }, 45000).unref?.();
+} catch {}
 app.whenReady().then(async () => {
   BrowserPrivacy.secureResolver(app);
   try { checkPending(); } catch {}
@@ -4683,12 +5263,11 @@ app.whenReady().then(async () => {
   const ids = (DB.open || []).filter(id => acct(id));
   if (!ids.length) ids.push(DB.last && acct(DB.last) ? DB.last : DB.accounts[0].id);
   const savedLast = (DB.last && ids.includes(DB.last)) ? DB.last : ids[0];
-  for (const id of ids) await openAccountSafe(id);
-  if (ids.length > 1) {
-    DB.open = ids;
-    DB.last = savedLast;
-    try { saveDB(); } catch {}
-  }
+  const bootIds = (updRestoredOpen && updRestoredOpen.length > 1) ? ids : (!app.isPackaged || ids.length <= 4 ? ids : [savedLast]);
+  DB.open = [...bootIds];
+  DB.last = savedLast;
+  try { saveDB(); } catch {}
+  for (const id of bootIds) await openAccountSafe(id);
   setTimeout(async () => {
     try {
       const userData = app.getPath('userData');
@@ -4705,6 +5284,28 @@ app.whenReady().then(async () => {
           }
         }
       }
+      const uFiles = await fs.promises.readdir(userData).catch(() => []);
+      for (const f of uFiles) {
+        if (/\.(?:tmp|bak-\d+)$/i.test(f) || /^Preferences~RF.*\.TMP$/i.test(f)) {
+          await fs.promises.unlink(path.join(userData, f)).catch(() => {});
+        }
+      }
+      const pDir = path.join(userData, 'Partitions');
+      const pDirs = await fs.promises.readdir(pDir).catch(() => []);
+      for (const d of pDirs) {
+        const m = /^acct-([0-9a-f]{10})$/i.exec(d);
+        if (m && !activeIds.has(m[1])) {
+          await fs.promises.rm(path.join(pDir, d), { recursive: true, force: true }).catch(() => {});
+        } else {
+          const partPath = path.join(pDir, d);
+          const pfList = await fs.promises.readdir(partPath).catch(() => []);
+          for (const pf of pfList) {
+            if (/^Preferences~RF.*\.TMP$/i.test(pf) || /\.tmp$/i.test(pf)) {
+              await fs.promises.unlink(path.join(partPath, pf)).catch(() => {});
+            }
+          }
+        }
+      }
       const sPath = path.join(userData, 's');
       const sFiles = await fs.promises.readdir(sPath).catch(() => []);
       const cutoff = Date.now() - 5 * 60e3;
@@ -4713,6 +5314,9 @@ app.whenReady().then(async () => {
           const full = path.join(sPath, f);
           const st = await fs.promises.stat(full).catch(() => null);
           if (st && st.mtimeMs < cutoff) await fs.promises.unlink(full).catch(() => {});
+        } else {
+          const sm = /^([0-9a-f]{10})\.json$/i.exec(f);
+          if (sm && !activeIds.has(sm[1])) await fs.promises.unlink(path.join(sPath, f)).catch(() => {});
         }
       }
     } catch {}

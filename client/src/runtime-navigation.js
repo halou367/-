@@ -21,9 +21,33 @@ function loadURLAlive(wc, url, timeout = 45000, { forceReload = false } = {}) {
       try { if (!wc.isDestroyed()) wc.stop(); } catch {}
     }, timeout);
     timer.unref?.();
+    const normNavErr = err => {
+      if (!err || typeof err !== 'object') return err;
+      const msg = String(err.message || '');
+      if (!err.code) {
+        if (err.errno === -3 || /ERR_ABORTED|\(-3\)/i.test(msg)) err.code = 'ERR_ABORTED';
+        else { const m = /\b(ERR_[A-Z0-9_]+)\b/.exec(msg); if (m) err.code = m[1]; }
+      }
+      return err;
+    };
+    const isTransientNetErr = err => {
+      const c = String(err?.code || '') + ' ' + String(err?.message || '');
+      return /ERR_EMPTY_RESPONSE|ERR_NETWORK_CHANGED|ERR_SOCKET_NOT_CONNECTED|ERR_CONNECTION_RESET|ERR_CONNECTION_CLOSED|ERR_HTTP2_PROTOCOL_ERROR|ERR_TIMED_OUT|ERR_TUNNEL_CONNECTION_FAILED/i.test(c);
+    };
     try {
       if(forceReload&&wc.getURL?.()===url&&typeof wc.reloadIgnoringCache==='function'){wc.once('did-finish-load',loaded);wc.on('did-fail-load',failed);wc.reloadIgnoringCache();}
-      else Promise.resolve(wc.loadURL(url)).then(() => finish(), finish);
+      else Promise.resolve(wc.loadURL(url)).then(() => finish(), err => {
+        err = normNavErr(err);
+        if (!settled && !wc.isDestroyed() && isTransientNetErr(err)) {
+          try { wc.session?.closeAllConnections?.(); } catch {}
+          setTimeout(() => {
+            if (settled || wc.isDestroyed()) return;
+            Promise.resolve(wc.loadURL(url)).then(() => finish(), e2 => finish(normNavErr(e2)));
+          }, 350);
+          return;
+        }
+        finish(err);
+      });
     }
     catch (e) { finish(e); }
   });
@@ -34,7 +58,7 @@ module.exports = { loadURLAlive };
 // Only one owner may show an offline page / schedule an OAuth retry for that navigation.
 function createFailureOwner({ now = Date.now, duplicateMs = 2000 } = {}) {
   let active = null, next = 0, recent = null;
-  const aborted = x => [-3, 'ERR_ABORTED', 'ERR_RENDER_PROCESS_GONE', 'ERR_WEB_CONTENTS_DESTROYED'].includes(x?.code);
+  const aborted = x => [-3, 'ERR_ABORTED', 'ERR_RENDER_PROCESS_GONE', 'ERR_WEB_CONTENTS_DESTROYED'].includes(x?.code) || x?.errno === -3 || /ERR_ABORTED|\(-3\)/i.test(String(x?.message || x?.desc || ''));
   const remember = (failure, aliases = []) => { recent = { at: now(), urls: new Set([...aliases, failure.url].filter(Boolean)) }; return failure; };
   return {
     begin(url) { recent = null; active = { id: ++next, target: url, urls: new Set([url]), failure: null, handled: false }; return active.id; },

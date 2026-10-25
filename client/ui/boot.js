@@ -210,9 +210,9 @@ const WebBar = (() => {
       try { if (typeof Pool !== 'undefined' && Pool.load) void Pool.load().then(() => Bar.render(), () => {}); } catch {}
       let sid0 = sidNow();
       setInterval(() => { if (!wrap?.isConnected) { wrap = null; try { mount(); } catch {} } const s = sidNow(); if (s !== sid0) { sid0 = s; Bar.render(); } }, 1500);
-      const ping = () => { if (!document.hidden) void IP.ping?.()?.then?.(() => Bar.render(), () => {}); };
+      const ping = () => { if (!(typeof document !== 'undefined' && document.hidden)) void IP.ping?.()?.then?.(() => Bar.render(), () => {}); };
       setTimeout(ping, 1500); setInterval(ping, 90000);
-      setInterval(() => { if (!document.hidden) { void hostInfo(); Bar.render(); } }, 15000);
+      setInterval(() => { if (!(typeof document !== 'undefined' && document.hidden)) { void hostInfo(); Bar.render(); } }, 15000);
       return true;
     },
   };
@@ -505,6 +505,7 @@ const WebSide = (() => {
   return { start, paint, _cache: cache };
 })();
 
+
 async function init() {
   Bus.on('chat', c => scheduleChat(c));
   Bus.on('history', () => { UI.renderListSoon(); UI.renderTabs(); if (UI.els?.chat) scheduleChat(UI.els.chat); });
@@ -515,9 +516,9 @@ async function init() {
   Bus.on('rank', () => UI.renderListSoon());
   // 上次没删完的归档对话（删到一半退出了 App / 在等每小时的额度）：打开 20 秒后接着删
   setTimeout(() => { try { if (isMob()) LaunchPick.preload(); } catch {} }, 4000);
-  addEventListener('focus', () => { try { if (isMob()) LaunchPick.preload(); } catch {} });
+  let _lastMobPreloadAt = 0;
+  addEventListener('focus', () => { try { if (isMob() && now() - _lastMobPreloadAt > 30000) { _lastMobPreloadAt = now(); LaunchPick.preload(); } } catch {} });
   setTimeout(() => { try { Bulk.resume(); } catch {} }, 20e3);
-  setTimeout(() => void ProbeBankCache.load(), 1500);
   setTimeout(() => { try { ProtocolSchema?.autoSync?.(false); } catch {} }, 8000);
   setInterval(() => void ProbeBankCache.refresh(), 30 * 60e3);
   Bus.on('fav', () => UI.renderList());
@@ -536,7 +537,7 @@ async function init() {
     // 任务完成通知：App 在后台时，对话回复完成 / 等待你回答 / 出错 → 系统通知；假完成、中途断链待续接、抽卡对话一律不通知
     if (c.gacha || Gacha.owns(c.sid) || Prefs.notify === false || info?.forced || info?.fake || info?.midStall || c.fakeEnd || c.midTurnStall) return;
     if (typeof KeepAlive !== 'undefined' && KeepAlive.isMidTurnStalled?.(c)) return;
-    const bg = document.hidden || !document.hasFocus();
+    const bg = (typeof document !== 'undefined' && document.hidden) || !document.hasFocus();
     if (!bg && !Host.notify) return;   // 安卓由外壳判断（App 在前台且正看着这个账号时不弹）
     try {
       // 通知标题用备注；没有备注用型号名（通知里没有厂商图标，用完整型号名如 glm-5.3），不再用「模型/时间/备注」整串会话名
@@ -650,25 +651,34 @@ async function init() {
   { const fix = e => { const t = e.target; if (t && t !== document && t !== document.body && t !== document.documentElement && t.id !== 'app' && t.id !== 'main') return; for (const el of t === document ? [document.scrollingElement, document.body] : [t]) if (el && (el === document.body || el === document.documentElement || el.id === 'app' || el.id === 'main') && (el.scrollTop || el.scrollLeft)) { el.scrollTop = 0; el.scrollLeft = 0; } };
     document.addEventListener('scroll', fix, { capture: true, passive: true }); }
   // 别的窗口（账号菜单）可能改了共享设置（金色点亮 / 主题 / 检测间隔）或本账号的抽卡设置：回到这个窗口时重新读一次
+  let _lastFocusPullAt = 0;
   addEventListener('focus', () => {
+    if (now() - _lastFocusPullAt < 25000) return;
+    _lastFocusPullAt = now();
     Shared.pull().catch(() => {});
     if (!Gacha.busy()) Gacha.pullOwn().then(() => { UI.renderGachaBadge?.(); document.querySelectorAll('.gbtn2:not([data-acct])').forEach(b => GPop.paint?.(b)); }).catch(() => {});
   });
-  document.addEventListener('visibilitychange', () => { if (!document.hidden) Shared.pull().catch(() => {}); });
+  document.addEventListener('visibilitychange', () => { if (!(typeof document !== 'undefined' && document.hidden) && now() - _lastFocusPullAt >= 15000) { _lastFocusPullAt = now(); Shared.pull().catch(() => {}); } });
   UI.renderAcct(); UI.renderQuota(); UI.renderGachaBadge();
   try { History.warm(UI.host?.account?.id || 'web'); } catch {}
   void TitleSync.start().catch(e=>TitleSync.error(describe(e)));
   // 出口 IP 与实时延迟合一采样：前台每 30 秒由 IP.ping 同步刷新延迟与出口 IP（IP.poll 自动复用不重发）；窗口隐藏且非抽卡时延长至 5 分钟一次，大幅节省 EdgeTunnel 请求配额
+  if (UI.host?.account?.status?.ip && !IP.ip) {
+    IP.ip = UI.host.account.status.ip;
+    if (UI.host.account.status.loc) IP.loc = UI.host.account.status.loc;
+    IP.at = now(); IP.checkedAt = now();
+    if (UI.host.account.status.ms) IP.recordRtt?.(UI.host.account.status.ms);
+  }
   IP.poll();
-  IP.ping(); setInterval(() => { if (!document.hidden && navigator.onLine !== false) IP.ping(); }, 30000);
+  IP.ping(); setInterval(() => { if (!(typeof document !== 'undefined' && document.hidden) && navigator.onLine !== false) IP.ping(); }, 30000);
   Bus.on('rtt', () => { const el = document.getElementById('ip-rtt'); if (el) { el.className = IP.rttCls(); el.textContent = IP.rttText(); } });
-  setInterval(() => Traffic.tick(), 1000);
+  setInterval(() => { if (!(typeof document !== 'undefined' && document.hidden)) Traffic.tick(); }, 1000);
   setInterval(() => {
-    if (IP.polling) return;
-    const base = IP.fast ? 4000 : Math.max(15, Prefs.ipPoll || 60) * 1000, gap = document.hidden && !IP.fast ? Math.max(base, 300000) : base;
+    if (IP.polling || ((typeof document !== 'undefined' && document.hidden) && !IP.fast)) return;
+    const base = IP.fast ? 4000 : Math.max(15, Prefs.ipPoll || 60) * 1000, gap = (typeof document !== 'undefined' && document.hidden) && !IP.fast ? Math.max(base, 300000) : base;
     const retryGap = IP.err ? Math.max(gap, Math.min(120000, 15000 * 2 ** Math.min(IP.failures - 1, 3))) : gap;
     if (navigator.onLine !== false && now() - Math.max(IP.at, IP.checkedAt || 0) >= retryGap) IP.poll();
-  }, 1000);
+  }, 3000);
 
   // 邮件链接（找回 / 设置密码）跳回来：直接显示「设置新密码」
   // 浏览器模式输入框旁的「抽卡」按钮跳回来：登录就绪后直接打开抽卡面板
@@ -748,7 +758,7 @@ async function init() {
     const cm = Store.get('me:u', null);
     const hasLocalState = !!(History.items?.length || Store.get('tabs', null)?.length || Store.get('tabs:v1', null)?.list?.length || Tabs.list?.length || (typeof MsgCache !== 'undefined' && MsgCache.keys?.()?.length));
     const isFixtureAcct = Boolean(window.__fixture || window.__routeFixture || /@example\.invalid$/i.test(String(UI.host?.account?.email || '')) || /^(?:https?:\/\/|socks5:\/\/)?127\.0\.0\.1:(?:1|9|10)\b/i.test(String(UI.host?.account?.proxy || '')));
-    const hasConfiguredAccount = Boolean(!isFixtureAcct && (UI.host?.account?.id || UI.host?.account?.email || UI.host?.account?.hasPw || UI.host?.account?.hasPassword));
+    const hasConfiguredAccount = Boolean(!isFixtureAcct && (UI.host?.account?.email || UI.host?.account?.hasPw || UI.host?.account?.hasPassword || UI.host?.account?.status?.loggedIn));
     if ((cm && cm.id && (!expectedEmail || sameAcctEmail(cm.email, expectedEmail))) || hasLocalState || hasConfiguredAccount) {
       const em = expectedEmail || cm?.email || UI.host?.account?.email || UI.host?.account?.name || '本地账号';
       UI.me = (cm && cm.id) ? cm : { id: UI.host?.account?.id || 'local', email: em, name: String(em).split('@')[0] };
@@ -829,7 +839,7 @@ async function init() {
           UI.renderAcct(); return UI.loginGate('自动登录失败：' + describe(e));
         }
       }
-    } else if (early && !window.__fixture && !window.__routeFixture) {
+    } else if (early && !window.__fixture && !window.__routeFixture && (History.items?.length || Store.get('tabs', null)?.length || Store.get('tabs:v1', null)?.list?.length)) {
       try { Host.noteAccount?.({ loggedIn: false })?.catch?.(() => {}); } catch {}
       UI.enterBrowseMode('已保留本地缓存对话 · 登录会话过期，可直接查阅本地记录');
       return;
@@ -848,6 +858,19 @@ async function init() {
       localStorage.removeItem('anc-auth'); localStorage.removeItem('anc-auth-email');
     } catch (e) { UI.me = null; return UI.loginGate('身份已核对，但本地账号信息保存失败：' + cleanErr(e)); }
   }
+  UI.activateAuthedSession = async function(user) {
+    if (!user?.id) { location.reload(); return; }
+    Store.set('me:u', user);
+    UI.me = user;
+    UI.authed = true;
+    window.__BRANA_BROWSE_MODE = false;
+    try { document.querySelectorAll('.connbar, .route-recovery-note, .modal-back.auth-back').forEach(el => el.remove()); } catch {}
+    try { shell(); UI.renderAcct(); UI.renderTabs(); UI.shown(); } catch { location.reload(); return; }
+    try { Acct.report(); } catch {}
+    void (async () => {
+      try { await Promise.all([Models.load?.(), History.refresh?.(), Pulse.poll?.()]).catch(() => {}); UI.renderList?.(); UI.renderAcct?.(); KeepAlive.start?.(); } catch {}
+    })();
+  };
   UI.authed = true; UI.renderAcct();
   // 在网页里（网页注册 / 网页登录 / 令牌链接跳转 / 浏览器模式）登录成功、回到客户端后，把邮箱与网页填写/预设的密码记到这个账号上（代理 / 地区 / 节点原样保留）
   { const c = UI.host?.account || {}, hasSavedPw = Boolean(c.hasPw || c.hasPassword);
@@ -988,7 +1011,7 @@ async function init() {
   };
   // 安卓：第一次（只问一次）请用户允许不受电池优化限制，熄屏后才能持续抽卡 / 发队列
   if (Host.bgStatus) { const ask = async () => { const r = await Host.bgStatus().catch(() => null); if (!r || r.battery || r.asked || !r.front) return; if (document.querySelector('.lpick,.modal-back:not(.anc-gh),.eflow')) { setTimeout(ask, 3000); return; } Host.bgAllow('asked'); if (await Dialog.confirm({ title: '允许后台运行', text: '熄屏或切到后台时继续抽卡、发送队列消息、接收回复，需要允许 Brana AI 不受电池优化限制。之后也可以在「设置 → 后台运行」里改。', ok: '去允许' })) Host.bgAllow('battery'); }; setTimeout(ask, 5000); }
-  setInterval(bgRep, 4000); Bus.on('gacha', () => { clearTimeout(bgRep.t); bgRep.t = setTimeout(bgRep, 300); }); setTimeout(bgRep, 1500);
+  setInterval(() => { if (!(typeof document !== 'undefined' && document.hidden) || bgRep.k !== '{"gacha":false,"queue":0,"stream":0}') bgRep(); }, 10000); Bus.on('gacha', () => { clearTimeout(bgRep.t); bgRep.t = setTimeout(bgRep, 300); }); Bus.on('turn', () => { clearTimeout(bgRep.t); bgRep.t = setTimeout(bgRep, 300); }); setTimeout(bgRep, 1500);
   if (cmd?.open) setTimeout(() => Tabs.open(cmd.open), 300);
   // 点「任务完成」通知进来：打开那个对话
   window.__ancOpenSid = sid => { Host.takeOpen?.()?.catch?.(() => {}); if (sid === '__captcha') { try { Gacha.openCaptcha(); } catch {} return; } if (sid && UI.me) Tabs.open(sid); };
@@ -998,10 +1021,10 @@ async function init() {
   if (cmd?.stats) setTimeout(() => AcctStats.cmd(cmd).catch(() => {}), 800);
   if (cmd === 'gacha-start') setTimeout(() => { if (!Gacha.busy()) bgStart(); else GPop.report(); }, 1200); else GPop.report();
   // 安卓多账号：这个账号的页面被切到最前面（之前在后台运行）：同步状态栏配色、刷新出口 IP / 对话列表
-  window.__ancFront = () => { try { Chrome.apply(); IP.poll(); History.auto('front'); UI.renderGachaBadge?.(); Sync.kick(); if (typeof PelicanShots !== 'undefined') PelicanShots.pull?.(false, true); } catch {} };
+  window.__ancFront = () => { try { Chrome.apply(); IP.poll(); History.auto('front'); UI.renderGachaBadge?.(); Sync.kick(); } catch {} };
   Sync.start();
   // 窗口重新可见时，检查没有在流式接收的进行中对话
-  document.addEventListener('visibilitychange', () => { if (!document.hidden) { for (const c of Chats.values()) if (c.busy && !c.streaming && !c.isEvaluation && !(typeof EvalEngine !== 'undefined' && EvalEngine.isEvalChat?.(c))) c.stream(); IP.poll(); } });
+  document.addEventListener('visibilitychange', () => { if (!(typeof document !== 'undefined' && document.hidden)) { for (const c of Chats.values()) if (c.busy && !c.streaming && !c.isEvaluation && !(typeof EvalEngine !== 'undefined' && EvalEngine.isEvalChat?.(c))) c.stream(); IP.poll(); } });
 }
 
 function boot() {

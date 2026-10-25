@@ -1,0 +1,6 @@
+{
+  "name": "@brana/browser-workspace",
+  "version": "1.0.0",
+  "private": true,
+  "extensionCompatibilityTest": true
+}

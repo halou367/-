@@ -7,12 +7,16 @@ const AuthEnv = {
     const result=await Host.authTask(request);if(!result?.ok)throw Object.assign(Error(result?.error||'认证环境未确认'),{code:result?.code||'AUTH_ENV_UNCONFIRMED'});return result;
   },
   async exit(){
+    const inFixture=Boolean(typeof window!=='undefined'&&(window.__fixture||window.__routeFixture||window.__capFetch));
+    if(!inFixture&&typeof IP!=='undefined'&&IP.ip&&!IP.err&&Date.now()-(IP.at||0)<20000)return IP.ip;
     return NetPolicy.deadline(async signal=>{
       const response=await rawFetch('/cdn-cgi/trace',{credentials:'same-origin',cache:'no-store',signal});
       if(!response.ok)throw Object.assign(Error('实际出口检测失败（HTTP '+response.status+'），未开始认证'),{status:response.status});
       const body=await response.text(),ip=/^ip=([0-9a-fA-F:.]+)\s*$/m.exec(body)?.[1];
-      if(!ip)throw Error('未获得当前账号的真实出口，未开始认证');return ip;
-    },{timeout:12000});
+      if(!ip)throw Error('未获得当前账号的真实出口，未开始认证');
+      if(typeof IP!=='undefined'){IP.ip=ip;IP.err=null;IP.at=Date.now();IP.checkedAt=Date.now();}
+      return ip;
+    },{timeout:6000});
   },
   async restore(opt){
     if(typeof Host.authTask!=='function')return null;
@@ -80,11 +84,24 @@ const AuthEnv = {
     if(UI.host?.account)UI.host.account.authLocked=false;this.paint();Bus.emit('route-state');return true;
   },
   watch(){
-    if(this.observer)return;this.observer=new MutationObserver(()=>this.paint());this.observer.observe(document.body||document.documentElement,{childList:true,subtree:true});
+    if(!this.state?.locked){
+      if(this.observer){this.observer.disconnect();this.observer=null;}
+      return;
+    }
+    if(this.observer||typeof MutationObserver==='undefined')return;
+    const root=document.body||document.documentElement;if(!root)return;
+    this.observer=new MutationObserver(()=>{
+      if(!this.state?.locked){this.observer?.disconnect();this.observer=null;return;}
+      if(this._rafPaint)return;
+      const sched=typeof requestAnimationFrame==='function'?requestAnimationFrame:fn=>setTimeout(fn,16);
+      this._rafPaint=sched(()=>{this._rafPaint=0;this.paint();});
+    });
+    this.observer.observe(root,{childList:true,subtree:true});
   },
   paint(){
     const old=document.querySelector('.auth-route-lock'),task=this.state;
-    if(!task?.locked||task.accountId!==UI.host?.account?.id){old?.remove();return;}
+    if(!task?.locked||task.accountId!==UI.host?.account?.id){old?.remove();if(this.observer){this.observer.disconnect();this.observer=null;}return;}
+    this.watch();
     const target=document.querySelector('#view .auth-form')||document.querySelector('#view .lform');if(!target){old?.remove();return;}
     const expired=task.expires<=Date.now(),busy=!!(this.operations||this.starting),key=[task.ticket,task.email,task.stage,expired,busy].join('|');
     if(old?.dataset.key===key&&old.parentElement===target)return;

@@ -13,7 +13,7 @@ function withAbort(promise,signal){
     Promise.resolve(promise).then(v=>{cleanup();resolve(v);},e=>{cleanup();reject(e);});
   });
 }
-function createPoolProbeRunner(run,{limit=4,queueLimit=4096,deadlineMs=45000}={}){
+function createPoolProbeRunner(run,{limit=4,queueLimit=4096,deadlineMs=120000}={}){
   const jobs=new Map(),queue=[],slots=Array.from({length:limit},(_,i)=>i);
   const validId=id=>typeof id==='string'&&/^[a-zA-Z0-9._-]{1,100}$/.test(id);
   const key=(sender,id)=>String(sender.id)+':'+id;

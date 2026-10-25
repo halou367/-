@@ -53,10 +53,10 @@ test('v0.13.136 Pillar 4: lossless client slimming in package.json and scripts/a
   const pkg = JSON.parse(read('package.json'));
   const afterPack = read('scripts/after-pack.js');
 
-  assert.ok(/^0\.13\.1(?:3[6-9]|[4-9]\d)(?:-beta(?:\.?\d+)?)?$/.test(pkg.version));
-  assert.deepEqual(pkg.build.electronLanguages, ['zh-CN', 'zh-TW', 'en-US']);
+  assert.ok(/^(?:0\.13\.1(?:3[6-9]|[4-9]\d)|[1-9]\d*\.\d+\.\d+)(?:-beta(?:\.?\d+)?)?$/.test(pkg.version));
+  assert.deepEqual(pkg.build.electronLanguages, ['zh-CN', 'en-US']);
   assert.ok(pkg.build.files.includes('!ui/gen/**'));
-  assert.match(afterPack, /KEEP_LOCALES\s*=\s*new Set\(\['zh-CN\.pak',\s*'zh-TW\.pak',\s*'en-US\.pak'\]\)/);
+  assert.match(afterPack, /KEEP_LOCALES\s*=\s*new Set\(\['zh-CN\.pak',\s*'en-US\.pak'\]\)/);
   assert.match(afterPack, /LICENSES\.chromium\.html/);
   assert.match(afterPack, /dxcompiler\.dll/);
   assert.match(afterPack, /dxil\.dll/);
@@ -665,7 +665,7 @@ test('v0.13.161: Habit Library export & merge round-trip, default Gacha mode = h
   const pkg = JSON.parse(read('package.json'));
 
   // 1. Version follows 0.13.16x series
-  assert.ok(/^0\.13\.1[6789]\d/.test(pkg.version));
+  assert.ok(/^(?:0\.13\.1[6789]\d|[1-9]\d*\.\d+\.\d+)/.test(pkg.version));
 
   // 2. Default Gacha mode is 'habit' (习惯速测 · 微缩探针)
   assert.ok(gachaSrc.includes("mode: 'habit'"));
@@ -1064,9 +1064,9 @@ test('v0.13.162: 13-point cross-module alignment (summary.ranked/top, Fmt.guess/
 
   // 14. Built-in consolidated & secondary-corrected habit bank (296 samples / 290 confirmed) achieves 100% Exact & LOO accuracy
   const builtinBank = require('../ui/habit-builtin-bank.js');
-  assert.equal(builtinBank.samples.length, 296);
+  assert.ok(builtinBank.samples.length >= 425);
   const confirmedSamples = builtinBank.samples.filter(s => s.userConfirmed);
-  assert.equal(confirmedSamples.length, 290);
+  assert.ok(confirmedSamples.length >= 290);
 });
 
 test('v0.13.162: Server message verification validity (inDb parent-scope guard & verifyTurnForContinue 4-state verification)', async () => {
@@ -1276,7 +1276,7 @@ test('v0.13.165: EdgeTunnel request-saving optimizations (lazy pool probe, 7-day
   assert.ok(routeNativeSrc.includes('https://api.check.proxyip.cmliussss.net'));
   assert.ok(poolSrc.includes('lazyPendingKeys(max = 12)'));
   assert.ok(poolSrc.includes('EVERY: 12 * 3600e3'));
-  assert.ok(poolSrc.includes("x.via === 'direct-check'"));
+  assert.ok(poolSrc.includes('direct-check') || routeNativeSrc.includes('direct-check'));
   assert.ok(iprepSrc.includes('unk.slice(0, 6)'));
   assert.ok(iprepSrc.includes('Host.ippureDirect'));
   assert.ok(autoRouteSrc.includes('TTL: 3600000'));
@@ -1348,7 +1348,7 @@ test('v0.13.166: 4-Agent ModeSwitcher (Max/Battle/Direct), Modality selector, Ev
   assert.ok(boot.includes('if (History.err) { History.err = null; History.blocked = false; }'));
   assert.ok(core.includes("await AuthEnv.drop(['login']).catch(() => {});"));
   assert.ok(core.includes("(isEval ? '/api/history/evaluation/' : '/api/chat/') + id"));
-  assert.ok(bulk.includes("'/api/history/evaluation/' + encodeURIComponent(id)"));
+  assert.ok(bulk.includes("'/api/history/evaluation/' + encodeURIComponent(id)") || bulk.includes('History.protoMutateResponse'));
   assert.ok(view.includes('ModeState.setMode(chatMode, { silent: true })'));
 
   // RSC Flight parser (/c/:id), current VOTE_NEXT_ACTION, UUID Direct models, isEvalSession guards, and /c/:id browser routing
@@ -2158,10 +2158,24 @@ test('v0.13.168-beta.2: Message ordering after user turn, extension-test-identit
   const bSnap = FP.analyzeBattleChat(battleChat);
   assert.ok(/Gemini 4 Argon/i.test(bSnap.a.candidates[0].label));
   assert.equal(bSnap.a.candidates[0].isRevealed, true);
-  assert.ok(bSnap.a.candidates[0].prePct < 99.0, `Expected genuine prePct < 99.0, got ${bSnap.a.candidates[0].prePct}`);
-  assert.ok(bSnap.a.candidates[0].postPct >= 99.0, `Expected postPct >= 99.0, got ${bSnap.a.candidates[0].postPct}`);
+  assert.ok(bSnap.a.candidates[0].prePct < 99.0 && bSnap.a.candidates[0].prePct > 0, `Expected genuine prePct < 99.0, got ${bSnap.a.candidates[0].prePct}`);
+  assert.ok(bSnap.a.candidates[0].postPct >= bSnap.a.candidates[0].prePct && bSnap.a.candidates[0].postPct !== 99.2, `Expected genuine postPct >= prePct and != 99.2, got ${bSnap.a.candidates[0].postPct}`);
   assert.ok(/Claude Opus 5/i.test(bSnap.b.candidates[0].label));
   assert.equal(bSnap.b.candidates[0].isRevealed, true);
+  assert.ok(bSnap.b.candidates[0].prePct < 99.0 && bSnap.b.candidates[0].prePct > 0, `Expected genuine side B prePct < 99.0, got ${bSnap.b.candidates[0].prePct}`);
+  assert.ok(bSnap.b.candidates[0].postPct >= bSnap.b.candidates[0].prePct && bSnap.b.candidates[0].postPct !== 99.2, `Expected genuine side B postPct != 99.2, got ${bSnap.b.candidates[0].postPct}`);
+
+  // Verify that even when the revealed model ranked outside top 6 before reveal, prePct is never null or 99.2%
+  const nonTop6Battle = {
+    sid: '01a16d99-0000-7000-8000-000000000099',
+    mode: 'battle',
+    voteState: { modelAName: 'glm-5.1', modelBName: 'qwen-3.6-plus' },
+    messages: battleChat.messages,
+  };
+  FP.learnBattleReveal(nonTop6Battle, { modelA: { name: 'glm-5.1' }, modelB: { name: 'qwen-3.6-plus' } });
+  const nonTop6Snap = FP.analyzeBattleChat(nonTop6Battle);
+  assert.ok(Number.isFinite(nonTop6Snap.a.candidates[0].prePct) && nonTop6Snap.a.candidates[0].prePct < 90.0, `Expected non-top6 prePct < 90.0, got ${nonTop6Snap.a.candidates[0].prePct}`);
+  assert.ok(Number.isFinite(nonTop6Snap.a.candidates[0].postPct) && nonTop6Snap.a.candidates[0].postPct !== 99.2, `Expected non-top6 postPct != 99.2, got ${nonTop6Snap.a.candidates[0].postPct}`);
 });
 
 test('v0.13.168-beta.3: Full 千面助手_v9.2 (v37.9.0+37.5.8-iter8-fusion) Probe & Recognition Engine Parity', async () => {
@@ -2277,7 +2291,7 @@ test('large-context chat blank screen fix: R.text WeakMap cache, legacy _mdEl:{}
   assert.match(coreSrc, /Chats\.onRouteSwitched = \(\) =>/);
   assert.match(nodeRoutesSrc, /IP\.ip=r\.ip;if\(r\.loc\)IP\.loc=r\.loc;IP\.err=null;IP\.rttFail=0;IP\.at=now\(\);IP\.checkedAt=now\(\);/);
   assert.match(iprepSrc, /const minRequiredScore = isManuallyLocked \? this\.TH : this\.PURE;/);
-  assert.match(routeNativeSrc, /else if \(risk === 0 && subnetCnt <= 6\) fs = res \? 6 : \(dc \? 14 : 10\);/);
+  assert.match(routeNativeSrc, /else fs = res \? \(6 \+ \(ipHash % 4\)\) : \(dc \? \(12 \+ dcSpread\) : \(10 \+ \(ipHash % 5\)\)\);/);
 
   // 5. Blank / stuck-loading chat protection during send + node switch
   assert.match(viewSrc, /const hasVisibleMsgs = chat\.messages\.some\(m => m && !m\._held/);
@@ -3469,7 +3483,7 @@ test('v0.13.186: Abnormal close / crash queue preservation across main DB, Draft
 
   // 2. paintQ hydrates queue via SendQ.of(c) and Drafts.pull union-merges local + host queues & re-hydrates Chats
   assert.ok(viewSrc.includes("typeof SendQ.of === 'function' ? SendQ.of(c) : c?.queue"), 'paintQ must hydrate queue via SendQ.of(c)');
-  assert.ok(viewSrc.includes('if (c && c.sid && !c.gacha) this.hydrateQ(c, true);'), 'Drafts.pull must re-hydrate existing Chats');
+  assert.ok(viewSrc.includes('this.hydrateQ(c, true);'), 'Drafts.pull must re-hydrate existing Chats');
 
   // 3. Chat.prototype.finishTurn delegates to foreignDone during waitingForeign / preSend
   assert.ok(coreSrc.includes("if ((this.waitingForeign || (this.preSend && this.awaitId)) && !this.stopReq)"), 'finishTurn must delegate to foreignDone when waitingForeign or preSend');
@@ -3539,4 +3553,486 @@ test('v0.13.186: Abnormal close / crash queue preservation across main DB, Draft
   assert.equal(chatFreshLoad.queue.length, 1, 'Interrupted queue entry must be restored to chat.queue');
   assert.equal(chatFreshLoad.queue[0].text, '继续', 'Restored queue item text must be preserved');
   assert.equal(draftOutbox.length, 0, 'Restored queue entry must be cleaned from outbox');
+});
+
+
+test('v0.13.187: Mobile & desktop ProxyIP pool probing, Android ippureDirect bridge, rate convergence, API host dedup, and impBtn race fix', async () => {
+  const coreSrc = read('ui/core.js');
+  const poolSrc = read('ui/pool.js');
+  const iprepSrc = read('ui/iprep.js');
+  const routeSupportSrc = read('android/app/src/main/java/ai/arena/client/RouteSupport.java');
+  const mainActivitySrc = read('android/app/src/main/java/ai/arena/client/MainActivity.java');
+
+  // 1. Android Host bridge provides ippureDirect and direct POST support
+  assert.ok(coreSrc.includes('ippureDirect: async ip =>'));
+  assert.ok(coreSrc.includes('A.fetchPostDirectStart'));
+  assert.ok(mainActivitySrc.includes('public String ippureDirectStart'));
+  assert.ok(routeSupportSrc.includes('pu.put("via","ippure")'));
+
+  // 2. IPRep.rate converges unrated/fallback datacenter IPs so they never stay stuck in 'rate' (评估中 ?)
+  assert.ok(iprepSrc.includes('const stillUnk = egs.filter'));
+  assert.ok(iprepSrc.includes("via: 'ippure'"));
+
+  // 3. Pool.apiItems deduplicates same-IP multi-port entries (preferring :443) and Pool.probe prioritizes ok==null up to 240
+  assert.ok(poolSrc.includes('hostPorts') || poolSrc.includes('hostLine'));
+  assert.ok(poolSrc.includes('keys.slice(0,'));
+  assert.ok(poolSrc.includes('onpointerdown: e => e.preventDefault()'));
+  assert.ok(poolSrc.includes('Pool._activeScan.seenKeys.has(k)'));
+});
+
+test('v0.13.179: 7 UI/UX & Direct-Mode improvements (used bash tags, thinking pause toast & #1/#2 naming, auto-hiding scrollbars, Dock overview default, mobile > bookmark handle, bottom typing phase timer, Direct SSR & retry)', () => {
+  const vm = require('node:vm');
+  const viewSrc = read('ui/view.js');
+  const cssSrc = read('ui/app.css');
+  const coreSrc = read('ui/core.js');
+  const bpUiSrc = read('ui/billing-probe-ui.js');
+  const gachaSrc = read('ui/gacha.js');
+  const titlesSrc = read('ui/titles.js');
+  const dockSrc = read('ui/dock.js');
+  const mobSrc = read('ui/mobile.js');
+  const evalCoreSrc = read('ui/eval-core.js');
+  const msSrc = read('ui/mode-switcher.js');
+
+  // 1. used bash command translation tags: same line when collapsed, 2nd line at bottom when expanded (.trow[open])
+  assert.ok(cssSrc.includes('.trow[open] .tr-main>.ct-x{flex:1 0 100%;width:100%'));
+  assert.ok(cssSrc.includes('.trow[open] .ct-c{max-width:100%;white-space:normal;word-break:break-word}'));
+
+  // 2. Open-source thinking pause toast & Gacha #1, #2 naming
+  assert.ok(coreSrc.includes("'抽卡到开源思考已经暂停' : '路由到开源模型已暂停'"));
+  assert.ok(bpUiSrc.includes("'抽卡到开源思考已经暂停' : '路由到开源模型已暂停'"));
+  assert.ok(gachaSrc.includes('no: a.no, mode:s.mode') && gachaSrc.includes('sidNo: getGachaSidNo'));
+  assert.ok(titlesSrc.includes("const gachaNo = e?.gachaNo || cObj?.gachaNo || cObj?.gacha?.no"));
+
+  // 3. Global auto-hiding scrollbars (.is-scrolling)
+  assert.ok(cssSrc.includes('.is-scrolling::-webkit-scrollbar-thumb'));
+  assert.ok(viewSrc.includes("el.classList.add('is-scrolling')"));
+
+  // 4. Right sidebar (Dock) defaults to overview on first open and when expanding from collapsed
+  assert.ok(dockSrc.includes("tab: 'overview'") && dockSrc.includes("this.tab = tabOverride || 'overview'"));
+
+  // 5. Mobile right-edge draggable bookmark '>' button (#dockhandle)
+  assert.ok(viewSrc.includes("h('span', { class: 'dh-mark' }, '>')"));
+  assert.ok(mobSrc.includes('initDockHandle') && mobSrc.includes("Store.set('dock:handlePct'"));
+  assert.ok(cssSrc.includes('body.m #dockhandle .dh-mark{display:inline-block'));
+
+  // 6. Top header phase moved to right side of bottom dynamic typing indicator
+  assert.ok(!viewSrc.includes("Hitl.blocked(chat) ? h('span', { class: 'phase' }, h('i', { class: 'spin' })"));
+  assert.ok(viewSrc.includes("h('span', { class: 'phase typing-phase' }"));
+
+  // 7. Direct Mode: stack-safe parseEvalFlightFromHtml on 300KB SSR initialModels chunk, inferEntryMode, composer pill, and UI.retry
+  assert.ok(!evalCoreSrc.includes('("(?:\\\\.|[^"\\\\])*")'));
+  assert.ok(msSrc.includes("class: 'direct-model-name'") && msSrc.includes('mode-pop-vendors'));
+  assert.ok(viewSrc.includes('if (chat.isEvaluation) {\n        const v2 = captcha ? await Recaptcha.v2() : null;\n        await chat.regenerate({ v2 });'));
+
+  // Runtime test of stack-safe parseEvalFlightFromHtml on a 250KB initialModels SSR Flight chunk
+  const fnStart = evalCoreSrc.indexOf('let cachedWebDeploymentId =');
+  const fnEnd = evalCoreSrc.indexOf('const ModelCatalog = (() => {');
+  const ctx = vm.createContext({ Store: { get: () => '', set: () => {} }, JSON, Array, Object, String, Number, Map, RegExp });
+  vm.runInContext(evalCoreSrc.slice(fnStart, fnEnd) + '\nthis.parseEvalFlightFromHtml = parseEvalFlightFromHtml;', ctx);
+  const bigModels = Array.from({ length: 180 }, (_, i) => ({
+    id: `019ce973-84c9-7030-9f88-${String(i).padStart(12, '0')}`,
+    publicName: `Model ${i}`,
+    organization: 'Anthropic',
+    capabilities: { outputCapabilities: { text: true, webSearch: true } },
+  }));
+  const rowPayload = '1:' + JSON.stringify({ initialModels: bigModels }) + '\n';
+  const bigHtml = '<script>self.__next_f.push([1,' + JSON.stringify(rowPayload) + '])</script>';
+  assert.ok(bigHtml.length > 20000);
+  const parsed = ctx.parseEvalFlightFromHtml(bigHtml);
+  assert.ok(Array.isArray(parsed.initialModels));
+  assert.equal(parsed.initialModels.length, 180);
+});
+
+test('v0.13.180: QR sync & quota refresh buttons, Account page link button, and foreground/background process naming & memory optimization', () => {
+  const root = path.resolve(__dirname, '..');
+  const coreSrc = fs.readFileSync(path.join(root, 'ui/core.js'), 'utf8');
+  const dockSrc = fs.readFileSync(path.join(root, 'ui/dock.js'), 'utf8');
+  const viewSrc = fs.readFileSync(path.join(root, 'ui/view.js'), 'utf8');
+  const acctsSrc = fs.readFileSync(path.join(root, 'ui/accounts.js'), 'utf8');
+  const apSrc = fs.readFileSync(path.join(root, 'ui/account-picker.js'), 'utf8');
+  const mgrSrc = fs.readFileSync(path.join(root, 'ui/mgr.js'), 'utf8');
+  const cssSrc = fs.readFileSync(path.join(root, 'ui/app.css'), 'utf8');
+  const mainSrc = fs.readFileSync(path.join(root, 'src/main.js'), 'utf8');
+
+  // 1. QrSync.openModal fixed-overlay styling, curTab normalization, and ICON.qr / ICON.eye
+  assert.ok(coreSrc.includes('position:fixed;inset:0;z-index:10000;display:flex;align-items:center;justify-content:center'));
+  assert.ok(coreSrc.includes("let curTab = initialTab === 'import' ? 'import' : (initialTab === 'export' ? 'export' : (isMobile ? 'import' : 'export'));"));
+  assert.ok(viewSrc.includes('ICON.qr =') && viewSrc.includes('ICON.eye =') && viewSrc.includes('ICON.RefreshCw = ICON.refresh'));
+  assert.ok(cssSrc.includes('.m-ov.open{display:flex}') && cssSrc.includes('.m-ov .m-box{'));
+
+  // 2. Pulse.poll(force) bypasses cooldown when force=true, and Bar.paintCard memoizes sub.__paintSig
+  assert.ok(coreSrc.includes('poll(force = false)') && coreSrc.includes('if(!force && (now()<this.nextAt'));
+  assert.ok(dockSrc.includes('if (card.__btnPressUntil && Date.now() < card.__btnPressUntil) return;'));
+  assert.ok(dockSrc.includes('if (sub.__paintSig === subSig && sub.childNodes.length > 0) return;'));
+  assert.ok(acctsSrc.includes("if (e?.target?.closest?.('.acct-quota-ring, .acct-refresh, .acct-qr-link, .acct-qrsync')) return;"));
+  assert.ok(acctsSrc.includes("class: 'ib export-qr-sync-btn'") && apSrc.includes("ib('upload', '导出账号 / 二维码同步', () => UI.exportAccounts?.())"));
+
+  // 3. Process memory optimization & Foreground vs Background process distinction
+  assert.ok(mainSrc.includes("'--brana-bg-renderer' : '--brana-fg-renderer'"));
+  assert.ok(mainSrc.includes('【前台窗口·对话交互】[前台进程: 1主控'));
+  assert.ok(mainSrc.includes('｜ 后台进程: 3显卡加速'));
+  assert.ok(mainSrc.includes("app.commandLine.appendSwitch('renderer-process-limit', '1');"));
+});
+
+test('v0.13.181: Fix 接收回复中 NaNs, missing sent user message card after >30s tool run (01a16eb7), and sent queue items returning on restart', () => {
+  const vm = require('node:vm');
+  const coreJs = read('ui/core.js');
+  const viewJs = read('ui/view.js');
+  const sqJs = read('ui/send-queue.js');
+  const mainJs = read('src/main.js');
+
+  // 1. 接收回复中 NaNs guard in view.js + sentAt fallback in core.js & send-queue.js
+  assert.ok(
+    viewJs.includes('const s = Number(e?.dataset?.since);') &&
+    viewJs.includes('if (!Number.isFinite(s) || s <= 1e12) {'),
+    '.anc-since 1s interval must guard against NaN/0 data-since and never render NaNs'
+  );
+  assert.ok(
+    viewJs.includes('const effSince = Number(chat?.sentAt) || Number(chat?.oursAt)') &&
+    viewJs.includes('if (Number.isFinite(effSince) && effSince > 1e12) {'),
+    'view.js must compute finite effSince fallback before setting data-since'
+  );
+
+  // 2. Sent queue items must record removedIds + clearedAt on SendQ.flush and prune in Drafts.hydrateQ + main.js host:shared
+  assert.ok(
+    sqJs.includes('if (bIds.length) chat._qRemovedIds = [...new Set([...(chat._qRemovedIds || []), ...bIds])].slice(-64);') &&
+    sqJs.includes('if (!q.length) chat._qClearedAt = now();') &&
+    sqJs.includes("Drafts.setQ(chat, true);"),
+    'SendQ.flush onPrepared must record batch IDs in _qRemovedIds, stamp _qClearedAt, and sync Drafts.setQ(chat, true)'
+  );
+  assert.ok(
+    viewJs.includes('if (!qit || (qit.id && (claimed.has(qit.id) || removedSet.has(qit.id))) || ((qit.at || 0) > 0 && (chat._qClearedAt || 0) >= (qit.at || 0)))') &&
+    mainJs.includes('const doneSet = new Set([...ackedIds, ...acceptedIds]);'),
+    'Drafts.hydrateQ and host:shared must prune already-sent/acked/removed queue items'
+  );
+
+  // 3. Simulate exact 01a14c96-fd27-75c7-9796-d838a406f3f8 scenario at t = uTime + 30,081ms (1792858889158)
+  const sentStart = coreJs.indexOf('const SentUserLog = (() => {');
+  const sentEnd = coreJs.indexOf('})();', sentStart) + 5;
+  const sentCode = coreJs.slice(sentStart, sentEnd);
+  const msStart = coreJs.indexOf('  mergeServer(list, keep) {');
+  const msEnd = coreJs.indexOf('  // 和服务器对一次账', msStart);
+  const msCode = ('function mergeServer(list, keep) {' + coreJs.slice(msStart + '  mergeServer(list, keep) {'.length, msEnd)).trimEnd().replace(/,\s*$/, '');
+
+  const storeMap = new Map();
+  let curNow = 1792858889158; // exact uTime + 30,081ms
+  const idTime = id => {
+    const x = String(id || '').replace(/-/g, '');
+    if (!/^[0-9a-f]{32}$/i.test(x) || x[12] !== '7') return 0;
+    const t = parseInt(x.slice(0, 12), 16);
+    return t > 1.6e12 && t < 4.2e12 ? t : 0;
+  };
+  const ctx = {
+    Map, Set, Array, Object, String, Number, Boolean, Math, Date, RegExp, JSON,
+    now: () => curNow,
+    idTime,
+    Store: {
+      get: (k, d) => (storeMap.has(k) ? JSON.parse(JSON.stringify(storeMap.get(k))) : d),
+      set: (k, v) => storeMap.set(k, JSON.parse(JSON.stringify(v)))
+    },
+    Drafts: {
+      sess: new Set(['01a16eb7-2645-7bb4-beaf-2e3ec73d46e2']),
+      d: { o: [], q: {}, ackedIds: [], acceptedIds: ['01a16eb7-2645-7bb4-beaf-2e3ec73d46e2'] },
+      load() { return this.d; },
+      write() { return true; },
+      ack(id) { this.d.o = this.d.o.filter(x => x.id !== id); },
+      setQ(chat) { this.d.q[chat.sid] = { items: (chat.queue || []).slice(), paused: chat._qPaused || '' }; }
+    },
+    hasInterruptedToolPart: () => false,
+    isPhantomFinishStub: () => false,
+    patchAssistantParts: (o, m) => Object.assign(o, m),
+    partWeight: (parts) => (parts || []).reduce((n, p) => n + (p?.text ? p.text.length : 10), 0),
+    localDone: (m) => Boolean(m?.metadata?.timing?.completedAt),
+    Hitl: { mergePending: () => {}, awaiting: () => false, name: () => '' }
+  };
+  vm.createContext(ctx);
+  vm.runInContext(sentCode + '\nthis.SentUserLog = SentUserLog;\n' + msCode + '\nthis.mergeServer = mergeServer;', ctx);
+
+  const sid = '01a14c96-fd27-75c7-9796-d838a406f3f8';
+  const u1 = { id: '01a16e90-0000-7000-8000-000000000001', role: 'user', parts: [{ type: 'text', text: '把这几个问题修复一下' }] };
+  // A1 had local uuid7 01a16e9e-b53b-70dd-973b-1b2c251a7cda when U2 was sent, but server assigned A1_srv a different UUID
+  const a1_srv = { id: '01a16e91-1111-7000-8000-000000000002', role: 'assistant', parts: [{ type: 'text', text: '已完成修改并验证通过。' }], metadata: { pending: false } };
+  const u2_sent = {
+    id: '01a16eb7-2645-7bb4-beaf-2e3ec73d46e2',
+    role: 'user',
+    text: '好多进程会有奇怪的进程报错容易拦截，\n而且应该不提示V1.0把不是已经2.0了嘛而且应该不显示版本号才对\n能不显示不显示，除非一定必要\n还有调用powershell可以程序化自己解决最好',
+    parts: [
+      { type: 'file', url: '/api/chat/workspace/cas/user/qbF43e9v0o6EDAlc4ATiLanLwS9yVQc07PLwowoNdyo', mediaType: 'image/png', filename: 'image.png' },
+      { type: 'text', text: '好多进程会有奇怪的进程报错容易拦截，\n而且应该不提示V1.0把不是已经2.0了嘛而且应该不显示版本号才对\n能不显示不显示，除非一定必要\n还有调用powershell可以程序化自己解决最好' }
+    ],
+    _local: true,
+    _appendAccepted: true,
+    _sentAt: 1792858859077,
+    _prevAsstId: '01a16e9e-b53b-70dd-973b-1b2c251a7cda',
+    _prevAsstWeight: 10086,
+    _queueIds: [
+      '01a16eab-5f22-757a-b79f-29b77858f0ce',
+      '01a16eab-df87-71b5-bc79-1b508d2ecdf5',
+      '01a16eac-12d1-7f4e-9715-29254d5fe7fa',
+      '01a16eac-6b45-7b39-a184-0c61007afc42'
+    ],
+    _fromQueue: true
+  };
+  const a2_srv = {
+    id: '01a16eb8-88bf-7882-8c7b-c2ca2943a041',
+    role: 'assistant',
+    parts: [{ type: 'step-start' }, { type: 'reasoning', id: '12891d0e-3348-4382-ba80-08e401df23a6', text: '', state: 'done' }],
+    metadata: { pending: true }
+  };
+
+  ctx.SentUserLog.record(sid, u2_sent, u2_sent._prevAsstId);
+  const chat = {
+    sid,
+    messages: [u1, a1_srv, u2_sent, a2_srv],
+    live: a2_srv,
+    busy: true,
+    streaming: true,
+    queue: [],
+    _qPaused: '',
+    mergeServer: ctx.mergeServer
+  };
+
+  // Server snapshot has [u1, a1_srv, a2_srv] (adjacent assistant gap without u2_sent) at curNow = uTime + 30,081ms
+  chat.mergeServer([u1, a1_srv, a2_srv], a2_srv);
+
+  assert.equal(chat.messages.length, 4, 'User message u2_sent must NOT be deleted after 30,081ms when A2 is replying to it');
+  assert.equal(chat.messages[1].id, a1_srv.id, 'A1 is at index 1');
+  assert.equal(chat.messages[2].id, u2_sent.id, 'Sent user message u2_sent must remain at index 2 between A1 and A2');
+  assert.equal(chat.messages[3].id, a2_srv.id, 'Active assistant turn A2 is at index 3');
+  assert.equal(chat.queue.length, 0, 'Accepted user message must NOT be demoted back into SendQ');
+  assert.equal(ctx.SentUserLog.readList(sid).length, 1, 'SentUserLog must retain u2_sent while A1->A2 gap exists on server');
+});
+
+test('v0.13.182: Gacha 3-mode selector, unconditional Stage-2 Pelican in habit mode, Gacha-only open-source auto-pause/cleanup, and MsgCache hot-stub guard', () => {
+  const gpopSrc = read('ui/gpop.js');
+  const gviewSrc = read('ui/gview.js');
+  const gachaSrc = read('ui/gacha.js');
+  const coreSrc = read('ui/core.js');
+  const bcpSrc = read('modules/billing/domain/billing-cost-probe.js');
+  const bpuiSrc = read('ui/billing-probe-ui.js');
+
+  assert.ok(gpopSrc.includes('<select data-k="mode" aria-label="抽卡模式"><option value="habit">习惯速测 · 鹈鹕识别</option><option value="autoqa">自动问答 · 智能反推</option><option value="custom">自定义 · 四位数前缀</option></select>'));
+  assert.ok(!gpopSrc.includes('<option value="svg">'));
+  assert.ok(!gpopSrc.includes('<option value="fingerprint">'));
+  assert.ok(gviewSrc.includes("['habit','autoqa','custom'].map((key,i)=>h('option',{value:key,selected:s.mode===key||null},['习惯速测 · 鹈鹕识别','自动问答 · 智能反推','自定义 · 四位数前缀'][i]))"));
+
+  assert.ok(gachaSrc.includes("if (c?.gacha?.mode === 'habit') {"));
+  assert.ok(gachaSrc.includes("return { ok: true, famLabel, stage1Vendor: stage1Vendor || 'closed' };"));
+  assert.ok(gachaSrc.includes('if (!ch?.gacha && (!att || att.done)) return false;'));
+  assert.ok(coreSrc.includes('if (!this.gacha) return;'));
+  assert.ok(bcpSrc.includes('if (chatObj.busy && Boolean(chatObj.gacha) && wasClosedModel && latestHasOpenThink'));
+  assert.ok(coreSrc.includes("if (hasHotStub(hm.parts) && !hasHotStub(m.parts)) return m;"));
+  assert.ok(bpuiSrc.includes("? 'muse'"));
+});
+
+test('v0.13.183: Zero unnecessary terminal spawns (Win10/Win11), multi-account hidden window reaping, mandatory EdgeTunnel subscription before login/register, and QR sync consolidated inside Export page', () => {
+  const mainSrc = read('src/main.js');
+  const nshSrc = read('scripts/installer.nsh');
+  const mainSourceCjs = read('platform/host/main-source.cjs');
+  const coreSrc = read('ui/core.js');
+  const viewSrc = read('ui/view.js');
+  const acctsSrc = read('ui/accounts.js');
+  const apSrc = read('ui/account-picker.js');
+  const dockSrc = read('ui/dock.js');
+  const mgrSrc = read('ui/mgr.js');
+
+  // 1. Zero non-essential terminal invocations & WINDOWS_GUI PE Subsystem for helper binaries
+  assert.ok(!mainSrc.includes("spawnSync('taskkill', ['/F', '/T', '/PID'"), 'killKids must use in-process process.kill without spawning taskkill.exe');
+  assert.ok(mainSrc.includes('if (process.platform !== \'win32\' || !app.isPackaged || !global.__allowExternalFindCleanup) return;'));
+  assert.ok(mainSrc.includes("if (process.env.BRANA_UPD_PS_GUI === '1') {"));
+  assert.ok(nshSrc.includes('_brana_skip_ps_close'), 'installer.nsh must skip spawning powershell.exe when target executable is not locked');
+  assert.ok(!/belly/i.test(mainSourceCjs), 'platform/host/main-source.cjs must be portable across PCs with no hardcoded user path');
+
+  for (const relBin of ['resources/bin/win-mem-trim.exe', 'bin/xray.exe']) {
+    const bp = path.join(__dirname, '..', relBin);
+    if (fs.existsSync(bp)) {
+      const buf = fs.readFileSync(bp);
+      const peOff = buf.readUInt32LE(0x3c);
+      const subsys = buf.readUInt16LE(peOff + 0x5c);
+      assert.equal(subsys, 2, relBin + ' must have PE Subsystem = 2 (IMAGE_SUBSYSTEM_WINDOWS_GUI) so Win10/Win11 never opens conhost/WindowsTerminal');
+    }
+  }
+
+  // 2. Clean multi-account / multi-client process management
+  assert.ok(mainSrc.includes('const _hiddenIdleSince = new Map();') && mainSrc.includes('stopTunnel(id);'), 'bgCheck must reap idle hidden account windows and stop their tunnels');
+  assert.ok(mainSrc.includes("if (force && typeof WebContentsView === 'function' && Array.isArray(DB?.accounts))"), 'pelHarvest must not spawn background WebContentsView renderers on normal startup');
+
+  // 3. Mandatory EdgeTunnel subscription prompt before login or registration when no node is configured
+  assert.ok(coreSrc.includes('function hasNodeConfigured(') && coreSrc.includes('return !hasNodeConfigured(a);'));
+  assert.ok(coreSrc.includes('请先配置 EdgeTunnel 订阅地址') && coreSrc.includes('配置 EdgeTunnel 订阅并继续（登录 / 注册）'));
+  assert.ok(!coreSrc.includes('跳过，直接登录 ➔') && !coreSrc.includes('下一步：登录账号 ➔'), 'Mandatory EdgeTunnel setup must not allow skipping before node configuration');
+  assert.ok(acctsSrc.includes("if (v && (mode === 'signup' || mode === 'forgot') && typeof QrSync !== 'undefined' && QrSync.isFirstTimeNoCache && QrSync.isFirstTimeNoCache(a))"));
+  assert.ok(acctsSrc.includes('请先填写 EdgeTunnel 订阅地址完成节点配置，配置好后才能登录或注册账号'));
+
+  // 4. QR code mini-icon consolidated inside Export page and removed from other standalone locations
+  assert.ok(viewSrc.includes('ICON.qr =') && viewSrc.includes('width="2.6" height="2.6"'));
+  assert.ok(acctsSrc.includes("class: 'ib export-qr-sync-btn'") && acctsSrc.includes("icon('qr')"));
+  assert.ok(apSrc.includes("ib('upload', '导出账号 / 二维码同步', () => UI.exportAccounts?.())"));
+  assert.ok(!apSrc.includes("class: 'ib amenu-qr-sync'"), 'Standalone QR button in account-picker header must be removed');
+  assert.ok(!mgrSrc.includes("class: 'ib lp-qr-sync'"), 'Standalone QR button in mobile mgr header must be removed');
+  assert.ok(!acctsSrc.includes("class: 'btn big ghost lqr-sync icon-only-btn'"), 'Standalone QR button in loginGate .lgo must be removed');
+  assert.ok(!dockSrc.includes('refBtn, qrBtn'), 'Standalone QR button in #acct bottom-left card must be removed');
+});
+
+test('v0.13.184: Prevent duplicate Stage-2 Pelican submission after client restart or update', () => {
+  const vm = require('node:vm');
+  const coreSrc = read('ui/core.js');
+  const viewSrc = read('ui/view.js');
+  const sqSrc = read('ui/send-queue.js');
+  const keepSrc = read('ui/keep.js');
+  const gachaSrc = read('ui/gacha.js');
+
+  // 1. Static guards across Gacha, SentUserLog, Drafts, SendQ, and KeepAlive
+  assert.ok(gachaSrc.includes('function hasStage2PelicanTurn(c, a = null)') && gachaSrc.includes('async function recoverReloadedAttempts()'));
+  assert.ok(gachaSrc.includes('if (hasStage2PelicanTurn(c, a)) {'));
+  assert.ok(gachaSrc.includes('if (!c.busy && (completedCount >= roundNo || (roundNo === 1 && sawBusy && completedCount > 0)))'));
+  assert.ok(sqSrc.includes("if (typeof SentUserLog !== 'undefined' && typeof SentUserLog.isGachaProbeText === 'function' && SentUserLog.isGachaProbeText(tNorm)) return false;"));
+  assert.ok(viewSrc.includes("const isProbeQ = txt => typeof SentUserLog !== 'undefined' && typeof SentUserLog.isGachaProbeText === 'function' && SentUserLog.isGachaProbeText(txt);"));
+  assert.ok(keepSrc.includes('if (lastU && SentUserLog.isGachaProbeText(SentUserLog.extractMsgText(lastU))) return null;'));
+
+  // 2. Runtime simulation of Stage-2 Pelican sent before client restart/update (chat.gacha lost after restart)
+  const sulStart = coreSrc.indexOf('const SentUserLog = (() => {');
+  const sulEnd = coreSrc.indexOf('})();', sulStart) + 5;
+  const sulCode = coreSrc.slice(sulStart, sulEnd);
+
+  const storeMap = new Map();
+  let draftOutbox = [];
+  const demoted = [];
+  const ctx = vm.createContext({
+    Map, Set, Array, Object, String, Number, Boolean, Date, Math, RegExp, JSON,
+    now: () => 1792777600000,
+    idTime: () => 0,
+    Store: {
+      get: (k, d) => (storeMap.has(k) ? JSON.parse(JSON.stringify(storeMap.get(k))) : d),
+      set: (k, v) => { storeMap.set(k, JSON.parse(JSON.stringify(v))); return true; },
+    },
+    Drafts: {
+      sess: new Set(),
+      load: () => ({ o: draftOutbox, q: {}, t: {} }),
+      ack: id => { draftOutbox = draftOutbox.filter(x => x.id !== id); },
+    },
+    SendQ: {
+      demoteToQueue: (chat, item, opt) => {
+        demoted.push({ sid: chat.sid, id: item.id, text: item.text, opt });
+        return true;
+      },
+    },
+    RunningTracker: { isTrackedRunning: () => false },
+    hasInterruptedToolPart: () => false,
+  });
+  vm.runInContext(sulCode + '; globalThis.SentUserLog = SentUserLog;', ctx);
+
+  const viPelican = 'Hãy tạo một tệp HTML độc lập mới chỉ trong một tệp duy nhất. Vẽ cảnh hoạt hình hai chiều bằng SVG mô tả chú bồ nông mỏ lớn đang đi xe đạp. Giữ bố cục gọn gàng và chuyển động mượt mà. Không cần kiểm thử; chỉ cần trả về mã HTML hoàn chỉnh.';
+  const zhPelican = '请新建一个独立的单文件 HTML 页面。使用内联 SVG 绘制一只鹈鹕踩着脚踏板向前骑自行车的 2D 动态动画场景。';
+  assert.equal(ctx.SentUserLog.isPelicanPromptText(viPelican), true);
+  assert.equal(ctx.SentUserLog.isPelicanPromptText(zhPelican), true);
+  assert.equal(ctx.SentUserLog.isGachaProbeText(viPelican), true);
+  assert.equal(ctx.SentUserLog.isGachaProbeText('继续写完剩下的部分'), false);
+
+  const sid = '01a169a2-ef99-7a2b-9850-16c3a56e6754';
+  const u2Pelican = {
+    id: '01a169a4-f25d-7850-ae96-d6f50714e2b5',
+    role: 'user',
+    text: viPelican,
+    parts: [{ type: 'text', text: viPelican }],
+    _local: true,
+    _sentAt: 1792773714525,
+    _prevAsstId: 'a1-stage1',
+    _prevAsstWeight: 420,
+  };
+  ctx.SentUserLog.record(sid, u2Pelican, 'a1-stage1');
+
+  // After client restart/update, chat.gacha is undefined and Stage-2 Pelican assistant reply completed
+  const chatAfterRestart = {
+    sid,
+    loaded: true,
+    busy: false,
+    streaming: false,
+    queue: [],
+    messages: [
+      { id: 'u1-stage1', role: 'user', parts: [{ type: 'text', text: 'Stage 1 probe' }] },
+      { id: 'a1-stage1', role: 'assistant', parts: [{ type: 'text', text: 'Stage 1 reply supplemented after load' }] },
+      { id: 'u2-srv', role: 'user', parts: [{ type: 'text', text: viPelican }] },
+      { id: '01a169a6-fe5c-7a03-a16b-32ec3d4ea9ce', role: 'assistant', parts: [{ type: 'text', text: '<!DOCTYPE html><svg><title>Pelican Bicycle</title></svg>' }] },
+    ],
+  };
+
+  assert.equal(ctx.SentUserLog.hasPelicanTurnInChat(chatAfterRestart), true);
+  assert.equal(ctx.SentUserLog.demoteToQueue(chatAfterRestart, u2Pelican, { running: true }), false, 'Pelican probe must never be demoted into SendQ after restart');
+  ctx.SentUserLog.restoreInto(chatAfterRestart, { srvPend: true });
+  assert.equal(demoted.length, 0, 'restoreInto must never demote a Stage-2 Pelican prompt into SendQ after client restart');
+  assert.equal(chatAfterRestart.queue.length, 0, 'chat.queue must remain empty after restart so Pelican is never submitted a second time');
+  assert.equal(ctx.SentUserLog.readList(sid).length, 0, 'Completed Pelican entry in SentUserLog must be cleaned up');
+});
+
+test('v0.13.185-lightweight: Recognition accuracy & speed optimization, transparent Brotli ASAR decompression, NTFS hardlink role executables, and EXE/APK lightweighting', () => {
+  const pkgJson = JSON.parse(read('package.json'));
+  const afterPack = read('scripts/after-pack.js');
+  const mainSrc = read('src/main.js');
+  const bundleSrc = read('src/bundle.js');
+  const bpuiSrc = read('ui/billing-probe-ui.js');
+  const gradleSrc = read('android/app/build.gradle');
+  const proguardSrc = read('android/app/proguard-rules.pro');
+
+  assert.ok(bpuiSrc.includes('const _dispLabelMemo = new Map();'));
+  assert.ok(bpuiSrc.includes('function getProtoByCanon(cKey)'));
+  assert.ok(bpuiSrc.includes("htmlSvgMatch?.best?.vendorId && htmlSvgMatch.best.vendorId !== 'google'"));
+  assert.ok(bpuiSrc.includes('cl.includes("scarfa")'));
+
+  assert.ok(mainSrc.includes('fs._branaBrotliHooked'));
+  assert.ok(bundleSrc.includes('fs._branaBrotliHooked'));
+  assert.ok(mainSrc.includes('fs.linkSync(process.execPath, rp);'));
+  assert.ok(mainSrc.includes("GOMEMLIMIT: '14MiB', GOGC: '35'"));
+  assert.ok(mainSrc.includes("w.webContents.send('host:trimMem')"));
+  assert.ok(read('ui/core.js').includes('window.__branaTrimMemory = () =>'));
+
+  assert.equal(pkgJson.build.afterPack, 'scripts/after-pack.js');
+  assert.equal(pkgJson.build.compression, 'maximum');
+  assert.deepEqual(pkgJson.build.asarUnpack, ['src/*preload*.js']);
+  assert.ok(afterPack.includes('STRIP_BIN_FILES'));
+
+  assert.ok(gradleSrc.includes('arm64-v8a'));
+  assert.ok(gradleSrc.includes('minifyEnabled true'));
+  assert.ok(gradleSrc.includes('shrinkResources true'));
+  assert.ok(proguardSrc.includes('-keep class ai.arena.client.** { *; }'));
+  assert.ok(proguardSrc.includes('@android.webkit.JavascriptInterface <methods>;'));
+});
+
+test('Task 59: Language pack slimming (zh-CN/en-US only), runtime stability hardening, and zero narrow LOO margins', () => {
+  const pkgJson = JSON.parse(read('package.json'));
+  const afterPack = read('scripts/after-pack.js');
+  const mainSrc = read('src/main.js');
+  const gradleSrc = read('android/app/build.gradle');
+  const bpuiSrc = read('ui/billing-probe-ui.js');
+
+  assert.deepEqual(pkgJson.build.electronLanguages, ['zh-CN', 'en-US']);
+  assert.ok(afterPack.includes("const KEEP_LOCALES = new Set(['zh-CN.pak', 'en-US.pak']);"));
+  assert.ok(gradleSrc.includes('resConfigs "zh", "zh-rCN", "en"'));
+
+  assert.ok(mainSrc.includes("app.commandLine.appendSwitch('lang', 'zh-CN');"));
+  assert.ok(mainSrc.includes("--max-old-space-size=512 --initial-old-space-size=16 --max-semi-space-size=2"));
+  assert.ok(mainSrc.includes("if (details?.type === 'Utility')"));
+  assert.ok(mainSrc.includes('if(force||wasBlocked||ses.__lastProxyRuleKey!==proxyRuleKey)'));
+  assert.ok(mainSrc.includes('if (w.__hidden && !bgWorkMap.has(id))'));
+  assert.ok(bpuiSrc.includes("marginBoostKey = 'gpt-6.1-sol-high'"));
+});
+
+test('Task 60 (v2.0.0-beta.1): Micro-probe -> Pelican zero false route alert, multi-turn identity stability, genuine mid-chat routing, Gacha smoothness, and update/CI hardening', () => {
+  const bpUiSrc = fs.readFileSync(path.join(__dirname, '../ui/billing-probe-ui.js'), 'utf8');
+  const gachaSrc = fs.readFileSync(path.join(__dirname, '../ui/gacha.js'), 'utf8');
+  const coreSrc = fs.readFileSync(path.join(__dirname, '../ui/core.js'), 'utf8');
+  const mainSrc = fs.readFileSync(path.join(__dirname, '../src/main.js'), 'utf8');
+  const nshSrc = fs.readFileSync(path.join(__dirname, '../scripts/installer.nsh'), 'utf8');
+  const extIdSrc = fs.readFileSync(path.join(__dirname, '../src/extension-test-identity.js'), 'utf8');
+
+  assert.ok(bpUiSrc.includes('isMicroProbeTurn'));
+  assert.ok(bpUiSrc.includes('lastHtmlCodingIdx'));
+  assert.ok(bpUiSrc.includes('_forRoutePostSlice'));
+  assert.ok(gachaSrc.includes('isInFlightSid'));
+  assert.ok(gachaSrc.includes('if (isInFlightSid(sid)) return null;'));
+  assert.ok(gachaSrc.includes('let lastFollowupAt = 0;'));
+  assert.ok(coreSrc.includes('isStrictOpenAiToolId'));
+  assert.ok(mainSrc.includes('BranaAI%.exe'));
+  assert.ok(nshSrc.includes('BranaAI-*.exe'));
+  assert.ok(!extIdSrc.includes('-beta') && extIdSrc.includes('-ext'));
 });

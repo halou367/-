@@ -174,11 +174,21 @@ async function resolveAll(name){
       'https://120.53.53.53/dns-query?edns_client_subnet=8.8.8.8/24'
     ];
     const reqs=[];
-    const one=base=>new Promise(resolve=>{
+    const extractTxtIps=txt=>{
+      const out=[],s=String(txt||'').replace(/^"+|"+$/g,'').replace(/\\"/g,'"');
+      const re=/\b(\d{1,3}(?:\.\d{1,3}){3})(?::(\d{1,5}))?\b/g;let m;
+      while((m=re.exec(s))!==null){if(net.isIPv4(m[1])&&(!m[2]||(+m[2]>=1&&+m[2]<=65535)))out.push(m[2]?m[1]+':'+m[2]:m[1]);}
+      return out;
+    };
+    const one=(base,qType='A')=>new Promise(resolve=>{
       const sep=base.includes('?')?'&':'?';
-      const req=https.get(base+sep+'name='+encodeURIComponent(name)+'&type=A',{headers:{Accept:'application/dns-json'},timeout:2500,agent:false},res=>{
+      const req=https.get(base+sep+'name='+encodeURIComponent(name)+'&type='+qType,{headers:{Accept:'application/dns-json'},timeout:2500,agent:false},res=>{
         let text='';res.on('data',c=>{text+=c;if(text.length>262144)req.destroy();});res.on('error',()=>resolve(null));
-        res.on('end',()=>{try{if(res.statusCode!==200)return resolve(null);const j=JSON.parse(text);if(j.Status!==0&&j.Status!==3)return resolve(null);resolve((j.Answer||[]).filter(r=>r.type===1&&net.isIPv4(r.data)).map(r=>r.data));}catch{resolve(null);}});
+        res.on('end',()=>{try{if(res.statusCode!==200)return resolve(null);const j=JSON.parse(text);if(j.Status!==0&&j.Status!==3)return resolve(null);
+          const ans=j.Answer||[];
+          if(qType==='TXT'||qType==='16')return resolve(ans.filter(r=>r.type===16).flatMap(r=>extractTxtIps(r.data)));
+          resolve(ans.filter(r=>r.type===1&&net.isIPv4(r.data)).map(r=>r.data));
+        }catch{resolve(null);}});
       });
       reqs.push(req);
       req.on('timeout',()=>{req.destroy();resolve(null);});
@@ -189,7 +199,9 @@ async function resolveAll(name){
       const fin=()=>{if(finished)return;finished=true;clearTimeout(timer);for(const r of reqs){try{r.destroy();}catch{}}done(out.slice());};
       for(const u of urls)one(u).then(v=>{if(v&&v.length){out.push(v);if(!timer)timer=setTimeout(fin,450);}if(--left===0)fin();});
     });
-    const badIp=ip=>/^198\.1[89]\./.test(ip)||isCloudflareOfficialIp(ip);
+    const badIp=ip=>{const h=String(ip||'').split(':')[0];return /^198\.1[89]\./.test(h)||isCloudflareOfficialIp(h);};
+    const txtGot=await Promise.all([one(urls[0],'TXT'),one('https://1.1.1.1/dns-query','TXT')]).catch(()=>[]);
+    for(const tv of txtGot)if(tv&&tv.length)got.push(tv);
     let ips=[...new Set(got.flat())].filter(ip=>!badIp(ip));
     if(!ips.length){try{ips=(await require('dns').promises.resolve4(name)).filter(ip=>!badIp(ip));}catch{ips=[];}}
     if(ips.length){

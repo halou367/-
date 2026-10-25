@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "id": "model-identity",
+  "title": "模型信息识别",
+  "version": "1.0.0",
+  "status": "complete-v1.0-modularized-and-static-verified",
+  "scope": "完整模型信息识别与抽卡子系统：Token 原像反推、费率匹配、家族线索、多轮置信度、目录同步（arena-trace/* + catalog.json）、实时 Trace 与 BotScore 服务（trace）、Claude 强度评分与账号统计（cscore / astats）、自动抽卡与老虎机/浮层视图（gacha-prompts / gacha / gview / gpop / slot）；Arena Trace 架构文档（docs/ARENA-TRACE-README.md）。",
+  "entrypoints": {
+    "node": "public.cjs",
+    "renderer": "public.browser.js"
+  },
+  "runtimeVerification": "not-run"
+}

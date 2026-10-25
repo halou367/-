@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "id": "habit-engine",
+  "title": "反推习惯引擎",
+  "version": "1.0.0",
+  "status": "complete-v1.0-modularized-and-static-verified",
+  "scope": "完整指纹与反推习惯子系统：对话习惯反推与盲测自学习核心（chat-habit-fingerprint.js）、21模型基准种子题库（data/fingerprint-bank-v2026.09.5.json）、探针核心与多库组合（probe-vendor / probe-bank-ikale / probe-bank-cache / fp-libs）、个人与跨账号共享指纹库（personal-fingerprint / personal-fingerprint-math / shared-fingerprint-schema / shared-fingerprint / fingerprint-store）、3探针交互测试与自动校准（fingerprint / fingerprint-review / fingerprint-library-ui / fingerprint-batch / pelican-test / revolver）、防失控与思考跳过归档（probe-output-guard / probe-archive）、内置习惯样本库与强度皇冠评估（habit-builtin-bank / strength）；主进程跨账号指纹存储、鹈鹕基准收割与共享状态同步IPC（main-shared-fingerprint-ipc.js）。",
+  "entrypoints": {
+    "node": "public.cjs",
+    "renderer": "public.browser.js"
+  },
+  "runtimeVerification": "not-run"
+}

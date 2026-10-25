@@ -214,7 +214,7 @@ small#why{display:none}
     $('proxy').value = acct.proxy || '';
     $('pip').value = acct.proxyIp || '';
     syncPip();
-    if (H && route && typeof OfflineModes !== 'undefined') {
+    if ((H || A) && route && typeof OfflineModes !== 'undefined') {
       nativeModes = await OfflineModes.bind({ route: route, account: function () { return acct; }, hint: hint, retry: function () { call('back'); } });
     }
     if (G && !acct.proxy) {

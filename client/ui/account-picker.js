@@ -183,7 +183,7 @@ const AccountPicker = {
     return h('div', { class: 'acct-dock', role: 'toolbar', 'aria-label': '账号操作' },
       s, ib('user', '账户管理（账号设置 · 密码）', () => UI.accounts?.()),
       ib('plus', '添加账号', () => UI.addAccount?.(), ' adk-big'),
-      ib('download', '导入账号', () => UI.importAccounts?.()), ib('upload', '导出账号', () => UI.exportAccounts?.()));
+      ib('download', '导入账号', () => UI.importAccounts?.()), ib('upload', '导出账号 / 二维码同步', () => UI.exportAccounts?.()));
   },
   async open(e, initialPage = 0) {
     const anc = (e?.currentTarget?.getBoundingClientRect ? e.currentTarget : $('#acct'))?.getBoundingClientRect() || { left: 10, top: 58, bottom: 58 };

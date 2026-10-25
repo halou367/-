@@ -124,6 +124,7 @@ jobs:
         with: { node-version: 22 }
       - run: npm install --no-audit --no-fund
       - run: node node_modules/electron/install.js
+      - run: node scripts/build-probe.js
       - run: node scripts/bundle.js
       - name: Verify real Windows runtime and crash recovery
         shell: pwsh
@@ -230,12 +231,13 @@ jobs:
         with: { distribution: temurin, java-version: 17 }
       - uses: gradle/actions/setup-gradle@v4
         with: { gradle-version: '8.9' }
+      - run: node scripts/build-probe.js
       - run: node scripts/bundle.js
       - name: Bundle xray core (VLESS, arm64-v8a + x86_64)
         shell: bash
         run: |
           set -e
-          for pair in "arm64-v8a:arm64-v8a" "amd64:x86_64"; do
+          for pair in "arm64-v8a:arm64-v8a"; do
             src=${pair%%:*}; abi=${pair##*:}
             curl -fsSL -o x.zip https://github.com/XTLS/Xray-core/releases/latest/download/Xray-android-${src}.zip
             mkdir -p xr && unzip -o -q x.zip xray -d xr

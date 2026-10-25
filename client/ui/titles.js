@@ -66,7 +66,8 @@ const Notes = {
     text = String(text || '').replace(/\s+/g, ' ').trim().slice(0, 59);
     const n = this.rec(sid); n.n = text; delete n.noteLocal; // Synced inside the encrypted v4 (Qx) title.
     if (typeof TitleSync !== 'undefined') TitleSync.dirty(sid);
-    const saved = this.save(); Titles.local(sid); Titles.kick(800); return saved;
+    if (typeof Titles !== 'undefined' && Titles.prio) Titles.prio.add(sid);
+    const saved = this.save(); Titles.local(sid); Titles.kick(400); return saved;
   },
   drop(sid) { if (this.all[sid]) { delete this.all[sid]; this.save(); } },
   dropMany(sids) {
@@ -314,9 +315,15 @@ const Titles = {
       if (gp.fav && typeof Fav !== 'undefined' && !Fav.has(sid) && !(Fav.unfavAt && Fav.unfavAt[sid])) Fav.setQuiet(sid, true);
       if (gp.gold && typeof Gold !== 'undefined' && Gold.noteRestoredChat) Gold.noteRestoredChat(sid, gp);
     }
-    const isBattleSess = Boolean(cObj?.evalMode === 'battle' || (e?.type === 'evaluation' && (e?.mode === 'battle' || (!e?.mode && (e?.modelBId || !e?.modelAId)))));
+    const isDirectSess = Boolean(
+      cObj?.evalMode === 'direct' ||
+      e?.mode === 'direct' ||
+      mi0?.directMode ||
+      (e?.type === 'evaluation' && typeof ModeState !== 'undefined' && typeof ModeState.inferEntryMode === 'function' && ModeState.inferEntryMode(e) === 'direct')
+    );
+    const isBattleSess = !isDirectSess && Boolean(cObj?.evalMode === 'battle' || (e?.type === 'evaluation' && (e?.mode === 'battle' || (!e?.mode && (e?.modelBId || !e?.modelAId)))));
     if (isBattleSess) {
-      if (sid && typeof Models !== 'undefined' && Models.all && Models.all[sid] && !Models.all[sid].battleRevealed) {
+      if (sid && typeof Models !== 'undefined' && Models.all && Models.all[sid] && !Models.all[sid].battleRevealed && !Models.all[sid].directMode) {
         delete Models.all[sid];
         try { if (typeof Store !== 'undefined' && Store.set) Store.set('models', Models.all); } catch {}
       }
@@ -337,10 +344,11 @@ const Titles = {
         : ((cObj?.busy || cObj?.streaming || cObj?._evalStreaming) ? '生成中' : ((cObj?.voteState?.voted || (mA && mB)) ? '已完成' : '待选择'));
       return saveView({ vid: '', model: '', note: noteB, time: spB.time, title: rawB, plain: vsPlain, battleStatus, gold: false, isBattle: true });
     }
-    const raw0 = (e && (e.localTitle || e.title)) || cObj?.localTitle || cObj?.title || fallback || '';
+    const gachaNo = e?.gachaNo || cObj?.gachaNo || cObj?.gacha?.no || (typeof Gacha !== 'undefined' && Gacha.sidNo ? Gacha.sidNo(sid) : 0) || 0;
+    const raw0 = gachaNo ? ('#' + gachaNo) : ((e && (e.localTitle || e.title)) || cObj?.localTitle || cObj?.title || fallback || '');
     const raw = (typeof TitleCipher !== 'undefined' && TitleCipher.isGoldPrefixed?.(raw0)) ? (TitleCipher.stripGoldPrefix(raw0) || '新对话') : raw0;
     const sp = splitNote(raw), mi = mi0;
-    const note = sid ? Notes.get(sid) || sp.note : sp.note;
+    const note = (sid ? Notes.get(sid) : '') || rMeta0?.note || gp?.note || sp.note;
     const hasValidMiName = !!(mi?.name && !/^(未识别|未知型号|待定)$/.test(String(mi.name).trim()));
     const hasReidMi = !!(hasValidMiName && !mi?.pendingConfirm && (mi?.habitInferred || mi?.reverseInferred || mi?.billingProbe || mi?.userCorrected || !mi?.guess));
     const isGoldNow = !!(sid && typeof Gold !== 'undefined' && typeof Gold.isChatGold === 'function' ? Gold.isChatGold(sid, cloudTitle) : (gp?.gold || (sid && typeof Gold !== 'undefined' && Gold.hasChat?.(sid))));
@@ -354,7 +362,7 @@ const Titles = {
     return saveView({ vid, model: model || '', note, time: sp.time, title: raw, plain: !model ? ConversationLabels.label(null, sp.composite ? sp.base : raw) : '', gold: isGoldNow });
   },
 };
-setInterval(() => Titles.tick(), 5000);
+setInterval(() => { if (!(typeof document !== 'undefined' && document.hidden)) Titles.tick(); }, 5000);
 
 // ---------- 对话框（Electron 不支持 window.prompt，用自己的输入框）----------
 const Dialog = {

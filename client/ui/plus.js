@@ -3,20 +3,34 @@
 // ⓘ：长说明收成一个图标，悬停或点一下显示
 const tipI = (text, cls = '') => h('span', { class: 'tipi ' + cls, tabindex: 0, 'data-tip': text, role: 'button', 'aria-label': '说明' }, icon('info'));
 const Tip = (() => {
-  let box = null, owner = null, pinned = false, hideT = 0;
+  let box = null, owner = null, pinned = false, hideT = 0, showT = 0;
   function show(el, pin) {
-    const text = el.getAttribute('data-tip'); if (!text) return;
+    clearTimeout(showT); showT = 0;
+    const text = el?.getAttribute?.('data-tip'); if (!text) return;
     clearTimeout(hideT);
     if (!box) { box = h('div', { class: 'tipbox' }); document.body.append(box); box.addEventListener('mouseenter', () => clearTimeout(hideT)); box.addEventListener('mouseleave', () => { if (!pinned) hide(); }); }
     owner = el; pinned = !!pin; box.textContent = text; box.style.display = 'block';
     const bw = Math.min(300, innerWidth - 16); box.style.maxWidth = bw + 'px';
     if (typeof placeInward === 'function') placeInward(box, el, { pad: 8, gap: 6, keepWidth: true, keepHeight: true });
   }
-  function hide() { if (box) box.style.display = 'none'; owner = null; pinned = false; }
-  document.addEventListener('mouseover', e => { if (typeof window !== 'undefined' && window.__ancLastScrollAt && Date.now() - window.__ancLastScrollAt < 160) return; const el = e.target.closest?.('[data-tip]'); if (el && el !== owner && !pinned) show(el); else if (!el && owner && !pinned && !box?.contains(e.target)) { clearTimeout(hideT); hideT = setTimeout(hide, 180); } });
+  function hide() { clearTimeout(showT); showT = 0; if (box) box.style.display = 'none'; owner = null; pinned = false; }
+  document.addEventListener('mouseover', e => {
+    if (typeof window !== 'undefined') {
+      const tNow = Date.now();
+      if ((window.__ancLastScrollAt && tNow - window.__ancLastScrollAt < 180) || (window.__ancLastListScrollAt && tNow - window.__ancLastListScrollAt < 180)) return;
+    }
+    const el = e.target.closest?.('[data-tip]');
+    if (el && el !== owner && !pinned) {
+      clearTimeout(hideT); clearTimeout(showT);
+      showT = setTimeout(() => { showT = 0; if (el.isConnected && !pinned) show(el); }, 85);
+    } else if (!el) {
+      clearTimeout(showT); showT = 0;
+      if (owner && !pinned && !box?.contains(e.target)) { clearTimeout(hideT); hideT = setTimeout(hide, 180); }
+    }
+  }, { passive: true });
   document.addEventListener('click', e => { const el = e.target.closest?.('[data-tip]'); if (el && (el.classList?.contains('tipi') || el.classList?.contains('bp-pill') || el.classList?.contains('u'))) { e.preventDefault(); e.stopPropagation(); if (owner === el && pinned) hide(); else show(el, true); } else if (box && !box.contains(e.target)) hide(); }, true);
   document.addEventListener('focusin', e => { const el = e.target.closest?.('[data-tip]'); if (el) show(el); });
-  addEventListener('scroll', () => { if (owner && !pinned) hide(); }, { capture: true, passive: true });
+  addEventListener('scroll', () => { clearTimeout(showT); showT = 0; if (owner && !pinned) hide(); }, { capture: true, passive: true });
   return { show, hide };
 })();
 
@@ -328,5 +342,5 @@ function useKeys(inp, cr, out, rs, full) {
     const desc = name + ' Token：' + (v == null ? '未报告' : Number(v).toLocaleString('en-US')) + (extra || '');
     return h('span', { class: 'u u-' + cls, title: desc, 'data-tip': desc, tabindex: 0 }, icon(icMap[cls] || 'info'), h('i', { class: cls }), h('em', {}, name), h('b', {}, v == null ? '—' : fmtTokS(v)));
   };
-  return K(one('in', '输入', inp, cr && inp ? '（其中缓存 ' + Math.round(cr / inp * 100) + '%）' : ''), one('cache', '缓存', cr), one('out', '输出', out), full || rs ? one('rsn', '思考', rs) : null);
+  return K(one('in', '输入', inp, Number(cr) > 0 && Number(inp) > 0 ? '（其中缓存 ' + Math.round(cr / inp * 100) + '%）' : ''), Number(cr) > 0 ? one('cache', '缓存', cr) : null, one('out', '输出', out), Number(rs) > 0 ? one('rsn', '思考', rs) : null);
 }

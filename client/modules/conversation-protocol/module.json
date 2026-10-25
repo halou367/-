@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "id": "conversation-protocol",
+  "title": "对话协议交互",
+  "version": "1.0.0",
+  "status": "complete-v1.0-modularized-and-static-verified",
+  "scope": "消息与工具渲染导出（md / fmt / file-export / chat-export / capture）、思考状态与模式切换（thinking-status / mode-switcher）、发送队列与斜杠命令（send-queue / slash-commands）、对战评测与 HTML 预览（eval-core / eval-view / html-preview）、中途卡顿自动续写（keep）、连接器与会话门控（connectors / session-gate / cap-route）；对话流与工具调用协议状态机（core-chat-protocol.js）及终端命令翻译与消息流渲染器（view-message-renderer.js）。",
+  "entrypoints": {
+    "node": "public.cjs",
+    "renderer": "public.browser.js"
+  },
+  "runtimeVerification": "not-run"
+}

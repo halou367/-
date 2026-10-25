@@ -8,12 +8,13 @@ const ThinkingStatus = (() => {
     const id=normalize(name);if(!id)return 'unknown';
     if(metadata.open_weights===true)return 'open';if(metadata.open_weights===false)return 'closed';
     if(open.has(id))return 'open';
+    if(/^(?:gpt-(?!oss(?:-|$))|chatgpt-|o[134](?:-|$)|claude-|gemini-|grok-[234](?:-|$))/.test(id))return 'closed';
     if(typeof ProbeLib!=='undefined'){
       const rows=(ProbeLib.seedBank?.models||[]).filter(m=>normalize(m.id)===id);
       if(rows.length&&rows.every(m=>m.open_weights===true))return 'open';
       if(rows.some(m=>m.open_weights===false))return 'closed';
     }
-    return /^(?:gpt-(?!oss(?:-|$))|chatgpt-|o[134](?:-|$)|claude-|gemini-|grok-[234](?:-|$))/.test(id)?'closed':'unknown';
+    return 'unknown';
   }
   const _accessMemo = typeof WeakMap !== 'undefined' ? new WeakMap() : null;
   const _ofMemo = typeof WeakMap !== 'undefined' ? new WeakMap() : null;
@@ -25,12 +26,13 @@ const ThinkingStatus = (() => {
     const m=Models.get(chat.sid);
     const lastTurn=turns[turns.length-1];
     const aSig=`${chat.sid}\0${current?.id||''}\0${message===chat.live||!message?1:0}\0${chat.turnInput||chat.awaitId||''}\0${turns.length}\0${lastTurn?.changed?1:0}:${lastTurn?.routing?1:0}:${lastTurn?.outcome||''}:${lastTurn?.response||''}:${lastTurn?.internal||''}:${lastTurn?.records?.length||0}\0${m?.name||''}:${m?.routed?1:0}:${m?.guess?1:0}:${m?.messageId||''}:${m?.inputId||''}:${m?.response||''}:${m?.internal||''}`;
-    if (_accessMemo && typeof chat === 'object') {
-      const hit = _accessMemo.get(chat);
+    const memoObj = (message && typeof message === 'object') ? message : chat;
+    if (_accessMemo && typeof memoObj === 'object') {
+      const hit = _accessMemo.get(memoObj);
       if (hit && hit.sig === aSig) return hit.val;
     }
     const saveAcc = val => {
-      if (_accessMemo && typeof chat === 'object') _accessMemo.set(chat, { sig: aSig, val });
+      if (_accessMemo && typeof memoObj === 'object') _accessMemo.set(memoObj, { sig: aSig, val });
       return val;
     };
     const matches=current?.id?turns.filter(t=>(t.records||[]).some(r=>r.messageId===current.id)):[];
@@ -68,7 +70,10 @@ const ThinkingStatus = (() => {
   }
   const isClosed=chat=>{const a=access(chat);return a.certain&&a.type==='closed';};
   const isStoppedMsg=m=>Boolean(m?.metadata?.openThinkStopped||m?.metadata?.aborted||m?.metadata?.feedback?.interruption==='stop');
-  const hasClosedTools=m=>(m?.parts||[]).some(p=>/^(?:toolu_|srvtoolu_|call_)/i.test(String(p?.toolCallId||'')));
+  const isOpenToolId=id=>/^(?:call_\d+_|call_[0-9a-f]{24}$|functions\.|_\d+_[0-9a-f]{6,}|chatcmpl-tool-)/i.test(String(id||''));
+  const isClosedToolId=id=>{const s=String(id||'');return /^(?:toolu_|srvtoolu_|msg_01)/i.test(s)||(/^call_[A-Za-z0-9_-]{20,}$/.test(s)&&!isOpenToolId(s));};
+  const hasClosedTools=m=>(m?.parts||[]).some(p=>isClosedToolId(p?.toolCallId));
+  const hasOpenTools=m=>(m?.parts||[]).some(p=>isOpenToolId(p?.toolCallId));
   function of(chat) {
     if (!chat) return null;
     const closedByApi = isClosed(chat);
@@ -78,9 +83,9 @@ const ThinkingStatus = (() => {
     const lastM = chat.live || msgsArr[msgsArr.length - 1] || null;
     const lastP = Array.isArray(lastM?.parts) && lastM.parts.length ? lastM.parts[lastM.parts.length - 1] : null;
     const oSig = `${chat.sid || ''}\0${closedByApi ? 1 : 0}\0${msgsArr.length}\0${chat.live ? chat.live.id || 'L' : ''}\0${lastM?.id || ''}:${lastM?.parts?.length || 0}:${lastM?.metadata?.openThinkStopped ? 1 : 0}:${lastP?.type || ''}:${lastP?.state || ''}:${(lastP?.text || '').length}:${visible(lastP) ? 1 : 0}\0${curM0?.name || ''}:${curM0?.guess ? 1 : 0}:${curM0?.userCorrected ? 1 : 0}\0${f?.rChars || 0}:${f?.rBlocks || f?.rN || 0}:${f?.rHead || ''}:${chat.thinkStopped ? 1 : 0}`;
-    if (_ofMemo && typeof chat === 'object' && (chat._openSourceMarked || (!chat.sid))) {
+    if (_ofMemo && typeof chat === 'object') {
       const hit = _ofMemo.get(chat);
-      if (hit && hit.sig === oSig) return hit.val;
+      if (hit && hit.sig === oSig && (hit.val?.kind !== 'compat-thinking' || chat._openSourceMarked || !chat.sid)) return hit.val;
     }
     const saveOf = val => {
       if (_ofMemo && typeof chat === 'object') _ofMemo.set(chat, { sig: oSig, val });
@@ -93,10 +98,12 @@ const ThinkingStatus = (() => {
     if (curM?.name && curM.name !== '开源模型' && !/开源|compat|qwen|deepseek|glm|kimi|minimax|llama|mistral|nemotron|inkling|beam|caveman|gemma/i.test(curM.name) && !curM.guess) {
       sawClosed = true;
     }
+    const anyExplicitOpen = asstMsgs.some(m => Boolean(m?.metadata?.openThinkStopped || hasOpenTools(m) || (m?.parts || []).some(p => p?.type === 'reasoning' && visible(p))));
     if (asstMsgs.length > 1) {
       const firstAsst = asstMsgs[0];
       const firstVisible = (firstAsst?.parts || []).some(p => p?.type === 'reasoning' && visible(p));
-      if (!firstVisible && !firstAsst?.metadata?.openThinkStopped) sawClosed = true;
+      const firstHidden = (firstAsst?.parts || []).some(p => p?.type === 'reasoning' && !visible(p));
+      if (!firstVisible && !firstAsst?.metadata?.openThinkStopped && !hasOpenTools(firstAsst) && (firstHidden || hasClosedTools(firstAsst))) sawClosed = true;
     }
     const nonStopped = asstMsgs.filter(m => !isStoppedMsg(m));
     const msgs = nonStopped.length ? nonStopped : asstMsgs;
@@ -111,7 +118,7 @@ const ThinkingStatus = (() => {
       if (!mHasVisible && (mHasHidden || hasClosedTools(m))) {
         sawClosed = true;
       }
-      if (mHasVisible && !closedByApi && !sawClosed) {
+      if ((mHasVisible || m?.metadata?.openThinkStopped || (anyExplicitOpen && hasOpenTools(m))) && !closedByApi && !sawClosed) {
         try {
           if (chat.sid && !chat._closedLockedModel && !chat._openSourceMarked && !chat._openSourceMarking && typeof BillingProbe !== 'undefined' && typeof BillingProbe.markAsOpenSourceModel === 'function') {
             const curM = typeof Models !== 'undefined' ? Models.get(chat.sid) : null;

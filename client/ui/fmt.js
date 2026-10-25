@@ -10,6 +10,17 @@ const Fmt = {
     const len = s.length;
     if (!len) return 0;
     let cjk = 0;
+    if (len > 4096) {
+      const step = Math.ceil(len / 2048);
+      let sampled = 0;
+      for (let i = 0; i < len; i += step) {
+        sampled++;
+        const c = s.charCodeAt(i);
+        if ((c >= 0x3000 && c <= 0x9fff) || (c >= 0xac00 && c <= 0xd7af) || (c >= 0xff00 && c <= 0xffef)) cjk++;
+      }
+      cjk = Math.round(cjk * (len / Math.max(1, sampled)));
+      return cjk + (len - cjk) / 4;
+    }
     for (let i = 0; i < len; i++) {
       const c = s.charCodeAt(i);
       if ((c >= 0x3000 && c <= 0x9fff) || (c >= 0xac00 && c <= 0xd7af) || (c >= 0xff00 && c <= 0xffef)) cjk++;
@@ -114,7 +125,7 @@ const Fmt = {
     const tidAvg = tidCnt > 0 ? tidChars / tidCnt : 0;
     const isOpenAiChunk = (tN >= 15 && avgChunk > 0 && avgChunk <= 3.8) || (tN < 6 && tidCnt >= 18 && tidAvg > 0 && tidAvg <= 4.2);
     const isGeminiChunk = !isOpenAiChunk && tN >= 3 && tN <= 28 && avgChunk >= 28.0;
-    const isMuseBufferedTool = tidCnt > 0 && tidCnt <= 6 && tidAvg >= 2000 && (f.rE || 0) === 0 && (f.rWireEmptyDeltas || 0) === 0 && rs.length >= 2;
+    const isMuseBufferedTool = (tidCnt > 0 && tidCnt <= 6 && tidAvg >= 1800 && (f.rE || 0) === 0 && (f.rWireEmptyDeltas || 0) === 0 && rs.length >= 2) || (rs.length >= 2 && avgChunk >= 15.0);
     const isClaudeChunk = !isOpenAiChunk && !isGeminiChunk && !isMuseBufferedTool && ((tN >= 15 && avgChunk >= 4.0 && avgChunk <= 25.0 && (rs.length > 0 || (f.rE || 0) > 0 || (f.rWireEmptyDeltas || 0) > 0 || tidCnt > 0)) || (tN >= 6 && avgChunk >= 4.0 && avgChunk <= 25.0 && rs.length > 0) || (tidCnt > 0 && tidCnt <= 8 && tidAvg < 2000 && (f.tools || 0) > 0 && !(tN >= 3 && avgChunk >= 28.0) && !isOpenAiChunk));
     const isTc = i => /^tc_[A-Za-z0-9_-]{8,}$/.test(i);
     if (all.every(i => isTc(i) || num(i))) {

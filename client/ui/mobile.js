@@ -27,8 +27,8 @@ const Mob = {
   // 拖动 = 当前页和相邻页一起平移（整数像素、不改透明度）；松手滑到位后只换角色，不重建任何东西 ----
   dragging: false,
   busy() { return this.dragging || !!this.pend; },
-  // 相邻页回到停靠位（当前页正下方）
-  park(P) { if (!P?.el) return; P.el.classList.remove('moving'); P.el.style.transition = ''; P.el.style.transform = ''; const sc = P.el.querySelector('.scroller'); if (sc) sc.style.overflowY = ''; P.el.querySelector(':scope>.pgrad')?.remove(); },
+  // 相邻页回到停靠位（当前页正下方，隐藏绘制层但保留布局与滚动位置，避免后台叠加合成掉帧）
+  park(P) { if (!P?.el) return; P.el.classList.remove('moving'); P.el.style.visibility = 'hidden'; P.el.style.transition = ''; P.el.style.transform = ''; const sc = P.el.querySelector('.scroller'); if (sc) sc.style.overflowY = ''; P.el.querySelector(':scope>.pgrad')?.remove(); },
   // 滑进来的那一页：靠着当前页的那一边是当前窗口的颜色，渐变到它自己的颜色（接缝处颜色连续）；
   // 落位后这层渐变慢慢淡掉，页面恢复成自己的本色。渐变是页里最底下单独的一层，只改透明度，不重画页面内容
   grad(el, v, d) {
@@ -50,8 +50,8 @@ const Mob = {
       s.p = null; s.gd = d;
       if (can) {
         const L = Tabs.list, i = L.findIndex(t => t.key === Tabs.active);
-        s.p = Pager.get(L[i + d], true);
-        if (s.p) { if (s.p.dirty) Pager.paint(s.p); s.p.el.classList.add('moving'); this.grad(s.p.el, v, d); }
+        s.p = Pager.get(L[i + d], true, true);
+        if (s.p) { s.p.el.style.visibility = ''; s.p.el.classList.add('moving'); this.grad(s.p.el, v, d); }
       }
     }
     const x = Math.round(can ? dx : dx * 0.18);
@@ -114,8 +114,88 @@ const Mob = {
     el.textContent = t; el.classList.remove('on'); void el.offsetWidth; el.classList.add('on');
     clearTimeout(this.hT); this.hT = setTimeout(() => el.classList.remove('on'), 1100);
   },
+  initDockHandle(btn = typeof $ === 'function' ? $('#dockhandle') : document.getElementById('dockhandle')) {
+    if (!btn || btn.__dhBound) return;
+    btn.__dhBound = true;
+    const applySavedPos = () => {
+      try {
+        const savedPct = Number(Store.get('dock:handlePct', 38));
+        const pct = Number.isFinite(savedPct) ? Math.max(8, Math.min(86, savedPct)) : 38;
+        btn.style.top = pct + '%';
+      } catch {}
+    };
+    applySavedPos();
+    let dragState = null;
+    const getPt = ev => (ev.touches && ev.touches[0]) || (ev.changedTouches && ev.changedTouches[0]) || ev;
+    const onStart = ev => {
+      if (!isMob()) return;
+      const p = getPt(ev);
+      if (!p) return;
+      const rect = btn.getBoundingClientRect();
+      dragState = {
+        startX: p.clientX,
+        startY: p.clientY,
+        startTop: rect.top,
+        moved: false,
+        swipedOpen: false,
+      };
+    };
+    const onMove = ev => {
+      if (!dragState || !isMob()) return;
+      const p = getPt(ev);
+      if (!p) return;
+      const dx = p.clientX - dragState.startX;
+      const dy = p.clientY - dragState.startY;
+      if (!dragState.moved && dx < -34 && Math.abs(dx) > Math.abs(dy) * 1.3) {
+        dragState.swipedOpen = true;
+        btn.dataset.dragged = '1';
+        dragState = null;
+        Dock.toggle(true);
+        return;
+      }
+      if (dragState.moved || Math.abs(dy) > 6) {
+        dragState.moved = true;
+        btn.dataset.dragged = '1';
+        btn.classList.add('dragging');
+        if (ev.cancelable) ev.preventDefault();
+        const vh = Math.max(320, window.innerHeight || document.documentElement.clientHeight || 640);
+        const hBtn = btn.offsetHeight || 38;
+        const clampedTop = Math.max(48, Math.min(vh - hBtn - 48, dragState.startTop + dy));
+        const pct = Math.round((clampedTop / vh) * 1000) / 10;
+        btn.style.top = pct + '%';
+        dragState.lastPct = pct;
+      }
+    };
+    const onEnd = () => {
+      if (!dragState) return;
+      const st = dragState;
+      dragState = null;
+      btn.classList.remove('dragging');
+      if (st.moved && Number.isFinite(st.lastPct)) {
+        try { Store.set('dock:handlePct', st.lastPct); } catch {}
+        setTimeout(() => { if (btn.dataset.dragged === '1') btn.dataset.dragged = ''; }, 240);
+      }
+    };
+    btn.addEventListener('touchstart', onStart, { passive: true });
+    btn.addEventListener('touchmove', onMove, { passive: false });
+    btn.addEventListener('touchend', onEnd, { passive: true });
+    btn.addEventListener('touchcancel', onEnd, { passive: true });
+    btn.addEventListener('pointerdown', ev => {
+      if (ev.pointerType === 'touch') return;
+      onStart(ev);
+      const pm = e2 => onMove(e2);
+      const pu = () => {
+        window.removeEventListener('pointermove', pm, true);
+        window.removeEventListener('pointerup', pu, true);
+        onEnd();
+      };
+      window.addEventListener('pointermove', pm, true);
+      window.addEventListener('pointerup', pu, true);
+    });
+  },
   bind() {
     try { MobFit.init(); } catch {}
+    try { this.initDockHandle(); } catch {}
     let s = null;
     const pt = e => e.touches ? e.touches[0] : e;
     document.addEventListener('touchstart', e => {
@@ -127,7 +207,7 @@ const Mob = {
       if (HtmlPreview.on()) { s = null; return; }   // 预览弹层开着：边缘滑动 / 切窗口手势不抢（捏合、拖动、下拉关闭都在弹层里处理）
       if (!b.classList.contains('drawer') && p.clientX < 22 && !document.querySelector('.modal-back:not(.anc-gh)')) s.kind = 'open';
       // 右边缘往左滑：展开模型信息
-      else if (!b.classList.contains('drawer') && !Dock.mOpen && p.clientX > innerWidth - 18 && !document.querySelector('.modal-back:not(.anc-gh),.asheet-back:not(.anc-gh)')) s.kind = 'dopen';
+      else if (!b.classList.contains('drawer') && !Dock.mOpen && !e.target.closest?.('#dockhandle') && p.clientX > innerWidth - 18 && !document.querySelector('.modal-back:not(.anc-gh),.asheet-back:not(.anc-gh)')) s.kind = 'dopen';
       else if (b.classList.contains('drawer') && e.target.closest?.('#sb,#scrim')) s.kind = 'close';
       else if (sheet) s.kind = 'side';   // 模型信息卡片（右侧）：往右滑关闭
       // 聊天区域（消息列表 / 输入框）左右滑：切换窗口
@@ -412,16 +492,18 @@ const Pager = {
   panes: new Map(),
   on() { return isMob() && !!$('#body'); },
   nbrs() { const L = Tabs.list, i = L.findIndex(t => t.key === Tabs.active); return i < 0 ? [] : [L[i - 1], L[i + 1]].filter(Boolean); },
-  mk(t) {
+  mk(t, fastPh = false) {
     const body = $('#body'); if (!body) return null;
     // 不用 inert / pointer-events:none：它们是继承属性，每次换角色都会让两整页全部重算样式（滑到位那一下卡）。
-    // 停着的相邻页完全被不透明的 #view 盖住，本来就点不到；只标 aria-hidden 给读屏。
+    // 停着的相邻页完全被不透明的 #view 盖住，本来就点不到；只标 aria-hidden 给读屏，并在停靠时设置 visibility:hidden 避免后台图层合成。
     const el = h('div', { class: 'pane', 'aria-hidden': 'true' });
+    el.style.visibility = 'hidden';
     const P = { key: t.key, sid: t.sid || null, kind: t.kind || '', el, els: null, cache: null, stick: true, paintQ: null, dirty: false, ph: false };
     body.insertBefore(el, $('#view'));
-    if (t.kind) {
-      // 抽卡 / 排行页是单例，没法预搭：只放一个带标题的占位页，滑过去后再正常渲染
-      el.append(h('div', { class: 'chead' }, h('div', { class: 'chead-t' }, t.kind === 'power' ? '推理分排行' : '抽卡')), h('div', { class: 'scroller' }));
+    if (t.kind || fastPh) {
+      // 抽卡 / 排行页或手势首帧快速占位：先放一个极轻量带标题和底色的占位页（<0.5ms），滑到位后再完整填充
+      const label = t.kind === 'power' ? '推理分排行' : t.kind === 'gacha' ? '抽卡' : (t.sid ? (Titles.view(t.sid, History.byId(t.sid)?.title || t.title || '')?.note || Titles.view(t.sid, History.byId(t.sid)?.title || t.title || '')?.model || '对话') : '新对话');
+      el.append(h('div', { class: 'chead' }, h('div', { class: 'chead-t' }, label)), h('div', { class: 'scroller' }));
       try { Palette.paintPage(el, t); } catch {}
       P.ph = true;
     } else {
@@ -430,25 +512,32 @@ const Pager = {
     this.panes.set(t.key, P);
     return P;
   },
-  get(t, build) { if (!t) return null; let P = this.panes.get(t.key); if (P && !this.valid(P, t)) { this.drop(t.key); P = null; } if (!P && build && this.on()) P = this.mk(t); return P || null; },
+  get(t, build, fastPh = false) { if (!t) return null; let P = this.panes.get(t.key); if (P && !this.valid(P, t)) { this.drop(t.key); P = null; } if (!P && build && this.on()) P = this.mk(t, fastPh); return P || null; },
   valid(P, t) { return P.el.isConnected && (P.sid || null) === (t.sid || null) && (P.kind || '') === (t.kind || ''); },
   ensure() {
     this.eT = 0;
     if(document.hidden)return;
     if (!this.on()) { this.clear(); return; }
-    if (Mob.busy()) { this.ensureSoon(200); return; }
+    const activeBusy = !!(UI.pane?.els?.chat?.busy || UI.pane?.els?.chat?.streaming);
+    const recentScroll = (Date.now() - Math.max(window.__ancLastScrollAt || 0, window.__ancLastListScrollAt || 0)) < 350;
+    if (Mob.busy() || activeBusy || recentScroll) { this.ensureSoon(activeBusy ? 650 : 280); return; }
     const want = this.nbrs(), keys = new Set(want.map(t => t.key));
     for (const k of [...this.panes.keys()]) if (!keys.has(k)) this.drop(k);
-    for (const t of want) this.get(t, true);
+    for (const t of want) {
+      if (!this.panes.has(t.key)) {
+        this.get(t, true, false);
+        if (want.length > 1) { this.ensureSoon(220); break; }
+      }
+    }
   },
-  ensureSoon(ms = 120) { if (this.eT) return; this.eT = setTimeout(() => this.ensure(), ms); },
+  ensureSoon(ms = 320) { if (this.eT) return; this.eT = setTimeout(() => this.ensure(), ms); },
   drop(k) { const P = this.panes.get(k); if (!P) return; this.panes.delete(k); try { P.resizeObserver?.disconnect();P.el.remove(); } catch {} },
   clear() { for (const k of [...this.panes.keys()]) this.drop(k); },
   // 当前页退成相邻页（保留它的全部状态：节点、滚动位置、展开状态、输入框）
   demote() {
     const cur = UI.pane, el = cur.el; if (!el || !cur.key) return null;
     el.removeAttribute('id'); el.classList.add('pane'); el.classList.remove('swin-l', 'swin-r'); el.setAttribute('aria-hidden', 'true');
-    el.style.transition = ''; el.style.transform = '';
+    el.style.visibility = 'hidden'; el.style.transition = ''; el.style.transform = '';
     const t = Tabs.list.find(x => x.key === cur.key);
     cur.sid = t?.sid || null; cur.kind = t?.kind || ''; cur.dirty = false;
     // 抽卡 / 排行页是单例：退下来就拆掉（下次用占位页）
@@ -460,7 +549,7 @@ const Pager = {
   promote(P) {
     const el = P.el; this.panes.delete(P.key);
     el.classList.remove('pane', 'moving'); el.removeAttribute('aria-hidden'); el.id = 'view';
-    el.style.transition = ''; el.style.transform = '';
+    el.style.visibility = ''; el.style.transition = ''; el.style.transform = '';
     const sc = el.querySelector('.scroller'); if (sc) sc.style.overflowY = '';
     UI.pane = P;
   },
@@ -519,20 +608,25 @@ const MobFit = {
   t: 0,
   measure() {
     if (!isMob()) return;
-    const cs = [...document.querySelectorAll('.composer')].filter(c => c.offsetParent && c.getBoundingClientRect().height > 0);
-    const c = cs.sort((a, b) => b.getBoundingClientRect().bottom - a.getBoundingClientRect().bottom)[0];
+    if (document.hidden) return;
+    const c = document.querySelector('#view .composer') || UI.pane?.els?.composer || null;
+    const rect = (c && c.offsetParent) ? c.getBoundingClientRect() : null;
     const vh = window.visualViewport ? visualViewport.height + visualViewport.offsetTop : innerHeight;
-    const gap = c ? Math.max(0, Math.round(vh - c.getBoundingClientRect().top)) : 0;
+    const gap = (rect && rect.height > 0) ? Math.max(0, Math.round(vh - rect.top)) : 0;
     const v = gap ? gap + 'px' : '';
-    if (document.body.style.getPropertyValue('--compgap') !== v) { if (v) document.body.style.setProperty('--compgap', v); else document.body.style.removeProperty('--compgap'); }
+    if (this._lastGap !== v) {
+      this._lastGap = v;
+      if (v) document.body.style.setProperty('--compgap', v);
+      else document.body.style.removeProperty('--compgap');
+    }
   },
   init() {
     if (this.t) return;
-    const run = () => { if (!isMob()) return; cancelAnimationFrame(this.raf); this.raf = requestAnimationFrame(() => this.measure()); };
-    addEventListener('resize', run); window.visualViewport?.addEventListener('resize', run); window.visualViewport?.addEventListener('scroll', run);
+    this.t = 1;
+    const run = () => { if (!isMob() || document.hidden) return; cancelAnimationFrame(this.raf); this.raf = requestAnimationFrame(() => this.measure()); };
+    addEventListener('resize', run); window.visualViewport?.addEventListener('resize', run);
     document.addEventListener('focusin', () => { if (isMob()) setTimeout(run, 60); }); document.addEventListener('focusout', () => { if (isMob()) setTimeout(run, 120); });
     try { new ResizeObserver(run).observe(document.body); } catch {}
-    this.t = setInterval(() => { if (isMob() && !document.body.classList.contains('ws-off')) this.measure(); }, 700);
     run();
   },
 };

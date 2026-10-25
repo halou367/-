@@ -104,15 +104,64 @@ Object.assign(Nodes, {
         onStep?.('订阅已获取（'+(r.via||'自动网络')+' · '+((now()-started)/1000).toFixed(1)+' 秒）');return r;
       }catch(error){return {error:'无法获取订阅：'+cleanErr(error)};}finally{clearInterval(tick);}
     }
-    const t0 = now(), errs = [];
-    const tag = (p, name) => Promise.resolve(p).then(r => { if (!r || r.error || typeof r.text !== 'string') throw new Error(name + '：' + (r?.error || '无响应')); return { ...r, via: name }; }).catch(e => { errs.push(cleanErr(e)); throw e; });
+    const t0 = now(), errs = [], ctls = [];
+    const isHtmlDoc = s => /^\s*(?:<!doctype\s+html|<html[\s>]|<head[\s>]|<body[\s>])/i.test(String(s || ''));
+    const countValidLines = s => String(s || '').split(/\r?\n/).filter(l => { const x = l.trim(); return x && !x.startsWith('<') && !x.startsWith('{'); }).length;
+    const tag = (p, name) => Promise.resolve(p).then(r => {
+      if (!r || r.error || typeof r.text !== 'string' || !r.text.trim()) throw new Error(name + '：' + (r?.error || '无响应'));
+      if (isHtmlDoc(r.text)) throw new Error(name + '：返回了网页而非订阅内容');
+      return { ...r, via: name, _lines: countValidLines(r.text) };
+    }).catch(e => { errs.push(cleanErr(e)); throw e; });
+    const pageGet = (u, ms = 10000) => (async () => { const ctl = new AbortController(); ctls.push(ctl); const tm = setTimeout(() => ctl.abort(), ms); if (tm && typeof tm.unref === "function") tm.unref(); try { const x = await fetch(u, { cache: 'no-store', credentials: 'omit', signal: ctl.signal }); if (!x.ok) throw new Error('HTTP ' + x.status); return { text: await x.text() }; } finally { clearTimeout(tm); } })();
     const jobs = [];
     if (Host.fetchText) { jobs.push(tag(Host.fetchText(url), '经当前线路')); jobs.push(tag(Host.fetchText(url, { direct: true }), '直连')); }
-    jobs.push(tag((async () => { const ctl = new AbortController(), tm = setTimeout(() => ctl.abort(), 20000); try { const x = await fetch(url, { cache: 'no-store', credentials: 'omit', signal: ctl.signal }); if (!x.ok) throw new Error('HTTP ' + x.status); return { text: await x.text() }; } finally { clearTimeout(tm); } })(), '页面网络'));
-    const tick = setInterval(() => onStep?.('获取订阅中… ' + Math.round((now() - t0) / 1000) + ' 秒（经线路 / 直连同时尝试）'), 1000);
-    try { const r = await Promise.any(jobs); onStep?.('订阅已获取（' + r.via + ' · ' + ((now() - t0) / 1000).toFixed(1) + ' 秒）'); return r; }
-    catch { return { error: '无法获取订阅：' + ([...new Set(errs)].join('；') || '全部超时') }; }
-    finally { clearInterval(tick); }
+    jobs.push(tag(pageGet(url, 10000), '页面网络'));
+    const ghM = /^https:\/\/raw\.githubusercontent\.com\/([^/]+)\/([^/]+)\/([^/]+)\/(.+)$/i.exec(String(url || '').trim());
+    if (ghM) {
+      const [, owner, repo, branch, restPath] = ghM;
+      const mirrors = [
+        [`https://testingcf.jsdelivr.net/gh/${owner}/${repo}@${branch}/${restPath}`, '镜像(cf)'],
+        [`https://fastly.jsdelivr.net/gh/${owner}/${repo}@${branch}/${restPath}`, '镜像(fastly)'],
+        [`https://gcore.jsdelivr.net/gh/${owner}/${repo}@${branch}/${restPath}`, '镜像(gcore)'],
+        [`https://cdn.jsdelivr.net/gh/${owner}/${repo}@${branch}/${restPath}`, '镜像(jsdelivr)'],
+        [`https://ghfast.top/${url}`, '镜像(ghfast)'],
+      ];
+      for (const [mu, mName] of mirrors) {
+        if (Host.fetchText) jobs.push(tag(Host.fetchText(mu, { direct: true }), mName));
+        jobs.push(tag(pageGet(mu, 9000), mName));
+      }
+    }
+    const tick = setInterval(() => onStep?.('获取订阅中… ' + Math.round((now() - t0) / 1000) + ' 秒（经线路 / 直连 / 镜像同时尝试）'), 1000);
+    // 兼顾防截断与防卡死：先收到小响应（<40行）时等待最多 1200ms 让完整响应到达；收到大响应（>=40行）后再等 220ms 择优即刻返回，绝不被挂死的直连阻塞 20 秒
+    try {
+      const good = [];
+      await new Promise(resolve => {
+        let rem = jobs.length, graceTimer = null, settled = false;
+        const finish = () => { if (settled) return; settled = true; if (graceTimer) clearTimeout(graceTimer); resolve(); };
+        if (!rem) return finish();
+        for (const j of jobs) {
+          Promise.resolve(j).then(v => {
+            if (v && typeof v.text === 'string' && v.text.trim()) {
+              good.push(v);
+              const isFull = (v._lines || 0) >= 40 || v.text.length >= 1200;
+              const waitMs = isFull ? 220 : 1200;
+              if (graceTimer) clearTimeout(graceTimer);
+              graceTimer = setTimeout(finish, waitMs);
+            }
+          }, () => {}).finally(() => {
+            if (--rem <= 0) finish();
+          });
+        }
+      });
+      if (good.length) {
+        good.sort((a, b) => (b._lines || 0) - (a._lines || 0) || b.text.length - a.text.length);
+        const r = good[0];
+        onStep?.('订阅已获取（' + r.via + ' · ' + good.length + ' 个来源 · ' + ((now() - t0) / 1000).toFixed(1) + ' 秒）');
+        return r;
+      }
+      return { error: '无法获取订阅：' + ([...new Set(errs)].slice(0, 4).join('；') || '全部超时') };
+    } catch (e) { return { error: '无法获取订阅：' + cleanErr(e) }; }
+    finally { clearInterval(tick); for (const c of ctls) { try { c.abort(); } catch {} } }
   },
   // 导入任意文本：返回 { added: [节点], exist, other, subs: [{url, n, error}], bad }
   async importAny(text, onStep) {

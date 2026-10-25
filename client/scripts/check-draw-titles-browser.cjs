@@ -107,13 +107,13 @@ async function finish(f, name) {
   await p.evaluate(()=>{__anc.GPop.openAny();});await p.clock.runFor(200);
   await p.locator('#gpop [data-ui=text]').click();
   const mode=p.locator('#gpop [data-k=mode]'),preferred=p.locator('#gpop [data-ui=preferred]');
-  assert.deepEqual(await mode.locator('option').evaluateAll(x=>x.map(o=>o.value)),['habit','autoqa','svg','custom','fingerprint']);
-  await mode.selectOption('svg');assert.equal(await preferred.isVisible(),false);assert.equal(await p.locator('#gpop [data-k=prompt]').isDisabled(),true);
+  assert.deepEqual(await mode.locator('option').evaluateAll(x=>x.map(o=>o.value)),['habit','autoqa','custom']);
+  await mode.selectOption('habit');assert.equal(await preferred.isVisible(),false);assert.equal(await p.locator('#gpop [data-k=prompt]').isDisabled(),true);
+  await mode.selectOption('autoqa');assert.equal(await preferred.isVisible(),false);assert.equal(await p.locator('#gpop [data-k=prompt]').isDisabled(),true);
   await mode.selectOption('custom');assert.equal(await preferred.isVisible(),false);
   await p.locator('#gpop [data-k=prompt]').fill('Reply with the word ready.');await p.locator('#gpop [data-k=prompt]').blur();assert.equal(await p.locator('#gpop [data-ui=saveText]').count(),0);
-  await mode.selectOption('fingerprint');assert.equal(await preferred.isVisible(),true);
-  await p.locator('#gpop [data-k=preferredKeywords]').fill('6-astra, opus-5.5\nfable');await p.locator('#gpop [data-k=preferredKeywords]').blur();await p.locator('#gpop [data-k=intervalSec]').fill('3000');await p.locator('#gpop [data-k=intervalSec]').press('Enter');assert.equal(await p.evaluate(()=>__anc.Gacha.settings().intervalMs),3000000);assert.equal(await p.locator('#gpop [data-k=intervalSec]').inputValue(),'3000');
-  const settings=await p.evaluate(()=>__anc.Gacha.settings());assert.equal(settings.fingerprint,true);assert.equal(settings.parallel,1);assert.equal(settings.turbo,false);assert.equal(settings.prompt,'Reply with the word ready.');assert.deepEqual(settings.preferredKeywords,['6-astra','opus-5.5','fable']);
+  await p.locator('#gpop [data-k=intervalSec]').fill('3000');await p.locator('#gpop [data-k=intervalSec]').press('Enter');assert.equal(await p.evaluate(()=>__anc.Gacha.settings().intervalMs),3000000);assert.equal(await p.locator('#gpop [data-k=intervalSec]').inputValue(),'3000');
+  const settings=await p.evaluate(()=>__anc.Gacha.settings());assert.equal(settings.fingerprint,false);assert.equal(settings.parallel,3);assert.equal(settings.turbo,true);assert.equal(settings.prompt,'Reply with the word ready.');
   const frame=await p.locator('#gpop .panel').boundingBox();assert(frame.x>=-1&&frame.x+frame.width<=width+1);
   await p.evaluate(()=>{__anc.GPop.close();__anc.UI.settings();});
   await p.getByRole('button',{name:'设置 / 解锁',exact:true}).click();

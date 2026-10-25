@@ -28,12 +28,20 @@ function ensureModeSwitcherStyle() {
   st.id = 'brana-mode-switcher-css';
   st.textContent = `
 .mode-bar-wrap{display:inline-flex;align-items:center;gap:2px;flex-wrap:nowrap;min-width:0;max-width:100%;flex:none}
-.cbtn.mode-pill,.cbtn.modality-pill,.cbtn.direct-model-pill{display:inline-grid;place-items:center;width:28px;height:28px;min-width:28px;max-width:28px;padding:0;border-radius:7px;border:1px solid transparent;background:transparent;color:var(--fg2);line-height:1;cursor:pointer;transition:background .14s ease,color .14s ease,border-color .14s ease;user-select:none;flex:none}
-.cbtn.mode-pill:hover,.cbtn.modality-pill:hover,.cbtn.direct-model-pill:hover,.cbtn.mode-pill.is-open,.cbtn.modality-pill.is-open,.cbtn.direct-model-pill.is-open{background:var(--hl,var(--bg3));color:var(--fg)}
-.cbtn.mode-pill .ic,.cbtn.modality-pill .ic,.cbtn.direct-model-pill .ic{width:16px;height:16px;flex:none;color:currentColor}
-.cbtn.direct-model-pill .vlogo,.cbtn.direct-model-pill .vi{flex:none;opacity:.85;filter:grayscale(1) contrast(1.05)}
-.cbtn.direct-model-pill:hover .vlogo,.cbtn.direct-model-pill:hover .vi,.cbtn.direct-model-pill.is-open .vlogo,.cbtn.direct-model-pill.is-open .vi{opacity:1}
-body.m .cbtn.mode-pill,body.m .cbtn.modality-pill,body.m .cbtn.direct-model-pill{width:32px;height:32px;min-width:32px;max-width:32px;border-radius:50%}
+.cbtn.mode-pill,.cbtn.modality-pill{display:inline-grid;place-items:center;width:28px;height:28px;min-width:28px;max-width:28px;padding:0;border-radius:7px;border:1px solid transparent;background:transparent;color:var(--fg2);line-height:1;cursor:pointer;transition:background .14s ease,color .14s ease,border-color .14s ease;user-select:none;flex:none}
+.cbtn.direct-model-pill{display:inline-flex;align-items:center;gap:5px;height:28px;min-width:28px;max-width:176px;padding:0 7px;border-radius:7px;border:1px solid var(--bd);background:color-mix(in srgb,var(--bg2) 72%,transparent);color:var(--fg);font-size:11.5px;font-weight:500;line-height:1;cursor:pointer;transition:background .14s ease,color .14s ease,border-color .14s ease;user-select:none;flex:0 1 auto}
+.cbtn.direct-model-pill .direct-model-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:128px}
+.cbtn.direct-model-pill .ic{width:12px;height:12px;opacity:.65;flex:none}
+.cbtn.mode-pill:hover,.cbtn.modality-pill:hover,.cbtn.direct-model-pill:hover,.cbtn.mode-pill.is-open,.cbtn.modality-pill.is-open,.cbtn.direct-model-pill.is-open{background:var(--hl,var(--bg3));color:var(--fg);border-color:var(--bd2)}
+.cbtn.mode-pill .ic,.cbtn.modality-pill .ic{width:16px;height:16px;flex:none;color:currentColor}
+.cbtn.direct-model-pill .vlogo,.cbtn.direct-model-pill .vi{flex:none;opacity:.96}
+body.m .cbtn.mode-pill,body.m .cbtn.modality-pill{width:32px;height:32px;min-width:32px;max-width:32px;border-radius:50%}
+body.m .cbtn.direct-model-pill{height:30px;max-width:142px;border-radius:15px;padding:0 8px}
+body.m .cbtn.direct-model-pill .direct-model-name{max-width:92px}
+.mode-pop-vendors{display:flex;align-items:center;gap:4px;overflow-x:auto;padding:1px 1px 5px;margin-bottom:3px}
+.mode-vendor-chip{flex:none;padding:2px 7px;border-radius:999px;border:1px solid var(--bd);background:var(--bg2);color:var(--fg2);font-size:11px;line-height:1.3;cursor:pointer;transition:all .12s ease}
+.mode-vendor-chip:hover{color:var(--fg);border-color:var(--bd2)}
+.mode-vendor-chip.on{background:var(--fg);color:var(--bg);border-color:var(--fg);font-weight:600}
 .mode-pop{position:fixed;z-index:95;width:max-content;min-width:124px;max-width:176px;background:var(--card,var(--bg));border:1px solid var(--bd2,var(--bd));border-radius:12px;box-shadow:var(--sh,0 10px 32px rgba(0,0,0,.22));padding:5px;display:flex;flex-direction:column;gap:2px;backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);animation:modePopIn .14s cubic-bezier(.2,.8,.2,1)}
 .mode-pop.direct-model-pop{width:316px;min-width:280px;max-width:calc(100vw - 20px);padding:8px}
 @keyframes modePopIn{from{opacity:0;transform:translateY(5px) scale(.985)}to{opacity:1;transform:translateY(0) scale(1)}}
@@ -127,12 +135,12 @@ const MODALITY_META_MAP = {
 };
 
 const DIRECT_FALLBACK_MODELS = [
-  { id: 'claude-opus-4-6', name: 'claude-opus-4-6', publicName: 'Claude Opus 4.6', displayName: 'Claude Opus 4.6', organization: 'Anthropic', provider: 'anthropic' },
-  { id: 'claude-sonnet-4-6', name: 'claude-sonnet-4-6', publicName: 'Claude Sonnet 4.6', displayName: 'Claude Sonnet 4.6', organization: 'Anthropic', provider: 'anthropic' },
-  { id: 'gpt-5.4-high', name: 'gpt-5.4-high', publicName: 'GPT-5.4 (high)', displayName: 'GPT-5.4 (high)', organization: 'OpenAI', provider: 'openai' },
-  { id: 'gemini-3.1-pro-preview', name: 'gemini-3.1-pro-preview', publicName: 'Gemini 3.1 Pro Preview', displayName: 'Gemini 3.1 Pro Preview', organization: 'Google', provider: 'google' },
-  { id: 'deepseek-v3.2-thinking', name: 'deepseek-v3.2-thinking', publicName: 'DeepSeek-V3.2-Thinking', displayName: 'DeepSeek-V3.2-Thinking', organization: 'DeepSeek', provider: 'deepseek' },
-  { id: 'qwen3.5-397b-a17b', name: 'qwen3.5-397b-a17b', publicName: 'Qwen3.5-397B-A17B', displayName: 'Qwen3.5-397B-A17B', organization: 'Alibaba', provider: 'qwen' },
+  { id: '019ce973-84c9-7030-9f88-1ebbf2edeb14', name: 'claude-opus-4-6', publicName: 'Claude Opus 4.6', displayName: 'Claude Opus 4.6', organization: 'Anthropic', provider: 'anthropic' },
+  { id: '019cbd0a-d2e9-7540-9651-8fb7bc7bc483', name: 'claude-sonnet-4-6', publicName: 'Claude Sonnet 4.6', displayName: 'Claude Sonnet 4.6', organization: 'Anthropic', provider: 'anthropic' },
+  { id: '019d3995-9b7a-730d-b779-227ad61ecc9b', name: 'gpt-5.4-high', publicName: 'GPT-5.4 High', displayName: 'GPT-5.4 High', organization: 'OpenAI', provider: 'openai' },
+  { id: '019cbfae-9988-799f-833f-d9ef5fb8b92e', name: 'gemini-3.1-pro-preview', publicName: 'Gemini 3.1 Pro', displayName: 'Gemini 3.1 Pro', organization: 'Google', provider: 'google' },
+  { id: '019b7b2f-fc57-7c65-b4ef-fd8db34f448e', name: 'deepseek-v3.2', publicName: 'DeepSeek V3.2', displayName: 'DeepSeek V3.2', organization: 'DeepSeek', provider: 'deepseek' },
+  { id: '01980d0b-8126-7f5b-a749-bd6ef7bc7f56', name: 'qwen3-235b-a22b-instruct-2507', publicName: 'Qwen3 235B A22B', displayName: 'Qwen3 235B A22B', organization: 'Alibaba', provider: 'qwen' },
 ];
 
 const ModeSwitcher = {
@@ -517,6 +525,18 @@ const ModeSwitcher = {
     const curDirect = this._resolveDirectModel(chat, curMod);
     const curDirectId = curDirect?.id || curDirect?.name || '';
 
+    let activeVendor = 'all';
+    const vendorFilters = [
+      ['all', '全部'],
+      ['anthropic', 'Claude'],
+      ['openai', 'GPT'],
+      ['google', 'Gemini'],
+      ['xai', 'Grok'],
+      ['deepseek', 'DeepSeek'],
+      ['qwen', 'Qwen'],
+      ['zhipu', 'GLM'],
+      ['moonshot', 'Kimi'],
+    ];
     const searchInput = h('input', {
       type: 'text',
       class: 'mode-pop-search',
@@ -524,7 +544,21 @@ const ModeSwitcher = {
       autocomplete: 'off',
       spellcheck: 'false',
     });
+    const vendorBar = h('div', { class: 'mode-pop-vendors' });
     const listWrap = h('div', { class: 'mode-pop-list' });
+
+    const renderVendors = () => {
+      vendorBar.replaceChildren(...vendorFilters.map(([vk, vl]) => h('button', {
+        type: 'button',
+        class: 'mode-vendor-chip' + (activeVendor === vk ? ' on' : ''),
+        onclick: e => {
+          e.stopPropagation();
+          activeVendor = vk;
+          renderVendors();
+          renderList();
+        },
+      }, vl)));
+    };
 
     const getModels = () => {
       if (typeof ModelCatalog !== 'undefined' && typeof ModelCatalog.getModelsForModality === 'function') {
@@ -537,15 +571,17 @@ const ModeSwitcher = {
     const renderList = () => {
       const q = String(searchInput.value || '').trim().toLowerCase();
       const allModels = getModels();
-      const filtered = !q
-        ? allModels
-        : allModels.filter(m => {
-            const hay = m._searchHay || (m._searchHay = [m.displayName, m.publicName, m.name, m.id, m.organization, m.provider]
-              .filter(Boolean)
-              .join(' ')
-              .toLowerCase());
-            return hay.includes(q);
-          });
+      const filtered = allModels.filter(m => {
+        const hay = m._searchHay || (m._searchHay = [m.displayName, m.publicName, m.name, m.id, m.organization, m.provider]
+          .filter(Boolean)
+          .join(' ')
+          .toLowerCase());
+        if (activeVendor !== 'all') {
+          const vid = (typeof Brand !== 'undefined' && Brand.of) ? Brand.of(m.name || m.displayName || m.provider) : '';
+          if (vid !== activeVendor && !hay.includes(activeVendor)) return false;
+        }
+        return !q || hay.includes(q);
+      });
 
       if (!filtered.length) {
         listWrap.replaceChildren(h('div', { class: 'mode-pop-empty' }, '无匹配模型'));
@@ -609,6 +645,7 @@ const ModeSwitcher = {
     };
 
     searchInput.addEventListener('input', () => renderList());
+    renderVendors();
     renderList();
 
     const pop = h('div', {
@@ -622,6 +659,7 @@ const ModeSwitcher = {
       this._icon('search'),
       searchInput
     ),
+    vendorBar,
     listWrap);
 
     document.body.appendChild(pop);
@@ -694,9 +732,10 @@ const ModeSwitcher = {
       if (curMode === 'direct') {
         const directModel = this._resolveDirectModel(curChat, curMod);
         const modelLabel = directModel?.displayName || directModel?.publicName || directModel?.name || directModel?.id || '选择模型';
+        const shortLabel = String(modelLabel).replace(/\s*\(preview\)\s*/gi, '').trim();
         const directBtn = h('button', {
           type: 'button',
-          class: 'ib cbtn direct-model-pill mode-icon-only',
+          class: 'ib cbtn direct-model-pill',
           title: `当前直连模型：${modelLabel} · 点击切换模型`,
           'aria-label': `选择 Direct 直连模型（当前：${modelLabel}）`,
           onclick: e => {
@@ -704,7 +743,9 @@ const ModeSwitcher = {
             this._openDirectModelPop(directBtn, tab, curChat, wrap);
           },
         },
-        this._modelLogo(directModel, 16));
+        this._modelLogo(directModel, 15),
+        h('span', { class: 'direct-model-name' }, shortLabel),
+        this._icon('chevud'));
         pills.push(directBtn);
       }
 
@@ -719,7 +760,8 @@ const ModeSwitcher = {
         const gbtn = comp?.querySelector?.('.gbtn2:not([data-acct])');
         if (gbtn) {
           gbtn.style.display = curMode === 'battle' ? 'none' : '';
-          gbtn.hidden = curMode === 'battle';
+          if (curMode === 'direct') gbtn.style.display = 'none';
+          gbtn.hidden = curMode === 'battle' || curMode === 'direct';
         }
         if (curMode === 'battle' && typeof GPop !== 'undefined' && typeof GPop.isOpen === 'function' && GPop.isOpen() && !GPop.target) {
           GPop.close?.();

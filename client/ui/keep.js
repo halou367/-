@@ -18,6 +18,10 @@ const KeepAlive = (() => {
   const DONE_TEXT = /(?:已完成|已修复|已解决|已更新|已发布|已实现|已经完成|全部完成|修改完成|完成更新|完成修复|完成修改|测试通过|验证通过|已生成|已打包|已同步|总结如下|如下所示|以上就是|完毕|现在[你您]可以)/;
   function isMidTurnStalled(c, msg) {
     if (!c || c.gacha || (typeof Gacha !== 'undefined' && Gacha.owns?.(c.sid))) return null;
+    if (typeof SentUserLog !== 'undefined' && typeof SentUserLog.isGachaProbeText === 'function' && Array.isArray(c.messages)) {
+      const lastU = [...c.messages].reverse().find(x => x && x.role === 'user');
+      if (lastU && SentUserLog.isGachaProbeText(SentUserLog.extractMsgText(lastU))) return null;
+    }
     if (typeof Fingerprint !== 'undefined' && Fingerprint.isRunning?.(c)) return null;
     if (typeof SendQ !== 'undefined' && SendQ.of?.(c)?.length > 0) return null;
     if (c.endStop || c.stopReq || c.error || c.status === 'error') return null;
@@ -100,6 +104,10 @@ const KeepAlive = (() => {
 
   function canAutoResendOfficialError(c) {
     if (!c || c.gacha || (typeof Gacha !== 'undefined' && Gacha.owns?.(c.sid))) return null;
+    if (typeof SentUserLog !== 'undefined' && typeof SentUserLog.isGachaProbeText === 'function' && Array.isArray(c.messages)) {
+      const lastU = [...c.messages].reverse().find(x => x && x.role === 'user');
+      if (lastU && SentUserLog.isGachaProbeText(SentUserLog.extractMsgText(lastU))) return null;
+    }
     if (typeof Fingerprint !== 'undefined' && Fingerprint.isRunning?.(c)) return null;
     if (c.endStop || c.stopReq) return null;
     const msgs = c.messages || [];

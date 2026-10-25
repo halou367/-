@@ -441,13 +441,51 @@ const fmtClock2 = ms => { if (!ms) return '—'; const d = new Date(ms), p = n =
 // ---------- 工作区（沙盒文件）：/api/chat/{sid}/workspace/latest?includeManifest=true ----------
 const Workspace = {
   cache: new Map(), pending: new Map(), revisions: new Map(),
+  dirCache: new Map(), casCache: new Map(), casPending: new Map(), _wsSeq: 0,
+  async protoJson(path, opt = {}) {
+    const seq = (this._wsSeq = (this._wsSeq + 1) % 10000);
+    const preferProto = Boolean(opt.preferProto || (typeof ReadLimit !== 'undefined' && ReadLimit.active?.()));
+    const tryProto = async () => {
+      if (typeof Host === 'undefined' || typeof Host.protoFetch !== 'function') return null;
+      const pr = await Host.protoFetch(path, {
+        method: 'GET',
+        bypass429: true,
+        pipSlot: seq,
+        timeout: opt.timeout || 20000,
+      });
+      if (pr && pr.ok && pr.text) {
+        return JSON.parse(String(pr.text));
+      }
+      if (pr && typeof pr.status === 'number' && !pr.fallback && !pr.ok) {
+        throw new HttpError(pr.status, pr.text || '');
+      }
+      return null;
+    };
+    if (preferProto) {
+      try {
+        const j = await tryProto();
+        if (j !== null) return j;
+      } catch (e) {
+        if (e?.status && e.status !== 429 && e.status !== 403) throw e;
+      }
+    }
+    try {
+      return await api(path, opt);
+    } catch (err) {
+      if (err?.status === 429 || err?.status === 403 || err?.rateLimitedLocally) {
+        const j = await tryProto();
+        if (j !== null) return j;
+      }
+      throw err;
+    }
+  },
   async latest(sid, force) {
     const c = this.cache.get(sid);
     if (!force && this.pending.has(sid)) return this.pending.get(sid);
     if (c && !force && now() - c.at < 20000) return c;
     const rev = (this.revisions.get(sid) || 0) + 1; this.revisions.set(sid,rev);
     const job = (async () => {
-      const j = await api('/api/chat/' + encodeURIComponent(sid) + '/workspace/latest?includeManifest=true', { bg: !force, noApiRetry: true });
+      const j = await this.protoJson('/api/chat/' + encodeURIComponent(sid) + '/workspace/latest?includeManifest=true', { bg: !force, noApiRetry: true });
       const v = { at: now(), node: j?.manifestNodeId || null, leaf: j?.leafMessageId || null, manifest: j?.manifest || null };
       if (this.revisions.get(sid) !== rev) return this.pending.get(sid) || this.cache.get(sid) || v;
       this.cache.set(sid, v); Bus.emit('workspace', sid); return v;
@@ -455,14 +493,80 @@ const Workspace = {
     this.pending.set(sid, job);
     try { return await job; } finally { if (this.pending.get(sid) === job) this.pending.delete(sid); }
   },
-  async dir(sid, node, path, opt = {}) { const j = await api(`/api/chat/${encodeURIComponent(sid)}/workspace/${encodeURIComponent(node)}/dir?path=${encodeURIComponent(path)}`, opt); return j?.directory || null; },
+  async dir(sid, node, path, opt = {}) {
+    const dKey = sid + ':' + node + ':' + path;
+    if (this.dirCache.has(dKey)) return this.dirCache.get(dKey);
+    const j = await this.protoJson(`/api/chat/${encodeURIComponent(sid)}/workspace/${encodeURIComponent(node)}/dir?path=${encodeURIComponent(path)}`, opt);
+    const d = j?.directory || null;
+    if (d) {
+      if (this.dirCache.size >= 512) this.dirCache.delete(this.dirCache.keys().next().value);
+      this.dirCache.set(dKey, d);
+    }
+    return d;
+  },
   downloadUrl: (sid, node) => `${ORIGIN}/api/chat/${encodeURIComponent(sid)}/workspace/${encodeURIComponent(node)}/download`,
   casUrl: hash => `${ORIGIN}/api/chat/workspace/cas/user/${encodeURIComponent(hash)}`,
+  async fetchCasBlob(hash, opt = {}) {
+    const hKey = String(hash || '').trim();
+    if (!hKey) throw Error('缺少文件哈希');
+    if (!opt.range && this.casCache.has(hKey)) return this.casCache.get(hKey);
+    if (!opt.range && this.casPending.has(hKey)) return this.casPending.get(hKey);
+    const run = (async () => {
+      const relPath = '/api/chat/workspace/cas/user/' + encodeURIComponent(hKey);
+      const hdrs = opt.range ? { Range: opt.range } : undefined;
+      try {
+        const res = await rawFetch(this.casUrl(hKey), {
+          credentials: 'same-origin',
+          cache: 'no-store',
+          ...(opt.signal ? { signal: opt.signal } : {}),
+          ...(hdrs ? { headers: hdrs } : {}),
+        });
+        if (res.ok) {
+          const b = await res.blob();
+          if (!opt.range && b.size <= 8 * 1024 * 1024) {
+            if (this.casCache.size >= 96) this.casCache.delete(this.casCache.keys().next().value);
+            this.casCache.set(hKey, b);
+          }
+          return b;
+        }
+        if (res.status !== 429 && res.status !== 403) {
+          throw new HttpError(res.status, await res.text().catch(() => ''));
+        }
+      } catch (e) {
+        if (e instanceof HttpError && e.status !== 429 && e.status !== 403) throw e;
+        if (opt.signal?.aborted) throw e;
+      }
+      if (typeof Host !== 'undefined' && typeof Host.protoFetch === 'function') {
+        const seq = (this._wsSeq = (this._wsSeq + 1) % 10000);
+        const pr = await Host.protoFetch(relPath, {
+          method: 'GET',
+          bypass429: true,
+          responseType: 'base64',
+          pipSlot: seq,
+          headers: hdrs || {},
+          timeout: 30000,
+        });
+        if (pr && pr.ok && typeof pr.base64 === 'string') {
+          const binStr = atob(pr.base64);
+          const bytes = new Uint8Array(binStr.length);
+          for (let i = 0; i < binStr.length; i++) bytes[i] = binStr.charCodeAt(i);
+          const b = new Blob([bytes], { type: pr.contentType || 'application/octet-stream' });
+          if (!opt.range && b.size <= 8 * 1024 * 1024) {
+            if (this.casCache.size >= 96) this.casCache.delete(this.casCache.keys().next().value);
+            this.casCache.set(hKey, b);
+          }
+          return b;
+        }
+        if (pr && typeof pr.status === 'number') throw new HttpError(pr.status, pr.text || '读取工作区文件失败');
+      }
+      throw new HttpError(429, '工作区文件请求受限（429）');
+    })();
+    if (!opt.range) this.casPending.set(hKey, run);
+    try { return await run; } finally { if (!opt.range && this.casPending.get(hKey) === run) this.casPending.delete(hKey); }
+  },
   async fileBlob(entry) {
     if (entry.inlineText != null) return new Blob([entry.inlineText], { type: 'text/plain;charset=utf-8' });
-    const res = await rawFetch(this.casUrl(entry.hash), { credentials: 'same-origin', cache: 'no-store' });
-    if (!res.ok) throw new HttpError(res.status, await res.text().catch(() => ''));
-    return res.blob();
+    return this.fetchCasBlob(entry.hash);
   },
 };
 Bus.on('turn', c => {

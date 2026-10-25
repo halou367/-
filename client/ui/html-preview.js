@@ -613,8 +613,8 @@ const HtmlPreview = (() => {
           const hit = curBundle.files.find(f => f.path === st.path);
           if (hit) st.get = hit.get;
         }
-        let nextDigest = 2166136261;
-        for (const f of (curBundle.files || [])) { const s = (f.path || '') + ':' + (typeof f.get === 'function' ? f.get() : (f.content || '')); for (let i = 0; i < s.length; i += Math.max(1, s.length > 4096 ? 4 : 1)) { nextDigest ^= s.charCodeAt(i); nextDigest = Math.imul(nextDigest, 16777619) >>> 0; } }
+        let nextDigest = 2166136261 >>> 0;
+        for (const f of (curBundle.files || [])) { const s = (f.path || '') + ':' + (typeof f.get === 'function' ? f.get() : (f.content || '')); for (let i = 0; i < s.length; i++) { nextDigest ^= s.charCodeAt(i); nextDigest = Math.imul(nextDigest, 16777619) >>> 0; } }
         const digestChanged = st._lastFilesDigest !== undefined && st._lastFilesDigest !== nextDigest;
         st._lastFilesDigest = nextDigest;
         st._lastFileCount = nextCount;
@@ -1085,8 +1085,15 @@ const HtmlPreview = (() => {
       const baseSid = st.sid || Tabs.cur?.sid || null;
       const curChat = baseSid && typeof Chats !== 'undefined' ? Chats.get(baseSid) : null;
       const sid = (baseSid && st.evalPos && curChat?.evalMode === 'battle') ? `${baseSid}#${st.evalPos}` : baseSid;
-      const shot = (st.previewUrl && textOf().trim()) ? await shootText(textOf(), st.name) : await shoot();
-      const r = PelicanShots.add({ sid, ...shot, file: st.name });
+      const rawTextNow = String(textOf() || '');
+      let hDig = 2166136261 >>> 0;
+      for (let i = 0; i < rawTextNow.length; i++) { hDig ^= rawTextNow.charCodeAt(i); hDig = Math.imul(hDig, 16777619) >>> 0; }
+      const artifactDigest = rawTextNow.length + ':' + hDig.toString(36);
+      const messageId = st.evalMsg?.id || st.messageId || curChat?.messages?.filter(m => m && m.role === 'assistant')?.at(-1)?.id || null;
+      const curM = PelicanShots.modelOf ? PelicanShots.modelOf(sid) : { model: null, score: null, think: null };
+      const explicitModel = st.evalModelName || (curM?.model && curM.model !== '未识别' ? curM.model : undefined);
+      const shot = (st.previewUrl && rawTextNow.trim()) ? await shootText(rawTextNow, st.name) : await shoot();
+      const r = PelicanShots.add({ sid, ...shot, file: st.name, messageId, artifactDigest, model: explicitModel, score: curM?.score, think: curM?.think, lockedModel: Boolean(explicitModel) });
       toast('已记录 · ' + r.model + (r.score != null ? ' · 推理分 ' + Strength.fmtScore(r.score) : '') + '（模型信息 · 概览 · 鹈鹕测试图）');
       try { Dock.render(); } catch {}
     } catch (e) { toast('记录失败：' + describe(e), 'err'); }
@@ -1158,8 +1165,8 @@ const PelicanShots = (() => {
   };
   const save = a => {
     const full = Array.isArray(a) ? a.slice(-TOTAL) : [];
-    memRows = full;
     let r = full.slice(-LOCAL_MAX_ROWS);
+    memRows = (typeof table === 'function' && table.refreshOpen) ? full : r;
     while (r.length > 4) {
       try {
         if (JSON.stringify(r).length <= LOCAL_MAX_CHARS) break;
@@ -1376,10 +1383,12 @@ const PelicanShots = (() => {
     save(updated);
     push();
   }
-  function add({ sid, url, w, h: hh, file, auto, acct, messageId, artifactDigest, lockedModel, model: explicitModel }) {
+  function add({ sid, url, w, h: hh, file, auto, acct, messageId, artifactDigest, lockedModel, model: explicitModel, score: explicitScore, think: explicitThink }) {
     const m = modelOf(sid), aLabel = acct || curAcct();
     const finalModel = (explicitModel && explicitModel !== '未识别') ? cleanName(explicitModel) : m.model;
-    const rec = { id: uuid7(), at: now(), sid, model: finalModel, score: m.score, ...(m.think != null ? { think: m.think } : {}), url, w, h: hh, file: file || '', ...(auto ? { auto: true } : {}), ...(aLabel ? { acct: aLabel } : {}), ...(messageId ? { messageId } : {}), ...(artifactDigest ? { artifactDigest } : {}), ...(lockedModel ? { lockedModel: true } : {}) };
+    const finalScore = (explicitScore !== undefined && explicitScore !== null && Number.isFinite(+explicitScore)) ? +explicitScore : m.score;
+    const finalThink = (explicitThink !== undefined && explicitThink !== null && Number.isFinite(+explicitThink)) ? +explicitThink : m.think;
+    const rec = { id: uuid7(), at: now(), sid, model: finalModel, score: finalScore, ...(finalThink != null ? { think: finalThink } : {}), url, w, h: hh, file: file || '', ...(auto ? { auto: true } : {}), ...(aLabel ? { acct: aLabel } : {}), ...(messageId ? { messageId } : {}), ...(artifactDigest ? { artifactDigest } : {}), ...(lockedModel ? { lockedModel: true } : {}) };
     let a = all(); a.push(rec);
     const mine = rec.sid ? a.filter(x => x.sid === rec.sid) : a.filter(x => !x.sid && key(x.model) === key(rec.model));
     if (mine.length > PER) { const drop = new Set(mine.slice(0, mine.length - PER).map(x => x.id)); a = a.filter(x => !drop.has(x.id)); }
@@ -1400,8 +1409,14 @@ const PelicanShots = (() => {
     const list = (typeof R !== 'undefined' && R.writes ? R.writes(sid) : []).filter(x => HtmlPreview.kindOf(x.path) === 'html'), w = list[list.length - 1];
     if (!w) return { none: '这一轮没有写出 html / svg 文件，没有可存的图' };
     const text = String(w.get() || ''); if (text.trim().length < 80) return { none: '写出的页面是空的，没有存图' };
+    let hDig = 2166136261 >>> 0;
+    for (let i = 0; i < text.length; i++) { hDig ^= text.charCodeAt(i); hDig = Math.imul(hDig, 16777619) >>> 0; }
+    const artifactDigest = text.length + ':' + hDig.toString(36);
+    const lastAsst = (chat || (typeof Chats !== 'undefined' ? Chats.get(sid) : null))?.messages?.filter(m => m && m.role === 'assistant')?.at(-1);
+    const curM = modelOf(sid);
+    const explicitModel = (curM.model && curM.model !== '未识别') ? curM.model : undefined;
     const shot = await HtmlPreview.shootText(text, w.path.split('/').pop() || w.path);
-    return { rec: add({ sid, ...shot, file: w.path.split('/').pop() || w.path, auto: true }) };
+    return { rec: add({ sid, ...shot, file: w.path.split('/').pop() || w.path, auto: true, messageId: lastAsst?.id || null, artifactDigest, model: explicitModel, score: curM.score, think: curM.think, lockedModel: Boolean(explicitModel) }) };
   }
   const forSid = sid => sid ? all().filter(x => x.sid === sid).map(view).sort((x, y) => y.at - x.at) : [];
   const forModel = name => { const k = key(name); return k ? all().map(view).filter(x => key(x.model) === k).sort((x, y) => y.at - x.at) : []; };

@@ -83,8 +83,10 @@ function createAccountSignIn({ find, password, session, prepare, syncCookies, sa
     let lease;
     try {
       lease = await begin?.(a, expected, ses); current();
+      const ua = a.fp?.ua || DEFAULT_UA;
+      const lang = a.fp?.lang || 'en-US,en;q=0.9';
       if (!posters.has(ses)) posters.set(ses, AuthFlow.createPoster({
-        fetch: (url, init) => ses.fetch(url, { ...init, credentials: 'include', headers: { ...init.headers, origin: 'https://arena.ai', referer: 'https://arena.ai/' } }),
+        fetch: (url, init) => ses.fetch(url, { ...init, credentials: 'include', headers: { ...init.headers, origin: 'https://arena.ai', referer: 'https://arena.ai/', 'user-agent': ua, 'accept-language': lang } }),
         deadline, retryAfter: NetPolicy.retryAfter,
       }));
       let response;
@@ -93,7 +95,7 @@ function createAccountSignIn({ find, password, session, prepare, syncCookies, sa
       await syncCookies(ses, response); // Only the real server's Set-Cookie values, never a fabricated session.
       let data;
       try {
-        const r = await read(ses, 'https://arena.ai/api/me', {}, 30000);
+        const r = await read(ses, 'https://arena.ai/api/me', { headers: { 'user-agent': ua, 'accept-language': lang } }, 15000);
         if (!r.ok) throw Object.assign(Error('HTTP ' + r.status), { status: r.status });
         try { data = await r.json(); } catch { throw Object.assign(Error('账号状态响应格式异常'), { responseFormat: true }); }
         NetPolicy.sessionValue(data);
@@ -460,4 +462,76 @@ function createAccountTokenRegistrar({ find, password, setPassword, session, pre
   };
 }
 
-module.exports = { createAccountSignIn, protoRecaptchaV3, createAccountTokenRegistrar };
+function createAccountMagicLinkSender({ find, session, prepare }) {
+  if (typeof find !== 'function' || typeof session !== 'function' || typeof prepare !== 'function') {
+    throw TypeError('account magic-link sender requires find, session, and prepare');
+  }
+  const deadline = NetPolicy.deadline;
+  const read = (ses, url, init = {}, timeout = 20000) => deadline(signal => ses.fetch(url, {
+    ...init,
+    credentials: 'include',
+    redirect: init.redirect || 'manual',
+    cache: 'no-store',
+    signal,
+    headers: { accept: 'application/json, text/plain, */*', referer: 'https://arena.ai/', ...(init.headers || {}) },
+  }), { timeout });
+
+  return async function sendMagicLinkAccount(id, rawEmail, fullName = '') {
+    const a = find(id);
+    if (!a) throw Error('目标账号不存在');
+    const email = AuthFlow.email(rawEmail || a.email);
+    if (!AuthFlow.EMAIL.test(email)) throw Error('请填写有效邮箱');
+    const ses = session(a);
+    await prepare(a);
+    const ua = a.fp?.ua || DEFAULT_UA;
+    const lang = a.fp?.lang || 'en-US,en;q=0.9';
+    const baseHdr = { 'user-agent': ua, 'accept-language': lang };
+    try {
+      const wr = await read(ses, 'https://arena.ai/', { headers: { ...baseHdr, accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8' } }, 12000);
+      const html = await wr.text().catch(() => '');
+      const pid = (html.match(/userId\\?":\\?"([0-9a-f-]{36})\\?",\\?"userState\\?":\\?"provisional/) || [])[1] || '';
+      if (pid) {
+        const wTok = await protoRecaptchaV3(ses, { action: 'sign_up', ua }).catch(() => null);
+        if (wTok) {
+          await read(ses, 'https://arena.ai/nextjs-api/sign-up', {
+            method: 'POST',
+            headers: { ...baseHdr, 'content-type': 'application/json', origin: 'https://arena.ai' },
+            body: JSON.stringify({ recaptchaToken: wTok, provisionalUserId: pid }),
+          }, 12000).catch(() => {});
+        }
+      }
+    } catch {}
+    const rcToken = await protoRecaptchaV3(ses, { action: 'signup_magic_link', ua }).catch(() => null);
+    const name = String(fullName || a.name || email.split('@')[0]).trim();
+    const cc = /^[A-Z]{2}$/.test(a.region || '') ? a.region : undefined;
+    const sendResp = await read(ses, 'https://arena.ai/nextjs-api/sign-up/magic-link', {
+      method: 'POST',
+      headers: {
+        ...baseHdr,
+        'content-type': 'application/json',
+        origin: 'https://arena.ai',
+        ...(rcToken ? { 'x-recaptcha-token': rcToken } : {}),
+      },
+      body: JSON.stringify({
+        email,
+        fullName: name,
+        shouldLinkHistory: false,
+        marketingConsent: false,
+        ...(cc ? { registeredCountryCode: cc } : {}),
+        ...(rcToken ? { recaptchaToken: rcToken, recaptchaAction: 'signup_magic_link' } : {}),
+      }),
+    }, 20000);
+    const sendText = await sendResp.text().catch(() => '');
+    let sendData = null;
+    try { sendData = sendText ? JSON.parse(sendText) : null; } catch {}
+    if (!sendResp.ok) {
+      throw Error(sendData?.error || sendData?.message || ('注册邮件发送失败（HTTP ' + sendResp.status + '）'));
+    }
+    if (/^\s*</.test(sendText) || !sendData || (sendData.success !== true && sendData.ok !== true && !sendData.user && !sendData.emailSent)) {
+      throw Error('注册接口返回了验证页或非确认响应，不能确认邮件已发出');
+    }
+    return { ok: true, id: a.id, email, data: sendData };
+  };
+}
+
+module.exports = { createAccountSignIn, protoRecaptchaV3, createAccountTokenRegistrar, createAccountMagicLinkSender };

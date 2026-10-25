@@ -73,4 +73,27 @@ test('Direct IP entry & CSV API import: unbans previously banned/failed IPs, par
   assert.deepEqual([...csvItems].map(p => [p.line, p.loc || '']), [['130.61.129.162', 'US'], ['45.131.71.168:2053', 'DE']]);
 });
 
-
+test('country_proxies large single-country list (>240 lines) is not truncated to 16, keeps up to 2 ports per IP (preferring :443), and refreshApi(force=true) recovers dropped/banned exits', async () => {
+  const ctx = load();
+  const { Pool } = ctx;
+  const U = 'https://raw.githubusercontent.com/NiREvil/vless/main/sub/country_proxies/DE.txt';
+  await Pool.load();
+  await Pool.mutate(d => {
+    d.src.push(U);
+    d.ips['45.68.1.10'] = { ip: '45.68.1.10', port: '', src: U, loc: 'DE', ok: false, err: 'connection closed' };
+    (d.ban ||= {})['45.68.1.10'] = '高风险';
+    (d.drop ||= {})['45.68.1.10:443'] = 100;
+  });
+  const lines = [];
+  for (let i = 1; i <= 120; i++) {
+    lines.push(`45.68.${i}.10 8443`);
+    lines.push(`45.68.${i}.10 443`);
+    lines.push(`45.68.${i}.10 2053`);
+  }
+  ctx.__resp = { text: lines.join('\n') };
+  const r = await Pool.refreshApi(U, true);
+  assert.equal(r.total, 240, '120 unique IPs * 2 ports per IP = 240 items (not truncated to 16)');
+  assert.ok(Pool.d.ips['45.68.1.10:443'] && !Pool.d.ips['45.68.1.10:443'].gone, ':443 port kept and not deleted by old failed portless entry');
+  assert.ok(Pool.d.ips['45.68.1.10:8443'] && !Pool.d.ips['45.68.1.10:8443'].gone, 'second port :8443 kept');
+  assert.equal(Pool.banned('45.68.1.10:443'), false, 'force=true clears prior ban/drop on refreshed API exits');
+});

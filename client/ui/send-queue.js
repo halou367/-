@@ -214,6 +214,20 @@ const SendQ = {
   // Reserved for explicit transfer back to the composer, never used before async sends.
   take(chat) { if (chat?._qBusy) return { text: '', atts: [] }; const items = this.of(chat).splice(0); chat.emit(); return { text: items.map(i => i.text).filter(Boolean).join('\n'), atts: items.flatMap(i => i.atts || []) }; },
   async flush(chat, { manual = false } = {}) {
+    if (chat && Array.isArray(chat.queue) && chat.queue.length && typeof SentUserLog !== 'undefined' && typeof SentUserLog.isGachaProbeText === 'function') {
+      const beforeLen = chat.queue.length;
+      for (let qi = chat.queue.length - 1; qi >= 0; qi--) {
+        const qit = chat.queue[qi];
+        if (qit && SentUserLog.isGachaProbeText(qit.text)) {
+          if (qit.id) chat._qRemovedIds = [...new Set([...(chat._qRemovedIds || []), qit.id])].slice(-64);
+          chat.queue.splice(qi, 1);
+        }
+      }
+      if (chat.queue.length !== beforeLen) {
+        try { if (typeof Drafts !== 'undefined' && Drafts.setQ) Drafts.setQ(chat, true); } catch {}
+        if (!chat.queue.length) { chat.emit?.(); return false; }
+      }
+    }
     let reason = this.blocked(chat, manual);
     // 手动「立即发送」被待确认记录挡住：当场向服务器核对一次，确认后直接发
     if (manual && /上一条输入尚未确认/.test(reason) && typeof Drafts !== 'undefined') { toast('正在向服务器核对上一条…'); const ok = await Drafts.verify(chat).catch(() => false);
@@ -251,7 +265,11 @@ const SendQ = {
         ...(files ? { files, previews: atts } : {}), queueIds: batch.map(i => i.id),
         onPrepared: () => {
           handedOff = true;
+          const bIds = batch.map(i => i?.id).filter(Boolean);
+          if (bIds.length) chat._qRemovedIds = [...new Set([...(chat._qRemovedIds || []), ...bIds])].slice(-64);
           const q = this.of(chat); for (const item of batch) { const i = q.indexOf(item); if (i >= 0) q.splice(i, 1); }
+          if (!q.length) chat._qClearedAt = now();
+          try { if (typeof Drafts !== 'undefined' && typeof Drafts.setQ === 'function') Drafts.setQ(chat, true); } catch {}
         },
       });
       if (!handedOff) throw Error('消息未进入发送流程，已保留队列，请检查前置任务');
@@ -301,6 +319,9 @@ const SendQ = {
     const rawText = (parts.length ? parts.filter(p => p && p.type === 'text' && typeof p.text === 'string').map(p => p.text).join('\n') : '') || String(msgOrEntry.text || msgOrEntry.content || '');
     const text = rawText.trim();
     const tNorm = norm(text);
+    if (msgOrEntry.gachaProbe || msgOrEntry._gachaProbe || msgOrEntry.metadata?.gachaProbe) return false;
+    if (typeof SentUserLog !== 'undefined' && typeof SentUserLog.isGachaProbeText === 'function' && SentUserLog.isGachaProbeText(tNorm)) return false;
+    if (typeof Gacha !== 'undefined' && (Gacha.owns?.(chat.sid) || (typeof SentUserLog !== 'undefined' && SentUserLog.isPelicanPromptText?.(tNorm) && (Gacha.isGachaChat?.(chat.sid, chat) || Gacha.hasPelicanSent?.(chat.sid))))) return false;
     const at = msgOrEntry._sentAt || msgOrEntry.at || (typeof idTime === 'function' ? idTime(id) : 0) || (typeof now === 'function' ? now() : Date.now());
     let atts = [];
     if (Array.isArray(msgOrEntry._prev) && msgOrEntry._prev.length) {
@@ -369,6 +390,9 @@ const SendQ = {
     if (chat.status === 'error') {
       chat.status = isRunning ? 'streaming' : 'idle';
       if (isRunning && !chat.phase) chat.phase = '接收回复中';
+    }
+    if (isRunning && !chat.sentAt) {
+      chat.sentAt = Number(chat.live?._sentAt) || (typeof idTime === 'function' ? idTime(chat.live?.id || chat.messages?.at(-1)?.id) : 0) || (typeof now === 'function' ? now() : Date.now());
     }
     try { if (typeof MsgCache !== 'undefined' && typeof MsgCache.put === 'function') MsgCache.put(chat); } catch {}
     if (!opt?.silent) {

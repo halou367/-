@@ -1230,7 +1230,7 @@ const EvalView = {
           if (typeof toast === 'function') toast('投票引擎尚未加载', 'err');
           return;
         }
-        const res = await EvalEngine.submitVote(chat.sid, val);
+        const res = await EvalEngine.submitVote(chat.sid, val, { messageAId: lastTurn?.a?.id || null, messageBId: lastTurn?.b?.id || null });
         if (res && typeof toast === 'function') {
           toast('A: ' + (res.modelAName || 'A') + ' · B: ' + (res.modelBName || 'B'), 'ok');
         }

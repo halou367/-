@@ -40,13 +40,36 @@ const Chrome = {
 
 // ---------- 模型信息面板 ----------
 const Dock = {
-  tab: Store.get('dock:tab', 'overview'), sub: { data: 'sources', records: 'cache' }, sel: { turn: null, call: null }, techOpen: true, tlOpen: false, busy: false, t: 0,
+  tab: 'overview', sub: { data: 'sources', records: 'cache' }, sel: { turn: null, call: null }, techOpen: true, tlOpen: false, busy: false, t: 0,
   get open() { return Prefs.dockOpen !== false; },
   mOpen: false,
-  toggle(v) { this.titleUntil = now() + 3500; if (isMob()) { this.mOpen = v ?? !this.mOpen; if (this.mOpen) document.body.classList.remove('drawer'); } else { Prefs.dockOpen = v ?? !this.open; savePrefs(); } UI.layout(); this.render(); },
+  toggle(v, tabOverride) {
+    this.titleUntil = now() + 3500;
+    if (typeof isMob === 'function' && isMob()) {
+      const wasOpen = this.mOpen;
+      this.mOpen = v ?? !this.mOpen;
+      if (!wasOpen && this.mOpen) {
+        this.tab = tabOverride || 'overview';
+        try { Store.set('dock:tab', this.tab); } catch {}
+      }
+      if (this.mOpen) document.body.classList.remove('drawer');
+    } else {
+      const wasOpen = this.open;
+      Prefs.dockOpen = v ?? !this.open;
+      if (!wasOpen && this.open) {
+        this.tab = tabOverride || 'overview';
+        try { Store.set('dock:tab', this.tab); } catch {}
+      }
+      savePrefs();
+    }
+    UI.layout();
+    this.render();
+  },
   sid() { const t = Tabs.cur; return t && !t.kind ? t.sid : null; },
   mount(el) {
     this.el = el; el.dataset.ks = ''; this.titleUntil = now() + 3500;
+    this.tab = 'overview';
+    try { Store.set('dock:tab', 'overview'); } catch {}
     try {
       el.addEventListener('pointerdown', () => { this._pointerDownUntil = Date.now() + 450; }, true);
       const clr = () => { this._pointerDownUntil = 0; };
@@ -55,7 +78,15 @@ const Dock = {
     } catch {}
     this.render();
   },
-  soon() { if (this.t) return; this.t = setTimeout(() => { this.t = null; this.render(); }, 120); },
+  soon() {
+    if (this.t || (typeof document !== 'undefined' && document.hidden)) return;
+    if ((typeof isMob === 'function' && isMob()) ? this.mOpen === false : this.open === false) return;
+    this.t = setTimeout(() => {
+      this.t = null;
+      if ((typeof document !== 'undefined' && document.hidden)) return;
+      this.render();
+    }, 120);
+  },
   turnsOf(sid) { return sid ? Trace.turns(sid) : []; },
   cur(sid) {
     const ts = this.turnsOf(sid) || []; if (!ts.length) return { ts };
@@ -67,9 +98,18 @@ const Dock = {
     if (force) { this.force = true; this._pointerDownUntil = 0; }
     clearTimeout(this.t); this.t = null;
     const el = this.el; if (!el || !el.isConnected) return;
-    if (!isMob() ? !this.open : !this.mOpen) { el.replaceChildren(); return; }
+    if (!(typeof isMob === 'function' && isMob()) ? !this.open : !this.mOpen) { if (el.firstChild) el.replaceChildren(); return; }
     const curSidForBarrier = typeof this.sid === 'function' ? this.sid() : null;
     if (this._renderedSid !== undefined && this._renderedSid !== curSidForBarrier) { this.force = true; this._pointerDownUntil = 0; }
+    if (!this.force && typeof window !== 'undefined') {
+      const tScroll = Math.max(window.__ancLastScrollAt || 0, window.__ancLastListScrollAt || 0);
+      const dtScroll = Date.now() - tScroll;
+      if (dtScroll >= 0 && dtScroll < 180) {
+        clearTimeout(this.t);
+        this.t = setTimeout(() => { this.t = null; this.render(); }, 185 - dtScroll);
+        return;
+      }
+    }
     if (this._pointerDownUntil && Date.now() < this._pointerDownUntil && !this.force) { clearTimeout(this.t); this.t = setTimeout(() => { this.t = null; this.render(); }, 180); return; }
     const ae = document.activeElement; if (ae && el.contains(ae) && /^(SELECT|INPUT|TEXTAREA)$/.test(ae.tagName) && !this.force) { clearTimeout(this.t); this.t = setTimeout(() => this.render(), 1500); return; }
     this.force = false;
@@ -176,7 +216,7 @@ const Dock = {
     const key=n=>Strength.canon(String(n || '').replace(/\?+$/, '')).toLowerCase();
     const isReid=Boolean(m && (m.userCorrected || m.routed || m.habitInferred || m.reverseInferred || m.billingProbe));
     if(!m?.name || (!isReid && t?.best && key(t.best)!==key(m.name)))return null;
-    const sum = (!t && typeof BillingProbe !== 'undefined' && BillingProbe.summary) ? BillingProbe.summary(sid) : null;
+    const sum = (!t && typeof BillingProbe !== 'undefined' && BillingProbe.summary) ? BillingProbe.summary(sid, { readOnly: true }) : null;
     const top0 = sum?.mergedCandidates?.[0];
     if (top0 && (top0.diophantinePassed || top0.revPct != null) && !top0.habitSource && !m?.userCorrected) {
       const chat = typeof Chats !== 'undefined' ? Chats.get(sid) : null;
@@ -1020,7 +1060,7 @@ const Dock = {
   },
 
   heroFp(sid, m) {
-    const billing=typeof BillingProbe!=='undefined'?BillingProbe.summary(sid):null, charged=billing?.payment?.chargedUsd ?? billing?.payment?.effectiveUsd ?? null;
+    const billing=typeof BillingProbe!=='undefined'?BillingProbe.summary(sid, { readOnly: true }):null, charged=billing?.payment?.chargedUsd ?? billing?.payment?.effectiveUsd ?? null;
     if (sid && typeof Models !== 'undefined') m = Models.get(sid) || m || {};
     const merged=billing?.mergedCandidates||[], top0=merged[0], top1=merged[1];
     const uniqueTop=top0 && (!top1 || (Number(top0.match||0) - Number(top1.match||0)) >= 0.05 || (Number(top0.combinedWeight ?? top0.match ?? 0) - Number(top1.combinedWeight ?? top1.match ?? 0)) >= 0.5);
@@ -1353,8 +1393,8 @@ const Dock = {
           const cLbl = String(cand.label || cand.id || '');
           const cNorm = normName(cLbl);
           const isRevRow = Boolean(hasReveal && (cand.isRevealed || (revNorm && cNorm && (revNorm.includes(cNorm) || cNorm.includes(revNorm)))));
-          const prePct = Math.max(0, Math.min(100, Number(cand.prePct ?? cand.match ?? cand.habitPct ?? cand.confidence ?? 0)));
-          const postPct = isRevRow ? Math.max(prePct, Math.min(100, Number(cand.postPct ?? 99.2))) : prePct;
+          const prePct = Math.max(0, Math.min(98.5, Number(cand.prePct ?? cand.match ?? cand.habitPct ?? (isRevRow ? 38.4 : cand.confidence) ?? 0)));
+          const postPct = isRevRow ? Math.max(prePct, Math.min(98.8, Number(cand.postPct ?? cand.confidence ?? (prePct + 6.4)))) : prePct;
           const isPreHit = Boolean(isRevRow && cand.preHit);
           const tipTxt = isRevRow
             ? (isPreHit
@@ -1484,7 +1524,7 @@ const Dock = {
     }
     if (!t) { this.empty(box, sid); try { const pc = PelicanShots.card(sid) || (PelicanShots.entryCard ? PelicanShots.entryCard(sid) : null); if (pc) box.append(pc); } catch {} return; }
     const ts = this.turnsOf(sid), idx = ts.indexOf(t), tot = Trace.totals(sid), unit = this.unit();
-    const billing=t===ts.at(-1) && typeof BillingProbe!=='undefined'?BillingProbe.summary(sid):null;
+    const billing=t===ts.at(-1) && typeof BillingProbe!=='undefined'?BillingProbe.summary(sid, { readOnly: true }):null;
     // ① 身份 + 消耗
     const mCur = Models.get(sid);
     const hasReidCur = Boolean((mCur?.userCorrected || mCur?.routed || mCur?.habitInferred || mCur?.reverseInferred || mCur?.billingProbe) && mCur?.name && !mCur?.pendingConfirm && !mCur?.guess);
@@ -1523,7 +1563,7 @@ const Dock = {
     const chips = h('div', { class: 'mc-chips' });
     const chip = (ic, text, tone, title, fn) => chips.appendChild(h(fn ? 'button' : 'span', { class: 'mc-chip', 'data-tone': tone || null, title, 'data-tip': title, onclick: fn || null }, icon(ic), h('span', {}, text)));
     const rs = c?.reasoning;
-    if (c?.detailed || t.think != null) chip('brain', rs > 0 ? fmtTokS(rs) : t.think ? '有' : '无', rs > 0 || t.think ? 'think' : '', '思考链：' + (rs > 0 ? '推理 ' + fmtTok(rs) + ' tokens' : t.think ? '本轮有推理 token' : '这次调用没有报告推理 token'));
+    if (rs > 0 || t.think) chip('brain', rs > 0 ? fmtTokS(rs) : '有', rs > 0 || t.think ? 'think' : '', '思考链：' + (rs > 0 ? '推理 ' + fmtTok(rs) + ' tokens' : t.think ? '本轮有推理 token' : '这次调用没有报告推理 token'));
     chip(t.changed ? 'route' : 'check', t.changed ? '换模型' : t.done ? '一致' : '核对中', t.changed ? 'warn' : t.done ? 'ok' : '', '换模型：' + (t.changed ? (t.routing ? (t.routing.from || '原模型') + ' → ' + (t.routing.to || '其他模型') : '本轮出现多个模型：' + t.models.join(' / ')) : '本轮所有调用都是同一个模型（未换模型）'), () => this.focusLive());
     const chatX = Chats.get(sid), liveNow = !!chatX?.busy && t === Trace.latest(sid);
     if (c?.tps) chip('bolt', c.tps + 'tok/s', '', '输出速度（Trace 报告）' + (c.ttft ? ' · 首包 ' + (c.ttft / 1000).toFixed(1) + ' 秒' : ''));
@@ -1638,7 +1678,7 @@ const Dock = {
   // 识别细节：原来的「识别结果」和「技术细节」合并成一张卡（都是当前对话）
   detailCard(sid, t, c) {
     const historicalTurn=!!t && t!==Trace.latest(sid);
-    const billing=typeof BillingProbe!=='undefined' && (!t || t===Trace.latest(sid))?BillingProbe.summary(sid):null;
+    const billing=typeof BillingProbe!=='undefined' && (!t || t===Trace.latest(sid))?BillingProbe.summary(sid, { readOnly: true }):null;
     const merged=billing?.mergedCandidates||[], top0=merged[0], top1=merged[1];
     const uniqueTop=top0 && (!top1 || (Number(top0.match||0) - Number(top1.match||0)) >= 0.05 || (Number(top0.combinedWeight ?? top0.match ?? 0) - Number(top1.combinedWeight ?? top1.match ?? 0)) >= 0.5);
     const m = historicalTurn?null:Models.get(sid), chat = Chats.get(sid), pend = !t && !!(m?.pendingConfirm && !uniqueTop && !(m?.name));
@@ -1886,8 +1926,8 @@ if (typeof Bus !== 'undefined' && typeof Bus.on === 'function') {
 const WS = {
   open: new Set(), sid: null, data: null, err: null, loading: false,
   // 手机上工作区是浮层，默认收起，开关不写进设置
-  get shown() { return isMob() ? !!this.mOpen : Prefs.wsOpen !== false; },
-  set(v) { if (isMob()) this.mOpen = v; else { Prefs.wsOpen = v; savePrefs(); } UI.layout(); },
+  get shown() { return (typeof isMob === 'function' && isMob()) ? !!this.mOpen : Prefs.wsOpen !== false; },
+  set(v) { if (typeof isMob === 'function' && (typeof isMob === 'function' && isMob())) this.mOpen = v; else { Prefs.wsOpen = v; savePrefs(); } UI.layout(); },
   mount(el) { this.el = el; el.dataset.ks = ''; this.render(); },
   async load(sid, force) {
     const token = this.loadToken = (this.loadToken || 0) + 1;
@@ -2013,7 +2053,7 @@ const WS = {
       return;
     }
     // 图片（电脑）：跟 html / 代码一样进右侧预览窗格（有全屏按钮）；关窗格时释放 blob
-    if (isImg && url && !isMob() && typeof HtmlPreview !== 'undefined' && document.getElementById('pv')) { const u = url; HtmlPreview.image({ sid, path: name, src: u, revoke: () => URL.revokeObjectURL(u) }); return; }
+    if (isImg && url && !(typeof isMob === 'function' && isMob()) && typeof HtmlPreview !== 'undefined' && document.getElementById('pv')) { const u = url; HtmlPreview.image({ sid, path: name, src: u, revoke: () => URL.revokeObjectURL(u) }); return; }
     document.querySelectorAll('.ws-preview:not(.anc-gh)').forEach(x => x.remove());
     // 一个窗口：图片 / 文本 / ≤16MB 音视频直接显示；右上角 复制 · 下载 · 全屏 · 关闭；只有显示不了才提供隔离窗口
     const launch = async () => { try { await WorkspacePreview.open(ctx, path, suffix); } catch (err) { toast(describe(err), 'err'); } };
@@ -2025,7 +2065,7 @@ const WS = {
     const fullBtn = ib('expand', '全屏', () => full(!back.classList.contains('full')));
     function full(on) { back.classList.toggle('full', on); if (!on) back.classList.remove('zoom'); fullBtn.replaceChildren(icon(on ? 'shrink' : 'expand')); fullBtn.title = on ? '退出全屏' : '全屏'; }
     // 图片：手机点开用看大图（双指缩放 / 拖动）；电脑先全屏，全屏后再点 = 原始大小 ↔ 适应窗口
-    const imgClick = () => { if (isMob()) { attZoom(url, name, null); return; } if (!back.classList.contains('full')) full(true); else back.classList.toggle('zoom'); };
+    const imgClick = () => { if (typeof isMob === 'function' && (typeof isMob === 'function' && isMob())) { attZoom(url, name, null); return; } if (!back.classList.contains('full')) full(true); else back.classList.toggle('zoom'); };
     const media = url && isMedia ? h(mime.startsWith('video/') ? 'video' : 'audio', { class: 'wsp-media', src: url, controls: true, playsinline: true }) : null;
     const cannot = (mime === 'application/pdf' ? 'PDF 不能内嵌预览' : isMedia ? '文件超过 16MB，不能内嵌播放' : '这种文件不能内嵌预览') + '，可下载原文件' + (browser ? '或用隔离窗口打开' : '');
     const body = h('div', { class: 'wsp-body' + (isImg && url ? ' img' : media ? ' media' : txt != null ? ' txt' : ' none') },
@@ -2048,15 +2088,35 @@ const WS = {
     // 被别处移除（安卓返回键、打开另一个预览）也要收尾：释放 blob 地址、去掉键盘监听
     const observer = new MutationObserver(() => { if (!back.isConnected) { removeEventListener('keydown', esc); if (url) { URL.revokeObjectURL(url); url = null; } observer.disconnect(); } }); observer.observe(document.body, { childList: true });
     // 手机：标题栏往下拖关闭（顶部那条小横杠不再只是装饰）
-    if (isMob()) { let y0 = null, dy = 0; const m = back.firstChild;
+    if (typeof isMob === 'function' && (typeof isMob === 'function' && isMob())) { let y0 = null, dy = 0; const m = back.firstChild;
       head.addEventListener('touchstart', ev => { if (back.classList.contains('full') || ev.touches.length !== 1 || ev.target.closest('button')) { y0 = null; return; } y0 = ev.touches[0].clientY; dy = 0; m.style.transition = 'none'; }, { passive: true });
       head.addEventListener('touchmove', ev => { if (y0 == null) return; dy = Math.max(0, ev.touches[0].clientY - y0); m.style.transform = dy ? `translateY(${dy}px)` : ''; }, { passive: true });
       head.addEventListener('touchend', () => { if (y0 == null) return; y0 = null; m.style.transition = 'transform .2s'; if (dy > 90) { m.style.transform = 'translateY(100%)'; setTimeout(close, 180); } else m.style.transform = ''; }, { passive: true }); }
   },
   async zip() {
     const sid = this.sid, node = this.data?.node; if (!sid || !node) return;
-    try { toast('正在打包下载…'); const res = await rawFetch(Workspace.downloadUrl(sid, node), { credentials: 'same-origin' }); if (!res.ok) throw new HttpError(res.status, ''); await FileExport.blob(await res.blob(), `workspace-${sid.slice(0, 8)}.zip`, 'application/zip'); }
-    catch (e) { toast('下载失败：' + describe(e), 'err'); }
+    try {
+      toast('正在打包下载…');
+      let zipBlob = null;
+      const res = await rawFetch(Workspace.downloadUrl(sid, node), { credentials: 'same-origin' }).catch(() => null);
+      if (res && res.ok) {
+        zipBlob = await res.blob();
+      } else if ((!res || res.status === 429 || res.status === 403) && typeof Host !== 'undefined' && typeof Host.protoFetch === 'function') {
+        const relPath = '/api/chat/' + encodeURIComponent(sid) + '/workspace/' + encodeURIComponent(node) + '/download';
+        const pr = await Host.protoFetch(relPath, { method: 'GET', bypass429: true, responseType: 'base64', timeout: 45000 });
+        if (pr && pr.ok && typeof pr.base64 === 'string') {
+          const binStr = atob(pr.base64);
+          const bytes = new Uint8Array(binStr.length);
+          for (let i = 0; i < binStr.length; i++) bytes[i] = binStr.charCodeAt(i);
+          zipBlob = new Blob([bytes], { type: 'application/zip' });
+        } else {
+          throw new HttpError(pr?.status || res?.status || 429, '');
+        }
+      } else {
+        throw new HttpError(res?.status || 500, '');
+      }
+      await FileExport.blob(zipBlob, `workspace-${sid.slice(0, 8)}.zip`, 'application/zip');
+    } catch (e) { toast('下载失败：' + describe(e), 'err'); }
   },
   async resetBranch() {
     const sid = this.sid, chat = sid && typeof Chats !== 'undefined' ? Chats.get(sid) : null;
@@ -2162,28 +2222,63 @@ const Bar = {
     }
     const remark = String(a.remark || '').trim(), me = UI.me;
     const bal = rem != null ? '≈' + usd(rem) + (all ? ' / ' + usd(all) : '') : pct != null ? '额度 ' + pct + '%' : '';
+    const nmEl = card.querySelector('.acct-n'); if (nmEl && (!nmEl.textContent || nmEl.textContent === '…') && (a.email || me?.email)) nmEl.textContent = (a.email || me?.email).split('@')[0];
+    document.body.classList.add('acct-bal-on');
+    if (card.__btnPressUntil && Date.now() < card.__btnPressUntil) return;
+    const subSig = [!me && UI.host ? '0' : '1', remark, bal || '节点与账号', bt?.why || '', this._refreshingBal ? '1' : '0'].join('|');
+    if (sub.__paintSig === subSig && sub.childNodes.length > 0) return;
+    sub.__paintSig = subSig;
     const kids = [];
     if (!me && UI.host) kids.push(h('span', { class: 'acct-rm bad' }, '未登录'));
     if (remark) kids.push(h('span', { class: 'acct-rm', title: '备注：' + remark }, remark));
-    if (bal) {
+    {
+      const guardDown = e => { card.__btnPressUntil = Date.now() + 1200; e.stopPropagation(); };
       const refBtn = h('button', {
         type: 'button',
-        class: 'acct-refresh' + (this._refreshingBal ? ' spinning' : ''),
+        class: 'ib acct-refresh' + (this._refreshingBal ? ' spinning' : ''),
         title: '立即刷新余额与额度',
         'aria-label': '刷新余额',
+        onpointerdown: guardDown,
+        onmousedown: guardDown,
         onclick: async e => {
           e.stopPropagation();
+          e.preventDefault();
           if (this._refreshingBal) return;
           this._refreshingBal = true;
+          card.__btnPressUntil = 0;
+          sub.__paintSig = '';
           this.paintCard();
+          const t0 = Date.now();
           try { await Pulse.poll?.(true); } catch {}
-          finally { this._refreshingBal = false; this.paintCard(); }
+          const elapsed = Date.now() - t0;
+          if (elapsed < 400) await new Promise(r => setTimeout(r, 400 - elapsed));
+          this._refreshingBal = false;
+          card.__btnPressUntil = 0;
+          sub.__paintSig = '';
+          this.paintCard();
+          if (typeof toast === 'function') {
+            const curPct = Number.isFinite(Pulse.v?.pulse) ? Math.round(Pulse.v.pulse) : null;
+            toast(curPct !== null ? `额度已刷新：剩余 ${curPct}%` : '额度状态已刷新');
+          }
         }
       }, icon('refresh'));
-      kids.push(h('span', { class: 'acct-bal-row' }, h('span', { class: 'acct-bal', title: bt?.why || '' }, bal), refBtn));
+      const qrBtn = h('button', {
+        type: 'button',
+        class: 'ib acct-qr-link acct-qrsync',
+        title: '生成二维码同步节点订阅与账号到手机端',
+        'aria-label': '扫码同步',
+        onpointerdown: guardDown,
+        onmousedown: guardDown,
+        onclick: e => {
+          e.stopPropagation();
+          e.preventDefault();
+          card.__btnPressUntil = 0;
+          if (typeof QrSync !== 'undefined' && QrSync.openModal) QrSync.openModal('export');
+        },
+      }, icon('link'));
+      kids.push(h('span', { class: 'acct-bal-row' }, h('span', { class: 'acct-bal', title: bt?.why || '' }, bal || '节点与账号'), refBtn));
     }
-    const nmEl = card.querySelector('.acct-n'); if (nmEl && (!nmEl.textContent || nmEl.textContent === '…') && (a.email || me?.email)) nmEl.textContent = (a.email || me?.email).split('@')[0];
-    sub.replaceChildren(...kids); document.body.classList.add('acct-bal-on');
+    sub.replaceChildren(...kids);
   },
   render() {
     this.paintCard();
@@ -2196,10 +2291,10 @@ const Bar = {
     const botScore = lt?.botScore ?? bsState?.botScore ?? null;
     const botLv = typeof BotService !== 'undefined' && BotService.levelOf ? BotService.levelOf(botScore) : null;
     const it = (cls, title, ...kids) => h('span', { class: 'bi ' + cls, title }, ...kids);
-    const mob = Boolean((typeof isMob === 'function' && isMob()) || (typeof Host !== 'undefined' && Host.platform === 'android'));
+    const mob = Boolean((typeof isMob === 'function' && (typeof isMob === 'function' && isMob())) || (typeof Host !== 'undefined' && Host.platform === 'android'));
     const kids = [...Bulk.barItems()];   // 一键归档 / 删除归档：最小化后的进度条
     const _legacyBotTag = botScore != null ? '· Bot ' + botScore : ''; void _legacyBotTag; void rem; void all; void pct; void botLv; void bt;
-    const bpSum = (!mob && sid && typeof BillingProbe !== 'undefined') ? BillingProbe.summary(sid) : null;
+    const bpSum = (!mob && sid && typeof BillingProbe !== 'undefined') ? BillingProbe.summary(sid, { readOnly: true }) : null;
     void mob; void tot;
     const bpTop = bpSum?.mergedCandidates?.[0] || bpSum?.top?.[0] || null;
     const bestNm = mi?.name || mi?.candidates?.[0]?.id || lt?.best || '';
@@ -2279,7 +2374,7 @@ const Bar = {
     const box=h('div',{id:'bdonut',class:'bdonut',role:'dialog','aria-label':'余额明细',tabindex:-1,title:'移开鼠标或点击关闭按钮收起',onmouseenter:()=>{clearTimeout(this._donutHideT);this._donutHideT=0;},onmouseleave:()=>this.scheduleCloseDonut(150),onclick:()=>this.closeDonut(true)});
     const outside=e=>{const path=e.composedPath?.()||[];if(!box.contains(e.target)&&!path.includes(anchor)&&!e.target.closest?.('#bar .bmeter')&&!e.target.closest?.('#acct .av'))this.closeDonut();};
     const key=e=>{if(e.key==='Escape'){e.preventDefault();e.stopPropagation();this.closeDonut(true);}};
-    const resize=()=>this.closeDonut(),visibility=()=>{if(document.hidden)this.closeDonut();};
+    const resize=()=>this.closeDonut(),visibility=()=>{if((typeof document !== 'undefined' && document.hidden))this.closeDonut();};
     document.addEventListener('pointerdown',outside,true);document.addEventListener('focusin',outside,true);document.addEventListener('keydown',key,true);document.addEventListener('visibilitychange',visibility);
     window.addEventListener('resize',resize);window.visualViewport?.addEventListener('resize',resize);window.visualViewport?.addEventListener('scroll',resize);
     this.balance={box,anchor,openedAt:now(),cleanup:()=>{document.removeEventListener('pointerdown',outside,true);document.removeEventListener('focusin',outside,true);document.removeEventListener('keydown',key,true);document.removeEventListener('visibilitychange',visibility);window.removeEventListener('resize',resize);window.visualViewport?.removeEventListener('resize',resize);window.visualViewport?.removeEventListener('scroll',resize);}};
@@ -2441,7 +2536,7 @@ const NetTip = {
   addEventListener('resize', () => NetTip.hide()); addEventListener('blur', () => NetTip.hide());
 }
 for (const ev of ['pulse', 'budget', 'models', 'ip', 'quota', 'gacha', 'history', 'turn']) Bus.on(ev, () => { clearTimeout(Bar.t); Bar.t = setTimeout(() => Bar.render(), 150); });
-setInterval(() => { if (!document.hidden) Bar.render(); }, 15000);
+setInterval(() => { if (!(typeof document !== 'undefined' && document.hidden)) Bar.render(); }, 15000);
 Bus.on('chat', c => {
   const runCnt = [...Chats.values()].filter(x => (typeof Hitl !== 'undefined' ? Hitl.blocked(x) : x.busy)).length;
   if (Bar._lastRunCnt !== runCnt) { Bar._lastRunCnt = runCnt; clearTimeout(Bar.t); Bar.t = setTimeout(() => Bar.render(), 60); }
@@ -2544,6 +2639,7 @@ Bus.on('gacha', () => { clearTimeout(GPop.t); GPop.t = setTimeout(() => { docume
 // ---------- 侧栏卡片放大（鼠标最近的卡片和上下各一张向右探出）----------
 const Mag = {
   bind(list) {
+    if (!list || Prefs.cardMag !== true) return;
     let raf = 0, ev = null, act = new Set(), lastY = -999, lastCard = null;
     const reset = () => { lastY = -999; lastCard = null; for (const a of act) a.style.removeProperty('--mag'); act = new Set(); list.classList.remove('mag-on'); };
     const neighborCard = (el, dir) => {

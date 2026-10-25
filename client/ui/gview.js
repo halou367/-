@@ -162,7 +162,7 @@ const GView = {
     // 选项
     const f = (k, type, attrs = {}) => h('input', { type, ...attrs, 'data-k': k });
     const prompt = h('textarea', { rows: 2, maxlength: 4000, 'data-k': 'prompt' }, s.prompt);
-    const mode=h('select',{'data-k':'mode',onchange:()=>{Gacha.save({mode:mode.value});this.paintCfg();}},...['habit','autoqa','svg','custom','fingerprint'].map((key,i)=>h('option',{value:key,selected:s.mode===key||null},['习惯速测 · 微缩探针','自动问答 · 智能反推','SVG · 英文鹈鹕','自定义 · 四位数前缀','测指纹 · 优选名单'][i])));
+    const mode=h('select',{'data-k':'mode',onchange:()=>{Gacha.save({mode:mode.value});this.paintCfg();}},...['habit','autoqa','custom'].map((key,i)=>h('option',{value:key,selected:s.mode===key||null},['习惯速测 · 鹈鹕识别','自动问答 · 智能反推','自定义 · 四位数前缀'][i])));
     const preferred=h('textarea',{rows:2,'data-k':'preferredKeywords'},s.preferredKeywords.join('\n'));
 
     const interval = f('intervalSec', 'number', { min: 0, max: 60, step: 0.1, value: (s.intervalMs / 1000).toString() });

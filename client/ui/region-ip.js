@@ -174,12 +174,22 @@ const RegionIP = {
   },
   close() {
     if(this.busy||this.view?.picker?.busy){toast('切换中，请等待结果');return;}
-    const v=this.view;if(!v)return;const wasOffline=!!(v.offlineAlert||IP.err||window.__BRANA_BROWSE_MODE);
+    const v=this.view;if(!v)return;
+    const stillOffline=Boolean(IP.err||(!IP.ip&&v.offlineAlert));
+    const wasOffline=!!(v.offlineAlert||IP.err||window.__BRANA_BROWSE_MODE);
     v.closed=true;clearInterval(v.tick);v.off?.();v.back.remove();this.view=null;
-    if(wasOffline){
+    if(stillOffline&&wasOffline){
       try{if(typeof SessionGate!=='undefined'&&SessionGate.active){window.__BRANA_BROWSE_MODE=true;SessionGate.active.cancel?.();}}catch{}
       if(typeof UI!=='undefined'&&!UI.authed&&typeof UI.enterBrowseMode==='function'){
         try{UI.enterBrowseMode('已进入离线查阅模式（可直接浏览本地缓存对话）');}catch{}
+      }
+    }else if(wasOffline&&typeof UI!=='undefined'){
+      window.__BRANA_BROWSE_MODE=false;
+      const hasIdent=Boolean((UI.me&&!UI.me.browseOnly)||(typeof Store!=='undefined'&&Store.get('me:u',null))||UI.host?.account?.email||UI.host?.account?.hasPw);
+      if(!hasIdent&&typeof UI.loginGate==='function'){
+        UI.authed=false;UI.me=null;UI.loginGate();
+      }else if(typeof UI.recoverFromBrowseMode==='function'){
+        void UI.recoverFromBrowseMode();
       }
     }
   },

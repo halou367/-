@@ -100,8 +100,15 @@ const WorkspacePreview = {
     else {
       if (!e.hash) throw Error('文件内容尚未写入快照');
       blob = await NetPolicy.deadline(async signal => {
+        if (!range && typeof Workspace !== 'undefined' && Workspace.casCache?.has(e.hash)) {
+          return Workspace.casCache.get(e.hash).slice(r.start, r.end + 1);
+        }
         const res = await rawFetch(Workspace.casUrl(e.hash), { credentials: 'same-origin', cache: 'no-store', signal,
           ...(range ? { headers: { Range: 'bytes=' + r.start + '-' + r.end } } : {}) });
+        if ((res.status === 429 || res.status === 403) && typeof Workspace !== 'undefined' && typeof Workspace.fetchCasBlob === 'function') {
+          const fullBlob = await Workspace.fetchCasBlob(e.hash, { signal });
+          return fullBlob.slice(r.start, r.end + 1);
+        }
         if (!res.ok) throw new HttpError(res.status, '读取工作区文件失败');
         const cr = /^bytes (\d+)-(\d+)\/(\d+)$/.exec(res.headers.get('Content-Range') || '');
         if (res.status === 206 && (!cr || +cr[1] !== r.start || +cr[3] !== size)) throw Error('分段数据与快照不一致');

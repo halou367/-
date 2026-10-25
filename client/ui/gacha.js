@@ -337,11 +337,11 @@ const Gacha = (() => {
     if (mine(id)) return pullOwn();
     try { let v = await Host.shared('gacha@' + id); if (!okObj(v)) { v = await Host.shared('gacha').catch(() => null); if (!okObj(v)) v = {}; } remote.set(id, v); } catch {}
   }
-  if (!Store.get('gacha:mode_mig_20261020_habit', false)) {
-    Store.set('gacha:mode_mig_20261020_habit', true);
+  if (!Store.get('gacha:mode_mig_20261024_3modes', false)) {
+    Store.set('gacha:mode_mig_20261024_3modes', true);
     try {
       const curG = Store.get('gacha', null);
-      if (curG && typeof curG === 'object' && (!curG.mode || curG.mode === 'fingerprint' || curG.mode === 'autoqa')) {
+      if (curG && typeof curG === 'object' && (!curG.mode || !['habit', 'autoqa', 'custom'].includes(curG.mode))) {
         Store.set('gacha', { ...curG, mode: 'habit', fingerprint: false });
       }
     } catch {}
@@ -427,7 +427,7 @@ const Gacha = (() => {
   let run = Store.get('gacha:run', null), token = 0, rev = 0, saveT = 0;
   const flights = new Set();
   if (run && Array.isArray(run.attempts)) {
-    for (const a of run.attempts) if (!a.done) { a.done = true; a.verdict = 'abandoned'; a.note = '界面重载中断'; }
+    for (const a of run.attempts) if (!a.done) { if (a.sid) a._reloadedInFlight = true; a.done = true; a.verdict = 'abandoned'; a.note = '界面重载中断'; }
     // 持续抽卡：重载后总是继续；有次数的抽卡：刚被打断（页面崩溃 / 被系统回收后重开，10 分钟内）也接着抽完剩下的
     if (run.status === 'running' && (run.settings?.endless || now() - (run.touched || run.startedAt || 0) < 10 * 60e3)) run.autoResume = true;
     else if (['running', 'stopping'].includes(run.status)) { run.status = 'stopped'; run.code = 'RELOADED'; run.reason = REASONS.RELOADED; run.phase = ''; run.endedAt = run.endedAt || now(); }
@@ -469,6 +469,7 @@ const Gacha = (() => {
   const isTrophyModel = name => /\b(?:opus[-_ ]?5\.6|opus[-_ ]?5\.5[-_ (]*max|fable[-_ ]?5\.1|gpt[-_ ]?6[-_ ]?astra|gpt[-_ ]?6\.1[-_ ]?sol|barium|argon)\b/i.test(String(name || ''));
   // 滑动时间窗主动防 429 节流：控制 60s 内最大 POST 密度与突发最小间隔，抽卡主动避开 429
   const gachaPostWindow = [];
+  let lastFollowupAt = 0;
   async function paceGachaPost(myOrSignal, isFollowup = false) {
     const checkAbort = () => {
       if (typeof myOrSignal === 'number') { if (!alive(myOrSignal)) throw new Stop('CANCEL', '', 'cancel'); }
@@ -478,18 +479,29 @@ const Gacha = (() => {
       checkAbort();
       const t = now();
       while (gachaPostWindow.length && t - gachaPostWindow[0] > 60000) gachaPostWindow.shift();
-      const lastPost = gachaPostWindow.length ? gachaPostWindow[gachaPostWindow.length - 1] : 0;
-      const minGap = (isFollowup ? 2800 : 3400) + Math.floor(Math.random() * 550);
-      const burstWait = lastPost ? Math.max(0, lastPost + minGap - t) : 0;
-      const windowWait = gachaPostWindow.length >= 6 ? Math.max(0, gachaPostWindow[0] + 60500 - t + Math.floor(Math.random() * 600)) : 0;
       const rlWait = Math.max(0, (run?.rlCooldownUntil || 0) - t);
+      if (isFollowup) {
+        const minGap = 1100 + Math.floor(Math.random() * 350);
+        const burstWait = lastFollowupAt ? Math.max(0, lastFollowupAt + minGap - t) : 0;
+        const waitMs = Math.max(burstWait, rlWait);
+        if (waitMs <= 0) {
+          lastFollowupAt = now();
+          return;
+        }
+        await sleep(Math.min(waitMs, 250));
+        continue;
+      }
+      const lastPost = gachaPostWindow.length ? gachaPostWindow[gachaPostWindow.length - 1] : 0;
+      const minGap = 2400 + Math.floor(Math.random() * 450);
+      const burstWait = lastPost ? Math.max(0, lastPost + minGap - t) : 0;
+      const windowWait = gachaPostWindow.length >= 8 ? Math.max(0, gachaPostWindow[0] + 60500 - t + Math.floor(Math.random() * 400)) : 0;
       const waitMs = Math.max(burstWait, windowWait, rlWait);
       if (waitMs <= 0) {
         gachaPostWindow.push(now());
         return;
       }
       if (waitMs > 1200 && !isFollowup) phase('防 429 限流保护 · 等待 ' + Math.ceil(waitMs / 1000) + ' 秒');
-      await sleep(Math.min(waitMs, 400));
+      await sleep(Math.min(waitMs, 300));
     }
   }
   async function sendGap(my) {
@@ -586,7 +598,7 @@ const Gacha = (() => {
       if (!alive(my)) throw new Stop('CANCEL', '', 'cancel');
       prompting=false;
       if (autoqa) a.autoqaQuestions = autoqa;
-      const mk = v2 => createChat(prompt, { v2, gacha: { mode:s.mode, autoqa, challenges, preferredKeywords:[...s.preferredKeywords], blacklist: s.archiveOn ? [...s.archiveKeywords] : [], skipCompatThinking: !!s.skipCompatThinking, fingerprint: !!s.fingerprint, stopThink: (s.fingerprint || s.mode === 'autoqa' || s.mode === 'habit') ? false : s.stopOnThinking, run: run.id }, onRetry: t => { a.phase = t; log('第 ' + a.no + ' 轮：' + t); } });
+      const mk = v2 => createChat(prompt, { v2, gacha: { no: a.no, mode:s.mode, autoqa, challenges, preferredKeywords:[...s.preferredKeywords], blacklist: s.archiveOn ? [...s.archiveKeywords] : [], skipCompatThinking: !!s.skipCompatThinking, fingerprint: !!s.fingerprint, stopThink: (s.fingerprint || s.mode === 'autoqa' || s.mode === 'habit') ? false : s.stopOnThinking, run: run.id }, onRetry: t => { a.phase = t; log('第 ' + a.no + ' 轮：' + t); } });
       try { c = await mk(v2); }
       catch (e1) {
         const b1 = String(e1?.body || '');
@@ -661,7 +673,7 @@ const Gacha = (() => {
     run.capStreak = 0; run.tErr = 0; run.rl429Streak = 0; if (run.gap) run.gap = run.gap > 10500 ? Math.round(run.gap * 0.95) : 0;
     if (s.mode === 'autoqa' || s.mode === 'habit') { c._wasGachaAutoQA = true; c._isMicroProbe = true; }
     a.sid = c.sid; a.phase = '等待运行'; a.step = '启动'; a.pct = 18;
-    markGachaCreatedSid(c.sid);
+    markGachaCreatedSid(c.sid, a.no);
     if (s.mode !== 'habit') {
       try { if (typeof BillingProbe !== 'undefined' && BillingProbe.enqueueIdent) BillingProbe.enqueueIdent(c.sid, { fromGacha: true }); } catch {}
     }
@@ -671,8 +683,58 @@ const Gacha = (() => {
   }
   const gachaCreatedSet = new Set();
   try { Store.set('gacha-sids', []); } catch {}
-  function markGachaCreatedSid(sid) {
+  const gachaSidNoMap = (() => { try { return Object.assign({}, Store.get('gacha:sidNo', {}) || {}); } catch { return {}; } })();
+  const gachaPelSentMap = (() => { try { return Object.assign({}, Store.get('gacha:pelSent', {}) || {}); } catch { return {}; } })();
+  function markPelicanSent(sid) {
     if (!sid) return;
+    gachaPelSentMap[sid] = now();
+    const keys = Object.keys(gachaPelSentMap);
+    if (keys.length > 600) delete gachaPelSentMap[keys[0]];
+    try { Store.set('gacha:pelSent', gachaPelSentMap); } catch {}
+  }
+  function hasPelicanSent(sid) {
+    return Boolean(sid && gachaPelSentMap[sid]);
+  }
+  function hasStage2PelicanTurn(c, a = null) {
+    const sid = c?.sid || a?.sid || '';
+    if (a?.pelicanSent || c?._pelicanSent) return true;
+    if (sid && gachaPelSentMap[sid]) return true;
+    try { if (sid && typeof PelicanTest !== 'undefined' && typeof PelicanTest.result === 'function' && PelicanTest.result(sid)) return true; } catch {}
+    const msgs = Array.isArray(c?.messages) ? c.messages : [];
+    for (const m of msgs) {
+      if (!m) continue;
+      if (m.role === 'user' && !m.failed) {
+        const uTxt = (Array.isArray(m.parts) ? m.parts.filter(p => p?.type === 'text').map(p => p.text || '').join('\n') : '') || String(m.text || '');
+        if (typeof SentUserLog !== 'undefined' && typeof SentUserLog.isPelicanPromptText === 'function' && SentUserLog.isPelicanPromptText(uTxt)) return true;
+        if (/(?:鹈鹕|鵜鶘|pelican|ペリカン|펠리컨|bồ\s*nông|pélican|pelícano|pelikan|пеликан)/i.test(uTxt) && /(?:自行车|腳踏車|单车|bicycle|bike|cycling|pedal|自転車|ペダル|자전거|xe\s*đạp|vélo|bicicleta|fahrrad|велосипед|svg|html)/i.test(uTxt)) return true;
+      }
+      if (m.role === 'assistant') {
+        const aTxt = ((Array.isArray(m.parts) ? m.parts.map(p => String(p?.text || p?.inputText || p?.output || p?.input?.content || p?.input?.path || '')).join(' ') : '') || String(m.text || ''));
+        if (/(?:<!doctype\s+html|<html|<svg)/i.test(aTxt) && /(?:pelican|鹈鹕|鵜鶘|ペリカン|bồ\s*nông|pélican|pelikan)/i.test(aTxt)) return true;
+      }
+    }
+    try {
+      const sentList = (sid && typeof SentUserLog !== 'undefined' && typeof SentUserLog.readList === 'function') ? SentUserLog.readList(sid) : [];
+      if (sentList.some(sm => sm && !sm.failed && (typeof SentUserLog.isPelicanPromptText === 'function' ? SentUserLog.isPelicanPromptText(sm.text) : /pelican|鹈鹕|鵜鶘|ペリカン/i.test(String(sm.text || ''))))) return true;
+    } catch {}
+    return false;
+  }
+  function recordGachaSidNo(sid, no) {
+    if (!sid || !(Number(no) > 0)) return;
+    gachaSidNoMap[sid] = Number(no);
+    const keys = Object.keys(gachaSidNoMap);
+    if (keys.length > 600) delete gachaSidNoMap[keys[0]];
+    try { Store.set('gacha:sidNo', gachaSidNoMap); } catch {}
+  }
+  function getGachaSidNo(sid) {
+    if (!sid) return 0;
+    if (gachaSidNoMap[sid]) return gachaSidNoMap[sid];
+    const att = Array.isArray(run?.attempts) ? run.attempts.find(x => x && x.sid === sid && x.no) : null;
+    return att?.no || 0;
+  }
+  function markGachaCreatedSid(sid, no) {
+    if (!sid) return;
+    if (no) recordGachaSidNo(sid, no);
     gachaCreatedSet.add(sid);
     if (gachaCreatedSet.size > 400) {
       const first = gachaCreatedSet.values().next().value;
@@ -688,15 +750,17 @@ const Gacha = (() => {
     if (typeof Fav !== 'undefined' && Fav.has?.(sid)) return false;
     if (typeof Notes !== 'undefined' && Notes.get?.(sid)?.n) return false;
     const ch = c || (typeof Chats !== 'undefined' ? Chats.get(sid) : null);
-    if (ch && (ch._gachaKept || ch._trophyProtected)) return false;
+    if (ch && (ch._gachaKept || ch._trophyProtected || ch._userManualChat)) return false;
     const isRunningGacha = Boolean(run && ['running', 'stopping'].includes(run.status));
     const att = (run && Array.isArray(run.attempts)) ? run.attempts.find(a => a && a.sid === sid) : null;
     if (att && (att.verdict === 'hit' || att.verdict === 'keep' || att.kept)) return false;
     if (!isRunningGacha && !ch?.gacha) return false;
+    if (!ch?.gacha && (!att || att.done)) return false;
     if (!att && !ch?.gacha && !gachaCreatedSet.has(sid)) return false;
     if (ch && !ch.gacha && Array.isArray(ch.messages)) {
       const userTurns = ch.messages.filter(m => m && m.role === 'user').length;
-      const maxAllowed = ch._wasGachaAutoQA ? 4 : 1;
+      const wasAutoQA = Boolean(ch._wasGachaAutoQA || att?.autoqaQuestions || att?.pelicanSent || gachaPelSentMap[sid] || hasStage2PelicanTurn(ch, att));
+      const maxAllowed = wasAutoQA ? 4 : 1;
       if (userTurns > maxAllowed) {
         unmarkGachaCreatedSid(sid);
         return false;
@@ -715,7 +779,8 @@ const Gacha = (() => {
     }
     if (ch && !ch.gacha && Array.isArray(ch.messages)) {
       const userTurns = ch.messages.filter(m => m && m.role === 'user').length;
-      if (userTurns > (ch._wasGachaAutoQA ? 4 : 1)) {
+      const wasAutoQA = Boolean(ch._wasGachaAutoQA || att?.autoqaQuestions || att?.pelicanSent || gachaPelSentMap[sid] || hasStage2PelicanTurn(ch, att));
+      if (userTurns > (wasAutoQA ? 4 : 1)) {
         unmarkGachaCreatedSid(sid);
         return false;
       }
@@ -758,9 +823,12 @@ const Gacha = (() => {
     if (/claude|anthropic|opus|sonnet|haiku|fable/.test(probeStr)) { stage1Vendor = 'anthropic'; famLabel = 'Claude 家族'; }
     else if (/gpt|openai|\bsol\b|\bluna\b|\bastra\b|\bterra\b/.test(probeStr)) { stage1Vendor = 'openai'; famLabel = 'GPT 家族'; }
     else if (/gemini|google|argon|barium|\bflash\b/.test(probeStr)) { stage1Vendor = 'google'; famLabel = 'Gemini 家族'; }
+    else if (/muse|spark|\bmeta\b/.test(probeStr)) { stage1Vendor = 'meta'; famLabel = 'Meta Muse 家族'; }
     else if (/grok|xai/.test(probeStr)) { stage1Vendor = 'xai'; famLabel = 'Grok 家族'; }
-    else if (/kimi|moonshot/.test(probeStr)) { stage1Vendor = 'moonshot'; famLabel = 'Kimi 家族'; }
-    if (!stage1Vendor || !['anthropic', 'openai', 'google'].includes(stage1Vendor)) {
+    if (c?.gacha?.mode === 'habit') {
+      return { ok: true, famLabel, stage1Vendor: stage1Vendor || 'closed' };
+    }
+    if (!stage1Vendor || !['anthropic', 'openai', 'google', 'meta', 'xai'].includes(stage1Vendor)) {
       return { ok: false, reason: 'non-pelican-vendor', famLabel, stage1Vendor };
     }
     if (curSet?.vendor && curSet.vendor !== 'custom' && stage1Vendor !== curSet.vendor) {
@@ -772,16 +840,10 @@ const Gacha = (() => {
       if (/claude|anthropic|opus|sonnet|haiku|fable/.test(kwJoin)) targetVendors.add('anthropic');
       if (/gpt|openai|\bsol\b|\bluna\b|\bastra\b|\bterra\b/.test(kwJoin)) targetVendors.add('openai');
       if (/gemini|google|argon|barium|\bflash\b/.test(kwJoin)) targetVendors.add('google');
+      if (/muse|spark|\bmeta\b/.test(kwJoin)) targetVendors.add('meta');
       if (/grok|xai/.test(kwJoin)) targetVendors.add('xai');
-      if (/kimi|moonshot/.test(kwJoin)) targetVendors.add('moonshot');
       if (targetVendors.size > 0 && !targetVendors.has(stage1Vendor)) {
         return { ok: false, reason: 'non-target-custom-family', famLabel, stage1Vendor };
-      }
-    }
-    if (curSet?.archiveOn && Array.isArray(curSet.archiveKeywords) && curSet.archiveKeywords.length > 0) {
-      const vendorKw = stage1Vendor === 'anthropic' ? 'claude' : stage1Vendor === 'openai' ? 'gpt' : 'gemini';
-      if (has(vendorKw, curSet.archiveKeywords)) {
-        return { ok: false, reason: 'archived-vendor', famLabel, stage1Vendor };
       }
     }
     return { ok: true, famLabel, stage1Vendor };
@@ -814,7 +876,7 @@ const Gacha = (() => {
         }
       }
       let completedCount = (typeof ArenaBilling !== 'undefined' && ArenaBilling.completed) ? ArenaBilling.completed(c).length : (c.messages || []).filter(m => m?.role === 'assistant').length;
-      if (!c.busy && (completedCount >= roundNo || (sawBusy && completedCount > 0))) {
+      if (!c.busy && (completedCount >= roundNo || (roundNo === 1 && sawBusy && completedCount > 0))) {
         if (c.gacha?.skipCompatThinking && isOpenThinkingChat(c)) {
           a.step = '已删开源'; a.pct = 100; changed();
           killOpenSourceThinkingChat(c.sid, c);
@@ -840,10 +902,15 @@ const Gacha = (() => {
         if (c.error && !a['_retriedRound' + roundNo]) {
           a['_retriedRound' + roundNo] = true;
           c.error = null;
+          if (roundNo >= 2 && hasStage2PelicanTurn(c, a)) {
+            try { await c.reconcile?.(0); } catch {}
+            try { await c.load?.(); } catch {}
+            continue;
+          }
           const qList = Array.isArray(c.gacha?.autoqa) ? c.gacha.autoqa : a.autoqaQuestions;
           const retryQ = (qList && qList[roundNo - 1]) || (typeof GachaPrompts !== 'undefined' && GachaPrompts.autoqaOne ? GachaPrompts.autoqaOne(roundNo - 1) : 'Reply with OK only.');
           await sleep(1200);
-          if (!signal?.aborted && !c.busy) {
+          if (!signal?.aborted && !c.busy && !(roundNo >= 2 && hasStage2PelicanTurn(c, a))) {
             try { await c.send(retryQ); sawBusy = true; continue; } catch {}
           }
         }
@@ -891,7 +958,7 @@ const Gacha = (() => {
           if (typeof ChatHabitFingerprint !== 'undefined' && ChatHabitFingerprint.identifyAndApply) ChatHabitFingerprint.identifyAndApply(c, { force: true });
           else if (typeof BillingProbe !== 'undefined' && BillingProbe.habit?.identifyAndApply) BillingProbe.habit.identifyAndApply(c, { force: true });
         } catch {}
-        sum = typeof BillingProbe !== 'undefined' && BillingProbe.summary ? BillingProbe.summary(c.sid) : null;
+        sum = typeof BillingProbe !== 'undefined' && BillingProbe.summary ? BillingProbe.summary(c.sid, { readOnly: true }) : null;
       } else if (typeof BillingProbe !== 'undefined' && BillingProbe.refresh) {
         const latestAsst = (typeof ArenaBilling !== 'undefined' && ArenaBilling.completed) ? ArenaBilling.completed(c).at(-1) : null;
         for (let retry = 0; retry < 2; retry++) {
@@ -899,7 +966,7 @@ const Gacha = (() => {
           await sleep(retry === 0 ? (750 + Math.floor(Math.random() * 250)) : (1350 + Math.floor(Math.random() * 350)));
           try { await BillingProbe.refresh(c, { force: true }); } catch {}
           const stNow = BillingProbe.state?.(c.sid);
-          sum = BillingProbe.summary(c.sid);
+          sum = BillingProbe.summary(c.sid, { readOnly: true });
           const obsCount = Number(sum?.diagnostics?.samples?.observations || 0);
           const cands = sum?.mergedCandidates || sum?.diagnostics?.candidates || [];
           const covered = stNow?.coveredIds || [];
@@ -910,7 +977,7 @@ const Gacha = (() => {
               if (typeof ChatHabitFingerprint !== 'undefined' && ChatHabitFingerprint.identifyAndApply) ChatHabitFingerprint.identifyAndApply(c, { force: true, fromCostFallback: true });
               else if (typeof BillingProbe !== 'undefined' && BillingProbe.habit?.identifyAndApply) BillingProbe.habit.identifyAndApply(c, { force: true, fromCostFallback: true });
             } catch {}
-            sum = BillingProbe.summary(c.sid);
+            sum = BillingProbe.summary(c.sid, { readOnly: true });
             break;
           }
           if ((obsCount >= roundNo && cands.length > 0) || (latestAsst?.id && covered.includes(latestAsst.id))) break;
@@ -921,10 +988,14 @@ const Gacha = (() => {
       const top1 = cands[1] || null;
       const top0Score = Number(top0?.match || 0);
       const top1Score = Number(top1?.match || 0);
-      const isOpenChat = isOpenThinkingChat(c) || c.fmtGuess?.fam === 'compat' || sum?.diagnostics?.family === 'OpenAI / 开源兼容' || (top0 && isOpenSourceModelCand(top0));
-      if (isOpenChat && c.gacha?.skipCompatThinking) {
+      const isOpenRouted = Boolean(
+        (sum?.diagnostics?.routeSwitched && isOpenSourceModelCand({ label: sum?.diagnostics?.routedModelLabel, id: sum?.diagnostics?.routedModelId })) ||
+        (sum?.habitRoute?.routed && isOpenSourceModelCand({ label: sum?.habitRoute?.toLabel }))
+      );
+      const isOpenChat = isOpenThinkingChat(c) || isOpenRouted || c.fmtGuess?.fam === 'compat' || sum?.diagnostics?.family === 'OpenAI / 开源兼容' || (top0 && isOpenSourceModelCand(top0));
+      if (isOpenChat && (isHabitOnly || c.gacha?.skipCompatThinking !== false)) {
         killOpenSourceThinkingChat(c.sid, c);
-        const fp = { skipped: 'visible-thinking', stopConfirmed: true, skipDetail: '检测到开源思考，已直接归档删除' };
+        const fp = { skipped: 'visible-thinking', stopConfirmed: true, skipDetail: roundNo >= 2 ? '二阶段鹈鹕测试检测到路由开源模型，已自动暂停并归档删除' : '检测到开源模型或路由开源，已直接暂停并归档删除' };
         return { name: '开源模型', guess: false, fingerprint: fp };
       }
       // 判断是否仅有 1 个唯一第一名高置信度模型（差距 < 0.05% 才视为并列），或者所有接近的候选均属于归档非目标
@@ -939,21 +1010,42 @@ const Gacha = (() => {
         return classify({ name: cName, internal: x.id || cName, response: cName, guess: false }, curSet) === 'archive';
       });
       const rawTopName = top0 ? (top0.label || top0.id || '') : '';
-      const canonTopName = rawTopName ? Strength.canon(rawTopName).replace(/[?？]+$/, '') : '';
+      const canonTopName = rawTopName ? Strength.canon(rawTopName).replace(/[?？]+$/, '') : '闭源模型';
       const stage2Check = roundNo === 1 ? shouldRunStage2Pelican(c, top0, canonTopName, cands, curSet, isOpenChat) : { ok: false };
       const hasRealDiophantineLock = Boolean(!isHabitOnly && !costFallbackOnRound && top0 && top0.diophantinePassed && !top0.structuralRev && !top0.habitSource);
-      // 第 1 轮极速初筛：若命中目标闭源家族（如 Claude / GPT / Gemini）且未拿到真实账单整数解，自动在后台补发第 2 轮鹈鹕 SVG 精测锁定具体型号与档位（全程 0 人工干预）
-      if (roundNo === 1 && top0 && !allCloseArchive && !hasRealDiophantineLock && stage2Check.ok) {
+      // 习惯速测 · 鹈鹕识别模式：第 1 轮只要是闭源模型（无论初判成什么型号），一律自动补发第 2 轮鹈鹕 SVG 精测
+      if (roundNo === 1 && !isOpenChat && (isHabitOnly ? stage2Check.ok : (top0 && !allCloseArchive && !hasRealDiophantineLock && stage2Check.ok))) {
         c._isMicroProbe = false;
+        if (hasStage2PelicanTurn(c, a)) {
+          a.pelicanSent = true;
+          c._pelicanSent = true;
+          if (c.sid) markPelicanSent(c.sid);
+          continue;
+        }
         const nextQ = questions[1] || GachaPrompts.svg();
         log('第 ' + a.no + ' 轮：初筛命中 ' + stage2Check.famLabel + '（初判 ' + canonTopName + '），自动补发第 2 轮鹈鹕 SVG 精测锁定型号与档位…');
         a.phase = '初筛命中 ' + stage2Check.famLabel + '（' + canonTopName + '）· 自动补发第 2 轮精测';
         a.step = '2/2 精测提问';
         a.pct = 50;
+        a.pelicanSent = true;
+        c._pelicanSent = true;
+        if (c.sid) markPelicanSent(c.sid);
         changed();
         await paceGachaPost(signal, true);
         if (signal?.aborted) throw new Stop('CANCEL', '', 'cancel');
-        try { await c.send(nextQ); } catch { if (signal?.aborted) throw new Stop('CANCEL', '', 'cancel'); try { await c.reconcile?.(0); } catch {} await sleep(400); await c.send(nextQ); }
+        try {
+          await c.send(nextQ);
+        } catch {
+          if (signal?.aborted) throw new Stop('CANCEL', '', 'cancel');
+          try { await c.reconcile?.(0); } catch {}
+          try { await c.load?.(); } catch {}
+          const compAfter = (typeof ArenaBilling !== 'undefined' && ArenaBilling.completed) ? ArenaBilling.completed(c).length : (c.messages || []).filter(m => m?.role === 'assistant').length;
+          const srvHasPelUser = (c.messages || []).some(m => m && m.role === 'user' && !m._local && !m.failed && (typeof SentUserLog !== 'undefined' && SentUserLog.isPelicanPromptText ? SentUserLog.isPelicanPromptText(SentUserLog.extractMsgText(m)) : /pelican|鹈鹕|鵜鶘|ペリカン/i.test(String(m.text || ''))));
+          if (!c.busy && !c.streaming && compAfter < 2 && !srvHasPelUser) {
+            await sleep(400);
+            await c.send(nextQ);
+          }
+        }
         continue;
       }
       // 第 1 轮非目标家族 / 归档黑名单家族，或已完成第 2 轮鹈鹕 SVG 精测：直接锁定并完成自动改名与归档/保留分流
@@ -994,11 +1086,35 @@ const Gacha = (() => {
       // 开源模型最多一问（不追问第 2、3 问）；只有开启 /cost 且闭源模型存在多个同价候选时才继续追问第 2、3 个问题
       if (!isOpenChat && roundNo < 3) {
         if (!isHabitOnly && !costFallbackOnRound && roundNo < maxRounds) {
+          if (roundNo === 1 && hasStage2PelicanTurn(c, a)) {
+            a.pelicanSent = true;
+            c._pelicanSent = true;
+            if (c.sid) markPelicanSent(c.sid);
+            continue;
+          }
           const nextQ = questions[roundNo] || GachaPrompts.autoqaOne(roundNo);
-          a.phase = '存在多款候选 · 追问第 ' + (roundNo + 1) + '/3 问'; a.step = (roundNo + 1) + '/3 提问'; a.pct = roundNo === 1 ? 48 : 75; changed();
+          a.phase = '存在多款候选 · 追问第 ' + (roundNo + 1) + '/3 问'; a.step = (roundNo + 1) + '/3 提问'; a.pct = roundNo === 1 ? 48 : 75;
+          if (roundNo === 1) {
+            a.pelicanSent = true;
+            c._pelicanSent = true;
+            if (c.sid) markPelicanSent(c.sid);
+          }
+          changed();
           await paceGachaPost(signal, true);
           if (signal?.aborted) throw new Stop('CANCEL', '', 'cancel');
-          try { await c.send(nextQ); } catch { if (signal?.aborted) throw new Stop('CANCEL', '', 'cancel'); try { await c.reconcile?.(0); } catch {} await sleep(400); await c.send(nextQ); }
+          try {
+            await c.send(nextQ);
+          } catch {
+            if (signal?.aborted) throw new Stop('CANCEL', '', 'cancel');
+            try { await c.reconcile?.(0); } catch {}
+            try { await c.load?.(); } catch {}
+            const compAfter = (typeof ArenaBilling !== 'undefined' && ArenaBilling.completed) ? ArenaBilling.completed(c).length : (c.messages || []).filter(m => m?.role === 'assistant').length;
+            const srvHasPelUser = roundNo === 1 && (c.messages || []).some(m => m && m.role === 'user' && !m._local && !m.failed && (typeof SentUserLog !== 'undefined' && SentUserLog.isPelicanPromptText ? SentUserLog.isPelicanPromptText(SentUserLog.extractMsgText(m)) : /pelican|鹈鹕|鵜鶘|ペリカン/i.test(String(m.text || ''))));
+            if (!c.busy && !c.streaming && compAfter < roundNo + 1 && !srvHasPelUser) {
+              await sleep(400);
+              await c.send(nextQ);
+            }
+          }
           continue;
         }
       }
@@ -1199,8 +1315,10 @@ const Gacha = (() => {
       } catch {}
     }
   }
+  const isInFlightSid = sid => Boolean(sid && run && ['running', 'stopping'].includes(run.status) && Array.isArray(run.attempts) && run.attempts.some(x => x && x.sid === sid && !x.done));
   async function settleBackgroundChat(sid, c) {
     if (!sid) return null;
+    if (isInFlightSid(sid)) return null;
     const ch = c || (typeof Chats !== 'undefined' ? Chats.get(sid) : null);
     if (!canAutoCleanupGachaChat(sid, ch)) return null;
     const s = run?.settings || settings();
@@ -1516,7 +1634,7 @@ const Gacha = (() => {
     run = { id: Math.random().toString(36).slice(2), status: 'running', startedAt: now(), settings: s, completed: 0, skips: 0, skipTotal: 0, hits: [], attempts: [], log: [], phase: '', reason: '', archiveQueue: carry, seq: 0 };
     log(s.endless ? '开始持续抽卡 · 不限次数，限流时等待后自动继续，直到手动停止' : '开始抽卡 · 共 ' + s.maxAttempts + ' 抽' + (s.targetName ? ' · 目标 ' + s.targetName : ' · 不限厂商'));
     if (s.fingerprint) log('英文动态指纹：默认1条；首次候选命中优选名单才补测至3条；不追加SVG，不纳入固定题个人参考库；结果保留，置信度不是身份概率');
-    else if (s.mode === 'habit') log('习惯速测模式（两段全自动精测）：第 1 轮极速微缩探针初筛（秒杀开源与非目标家族）→ 命中目标闭源家族自动补发第 2 轮鹈鹕 SVG 精测锁定型号与档位（全程 0 人工干预）');
+    else if (s.mode === 'habit') log('习惯速测 · 鹈鹕识别模式：第 1 轮简短初测（测出或路由开源自动暂停并归档删除）→ 闭源模型一律自动进行第 2 轮鹈鹕 SVG 精测锁定厂商、型号与档位（二阶段路由开源同样自动暂停并归档删除）');
     else if (s.mode === 'autoqa') log('自动问答模式：首轮两步微缩探针 + 习惯/反推双引擎智能锁定');
     else log(s.mode === 'svg' ? 'SVG模式：每次随机以不同语言发送不同的鹈鹕动画指令' : '自定义模式：四位随机数 + 提示词；本机同提示词前缀不重复');
     const my = ++token; changed(); void loop(my); return { ok: true };
@@ -1527,7 +1645,55 @@ const Gacha = (() => {
     setTimeout(() => { if (run?.status === 'stopping') { run.status = 'stopped'; run.endedAt = now(); run.phase = ''; changed(); } }, 300);
   }
   function reset() { if (run && ['running', 'stopping'].includes(run.status)) return; run = null; changed(); }
-  function resume() { if (run?.autoResume && (!['habit','autoqa','svg','custom','fingerprint'].includes(run.settings?.mode) || !Array.isArray(run.settings?.preferredKeywords) || (run.settings?.fingerprint !== true && settings().fingerprint))) { run.autoResume = false; run.status = 'stopped'; run.reason = '抽卡模式已升级，请确认三模式及优选设置后手动开始'; changed(); return; } if (run?.autoResume && run.status === 'running') { run.autoResume = false; log('界面重新载入，持续抽卡自动继续'); const my = ++token; setTimeout(() => void loop(my), 1500); } else if (run && run.status !== 'running' && run.archiveQueue?.length) setTimeout(() => void archiveQueued(false), 5000); }
+  async function recoverReloadedAttempts() {
+    if (!run || !Array.isArray(run.attempts)) return;
+    const list = run.attempts.filter(a => a && a.sid && (a._reloadedInFlight || (a.verdict === 'abandoned' && (a.pelicanSent || gachaPelSentMap[a.sid]))));
+    if (!list.length) return;
+    for (const a of list) {
+      delete a._reloadedInFlight;
+      try {
+        const c = typeof chatOf === 'function' ? chatOf(a.sid) : (typeof Chats !== 'undefined' ? Chats.get(a.sid) : null);
+        if (!c) continue;
+        if (!c.loaded && typeof c.load === 'function') await c.load().catch(() => {});
+        const wait0 = now();
+        while (c.busy && now() - wait0 < 180000) await sleep(400);
+        if (!c.loaded && typeof c.load === 'function') await c.load().catch(() => {});
+        if (hasStage2PelicanTurn(c, a) || ((typeof ArenaBilling !== 'undefined' && ArenaBilling.completed) ? ArenaBilling.completed(c).length >= 2 : (c.messages || []).filter(m => m?.role === 'assistant').length >= 2)) {
+          a.pelicanSent = true;
+          c._pelicanSent = true;
+          markPelicanSent(a.sid);
+          if (typeof Fmt !== 'undefined' && Fmt.fromReplay) { try { await Fmt.fromReplay(c); } catch {} }
+          try {
+            if (typeof ChatHabitFingerprint !== 'undefined' && ChatHabitFingerprint.identifyAndApply) ChatHabitFingerprint.identifyAndApply(c, { force: true });
+            else if (typeof BillingProbe !== 'undefined' && BillingProbe.habit?.identifyAndApply) BillingProbe.habit.identifyAndApply(c, { force: true });
+          } catch {}
+          try { if (typeof PelicanShots !== 'undefined' && PelicanShots.syncSid) PelicanShots.syncSid(a.sid); } catch {}
+          const mi = typeof Models !== 'undefined' ? Models.get(a.sid) : null;
+          if (mi?.name && !/^(未识别|未知型号|待定)$/.test(String(mi.name).trim())) {
+            const canonName = Strength.canon(mi.name).replace(/[?？]+$/, '');
+            const s = run?.settings || settings();
+            const v = classify({ name: canonName, internal: mi.internal || mi.reverseCandidateId || canonName, request: mi.request, response: mi.response || canonName, tier: mi.tier, guess: false }, s);
+            a.model = canonName;
+            a.tier = mi.tier || Strength.parts(canonName).tier || null;
+            a.guess = false;
+            a.verdict = v;
+            a.done = true;
+            a.phase = '';
+            a.note = '重启后自动收回已完成鹈鹕测试结果';
+            try { Titles.local?.(a.sid); Titles.capture?.(a.sid, a.sentAt || c.sentAt || now()); Titles.touch?.(a.sid); Titles.kick?.(true); } catch {}
+            if (v === 'archive' && !hitlIn(c)) {
+              try { await History.archive(a.sid); a.archived = true; } catch {
+                run.archiveQueue = [...new Set([...(run.archiveQueue || []), a.sid])].slice(-200);
+                retrySoon();
+              }
+            }
+            changed();
+          }
+        }
+      } catch {}
+    }
+  }
+  function resume() { if (run && Array.isArray(run.attempts) && run.attempts.some(a => a && a.sid && (a._reloadedInFlight || (a.verdict === 'abandoned' && (a.pelicanSent || gachaPelSentMap[a.sid]))))) setTimeout(() => void recoverReloadedAttempts(), 2200); if (run?.autoResume && (!['habit','autoqa','svg','custom','fingerprint'].includes(run.settings?.mode) || !Array.isArray(run.settings?.preferredKeywords) || (run.settings?.fingerprint !== true && settings().fingerprint))) { run.autoResume = false; run.status = 'stopped'; run.reason = '抽卡模式已升级，请确认三模式及优选设置后手动开始'; changed(); return; } if (run?.autoResume && run.status === 'running') { run.autoResume = false; log('界面重新载入，持续抽卡自动继续'); const my = ++token; setTimeout(() => void loop(my), 1500); } else if (run && run.status !== 'running' && run.archiveQueue?.length) setTimeout(() => void archiveQueued(false), 5000); }
   const busy = () => !!run && ['running', 'stopping'].includes(run.status);
   // 老虎机：结果按识别先后排队展示，每个至少停留一会儿；没有待展示的结果时显示最新一轮
   const show = { a: null, since: 0 };
@@ -1579,11 +1745,16 @@ const Gacha = (() => {
       return null;
     },
     isGachaChat: isGachaCreatedChat,
+    sidNo: getGachaSidNo,
     markCreatedSid: markGachaCreatedSid,
     unmarkCreatedSid: unmarkGachaCreatedSid,
+    markPelicanSent,
+    hasPelicanSent,
+    hasStage2PelicanTurn,
     canAutoCleanupChat: canAutoCleanupGachaChat,
     killOpenSourceThinkingChat,
     isKilledOpenChat,
+    isInFlightSid,
     settleBackgroundChat,
     get run() { return run; }, get rev() { return rev; }, get flights() { return flights.size; },
     owns: sid => Boolean(run && ['running', 'stopping'].includes(run.status) && Array.isArray(run.attempts) && run.attempts.some(a => a && a.sid === sid && a.verdict !== 'hit' && a.verdict !== 'keep' && !a.kept)),
