@@ -242,7 +242,7 @@ const Dock = {
     sid = sid || (typeof this.sid === 'function' ? this.sid() : '') || (typeof Tabs !== 'undefined' ? Tabs.cur?.sid : '') || '';
     const chat = sid && typeof Chats !== 'undefined' ? (Chats.get(sid) || (typeof chatOf === 'function' ? chatOf(sid) : null)) : null;
     const mi = sid && typeof Models !== 'undefined' ? Models.get(sid) : null;
-    const sum = billing || (typeof BillingProbe !== 'undefined' ? BillingProbe.summary?.(sid) : null);
+    const sum = billing || (typeof BillingProbe !== 'undefined' ? BillingProbe.summary?.(sid, { readOnly: true }) : null);
     const diagOk = Boolean(sid && (mi || chat || sum?.mergedCandidates?.length));
     const diagTip = diagOk ? '导出诊断 JSON：导出本对话计费反推与习惯特征诊断文件（可导入习惯库）' : '导出诊断 JSON：当前对话暂无识别诊断数据';
     const toolTip = '导出调用工具：导出本对话模型调用过的全部工具及参数结构（JSON）';
@@ -2298,7 +2298,7 @@ const Bar = {
     const mob = Boolean((typeof isMob === 'function' && (typeof isMob === 'function' && isMob())) || (typeof Host !== 'undefined' && Host.platform === 'android'));
     const kids = [...Bulk.barItems()];   // 一键归档 / 删除归档：最小化后的进度条
     const _legacyBotTag = botScore != null ? '· Bot ' + botScore : ''; void _legacyBotTag; void rem; void all; void pct; void botLv; void bt;
-    const bpSum = (!mob && sid && typeof BillingProbe !== 'undefined') ? BillingProbe.summary(sid, { readOnly: true }) : null;
+    const bpSum = null;
     void mob; void tot;
     const bpTop = bpSum?.mergedCandidates?.[0] || bpSum?.top?.[0] || null;
     const bestNm = mi?.name || mi?.candidates?.[0]?.id || lt?.best || '';
@@ -2316,7 +2316,7 @@ const Bar = {
       ? Boolean((curBarChat.isEvaluation && curBarChat.evalMode === 'battle') || (typeof EvalView !== 'undefined' && EvalView.isBattleChat?.(curBarChat)))
       : (typeof ModeState !== 'undefined' && typeof ModeState.getMode === 'function' && ModeState.getMode() === 'battle');
     if (!isBattleBarMode) {
-      if (Gacha.capOffer()) kids.push(Gacha.capCooling?.() ? h('button', { class: 'bi link bcap cool', title: '验证分数低，正在自动冷却后重试，不用操作；想马上继续也可以点一下手动验证', onclick: () => GPop.captcha() }, '验证冷却中 · 自动重试') : h('button', { class: 'bi link bcap', title: '抽卡遇到人机验证：点一下完成验证', onclick: () => GPop.captcha() }, '验 · 抽卡需要人机验证'));
+      if (Gacha.capOffer()) kids.push(h('button', { class: 'bi link bcap cool', title: '正在自动完成人机验证…', onclick: () => GPop.captcha() }, '人机验证进行中…'));
       else { const r = Gacha.run; if (r && (Gacha.busy() || r.status === 'hit')) kids.push(h('button', { class: 'bi link', onclick: () => GPop.openAny() }, `抽卡 ${r.completed}/${r.settings?.endless ? '∞' : r.settings?.maxAttempts} · 命中 ${(r.hits || []).length}`)); }
     }
     const a = UI.host?.account || {};
@@ -2561,8 +2561,8 @@ const GPop = {
   capEl(b, on, solving) {
     b.toggleAttribute('data-cap', !!on);
     if (!on) return false;
-    b.title = solving ? '正在人机验证…' : '抽卡遇到人机验证：点一下完成验证，完成后自动继续抽卡';
-    b.replaceChildren(h('span', { class: 'g-cap' + (solving ? ' ing' : '') }, '验'));
+    b.title = '人机验证进行中…';
+    b.replaceChildren(h('span', { class: 'g-cap ing' }, '验'));
     return true;
   },
   paint(b) {

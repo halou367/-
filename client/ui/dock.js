@@ -242,7 +242,7 @@ const Dock = {
     sid = sid || (typeof this.sid === 'function' ? this.sid() : '') || (typeof Tabs !== 'undefined' ? Tabs.cur?.sid : '') || '';
     const chat = sid && typeof Chats !== 'undefined' ? (Chats.get(sid) || (typeof chatOf === 'function' ? chatOf(sid) : null)) : null;
     const mi = sid && typeof Models !== 'undefined' ? Models.get(sid) : null;
-    const sum = billing || (typeof BillingProbe !== 'undefined' ? BillingProbe.summary?.(sid) : null);
+    const sum = billing || (typeof BillingProbe !== 'undefined' ? BillingProbe.summary?.(sid, { readOnly: true }) : null);
     const diagOk = Boolean(sid && (mi || chat || sum?.mergedCandidates?.length));
     const diagTip = diagOk ? '导出诊断 JSON：导出本对话计费反推与习惯特征诊断文件（可导入习惯库）' : '导出诊断 JSON：当前对话暂无识别诊断数据';
     const toolTip = '导出调用工具：导出本对话模型调用过的全部工具及参数结构（JSON）';
@@ -2298,7 +2298,7 @@ const Bar = {
     const mob = Boolean((typeof isMob === 'function' && (typeof isMob === 'function' && isMob())) || (typeof Host !== 'undefined' && Host.platform === 'android'));
     const kids = [...Bulk.barItems()];   // 一键归档 / 删除归档：最小化后的进度条
     const _legacyBotTag = botScore != null ? '· Bot ' + botScore : ''; void _legacyBotTag; void rem; void all; void pct; void botLv; void bt;
-    const bpSum = (!mob && sid && typeof BillingProbe !== 'undefined') ? BillingProbe.summary(sid, { readOnly: true }) : null;
+    const bpSum = null;
     void mob; void tot;
     const bpTop = bpSum?.mergedCandidates?.[0] || bpSum?.top?.[0] || null;
     const bestNm = mi?.name || mi?.candidates?.[0]?.id || lt?.best || '';

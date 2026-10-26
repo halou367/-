@@ -948,7 +948,7 @@ async function init() {
       try { Bus.emit('pin'); } catch {}
     }
     if (m?.pelshotsSync) {
-      try { if (typeof PelicanShots !== 'undefined' && PelicanShots.pull) void PelicanShots.pull(false, true); } catch {}
+      try { if (typeof PelicanShots !== 'undefined' && PelicanShots.pull) void PelicanShots.pull(false, true, true); } catch {}
     }
     if (m?.habitBankSync) {
       try {
@@ -962,6 +962,7 @@ async function init() {
       } catch {}
     }
     // 账号管理窗口：打开某个对话 / 重新统计
+    if (m?.tokenRegStep) { try { window.__onTokenRegStep?.(m); } catch {} }
     if (m?.open && UI.me) Tabs.open(m.open);
     if (m?.stats) AcctStats.cmd(m).catch(() => {});
   });

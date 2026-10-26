@@ -65,18 +65,21 @@ const EvalView = {
     if (chat.evalMode === 'battle') return true;
     if (chat.evalMode === 'direct') return false;
     const he = (typeof History !== 'undefined' && typeof History.byId === 'function' && chat.sid) ? History.byId(chat.sid) : null;
-    if (he && (he.type === 'evaluation' || he.mode === 'battle' || he.mode === 'direct')) {
-      if (he.mode === 'direct' || (he.modelAId && !he.modelBId && he.mode !== 'battle')) return false;
+    if (he && (he.type === 'evaluation' || he.mode === 'battle' || he.mode === 'direct' || he.mode === 'direct-battle' || he.mode === 'side-by-side')) {
+      if (he.mode === 'direct' || he.mode === 'direct-battle' || he.mode === 'side-by-side' || (he.modelAId && !he.modelBId && he.mode !== 'battle')) return false;
       return true;
     }
     return Boolean(chat.isEvaluation && chat.evalMode !== 'direct');
   },
 
   isBattleEntry(entry = null, chat = null, tab = null) {
-    if (chat && this.isBattleChat(chat)) return true;
+    if (chat) {
+      if (chat.evalMode === 'direct') return false;
+      if (this.isBattleChat(chat)) return true;
+    }
     if (entry) {
-      if (entry.mode === 'direct') return false;
-      if (entry.mode === 'battle' || entry.mode === 'direct-battle' || entry.mode === 'side-by-side') return true;
+      if (entry.mode === 'direct' || entry.mode === 'direct-battle' || entry.mode === 'side-by-side') return false;
+      if (entry.mode === 'battle') return true;
       if (entry.type === 'evaluation') {
         if (entry.modelAId && !entry.modelBId && entry.mode !== 'battle') return false;
         return true;
@@ -151,7 +154,7 @@ const EvalView = {
     if (chat.evalMode === 'direct') return true;
     if (chat.evalMode === 'battle') return false;
     const he = (typeof History !== 'undefined' && typeof History.byId === 'function' && chat.sid) ? History.byId(chat.sid) : null;
-    if (he && (he.mode === 'direct' || (he.type === 'evaluation' && he.modelAId && !he.modelBId && he.mode !== 'battle'))) {
+    if (he && (he.mode === 'direct' || he.mode === 'direct-battle' || he.mode === 'side-by-side' || (he.type === 'evaluation' && he.modelAId && !he.modelBId && he.mode !== 'battle'))) {
       return true;
     }
     return false;
@@ -638,10 +641,26 @@ const EvalView = {
     if (msg?.webdev?.status === 'pending' && Array.isArray(msg?.webdev?.files) && msg.webdev.files.length > 0) {
       return `已生成 ${msg.webdev.files.length} 个文件，正在构建并部署预览…`;
     }
-    if (chat?.modality === 'webdev' || chat?.evalModality === 'webdev' || chat?.resolvedModality === 'webdev') {
-      return '正在规划项目结构与编写代码…';
+    const curMod = chat?.resolvedModality || chat?.evalModality || chat?.modality || 'chat';
+    const startedAt = Number(msg?.metadata?.timing?.startedAt || chat?.sentAt || 0);
+    const elapsedSec = startedAt > 1e12 ? Math.max(0, Math.floor((Date.now() - startedAt) / 1000)) : 0;
+    const secSuffix = elapsedSec > 0 ? `（${elapsedSec}s）` : '';
+    if (msg?.genPhase) {
+      return msg.genPhase.includes('s）') ? msg.genPhase : (msg.genPhase.replace(/…$/, '') + secSuffix + '…');
     }
-    return '正在接收实时流…';
+    if (curMod === 'image') {
+      return `正在绘制图像${secSuffix}…`;
+    }
+    if (curMod === 'video') {
+      return `正在渲染视频${secSuffix}…`;
+    }
+    if (curMod === 'search') {
+      return `正在联网检索与生成回复${secSuffix}…`;
+    }
+    if (curMod === 'webdev') {
+      return `正在规划项目结构与编写代码${secSuffix}…`;
+    }
+    return `正在生成回复${secSuffix}…`;
   },
 
   renderWebDevStatusFooter(chat, msg, pos = 'a', isStreaming = false) {
@@ -697,13 +716,19 @@ const EvalView = {
     const sideLabel = pos === 'a' ? 'A' : 'B';
     const pvBtns = this.renderPreviewHeaderBtns(chat, msg, pos);
 
+    const statusPill = isStreaming
+      ? h('span', { class: 'battle-anon-tag is-streaming' }, h('i', { class: 'think-pulse', title: '生成中…' }), this.describeLiveProgress(chat, msg, pos))
+      : (msg?.status === 'failed' || msg?.failed)
+        ? h('span', { class: 'battle-anon-tag is-failed' }, '⚠ 生成失败')
+        : (msg?.status === 'success')
+          ? h('span', { class: 'battle-anon-tag is-done' }, msg.genPhase && msg.genPhase.startsWith('✓') ? msg.genPhase : '✓ 生成完毕')
+          : h('span', { class: 'battle-anon-tag' }, '匿名盲测');
+
     if (!isRevealed) {
       head.append(
         h('span', { class: 'battle-side-tag', title: 'Model ' + sideLabel }, sideLabel),
         h('span', { class: 'battle-col-title' }, 'Model ' + sideLabel),
-        isStreaming
-          ? h('span', { class: 'battle-anon-tag is-streaming' }, h('i', { class: 'think-pulse', title: '生成中…' }), '生成中…')
-          : h('span', { class: 'battle-anon-tag' }, '匿名盲测'),
+        statusPill,
         h('span', { class: 'grow' }),
         pvBtns,
         this.renderRegenBtn(chat, msg, pos, isStreaming, turn)
@@ -722,6 +747,7 @@ const EvalView = {
       h('span', { class: 'battle-side-tag', title: 'Model ' + sideLabel }, sideLabel),
       logoEl,
       h('b', { class: 'battle-real-name', title: realName }, realName),
+      statusPill,
       h('span', { class: 'grow' }),
       pvBtns,
       this.renderRegenBtn(chat, msg, pos, isStreaming, turn)
@@ -803,22 +829,46 @@ const EvalView = {
   },
 
   renderMediaPart(part) {
-    const url = part?.url || part?.image || part?.src || '';
+    let url = part?.url || part?.image || part?.src || '';
     if (!url) return null;
+    const r2Name = part?.name || part?.filename || '';
     const isVideo = part?.type === 'video' || /^video\//i.test(part?.contentType || part?.mediaType || '') || /\.(mp4|webm|mov)(\?|$)/i.test(url);
     if (isVideo) {
+      const dlLink = h('a', { class: 'ib xs eval-media-dl', href: url, download: 'battle-video.mp4', target: '_blank', rel: 'noopener', title: '下载视频' }, typeof icon === 'function' ? icon('dl') : '↓');
+      const vidEl = h('video', {
+        class: 'eval-media-video',
+        controls: true,
+        playsinline: true,
+        preload: 'metadata',
+        src: url,
+        poster: part?.thumbnailUrl || null,
+        onerror: () => {
+          if (vidEl._r2Retried || typeof EvalEngine === 'undefined' || typeof EvalEngine.refreshSignedAttachmentUrl !== 'function') return;
+          vidEl._r2Retried = true;
+          EvalEngine.refreshSignedAttachmentUrl(url, r2Name).then(fresh => {
+            if (fresh && fresh !== url) {
+              url = fresh;
+              if (part) part.url = fresh;
+              vidEl.src = fresh;
+              dlLink.href = fresh;
+            }
+          }).catch(() => {});
+        },
+      });
+      if (typeof EvalEngine !== 'undefined' && typeof EvalEngine.isR2UrlExpired === 'function' && EvalEngine.isR2UrlExpired(url)) {
+        vidEl._r2Retried = true;
+        EvalEngine.refreshSignedAttachmentUrl(url, r2Name).then(fresh => {
+          if (fresh && fresh !== url) {
+            url = fresh;
+            if (part) part.url = fresh;
+            vidEl.src = fresh;
+            dlLink.href = fresh;
+          }
+        }).catch(() => {});
+      }
       return h('div', { class: 'eval-media-wrap eval-video-wrap' },
-        h('video', {
-          class: 'eval-media-video',
-          controls: true,
-          playsinline: true,
-          preload: 'metadata',
-          src: url,
-          poster: part?.thumbnailUrl || null,
-        }),
-        h('div', { class: 'eval-media-bar' },
-          h('a', { class: 'ib xs eval-media-dl', href: url, download: 'battle-video.mp4', target: '_blank', rel: 'noopener', title: '下载视频' }, typeof icon === 'function' ? icon('dl') : '↓')
-        )
+        vidEl,
+        h('div', { class: 'eval-media-bar' }, dlLink)
       );
     }
     const imgEl = h('img', {
@@ -826,12 +876,33 @@ const EvalView = {
       src: url,
       alt: part?.alt || 'Generated image',
       loading: 'lazy',
+      onerror: () => {
+        if (imgEl._r2Retried || typeof EvalEngine === 'undefined' || typeof EvalEngine.refreshSignedAttachmentUrl !== 'function') return;
+        imgEl._r2Retried = true;
+        EvalEngine.refreshSignedAttachmentUrl(url, r2Name).then(fresh => {
+          if (fresh && fresh !== url) {
+            url = fresh;
+            if (part) part.url = fresh;
+            imgEl.src = fresh;
+          }
+        }).catch(() => {});
+      },
       onclick: e => {
         if (typeof ImgView !== 'undefined' && typeof ImgView.open === 'function') {
-          ImgView.open(url, '图片', e.currentTarget);
+          ImgView.open(imgEl.src || url, '图片', e.currentTarget);
         }
       },
     });
+    if (typeof EvalEngine !== 'undefined' && typeof EvalEngine.isR2UrlExpired === 'function' && EvalEngine.isR2UrlExpired(url)) {
+      imgEl._r2Retried = true;
+      EvalEngine.refreshSignedAttachmentUrl(url, r2Name).then(fresh => {
+        if (fresh && fresh !== url) {
+          url = fresh;
+          if (part) part.url = fresh;
+          imgEl.src = fresh;
+        }
+      }).catch(() => {});
+    }
     return h('div', { class: 'eval-media-wrap eval-image-wrap' },
       imgEl,
       h('div', { class: 'eval-media-bar' },
@@ -841,10 +912,11 @@ const EvalView = {
           title: '保存图片',
           onclick: e => {
             e.stopPropagation();
+            const curUrl = imgEl.src || url;
             if (typeof ImgAct !== 'undefined' && typeof ImgAct.save === 'function') {
-              ImgAct.save(url, 'battle-image.png', imgEl);
+              ImgAct.save(curUrl, 'battle-image.png', imgEl);
             } else {
-              window.open(url, '_blank');
+              window.open(curUrl, '_blank');
             }
           },
         }, typeof icon === 'function' ? icon('dl') : '↓')
@@ -852,8 +924,8 @@ const EvalView = {
     );
   },
 
-  renderSourcesPart(sources) {
-    const list = Array.isArray(sources) ? sources.filter(Boolean) : [];
+  renderSourcesPart(part) {
+    const list = Array.isArray(part) ? part : (Array.isArray(part?.sources) ? part.sources : []);
     if (!list.length) return null;
     return h('div', { class: 'eval-sources' },
       h('div', { class: 'eval-sources-list' },
@@ -1101,16 +1173,18 @@ const EvalView = {
         if (!m) return 'none:' + (isStr ? '1' : '0') + ':' + expFlag;
         const pLen = Array.isArray(m.parts) ? m.parts.length : 0;
         const lastP = pLen ? m.parts[pLen - 1] : null;
-        const totTxtLen = Array.isArray(m.parts) ? m.parts.reduce((s, p) => s + (p?.text ? p.text.length : 0) + (p?.inputText ? p.inputText.length : 0) + (p?.state ? p.state.length : 0), 0) : 0;
+        const totTxtLen = Array.isArray(m.parts) ? m.parts.reduce((s, p) => s + (p?.text ? p.text.length : 0) + (p?.inputText ? p.inputText.length : 0) + (p?.state ? p.state.length : 0) + (p?.url ? p.url.length : 0), 0) : 0;
+        const mediaSig = Array.isArray(m.parts) ? m.parts.filter(p => p && p.url).map(p => String(p.url).slice(-28)).join(',') : '';
+        const attSig = Array.isArray(m.experimental_attachments) ? m.experimental_attachments.map(a => String(a?.url || '').slice(-28)).join(',') : '';
         const wdSig = m.webdev ? `${m.webdev.status || ''}:${m.webdev.files?.length || 0}:${m.webdev.previewUrl || ''}` : '';
-        return `${m.id || ''}:${m.v || 0}:${m.status || ''}:${m.failed ? 1 : 0}:${isStr ? 1 : 0}:${pLen}:${lastP?.type || ''}:${(lastP?.text || '').length}:${totTxtLen}:${(m.text || '').length}:${(m.reasoning || '').length}:${wdSig}:${expFlag}`;
+        return `${m.id || ''}:${m.v || 0}:${m.status || ''}:${m.genPhase || ''}:${m.failed ? 1 : 0}:${isStr ? 1 : 0}:${pLen}:${lastP?.type || ''}:${(lastP?.text || '').length}:${totTxtLen}:${(m.text || '').length}:${(m.reasoning || '').length}:${mediaSig}:${attSig}:${wdSig}:${expFlag}`;
       };
       const voteSig = `${vs?.voted ? 1 : 0}:${vs?.value || ''}:${vs?.revealed ? 1 : 0}:${vs?.modelAName || ''}:${vs?.modelBName || ''}`;
       const colASig = `${msgSig(turn.a, isStreamingA, 'a')}:${winA ? 1 : 0}:${isLastTurn ? 1 : 0}:${voteSig}`;
       const colBSig = `${msgSig(turn.b, isStreamingB, 'b')}:${winB ? 1 : 0}:${isLastTurn ? 1 : 0}:${voteSig}`;
       const renderCol = (pos, msg, isStreaming, win, colSig) => {
         const cls = `battle-col col-${pos}` + (win ? ' is-winner' : '') + (isStreaming ? ' is-streaming' : '');
-        const headSig = `${isStreaming ? 1 : 0}:${msg?.id || ''}:${msg?.status || ''}:${msg?.failed ? 1 : 0}:${msg?.modelId || ''}:${voteSig}`;
+        const headSig = `${isStreaming ? 1 : 0}:${msg?.id || ''}:${msg?.status || ''}:${msg?.genPhase || ''}:${msg?.failed ? 1 : 0}:${msg?.modelId || ''}:${voteSig}`;
         if (typeof Seg !== 'undefined' && !Seg.off && typeof patchKids === 'function') {
           const colEl = Seg.box(bSid, `col${pos.toUpperCase()}Box:` + turn.id, () => {
             const bodyEl = h('div', { class: 'battle-col-body' });

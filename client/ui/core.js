@@ -811,8 +811,11 @@ const Pin = {
       this.ensure(true);
       return;
     }
-    if (!verifiedCost && id !== 'dpl_3UbNvzoXfT6iNZqgBa7GjsGeKLaT') return;
     if (this.EXPIRED.has(id)) return;
+    if (!verifiedCost && id !== 'dpl_3UbNvzoXfT6iNZqgBa7GjsGeKLaT') {
+      if (!this.POOL.includes(id) && this.POOL.length < 12) this.POOL.push(id);
+      return;
+    }
     if (!this.POOL.includes(id)) this.POOL.push(id);
   },
   markBadDpl(d) {
@@ -1085,6 +1088,10 @@ const Models = {
     if (v && v.name && !/^(未识别|未知型号|待定)$/.test(String(v.name).trim()) && (v.habitInferred || v.reverseInferred || v.billingProbe || v.userCorrected)) {
       v = { ...v, pendingConfirm: false, guess: false };
     }
+    const prev = sid ? this.all[sid] : null;
+    if (prev && v && prev.name === v.name && Boolean(prev.sure) === Boolean(v.sure) && Boolean(prev.guess) === Boolean(v.guess) && Boolean(prev.pendingConfirm) === Boolean(v.pendingConfirm) && Boolean(prev.directMode) === Boolean(v.directMode) && Boolean(prev.battleRevealed) === Boolean(v.battleRevealed) && Boolean(prev.userCorrected) === Boolean(v.userCorrected) && Boolean(prev.routed) === Boolean(v.routed) && (prev.effort || '') === (v.effort || '') && (prev.tier || '') === (v.tier || '') && (prev.confidence ?? null) === (v.confidence ?? null) && (prev.usd ?? null) === (v.usd ?? null) && (prev.modelA || '') === (v.modelA || '') && (prev.modelB || '') === (v.modelB || '') && prev.fingerprint === v.fingerprint) {
+      return prev;
+    }
     this.all[sid] = { ...v, at: now() };
     const ks = Object.keys(this.all);
     if (ks.length > 3000) for (const k of ks.slice(0, ks.length - 3000)) delete this.all[k];
@@ -1117,18 +1124,22 @@ class HttpError extends Error {
 const QrSync = (() => {
   const ONBOARD_DONE_KEY = 'qr_onboard_done';
   const ib = (ic, tip, fn) => h('button', { type: 'button', class: 'ib', title: tip, 'aria-label': tip, onclick: fn }, icon(ic));
-  const CAP_L = [0,17,32,53,78,106,134,154,192,230,271,321,367,425,458,520,586,644,718,792,858,929,1003,1091,1171,1273,1367];
+  const CAP_L = [0,17,32,53,78,106,134,154,192,230,271,321,367,425,458,520,586,644,718,792,858,929,1003,1091,1171,1273,1367,1465,1528,1628,1732,1840,1952,2068,2188,2303,2431,2563,2699,2809,2953];
   const EC_L = [
     null,[19,7,1,19,0,0],[34,10,1,34,0,0],[55,15,1,55,0,0],[80,20,1,80,0,0],[108,26,1,108,0,0],
     [136,18,2,68,0,0],[156,20,2,78,0,0],[194,24,2,97,0,0],[232,30,2,116,0,0],[274,18,2,68,2,69],
     [324,20,4,81,0,0],[370,24,2,92,2,93],[428,26,4,107,0,0],[461,30,3,115,1,116],[523,22,5,87,1,88],
     [589,24,5,98,1,99],[647,28,1,107,5,108],[721,30,5,120,1,121],[795,28,3,113,4,114],[861,28,3,107,5,108],
-    [932,28,4,116,4,117],[1006,28,2,111,7,112],[1094,30,4,121,5,122],[1174,30,6,117,4,118],[1276,26,8,106,4,107],[1370,28,10,114,2,115]
+    [932,28,4,116,4,117],[1006,28,2,111,7,112],[1094,30,4,121,5,122],[1174,30,6,117,4,118],[1276,26,8,106,4,107],[1370,28,10,114,2,115],
+    [1468,30,8,122,4,123],[1531,30,3,117,10,118],[1631,30,7,116,7,117],[1735,30,5,115,10,116],[1843,30,13,115,3,116],[1955,30,17,115,0,0],[2071,30,17,115,1,116],[2191,30,13,115,6,116],
+    [2306,30,12,121,7,122],[2434,30,6,121,14,122],[2566,30,17,122,4,123],[2702,30,4,122,18,123],[2812,30,20,117,4,118],[2956,30,19,118,6,119]
   ];
   const ALIGN = [
     null,[],[6,18],[6,22],[6,26],[6,30],[6,34],[6,22,38],[6,24,42],[6,26,46],[6,28,50],
     [6,30,54],[6,32,58],[6,34,62],[6,26,46,66],[6,26,48,70],[6,26,50,74],[6,30,54,78],[6,30,56,82],[6,30,58,86],[6,34,62,90],
-    [6,28,50,72,94],[6,26,50,74,98],[6,30,54,78,102],[6,28,54,80,106],[6,32,58,84,110],[6,30,58,86,114]
+    [6,28,50,72,94],[6,26,50,74,98],[6,30,54,78,102],[6,28,54,80,106],[6,32,58,84,110],[6,30,58,86,114],
+    [6,34,62,90,118],[6,26,50,74,98,122],[6,30,54,78,102,126],[6,26,52,78,104,130],[6,30,56,82,108,134],[6,34,60,86,112,138],[6,30,58,86,114,142],[6,34,62,90,118,146],
+    [6,30,54,78,102,126,150],[6,24,50,76,102,128,154],[6,28,54,80,106,132,158],[6,32,58,84,110,136,162],[6,26,54,82,110,138,166],[6,30,58,86,114,142,170]
   ];
   const GF_EXP = new Uint8Array(512), GF_LOG = new Uint8Array(256);
   (() => {
@@ -1155,8 +1166,8 @@ const QrSync = (() => {
   function encodeQR(text) {
     const bytes = new TextEncoder().encode(String(text || ''));
     let ver = 1;
-    while (ver <= 26 && CAP_L[ver] < bytes.length) ver++;
-    if (ver > 26) throw new Error('数据超出单张二维码容量');
+    while (ver <= 40 && CAP_L[ver] < bytes.length) ver++;
+    if (ver > 40) throw new Error('数据超出单张二维码容量');
     const [totalData, ecPerBlock, g1Blocks, g1Codewords, g2Blocks, g2Codewords] = EC_L[ver];
     const bits = [];
     const pushBits = (val, len) => { for (let i = len - 1; i >= 0; i--) bits.push((val >>> i) & 1); };
@@ -1245,39 +1256,134 @@ const QrSync = (() => {
   }
   function buildQrPathData(text) {
     const { size, grid } = encodeQR(text);
-    const pad = 3, total = size + pad * 2;
+    const pad = 4, total = size + pad * 2;
     let d = '';
     for (let r = 0; r < size; r++) {
-      for (let c = 0; c < size; c++) {
-        if (grid[r][c]) d += `M${c + pad},${r + pad}h1v1h-1z`;
+      let c = 0;
+      while (c < size) {
+        if (!grid[r][c]) { c++; continue; }
+        let w = 1;
+        while (c + w < size && grid[r][c + w]) w++;
+        d += `M${c + pad},${r + pad}h${w}v1h-${w}z`;
+        c += w;
       }
     }
     return { size, total, d };
   }
-  function toSvg(text, pxSize = 228) {
+  const snapQrPx = (pxSize, total) => {
+    const raw = Number(pxSize) || 360;
+    if (!total || total <= 0) return raw;
+    return Math.max(total * 3, Math.round(raw / total) * total);
+  };
+  function toSvg(text, pxSize = 356) {
     const { total, d } = buildQrPathData(text);
-    return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${total} ${total}" width="${pxSize}" height="${pxSize}" shape-rendering="crispEdges" style="background:#fff;border-radius:12px;display:block;margin:0 auto;box-shadow:0 4px 16px rgba(0,0,0,.18)"><path d="${d}" fill="#111"/></svg>`;
+    const disp = Math.max(120, Math.round(Number(pxSize) || 356));
+    return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${total} ${total}" data-qr-total="${total}" data-snap-px="${disp}" width="${pxSize}" height="${pxSize}" shape-rendering="crispEdges" style="background:#fff;border-radius:12px;display:block;margin:0 auto;box-shadow:0 4px 16px rgba(0,0,0,.18)"><path d="${d}" fill="#000"/></svg>`;
   }
-  function toSvgEl(text, pxSize = 248) {
+  function toSvgEl(text, pxSize = 360) {
     const { total, d } = buildQrPathData(text);
+    const disp = snapQrPx(pxSize, total);
     const ns = 'http://www.w3.org/2000/svg';
     const svg = document.createElementNS(ns, 'svg');
     svg.setAttribute('xmlns', ns);
     svg.setAttribute('viewBox', `0 0 ${total} ${total}`);
-    svg.setAttribute('width', String(pxSize));
-    svg.setAttribute('height', String(pxSize));
+    svg.setAttribute('data-qr-total', String(total));
+    svg.setAttribute('width', String(disp));
+    svg.setAttribute('height', String(disp));
     svg.setAttribute('shape-rendering', 'crispEdges');
     svg.setAttribute('style', 'background:#fff;border-radius:12px;display:block;margin:0 auto;box-shadow:0 4px 16px rgba(0,0,0,.18)');
     const p = document.createElementNS(ns, 'path');
     p.setAttribute('d', d);
-    p.setAttribute('fill', '#111');
+    p.setAttribute('fill', '#000');
     svg.appendChild(p);
     return svg;
+  }
+  function gfInv(a) { return a === 0 ? 0 : GF_EXP[255 - GF_LOG[a]]; }
+  function rsCorrectBlock(dataBlk, ecBlk, ecLen) {
+    if (!ecBlk || ecBlk.length !== ecLen) return dataBlk;
+    const rem = rsEncode(dataBlk, ecLen);
+    let diffCnt = 0;
+    for (let i = 0; i < ecLen; i++) if (rem[i] !== ecBlk[i]) diffCnt++;
+    if (diffCnt === 0) return dataBlk;
+    const n = dataBlk.length + ecLen;
+    const msg = new Uint8Array(n);
+    msg.set(dataBlk, 0);
+    msg.set(ecBlk, dataBlk.length);
+    const syn = new Uint8Array(ecLen);
+    let hasErr = false;
+    for (let i = 0; i < ecLen; i++) {
+      let s = 0;
+      const r = GF_EXP[i];
+      for (let j = 0; j < n; j++) s = gfMul(s, r) ^ msg[j];
+      syn[i] = s;
+      if (s !== 0) hasErr = true;
+    }
+    if (!hasErr) return dataBlk;
+    let C = new Uint8Array([1]), B = new Uint8Array([1]);
+    let L = 0, m = 1, b = 1;
+    for (let nIdx = 0; nIdx < ecLen; nIdx++) {
+      let d = syn[nIdx];
+      for (let i = 1; i <= L; i++) d ^= gfMul(C[i] || 0, syn[nIdx - i]);
+      if (d === 0) {
+        m++;
+      } else {
+        const T = new Uint8Array(Math.max(C.length, B.length + m));
+        T.set(C);
+        const factor = gfMul(d, gfInv(b));
+        for (let i = 0; i < B.length; i++) T[i + m] ^= gfMul(factor, B[i]);
+        if (2 * L <= nIdx) {
+          L = nIdx + 1 - L;
+          B = C;
+          b = d;
+          m = 1;
+        } else {
+          m++;
+        }
+        C = T;
+      }
+    }
+    if (L > (ecLen >> 1)) return dataBlk;
+    const errPos = [];
+    for (let i = 0; i < n; i++) {
+      let sum = 0;
+      const xInv = GF_EXP[(255 - i) % 255];
+      let xPow = 1;
+      for (let j = 0; j <= L; j++) {
+        sum ^= gfMul(C[j] || 0, xPow);
+        xPow = gfMul(xPow, xInv);
+      }
+      if (sum === 0) errPos.push(n - 1 - i);
+    }
+    if (errPos.length !== L) return dataBlk;
+    const omega = new Uint8Array(ecLen);
+    for (let i = 0; i < ecLen; i++) {
+      for (let j = 0; j <= L; j++) {
+        if (i + j < ecLen) omega[i + j] ^= gfMul(syn[i], C[j] || 0);
+      }
+    }
+    for (const pos of errPos) {
+      const k = n - 1 - pos;
+      const xInv = GF_EXP[(255 - k) % 255];
+      let num = 0, xPow = 1;
+      for (let i = 0; i < ecLen; i++) {
+        num ^= gfMul(omega[i], xPow);
+        xPow = gfMul(xPow, xInv);
+      }
+      let den = 0, xInv2 = gfMul(xInv, xInv), dPow = 1;
+      for (let i = 1; i <= L; i += 2) {
+        den ^= gfMul(C[i] || 0, dPow);
+        dPow = gfMul(dPow, xInv2);
+      }
+      if (den === 0) return dataBlk;
+      const errMag = gfMul(gfMul(GF_EXP[k % 255], num), gfInv(den));
+      if (pos >= 0 && pos < dataBlk.length) dataBlk[pos] ^= errMag;
+    }
+    return dataBlk;
   }
   function decodeQRMatrix(grid) {
     const size = grid.length;
     const ver = Math.round((size - 17) / 4);
-    if (ver < 1 || ver > 26 || ver * 4 + 17 !== size) return null;
+    if (ver < 1 || ver > 40 || ver * 4 + 17 !== size) return null;
     const isFunc = Array.from({ length: size }, () => new Uint8Array(size));
     const mark = (r, c) => { if (r >= 0 && r < size && c >= 0 && c < size) isFunc[r][c] = 1; };
     const finder = (r0, c0) => { for (let dy = -1; dy <= 7; dy++) for (let dx = -1; dx <= 7; dx++) mark(r0 + dy, c0 + dx); };
@@ -1296,15 +1402,18 @@ const QrSync = (() => {
         mark(b, a); mark(a, b);
       }
     }
-    let fBits = 0;
-    for (let i = 0; i <= 5; i++) if (grid[i][8]) fBits |= (1 << i);
-    if (grid[7][8]) fBits |= (1 << 6);
-    if (grid[8][8]) fBits |= (1 << 7);
-    if (grid[8][7]) fBits |= (1 << 8);
-    for (let i = 9; i < 15; i++) if (grid[8][14 - i]) fBits |= (1 << i);
-    const fmt = (fBits ^ 0x5412) >>> 10;
-    const mask = fmt & 7;
-    const maskFn = [
+    let fBits1 = 0, fBits2 = 0;
+    for (let i = 0; i <= 5; i++) if (grid[i][8]) fBits1 |= (1 << i);
+    if (grid[7][8]) fBits1 |= (1 << 6);
+    if (grid[8][8]) fBits1 |= (1 << 7);
+    if (grid[8][7]) fBits1 |= (1 << 8);
+    for (let i = 9; i < 15; i++) if (grid[8][14 - i]) fBits1 |= (1 << i);
+    for (let i = 0; i < 8; i++) if (grid[8][size - 1 - i]) fBits2 |= (1 << i);
+    for (let i = 8; i < 15; i++) if (grid[size - 15 + i][8]) fBits2 |= (1 << i);
+    const mask1 = ((fBits1 ^ 0x5412) >>> 10) & 7;
+    const mask2 = ((fBits2 ^ 0x5412) >>> 10) & 7;
+    const masksToTry = mask1 === mask2 ? [mask1, 0] : [mask1, mask2, 0];
+    const maskFns = [
       (r, c) => ((r + c) & 1) === 0,
       (r) => (r & 1) === 0,
       (_, c) => c % 3 === 0,
@@ -1313,52 +1422,70 @@ const QrSync = (() => {
       (r, c) => ((r * c) & 1) + ((r * c) % 3) === 0,
       (r, c) => ((((r * c) & 1) + ((r * c) % 3)) & 1) === 0,
       (r, c) => ((((r + c) & 1) + ((r * c) % 3)) & 1) === 0,
-    ][mask] || ((r, c) => ((r + c) & 1) === 0);
-    const bits = [];
-    let up = true;
-    for (let right = size - 1; right >= 1; right -= 2) {
-      if (right === 6) right = 5;
-      for (let v = 0; v < size; v++) {
-        const r = up ? size - 1 - v : v;
-        for (let j = 0; j < 2; j++) {
-          const c = right - j;
-          if (!isFunc[r][c]) {
-            let b = Boolean(grid[r][c]);
-            if (maskFn(r, c)) b = !b;
-            bits.push(b ? 1 : 0);
+    ];
+    for (const mask of [...new Set(masksToTry)]) {
+      const maskFn = maskFns[mask] || maskFns[0];
+      const bits = [];
+      let up = true;
+      for (let right = size - 1; right >= 1; right -= 2) {
+        if (right === 6) right = 5;
+        for (let v = 0; v < size; v++) {
+          const r = up ? size - 1 - v : v;
+          for (let j = 0; j < 2; j++) {
+            const c = right - j;
+            if (!isFunc[r][c]) {
+              let b = Boolean(grid[r][c]);
+              if (maskFn(r, c)) b = !b;
+              bits.push(b ? 1 : 0);
+            }
           }
         }
+        up = !up;
       }
-      up = !up;
-    }
-    const cws = [];
-    for (let i = 0; i + 7 < bits.length; i += 8) {
-      let v = 0; for (let b = 0; b < 8; b++) v = (v << 1) | bits[i + b];
-      cws.push(v);
-    }
-    const [totalData, , g1Blocks, g1Codewords, g2Blocks, g2Codewords] = EC_L[ver];
-    const blocks = Array.from({ length: g1Blocks + g2Blocks }, (_, i) => new Uint8Array(i < g1Blocks ? g1Codewords : g2Codewords));
-    const maxCw = Math.max(g1Codewords, g2Codewords);
-    let idx = 0;
-    for (let i = 0; i < maxCw; i++) {
-      for (let b = 0; b < blocks.length; b++) {
-        if (i < blocks[b].length && idx < cws.length) blocks[b][i] = cws[idx++];
+      const cws = [];
+      for (let i = 0; i + 7 < bits.length; i += 8) {
+        let v = 0; for (let b = 0; b < 8; b++) v = (v << 1) | bits[i + b];
+        cws.push(v);
       }
+      const [totalData, ecPerBlock, g1Blocks, g1Codewords, g2Blocks, g2Codewords] = EC_L[ver];
+      const numBlocks = g1Blocks + g2Blocks;
+      const blocks = Array.from({ length: numBlocks }, (_, i) => new Uint8Array(i < g1Blocks ? g1Codewords : g2Codewords));
+      const ecBlocks = Array.from({ length: numBlocks }, () => new Uint8Array(ecPerBlock));
+      const maxCw = Math.max(g1Codewords, g2Codewords);
+      let idx = 0;
+      for (let i = 0; i < maxCw; i++) {
+        for (let b = 0; b < numBlocks; b++) {
+          if (i < blocks[b].length && idx < cws.length) blocks[b][i] = cws[idx++];
+        }
+      }
+      for (let i = 0; i < ecPerBlock; i++) {
+        for (let b = 0; b < numBlocks; b++) {
+          if (idx < cws.length) ecBlocks[b][i] = cws[idx++];
+        }
+      }
+      const dataBytes = new Uint8Array(totalData);
+      let off = 0;
+      for (let b = 0; b < numBlocks; b++) {
+        const corrected = rsCorrectBlock(blocks[b], ecBlocks[b], ecPerBlock);
+        dataBytes.set(corrected, off);
+        off += corrected.length;
+      }
+      const dBits = [];
+      for (const b of dataBytes) for (let i = 7; i >= 0; i--) dBits.push((b >>> i) & 1);
+      const readBits = (p, len) => { let v = 0; for (let i = 0; i < len; i++) v = (v << 1) | (dBits[p + i] || 0); return v; };
+      const mode = readBits(0, 4);
+      if (mode !== 0b0100) continue;
+      const lenBits = ver < 10 ? 8 : 16;
+      const byteLen = readBits(4, lenBits);
+      if (byteLen <= 0 || 4 + lenBits + byteLen * 8 > dBits.length) continue;
+      const out = new Uint8Array(byteLen);
+      for (let i = 0; i < byteLen; i++) out[i] = readBits(4 + lenBits + i * 8, 8);
+      try {
+        const txt = new TextDecoder('utf-8', { fatal: false }).decode(out);
+        if (txt) return txt;
+      } catch {}
     }
-    const dataBytes = new Uint8Array(totalData);
-    let off = 0;
-    for (const blk of blocks) { dataBytes.set(blk, off); off += blk.length; }
-    const dBits = [];
-    for (const b of dataBytes) for (let i = 7; i >= 0; i--) dBits.push((b >>> i) & 1);
-    const readBits = (p, len) => { let v = 0; for (let i = 0; i < len; i++) v = (v << 1) | (dBits[p + i] || 0); return v; };
-    const mode = readBits(0, 4);
-    if (mode !== 0b0100) return null;
-    const lenBits = ver < 10 ? 8 : 16;
-    const byteLen = readBits(4, lenBits);
-    if (byteLen <= 0 || 4 + lenBits + byteLen * 8 > dBits.length) return null;
-    const out = new Uint8Array(byteLen);
-    for (let i = 0; i < byteLen; i++) out[i] = readBits(4 + lenBits + i * 8, 8);
-    return new TextDecoder().decode(out);
+    return null;
   }
   async function decodeFromImageData(imgData) {
     const { data, width, height } = imgData;
@@ -1366,9 +1493,138 @@ const QrSync = (() => {
       const i = (Math.min(height - 1, Math.max(0, Math.round(y))) * width + Math.min(width - 1, Math.max(0, Math.round(x)))) * 4;
       return data[i] * 0.299 + data[i + 1] * 0.587 + data[i + 2] * 0.114;
     };
-    const isValid = txt => Boolean(txt && (txt.includes('brana-sync') || txt.startsWith('ARENA-ACCOUNTS-V1:') || txt.startsWith('http') || txt.startsWith('{') || /^vless:\/\//i.test(txt)));
+    const isValid = txt => Boolean(txt && (txt.includes('brana-sync') || /^B[12]:/.test(txt) || txt.startsWith('ARENA-ACCOUNTS-V1:') || txt.startsWith('http') || txt.startsWith('{') || /^vless:\/\//i.test(txt)));
+    const checkRatio = (s0, s1, s2, s3, s4) => {
+      const total = s0 + s1 + s2 + s3 + s4;
+      if (total < 7 || s0 === 0 || s1 === 0 || s2 === 0 || s3 === 0 || s4 === 0) return false;
+      const u = total / 7, maxVar = u * 0.65;
+      return Math.abs(u - s0) < maxVar && Math.abs(u - s1) < maxVar && Math.abs(3 * u - s2) < 3 * maxVar && Math.abs(u - s3) < maxVar && Math.abs(u - s4) < maxVar;
+    };
+    const findFinderCenters = thr => {
+      const centers = [];
+      const yStep = Math.max(1, Math.floor(height / 180));
+      for (let y = 2; y < height - 2; y += yStep) {
+        let s = [0, 0, 0, 0, 0], st = 0, seenWhite = false;
+        for (let x = 0; x < width; x++) {
+          const dark = lum(x, y) < thr;
+          if (!dark) seenWhite = true;
+          if (!seenWhite) continue;
+          if (dark) {
+            if ((st & 1) === 1) st++;
+            s[st]++;
+          } else {
+            if ((st & 1) === 1) {
+              s[st]++;
+            } else if (st === 4) {
+              if (checkRatio(s[0], s[1], s[2], s[3], s[4])) {
+                const hSpan = s[0] + s[1] + s[2] + s[3] + s[4];
+                const cx = x - s[4] - s[3] - s[2] * 0.5;
+                const maxV = Math.ceil(hSpan * 1.2);
+                const cxi = Math.round(cx);
+                let u2 = 0, u1 = 0, u0 = 0, d2 = 0, d1 = 0, d0 = 0;
+                let vy = y;
+                while (vy >= 0 && lum(cxi, vy) < thr && u2 <= maxV) { u2++; vy--; }
+                while (vy >= 0 && lum(cxi, vy) >= thr && u1 <= maxV) { u1++; vy--; }
+                while (vy >= 0 && lum(cxi, vy) < thr && u0 <= maxV) { u0++; vy--; }
+                let dy = y + 1;
+                while (dy < height && lum(cxi, dy) < thr && d2 <= maxV) { d2++; dy++; }
+                while (dy < height && lum(cxi, dy) >= thr && d1 <= maxV) { d1++; dy++; }
+                while (dy < height && lum(cxi, dy) < thr && d0 <= maxV) { d0++; dy++; }
+                const vMid = u2 + d2;
+                if (checkRatio(u0, u1, vMid, d1, d0)) {
+                  const vSpan = u0 + u1 + vMid + d1 + d0;
+                  if (Math.abs(hSpan - vSpan) <= Math.max(hSpan, vSpan) * 0.45) {
+                    const cy = dy - d0 - d1 - vMid * 0.5;
+                    const mod = (hSpan + vSpan) / 14;
+                    const ex = centers.find(c => Math.hypot(c.x - cx, c.y - cy) < mod * 3.5);
+                    if (ex) {
+                      ex.x = (ex.x * ex.w + cx) / (ex.w + 1);
+                      ex.y = (ex.y * ex.w + cy) / (ex.w + 1);
+                      ex.mod = (ex.mod * ex.w + mod) / (ex.w + 1);
+                      ex.w++;
+                    } else {
+                      centers.push({ x: cx, y: cy, mod, w: 1 });
+                    }
+                  }
+                }
+              }
+              s = [s[2], s[3], s[4], 1, 0];
+              st = 3;
+            } else {
+              st++;
+              s[st]++;
+            }
+          }
+        }
+      }
+      return centers.sort((a, b) => b.w - a.w).slice(0, 8);
+    };
+    for (const thr of [128, 155, 102, 178]) {
+      const cands = findFinderCenters(thr);
+      if (cands.length >= 3) {
+        for (let i = 0; i < cands.length; i++) {
+          for (let j = i + 1; j < cands.length; j++) {
+            for (let k = j + 1; k < cands.length; k++) {
+              const pts = [cands[i], cands[j], cands[k]];
+              const d01 = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+              const d12 = Math.hypot(pts[1].x - pts[2].x, pts[1].y - pts[2].y);
+              const d02 = Math.hypot(pts[0].x - pts[2].x, pts[0].y - pts[2].y);
+              let tl, pA, pB;
+              if (d12 >= d01 && d12 >= d02) { tl = pts[0]; pA = pts[1]; pB = pts[2]; }
+              else if (d02 >= d01 && d02 >= d12) { tl = pts[1]; pA = pts[0]; pB = pts[2]; }
+              else { tl = pts[2]; pA = pts[0]; pB = pts[1]; }
+              const sideA = Math.hypot(pA.x - tl.x, pA.y - tl.y);
+              const sideB = Math.hypot(pB.x - tl.x, pB.y - tl.y);
+              if (sideA < 14 || sideB < 14 || Math.abs(sideA - sideB) > Math.max(sideA, sideB) * 0.28) continue;
+              const cross = (pA.x - tl.x) * (pB.y - tl.y) - (pA.y - tl.y) * (pB.x - tl.x);
+              const tr = cross > 0 ? pA : pB;
+              const bl = cross > 0 ? pB : pA;
+              const avgMod = (tl.mod + tr.mod + bl.mod) / 3;
+              const estDim = Math.round(((sideA + sideB) * 0.5) / Math.max(0.8, avgMod)) + 7;
+              const estVer = Math.max(1, Math.min(40, Math.round((estDim - 17) / 4)));
+              for (let dv = 0; dv <= 3; dv++) {
+                for (const sgn of (dv === 0 ? [0] : [-1, 1])) {
+                  const ver = estVer + dv * sgn;
+                  if (ver < 1 || ver > 40) continue;
+                  const sz = ver * 4 + 17, span = sz - 7;
+                  const ux = (tr.x - tl.x) / span, uy = (tr.y - tl.y) / span;
+                  const vx = (bl.x - tl.x) / span, vy = (bl.y - tl.y) / span;
+                  const grid = Array.from({ length: sz }, (_, r) => {
+                    const row = new Uint8Array(sz);
+                    for (let c = 0; c < sz; c++) {
+                      const px = tl.x + (c - 3) * ux + (r - 3) * vx;
+                      const py = tl.y + (c - 3) * uy + (r - 3) * vy;
+                      const sLum = (lum(px, py) * 2 + lum(px - ux * 0.15, py - uy * 0.15) + lum(px + ux * 0.15, py + uy * 0.15) + lum(px - vx * 0.15, py - vy * 0.15) + lum(px + vx * 0.15, py + vy * 0.15)) / 6;
+                      row[c] = sLum < thr ? 1 : 0;
+                    }
+                    return row;
+                  });
+                  if (grid[0][0] && grid[0][6] && grid[6][0] && grid[3][3] && !grid[1][1]) {
+                    const txt = decodeQRMatrix(grid);
+                    if (isValid(txt)) return txt;
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
     const regions = [];
-    const cx = width >> 1, cy = height >> 1;
+    let bMinY = height, bMaxY = 0, bMinX = width, bMaxX = 0;
+    for (let y = 0; y < height; y += 2) {
+      let cnt = 0;
+      for (let x = 0; x < width; x += 2) if (lum(x, y) > 200) cnt++;
+      if (cnt > (width >> 1) * 0.20) { if (y < bMinY) bMinY = y; if (y > bMaxY) bMaxY = y; }
+    }
+    if (bMaxY > bMinY + 32) {
+      for (let x = 0; x < width; x += 2) {
+        let cnt = 0;
+        for (let y = bMinY; y <= bMaxY; y += 2) if (lum(x, y) > 200) cnt++;
+        if (cnt > ((bMaxY - bMinY) >> 1) * 0.20) { if (x < bMinX) bMinX = x; if (x > bMaxX) bMaxX = x; }
+      }
+      if (bMaxX > bMinX + 32) regions.push([bMinX + 3, bMinY + 3, bMaxX - 3, bMaxY - 3]);
+    }
     let wMinX = width, wMinY = height, wMaxX = 0, wMaxY = 0, wHits = 0;
     for (let y = 0; y < height; y += 2) {
       for (let x = 0; x < width; x += 2) {
@@ -1393,7 +1649,7 @@ const QrSync = (() => {
         if (maxX <= minX + 16 || maxY <= minY + 16) continue;
         const qrW = maxX - minX + 1, qrH = maxY - minY + 1;
         if (Math.abs(qrW - qrH) > Math.max(qrW, qrH) * 0.35) continue;
-        for (let ver = 1; ver <= 26; ver++) {
+        for (let ver = 1; ver <= 40; ver++) {
           const sz = ver * 4 + 17, stepX = qrW / sz, stepY = qrH / sz;
           const grid = Array.from({ length: sz }, (_, r) => {
             const row = new Uint8Array(sz);
@@ -1428,14 +1684,25 @@ const QrSync = (() => {
       const url = URL.createObjectURL(file);
       img.onload = async () => {
         URL.revokeObjectURL(url);
-        const cv = document.createElement('canvas');
-        const scale = Math.min(1, 900 / Math.max(img.width || 1, img.height || 1));
-        cv.width = Math.max(64, Math.round(img.width * scale));
-        cv.height = Math.max(64, Math.round(img.height * scale));
-        const ctx = cv.getContext('2d');
-        ctx.drawImage(img, 0, 0, cv.width, cv.height);
-        const res = await decodeFromImageData(ctx.getImageData(0, 0, cv.width, cv.height)).catch(() => null);
-        resolve(res);
+        for (const maxDim of [960, 1440, 640]) {
+          try {
+            const cv = document.createElement('canvas');
+            const scale = maxDim / Math.max(img.width || 1, img.height || 1);
+            cv.width = Math.max(64, Math.round(img.width * scale));
+            cv.height = Math.max(64, Math.round(img.height * scale));
+            const ctx = cv.getContext('2d');
+            if (ctx) ctx.imageSmoothingEnabled = false;
+            ctx.drawImage(img, 0, 0, cv.width, cv.height);
+            const imgData = ctx.getImageData(0, 0, cv.width, cv.height);
+            if (typeof window !== 'undefined' && typeof window.jsQR === 'function') {
+              const hit = window.jsQR(imgData.data, imgData.width, imgData.height);
+              if (hit?.data) { resolve(hit.data); return; }
+            }
+            const res = await decodeFromImageData(imgData).catch(() => null);
+            if (res) { resolve(res); return; }
+          } catch {}
+        }
+        resolve(null);
       };
       img.onerror = () => { URL.revokeObjectURL(url); resolve(null); };
       img.src = url;
@@ -1462,10 +1729,18 @@ const QrSync = (() => {
     return bytes;
   };
   const fromB64Url = str => JSON.parse(new TextDecoder().decode(b64UrlToBytes(str)));
-  const withQuickTimeout = (p, ms = 1200) => Promise.race([
-    Promise.resolve(p),
-    new Promise(resolve => setTimeout(() => resolve(null), ms)),
-  ]);
+  const withQuickTimeout = (p, ms = 1200) => {
+    let syncFired = false;
+    const timerP = new Promise(resolve => {
+      let isSync = true;
+      setTimeout(() => {
+        if (isSync) syncFired = true;
+        else resolve(null);
+      }, ms);
+      isSync = false;
+    });
+    return syncFired ? Promise.resolve(p) : Promise.race([Promise.resolve(p), timerP]);
+  };
   const compressToB64Url = async obj => {
     const rawBytes = new TextEncoder().encode(JSON.stringify(obj));
     if (typeof CompressionStream === 'function') {
@@ -1483,10 +1758,119 @@ const QrSync = (() => {
     }
     return { ver: 'v1', b64: bytesToB64Url(rawBytes) };
   };
+  // ── 电脑端 ⇄ 手机端 轻量对称流加密与字典压缩 (Simple Stream Cipher + Dictionary Deduplication) ──
+  const qrSimpleXor = (bytes, salt16 = 0x5aa5) => {
+    const out = new Uint8Array(bytes.length);
+    let st = (0xdc428791 ^ (salt16 & 0xffff)) >>> 0;
+    for (let i = 0; i < bytes.length; i++) {
+      st = (Math.imul(st ^ 0x9e3779b9, 0x01000193) + i) >>> 0;
+      out[i] = bytes[i] ^ ((st >>> 16) & 0xff) ^ (st & 0xff);
+    }
+    return out;
+  };
+  const encryptSyncBytes = rawBytes => {
+    let csum = 0x5a;
+    for (let i = 0; i < rawBytes.length; i++) csum = ((csum * 33) ^ rawBytes[i]) & 0xffff;
+    if (!csum) csum = 0x5aa5;
+    const xored = qrSimpleXor(rawBytes, csum);
+    const out = new Uint8Array(xored.length + 2);
+    out[0] = (csum >>> 8) & 0xff;
+    out[1] = csum & 0xff;
+    out.set(xored, 2);
+    return bytesToB64Url(out);
+  };
+  const decryptSyncBytes = b64Str => {
+    const raw = b64UrlToBytes(b64Str);
+    if (raw.length < 3) return null;
+    const csum = ((raw[0] << 8) | raw[1]) & 0xffff;
+    return qrSimpleXor(raw.subarray(2), csum);
+  };
+  const deflateBytes = async rawBytes => {
+    if (typeof CompressionStream === 'function') {
+      try {
+        const cs = new CompressionStream('deflate-raw');
+        const writer = cs.writable.getWriter();
+        void writer.write(rawBytes);
+        void writer.close();
+        const buf = await withQuickTimeout(new Response(cs.readable).arrayBuffer(), 500);
+        if (buf) {
+          const comp = new Uint8Array(buf);
+          if (comp.length && comp.length < rawBytes.length) return comp;
+        }
+      } catch {}
+    }
+    return null;
+  };
+  const inflateBytes = async compBytes => {
+    if (typeof DecompressionStream === 'function') {
+      const ds = new DecompressionStream('deflate-raw');
+      const writer = ds.writable.getWriter();
+      writer.write(compBytes);
+      writer.close();
+      const buf = await new Response(ds.readable).arrayBuffer();
+      return new Uint8Array(buf);
+    }
+    return compBytes;
+  };
+  const packEncryptedCompactQr = async (subUrls, vlessLinks, compactAccts) => {
+    const groups = {};
+    for (const a of (compactAccts || [])) {
+      const em = String(a?.e || '').trim();
+      if (!em && !a?.n) continue;
+      const [user, dom = 'icloud.com'] = em ? em.split('@') : [a.n, ''];
+      const k = dom + '\t' + String(a?.p || '');
+      (groups[k] = groups[k] || []).push(user + ((compactAccts.length <= 6 && a?.ip) ? '|' + String(a.ip).replace(/:443$/, '') : ''));
+    }
+    const lines = [
+      (subUrls || []).slice(0, 2).join(','),
+      (vlessLinks || []).slice(0, 2).join(','),
+      ...Object.entries(groups).map(([k, users]) => k + '\t' + users.join(',')),
+    ].join('\n');
+    const rawBytes = new TextEncoder().encode(lines);
+    const comp = await deflateBytes(rawBytes);
+    const payload = comp || rawBytes;
+    const tag = comp ? 'brana-sync://e2/' : 'brana-sync://e0/';
+    return tag + encryptSyncBytes(payload);
+  };
+  const unpackEncryptedCompactQr = async (cipherB64, compressed = true) => {
+    const dec = decryptSyncBytes(cipherB64);
+    if (!dec) return null;
+    const raw = compressed ? await inflateBytes(dec) : dec;
+    const text = new TextDecoder().decode(raw);
+    const lines = text.split('\n');
+    const s = (lines[0] || '').split(',').map(x => x.trim()).filter(Boolean);
+    const l = (lines[1] || '').split(',').map(x => x.trim()).filter(Boolean);
+    const a = [];
+    for (let i = 2; i < lines.length; i++) {
+      const parts = lines[i].split('\t');
+      if (parts.length < 3) continue;
+      const dom = parts[0], pw = parts[1], users = parts.slice(2).join('\t').split(',');
+      for (const u of users) {
+        if (!u) continue;
+        const [localPart, ip = ''] = u.split('|');
+        const e = dom ? (localPart + '@' + dom) : localPart;
+        a.push({ e, p: pw, ...(ip ? { ip } : {}) });
+      }
+    }
+    return { v: 2, s, l, a };
+  };
   const decodeSyncToken = async rawStr => {
     const s = String(rawStr || '').trim();
     if (s.startsWith('{')) return JSON.parse(s);
     if (/^ARENA-ACCOUNTS-V1:/i.test(s)) { const obj = JSON.parse(new TextDecoder().decode(b64UrlToBytes(s.replace(/^ARENA-ACCOUNTS-V1:/i, '').trim()))); return { v: 1, accounts: (obj.accounts || []).map(a => ({ name: a.name || a.email || '', remark: a.remark || '', email: a.email || '', password: a.pw || a.password || '', proxy: a.proxy || '', proxyIp: a.proxyIp || '', region: a.region || '', nodeId: a.nodeId || '' })) }; }
+    if (/^(?:brana-sync:\/\/e1\/|B1:)/i.test(s)) {
+      const b64 = s.replace(/^(?:brana-sync:\/\/e1\/|B1:)/i, '');
+      const dec = decryptSyncBytes(b64);
+      if (dec) {
+        const srvInfo = JSON.parse(new TextDecoder().decode(dec));
+        return { __lanShort: true, ...srvInfo };
+      }
+    }
+    if (/^(?:brana-sync:\/\/e[02]\/|B2:)/i.test(s)) {
+      const isCompressed = !/^brana-sync:\/\/e0\//i.test(s);
+      const b64 = s.replace(/^(?:brana-sync:\/\/e[02]\/|B2:)/i, '');
+      return await unpackEncryptedCompactQr(b64, isCompressed);
+    }
     if (/^brana-sync:\/\/v2\//i.test(s)) {
       const bytes = b64UrlToBytes(s.replace(/^brana-sync:\/\/v2\//i, ''));
       if (typeof DecompressionStream === 'function') {
@@ -1548,10 +1932,18 @@ const QrSync = (() => {
     const pipStrings = pips.map(x => typeof x === 'string' ? x : (x?.ip ? (x.ip + (x.port && +x.port !== 443 ? ':' + x.port : '')) : (x?.address ? (x.address + (x.port && +x.port !== 443 ? ':' + x.port : '')) : ''))).filter(Boolean);
     const subUrls = subs.map(s => s?.url || s).filter(Boolean);
     const compactAccts = slimAccts.map(a => {
-      const o = { n: a.name, e: a.email, p: a.password, ip: a.proxyIp, r: a.region };
-      if (a.remark && a.remark !== a.name) o.rm = a.remark;
-      if (a.li >= 0) o.li = a.li;
-      else if (a.proxy) o.px = a.proxy;
+      const o = {};
+      const em = String(a.email || '').trim();
+      const nm = String(a.name || '').trim();
+      if (em) o.e = em;
+      if (nm && nm !== em && nm !== em.split('@')[0] && !/^账号\s*\d*$/.test(nm)) o.n = nm;
+      else if (!em && nm) o.n = nm;
+      if (a.password) o.p = a.password;
+      if (a.proxyIp) o.ip = String(a.proxyIp).replace(/:443$/, '');
+      if (a.region) o.r = a.region;
+      if (a.remark && a.remark !== nm && a.remark !== em) o.rm = a.remark;
+      if (a.li > 0) o.li = a.li;
+      else if (a.li < 0 && a.proxy) o.px = a.proxy;
       return o;
     });
     const fullBundle = {
@@ -1568,29 +1960,53 @@ const QrSync = (() => {
       activeVless,
       accounts: slimAccts,
     };
-    const minLinks = Math.max(1, ...compactAccts.map(a => (a.li != null ? a.li + 1 : 1)));
-    let qrPayload = '';
-    let inlineLite = null;
-    const budgets = [
-      [Math.min(allLinks.length, 24), Math.min(pipStrings.length, 24), Math.min(subUrls.length, 8), compactAccts.length],
-      [Math.min(allLinks.length, 12), Math.min(pipStrings.length, 12), Math.min(subUrls.length, 5), compactAccts.length],
-      [Math.min(allLinks.length, Math.max(minLinks, 6)), Math.min(pipStrings.length, 8), Math.min(subUrls.length, 4), compactAccts.length],
-      [Math.min(allLinks.length, Math.max(minLinks, 3)), Math.min(pipStrings.length, 4), Math.min(subUrls.length, 2), Math.min(compactAccts.length, 8)],
-      [Math.min(allLinks.length, 1), Math.min(pipStrings.length, 2), Math.min(subUrls.length, 1), Math.min(compactAccts.length, 4)],
-    ];
-    for (const [nL, nP, nS, nA] of budgets) {
-      inlineLite = {
-        v: 2,
-        s: subUrls.slice(0, nS),
-        l: allLinks.slice(0, nL),
-        p: pipStrings.slice(0, nP),
-        a: compactAccts.slice(0, nA),
-      };
-      const packed = await compressToB64Url(inlineLite);
-      const candidate = 'brana-sync://' + packed.ver + '/' + packed.b64;
-      qrPayload = candidate;
-      if (candidate.length <= 1300) break;
-    }
+    const slimVlessForQr = lnk => {
+      let s = String(lnk || '').trim();
+      const hIdx = s.indexOf('#');
+      if (hIdx > 0) s = s.slice(0, hIdx);
+      if (compactAccts.length > 4) {
+        s = s
+          .replace(/([?&])encryption=none(&|$)/gi, '$1')
+          .replace(/([?&])fp=chrome(&|$)/gi, '$1')
+          .replace(/([?&])path=%2F(&|$)/gi, '$1')
+          .replace(/([?&])ech=[^&]*(&|$)/gi, '$1')
+          .replace(/[?&]+$/g, '')
+          .replace(/\?&/g, '?')
+          .replace(/&&+/g, '&');
+        const mHost = /[?&]host=([^&]+)/i.exec(s);
+        const mSni = /[?&]sni=([^&]+)/i.exec(s);
+        if (mHost && mSni && mHost[1] === mSni[1]) {
+          s = s.replace(/([?&])sni=[^&]*(&|$)/i, '$1').replace(/[?&]+$/g, '').replace(/\?&/g, '?').replace(/&&+/g, '&');
+        }
+      }
+      return s;
+    };
+    const sortedForQr = [...compactAccts].sort((a, b) => String(a.p || '').localeCompare(String(b.p || '')));
+    const qrSlimAccts = compactAccts.length > 6
+      ? sortedForQr.map(x => ({ e: x.e, p: x.p, ...(x.n ? { n: x.n } : {}) }))
+      : sortedForQr;
+    const inlineLite = {
+      v: 2,
+      s: subUrls.slice(0, 1),
+      l: allLinks.slice(0, 1).map(slimVlessForQr),
+      a: qrSlimAccts,
+    };
+    const packed = await compressToB64Url(inlineLite);
+    const qrPayload = 'brana-sync://' + packed.ver + '/' + packed.b64;
+    let qrEncryptedPayload = qrPayload;
+    try {
+      qrEncryptedPayload = await packEncryptedCompactQr(subUrls.slice(0, 1), allLinks.slice(0, 1).map(slimVlessForQr), sortedForQr);
+    } catch {}
+    let qrShortPayload = '';
+    try {
+      if (typeof Host !== 'undefined' && typeof Host.shared === 'function') {
+        const srv = await withQuickTimeout(Host.shared('__qrSyncServe', fullBundle), 800);
+        if (srv?.ok && srv.port && srv.token) {
+          const shortObj = { p: srv.port, t: srv.token, ips: (srv.ips || [srv.ip]).filter(Boolean).slice(0, 3) };
+          qrShortPayload = 'brana-sync://e1/' + encryptSyncBytes(new TextEncoder().encode(JSON.stringify(shortObj)));
+        }
+      }
+    } catch {}
     const fullPacked = await compressToB64Url({
       v: 2,
       s: subUrls,
@@ -1599,20 +2015,9 @@ const QrSync = (() => {
       a: compactAccts,
     });
     const fullTokenStr = 'brana-sync://' + fullPacked.ver + '/' + fullPacked.b64;
-    const qrPages = [];
-    if (qrPayload.length <= 1300 && inlineLite?.a?.length === compactAccts.length) {
-      qrPages.push(qrPayload);
-    } else if (compactAccts.length > 0) {
-      for (let i = 0; i < compactAccts.length; i += 5) {
-        const pPack = await compressToB64Url({ v: 2, s: i === 0 ? subUrls.slice(0, 2) : [], l: allLinks.slice(0, 1), p: i === 0 ? pipStrings.slice(0, 4) : [], a: compactAccts.slice(i, i + 5).map(x => ({ ...x, li: 0 })) });
-        qrPages.push('brana-sync://' + pPack.ver + '/' + pPack.b64);
-      }
-      if (qrPages[0]) qrPayload = qrPages[0];
-    } else {
-      qrPages.push(qrPayload);
-    }
+    const qrPages = [qrPayload];
     const summary = { subs: subUrls.length, nodes: allLinks.length, accounts: slimAccts.length, currentEmail: slimAccts[0]?.email || '' };
-    return { fullBundle, inlineLite, qrPayload, qrPages, fullTokenStr, uri: qrPayload, summary };
+    return { fullBundle, inlineLite, qrPayload, qrEncryptedPayload, qrShortPayload, qrPages, fullTokenStr, uri: qrPayload, summary };
   }
   async function applySyncPayload(rawInput, onProgress) {
     const step = msg => { try { onProgress?.(msg); } catch {} };
@@ -1646,13 +2051,46 @@ const QrSync = (() => {
       }
       return { ok: true, mode: 'vless', subCount: Nodes.subs?.length || 0, nodeCount: Nodes.list?.length || added, accountCount: 0 };
     }
+    const fetchSyncHttpJson = async url => {
+      try {
+        if (typeof Host !== 'undefined' && typeof Host.fetchText === 'function') {
+          const r = await withQuickTimeout(Host.fetchText(url), 3500);
+          const bodyStr = typeof r === 'string' ? r : (r?.body || r?.text || '');
+          if (bodyStr && bodyStr.trim().startsWith('{')) return JSON.parse(bodyStr);
+        }
+      } catch {}
+      const ctrl = typeof AbortController === 'function' ? new AbortController() : null;
+      const tid = ctrl ? setTimeout(() => ctrl.abort(), 3500) : null;
+      try {
+        const resp = await fetch(url, ctrl ? { signal: ctrl.signal } : undefined);
+        if (resp.ok) return await resp.json();
+      } finally {
+        if (tid) clearTimeout(tid);
+      }
+      return null;
+    };
+    if (/^https?:\/\/[^/]+\/brana-sync\//i.test(text)) {
+      step('正在通过加密局域网通道拉取全量配置…');
+      const remoteData = await fetchSyncHttpJson(text);
+      if (!remoteData || typeof remoteData !== 'object') throw new Error('局域网同步连接超时，请确认手机与电脑处于同一 Wi-Fi 或切换「精简一码」');
+      text = JSON.stringify(remoteData);
+    }
     if (/^https?:\/\//i.test(text) && !text.includes('#brana=')) {
-      step('正在保存节点订阅地址…');
-      if (typeof Nodes !== 'undefined' && Array.isArray(Nodes.subs)) {
-        if (!Nodes.subs.some(s => s?.url === text)) {
+      step('正在保存并拉取节点订阅地址…');
+      if (typeof Nodes !== 'undefined') {
+        if (typeof Nodes.addSub === 'function') {
+          try { await withQuickTimeout(Nodes.addSub(text), 3500); } catch {}
+        }
+        if (Array.isArray(Nodes.subs) && !Nodes.subs.some(s => s?.url === text)) {
           Nodes.subs.push({ url: text, at: Date.now(), n: Nodes.list?.length || 0, error: '' });
           try { Nodes.saveSubs?.(); } catch {}
         }
+        const firstSubNode = Nodes.list?.[0];
+        if (firstSubNode && typeof Pool !== 'undefined' && typeof Pool.mutate === 'function') {
+          try { await Pool.mutate(d => { if (!d.node) d.node = firstSubNode.id; }); } catch {}
+          try { void Pool.pushG?.(); } catch {}
+        }
+        try { void Nodes.syncAndroid?.(); } catch {}
       }
       return { ok: true, mode: 'sub', subCount: Nodes.subs?.length || 1, nodeCount: Nodes.list?.length || 0, accountCount: 0 };
     }
@@ -1663,6 +2101,17 @@ const QrSync = (() => {
     }
     let data = null;
     try { data = await decodeSyncToken(text); } catch {}
+    if (data?.__lanShort && data.p && data.t && Array.isArray(data.ips)) {
+      step('正在通过局域网加密短码握手拉取全量配置…');
+      const candidates = data.ips.map(ip => `http://${ip}:${data.p}/brana-sync/${data.t}`);
+      let fetched = null;
+      try {
+        const results = await Promise.all(candidates.map(u => fetchSyncHttpJson(u).catch(() => null)));
+        fetched = results.find(x => x && typeof x === 'object') || null;
+      } catch {}
+      if (!fetched) throw new Error('局域网短码连接未响应，请确保手机与电脑在同一 Wi-Fi，或在电脑端切换为「精简一码」');
+      data = fetched;
+    }
     if (!data || typeof data !== 'object') throw new Error('无法识别该二维码或同步口令');
     step('正在本地写入节点、订阅与 ProxyIP 数据（纯离线零网络请求）…');
     const subUrls = Array.isArray(data.subs) ? data.subs.map(s => s?.url || s).filter(Boolean) : (Array.isArray(data.s) ? data.s.filter(Boolean) : []);
@@ -1763,14 +2212,30 @@ const QrSync = (() => {
           deferProxy: !loc?.id,
         };
         try {
-          const isCur = Boolean(loc?.id && loc.id === UI?.host?.account?.id);
-          const saved = await Host.saveAccount({ ...payload, deferProxy: !isCur || accts.length > 1 });
-          if (isCur && UI?.host) UI.host.account = { ...(UI.host.account || {}), ...(saved?.account || payload) };
+          const isCur = Boolean((loc?.id && loc.id === UI?.host?.account?.id) || (importedAccts === 0 && (!UI?.host?.account?.email || UI?.host?.account?.email === email)));
+          const saved = await Host.saveAccount({ ...payload, deferProxy: !isCur });
+          const mergedAcct = { ...(UI?.host?.account || {}), ...(saved?.account || payload), ...(payload.password ? { hasPw: true } : {}) };
+          if (isCur && UI?.host) {
+            UI.host.account = mergedAcct;
+            try {
+              const draft = UI.authDraft?.(mergedAcct);
+              if (draft) {
+                if (email) draft.email = email;
+                if (payload.password) draft.password = String(payload.password);
+              }
+            } catch {}
+          }
           if (pipLower) usedPips.add(pipLower);
           importedAccts++;
         } catch {}
       }
     }
+    if (subUrls.length && typeof Nodes !== 'undefined' && typeof Nodes.refreshAllSubs === 'function') {
+      try { void Nodes.refreshAllSubs(); } catch {}
+    }
+    try { void Pool?.pushG?.(); } catch {}
+    try { void Nodes?.syncAndroid?.(); } catch {}
+    try { void IP?.poll?.(); } catch {}
     try { const refreshed = await Host.listAccounts?.(true); if (Array.isArray(refreshed) && UI?.host) UI.host.accounts = refreshed; if (typeof LaunchPick !== 'undefined') LaunchPick.cache = null; } catch {}
     const sCnt = Nodes.subs?.length || subUrls.length, nCnt = Nodes.list?.length || 0, aCnt = importedAccts || accts.length, firstEm = accts.find(a => a.email)?.email || '';
     return {
@@ -1816,54 +2281,131 @@ const QrSync = (() => {
     let curTab = initialTab === 'import' ? 'import' : (initialTab === 'export' ? 'export' : (isMobile ? 'import' : 'export'));
     if (isMobile) curTab = 'import';
     let streamCleanup = null;
+    let resizeObs = null;
     const close = () => {
       if (streamCleanup) { try { streamCleanup(); } catch {} streamCleanup = null; }
+      if (resizeObs) { try { resizeObs.disconnect(); } catch {} resizeObs = null; }
       ov.remove();
     };
-    const body = h('div', { class: 'm-b', style: 'display:flex;flex-direction:column;gap:12px;padding:14px 16px;color:var(--fg,#ecebe8)' });
-    const headerTools = h('div', { style: 'display:flex;align-items:center;gap:6px' });
-    const titleSpan = h('span', { style: 'font-weight:700;font-size:14px;color:var(--fg,#ecebe8)' }, curTab === 'export' ? '二维码导出' : '扫码导入');
+    const body = h('div', { class: 'm-b', style: 'display:flex;flex-direction:column;flex:1;min-height:0;gap:10px;padding:12px 14px;color:#a6a29a' });
+    const headerTools = h('div', { style: 'display:flex;align-items:center;gap:5px;color:#a6a29a' });
+    const titleSpan = h('span', { style: 'font-weight:700;font-size:14px;color:#a6a29a;user-select:none' }, curTab === 'export' ? '二维码导出' : '扫码导入');
 
     async function renderExport() {
       headerTools.replaceChildren(ib('x', '关闭', close));
-      body.replaceChildren(h('div', { style: 'text-align:center;padding:24px;color:var(--fg2,#b9b6af)' }, '正在生成二维码…'));
-      const { qrPayload, qrPages, fullTokenStr, summary } = await buildSyncBundle();
-      const pages = Array.isArray(qrPages) && qrPages.length ? qrPages : [qrPayload];
-      let pageIdx = 0;
-      const qrSvgWrap = h('div', { style: 'display:flex;align-items:center;justify-content:center;min-height:252px' });
-      const pageLabel = h('span', { style: 'font-size:12px;color:var(--fg2,#b9b6af);font-weight:600' });
+      body.replaceChildren(h('div', { style: 'text-align:center;padding:24px;color:#9c9890' }, '正在生成加密同步二维码…'));
+      const { qrPayload, qrEncryptedPayload, qrShortPayload, fullTokenStr, summary } = await buildSyncBundle();
+      let qrMode = 'compat'; // 'compat' | 'enc' | 'short'
+      let targetPx = 372;
+      let isManualResize = false;
+
+      const getActiveUri = () => {
+        if (qrMode === 'short' && qrShortPayload) return qrShortPayload;
+        if (qrMode === 'enc' && qrEncryptedPayload) return qrEncryptedPayload;
+        return qrPayload;
+      };
+
+      const zoomLabel = h('span', { style: 'font-size:11px;font-family:var(--mono,monospace);color:#9c9890;min-width:38px;text-align:center;user-select:none' }, '100%');
+      const mkZoomBtn = (txt, title, fn) => h('button', {
+        class: 'btn xs',
+        title,
+        style: 'padding:2px 7px;font-size:11px;height:22px;border-radius:6px;background:#252422;color:#a6a29a;border:1px solid #383632;cursor:pointer',
+        onclick: fn,
+      }, txt);
+
+      const applyScale = (newPx, resizeBox = true) => {
+        targetPx = Math.max(220, Math.min(820, Math.round(newPx)));
+        const pct = Math.round((targetPx / 372) * 100);
+        zoomLabel.textContent = pct + '%';
+        const boxEl = ov?.querySelector?.('.m-box');
+        if (resizeBox && boxEl && boxEl.style) {
+          isManualResize = true;
+          boxEl.style.width = Math.min(Math.round(window.innerWidth * 0.96), targetPx + 74) + 'px';
+          boxEl.style.height = 'auto';
+          setTimeout(() => { isManualResize = false; }, 60);
+        }
+        paintQrPage();
+      };
+
+      headerTools.replaceChildren(
+        mkZoomBtn('−', '缩小二维码', () => applyScale(targetPx - 56, true)),
+        zoomLabel,
+        mkZoomBtn('+', '放大二维码', () => applyScale(targetPx + 56, true)),
+        mkZoomBtn('100%', '标准尺寸', () => applyScale(372, true)),
+        mkZoomBtn('全屏', '最大化二维码方便远距离扫码', () => applyScale(Math.min(window.innerWidth, window.innerHeight) - 180, true)),
+        ib('x', '关闭', close)
+      );
+
+      const modeBar = h('div', { style: 'display:flex;gap:6px;justify-content:center;flex-wrap:wrap' });
+      const modeHint = h('div', { style: 'font-size:11px;color:#8e8a82;text-align:center;line-height:1.35' }, '');
+      const modeDefs = [
+        { id: 'compat', label: '🔒 精简一码 (免更新秒扫)', desc: '全量离线一码 · 兼容已装手机端直接扫码（滚轮或拖拽窗口右下角可自由缩放）' },
+        { id: 'enc', label: '🛡️ 离线字典加密码', desc: '电脑⇄手机对称流加密 + 同域字典去重 · 模块更少更清晰（需新版手机端）' },
+        ...(qrShortPayload ? [{ id: 'short', label: '⚡ 极简短码 (33×33)', desc: '电脑⇄手机局域网加密短码握手 · 超大颗粒一秒识别（需同一 Wi-Fi 及新版手机端）' }] : []),
+      ];
+      const rebuildModeBar = () => {
+        modeBar.replaceChildren(...modeDefs.map(m => h('button', {
+          class: 'btn xs',
+          style: `padding:4px 9px;font-size:11px;border-radius:7px;cursor:pointer;border:1px solid ${qrMode === m.id ? '#2f9e5b' : '#35332f'};background:${qrMode === m.id ? 'rgba(47,158,91,0.16)' : '#22211f'};color:${qrMode === m.id ? '#6fd496' : '#9c9890'};font-weight:${qrMode === m.id ? '600' : '400'}`,
+          onclick: () => { qrMode = m.id; rebuildModeBar(); paintQrPage(); },
+        }, m.label)));
+        const curDef = modeDefs.find(m => m.id === qrMode) || modeDefs[0];
+        modeHint.textContent = curDef.desc;
+      };
+
+      const qrSvgWrap = h('div', {
+        title: '滚轮可自由缩放 · 点击切换放大 · 拖拽窗口右下角可自由拉伸',
+        style: 'display:flex;align-items:center;justify-content:center;min-height:240px;padding:12px;background:#fff;border-radius:14px;cursor:zoom-in;box-shadow:0 6px 24px rgba(0,0,0,0.28);transition:padding 0.1s ease',
+        onclick: () => applyScale(targetPx < 440 ? 496 : (targetPx < 560 ? 612 : 372), true),
+        onwheel: e => {
+          e.preventDefault();
+          const delta = e.deltaY < 0 ? 42 : -42;
+          applyScale(targetPx + delta, true);
+        },
+      });
+
       const paintQrPage = () => {
-        const curUri = pages[pageIdx] || qrPayload;
+        const curUri = getActiveUri();
         try {
           qrSvgWrap.innerHTML = toSvg(curUri, 248);
           if (typeof document !== 'undefined' && document.createElementNS && !qrSvgWrap.querySelector?.('svg')) {
-            qrSvgWrap.replaceChildren(toSvgEl(curUri, 248));
+            qrSvgWrap.replaceChildren(toSvgEl(curUri, targetPx));
+          }
+          const svgNode = qrSvgWrap.querySelector?.('svg');
+          if (svgNode) {
+            const mTot = /data-qr-total="(\d+)"/.exec(qrSvgWrap.innerHTML || '');
+            const totalMods = Number(svgNode.getAttribute?.('data-qr-total') || mTot?.[1]) || 89;
+            const snapped = snapQrPx(targetPx, totalMods);
+            svgNode.setAttribute?.('width', String(snapped));
+            svgNode.setAttribute?.('height', String(snapped));
+            if (svgNode.style) {
+              svgNode.style.width = snapped + 'px';
+              svgNode.style.height = snapped + 'px';
+              svgNode.style.boxShadow = 'none';
+            }
           }
         } catch {
-          try { qrSvgWrap.replaceChildren(toSvgEl(curUri, 248)); }
+          try { qrSvgWrap.replaceChildren(toSvgEl(curUri, targetPx)); }
           catch { qrSvgWrap.replaceChildren(h('div', { style: 'padding:18px;color:var(--warn,#c47a0a);text-align:center;font-size:12px' }, '请使用下方复制按钮复制同步码')); }
         }
-        pageLabel.textContent = pages.length > 1 ? `第 ${pageIdx + 1} / ${pages.length} 张二维码` : '';
       };
+
+      rebuildModeBar();
       paintQrPage();
-      const pagerRow = pages.length > 1 ? h('div', { style: 'display:flex;align-items:center;justify-content:center;gap:12px' },
-        ib('chev', '上一张', () => { pageIdx = (pageIdx - 1 + pages.length) % pages.length; paintQrPage(); }),
-        pageLabel,
-        ib('chev', '下一张', () => { pageIdx = (pageIdx + 1) % pages.length; paintQrPage(); })
-      ) : null;
-      const statusLine = h('div', { style: 'font-size:12px;color:var(--ok,#2f9e5b);text-align:center;font-weight:600' },
+
+      const statusLine = h('div', { style: 'font-size:12px;color:#3ca866;text-align:center;font-weight:600' },
         `${summary.accounts} 个账号 · ${summary.nodes} 个节点 · ${summary.subs} 个订阅`);
       const qrBox = h('div', {
-        style: 'display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;padding:14px;background:var(--bg2,#191817);border:1px solid var(--bd,#33312d);border-radius:10px',
+        style: 'display:flex;flex-direction:column;flex:1;align-items:center;justify-content:center;gap:8px;padding:12px;background:#181715;border:1px solid #302e2a;border-radius:10px;min-height:0',
       },
         qrSvgWrap,
-        pagerRow,
+        modeDefs.length > 1 ? modeBar : null,
         statusLine,
-        h('div', { style: 'font-size:11px;color:var(--fg3,#85827b);text-align:center;line-height:1.45' }, '手机端直接扫码即可导入全部节点与账号')
+        modeHint
       );
       const copyVal = fullTokenStr || qrPayload;
-      const copyRow = h('div', { style: 'display:flex;gap:8px;align-items:center' },
-        h('input', { class: 'inp', readonly: true, value: copyVal, style: 'flex:1;font-family:var(--mono,monospace);font-size:11px;padding:6px 8px;border-radius:8px;border:1px solid var(--bd2,#45423d);background:var(--bg2,#191817);color:var(--fg,#ecebe8)', onclick: e => e.target.select() }),
+      const copyRow = h('div', { style: 'display:flex;gap:8px;align-items:center;color:#9c9890' },
+        h('input', { class: 'inp', readonly: true, value: copyVal, style: 'flex:1;font-family:var(--mono,monospace);font-size:11px;padding:6px 8px;border-radius:8px;border:1px solid #3b3935;background:#181715;color:#9c9890', onclick: e => e.target.select() }),
         ib('copy', '复制同步码', async () => {
           try {
             if (typeof copyText === 'function') copyText(copyVal);
@@ -1871,7 +2413,50 @@ const QrSync = (() => {
           } catch { toast('复制失败，请手动全选复制', 'err'); }
         })
       );
-      body.replaceChildren(qrBox, copyRow);
+      const resizeGrip = h('div', {
+        title: '按住拖拽可自由缩放窗口与二维码大小',
+        style: 'position:absolute;right:3px;bottom:3px;width:18px;height:18px;cursor:nwse-resize;display:flex;align-items:flex-end;justify-content:flex-end;color:#78746c;font-size:11px;line-height:1;user-select:none;padding:2px',
+        onmousedown: e => {
+          e.preventDefault();
+          e.stopPropagation();
+          const boxEl = ov?.querySelector?.('.m-box');
+          if (!boxEl) return;
+          const startX = e.clientX;
+          const startY = e.clientY;
+          const startW = boxEl.offsetWidth || 456;
+          const startH = boxEl.offsetHeight || 540;
+          const onMove = ev => {
+            const dw = ev.clientX - startX;
+            const dh = ev.clientY - startY;
+            const nextSide = Math.max(220, Math.min(820, Math.max(startW + dw - 74, startH + dh - 170)));
+            applyScale(nextSide, true);
+          };
+          const onUp = () => {
+            window.removeEventListener('mousemove', onMove);
+            window.removeEventListener('mouseup', onUp);
+          };
+          window.addEventListener('mousemove', onMove);
+          window.addEventListener('mouseup', onUp);
+        },
+      }, '◢');
+      body.replaceChildren(qrBox, copyRow, resizeGrip);
+
+      const boxEl = ov?.querySelector?.('.m-box');
+      if (boxEl && typeof ResizeObserver === 'function') {
+        if (resizeObs) { try { resizeObs.disconnect(); } catch {} }
+        resizeObs = new ResizeObserver(entries => {
+          if (isManualResize) return;
+          const cr = entries[0]?.contentRect;
+          if (!cr) return;
+          const avail = Math.max(220, Math.min(820, Math.min(cr.width - 70, cr.height - 165)));
+          if (Math.abs(avail - targetPx) > 18) {
+            targetPx = avail;
+            zoomLabel.textContent = Math.round((targetPx / 372) * 100) + '%';
+            paintQrPage();
+          }
+        });
+        resizeObs.observe(boxEl);
+      }
     }
 
     function renderImport() {
@@ -1989,7 +2574,7 @@ const QrSync = (() => {
       style: 'position:fixed;inset:0;z-index:10000;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,0.62);padding:16px',
       onclick: e => { if (e.target === ov) close(); },
     },
-      h('div', { class: 'm-box', style: 'width:380px;max-width:94vw;background:var(--bg,#1f1e1c);color:var(--fg,#ecebe8);border:1px solid var(--bd,#33312d);border-radius:14px;box-shadow:0 16px 48px rgba(0,0,0,0.45);overflow:hidden' },
+      h('div', { class: 'm-box', style: 'position:relative;display:flex;flex-direction:column;width:452px;min-width:340px;min-height:420px;max-width:96vw;max-height:96vh;resize:both;overflow:auto;background:var(--bg,#1f1e1c);color:#a6a29a;border:1px solid var(--bd,#33312d);border-radius:14px;box-shadow:0 16px 48px rgba(0,0,0,0.45)' },
         h('div', { class: 'm-h', style: 'display:flex;align-items:center;justify-content:space-between;padding:12px 16px;border-bottom:1px solid var(--bd,#33312d)' }, titleSpan, headerTools),
         body
       )
@@ -2156,7 +2741,7 @@ async function api(path, opt = {}) {
     }, { timeout: baseTimeout, signal: opt.signal });
   } catch (e) {
     if (read && !isCost && !noApiRetry && retryCnt < (isChatRead ? 1 : 2) && !opt.signal?.aborted && typeof Host !== 'undefined' && typeof Host.info === 'function' && !e?.status && (e?.routeTimeout || /failed to fetch|fetch failed|network|ERR_|socket|eof|reset|closed/i.test(String(e?.message || e)))) {
-      if (!isBg && retryCnt >= 1 && e?.routeTimeout && !headersReceived && bytesReceived === 0 && !isChatRead && typeof AutoRoute !== 'undefined' && AutoRoute.onErrorSwitch) void AutoRoute.onErrorSwitch(e, path);
+      if (!isBg && !headersReceived && bytesReceived === 0 && (e?.routeTimeout || retryCnt >= 1) && !isChatRead && typeof AutoRoute !== 'undefined' && AutoRoute.onErrorSwitch) void AutoRoute.onErrorSwitch(e, path);
       const isSwitching = () => (typeof NodeRoutes !== 'undefined' && NodeRoutes.manual > 0) || (typeof AutoRoute !== 'undefined' && AutoRoute.busy) || (typeof Pool !== 'undefined' && Pool.switching?.size > 0);
       if (isSwitching()) {
         for (let w = 0; w < 8 && isSwitching() && !opt.signal?.aborted; w++) await new Promise(r => setTimeout(r, 250));
@@ -2165,19 +2750,39 @@ async function api(path, opt = {}) {
       const nextTimeout = isChatRead ? Math.max(Number(opt.timeout) || 0, 45000) : opt.timeout;
       if (!opt.signal?.aborted) return api(path, { ...opt, timeout: nextTimeout, onProgress, _retried: true, _retryCount: retryCnt + 1 });
     }
+    if (!isBg && !isCost && !opt.signal?.aborted && !headersReceived && bytesReceived === 0 && typeof AutoRoute !== 'undefined' && AutoRoute.onErrorSwitch && (e?.routeTimeout || NetPolicy.transportError?.(e))) {
+      void AutoRoute.onErrorSwitch(e, path);
+    }
     fault(e);
     throw e;
   }
   // HTML/challenge responses are not JSON, connectivity proof, or proof of logout.
   const html = /text\/html/i.test(res.headers?.get?.('content-type') || '') || /^\s*(?:<!doctype\s+html|<html\b|<head\b|<body\b)/i.test(text);
   if (html) {
-    if (res.status >= 500) { const error = new HttpError(res.status, 'Brana 服务暂时不可用', res); fault(error); throw error; }
+    if (res.status >= 500) {
+      const error = new HttpError(res.status, 'Brana 服务暂时不可用', res);
+      fault(error);
+      if (!isBg && !isCost && typeof AutoRoute !== 'undefined' && AutoRoute.onErrorSwitch) void AutoRoute.onErrorSwitch(error, path);
+      throw error;
+    }
     // Cloudflare 的限流页（网页版 429）：和纯文本 429 一样是出口 IP 被限流
     if (res.status === 429 && read && /^\/api\/chat\//.test(path) && !isCost) {
       const error = Object.assign(new HttpError(429, '出口 IP 被限流（429）', res), { ipLimited: true });
       ReadLimit.hit(error.retryAfterMs); IPRep.note('l'); Bus.emit('limited', { path, ip: true, retryAfterMs: NetPolicy.retryAfter(res.headers?.get('retry-after')) }); throw error;
     }
-    throw Object.assign(new HttpError(res.status, 'Brana 返回了网页或验证页面，请用网页登录检查', res), { responseFormat: true });
+    const isCfChallenge = res.headers?.get?.('cf-mitigated') === 'challenge' || /just a moment|cf-browser-verification|challenge-platform|cf-chl|cloudflare|attention required|verify you are human/i.test(text);
+    const cfErr = Object.assign(new HttpError(res.status, 'Brana 返回了网页或验证页面，请用网页登录检查', res), isCfChallenge ? { responseFormat: true, cfChallenge: true, captchaTriggered: true } : { responseFormat: true });
+    if (isCfChallenge && !isCost) {
+      try { if (typeof IPRep !== 'undefined') IPRep.note('rc'); } catch {}
+      if (!isBg && typeof Host !== 'undefined' && typeof Host.info === 'function') {
+        if (typeof IPRep !== 'undefined' && typeof IPRep.rotateOnVerificationOrLimit === 'function') {
+          void IPRep.rotateOnVerificationOrLimit('rc', { action: 'api' }).catch(() => null);
+        } else if (typeof AutoRoute !== 'undefined' && typeof AutoRoute.onErrorSwitch === 'function') {
+          void AutoRoute.onErrorSwitch(cfErr, 'captcha');
+        }
+      }
+    }
+    throw cfErr;
   }
   if (res.status === 401 && !opt.noRelogin && await Auth.relogin()) return api(path, { ...opt, noRelogin: true });
   if (res.status === 409 && !isCost && !opt._retried409 && typeof Pin !== 'undefined' && typeof Pin.drop === 'function') {
@@ -5401,7 +6006,7 @@ class Chat {
           let errNow = e;
           let eBody = String(errNow?.body || errNow?.message || '');
           const isDupPrompt = promptFailed(errNow?.status, eBody);
-          const isRcChallenge = Boolean(!isDupPrompt && ((errNow?.status === 403 && /recaptcha|人机|验证失败|verification required/i.test(eBody)) || (errNow?.status === 429 && /verification required/i.test(eBody))));
+          const isRcChallenge = Boolean(!isDupPrompt && ((errNow?.status === 403 && /recaptcha|人机|验证失败|verification required/i.test(eBody)) || (errNow?.status === 429 && /verification required/i.test(eBody)) || errNow?.cfChallenge || errNow?.captchaTriggered));
           if ((errNow?.status === 429 || isRcChallenge) && !opt.v2 && !isDupPrompt) {
             this.status = 'submitted';
             this.phase = isRcChallenge ? '触发人机校验，正在刷新交互遥测与 v3 令牌静默重发…' : '触发 429 速率限制，正在直连实时流核对并原地刷新令牌重发…';
@@ -5430,7 +6035,9 @@ class Chat {
           }
           const isRcOr429 = Boolean(errNow && !opt.v2 && !promptFailed(errNow?.status, eBody) && (
             (errNow?.status === 403 && /recaptcha|人机|验证失败|verification required/i.test(eBody)) ||
-            errNow?.status === 429
+            errNow?.status === 429 ||
+            errNow?.cfChallenge ||
+            errNow?.captchaTriggered
           ));
           if (isRcOr429 && typeof IPRep !== 'undefined' && typeof IPRep.rotateOnVerificationOrLimit === 'function') {
             this.phase = errNow?.status === 429
@@ -6806,7 +7413,7 @@ class Chat {
           }
           this.parts.set(key, p);
         }
-        if (p.type === 'reasoning' && /[^\s.…·。]/.test(String(ch.delta || ''))) { const firstVis = !/[^\s.…·。]/.test(p.text); const nextRText = String(p.text || '') + String(ch.delta || ''); const isGemBold = /^\s*\*\*[^\n*]{2,80}\*\*/.test(nextRText) && P.every(pt => !pt?.id || /^\d+$/.test(String(pt.id))); const isClosed = isGemBold || (typeof Fingerprint !== 'undefined' && Fingerprint.isClosedSourceStream?.(this, this.live)); if (!isClosed) { this._closedLockedModel = false; if (firstVis || !this.thinkStopped) { this.thinkGuard(p); try { if (typeof BillingProbe !== 'undefined' && typeof BillingProbe.markAsOpenSourceModel === 'function') BillingProbe.markAsOpenSourceModel(this); } catch {} } try { if (this.gacha && this.gacha.skipCompatThinking !== false && typeof Fingerprint !== 'undefined') Fingerprint.maybeStopCompat?.(this); } catch {} if (firstVis && this.gacha?.stopThink && !this.stopReq && P.some(x => x !== p && x.type === 'text' && String(x.text || '').trim())) { this.thinkStopped = true; this.routedThink = true; if (this.live) this.live.metadata = { ...(this.live.metadata || {}), openThinkStopped: true }; setTimeout(() => this.stop(), 0); } } }
+        if (p.type === 'reasoning' && /[^\s.…·。]/.test(String(ch.delta || ''))) { const firstVis = !/[^\s.…·。]/.test(p.text); const isClosed = false; if (!isClosed) { this._closedLockedModel = false; if (firstVis || !this.thinkStopped) { this.thinkGuard(p); try { if (typeof BillingProbe !== 'undefined' && typeof BillingProbe.markAsOpenSourceModel === 'function') BillingProbe.markAsOpenSourceModel(this); } catch {} } try { if (this.gacha && this.gacha.skipCompatThinking !== false && typeof Fingerprint !== 'undefined') Fingerprint.maybeStopCompat?.(this); } catch {} if (firstVis && this.gacha?.stopThink && !this.stopReq && P.some(x => x !== p && x.type === 'text' && String(x.text || '').trim())) { this.thinkStopped = true; this.routedThink = true; if (this.live) this.live.metadata = { ...(this.live.metadata || {}), openThinkStopped: true }; setTimeout(() => this.stop(), 0); } } }
         const dStr = ch.delta || '';
         if (typeof p._replayBuf === 'string') {
           p._replayBuf += dStr;
@@ -8094,20 +8701,31 @@ const Uploads = {
     const mediaType = this.type(file);
     onStage?.('校验');
     const hash = await this.hash(await file.arrayBuffer());
-    onStage?.('申请');
-    const j = await this.retry(() => api('/api/storage/generate-agent-upload-url', { json: { hash, contentType: mediaType, size: file.size }, timeout: 20000 }));
-    const uid = UI.me?.id || '';
-    let key = (j && (j.key || j.objectKey || j.storageKey || j.data?.key)) || null;
-    const url = this.findUrl(j);
-    if (!key && url) { try { key = decodeURIComponent(new URL(url).pathname.replace(/^\/+/, '')); if (!/^cas\//.test(key)) key = null; } catch {} }
-    if (!key) key = 'cas/users/' + uid + '/' + hash;
-    key = String(key).replace(/^\/+/, '');
-    if (url && !(j?.exists || j?.alreadyExists || j?.uploaded)) {
-      onStage?.('上传'); onProg?.(0);
-      await this.retry(() => this.put(url, file, mediaType, j?.headers && typeof j.headers === 'object' ? j.headers : null, onProg));
+    const curMode = (typeof ModeState !== 'undefined' && typeof ModeState.getMode === 'function') ? ModeState.getMode() : 'agent';
+    const curChat = (typeof Tabs !== 'undefined' && Tabs.cur?.sid && typeof Chats !== 'undefined') ? Chats.get(Tabs.cur.sid) : null;
+    const isEvalCtx = Boolean(curChat?.isEvaluation || curMode === 'battle' || curMode === 'direct');
+    try {
+      onStage?.('申请');
+      const j = await this.retry(() => api('/api/storage/generate-agent-upload-url', { json: { hash, contentType: mediaType, size: file.size }, timeout: 20000 }));
+      const uid = UI.me?.id || '';
+      let key = (j && (j.key || j.objectKey || j.storageKey || j.data?.key)) || null;
+      const url = this.findUrl(j);
+      if (!key && url) { try { key = decodeURIComponent(new URL(url).pathname.replace(/^\/+/, '')); if (!/^cas\//.test(key)) key = null; } catch {} }
+      if (!key) key = 'cas/users/' + uid + '/' + hash;
+      key = String(key).replace(/^\/+/, '');
+      if (url && !(j?.exists || j?.alreadyExists || j?.uploaded)) {
+        onStage?.('上传'); onProg?.(0);
+        await this.retry(() => this.put(url, file, mediaType, j?.headers && typeof j.headers === 'object' ? j.headers : null, onProg));
+      }
+      onProg?.(1);
+      return { key, filename: file.name || 'file', mediaType, size: file.size, hash, url: this.webPath(hash), _file: file };
+    } catch (err) {
+      if (isEvalCtx) {
+        onProg?.(1);
+        return { key: 'eval/' + hash, filename: file.name || 'file', mediaType, size: file.size, hash, url: '', _file: file };
+      }
+      throw err;
     }
-    onProg?.(1);
-    return { key, filename: file.name || 'file', mediaType, size: file.size, hash, url: this.webPath(hash) };
   },
   meta(files, node) { return files?.length ? { manifestNodeId: node || null, uploads: files.map(f => ({ key: f.key, filename: f.filename, mediaType: f.mediaType })) } : null; },
 };
@@ -8159,10 +8777,12 @@ function isIncompleteAssistantMsg(m) {
   let text = '';
   let hasReasonOrStep = false;
   let hasTool = false;
+  let hasMediaOrOut = Boolean((Array.isArray(m.experimental_attachments) && m.experimental_attachments.length) || m.webdev?.files?.length || m.webdev?.previewUrl);
   for (const p of parts) {
     if (!p) continue;
     if (p.type === 'text' && typeof p.text === 'string') text += p.text;
     else if (p.type === 'reasoning' || p.type === 'step-start') hasReasonOrStep = true;
+    else if (p.type === 'image' || p.type === 'video' || p.type === 'file' || p.type === 'sources' || String(p.type || '').startsWith('source-')) hasMediaOrOut = true;
     else if (p.toolCallId || String(p.type || '').startsWith('tool-') || p.type === 'dynamic-tool') {
       hasTool = true;
       if (p.state === 'output-available' && p.output && typeof p.output === 'object' && p.output.status === 'running') return true;
@@ -8170,7 +8790,7 @@ function isIncompleteAssistantMsg(m) {
   }
   if (!text && typeof m.content === 'string') text = m.content;
   const trimmed = text.trim();
-  if (!trimmed && hasReasonOrStep && !hasTool) return true;
+  if (!trimmed && hasReasonOrStep && !hasTool && !hasMediaOrOut) return true;
   if (trimmed) {
     if (trimmed.endsWith('…[cached]')) return true;
     const lineFences = (trimmed.match(/(?:^|\n)[ \t]*`{3,}/g) || []).length;
@@ -8181,12 +8801,15 @@ function isIncompleteAssistantMsg(m) {
 function isPhantomFinishStub(m) {
   if (!m || m.role !== 'assistant') return false;
   if (m.metadata?.pending || m.metadata?.aborted || m.metadata?.openThinkStopped || m.metadata?.error || m.metadata?.feedback?.interruption === 'stop') return false;
+  if ((Array.isArray(m.experimental_attachments) && m.experimental_attachments.length) || m.webdev?.files?.length || m.webdev?.previewUrl) return false;
   const parts = Array.isArray(m.parts) ? m.parts : [];
-  return !parts.some(p => p && p.type !== 'step-start' && !String(p.type || '').startsWith('data-') && ((p.type !== 'reasoning' && p.type !== 'text') || String(p.text || '').trim().length > 0));
+  return !parts.some(p => p && p.type !== 'step-start' && !String(p.type || '').startsWith('data-') && (p.type === 'image' || p.type === 'video' || p.type === 'file' || p.type === 'sources' || String(p.type || '').startsWith('source-') || (p.type !== 'reasoning' && p.type !== 'text') || String(p.text || '').trim().length > 0));
 }
 function hasSubstantiveAssistantWork(m) {
   if (!m || m.role !== 'assistant') return false;
+  if ((Array.isArray(m.experimental_attachments) && m.experimental_attachments.length) || m.webdev?.files?.length || m.webdev?.previewUrl) return true;
   const parts = Array.isArray(m.parts) ? m.parts : [];
+  if (parts.some(p => p && (p.type === 'image' || p.type === 'video' || p.type === 'file' || p.type === 'sources') && (p.url || (Array.isArray(p.sources) && p.sources.length)))) return true;
   if (parts.some(p => p && p.type === 'text' && String(p.text || '').trim().length > 0)) return true;
   if (parts.some(p => p && (p.toolCallId || String(p.type || '').startsWith('tool-') || p.type === 'dynamic-tool') && p.state === 'output-available' && p.output?.status !== 'aborted' && p.output?.status !== 'error')) return true;
   if (m.metadata?.pending && parts.some(p => p && (p.toolCallId || String(p.type || '').startsWith('tool-') || p.type === 'dynamic-tool') && /^(input-streaming|input-available|approval-requested)$/.test(p.state || ''))) return true;
@@ -8210,7 +8833,10 @@ function isDeadAssistantMsg(m) {
     p.toolCallId ||
     String(p.type || '').startsWith('tool-') ||
     p.type === 'dynamic-tool' ||
+    p.type === 'image' ||
+    p.type === 'video' ||
     p.type === 'file' ||
+    p.type === 'sources' ||
     String(p.type || '').startsWith('source-')
   ));
 }
@@ -10365,9 +10991,9 @@ try {
             if (!c || sid === curSid || c.busy || c.streaming || c.gacha || c._startupResuming || c._recoveringIncomplete || (Array.isArray(c.queue) && c.queue.length > 0)) continue;
             if (c.loaded && Array.isArray(c.messages) && c.messages.length > 0) loadedList.push(c);
           }
-          if (loadedList.length > 2) {
+          if (loadedList.length > 30) {
             loadedList.sort((a, b) => (Number(b.updatedAt || 0) - Number(a.updatedAt || 0)));
-            for (let i = 2; i < loadedList.length; i++) {
+            for (let i = 30; i < loadedList.length; i++) {
               const victim = loadedList[i];
               try { if (typeof MsgCache !== 'undefined') MsgCache.save?.(victim); } catch {}
               victim.messages = [];
@@ -10375,15 +11001,11 @@ try {
             }
           }
         }
-        if (typeof _mdPartCache !== 'undefined' && _mdPartCache instanceof Map && _mdPartCache.size > 80) {
-          const drop = _mdPartCache.size - 50;
+        if (typeof _mdPartCache !== 'undefined' && _mdPartCache instanceof Map && _mdPartCache.size > 400) {
+          const drop = _mdPartCache.size - 250;
           let n = 0;
           for (const k of _mdPartCache.keys()) { _mdPartCache.delete(k); if (++n >= drop) break; }
         }
-        if (typeof BUILTIN_HABIT_BANK !== 'undefined' && typeof BUILTIN_HABIT_BANK?.__releaseSamples === 'function') {
-          BUILTIN_HABIT_BANK.__releaseSamples();
-        }
-        if (typeof globalThis.gc === 'function') globalThis.gc();
       } catch {}
     };
   }

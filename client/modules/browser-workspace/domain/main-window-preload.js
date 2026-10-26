@@ -57,7 +57,7 @@ if(window.top===window&&['https:','chrome-extension:'].includes(location.protoco
 if ((location.origin === 'https://arena.ai' || location.protocol === 'file:') && window.top === window) {
   const call = (ch, ...a) => ipcRenderer.invoke('host:' + ch, ...a);
   contextBridge.exposeInMainWorld('BranaHost', {
-    platform: 'desktop', extensionCompatibilityTest: (() => { try { const p = require('../package.json'); return Boolean(p.extensionCompatibilityTest || p.name === 'brana-ai-extension-test' || /-beta\b/i.test(String(p.version || ''))); } catch { return false; } })(),
+    platform: 'desktop', extensionCompatibilityTest: (() => { try { const p = require('../package.json'); return Boolean(p.extensionCompatibilityTest || p.name === 'brana-ai-extension-test' || /-ext\b/i.test(String(p.version || ''))); } catch { return false; } })(),
     info: () => call('info'),
     listAccounts: lite => call('listAccounts', !!lite),
     saveAccount: a => call('saveAccount', a),
@@ -94,13 +94,17 @@ if ((location.origin === 'https://arena.ai' || location.protocol === 'file:') &&
     updInfo: () => call('updInfo'), updStart: o => call('updStart', o), updStatus: () => call('updStatus'), updInstall: () => call('updInstall'), updFailed: () => call('updFailed'), updManual: () => call('updManual'), updFolder: () => call('updFolder'), updDismiss: () => call('updDismiss'),
     fetchSubscription: u => call('fetchSubscription',String(u||'').slice(0,16000)),
     ippureDirect: ip => call('ippureDirect', String(ip || '').slice(0, 128)),
-    fetchText: (u, o) => call('fetchText', u, o && typeof o === 'object' ? { publicData: o.publicData === true, direct: o.direct === true, long: o.long === true, bearer: typeof o.bearer === 'string' ? o.bearer.slice(0, 8000) : '', method: o.method === 'POST' ? 'POST' : 'GET', body: String(o.body || ''), type: String(o.type || '') } : undefined),
+    fetchText: (u, o) => call('fetchText', u, o && typeof o === 'object' ? { publicData: o.publicData === true, direct: o.direct === true, long: o.long === true, timeout: Number(o.timeout) || 0, headers: o.headers && typeof o.headers === 'object' ? o.headers : undefined, bearer: typeof o.bearer === 'string' ? o.bearer.slice(0, 8000) : '', method: o.method === 'POST' ? 'POST' : 'GET', body: String(o.body || ''), type: String(o.type || '') } : undefined),
+    solveCaptchaAudio: u => call('solveCaptchaAudio', String(u || '').slice(0, 4000)),
     genFp: () => call('genFp'),
     getCred: () => call('getCred'),
     noteAccount: o => call('noteAccount', o),
     staticBankSync: id => ipcRenderer.sendSync('host:staticBankSync', String(id || '')),
     fingerprintStore: (op, revision, payload) => call('fingerprintStore', op, revision, payload),
     shared: (k, v) => v === undefined ? call('shared', k) : call('shared', k, v),
+    copyText: t => call('shared', '__clipboardWrite', String(t ?? '')),
+    apiGateway: v => call('shared', '__localApiGateway', v),
+    onApiGatewayReq: cb => { const fn = (_e, data) => { try { cb(data); } catch {} }; ipcRenderer.on('host:api-gateway-req', fn); return () => ipcRenderer.removeListener('host:api-gateway-req', fn); },
     setShared: (k, v) => call('shared', k, v),
     strMerge: p => call('strMerge', p),
     calMerge: p => call('calMerge', p),
@@ -114,6 +118,7 @@ if ((location.origin === 'https://arena.ai' || location.protocol === 'file:') &&
     signInAccount: id => call('signInAccount', id),
     sendMagicLinkAccount: (id, email, fullName) => call('sendMagicLinkAccount', id, email, fullName),
     registerTokenAccount: (id, opt) => call('registerTokenAccount', id, opt),
+    cancelTokenRegistration: id => call('cancelTokenRegistration', id),
     setCookies: (id, list) => call('setCookies', id, list),
     refreshQuotas: force => call('refreshQuotas', !!force),
     setTheme: t => call('theme', t),
@@ -128,15 +133,14 @@ if ((location.origin === 'https://arena.ai' || location.protocol === 'file:') &&
   });
 }
 
-// Periodic renderer cache & V8 heap trimmer
+// Only trim renderer Blink cache when the window is hidden in the background so active UI icons/fonts/styles never stutter
 (() => {
-  const trimRendererMem = () => {
-    try { webFrame.clearCache(); } catch {}
-    try { if (typeof globalThis.gc === 'function') globalThis.gc(); } catch {}
+  const trimRendererMem = (force = false) => {
+    try {
+      if (!force && typeof document !== 'undefined' && !document.hidden) return;
+      webFrame.clearCache();
+    } catch {}
   };
-  try { ipcRenderer.on('host:trimMem', trimRendererMem); } catch {}
-  setTimeout(trimRendererMem, 2200);
-  setTimeout(trimRendererMem, 7500);
-  setTimeout(trimRendererMem, 18000);
-  setInterval(trimRendererMem, 60000);
+  try { ipcRenderer.on('host:trimMem', () => trimRendererMem(false)); } catch {}
+  setInterval(() => trimRendererMem(false), 300000);
 })();

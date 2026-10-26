@@ -41,6 +41,8 @@ const PelicanTest = (() => {
     const alreadySent = Boolean(opts?.alreadySent);
     if ((!alreadySent && chat.busy) || chat.gacha || chat.queue?.length || chat.fpLocked || (typeof Fingerprint !== 'undefined' && Fingerprint.isRunning(chat))) { toast('请等待当前回复或任务结束', 'err'); return; }
     const ctl = new AbortController(), sid = chat.sid; active.set(chat, ctl);
+    delete chat._isMicroProbe;
+    delete chat._preferLatestTurn;
     const say = t => { chat.probeProgress = t; try { chat.emit(); } catch {} };
     if (!alreadySent) say('鹈鹕测试：发送中…');
     try {
@@ -114,7 +116,16 @@ const PelicanTest = (() => {
           const spectralScore = latestMi?.habitFeatures?.htmlSvgMatch?.spectralScore ?? chat?._habitFeatures?.htmlSvgMatch?.spectralScore ?? null;
           const latestMiCanon = (latestMi && !latestMi.guess && latestMi.name) ? Strength.canon(latestMi.name) : '';
           const latestName = latestMiCanon || ((hmCanon && hmConf >= 82 && hmStrongEvidence) ? hmCanon : '') || name;
-          if (prevModel && latestName && Strength.canon(prevModel) !== Strength.canon(latestName)) {
+          const stripBaseFam = s => (typeof ChatHabitFingerprint !== 'undefined' && ChatHabitFingerprint.parseModelFamilyAndTier)
+            ? (ChatHabitFingerprint.parseModelFamilyAndTier(s).famKey || String(s || '').toLowerCase())
+            : String(s || '').toLowerCase().replace(/\s*\((?:none|minimal|low|medium|high|xhigh|max)\)\s*$/i, '').replace(/-(?:none|minimal|low|medium|high|xhigh|max)$/i, '').replace(/[?？]+$/, '').trim();
+          const prevBaseFam = stripBaseFam(prevModel);
+          const nextBaseFam = stripBaseFam(latestName);
+          const isTrueCrossFamilyRoute = Boolean(
+            prevModel && latestName && prevBaseFam && nextBaseFam && prevBaseFam !== nextBaseFam &&
+            (Boolean(latestMi?.routed) || (mi && !mi.guess && !mi.pendingConfirm && Number(mi.reverseMatch ?? mi.confidence ?? 0) >= 92 && hmStrongEvidence))
+          );
+          if (isTrueCrossFamilyRoute) {
             chat.routed = true;
             chat.routeFrom = prevModel;
             chat.routeTo = latestName;
@@ -149,7 +160,7 @@ const PelicanTest = (() => {
       if (chat.busy) try { await chat.stop(); } catch {}
       toast(e?.name === 'AbortError' ? '鹈鹕测试已停止' : '鹈鹕测试失败：' + describe(e), e?.name === 'AbortError' ? undefined : 'err');
       return null;
-    } finally { active.delete(chat); chat.probeProgress = ''; try { chat.emit(); } catch {} }
+    } finally { active.delete(chat); chat.probeProgress = ''; delete chat._isMicroProbe; delete chat._preferLatestTurn; try { chat.emit(); } catch {} }
   }
 
   async function startMicro(chat, customPrompt = '', opts = {}) {
@@ -239,7 +250,12 @@ const PelicanTest = (() => {
         }
         const latestMi = typeof Models !== 'undefined' ? Models.get(sid) : null;
         const latestName = (latestMi && !latestMi.guess && latestMi.name) ? Strength.canon(latestMi.name) : '';
-        if (prevModel && latestName && Strength.canon(prevModel) !== Strength.canon(latestName)) {
+        const stripBaseFam = s => (typeof ChatHabitFingerprint !== 'undefined' && ChatHabitFingerprint.parseModelFamilyAndTier)
+          ? (ChatHabitFingerprint.parseModelFamilyAndTier(s).famKey || String(s || '').toLowerCase())
+          : String(s || '').toLowerCase().replace(/\s*\((?:none|minimal|low|medium|high|xhigh|max)\)\s*$/i, '').replace(/-(?:none|minimal|low|medium|high|xhigh|max)$/i, '').replace(/[?？]+$/, '').trim();
+        const prevBaseFam = stripBaseFam(prevModel);
+        const nextBaseFam = stripBaseFam(latestName);
+        if (prevModel && latestName && prevBaseFam && nextBaseFam && prevBaseFam !== nextBaseFam && Boolean(latestMi?.routed)) {
           chat.routed = true;
           chat.routeFrom = prevModel;
           chat.routeTo = latestName;
@@ -268,6 +284,7 @@ const PelicanTest = (() => {
       microActive.delete(chat);
       chat.probeProgress = '';
       delete chat._preferLatestTurn;
+      delete chat._isMicroProbe;
       try { chat.emit(); UI?.renderTabs?.(); UI?.renderListSoon?.(); Dock?.soon?.(); } catch {}
     }
   }

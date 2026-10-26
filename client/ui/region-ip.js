@@ -90,7 +90,7 @@ const RegionIP = {
           if(saved?.error)throw Error(saved.error);
           const info=await Host.info();if(info?.account?.id!==a.id||this.norm(info.account.proxyIp)!==this.norm(k)||info.account.region!==a.region||info.account.proxy!==a.proxy)throw Error('宿主未确认新 IP 配置');
           UI.host=info;
-          if(typeof AutoRoute!=='undefined')AutoRoute.noteManualRoute?.(600000);
+          if(typeof AutoRoute!=='undefined')AutoRoute.noteManualRoute?.(8000);
           try {await Pool.mutate(d=>{if(d.ips[k])d.ips[k].used=now();});}catch{}
           await sleep(800);if(IP.polling)await IP.polling;const at=now();await IP.poll();
           if(!IP.err&&IP.ip&&typeof IPRep!=='undefined'&&this.norm(IP.ip)!==this.norm(x.ip)){
@@ -163,6 +163,7 @@ const RegionIP = {
       if(isVless(next.proxy)&&next.region&&next.proxyIp)try{await Pool.mutate(d=>{if(d.ips[next.proxyIp])d.ips[next.proxyIp].used=now();});}catch{}
       const auto=k!=='node';
       if(AutoRoute.adapter&&(UI.host?.account?.routeAuto!==false)!==auto){const r=await AutoRoute.adapter.enabled(auto).catch(e=>({error:describe(e)}));if(!r?.ok)throw Error(r?.error||'自动选路设置未确认');}
+      if(typeof AutoRoute!=='undefined'&&(k==='auto'||k==='node'))AutoRoute.noteManualRoute?.(0);
       UI.host=await Host.info();v.account=UI.host?.account||v.account;
       await sleep(600);if(IP.polling)await IP.polling;await IP.poll().catch(()=>{});
       try{if(typeof Chats!=='undefined'&&typeof Chats.onRouteSwitched==='function')Chats.onRouteSwitched();}catch{}

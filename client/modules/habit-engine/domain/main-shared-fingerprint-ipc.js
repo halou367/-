@@ -303,7 +303,29 @@ function harvestAccountPelicanSoon(force = false) {
     finally { pelHarvesting = false; }
   }, force ? 120 : 6000);
 }
-ipcMain.handle('host:shared', (e, k, v) => {
+ipcMain.handle('host:shared', async (e, k, v) => {
+  if (k === '__clipboardWrite') {
+    try {
+      clipboard.writeText(String(v ?? ''));
+      return { ok: true };
+    } catch (err) {
+      return { ok: false, error: err?.message || String(err) };
+    }
+  }
+  if (k === '__localApiGateway') {
+    if (!global.__branaLocalApiGateway) {
+      const { createLocalApiGateway } = require('./local-api-gateway');
+      global.__branaLocalApiGateway = createLocalApiGateway({
+        getFallbackWebContents: () => {
+          for (const w of wins.values()) {
+            if (w && !w.isDestroyed() && w.webContents && !w.webContents.isDestroyed()) return w.webContents;
+          }
+          return null;
+        },
+      });
+    }
+    return global.__branaLocalApiGateway.handleIpc(e.sender, v || {});
+  }
   // 固定密码：{on, pw}，密码用系统钥匙串加密（和记住的账号密码一样），读出来时解密
   if (k === 'fixedpw') {
     DB.shared = DB.shared || {};

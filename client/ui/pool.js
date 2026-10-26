@@ -1294,7 +1294,11 @@ const Pool = {
       if (typeof IPRep !== 'undefined' && IPRep.rate) {
         const unrated = cands.filter(k => this.d.ips[k] && !IPRep.score?.(k, this.d.ips[k]).known);
         if (unrated.length) await IPRep.rate(unrated).catch(() => {});
-        cands = cands.filter(k => this.d.ips[k] && this.state(k, this.d.ips[k], a.id) === 'ok');
+        const okCands = cands.filter(k => this.d.ips[k] && this.state(k, this.d.ips[k], a.id) === 'ok');
+        cands = okCands.length ? okCands : cands.filter(k => {
+          const e = this.d.ips[k];
+          return e && !e.gone && !this.banned(k) && !this.cooling(e) && !this.owner(k, a.id) && !IPRep.risky?.(k, e);
+        });
       }
       cands = cands.filter(k => this.d.ips[k] && !this.d.ips[k].gone); if (!cands.length) continue;
       const r = ownRoute ? await Host.probe({ link, pips: cands, timeout: 7000 }) : await this.hostProbe(cands, 7000), link2 = ownRoute ? link : this.link();
@@ -1323,7 +1327,14 @@ const Pool = {
         const postUnrated = res.filter(([k, x]) => x.ip && x.brana && this.d.ips[k] && !IPRep.score?.(k, this.d.ips[k]).known).map(([k]) => k);
         if (postUnrated.length) await IPRep.rate(postUnrated).catch(() => {});
       }
-      const good = res.filter(([k, x]) => {
+      const rankSort = (p, q) => {
+        if (typeof IPRep !== 'undefined' && IPRep.rank) {
+          const rd = IPRep.rank(q[0], this.d?.ips?.[q[0]]) - IPRep.rank(p[0], this.d?.ips?.[p[0]]);
+          if (Math.abs(rd) >= 0.3) return rd;
+        }
+        return (p[1].ms || 9e9) - (q[1].ms || 9e9);
+      };
+      const strictGood = res.filter(([k, x]) => {
         if (!(x.ip && x.brana && (!x.loc || x.loc === cc))) return false;
         if (this.banned(k)) return false;
         if (typeof IPRep !== 'undefined') {
@@ -1332,13 +1343,18 @@ const Pool = {
           if (IPRep.pure && !IPRep.pure(k, e)) return false;
         }
         return true;
-      }).sort((p, q) => {
-        if (typeof IPRep !== 'undefined' && IPRep.rank) {
-          const rd = IPRep.rank(q[0], this.d?.ips?.[q[0]]) - IPRep.rank(p[0], this.d?.ips?.[p[0]]);
-          if (Math.abs(rd) >= 0.3) return rd;
+      }).sort(rankSort);
+      const good = strictGood.length ? strictGood : res.filter(([k, x]) => {
+        if (!(x.ip && x.brana && (!x.loc || x.loc === cc))) return false;
+        if (this.banned(k)) return false;
+        if (typeof IPRep !== 'undefined') {
+          const e = this.d?.ips?.[k];
+          if (IPRep.risky?.(k, e)) return false;
+          const sc = IPRep.score?.(k, e);
+          if (sc?.known && sc.s < 58) return false;
         }
-        return (p[1].ms || 9e9) - (q[1].ms || 9e9);
-      });
+        return true;
+      }).sort(rankSort);
       for (const [k, x] of res) if (!good.find(g => g[0] === k)) { fails++; log?.('ProxyIP ' + k + (x.ip && x.brana && x.loc && x.loc !== cc ? ' 出口地区是 ' + x.loc + '（不是 ' + cc + '）' : ' 不可用（' + (x.error || '超时') + '，已拉黑）') + '，换下一个'); }
       for (const [k, x] of good) {
         const nd = (ownRoute ? node : this.node()) || node || { id: a.nodeId || '' }, lk = link2 || link;
@@ -1346,6 +1362,13 @@ const Pool = {
         catch (err) { log?.('ProxyIP ' + k + '：' + cleanErr(err)); await Nodes.refreshAccts(); continue; }
         await this.mutate(d => { if (d.ips[k]) d.ips[k].used = now(); });
         await Nodes.refreshAccts(); Object.assign(a, { proxy: lk, nodeId: nd.id, region: cc, proxyIp: k });
+        if (typeof IP !== 'undefined' && typeof UI !== 'undefined' && UI.host?.account?.id === a.id) {
+          IP.err = null; IP.failures = 0; IP.rttFail = 0;
+          if (x.ip) IP.ip = x.ip;
+          if (x.loc || cc) IP.loc = x.loc || cc;
+          if (x.ms > 0) { IP.rtt = x.ms; IP.rttAt = now(); }
+          try { Bus.emit('ip'); Bus.emit('rtt'); } catch {}
+        }
         return { ok: true, to: k, ip: x.ip, loc: x.loc || cc, ms: x.ms };
       }
     }

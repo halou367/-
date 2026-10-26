@@ -102,6 +102,9 @@ if ((location.origin === 'https://arena.ai' || location.protocol === 'file:') &&
     staticBankSync: id => ipcRenderer.sendSync('host:staticBankSync', String(id || '')),
     fingerprintStore: (op, revision, payload) => call('fingerprintStore', op, revision, payload),
     shared: (k, v) => v === undefined ? call('shared', k) : call('shared', k, v),
+    copyText: t => call('shared', '__clipboardWrite', String(t ?? '')),
+    apiGateway: v => call('shared', '__localApiGateway', v),
+    onApiGatewayReq: cb => { const fn = (_e, data) => { try { cb(data); } catch {} }; ipcRenderer.on('host:api-gateway-req', fn); return () => ipcRenderer.removeListener('host:api-gateway-req', fn); },
     setShared: (k, v) => call('shared', k, v),
     strMerge: p => call('strMerge', p),
     calMerge: p => call('calMerge', p),
@@ -115,6 +118,7 @@ if ((location.origin === 'https://arena.ai' || location.protocol === 'file:') &&
     signInAccount: id => call('signInAccount', id),
     sendMagicLinkAccount: (id, email, fullName) => call('sendMagicLinkAccount', id, email, fullName),
     registerTokenAccount: (id, opt) => call('registerTokenAccount', id, opt),
+    cancelTokenRegistration: id => call('cancelTokenRegistration', id),
     setCookies: (id, list) => call('setCookies', id, list),
     refreshQuotas: force => call('refreshQuotas', !!force),
     setTheme: t => call('theme', t),
@@ -129,15 +133,14 @@ if ((location.origin === 'https://arena.ai' || location.protocol === 'file:') &&
   });
 }
 
-// Periodic renderer cache & V8 heap trimmer
+// Only trim renderer Blink cache when the window is hidden in the background so active UI icons/fonts/styles never stutter
 (() => {
-  const trimRendererMem = () => {
-    try { webFrame.clearCache(); } catch {}
-    try { if (typeof globalThis.gc === 'function') globalThis.gc(); } catch {}
+  const trimRendererMem = (force = false) => {
+    try {
+      if (!force && typeof document !== 'undefined' && !document.hidden) return;
+      webFrame.clearCache();
+    } catch {}
   };
-  try { ipcRenderer.on('host:trimMem', trimRendererMem); } catch {}
-  setTimeout(trimRendererMem, 2200);
-  setTimeout(trimRendererMem, 7500);
-  setTimeout(trimRendererMem, 18000);
-  setInterval(trimRendererMem, 60000);
+  try { ipcRenderer.on('host:trimMem', () => trimRendererMem(false)); } catch {}
+  setInterval(() => trimRendererMem(false), 300000);
 })();

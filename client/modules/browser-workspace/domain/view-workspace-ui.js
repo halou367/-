@@ -1324,7 +1324,65 @@ const UI = {
       paintAtt(); Recaptcha.warm(chat ? undefined : 'agentic_chat_submit');
     };
     const fin = h('input', { type: 'file', multiple: true, style: 'display:none', onchange: () => { addFiles([...fin.files]); fin.value = ''; } });
-    const plus = h('button', { class: 'ib attbtn', type: 'button', title: '添加附件（也可以粘贴或拖进来）', 'aria-label': 'Add files and connections', onclick: e => { e.stopPropagation(); fin.click(); } }, icon('plus'));
+    const isApiActive = () => typeof LocalApiGateway !== 'undefined' && LocalApiGateway.isBoundTo?.(tab?.sid);
+    const openPlusMenu = e => {
+      e.stopPropagation();
+      if (e.shiftKey) { fin.click(); return; }
+      const existing = document.querySelector('.menu.plus-menu:not(.anc-gh)');
+      if (existing) { existing.remove(); return; }
+      document.querySelectorAll('.menu:not(.anc-gh):not(.amenu)').forEach(m => m.remove());
+      this._menuOpenAt = now();
+      const curSid = tab?.sid || null;
+      const curChat = curSid ? chatOf(curSid) : chat;
+      const gwRunning = typeof LocalApiGateway !== 'undefined' && LocalApiGateway.isRunning?.();
+      const gwState = typeof LocalApiGateway !== 'undefined' && LocalApiGateway.getState ? LocalApiGateway.getState() : null;
+      const rawMod = (curSid && typeof Models !== 'undefined' && Models.get(curSid)?.name) || (curSid && typeof Trace !== 'undefined' && Trace.latest?.(curSid)?.best) || '';
+      const modShort = rawMod ? (typeof cardName === 'function' ? cardName(rawMod) : rawMod) : '';
+      const m = h('div', { class: 'menu plus-menu', onclick: ev => ev.stopPropagation() },
+        h('button', { type: 'button', onclick: () => { m.remove(); fin.click(); } },
+          icon('paperclip'),
+          h('div', { class: 'pm-txt' },
+            h('span', { class: 'pm-t' }, '添加附件'),
+            h('small', {}, '上传图片或文件（支持粘贴与拖拽）')
+          )
+        ),
+        typeof LocalApiGateway !== 'undefined' ? h('button', { type: 'button', class: gwRunning ? 'on' : '', onclick: () => { m.remove(); LocalApiGateway.openModal(curChat, tab); } },
+          icon('api'),
+          h('div', { class: 'pm-txt' },
+            h('div', { class: 'pm-t-row' },
+              h('span', { class: 'pm-t' }, 'API 反代导出'),
+              gwRunning ? h('span', { class: 'gpill ok pm-pill' }, ':' + (gwState?.port || 18765)) : (modShort ? h('span', { class: 'tag pm-pill' }, modShort) : null)
+            ),
+            h('small', {}, '将当前对话转译为本地标准 API 接口')
+          )
+        ) : null
+      );
+      document.body.append(m);
+      const r = plus.getBoundingClientRect();
+      if (typeof placeInward === 'function') {
+        placeInward(m, r, { pad: 8, gap: 6, useBottom: true, keepWidth: true });
+      } else {
+        m.style.left = Math.max(8, Math.round(r.left)) + 'px';
+        m.style.bottom = Math.max(8, Math.round(innerHeight - r.top + 6)) + 'px';
+      }
+      setTimeout(() => {
+        const off = ev => {
+          if (!m.isConnected) { document.removeEventListener('pointerdown', off, true); return; }
+          if (!m.contains(ev.target) && !plus.contains(ev.target)) {
+            m.remove();
+            document.removeEventListener('pointerdown', off, true);
+          }
+        };
+        document.addEventListener('pointerdown', off, true);
+      }, 0);
+    };
+    const plus = h('button', {
+      class: 'ib attbtn' + (isApiActive() ? ' api-on' : ''),
+      type: 'button',
+      title: '展开工具：添加附件 / 本地 API 反代导出（按住 Shift 点击直接选文件）',
+      'aria-label': 'Add files and connections',
+      onclick: openPlusMenu,
+    }, icon('plus'), h('i', { class: 'att-api-dot' }));
     ta.addEventListener('paste', e => { const fs = [...(e.clipboardData?.files || [])]; if (fs.length) { e.preventDefault(); addFiles(fs); } });
     const go = async () => {
       if (slash?.submit()) return;

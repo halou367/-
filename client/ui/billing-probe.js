@@ -475,10 +475,8 @@
       streamIdPrefix = (isOpenAiTcChunk || isMultiTcNoTools) ? 'openai-tc-empty' : isClaudeTcChunk ? 'claude-tc-empty' : null;
     }
     else if (allIds.length > 0 && allIds.every(i => /^\d+$/.test(i))) streamIdPrefix = 'numeric-only';
-    const isGeminiSummary = streamIdPrefix === 'numeric-only' && /^\s*\*\*[^\n*]{2,80}\*\*/.test(String(fmt?.rHead || ''));
-    const hasClosedWireId = !hasCompatStreamId && isGeminiSummary;
+    // 闭源模型均无明文思考内容（仅空/加密思考块或无思考块）；凡有可见思考正文一律判定为开源思考
     if (Number(fmt?.rChars) >= 2 && hasVisibleReasoningText(fmt?.rSample || fmt?.rHead || '')) visibleReasoning = true;
-    if (hasClosedWireId && visibleReasoning) visibleReasoning = false;
     if (visibleReasoning && streamIdPrefix && (streamIdPrefix.startsWith('openai') || streamIdPrefix.startsWith('claude'))) streamIdPrefix = null;
     const isOpenAiWireId = streamIdPrefix === 'openai-rs' || streamIdPrefix === 'openai-tc-empty';
     let reasoningSignature = null;
@@ -903,6 +901,10 @@
       const snapshot = { sid: chat.sid, _streamEvidence: chat._streamEvidence ? { ...chat._streamEvidence } : null, fmt: chat.fmt ? { ...chat.fmt, ids: Array.isArray(chat.fmt.ids) ? chat.fmt.ids.slice() : [] } : null, fmtGuess: chat.fmtGuess || null, messages: activeMsgs.map(m => ({ ...m, webdev: m.webdev ? JSON.parse(JSON.stringify(m.webdev)) : undefined, metadata: { ...(m.metadata ? JSON.parse(JSON.stringify(m.metadata)) : {}), pending: false }, parts: (m.parts || []).map(p => ({ ...p, input: p?.input && typeof p.input === 'object' ? JSON.parse(JSON.stringify(p.input)) : p?.input })) })) };
       const blocked = opts?.bypassCooldown ? null : cooldowns.get(owner);
       const until = Math.max(opts?.force ? 0 : s.nextAt, blocked?.until || 0);
+      try {
+        extractChatEvidence(snapshot, {}, snapHints || hints.get(chat)?.messages);
+        if (snapshot._streamEvidence) chat._streamEvidence = { ...(chat._streamEvidence || {}), ...snapshot._streamEvidence };
+      } catch {}
       if (clock() < until) {
         if (blocked && blocked.until > clock()) { s.status = blocked.status; s.error = blocked.error; s.httpStatus = blocked.httpStatus; }
         s.zeroQuotaInfo = null;

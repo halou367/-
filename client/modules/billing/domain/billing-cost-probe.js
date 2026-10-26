@@ -1450,7 +1450,9 @@
         const hasStaleZeroCostRev = Boolean(!hasRealCostInModel && Array.isArray(model?.reverseCandidates) && model.reverseCandidates.length > 0);
         const hasInternalMismatch = Boolean((curCanon && revCanon && curCanon !== revCanon) || (topEff && topEff !== 'standard' && model?.tier && model.tier !== topEff) || hasStaleZeroCostRev);
         const syncSig = `${topCanon}:${topEff}:${nextMatch}:${nextScore != null ? Math.round(Number(nextScore) * 10) : ''}:${isNowRouted ? 1 : 0}:${rAnnotations?.routeTo || ''}:${hasStaleZeroCostRev ? 0 : 1}`;
+        const isEvalSess = Boolean(chat?.isEvaluation || chat?.evalMode === 'battle' || chat?.evalMode === 'direct' || model?.directMode || model?.battleRevealed || (typeof History !== 'undefined' && History.byId?.(sid)?.type === 'evaluation'));
         const needModelSync = Boolean(
+          !isEvalSess &&
           !isLockedAutoOpen &&
           !isProtectedRealCostLock &&
           topCanon &&

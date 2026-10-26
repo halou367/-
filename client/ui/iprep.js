@@ -588,7 +588,7 @@ const IPRep = {
           if (s && s === curSub) exSet.add(k);
         }
       }
-      let targetCc = String(a.region || (curEntry?.loc && curEntry.loc !== '?' ? curEntry.loc : '') || '').trim().toUpperCase();
+      let targetCc = String(a.region || (curEntry?.loc && curEntry.loc !== '?' ? curEntry.loc : '') || (typeof IP !== 'undefined' && !IP.err && IP.loc ? IP.loc : '') || (typeof RegionAdvisor !== 'undefined' && RegionAdvisor.bestRegion?.() || '')).trim().toUpperCase();
       if (!targetCc || !Pool.avail(targetCc, a.id, exSet).length) {
         const bestAny = Pool.availAllPureLowestLatency?.(a.id, exSet)?.[0];
         if (bestAny) targetCc = Pool.d?.ips?.[bestAny]?.loc || targetCc || 'JP';
@@ -601,9 +601,22 @@ const IPRep = {
         ]);
         if (sw?.ok) switchedTo = sw.to || '';
       }
-      if (!switchedTo && typeof AutoRoute !== 'undefined' && typeof AutoRoute.request === 'function' && AutoRoute.enabled?.()) {
+      if (!switchedTo) {
+        const bestAny = Pool.availAllPureLowestLatency?.(a.id, exSet)?.[0];
+        const altCc = bestAny ? String(Pool.d?.ips?.[bestAny]?.loc || '').trim().toUpperCase() : '';
+        if (altCc && altCc !== targetCc && Pool.avail(altCc, a.id, exSet).length) {
+          const sw2 = await Promise.race([
+            Pool.acquire(a, altCc, { exclude: exSet, noScreen: true, allowNodeMode: true }).catch(() => null),
+            sleep(5200).then(() => null),
+          ]);
+          if (sw2?.ok) switchedTo = sw2.to || '';
+        }
+      }
+      if (!switchedTo && typeof AutoRoute !== 'undefined' && AutoRoute.enabled?.()) {
         const ar = await Promise.race([
-          AutoRoute.request('limited', true).catch(() => null),
+          (typeof AutoRoute.onErrorSwitch === 'function'
+            ? AutoRoute.onErrorSwitch({ captchaTriggered: kind === 'rc', ipLimited: kind !== 'rc' }, 'captcha')
+            : AutoRoute.request('limited', true)).catch(() => null),
           sleep(5200).then(() => null),
         ]);
         if (ar?.ok && ar?.changed) switchedTo = ar.account?.proxyIp || ar.label || 'standby';
@@ -717,7 +730,7 @@ const IPRep = {
       const isBanned = Boolean((k && Pool.banned?.(k)) || (eg && Pool.d?.banEg?.[eg.toLowerCase()]));
       const isManuallyLocked = Boolean(typeof AutoRoute !== 'undefined' && AutoRoute.manualLockUntil && now() < AutoRoute.manualLockUntil);
       const minRequiredScore = isManuallyLocked ? this.TH : this.PURE;
-      const isDirty = isBanned || Boolean(!k && !isChainNode && (!sc.known || sc.s < minRequiredScore)) || Boolean(!sc.known || sc.s < minRequiredScore);
+      const isDirty = isBanned || Boolean(!k && !isChainNode && (!sc.known || sc.s < minRequiredScore)) || Boolean(sc.known ? sc.s < minRequiredScore : sc.s < 68);
       if (!isDirty) return { ok: true, pure: true, score: sc.s, eg };
       if (k && !this.trusted(k) && sc.known && sc.s < minRequiredScore) {
         await Pool.mutate(d => {
@@ -732,15 +745,26 @@ const IPRep = {
         return { ok: false, dirty: true, score: sc.s, eg };
       }
       const exSet = new Set(k ? [k] : []);
-      let targetCc = String(a.region || (e?.loc && e.loc !== '?' ? e.loc : '') || '').trim().toUpperCase();
+      let targetCc = String(a.region || (e?.loc && e.loc !== '?' ? e.loc : '') || (typeof IP !== 'undefined' && !IP.err && IP.loc ? IP.loc : '') || (typeof RegionAdvisor !== 'undefined' && RegionAdvisor.bestRegion?.() || '')).trim().toUpperCase();
       if (!targetCc || !Pool.avail(targetCc, a.id, exSet).length) {
         const bestAny = Pool.availAllPureLowestLatency?.(a.id, exSet)?.[0];
         if (bestAny) targetCc = Pool.d?.ips?.[bestAny]?.loc || targetCc || 'JP';
       }
-      if (!targetCc || !Pool.avail(targetCc, a.id, exSet).length) {
-        return { ok: false, dirty: true, score: sc.s, eg };
+      let sw = null;
+      if (targetCc && Pool.avail(targetCc, a.id, exSet).length) {
+        sw = await Pool.acquire(a, targetCc, { exclude: exSet, noScreen: true, allowNodeMode: true }).catch(() => null);
       }
-      const sw = await Pool.acquire(a, targetCc, { exclude: exSet, noScreen: true, allowNodeMode: true }).catch(() => null);
+      if (!sw?.ok) {
+        const bestAny = Pool.availAllPureLowestLatency?.(a.id, exSet)?.[0];
+        const altCc = bestAny ? String(Pool.d?.ips?.[bestAny]?.loc || '').trim().toUpperCase() : '';
+        if (altCc && altCc !== targetCc && Pool.avail(altCc, a.id, exSet).length) {
+          sw = await Pool.acquire(a, altCc, { exclude: exSet, noScreen: true, allowNodeMode: true }).catch(() => null);
+        }
+      }
+      if (!sw?.ok && typeof AutoRoute !== 'undefined' && typeof AutoRoute.onErrorSwitch === 'function' && AutoRoute.enabled?.()) {
+        const ar = await AutoRoute.onErrorSwitch({ impureIp: true, riskyIp: Boolean(sc.known && sc.s < this.TH), score: sc.s }, 'pre-send').catch(() => null);
+        if (ar?.ok && ar?.changed) sw = { ok: true, to: ar.account?.proxyIp || ar.label || 'standby' };
+      }
       if (sw?.ok) {
         try { UI.host = await Host.info(); UI.renderAcct?.(); } catch {}
         if (typeof toast === 'function') {
@@ -777,10 +801,13 @@ const IPRep = {
         }
         return;
       }
+      if (liveIp && !this.score(k || liveIp, liveEntry).known) {
+        this.curEval(liveIp);
+      }
       const liveBad = Boolean(liveIp && (this.risky(k || liveIp, liveEntry) || this.impure(k || liveIp, liveEntry) || Pool.d?.banEg?.[liveIp.toLowerCase()]));
       const kBad = Boolean(k && !this.trusted(k) && (Pool.banned(k) || e?.gone || (!liveIp && e?.ok === false) || (e && (this.risky(k, e) || this.impure(k, e)))));
       const kMissing = Boolean(!k && !isChainNode && (!liveIp || !this.pure(liveIp, liveEntry)));
-      const forceImpure = Boolean(opt?.forceOnError && k && e && this.score(k, e).known && !this.pure(k, e));
+      const forceImpure = Boolean((opt?.forceOnError || opt?.forceOnHighRisk) && k && e && this.score(k, e).known && !this.pure(k, e));
       if (!(kBad || liveBad || kMissing || forceImpure)) return;
       if (typeof RouteState !== 'undefined' && RouteState.locked?.(a)) return;
       const confirmedHighRisk = Boolean((k && e && (this.risky(k, e) || this.impure(k, e))) || (liveIp && (this.risky(k || liveIp, liveEntry) || this.impure(k || liveIp, liveEntry))) || kMissing || (k && Pool.banned(k)) || (liveIp && Pool.d?.banEg?.[liveIp.toLowerCase()]));
@@ -789,28 +816,50 @@ const IPRep = {
         if (typeof Pool !== 'undefined' && Pool.canRotate && !Pool.canRotate(a)) return;
       }
       const hard = kBad || liveBad || kMissing;
-      if (!opt?.forceOnError && !opt?.forceOnHighRisk && now() - this.rotAt < (hard ? 15e3 : 30 * 60e3)) return;
-      if ([...Chats.values()].some(c => c.busy) || document.querySelector('.rc-back') || this.screening) { clearTimeout(this.ct); this.ct = setTimeout(() => this.check(opt), 30e3); return; }
+      if (!opt?.forceOnError && !opt?.forceOnHighRisk && now() - this.rotAt < (hard ? 8e3 : 30 * 60e3)) return;
+      const activeStreaming = [...Chats.values()].some(c => c.streaming && c.byteAt && now() - c.byteAt < 8000);
+      if (activeStreaming || document.querySelector('.rc-back') || this.screening) { clearTimeout(this.ct); this.ct = setTimeout(() => this.check(opt), 12e3); return; }
       this.rot = true; this.rotAt = now();
       if (liveBad && k && !this.trusted(k) && this.risky(k || liveIp, liveEntry)) {
         await Pool.mutate(d => {
           if (typeof Pool.banForever === 'function') Pool.banForever(d, k, '实测出口 ' + liveIp + ' 高风险 · 已永久拉黑');
           if (liveIp) { d.banEg ||= {}; d.banEg[liveIp.toLowerCase()] = now(); }
         }).catch(() => {});
+      } else if ((liveBad || kBad) && k && !this.trusted(k) && typeof Pool.coolTemporarily === 'function') {
+        await Pool.mutate(d => {
+          Pool.coolTemporarily(d, k, 'impure', liveIp || e?.eg || '', '出口纯净度不足 · 自动切换冷却中');
+        }).catch(() => {});
       }
       const sc = (k || liveIp) ? this.score(k || liveIp, liveEntry) : null;
       const exSet = new Set(k ? [k] : []);
-      let targetCc = a.region || (e?.loc && e.loc !== '?' ? e.loc : '') || '';
+      let targetCc = a.region || (e?.loc && e.loc !== '?' ? e.loc : '') || (typeof IP !== 'undefined' && !IP.err && IP.loc ? IP.loc : '') || (typeof RegionAdvisor !== 'undefined' && RegionAdvisor.bestRegion?.() || '');
       if (!targetCc || !Pool.avail(targetCc, a.id, exSet).length) {
         const bestAny = Pool.availAllPureLowestLatency?.(a.id, exSet)?.[0];
         if (bestAny) targetCc = Pool.d?.ips?.[bestAny]?.loc || targetCc || 'JP';
       }
-      if (!k && (!targetCc || !Pool.avail(targetCc, a.id, exSet).length)) return;
       const bgNoScreen = !k || (!opt?.forceOnError && !opt?.forceOnHighRisk);
-      let r;
-      if (targetCc && Pool.avail(targetCc, a.id, exSet).length) r = await Pool.acquire(a, targetCc, { exclude: exSet, noScreen: bgNoScreen, allowNodeMode: true });
-      else if ((opt?.forceOnError || opt?.forceOnHighRisk) && typeof RegionIP !== 'undefined' && RegionIP.switchNext) r = await RegionIP.switchNext({ owner: a.id, noScreen: bgNoScreen });
-      else return;
+      let r = null;
+      if (targetCc && Pool.avail(targetCc, a.id, exSet).length) {
+        r = await Pool.acquire(a, targetCc, { exclude: exSet, noScreen: bgNoScreen, allowNodeMode: true });
+      }
+      if (!r?.ok) {
+        const bestAny = Pool.availAllPureLowestLatency?.(a.id, exSet)?.[0];
+        const altCc = bestAny ? Pool.d?.ips?.[bestAny]?.loc : '';
+        if (altCc && altCc !== targetCc && Pool.avail(altCc, a.id, exSet).length) {
+          r = await Pool.acquire(a, altCc, { exclude: exSet, noScreen: true, allowNodeMode: true });
+        }
+      }
+      if (!r?.ok && typeof AutoRoute !== 'undefined' && typeof AutoRoute.onErrorSwitch === 'function' && AutoRoute.enabled?.()) {
+        const ar = await AutoRoute.onErrorSwitch({ impureIp: true, riskyIp: Boolean(sc?.known && sc.s < this.TH), score: sc?.s }, 'impure').catch(() => null);
+        if (ar?.ok && ar?.changed) r = { ok: true, to: ar.account?.proxyIp || ar.label || '备用纯净线路' };
+      }
+      if (r?.ok) {
+      } else if ((opt?.forceOnError || opt?.forceOnHighRisk) && typeof RegionIP !== 'undefined' && RegionIP.switchNext) {
+        r = await RegionIP.switchNext({ owner: a.id, noScreen: true }).catch(() => null);
+      } else if (confirmedHighRisk && typeof RegionIP !== 'undefined' && RegionIP.switchNext) {
+        r = await RegionIP.switchNext({ owner: a.id, noScreen: true }).catch(() => null);
+      }
+      if (!r) return;
       if (r?.ok) {
         try { UI.host = await Host.info(); UI.renderAcct?.(); } catch {}
         toast((k ? 'ProxyIP ' + k : '当前出口 ' + (liveIp || '未绑定 ProxyIP')) + (sc?.known && sc.s >= this.TH ? ' 不够纯净' : ' 属于高风险/异常') + (sc?.known ? '（' + sc.s + ' 分）' : '') + '，已自动切换到纯净出口 ' + r.to);
@@ -1026,5 +1075,13 @@ const IPRep = {
 };
 // 后台：启动 1 分钟后评估一次，之后每 30 分钟看一眼（只查过期的，没有就什么都不做）；出口 IP 变了 / 一轮结束时顺便看当前 IP 要不要换
 if (!globalThis.__BRANA_OFFLINE__) setTimeout(() => { IPRep.run().catch(() => {}); setInterval(() => { if (navigator.onLine !== false) IPRep.run().catch(() => {}); }, 30 * 60e3); }, 60e3);
-Bus.on('ip', () => { if (now() - (IPRep.cAt || 0) > 60e3) { IPRep.cAt = now(); IPRep.check(); } });
+Bus.on('ip', () => {
+  const curIp = typeof IP !== 'undefined' && !IP.err ? String(IP.ip || '').trim() : '';
+  const ipChanged = Boolean(curIp && curIp !== IPRep._lastChkIp);
+  if (ipChanged || now() - (IPRep.cAt || 0) > 20e3) {
+    if (curIp) IPRep._lastChkIp = curIp;
+    IPRep.cAt = now();
+    IPRep.check(ipChanged ? { forceOnHighRisk: true } : {});
+  }
+});
 Bus.on('turn', () => { setTimeout(() => IPRep.check(), 5000); });

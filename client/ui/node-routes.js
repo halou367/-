@@ -703,8 +703,9 @@ const NodeRoutes = (() => {
           const g2Promise=googleCheck(candidate);
           const saved=await selector({...io,cancelled:stale}).apply(data.account,candidate,wanted,r);warm.delete(routeKey(candidate));cache.delete(routeKey(candidate));lastBrana=null;pre=null;
           Object.assign(a,saved);current=Policy.fields(saved);changed=false;if(P&&State.isNode(saved)&&saved.nodeId){if(P.d)P.d.node=saved.nodeId;if(!UI.host?.routeDraft)void P.setNode(saved.nodeId).catch(()=>{});}UI.host=await Host.info();UI.renderAcct?.();
-          // 刚手动换好：记录手动选路锁定窗口（自动模式仅短暂防抖 15 秒，手动指定节点/IP 则锁定 10 分钟防止后台误切走）
-          if(typeof AutoRoute!=='undefined'){AutoRoute.noteManualRoute?.(wanted==='auto'?15000:600000);if(AutoRoute.engine)AutoRoute.engine.next=Math.max(AutoRoute.engine.next||0,Date.now()+(wanted==='auto'?15000:60000));AutoRoute.failed=false;}
+          try{if(P?.mutate)void P.mutate(d=>{d.auto=Boolean(wanted==='auto'||selPip===AUTO);d.regAuto=Boolean(wanted==='auto'||regAuto);}).catch(()=>{});}catch{}
+          const isAutoPick=Boolean(wanted==='auto'||regAuto||selPip===AUTO||selNode===AUTO);
+          if(typeof AutoRoute!=='undefined'){AutoRoute.noteManualRoute?.(isAutoPick?5000:12000);if(AutoRoute.engine)AutoRoute.engine.next=Math.min(AutoRoute.engine.next||0,Date.now()+5000);AutoRoute.failed=false;}
           try{if(saved?.id&&(saved.proxy||saved.proxyIp))Store.set('lastGoodRoute:'+saved.id,{id:saved.id,proxy:saved.proxy||'',proxyIp:saved.proxyIp||'',nodeId:saved.nodeId||'',region:saved.region||'',at:now()});}catch{}options.onApplied?.(saved);
           setTimeout(()=>Store.del('auth-route-draft'),2000);
           const effective=State.isNode(saved)?'节点 '+(nodes.find(n=>n.id===saved.nodeId)?.name||saved.nodeId||''):isDirectP(saved.proxy)?'直连':'本机代理 '+maskProxy(saved.proxy);
@@ -761,7 +762,7 @@ const NodeRoutes = (() => {
       }
       return check();
     }
-    function preferences(){const p=State.prefs(strategy);if(!changed&&strategy===State.mode(a)){p.routeAuto=a.routeAuto!==false;p.nodeFailover=a.nodeFailover===true;}return p;}
+    function preferences(){const p=State.prefs(strategy);if(!changed&&strategy===State.mode(a)){p.routeAuto=a.routeAuto!==false;p.nodeFailover=a.nodeFailover!==false;}return p;}
     function payload(patch){return {...patch,...current,...preferences(),...(a.id?{id:a.id}:{})};}
     async function save(patch){
       if(live){await commit();if(error)throw Error(error);return Host.saveAccount(payload(patch));}

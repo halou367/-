@@ -8,9 +8,10 @@ const RoutePolicy = (() => {
   // 限流(429) / 超时 / 401 / 403 / 404 / 5xx / 任何连接报错 → 立即触发秒切 IP / 节点
   const shouldRotateOnError = e => {
     if (!e || e.authLocked || e.rateLimitedLocally) return false;
+    if (e.ipLimited || e.routeTimeout || e.net || e.impureIp || e.riskyIp || e.captchaTriggered || e.cfChallenge) return true;
     const st = Number(e.status || e.httpStatus || 0);
-    if ([401, 403, 404, 408, 429, 500, 502, 503, 504, 520, 521, 522, 523, 524].includes(st)) return true;
-    if (e.ipLimited || e.routeTimeout || e.net) return true;
+    if ([408, 429, 500, 502, 503, 504, 520, 521, 522, 523, 524].includes(st)) return true;
+    if (st === 403 && /recaptcha|人机|验证|challenge|cloudflare/i.test(String(e.body || e.message || ''))) return true;
     return transportError(e);
   };
   const good = r => !!(r?.ok && r.ip && (r.service && r.realtime || r.scope === 'website' && r.website === true));
@@ -206,10 +207,11 @@ const RoutePolicy = (() => {
       const seen=new Set([key(a)]),uniq=list=>list.filter(c=>{const k=key(c);if(seen.has(k))return false;seen.add(k);return true;});
       const local=ips.filter(([,e])=>e.loc===home);
       if(local.length>1&&this.cursor>0){const off=this.cursor%local.length;local.push(...local.splice(0,off));}
-      const allowCross=Boolean(this.io.allowCrossRegionEscape&&(a.routeMode!=='node'||first.forceCrossRegion));
+      const crossEscape=Boolean(this.io.allowCrossRegionEscape||first.allowCrossRegionEscape||first.forceCrossRegion||first.regAuto);
+      const allowCross=Boolean(crossEscape&&(a.routeMode!=='node'||first.forceCrossRegion||first.regAuto||first.allowCrossRegionEscape));
       const awayFree=ips.filter(([,e])=>e.loc&&e.loc!==home&&!occupied.has(e.loc));
       const awayAll=ips.filter(([,e])=>e.loc&&e.loc!==home);
-      const away=a.routeMode==='node'&&!first.forceCrossRegion?[]:(awayFree.length?awayFree:(allowCross?awayAll:[]));
+      const away=a.routeMode==='node'&&!allowCross?[]:(awayFree.length?awayFree:(allowCross?awayAll:[]));
       if(away.length>1&&this.cursor>0){const off=this.cursor%away.length;away.push(...away.splice(0,off));}
       const rotIps=[...local,...away];
       const viaNode=(n,[k,e],extra={})=>({proxy:n.proxy,proxyIp:k,nodeId:n.id,region:e.loc||'',kind:'node',...(e.loc&&e.loc!==home?{crossRegion:true}:{}),...extra});
@@ -242,7 +244,9 @@ const RoutePolicy = (() => {
       }
       const keep={proxyIp:a.proxyIp||'',region:a.region||home};
       const curIpEntry=a.proxyIp?pool.ips?.[a.proxyIp]:null;
-      const curIpBad=Boolean((!a.proxyIp&&rotIps.length>0&&!/\/video\//i.test(a.proxy||''))||(a.proxyIp&&(pool.ban?.[cur]||curIpEntry?.gone||curIpEntry?.banned||(curIpEntry&&!reputationOK(pool,a.proxyIp,curIpEntry,at))||(this.io.networkFirst&&(curIpEntry?.cool>at||curIpEntry?.ok===false)))));
+      const curIpRep=curIpEntry?evalRep(pool,a.proxyIp,curIpEntry,at):null;
+      const curIpImpure=Boolean(curIpRep&&(curIpRep.score<68||(!curIpRep.ok&&curIpEntry?.eg&&pool.rep?.[curIpEntry.eg])));
+      const curIpBad=Boolean((!a.proxyIp&&rotIps.length>0&&!/\/video\//i.test(a.proxy||''))||(a.proxyIp&&(pool.ban?.[cur]||curIpEntry?.gone||curIpEntry?.banned||curIpImpure||(this.io.networkFirst&&(curIpEntry?.cool>at||curIpEntry?.ok===false)))));
       // 节点模式：优先同地区；开启 allowCrossRegionEscape 时，若同地区全部超时/失败，最后自动逃逸到可连通的其他地区（避免死胡同）
       if(State.mode(a)==='node')return {home,occupied,stages:[
         ...(globalLowestStage?.length?[['全库最低延迟可用纯净 ProxyIP',globalLowestStage]]:[]),
@@ -269,13 +273,13 @@ const RoutePolicy = (() => {
     }
     async recover(reason){
       const first=await this.io.read(), a=first.account, expected=fields(a), expectedConfig=State.signature(a), owner=a?.id;
-      const isErrIpSwitch=reason==='limited'||(reason==='error-switch'&&/^vless:/i.test(a?.proxy||'')&&Boolean(a?.proxyIp));
+      const isErrIpSwitch=reason==='limited'||reason==='impurity'||reason==='captcha'||(reason==='error-switch'&&/^vless:/i.test(a?.proxy||'')&&Boolean(a?.proxyIp));
       let mode=isErrIpSwitch?'ip':'node';
       const strategy=State.mode(a);
       const canDirectEscape=Boolean(this.io.allowCrossRegionEscape&&a&&!State.locked(a,this.now())&&!a.authLocked&&(strategy==='direct'||strategy==='proxy'||/^(?:direct|none|off)$/i.test(String(a.proxy||'').trim()))&&(first.nodes||[]).length>0);
       if(!a?.id||first.enabled===false||(!State.canRecover(a)&&!canDirectEscape)||this.io.cancelled?.())return {ok:false,disabled:true,authLocked:State.locked(a)};
       let current=null;
-      if((mode==='node'&&reason!=='error-switch')||(a.routeMode==='node'&&reason!=='limited')){
+      if((mode==='node'&&reason!=='error-switch'&&reason!=='impurity'&&reason!=='captcha')||(a.routeMode==='node'&&reason!=='limited'&&reason!=='impurity'&&reason!=='captcha'&&reason!=='error-switch')){
         // Two independent service checks; one success = keep everything (no latency-based switching).
         // 启动时（打开账号就连不上）只复核一次当前线路，尽快换到能用的
         const checks=(reason==='startup'||this.io.fastCheck)?1:2;
@@ -283,7 +287,11 @@ const RoutePolicy = (() => {
           if(i){await this.wait(this.io.retryMs??2500);if(this.io.cancelled?.())return {ok:false,cancelled:true};}
           this.io.progress?.(i?'复测当前线路':'检测当前线路');
           current=await this.probe({...expected,kind:'current'},true);
-          if(good(current)){this.failures=0;this.next=this.now()+15000;return {ok:true,changed:false,probe:current};}
+          const curPool=withProbe(first.pool||{},current);
+          const curHasRep=Boolean(current?.ip&&curPool.rep?.[current.ip]);
+          const curPureOk=!curHasRep||reputationOK(curPool,a.proxyIp||'current',{...(curPool.ips?.[a.proxyIp]||{}),eg:current.ip},this.now());
+          if(good(current)&&curPureOk){this.failures=0;this.next=this.now()+15000;return {ok:true,changed:false,probe:current};}
+          if(good(current)&&!curPureOk){mode='ip';break;}
           // 当前线路的服务检测被 429：这是出口 IP 被限流，不是节点断网——改走「换出口 IP」的流程
           if(current?.kind==='rate-limit'){mode='ip';break;}
           if(current?.reachable||['verification','service','config','unsupported'].includes(current?.kind)){this.next=this.now()+Math.max(15000,current.retryAfterMs||0);return {ok:false,blocked:true,kind:current.kind,retryAfterMs:current.retryAfterMs,error:current.error||'服务响应不是网络故障，保留当前线路'};}
@@ -313,7 +321,8 @@ const RoutePolicy = (() => {
           }
         }
       }
-      const valid=(c,r)=>good(r)&&(c?.nativeFallback&&!c?.proxyIp?true:((this.io.allowCrossRegionEscape?Boolean(r.loc):(strategy!=='node'||!a.region||r.loc===a.region)&&!groups.occupied.has(r.loc))&&reputationOK(withProbe(first.pool||{},r),c.proxyIp||r.ip,{eg:r.ip},this.now())));
+      const crossEscape=Boolean(this.io.allowCrossRegionEscape||first.allowCrossRegionEscape||first.forceCrossRegion||first.regAuto);
+      const valid=(c,r)=>good(r)&&(c?.nativeFallback&&!c?.proxyIp?true:((crossEscape?Boolean(r.loc):(strategy!=='node'||!a.region||r.loc===a.region)&&!groups.occupied.has(r.loc))&&reputationOK(withProbe(first.pool||{},r),c.proxyIp||r.ip,{eg:r.ip},this.now())));
       let winner=null,result=null,limitedN=0;
       const batchSize=this.io.allowCrossRegionEscape?(this.io.batchSize||4):2;
       const forceGlobalLowest=Boolean(this.io.forceGlobalLowestLatency?.());

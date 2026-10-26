@@ -2283,7 +2283,7 @@ const ChatHabitFingerprint = (() => {
         if (isBattleTruth) {
           softTargets[tgt.canon] = 1.0;
         } else {
-          softTargets[tgt.canon] = 0.58;
+          softTargets[tgt.canon] = 0.85;
           const tIdx = EFFORT_TIER_ORDER.indexOf(tgt.tier);
           if (tIdx >= 0) {
             // 如果是从更高档位往低档位拉（如 6.1sol-medium -> astra-low），中间过渡档位（如 astra-medium）获得更强软牵引 (0.28)
@@ -2320,6 +2320,7 @@ const ChatHabitFingerprint = (() => {
         if (qWeight < 0.55) continue;
         const effW = Math.max(0.35, weight * qWeight);
         const adjScore = Number.isFinite(+targetScore) ? Math.max(18, Math.min(98, +targetScore)) : null;
+        if (sid) calibratedSessionKeys.delete(`${sid}:${String(mCanon || '').toLowerCase()}`);
         recordTeacherCalibration(mCanon, feat, adjScore, effW, sid);
       }
 
@@ -2376,7 +2377,8 @@ const ChatHabitFingerprint = (() => {
             meta: extractCompactMeta(feat),
             target: tgt.canon,
             battleRepel: isBattleTruth,
-            weight: Math.round((Number(weight) || 3.5) * 10) / 10,
+            manualRepel: !isBattleTruth,
+            weight: Math.round((Number(weight) || 5.2) * 10) / 10,
             at: Date.now(),
           });
           cal.repelledModels[rk] = filteredRepel;
@@ -2463,14 +2465,14 @@ const ChatHabitFingerprint = (() => {
       if (!cal.vendorTierDeltas) cal.vendorTierDeltas = {};
       if (!cal.modalityProfiles) cal.modalityProfiles = {};
       const effW = Math.max(0.25, Number(weight) || 1.0);
-      const isHeavyBattleTruth = effW >= 8.0;
+      const isHeavyBattleTruth = effW >= 4.5;
       const hasTools = Boolean((feat.totalTools || 0) > 0);
       if (Array.isArray(feat.vec) && feat.vec.length === 20) {
         const prev = cal.protoCentroids[k];
         const protoDef = PROTOTYPES.find(p => String((typeof Strength !== 'undefined' && Strength?.canon) ? Strength.canon(p.label) : p.label).toLowerCase() === k);
         const n = Math.min(48, (prev?.count || 0) + 1);
-        const maxAlpha = isHeavyBattleTruth ? 0.42 : 0.36;
-        const alpha = Math.max(0.06, Math.min(maxAlpha, (isHeavyBattleTruth ? effW * 0.95 : effW) / (n * 1.4 + 3.5)));
+        const maxAlpha = isHeavyBattleTruth ? 0.44 : 0.36;
+        const alpha = Math.max(0.08, Math.min(maxAlpha, (isHeavyBattleTruth ? effW * 0.95 : effW) / (n * 1.2 + 3.0)));
         const baseVec = (prev && Array.isArray(prev.vec) && prev.vec.length === 20)
           ? prev.vec
           : (protoDef && Array.isArray(protoDef.vec) && protoDef.vec.length === 20 ? protoDef.vec : null);
@@ -2910,7 +2912,7 @@ const ChatHabitFingerprint = (() => {
           const lc = cal.protoCentroids[k];
           if (!lc) {
             cal.protoCentroids[k] = rc;
-          } else if (Array.isArray(lc.vec) && lc.vec.length === 20 && Array.isArray(rc.vec) && rc.vec.length === 20 && (rc.updatedAt || 0) !== (lc.updatedAt || 0)) {
+          } else if (Array.isArray(lc.vec) && lc.vec.length === 20 && Array.isArray(rc.vec) && rc.vec.length === 20 && (rc.updatedAt || 0) > (lc.updatedAt || 0)) {
             const cL = Math.max(1, Number(lc.count) || 1);
             const cR = Math.max(1, Number(rc.count) || 1);
             const tot = cL + cR;
@@ -2919,7 +2921,7 @@ const ChatHabitFingerprint = (() => {
               vec: blendedVec,
               meta: (rc.updatedAt || 0) >= (lc.updatedAt || 0) ? (rc.meta || lc.meta || null) : (lc.meta || rc.meta || null),
               count: Math.max(cL, cR) + 1,
-              updatedAt: Math.max(lc.updatedAt || 0, rc.updatedAt || 0, Date.now()),
+              updatedAt: Math.max(lc.updatedAt || 0, rc.updatedAt || 0),
             };
           }
         }
@@ -2928,7 +2930,7 @@ const ChatHabitFingerprint = (() => {
           const lt = cal.tierCentroids?.[k];
           if (!lt || !Array.isArray(lt.tierVec) || lt.tierVec.length !== 12) {
             cal.tierCentroids[k] = rt;
-          } else if ((rt.updatedAt || 0) !== (lt.updatedAt || 0)) {
+          } else if ((rt.updatedAt || 0) > (lt.updatedAt || 0)) {
             const wL = Math.max(1, Number(lt.truthWeightSum || lt.count) || 1);
             const wR = Math.max(1, Number(rt.truthWeightSum || rt.count) || 1);
             const totW = wL + wR;
@@ -2939,7 +2941,7 @@ const ChatHabitFingerprint = (() => {
                 : (rt.stdVec || lt.stdVec || new Array(12).fill(0.12)),
               count: Math.max(Number(lt.count) || 1, Number(rt.count) || 1) + 1,
               truthWeightSum: Math.round(Math.max(wL, wR, (wL + wR) * 0.65) * 100) / 100,
-              updatedAt: Math.max(lt.updatedAt || 0, rt.updatedAt || 0, Date.now()),
+              updatedAt: Math.max(lt.updatedAt || 0, rt.updatedAt || 0),
             };
           }
         }
@@ -2969,7 +2971,7 @@ const ChatHabitFingerprint = (() => {
           const ls = cal.scoreOffsets[k];
           if (!ls) {
             cal.scoreOffsets[k] = rs;
-          } else if ((rs.updatedAt || 0) !== (ls.updatedAt || 0)) {
+          } else if ((rs.updatedAt || 0) > (ls.updatedAt || 0)) {
             const cL = Math.max(1, Number(ls.count) || 1);
             const cR = Math.max(1, Number(rs.count) || 1);
             const tot = cL + cR;
@@ -2977,7 +2979,7 @@ const ChatHabitFingerprint = (() => {
               offset: Math.round((((Number(ls.offset) || 0) * cL + (Number(rs.offset) || 0) * cR) / tot) * 100) / 100,
               meanScore: Math.round((((Number(ls.meanScore) || 75) * cL + (Number(rs.meanScore) || 75) * cR) / tot) * 10) / 10,
               count: Math.max(cL, cR) + 1,
-              updatedAt: Math.max(ls.updatedAt || 0, rs.updatedAt || 0, Date.now()),
+              updatedAt: Math.max(ls.updatedAt || 0, rs.updatedAt || 0),
             };
           }
         }
@@ -3228,6 +3230,431 @@ const ChatHabitFingerprint = (() => {
     return { code: extracted, isTruncated };
   }
 
+  const FEATURE_WEIGHTS_V5 = [
+    0, 1, 2.2, 1, 1, 1, 2.2, 0, 0.5, 1, 0, 1.6, 1, 1, 0, 1.6,
+    1, 0, 0, 1, 0, 1, 0, 0, 1, 1, 0, 0, 0, 0, 1, 1,
+    1, 0, 0, 0.5, 1, 1, 1, 0, 0, 1, 0, 0, 0, 1, 2.2, 1,
+    1, 0.5, 1, 1, 1, 0.5, 2.2, 1, 0.5
+  , 1.2, 1.2, 0.8, 1.0, 1.0, 0.8, 0.8, 1.15, 1.10, 0.95, 1.05, 1.10, 1.05, 0.95, 1.05, 0.95, 0.90, 1.15, 1.25, 0.95, 1.10, 0.95, 0.90];
+  const V24_FEATURE_WEIGHTS_SVG32 = [
+    1.4, 1.2, 1.2, 1.5, 1.0, 0.5, 0.5, 1.0, 1.2, 0.5, 0.5, 0.8, 0.5, 0.8, 0.5, 0.5,
+    1.8, 1.4, 1.8, 1.4, 1.2, 1.8, 1.8, 1.0, 1.4, 0.5, 2.4, 2.0, 2.4, 2.2, 1.4, 1.4,
+    1.2, 1.4, 1.2, 1.2, 1.2, 1.4, 1.4, 1.2, 1.6, 1.4, 0.5, 0.5, 0.5, 1.4, 0.5, 1.6,
+    0.8, 0.8, 0.5, 0.5, 0.5, 1.4, 1.2, 0.5, 0.5
+  , 1.6, 1.6, 1.0, 1.4, 1.4, 1.2, 1.2, 1.10, 1.10, 0.95, 1.05, 0.60, 0.60, 0.95, 1.05, 0.95, 0.90, 1.15, 1.25, 0.95, 1.05, 0.90, 0.85];
+  const PELICAN_TOK_STOP = new Set([
+    'html','head','body','meta','charset','utf','viewport','width','device-width','initial-scale','title','style','script','svg','xmlns','http','www','w3','org','2000','viewBox','viewbox','defs','linearGradient','radialGradient','stop','offset','stop-color','stop-opacity','path','circle','ellipse','rect','line','polyline','polygon','fill','stroke','stroke-width','stroke-linecap','stroke-linejoin','none','round','butt','square','opacity','transform','translate','rotate','scale','class','const','let','var','function','return','Math','sin','cos','PI','document','getElementById','querySelector','querySelectorAll','window','requestAnimationFrame','setAttribute','display','flex','justify-content','align-items','height','margin','padding','overflow','hidden','background','position','relative','absolute','top','left','right','bottom','border-radius','box-shadow','sans-serif','system-ui','solid','infinite','linear','ease','ease-in-out','forwards','alternate','keyframes','from','true','false','null','for','while','else','new','Array','forEach','length','white','black','transparent','rgba','rgb','hsl','url','begin','dur','repeatCount','indefinite','values','keyTimes','calcMode','spline','keySplines','type','attributeName','xlink','href'
+  ]);
+  const PELICAN_BORING_HEX = new Set([
+    '#ffffff','#000000','#eeeeee','#cccccc','#dddddd','#bbbbbb','#aaaaaa','#999999','#888888','#777777','#666666','#555555','#444444','#333333','#222222','#111111','#f5f5f5','#f0f0f0','#e0e0e0','#d0d0d0','#87ceeb','#ffd700','#ffa500'
+  ]);
+
+
+  function extractPelicanFeatureVectorV24(code, forcedCodeType) {
+    const c = String(code || '')
+      .replace(/^\s*<!--\s*ARENA_OFFICIAL_BATTLE_GROUND_TRUTH[\s\S]*?-->\s*/i, '')
+      .replace(/<script>\(function\(\)\{function c\(\)\{var b=a\.contentDocument[\s\S]*?<\/script>/ig, '')
+      .replace(/\sdata-nonce=["'][^"']*["']/ig, '');
+    const cl = c.toLowerCase();
+    const bytes = typeof TextEncoder !== "undefined" ? new TextEncoder().encode(c).length : c.length;
+    const linesArr = c.split(/\r?\n/);
+    const lines = Math.max(1, linesArr.length);
+    const codeType = forcedCodeType || ((/<html|<!doctype html/i.test(c) || bytes > 4500) ? 'html_svg' : 'svg32');
+    const vbsAll = Array.from(c.matchAll(/viewBox=["']([^"']+)["']/ig), m => m[1].trim());
+    const vbs = codeType === 'html_svg' && vbsAll.length > 1 ? vbsAll.filter(v => v !== '0 0 32 32') : vbsAll;
+    const parsed = vbs.map(v => {
+      const n = (v.match(/[-+]?\d*\.?\d+/g) || []).map(Number);
+      return { v, n, area: n.length >= 4 ? n[2] * n[3] : 0 };
+    }).sort((a,b) => b.area - a.area);
+    const mainVB = parsed.length ? parsed[0].v : '';
+    const vbN = parsed.length ? parsed[0].n : [0,0,800,500];
+    const minVBArea = parsed.length ? parsed[parsed.length - 1].area : 0;
+    const vbW = vbN.length >= 4 ? vbN[2] : 800;
+    const vbH = vbN.length >= 4 ? vbN[3] : 500;
+    const htmlComments = Array.from(c.matchAll(/<!--[\s\S]*?-->/g)).length;
+    const jsComments = Array.from(c.matchAll(/(?:^|[^:])\/\/[^\r\n]*/gm)).length;
+    const cssComments = Array.from(c.matchAll(/\/\*[\s\S]*?\*\//g)).length;
+    const tagCounts = {};
+    for (const m of c.matchAll(/<([a-zA-Z][a-zA-Z0-9_-]*)\b/g)) {
+      const tag = m[1].toLowerCase(); tagCounts[tag] = (tagCounts[tag] || 0) + 1;
+    }
+    const count = (...names) => names.reduce((n,k) => n + (tagCounts[k.toLowerCase()] || 0), 0);
+    const hex = Array.from(c.matchAll(/#[0-9a-fA-F]{3,8}\b/g), m => m[0]);
+    const hex6 = hex.filter(h => h.length === 7);
+    const upperHex = hex.filter(h => /[A-F]/.test(h.slice(1))).length / Math.max(1, hex.length);
+    const hex6Ratio = hex6.length / Math.max(1, hex.length);
+    const dAll = Array.from(c.matchAll(/\bd=["']([^"']+)["']/g), m => m[1]).join(' ');
+    const upperCmds = (dAll.match(/[MLCQAZHVST]/g) || []).length;
+    const lowerCmds = (dAll.match(/[mlcqazhvst]/g) || []).length;
+    const bezierCmds = (dAll.match(/[CcQqSsTt]/g) || []).length;
+    const arcCmds = (dAll.match(/[Aa]/g) || []).length;
+    const relCmdRatio = lowerCmds / Math.max(1, upperCmds + lowerCmds);
+    const bezierRatio = bezierCmds / Math.max(1, upperCmds + lowerCmds);
+    const arcRatio = arcCmds / Math.max(1, upperCmds + lowerCmds);
+    const commaSep = (dAll.match(/\d,\d/g) || []).length;
+    const spaceSep = (dAll.match(/\d\s+\d/g) || []).length;
+    const commaRatio = commaSep / Math.max(1, commaSep + spaceSep);
+    const noLead = (dAll.match(/(?<!\d)\.\d+/g) || []).length;
+    const withLead = (dAll.match(/\b0\.\d+/g) || []).length;
+    const noLeadRatio = noLead / Math.max(1, noLead + withLead);
+
+    let indent2 = 0, indent4 = 0;
+    for (const ln of linesArr) {
+      const sp = ln.match(/^( +)\S/);
+      if (sp) {
+        if (sp[1].length === 2 || sp[1].length === 6) indent2++;
+        else if (sp[1].length === 4 || sp[1].length === 8) indent4++;
+      }
+    }
+    const indent4Ratio = indent4 / Math.max(1, indent2 + indent4);
+    const nKeyframes = (c.match(/@keyframes\s+/ig) || []).length;
+    const nSmil = count('animate', 'animatetransform', 'animatemotion');
+    const titleMatch = c.match(/<title>([^<]*)<\/title>/i);
+    const hasCjkTitle = /[\u4e00-\u9fff]/.test(titleMatch ? titleMatch[1] : '') ? 1 : 0;
+
+    const rootMatch = c.match(/<svg\b[^>]*>/i);
+    const rootTag = rootMatch ? rootMatch[0] : '';
+    const rootStroke = /\bstroke=/.test(rootTag) ? 1 : 0;
+    const rootWH = /\bwidth=/.test(rootTag) && /\bheight=/.test(rootTag) ? 1 : 0;
+    const whFirst = /width=["']32["'][^>]*viewBox=["']0 0 32 32["']/i.test(rootTag) ? 1 : 0;
+    const rxMatch = c.match(/<rect\b[^>]*\brx=["'](\d+(?:\.\d+)?)["']/i);
+    const rx = rxMatch ? Number(rxMatch[1]) : 0;
+
+    const hasAriaRole = (cl.includes('role="img"') || cl.includes('aria-label') || cl.includes('aria-labelledby')) ? 1 : 0;
+    const hasSvgTitleDesc = (count('title') >= 1 && count('desc') >= 1) ? 1 : 0;
+    const hasCssClamp = cl.includes('clamp(') ? 1 : 0;
+    const hasGridPlace = cl.includes('place-items') ? 1 : 0;
+    const hasTransformBox = cl.includes('transform-box') ? 1 : 0;
+    const hasFeFilter = /<fe(?:gaussianblur|dropshadow|turbulence|displacementmap)\b/i.test(cl) ? 1 : 0;
+    const hasVisChange = cl.includes('visibilitychange') ? 1 : 0;
+    const uniqueHexCnt = new Set(hex.map(h => h.toLowerCase())).size;
+
+    const cssCustomProps = (c.match(/--[a-zA-Z][a-zA-Z0-9_-]*\s*:/g) || []).length;
+    const cssGradCnt = (cl.match(/(?:linear|radial|conic)-gradient\s*\(/g) || []).length;
+    const scriptBlocks = Array.from(c.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/ig), m => m[1]);
+    const scriptShare = scriptBlocks.join('').length / Math.max(1, c.length);
+    const coordNums = dAll.match(/\d+(?:\.\d+)?/g) || [];
+    let intCoords = 0, dp1Coords = 0, dec2Coords = 0, dp3Coords = 0;
+    for (const cn of coordNums) {
+      const dot = cn.indexOf('.');
+      if (dot === -1) intCoords++;
+      else {
+        const dpLen = cn.length - dot - 1;
+        if (dpLen === 1) dp1Coords++;
+        else if (dpLen >= 2) {
+          dec2Coords++;
+          if (dpLen >= 3) dp3Coords++;
+        }
+      }
+    }
+    const nCoordNums = Math.max(1, coordNums.length);
+    const intCoordRatio = intCoords / nCoordNums;
+    const dp1CoordRatio = dp1Coords / nCoordNums;
+    const dec2CoordRatio = dec2Coords / nCoordNums;
+    const dp3CoordRatio = dp3Coords / nCoordNums;
+    const totCmds = Math.max(1, upperCmds + lowerCmds);
+    const cubicCRatio = (dAll.match(/[CcSs]/g) || []).length / totCmds;
+    const quadQRatio = (dAll.match(/[QqTt]/g) || []).length / totCmds;
+    const hvOrthoRatio = (dAll.match(/[HhVv]/g) || []).length / totCmds;
+    const closeZRatio = (dAll.match(/[Zz]/g) || []).length / totCmds;
+    const hasPerfNow = cl.includes('performance.now') ? 1 : 0;
+    const hasDomReadyOrIife = (cl.includes('domcontentloaded') || /\(\s*\(\s*\)\s*=>/.test(c) || /\(\s*function\s*\(/.test(c)) ? 1 : 0;
+    const roundJoinCnt = (cl.match(/stroke-line(?:cap|join)\s*=\s*["']round["']/g) || []).length;
+    const hasPreserveAR = cl.includes('preserveaspectratio') ? 1 : 0;
+    const hasCjkText = /[\u4e00-\u9fff]/.test(c) ? 1 : 0;
+    const modernCssCnt = (cl.match(/\b(?:box-shadow|backdrop-filter|aspect-ratio)\s*:/g) || []).length;
+
+    const num = x => Math.log1p(Math.max(0, x));
+    const vec = [
+      num(bytes), num(lines), num(bytes / lines),
+      vbW / Math.max(1, vbH), parsed.length > 1 ? 1 : 0,
+      cl.includes('requestanimationframe') ? 1 : 0,
+      cl.includes('cancelanimationframe') ? 1 : 0,
+      num(nKeyframes),
+      num(nSmil),
+      (cl.includes('math.sin') || cl.includes('math.cos')) ? 1 : 0,
+      (cl.includes('math.atan2') || cl.includes('math.acos')) ? 1 : 0,
+      (c.includes('--') && cl.includes('var(--')) ? 1 : 0,
+      cl.includes('prefers-reduced-motion') ? 1 : 0,
+      num(htmlComments), num(jsComments), num(cssComments),
+      upperHex, hex6Ratio, relCmdRatio, bezierRatio, arcRatio, commaRatio, noLeadRatio,
+      indent4Ratio, dec2CoordRatio, hasCjkTitle,
+      rootStroke, rootWH, whFirst, num(rx),
+      num(count('path')), num(count('circle')), num(count('ellipse')), num(count('rect')),
+      num(count('line')), num(count('polyline','polygon')), num(count('g')),
+      num(count('lineargradient','radialgradient')),
+      num(count('filter','clippath')), num(count('use')),
+      hasAriaRole, hasSvgTitleDesc, hasCssClamp, hasGridPlace, hasTransformBox,
+      hasFeFilter, hasVisChange, num(uniqueHexCnt),
+      num(cssCustomProps), num(cssGradCnt), scriptShare * 3.0,
+      hasPerfNow, hasDomReadyOrIife, num(roundJoinCnt), hasPreserveAR, hasCjkText, num(modernCssCnt),
+      intCoordRatio, dp1CoordRatio, dp3CoordRatio,
+      cubicCRatio, quadQRatio, hvOrthoRatio, closeZRatio
+    ];
+    // [V23.0] 8 Cross-Lingual Micro-Syntax & Code-Formatting Dimensions (dims 64..71: 1:1 Python Parity)
+    const _v23Hexes = Array.from(c.matchAll(/#([0-9a-fA-F]{6})\b/g), m => m[1]);
+    let _v23UpH = 0, _v23LoH = 0;
+    for (const _hx of _v23Hexes) {
+      const hasU = /[A-F]/.test(_hx), hasL = /[a-f]/.test(_hx);
+      if (hasU && !hasL) _v23UpH++;
+      else if (hasL && !hasU) _v23LoH++;
+    }
+    const _v23HexUpRatio = _v23UpH / Math.max(1, _v23UpH + _v23LoH);
+    let _v23PNums = 0, _v23PDecs = 0, _v23PDec2 = 0;
+    for (const _pm of c.matchAll(/\bd=["']([^"']+)["']/g)) {
+      for (const _nm of _pm[1].matchAll(/-?\d+(?:\.(\d+))?/g)) {
+        _v23PNums++;
+        if (_nm[1] !== undefined) {
+          _v23PDecs++;
+          if (_nm[1].length >= 2) _v23PDec2++;
+        }
+      }
+    }
+    const _v23DecRatio = _v23PDecs / Math.max(1, _v23PNums);
+    const _v23Dec2Ratio = _v23PDec2 / Math.max(1, _v23PNums);
+    const _v23Sm = c.match(/<svg\b([^>]*)>/i);
+    const _v23SvgAttr = _v23Sm ? _v23Sm[1] : '';
+    const _iVb = _v23SvgAttr.indexOf('viewBox'), _iXm = _v23SvgAttr.indexOf('xmlns');
+    const _v23VbBeforeXmlns = (_iVb >= 0 && (_iXm < 0 || _iVb < _iXm)) ? 1.0 : 0.0;
+    const _v23SmSty = c.match(/<style[^>]*>([\s\S]*?)<\/style>/i);
+    const _v23CssTxt = _v23SmSty ? _v23SmSty[1] : '';
+    const _v23Blocks = Array.from(_v23CssTxt.matchAll(/\{([^{}]*)\}/g), m => m[1]);
+    const _v23CssSingle = _v23Blocks.length ? (_v23Blocks.filter(b => !b.trim().includes('\n')).length / _v23Blocks.length) : 0.0;
+    const _cnS = (_v23CssTxt.match(/[a-z-]:[^\s/]/g) || []).length;
+    const _csS = (_v23CssTxt.match(/[a-z-]:\s+\S/g) || []).length;
+    const _v23CssNospace = (_cnS + _csS) > 0 ? (_cnS / (_cnS + _csS)) : 0.0;
+    const _v23TrM = Array.from(c.matchAll(/translate\(\s*-?\d+(?:\.\d+)?(\s*,\s*|\s+)-?\d+/g), m => m[1]);
+    const _v23TrComma = _v23TrM.length ? (_v23TrM.filter(sp => sp.includes(',')).length / _v23TrM.length) : 0.5;
+    const _v23Rot3 = Math.log1p((c.match(/rotate\(\s*-?\d+(?:\.\d+)?(?:\s*,\s*|\s+)\d+(?:\.\d+)?(?:\s*,\s*|\s+)\d+/g) || []).length);
+    vec.push(_v23HexUpRatio, _v23DecRatio, _v23Dec2Ratio, _v23VbBeforeXmlns, _v23CssSingle, _v23CssNospace, _v23TrComma, _v23Rot3);
+
+    // V19.7 Clean Token Extraction: strip hex literals before identifier scan so #87CEEB/#FFF never leak as words!
+    const cNoGeomNoHex = (codeType === 'html_svg' ? c.replace(/\b(?:d|points)=["'][^"']*["']/g, ' ') : c)
+      .replace(/#[0-9a-fA-F]{3,8}\b/g, ' ');
+    const rawWords = cNoGeomNoHex.match(/[a-zA-Z_][a-zA-Z0-9_-]{2,32}/g) || [];
+    const tokens = new Set();
+    for (const w of rawWords) {
+      if (!PELICAN_TOK_STOP.has(w) && !PELICAN_TOK_STOP.has(w.toLowerCase()) && !/^\d/.test(w)) {
+        tokens.add('W_' + w);
+      }
+    }
+    if (codeType === 'html_svg') {
+      for (const m of cNoGeomNoHex.matchAll(/\bclass=["']([^"']+)["']/g)) {
+        for (const cn of m[1].trim().split(/\s+/)) {
+          if (cn) tokens.add('CLS_' + cn);
+        }
+      }
+      for (const m of cNoGeomNoHex.matchAll(/\bid=["']([^"']+)["']/g)) {
+        if (m[1].trim()) tokens.add('ID_' + m[1].trim());
+      }
+      for (const m of cNoGeomNoHex.matchAll(/@keyframes\s+([a-zA-Z0-9_-]+)/ig)) {
+        tokens.add('KF_' + m[1]);
+      }
+      for (const m of cNoGeomNoHex.matchAll(/--([a-zA-Z][a-zA-Z0-9_-]*)\s*:/g)) {
+        tokens.add('VAR_' + m[1]);
+      }
+    }
+    for (const h of hex6) {
+      const hl = h.toLowerCase();
+      if (!PELICAN_BORING_HEX.has(hl)) tokens.add('HEX_' + hl);
+    }
+    if (mainVB) tokens.add('VB_' + mainVB.replace(/\s+/g, '_'));
+    for (const vbi of vbs) {
+      if (vbi) tokens.add('VB_' + String(vbi).trim().replace(/\s+/g, '_'));
+    }
+    if (codeType === 'html_svg') {
+      const hasRaf = cl.includes('requestanimationframe');
+      const hasSmil = cl.includes('<animatetransform') || cl.includes('<animate ') || cl.includes('<animatemotion');
+      const hasKf = cl.includes('@keyframes');
+      tokens.add(`ANIM_${hasRaf ? 1 : 0}_${hasSmil ? 1 : 0}_${hasKf ? 1 : 0}`);
+      const mSvgBody = cl.match(/<svg\b[^>]*>([\s\S]*?)<\/svg>/);
+      if (mSvgBody) {
+        const rawTags = [];
+        for (const tm of mSvgBody[1].matchAll(/<(defs|style|rect|circle|ellipse|line|polyline|polygon|path|g|use|clippath|filter)\b/g)) {
+          rawTags.push(tm[1]);
+        }
+        if (rawTags.length >= 4) {
+          const dedup = [rawTags[0]];
+          for (let ti = 1; ti < rawTags.length; ti++) {
+            if (rawTags[ti] !== dedup[dedup.length - 1]) dedup.push(rawTags[ti]);
+          }
+          tokens.add('LAYER_' + dedup.slice(0, 5).join('_'));
+          tokens.add('LAYER3_' + dedup.slice(0, 3).join('_'));
+        }
+      }
+      const nMSp = (c.match(/\bd=["']M\s+\d/g) || []).length;
+      const nMNoSp = (c.match(/\bd=["']M\d/g) || []).length;
+      if (nMSp > nMNoSp * 2 && nMSp >= 3) tokens.add('PATHFMT_M_SPACED');
+      else if (nMNoSp > nMSp * 2 && nMNoSp >= 3) tokens.add('PATHFMT_M_COMPACT');
+      const nPComma = (c.match(/\bd=["'][^"']*\d,\d/g) || []).length;
+      const nPSpace = (c.match(/\bd=["'][^"']*\d\s+\d/g) || []).length;
+      if (nPComma > nPSpace * 1.5 && nPComma >= 4) tokens.add('PATHSEP_COMMA');
+      else if (nPSpace > nPComma * 1.5 && nPSpace >= 4) tokens.add('PATHSEP_SPACE');
+
+      // [V21] Exact 1:1 JS <-> Python Orthogonal HTML & SVG Structural Tokens
+      const _twSet = new Set([
+        '#38bdf8', '#0ea5e9', '#0284c7', '#0369a1', '#7dd3fc', '#bae6fd', '#e0f2fe', '#f0f9ff',
+        '#f8fafc', '#f1f5f9', '#e2e8f0', '#cbd5e1', '#94a3b8', '#64748b', '#475569', '#334155', '#1e293b', '#0f172a',
+        '#fbbf24', '#f59e0b', '#d97706', '#fcd34d', '#fde68a', '#fef08a', '#f97316', '#ea580c', '#fb923c', '#ef4444', '#dc2626',
+        '#22c55e', '#10b981', '#14b8a6', '#6366f1', '#8b5cf6', '#ec4899'
+      ]);
+      const twHits = new Set(hex6.map(h => h.toLowerCase()).filter(hl => _twSet.has(hl))).size;
+      if (twHits >= 4) tokens.add('PAL_TAILWIND_HI');
+      else if (twHits >= 2) tokens.add('PAL_TAILWIND_MED');
+      if (/<linearGradient\b[^>]*\b(?:x1|x2|y1|y2)=["'][0-9.]+%["']/.test(c)) tokens.add('GRAD_PCT_COORDS');
+      if (/[═━]{4,}/.test(c)) tokens.add('COMM_UNICODE_BOX');
+      if (/<meta[^>]+name=["']viewport["']/i.test(c)) tokens.add('META_VP_PRESENT');
+      else if (cl.includes('<!doctype html') || cl.includes('<html')) tokens.add('META_VP_ABSENT');
+      if (c.includes('charset="utf-8"') || c.includes("charset='utf-8'")) tokens.add('CHARSET_LOWER');
+      else if (c.includes('charset="UTF-8"') || c.includes("charset='UTF-8'")) tokens.add('CHARSET_UPPER');
+      const _mt = c.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
+      if (_mt) {
+        const _tl = _mt[1].trim().length;
+        if (_tl <= 8) tokens.add('TITLE_EMPTY_SHORT');
+        else if (_tl >= 18) tokens.add('TITLE_DESCRIPTIVE');
+      }
+      if (/preserveAspectRatio=["'][^"']*(?:meet|slice)/i.test(c)) tokens.add('PAR_MEET_SLICE');
+      const _svgEnd = cl.lastIndexOf('</svg>');
+      const _styPos = cl.indexOf('<style');
+      if (_svgEnd > 0 && _styPos > _svgEnd) tokens.add('STYLE_AFTER_SVG');
+      if (/(?:^|\n)<svg\b/i.test(c)) tokens.add('SVG_INDENT_ZERO');
+      if (/\b100v[wh]\b/.test(cl)) tokens.add('CSS_VIEWPORT_100');
+      if (c.includes('<!doctype html>')) tokens.add('DOCTYPE_LOWER');
+      else if (c.includes('<!DOCTYPE html>')) tokens.add('DOCTYPE_UPPER');
+      if (c.includes(':root')) tokens.add('CSS_ROOT_VARS');
+    }
+    if (coordNums.length >= 20) {
+      if (intCoordRatio >= 0.92) tokens.add('COORD_PURE_INT');
+      else if (dp1CoordRatio >= 0.22) tokens.add('COORD_DP1_DOM');
+      else if (dec2CoordRatio >= 0.15) tokens.add('COORD_DP2PLUS_DOM');
+    }
+    if (quadQRatio > cubicCRatio && quadQRatio >= 0.08) tokens.add('CMD_QUAD_DOM');
+    if (hvOrthoRatio >= 0.06) tokens.add('CMD_HV_SHORTHAND');
+    if (rootStroke) tokens.add('ROOT_SVG_STROKE');
+    if (whFirst) tokens.add('WH_BEFORE_VB');
+    if (_v23UpH + _v23LoH >= 3) {
+      tokens.add(_v23HexUpRatio >= 0.85 ? 'HEXCASE_PURE_UPPER' : (_v23HexUpRatio <= 0.15 ? 'HEXCASE_PURE_LOWER' : 'HEXCASE_MIXED'));
+    }
+    if (_v23PNums >= 12) {
+      if (_v23DecRatio === 0.0) tokens.add('PATHDEC_PURE_INT');
+      else if (_v23Dec2Ratio >= 0.15) tokens.add('PATHDEC_HIGH_PREC');
+      else tokens.add('PATHDEC_1DEC');
+    }
+    if (_v23Sm) tokens.add(_v23VbBeforeXmlns > 0.5 ? 'SVGATTR_VB_FIRST' : 'SVGATTR_XMLNS_FIRST');
+    if (_v23Blocks.length >= 3) {
+      if (_v23CssSingle >= 0.75) tokens.add('CSSFMT_SINGLELINE');
+      else if (_v23CssSingle <= 0.15) tokens.add('CSSFMT_MULTILINE');
+      if (_v23CssNospace >= 0.75) tokens.add('CSSFMT_COLON_TIGHT');
+      else if (_v23CssNospace <= 0.15) tokens.add('CSSFMT_COLON_SPACED');
+    }
+    if (_v23TrM.length) {
+      tokens.add(_v23TrComma >= 0.7 ? 'TRSYN_COMMA' : (_v23TrComma <= 0.3 ? 'TRSYN_SPACE' : 'TRSYN_MIX'));
+    }
+    if (_v23Rot3 > 0) tokens.add('ROTSYN_3ARG');
+    if (c.includes('calcMode="spline"') || c.includes('keySplines=')) tokens.add('SMIL_SPLINE');
+    if (c.includes('cubic-bezier(')) tokens.add('CSS_CUBIC_BEZIER');
+    // [V24.0] 8 Static SVG Geometric Topology & Path-Command Invariants (dims 72..79)
+    let _v24Vbw = 800.0, _v24Vbh = 600.0;
+    const _v24Mvb = c.match(/viewBox\s*=\s*["']\s*([-\d.]+)[\s,]+([-\d.]+)[\s,]+([\d.]+)[\s,]+([\d.]+)/i);
+    if (_v24Mvb) {
+      _v24Vbw = Math.max(100.0, parseFloat(_v24Mvb[3]) || 800.0);
+      _v24Vbh = Math.max(100.0, parseFloat(_v24Mvb[4]) || 600.0);
+    }
+    const _v24Wheels = [];
+    for (const _cm of c.matchAll(/<circle\b([^>]*)>/gi)) {
+      const _ca = _cm[1] || '';
+      const _mr = _ca.match(/\br\s*=\s*["']([\d.]+)/i);
+      if (_mr) {
+        const _rv = parseFloat(_mr[1]) || 0;
+        if (_rv >= 18.0 && _rv <= _v24Vbh * 0.42) {
+          const _mcx = _ca.match(/\bcx\s*=\s*["']([-\d.]+)/i);
+          _v24Wheels.push([_rv, _mcx ? (parseFloat(_mcx[1]) || 0) : 0]);
+        }
+      }
+    }
+    for (const _em of c.matchAll(/<ellipse\b([^>]*)>/gi)) {
+      const _ea = _em[1] || '';
+      const _mrx = _ea.match(/\brx\s*=\s*["']([\d.]+)/i);
+      const _mry = _ea.match(/\bry\s*=\s*["']([\d.]+)/i);
+      if (_mrx && _mry) {
+        const _rxv = parseFloat(_mrx[1]) || 0, _ryv = parseFloat(_mry[1]) || 0;
+        if (_rxv >= 18.0 && _rxv <= _v24Vbh * 0.42 && (_rxv / Math.max(1.0, _ryv)) >= 0.75 && (_rxv / Math.max(1.0, _ryv)) <= 1.33) {
+          const _mcx = _ea.match(/\bcx\s*=\s*["']([-\d.]+)/i);
+          _v24Wheels.push([0.5 * (_rxv + _ryv), _mcx ? (parseFloat(_mcx[1]) || 0) : 0]);
+        }
+      }
+    }
+    _v24Wheels.sort((a, b) => b[0] - a[0]);
+    const _v24Dw = [];
+    for (const [_rv, _cxv] of _v24Wheels) {
+      if (_v24Dw.every((w) => Math.abs(_cxv - w[1]) > 0.08 * _v24Vbw)) _v24Dw.push([_rv, _cxv]);
+      if (_v24Dw.length >= 3) break;
+    }
+    const _v24Wspan = _v24Dw.length >= 2 ? Math.min(1.2, Math.abs(_v24Dw[0][1] - _v24Dw[1][1]) / _v24Vbw) : 0.0;
+    const _v24Wrad = _v24Dw.length >= 2 ? Math.min(0.6, 0.5 * (_v24Dw[0][0] + _v24Dw[1][0]) / _v24Vbh) : (_v24Dw.length === 1 ? Math.min(0.6, _v24Dw[0][0] / _v24Vbh) : 0.0);
+    const _v24DAll = Array.from(c.matchAll(/\bd=["']([^"']+)["']/g), m => m[1]).join(' ');
+    const _v24Cmds = _v24DAll.match(/[MmLlHhVvCcSsQqTtAaZz]/g) || [];
+    let _v24Nrel = 0, _v24Nabs = 0, _v24Ncub = 0, _v24Nquad = 0, _v24Narc = 0, _v24Nmov = 0, _v24Ncls = 0;
+    for (const _ch of _v24Cmds) {
+      if (_ch >= 'a' && _ch <= 'z' && _ch !== 'z') _v24Nrel++;
+      else if (_ch >= 'A' && _ch <= 'Z' && _ch !== 'Z') _v24Nabs++;
+      if ('CcSs'.includes(_ch)) _v24Ncub++;
+      else if ('QqTt'.includes(_ch)) _v24Nquad++;
+      else if ('Aa'.includes(_ch)) _v24Narc++;
+      else if ('Mm'.includes(_ch)) _v24Nmov++;
+      else if ('Zz'.includes(_ch)) _v24Ncls++;
+    }
+    const _v24Ncurv = _v24Ncub + _v24Nquad + _v24Narc;
+    const _v24CubicR = _v24Ncurv > 0 ? (_v24Ncub / _v24Ncurv) : 0.5;
+    const _v24RelR = (_v24Nrel + _v24Nabs) > 0 ? (_v24Nrel / (_v24Nrel + _v24Nabs)) : 0.0;
+    const _v24CloseR = _v24Nmov > 0 ? Math.min(1.2, _v24Ncls / _v24Nmov) : 0.0;
+    const _v24GAttrs = Array.from(c.matchAll(/<g\b([^>]*)>/gi), m => m[1] || '');
+    const _v24Ng = _v24GAttrs.length;
+    const _v24Ngn = _v24GAttrs.filter(ga => /\b(?:id|class)\s*=/i.test(ga)).length;
+    const _v24GidR = _v24Ng > 0 ? (_v24Ngn / _v24Ng) : 0.0;
+    const _v24RcapD = Math.log1p((c.match(/stroke-line(?:cap|join)\s*[:=]\s*["']?\s*round\b/gi) || []).length) / 4.0;
+    const _v24Nadef = (c.match(/<(?:filter|clipPath|mask|pattern|marker)\b/gi) || []).length;
+    const _v24AdefD = Math.log1p(_v24Nadef) / 3.0;
+    vec.push(_v24Wspan, _v24Wrad, _v24CubicR, _v24RelR, _v24CloseR, _v24GidR, _v24RcapD, _v24AdefD);
+    if (_v24Nrel + _v24Nabs >= 6) {
+      tokens.add(_v24RelR <= 0.02 ? 'PATHCMD_PURE_ABS' : (_v24RelR >= 0.45 ? 'PATHCMD_REL_HEAVY' : 'PATHCMD_REL_MIX'));
+    }
+    if (_v24Ncurv >= 4) {
+      if (_v24Nquad === 0 && _v24Ncub >= 4) tokens.add('CURVE_PURE_CUBIC');
+      else if (_v24Nquad >= _v24Ncub) tokens.add('CURVE_QUAD_HEAVY');
+      if (_v24Narc >= 2) tokens.add('CURVE_ARC_USED');
+    }
+    if (_v24Ng >= 3) {
+      if (_v24GidR >= 0.75) tokens.add('GRP_SEMANTIC_HIGH');
+      else if (_v24GidR === 0.0) tokens.add('GRP_BARE_ONLY');
+    }
+    if (_v24Nadef >= 2) tokens.add('DEFS_ADV_COMPOSITE');
+
+    return {
+      code_type: codeType,
+      vec,
+      tokens,
+      bytes,
+      lines,
+      vbs,
+      main_vb: mainVB,
+      min_vb_area: minVBArea,
+      n_path: count('path'),
+      n_g: count('g'),
+      n_grad: count('lineargradient','radialgradient'),
+      n_hcomm: htmlComments,
+      has_raf: cl.includes('requestanimationframe'),
+      root_tag: rootTag,
+      root_stroke: rootStroke,
+      wh_first: whFirst,
+      comma_ratio: commaRatio,
+      rect_rx: rx,
+      raw: c,
+      lower: cl
+    };
+  }
+
+
   function extractHtmlSvgFeatures(rawCode, forcedCodeType = "") {
     const cleaned = extractCleanHtmlOrSvg(rawCode);
     const c = (cleaned.code || String(rawCode || ""))
@@ -3305,7 +3732,24 @@ const ChatHabitFingerprint = (() => {
     const hasCssVar = (c.includes("--") && cl.includes("var(--")) ? 1 : 0;
     const hasReducedMotion = cl.includes("prefers-reduced-motion") ? 1 : 0;
 
-    const vec = [
+    const hasLowerDoctype = c.includes("<!doctype html>") ? 1 : 0;
+    const hasUpperDoctype = c.includes("<!DOCTYPE html>") ? 1 : 0;
+    const hasColorSchemeCss = cl.includes("color-scheme:") ? 1 : 0;
+    const hasBackdropFilter = cl.includes("backdrop-filter") ? 1 : 0;
+    const hasAriaLabelledby = cl.includes("aria-labelledby") ? 1 : 0;
+    const hasTransformOrigin = cl.includes("transform-origin") ? 1 : 0;
+    const hasTransformBoxFill = (cl.includes("transform-box: fill-box") || cl.includes("transform-box:fill-box")) ? 1 : 0;
+    const hasWillChange = cl.includes("will-change") ? 1 : 0;
+    const hasCubicBezier = cl.includes("cubic-bezier(") ? 1 : 0;
+    const hasSetAttribute = hasSetAttr;
+    const hasCreateElementNS = cl.includes("createelementns(") ? 1 : 0;
+    const hasPerfNow = cl.includes("performance.now(") ? 1 : 0;
+    const hasMathHypot = cl.includes("math.hypot(") ? 1 : 0;
+    const hasStrokeLinecapRound = (cl.includes('stroke-linecap="round"') || cl.includes("stroke-linecap='round'") || cl.includes("stroke-linecap: round") || cl.includes("stroke-linecap:round")) ? 1 : 0;
+    const hasFeGaussianBlur = cl.includes("<fegaussianblur") ? 1 : 0;
+    const hasFeDropShadow = cl.includes("<fedropshadow") ? 1 : 0;
+
+    const vecBase40 = [
       num(bytes), num(lines), num(bytes / lines), lines <= 5 ? 1 : 0,
       num(vbW), num(vbH), vbW / Math.max(1, vbH), vbs.length > 1 ? 1 : 0,
       mainVB.includes("0 0 1200 800") ? 1 : 0,
@@ -3318,35 +3762,45 @@ const ChatHabitFingerprint = (() => {
       rootStroke, rootWH, whFirst, num(rx),
       num(nPath), num(nCircle), num(nEllipse), num(nRect),
       num(nLine), num(nPoly), num(nG),
-      num(nGrad), num(nFilter), num(nUse),
-      hasAriaRole, hasSvgTitleDesc, hasCssClamp, hasGridPlace, hasTransformBox,
-      hasFeFilter, hasVisChange, hasSetAttr, num(uniqueHexCnt)
+      num(nGrad), num(nFilter), num(nUse)
     ];
+    const vec = [...vecBase40, hasAriaRole, hasSvgTitleDesc, hasCssClamp, hasGridPlace, hasTransformBox, hasFeFilter, hasVisChange, hasSetAttr, num(uniqueHexCnt)];
+    const vec57 = [...vecBase40, hasLowerDoctype, hasUpperDoctype, hasColorSchemeCss, hasBackdropFilter, hasAriaLabelledby, hasTransformOrigin, hasTransformBoxFill, hasWillChange, hasCubicBezier, hasSetAttribute, hasCreateElementNS, hasPerfNow, hasMathHypot, hasStrokeLinecapRound, hasFeGaussianBlur, hasFeDropShadow];
 
     const cNoGeom = codeType === "html_svg" ? c.replace(/\b(?:d|points)=["'][^"']*["']/g, " ") : c;
+    const cNoGeomV5 = codeType === "html_svg" ? cNoGeom.replace(/#[0-9a-fA-F]{3,8}\b/g, " ") : c;
     const tokens = new Set((cNoGeom.match(/[a-zA-Z_][a-zA-Z0-9_-]{2,32}/g) || []));
+    const tokensV5 = new Set();
+    for (const w of (cNoGeomV5.match(/[a-zA-Z_][a-zA-Z0-9_-]{2,32}/g) || [])) {
+      tokensV5.add("W_" + w.toLowerCase());
+      tokensV5.add(w);
+    }
     if (codeType === "html_svg") {
       for (const m of cNoGeom.matchAll(/\bclass=["']([^"']+)["']/g)) {
         for (const cn of m[1].trim().split(/\s+/)) {
-          if (cn) tokens.add("CLS_" + cn.toLowerCase());
+          if (cn) { tokens.add("CLS_" + cn.toLowerCase()); tokensV5.add("CLS_" + cn); tokensV5.add("CLS_" + cn.toLowerCase()); }
         }
       }
       for (const m of cNoGeom.matchAll(/\bid=["']([^"']+)["']/g)) {
-        if (m[1].trim()) tokens.add("ID_" + m[1].trim().toLowerCase());
+        const idv = m[1].trim();
+        if (idv) { tokens.add("ID_" + idv.toLowerCase()); tokensV5.add("ID_" + idv); tokensV5.add("ID_" + idv.toLowerCase()); }
       }
       for (const m of cNoGeom.matchAll(/@keyframes\s+([a-zA-Z0-9_-]+)/ig)) {
-        tokens.add("KF_" + m[1].toLowerCase());
+        tokens.add("KF_" + m[1].toLowerCase()); tokensV5.add("KF_" + m[1]); tokensV5.add("KF_" + m[1].toLowerCase());
+      }
+      for (const m of cNoGeom.matchAll(/--([a-zA-Z0-9_-]{2,28})\s*:/g)) {
+        tokensV5.add("VAR_" + m[1]); tokensV5.add("VAR_" + m[1].toLowerCase());
       }
     }
-    for (const h of new Set(hex)) tokens.add("HEX_" + h.toLowerCase());
-    if (mainVB) tokens.add("VB_" + mainVB.replace(/\s+/g, "_"));
-    if (vbs.length > 1) tokens.add("MULTI_SVG");
-    if (rootStroke) tokens.add("ROOT_SVG_STROKE");
-    if (whFirst) tokens.add("WH_BEFORE_VB");
-    if (commaRatio > 0.35) tokens.add("PATH_COMMA_SEP");
-    if (relCmdRatio > 0.25) tokens.add("PATH_REL_CMDS");
-    if (noLeadRatio > 0.4) tokens.add("PATH_OMIT_LEAD_ZERO");
-    if (upperHex > 0.5) tokens.add("UPPERCASE_HEX_DOMINANT");
+    for (const h of new Set(hex)) { tokens.add("HEX_" + h.toLowerCase()); tokensV5.add("HEX_" + h.toLowerCase()); }
+    if (mainVB) { tokens.add("VB_" + mainVB.replace(/\s+/g, "_")); tokensV5.add("VB_" + mainVB.replace(/\s+/g, "_")); }
+    if (vbs.length > 1) { tokens.add("MULTI_SVG"); tokensV5.add("MULTI_SVG"); }
+    if (rootStroke) { tokens.add("ROOT_SVG_STROKE"); tokensV5.add("ROOT_SVG_STROKE"); }
+    if (whFirst) { tokens.add("WH_BEFORE_VB"); tokensV5.add("WH_BEFORE_VB"); }
+    if (commaRatio > 0.35) { tokens.add("PATH_COMMA_SEP"); tokensV5.add("PATH_COMMA_SEP"); }
+    if (relCmdRatio > 0.25) { tokens.add("PATH_REL_CMDS"); tokensV5.add("PATH_REL_CMDS"); }
+    if (noLeadRatio > 0.4) { tokens.add("PATH_OMIT_LEAD_ZERO"); tokensV5.add("PATH_OMIT_LEAD_ZERO"); }
+    if (upperHex > 0.5) { tokens.add("UPPERCASE_HEX_DOMINANT"); tokensV5.add("UPPERCASE_HEX_DOMINANT"); }
     if (hasAriaRole) tokens.add("ARCH_ARIA_ROLE_IMG");
     if (hasSvgTitleDesc) tokens.add("ARCH_SVG_TITLE_DESC");
     if (hasCssClamp) tokens.add("ARCH_CSS_CLAMP");
@@ -3382,16 +3836,20 @@ const ChatHabitFingerprint = (() => {
 
     const svgStyleV2 = extractSvgStyleV2(c);
     const miniSvg32Referee = codeType === "svg32" ? scoreMiniSvg32Pelican(c) : null;
+    const v24Target = extractPelicanFeatureVectorV24(c, codeType);
 
     return {
       code_type: codeType,
       isTruncated: cleaned.isTruncated,
       vec,
+      vec57: v24Target.vec,
+      vec80: v24Target.vec,
       sig12,
       svgStyleV2,
       miniSvg32Referee,
       spectralScore,
       tokens,
+      tokensV5: v24Target.tokens,
       bytes,
       lines,
       vbs,
@@ -3448,6 +3906,8 @@ const ChatHabitFingerprint = (() => {
         add("openai/gpt-6.1-sol", 0.65, "GPT 6.1 Sol 1440×900双曲柄(nearCrank/farCrank)");
       } else if ((cl.includes(".masthead") || cl.includes(".eyebrow")) && cl.includes("calc(100% - 64px)") && cl.includes("visibilitychange") && f.has_raf) {
         add("openai/gpt-6.1-sol", 0.65, "GPT 6.1 Sol masthead/eyebrow+visibilitychange");
+      } else if (!f.has_raf && (cl.includes('id="scenetitle"') || cl.includes('aria-labelledby="scenetitle scenedesc"')) && (cl.includes('class="artboard"') || cl.includes('class="card"')) && (cl.includes("farleg") || cl.includes("nearleg") || cl.includes("leg--back") || cl.includes("leg--front") || cl.includes("crank-arm") || cl.includes('id="framepaint"')) && /<animatetransform\b/i.test(cl)) {
+        add("openai/gpt-6.1-sol", 0.72, "GPT 6.1 Sol sceneTitle/artboard+SMIL骨骼");
       }
 
       if (cl.includes('rel="icon"') && cl.includes("data:image/svg+xml") && cl.includes("whlf") && cl.includes("whlr")) add("anthropic/claude-opus-5.5", 0.72, "Claude Opus 5.5 内嵌SVG Favicon+whlF/whlR");
@@ -3456,8 +3916,8 @@ const ChatHabitFingerprint = (() => {
       if (cl.includes(".leg-a") && cl.includes(".leg-b") && cl.includes("lega") && cl.includes("legb")) add("x-ai/grok-4.7", 0.58, "Grok 4.7 leg-a/leg-b关键帧");
       if ((cl.includes("ui-rounded") || cl.includes("sf pro rounded") || cl.includes("bird-bob") || cl.includes("sun-breathe") || cl.includes("wheel-turn") || cl.includes(".hill-back") || cl.includes("bikepaint") || (cl.includes("road-drift") && cl.includes("softshadow")) || (vb.includes("0 0 1200 700") && !cl.includes("tinyshadow") && !cl.includes("whlf") && !cl.includes("pouchg"))) && !f.has_raf && !cl.includes("walk-clip") && !cl.includes("bird-feather") && !cl.includes("water-glint")) {
         add("openai/gpt-6-luna", 0.52, "GPT 6 Luna ui-rounded/bird-bob/wheel-turn纯CSS+SMIL");
-      } else if (cl.includes('lang="es"') && vb.includes("0 0 800 500")) {
-        add("openai/gpt-6-luna", 0.58, "GPT 6 Luna 多语种标题与800×500结构");
+      } else if (cl.includes('id="svg-title"') && cl.includes("legnear") && cl.includes("legfar") && (cl.includes("toesfar") || cl.includes("toesnear") || cl.includes('class="topline"') || cl.includes('class="scene-wrap"') || (cl.includes('id="svg-desc"') && cl.includes("footfar") && cl.includes("pedalfar") && /color-scheme\s*:/.test(cl)))) {
+        add("openai/gpt-6-luna", 0.72, "GPT 6 Luna svg-title+legNear/toesFar+topline逆运动学");
       }
       if ((vb.includes("0 0 800 500") || vb.includes("0 0 800 450") || vb.includes("0 0 1000 560") || vb.includes("0 0 1000 600") || vb.includes("0 0 1000 620")) && (cl.includes("#bfe6ff") || cl.includes("#e3f6ff") || cl.includes("#87ceeb") || cl.includes("hillsfar") || cl.includes("hillsnear") || cl.includes("solveik") || cl.includes("鹈鹕骑自行车</title>") || cl.includes("风一吹，就出发")) && !cl.includes("pelicanfeather") && !cl.includes("pedalu") && !cl.includes("crank-spin") && !cl.includes("tailwag") && !cl.includes("spokesrear") && !cl.includes("ikknee") && !cl.includes("legbackhilight") && !cl.includes('lang="es"') && !((cl.includes("crankr") && cl.includes("crankl") && cl.includes("pedalr") && cl.includes("pedall")) || (cl.includes("cloudtile") && cl.includes("farhilltile") && cl.includes("nearhilltile")) || (cl.includes("wheel_r") && cl.includes("crank_r") && cl.includes("thigh")))) {
         add("anthropic/claude-sonnet-5.5", 0.56, "Claude Sonnet 5.5 800×500/1000×620+#87ceeb/hillsFar/solveIK");
@@ -3473,27 +3933,30 @@ const ChatHabitFingerprint = (() => {
         add("google/gemini-3.8-flash", 0.55, "Gemini 3.8 Flash roadFill/wingbeat+1200×760");
       }
       if (vb.includes("0 0 900 520") && (cl.includes("sunrays") || cl.includes("plumeg") || cl.includes("chainfwd"))) add("z-ai/glm-5.3", 0.58, "GLM 5.3 900×520+sunRays/plumeG");
-      if ((cl.includes("wheelspin") || cl.includes("cloudrift") || cl.includes("clouddrift1") || (cl.includes("hillback") && cl.includes("hillfore")) || (f.lines <= 35 && b > 25000) || (f.n_path === 0 && b > 15000)) && !cl.includes(".masthead") && !vbs.includes("0 0 120 50") && !(vb.includes("0 0 800 500") && (cl.includes("crank-spin") || cl.includes("tailwag") || cl.includes("#87ceeb")))) add("moonshotai/kimi-k3", 0.55, "Kimi K3 关键帧/几何图元结构");
+      if ((cl.includes("wheelspin") || cl.includes("cloudrift") || cl.includes("clouddrift1") || (cl.includes("hillback") && cl.includes("hillfore"))) && !cl.includes(".masthead") && !vbs.includes("0 0 120 50") && !(vb.includes("0 0 800 500") && (cl.includes("crank-spin") || cl.includes("tailwag") || cl.includes("#87ceeb")))) add("moonshotai/kimi-k3", 0.55, "Kimi K3 关键帧/几何图元结构");
       if (b <= 11200 && (cl.includes("cranka") || cl.includes("crankb") || (vb.includes("0 0 800 500") && (cl.includes("#ff9a2e") || cl.includes("legfront") || cl.includes("pelican-head") || cl.includes("#fff8e7") || cl.includes("pedal-spin") || cl.includes("spokes") || cl.includes("groundline") || (cl.includes("@keyframes ride") && cl.includes("@keyframes ground")))))) add("anthropic/claude-haiku-5.5", 0.55, "Claude Haiku 5.5 紧凑800×500+crankA/crankB");
       const hasOpenAiColorSchemeInHtml = /color-scheme\s*:/.test(cl);
-      const hasMuseIkSolverFn = cl.includes("function knee(") || cl.includes("function kneeposition(") || cl.includes("function solveknee(") || cl.includes("function ikknee(") || cl.includes("function setleg(") || cl.includes("function updateleg(") || cl.includes("function placeleg(") || cl.includes("math.hypot(dx, dy) || 1") || /math\.min\(\s*\(\s*now\s*-\s*last\s*\)\s*\/\s*1000\s*,\s*0\.05\s*\)/.test(cl);
+      const hasOpenAiDomGuard = hasOpenAiColorSchemeInHtml || cl.includes('id="svg-title"') || cl.includes('id="svg-desc"') || cl.includes('id="scenetitle"') || cl.includes('id="scenedesc"') || cl.includes("toesfar") || cl.includes("toesnear") || cl.includes('class="artboard"') || cl.includes('class="topline"');
+      const hasMuseIkSolverFn = cl.includes("function knee(") || cl.includes("function kneeposition(") || cl.includes("function solveknee(") || cl.includes("function ikknee(") || cl.includes("function setleg(") || cl.includes("function updateleg(") || cl.includes("function placeleg(") || cl.includes("function setline(") || /math\.min\(\s*\(\s*now\s*-\s*last\s*\)\s*\/\s*1000\s*,\s*0\.05\s*\)/.test(cl);
       const hasMuseExclusiveDom = cl.includes("scarfflutter") || (cl.includes("scarftail") && !cl.includes("scarftail1")) || (cl.includes("scarfa") && cl.includes("scarfb")) || (cl.includes("hip_n") && cl.includes("hip_f")) || (cl.includes("legbackhilight") && cl.includes("legfronthilight")) || (cl.includes("head-bill") && cl.includes("fish-tail") && cl.includes("spin-rear") && cl.includes("spin-front"));
       const hasMuseSvgTitlePair = cl.includes('aria-labelledby="svgtitle svgdesc"') || cl.includes('aria-labelledby="titulosvg descsvg"') || (cl.includes('id="svgtitle"') && cl.includes('id="svgdesc"')) || (cl.includes('id="titulosvg"') && cl.includes('id="descsvg"'));
-      const hasMuseNearFarAnatomy = (((cl.includes("legnear") && cl.includes("legfar")) || (cl.includes("thighnear") && cl.includes("thighfar")) || (cl.includes("nearthigh") && cl.includes("farthigh"))) && ((cl.includes("footnear") && cl.includes("footfar")) || (cl.includes("nearfoot") && cl.includes("farfoot"))));
-      const isMuseKneeSvg = !hasOpenAiColorSchemeInHtml && (
-        (hasMuseExclusiveDom && (hasMuseIkSolverFn || (cl.includes("pedalnear") && cl.includes("pedalfar")) || (cl.includes("legnear") && cl.includes("legfar")) || (cl.includes("spin-rear") && cl.includes("spin-front")))) ||
+      const hasMuseNearFarAnatomy = ((((cl.includes("legnear") && cl.includes("legfar")) || (cl.includes("thighnear") && cl.includes("thighfar")) || (cl.includes("nearthigh") && cl.includes("farthigh"))) && ((cl.includes("footnear") && cl.includes("footfar")) || (cl.includes("nearfoot") && cl.includes("farfoot")))) || (cl.includes("thighnear") && cl.includes("shinnear") && cl.includes("thighfar") && cl.includes("shinfar")));
+      const isMuseKneeSvg = !hasOpenAiDomGuard && (
+        (hasMuseExclusiveDom && (hasMuseIkSolverFn || (cl.includes("pedalnear") && cl.includes("pedalfar")) || (cl.includes("spin-rear") && cl.includes("spin-front")))) ||
         (hasMuseSvgTitlePair && (hasMuseIkSolverFn || (cl.includes("pedalnear") && cl.includes("pedalfar")) || (cl.includes("spin-rear") && cl.includes("spin-front")))) ||
         (hasMuseNearFarAnatomy && hasMuseIkSolverFn)
       );
       const hasMuseStructuralBlock = cl.includes("grassblock") || cl.includes("treeblock") || (cl.includes('id="roadg"') && cl.includes('id="pouchg"') && cl.includes('id="sung"') && !cl.includes('id="plumeg"')) || (cl.includes("rearspokelines") && cl.includes("frontspokelines")) || (cl.includes("dashstrip") && cl.includes("grasstufts") && cl.includes("buildstrip")) || cl.includes('spokes("spokesrear")');
-      if (isMuseKneeSvg || hasMuseStructuralBlock) add("meta/muse-spark-1.3", isMuseKneeSvg ? 0.78 : 0.68, isMuseKneeSvg ? "Muse Spark 1.3 knee逆运动学/svgTitle+svgDesc/scarfFlutter" : "Muse Spark 1.3 roadG/pouchG/rearSpokeLines/dashStrip");
+      const tailwindMuseHits = ["#38bdf8", "#bae6fd", "#0284c7", "#0369a1", "#0c4a6e", "#fde047", "#facc15", "#f97316", "#ea580c", "#ef4444", "#dc2626", "#334155", "#1e293b", "#475569", "#94a3b8", "#cbd5e1", "#e2e8f0", "#f8fafc"].filter(hx => cl.includes(hx)).length;
+      const isMuseTailwindCssPelican = !hasOpenAiDomGuard && !f.has_raf && tailwindMuseHits >= 8 && (cl.includes("transform-box: fill-box") || cl.includes("transform-box:fill-box") || cl.includes("● live") || cl.includes("svg 2d animation") || (cl.includes("pelican-body") && cl.includes("wing-flap")));
+      if (isMuseKneeSvg || hasMuseStructuralBlock || isMuseTailwindCssPelican) add("meta/muse-spark-1.3", (isMuseKneeSvg || isMuseTailwindCssPelican) ? 0.78 : 0.68, isMuseTailwindCssPelican ? "Muse Spark 1.3 Tailwind-v3调色板+CSS关键帧骨骼动画" : (isMuseKneeSvg ? "Muse Spark 1.3 knee逆运动学/svgTitle+svgDesc/scarfFlutter" : "Muse Spark 1.3 roadG/pouchG/rearSpokeLines/dashStrip"));
       if ((cl.includes("bird-feather") && cl.includes("grass-sway")) || (cl.includes("pouchpaint") && cl.includes("beakpaint") && cl.includes("riderbob"))) add("xiaomi/mimo-v2.6-flash", 0.55, "MiMo V2.6 Flash grass-sway/pouchPaint");
       if ((cl.includes("driftscenery") && cl.includes("driftforeground")) || (cl.includes("spokesrear") && cl.includes("spokesfront") && vb.includes("0 0 800 500"))) add("anthropic/claude-opus-5", 0.58, "Claude Opus 5 driftScenery/spokesRear");
       if (cl.includes("sceneryrow") || (cl.includes('id="hills2"') && vb.includes("0 0 800 450"))) add("deepseek/deepseek-v4.1-flash", 0.55, "DeepSeek V4.1 Flash sceneryRow/hills2");
       if (cl.includes("backlegoutline") || cl.includes("frontlegoutline") || (cl.includes("rearspokes") && cl.includes("frontspokes") && cl.includes("speckle"))) add("openai/gpt-6-sol", 0.55, "GPT 6 Sol backLegOutline/frontLegOutline");
       if (cl.includes("tinyshadow") && cl.includes("framepaint")) {
-        const hasSolOpenAiCss = /color-scheme\s*:/.test(cl) || cl.includes("prefers-reduced-motion") || cl.includes("sandbox:") || vb.includes("0 0 900 520") || vb.includes("0 0 900 540");
-        add("openai/gpt-5.6-sol", hasSolOpenAiCss ? 0.55 : 0.16, "GPT 5.6 Sol tinyShadow/framePaint");
+        const hasSolOpenAiCss = (/color-scheme\s*:/.test(cl) || cl.includes("prefers-reduced-motion") || cl.includes("sandbox:") || vb.includes("0 0 900 520") || vb.includes("0 0 900 540")) && !isMuseKneeSvg && !hasMuseStructuralBlock && !isMuseTailwindCssPelican;
+        if (hasSolOpenAiCss) add("openai/gpt-5.6-sol", 0.55, "GPT 5.6 Sol tinyShadow/framePaint");
       }
       if (cl.includes("farlegpath") || cl.includes("farshoe") || cl.includes("badgepulse")) add("openai/gpt-5.6-luna", 0.55, "GPT 5.6 Luna farLegPath/farShoe/badgePulse");
       if (cl.includes("walk-clip") || (cl.includes("boardwalk") && cl.includes("wheel-spin--back"))) add("openai/gpt-5.5", 0.55, "GPT 5.5 boardwalk/walk-clip/BEM");
@@ -3506,7 +3969,6 @@ const ChatHabitFingerprint = (() => {
       if (cl.includes('class="stage"') && cl.includes('class="caption"') && vb.includes("0 0 800 500") && !cl.includes("sceneryrow")) add("qwen/qwen3.7-max", 0.55, "Qwen 3.7 Max stage/caption+800×500");
     } else {
       if (f.root_stroke && (/#1f2a44|#1f3a5f|#f4a259|#f5b82e/.test(cl) || f.comma_ratio > 0.35)) add("anthropic/claude-opus-5.5", 0.62, "Claude Opus 5.5 SVG32根节点stroke+逗号坐标");
-      else if (!f.root_stroke) add("anthropic/claude-opus-5.5", -0.25, "");
       if (f.wh_first && f.rect_rx === 4 && (/#fff5df|#244b52|#78c2ca/.test(cl))) add("openai/gpt-6-astra", 0.65, "GPT 6 Astra SVG32 width优先+rx=4");
       if (f.wh_first && f.rect_rx === 5 && (/#fff6e5|#294f52|#f3bc58/.test(cl))) add("openai/gpt-6.1-sol", 0.65, "GPT 6.1 Sol SVG32 width优先+rx=5");
       if (!f.wh_first && (f.rect_rx === 4 || f.rect_rx === 5)) {
@@ -3587,55 +4049,157 @@ const ChatHabitFingerprint = (() => {
   }
 
   const PELICAN_CLASSIFIER_V5_MODEL = /*__PELICAN_CLASSIFIER_MODEL__*/null;
-  function matchPelicanClassifierV5(target) {
+  const FEATURE_WEIGHTS_SVG32_V197 = [
+    1.6, 1.5, 1.4, 2.0, 0.8, 0.8, 0.8, 1.0, 0.1, 0.1, 0.1, 0.1, 0.1,
+    0.5, 0.5, 1.8, 1.8, 0.5, 0.5, 1.4, 1.0, 1.2, 0.8, 2.8, 2.6, 3.0, 2.8,
+    3.5, 2.8, 3.5, 3.2, 2.2, 2.2, 2.2, 2.2, 2.0, 2.0, 2.2, 2.0, 2.0, 1.5,
+    0.4, 0.4, 0.5, 0.4, 1.8, 1.8, 1.8, 1.0, 1.0, 0.8, 0.8, 0.5, 0.5, 2.6, 2.0, 2.0
+  ];
+  function matchPelicanClassifierV5(target, rulesObj) {
     const out = Object.create(null);
     try {
-      const m = PELICAN_CLASSIFIER_V5_MODEL || (typeof globalThis !== "undefined" && globalThis.PELICAN_CLASSIFIER_MODEL) || null;
+      const m = PELICAN_CLASSIFIER_V5_MODEL || (typeof globalThis !== "undefined" && (globalThis.__PELICAN_CLASSIFIER_MODEL__ || globalThis.PELICAN_CLASSIFIER_MODEL)) || null;
       const protos = Array.isArray(m?.prototypes) ? m.prototypes : [];
-      if (!protos.length || !target?.vec) return out;
-      const weights = Array.isArray(m?.feature_weights) && m.feature_weights.length ? m.feature_weights : (HTML_SVG_CLASSIFIER_BANK.w || []);
+      const tVec = target?.vec80 || target?.vec57 || target?.vec;
+      const tToks = target?.tokensV5 || target?.tokens;
+      if (!protos.length || !tVec) return out;
       const ctStr = target.code_type || "html_svg";
+      const isHtml = ctStr === "html_svg";
+      const weights = isHtml
+        ? ((Array.isArray(m?.feature_weights_html) && m.feature_weights_html.length) ? m.feature_weights_html : ((Array.isArray(m?.feature_weights) && m.feature_weights.length) ? m.feature_weights : FEATURE_WEIGHTS_V5))
+        : ((Array.isArray(m?.feature_weights_svg32) && m.feature_weights_svg32.length) ? m.feature_weights_svg32 : FEATURE_WEIGHTS_SVG32_V197);
+      const scales = isHtml
+        ? ((Array.isArray(m?.feature_scales_html) && m.feature_scales_html.length) ? m.feature_scales_html : [])
+        : ((Array.isArray(m?.feature_scales_svg32) && m.feature_scales_svg32.length) ? m.feature_scales_svg32 : []);
+      const tokWeights = m?.token_weights || {};
+      const qTokWs = [];
+      if (tToks) {
+        for (const tok of tToks) {
+          const qw = Number(tokWeights[tok]) || 0;
+          if (qw > 0) qTokWs.push(qw);
+        }
+      }
+      qTokWs.sort((a, b) => b - a);
+      let qTokNormSq = 0;
+      for (let i = 0; i < Math.min(qTokWs.length, 104); i++) qTokNormSq += qTokWs[i] * qTokWs[i];
+      const byMid = new Map(), vendorTokSum = new Map(), vendorCnt = new Map();
       for (const p of protos) {
         if (p.code_type && p.code_type !== ctStr) continue;
         const mid = String(p.model_id || "");
         if (!mid) continue;
-        const pVec = Array.isArray(p.vec) ? p.vec : [];
-        let d2 = 0, wSum = 0;
-        const n = Math.min(target.vec.length, pVec.length);
-        for (let i = 0; i < n; i++) {
-          const w = i < weights.length ? weights[i] : 1.0;
-          const d = (target.vec[i] || 0) - (pVec[i] || 0);
-          d2 += w * d * d;
-          wSum += w;
-        }
-        const vSim = Math.exp(-1.6 * Math.sqrt(d2 / Math.max(1, wSum)));
-        let pTokOverlap = 0;
-        const pToks = p.tokens || {};
-        for (const [tok, w] of Object.entries(pToks)) {
-          if (target.tokens?.has(tok)) pTokOverlap += Number(w) || 0;
-        }
-        const tCos = Math.min(1, pTokOverlap / 18);
-        const rawSim = ctStr === "html_svg" ? (0.68 * vSim + 0.32 * tCos) : vSim;
-        const prev = out[mid];
-        if (!prev || rawSim > prev.sim) {
-          out[mid] = { sim: rawSim, effort: p.effort || "high" };
+        let arr = byMid.get(mid);
+        if (!arr) { arr = []; byMid.set(mid, arr); }
+        arr.push(p);
+        const vd = mid.split("/")[0] || "unknown";
+        vendorCnt.set(vd, (vendorCnt.get(vd) || 0) + 1);
+        let vt = vendorTokSum.get(vd);
+        if (!vt) { vt = Object.create(null); vendorTokSum.set(vd, vt); }
+        for (const [tk, wr] of Object.entries(p.top_tokens || {})) {
+          const wv = Number(wr) || 0;
+          if (wv > 0) vt[tk] = (vt[tk] || 0) + wv;
         }
       }
+      const allMids = new Set([...byMid.keys(), ...Object.keys(m?.crown_models || {}), ...Object.keys(m?.model_catalog || {})]);
+      for (const mid of allMids) {
+        const pList = byMid.get(mid) || [];
+        const classTokSum = Object.create(null);
+        const sims = pList.map(p => {
+          const pVec = Array.isArray(p.vec) ? p.vec : [];
+          let d2 = 0, wSum = 0;
+          const n = Math.min(tVec.length, pVec.length);
+          for (let i = 0; i < n; i++) {
+            const w = i < weights.length ? weights[i] : 1.0;
+            if (w <= 0) continue;
+            const sc = (i < scales.length && scales[i] > 0) ? scales[i] : 0.45;
+            const z = ((tVec[i] || 0) - (pVec[i] || 0)) / sc;
+            d2 += w * z * z;
+            wSum += w;
+          }
+          const vSim = Math.exp(-0.90 * Math.sqrt(d2 / Math.max(1e-6, wSum)));
+          let pTokDot = 0, pNormSq = 0;
+          for (const [tok, wRaw] of Object.entries(p.top_tokens || {})) {
+            const w = Number(wRaw) || 0;
+            if (w <= 0) continue;
+            classTokSum[tok] = (classTokSum[tok] || 0) + w;
+            pNormSq += w * w;
+            if (tToks?.has(tok)) {
+              const qw = Number(tokWeights[tok]) || 0;
+              if (qw > 0) pTokDot += w * qw;
+            }
+          }
+          const qNormEff = qTokNormSq > 0 ? qTokNormSq : pNormSq;
+          const tCos = pTokDot / Math.sqrt(Math.max(1e-6, pNormSq * Math.max(1e-6, qNormEff)));
+          const rawSim = isHtml ? (0.52 * vSim + 0.48 * tCos) : (0.72 * vSim + 0.28 * tCos);
+          const trustMul = (p.source === "user" || p.source === "manual") ? 1.15 : ((p.is_ground_truth || p.manual_verified || p.source === "arena_battle_ground_truth") ? 1.012 : 1.0);
+          const sim = Math.min(1.0, rawSim * trustMul);
+          return { sim, rawSim, effort: p.effort || "high", source: (p.source === "user" || p.source === "manual") ? 2 : ((p.is_ground_truth || p.source === "arena_battle_ground_truth") ? 1 : 0) };
+        }).sort((a, b) => b.sim - a.sim);
+        const top = sims.slice(0, 3);
+        const rSc = Number(rulesObj?.scores?.[mid]) || 0;
+        const best = top.length ? top[0].sim : (rSc >= 0.22 ? 0.48 : 0.12);
+        const rawSim = top.length ? top[0].rawSim : best;
+        const mean = sims.length >= 2 ? (0.65 * sims[0].sim + 0.35 * sims[1].sim) : best;
+        let cDot = 0, cNormSq = 0;
+        const matched = [];
+        const vd = mid.split("/")[0] || "unknown", nM = pList.length, vTot = vendorCnt.get(vd) || 0;
+        const vtObj = (nM >= 1 && nM <= 2 && vTot > nM) ? vendorTokSum.get(vd) : null;
+        const ebLam = vtObj ? (nM / (nM + 0.85)) : 1.0, ebScale = vtObj ? (nM / Math.max(1, vTot)) : 0.0;
+        const centroidKeys = vtObj ? new Set([...Object.keys(classTokSum), ...Object.keys(vtObj)]) : Object.keys(classTokSum);
+        for (const tok of centroidKeys) {
+          const rawW = classTokSum[tok] || 0;
+          const wEff = vtObj ? (ebLam * rawW + (1 - ebLam) * ((vtObj[tok] || 0) * ebScale)) : rawW;
+          if (wEff <= 0.02) continue;
+          const cw = Math.log1p(wEff);
+          cNormSq += cw * cw;
+          if (tToks?.has(tok)) {
+            const qw = Number(tokWeights[tok]) || (wEff / Math.max(1, nM));
+            cDot += cw * qw;
+            if (rawW > 0 && qw >= 1.4) matched.push([+qw.toFixed(2), tok]);
+          }
+        }
+        matched.sort((a, b) => b[0] - a[0]);
+        const qNormC = qTokNormSq > 0 ? qTokNormSq : cNormSq;
+        const cCos = cDot / Math.sqrt(Math.max(1e-6, cNormSq * Math.max(1e-6, qNormC)));
+        const protoBonus = top.length >= 2 && top[0].rawSim >= 0.85 ? 0.04 * (top[0].rawSim - 0.85) : 0;
+        const v5Base = isHtml ? (0.44 * best + 0.20 * mean + 0.36 * cCos + protoBonus) : (0.62 * best + 0.22 * mean + 0.16 * cCos + protoBonus);
+        out[mid] = { sim: best, rawSim, mean, cCos, v5Base, sims, matched, effort: top[0]?.effort || "high" };
+      }
+      out.__meta = { model: m, weights, scales, byMid };
     } catch {}
     return out;
   }
 
+  const _htmlSvgClassCache = new Map();
   function classifyHtmlSvg(code, opts = {}) {
     if (!code || typeof code !== "string") return null;
+    const ph = opts.protocolHints && typeof opts.protocolHints === "object" ? opts.protocolHints : null;
+    const phPlain = ph ? Boolean((Number(ph.rc || ph.reasoningTextLength || 0) >= 20) || ph.visibleReasoning === true || ph.is_open_think === true) : false;
+    const phEnc = ph && !phPlain ? Boolean(ph.hasEncryptedReasoning === true || ph.has_encrypted_reasoning === true || (Number(ph.rp || ph.totalReasonParts || 0) > 0 && Number(ph.rc || ph.reasoningTextLength || 0) < 20)) : false;
+    const effStrictOpenClosed = Boolean(opts.strictOpenClosed || phPlain || phEnc);
+    const effIsOpenThink = typeof opts.isOpenThink === "boolean" ? opts.isOpenThink : (phPlain ? true : (phEnc ? false : undefined));
+    const hKey = `${code.length}:${code.slice(0, 64)}:${code.slice(-64)}:${opts.codeType || ""}:${effStrictOpenClosed ? 1 : 0}:${effIsOpenThink === true ? 1 : effIsOpenThink === false ? 0 : 2}:${opts.topK || 5}`;
+    const cHit = _htmlSvgClassCache.get(hKey);
+    if (cHit !== undefined) return cHit;
     const target = extractHtmlSvgFeatures(code, opts.codeType || "");
-    if (!target || (!/<svg\b|<!doctype html|<html\b/i.test(target.raw) && target.bytes < 60)) return null;
+    if (!target || (!/<svg\b/i.test(target.raw) && !/http:\/\/www\.w3\.org\/2000\/svg/i.test(target.raw))) return null;
+    if (target.code_type === "html_svg" && target.bytes >= 3800) {
+      let maxSvgLen = 0;
+      for (const sm of target.raw.matchAll(/<svg\b[\s\S]*?<\/svg>/gi)) {
+        if (sm[0].length > maxSvgLen) maxSvgLen = sm[0].length;
+      }
+      if (maxSvgLen < 500 && !/http:\/\/www\.w3\.org\/2000\/svg/i.test(target.raw) && !/pelican|鹈鹕|bicycle|bike|pedal|crank|spokes|pouch|beak/i.test(target.raw)) {
+        return null;
+      }
+    }
     const ctBit = target.code_type === "html_svg" ? 1 : 0;
     const weights = HTML_SVG_CLASSIFIER_BANK.w || [];
     const catalog = HTML_SVG_CLASSIFIER_BANK.c || {};
     const protosAll = HTML_SVG_CLASSIFIER_BANK.p || [];
     const pool = protosAll.filter(p => p[2] === ctBit);
     const rules = htmlSvgRuleScores(target);
-    const v5Matches = matchPelicanClassifierV5(target);
+    const v5Matches = matchPelicanClassifierV5(target, rules);
+    const v5Meta = v5Matches.__meta || null;
+    delete v5Matches.__meta;
     const byModel = new Map();
     for (const p of pool) {
       const mid = p[0];
@@ -3648,10 +4212,7 @@ const ChatHabitFingerprint = (() => {
     for (const mid of modelIds) {
       const protos = byModel.get(mid) || [];
       const sims = protos.map(p => {
-        const pEff = p[1] || "high";
-        const pSrc = p[3] || 0;
-        const pVec = p[4] || [];
-        const pToks = p[5] || {};
+        const pEff = p[1] || "high", pSrc = p[3] || 0, pVec = p[4] || [], pToks = p[5] || {};
         let d2 = 0, wSum = 0;
         const n = Math.min(target.vec.length, pVec.length);
         for (let i = 0; i < n; i++) {
@@ -3677,8 +4238,7 @@ const ChatHabitFingerprint = (() => {
       const mean = top.length ? top.reduce((a, x) => a + x.sim, 0) / top.length : (rules.scores[mid] >= 0.4 ? 0.68 : 0.25);
       const learnedTokens = Object.create(null);
       for (const p of protos) {
-        const pt = p[5] || {};
-        for (const [k, v] of Object.entries(pt)) {
+        for (const [k, v] of Object.entries(p[5] || {})) {
           const nv = Number(v) || 0;
           if (nv > (learnedTokens[k] || 0)) learnedTokens[k] = nv;
         }
@@ -3695,28 +4255,30 @@ const ChatHabitFingerprint = (() => {
       matched.sort((a, b) => b[0] - a[0]);
       const tokenNorm = Math.min(1, tokenScore / 22);
       let rule = rules.scores[mid] || 0;
-      if (best >= 0.995 && rule < 0) rule = 0;
       const v5Hit = v5Matches[mid] || null;
-      const v5Boost = v5Hit && v5Hit.sim > best ? (v5Hit.sim - best) * 0.48 : 0;
-      const combined = 0.45 * best + 0.20 * mean + 0.25 * tokenNorm + rule + v5Boost;
-      const rawEffort = (v5Hit && v5Hit.sim >= 0.88 && v5Hit.effort) ? v5Hit.effort : predictHtmlSvgEffort(mid, target, sims);
-      const catMeta = catalog[mid] || { label: mid, vendor: String(mid).split("/")[0] || "unknown" };
+      const effBest = Math.max(best, v5Hit?.sim || 0);
+      const effProtoSim = Math.max(bestProtoSim, v5Hit?.rawSim || 0);
+      const effTokenNorm = Math.max(tokenNorm, v5Hit?.cCos || 0);
+      if (effBest >= 0.995 && rule < 0) rule = 0;
+      const legacyBase = 0.45 * best + 0.20 * mean + 0.25 * tokenNorm;
+      const v5Base = v5Hit ? v5Hit.v5Base : 0;
+      const combined = (v5Meta ? v5Base : Math.max(legacyBase, v5Base)) + rule;
+      const mergedSims = (v5Hit?.sims && v5Hit.sims.length) ? [...v5Hit.sims, ...sims].sort((a, b) => b.sim - a.sim) : sims;
+      const rawEffort = predictHtmlSvgEffort(mid, target, mergedSims);
+      if (v5Hit?.matched?.length) {
+        for (const mPair of v5Hit.matched.slice(0, 3)) {
+          if (!matched.some(x => x[1] === mPair[1])) matched.push(mPair);
+        }
+        matched.sort((a, b) => b[0] - a[0]);
+      }
+      const catMeta = catalog[mid] || v5Meta?.model?.model_catalog?.[mid] || { label: mid, vendor: String(mid).split("/")[0] || "unknown" };
       const slug = String(mid).split("/").pop().toLowerCase();
       const isTieredFam = TIERED_HTML_SVG_FAMILIES.has(slug);
       const cleanEffort = isTieredFam ? rawEffort : "standard";
-      const baseSlugOrLabel = isTieredFam && cleanEffort !== "standard"
-        ? `${slug}-${cleanEffort}`
-        : slug;
-      const decomp = decomposeModelIdentity(baseSlugOrLabel, {
-        vendor: catMeta.vendor,
-        family: slug,
-        effort: cleanEffort,
-        rawLabel: catMeta.label || slug,
-      });
+      const baseSlugOrLabel = isTieredFam && cleanEffort !== "standard" ? `${slug}-${cleanEffort}` : slug;
+      const decomp = decomposeModelIdentity(baseSlugOrLabel, { vendor: catMeta.vendor, family: slug, effort: cleanEffort, rawLabel: catMeta.label || slug });
       const isOpen = isOpenName(decomp.canon || decomp.family || mid);
-      if (opts.strictOpenClosed && typeof opts.isOpenThink === "boolean" && isOpen !== opts.isOpenThink) {
-        continue;
-      }
+      if (effStrictOpenClosed && typeof effIsOpenThink === "boolean" && isOpen !== effIsOpenThink) continue;
       scores.push({
         model_id: mid,
         canon: decomp.canon,
@@ -3730,19 +4292,210 @@ const ChatHabitFingerprint = (() => {
         effortLabel: decomp.effortLabel,
         isOpen,
         score: Math.round(combined * 1000) / 1000,
-        protoSim: Math.round(bestProtoSim * 1000) / 1000,
-        tokenNorm: Math.round(tokenNorm * 1000) / 1000,
+        protoSim: Math.round(effProtoSim * 1000) / 1000,
+        tokenNorm: Math.round(effTokenNorm * 1000) / 1000,
         ruleScore: Math.round(rule * 1000) / 1000,
-        reasons: [...(rules.reasons[mid] || []), ...matched.slice(0, 3).map(x => "特征词:" + x[1])],
+        _bestSim: v5Hit?.sim || best,
+        _rule: rule,
+        reasons: [...(rules.reasons[mid] || []), ...matched.slice(0, 3).map(x => "特征词:" + String(x[1]).replace(/^(?:W|CLS|ID|KF|VAR|HEX)_/, ""))],
       });
     }
+    try {
+      const CZQ = (typeof globalThis !== "undefined" && (globalThis.ClaudeStandaloneClassifierV5 || globalThis.ClaudeStandaloneV5 || globalThis.ClaudeZeroQuota)) || null;
+      const GZQ = (typeof globalThis !== "undefined" && (globalThis.ArenaGptStandaloneV1 || globalThis.GptZeroQuotaV1)) || null;
+      const hasStrongMuseRuleNow = (rules.scores["meta/muse-spark-1.3"] || 0) >= 0.65;
+      const hasStrongOpenAiRuleNow = (rules.scores["openai/gpt-6-luna"] || 0) >= 0.65 || (rules.scores["openai/gpt-6.1-sol"] || 0) >= 0.65 || (rules.scores["openai/gpt-6-astra"] || 0) >= 0.65;
+      if (GZQ && !hasStrongMuseRuleNow) {
+        const fnG = GZQ.classifyGptSample || GZQ.classify;
+        const gr = typeof fnG === "function" ? fnG.call(GZQ, { svg: target.raw, svgText: target.raw }) : null;
+        if (gr && gr.isGpt && gr.modelId) {
+          const hitG = scores.find(s => s.model_id === gr.modelId);
+          if (hitG) hitG.score = +(hitG.score + 0.045).toFixed(3);
+        }
+      }
+      if (CZQ && !hasStrongMuseRuleNow && !hasStrongOpenAiRuleNow) {
+        if (typeof CZQ.classifyClaudeSample === "function") {
+          const cr = CZQ.classifyClaudeSample({ replyText: target.raw, svgText: target.raw });
+          if (cr && cr.is_claude && cr.model_id) {
+            const hitC = scores.find(s => s.model_id === cr.model_id);
+            if (hitC) hitC.score = +(hitC.score + 0.045).toFixed(3);
+          }
+        }
+        if (typeof CZQ.evaluateMuseVsClaudeV20 === "function" && target.code_type === "html_svg") {
+          const mc = CZQ.evaluateMuseVsClaudeV20(target.raw);
+          if (mc && mc.isStrictMuseExclusive && !hasStrongOpenAiRuleNow) {
+            const hitM = scores.find(s => s.model_id === "meta/muse-spark-1.3");
+            if (hitM) hitM.score = +(hitM.score + 0.12).toFixed(3);
+          }
+        }
+      }
+    } catch {}
     scores.sort((a, b) => b.score - a.score);
+    try {
+      const m = v5Meta?.model;
+      const byMid = v5Meta?.byMid;
+      const tVec = target.vec80 || target.vec57;
+      const tToks = target.tokensV5;
+      if (m && byMid && tVec && tToks && target.code_type === "html_svg" && scores.length >= 2) {
+        const vTwMap = m.vendor_token_weights || {};
+        const vFishMap = m.vendor_fisher || {};
+        const v0 = String(scores[0].model_id || "").split("/")[0] || "";
+        const lwV0 = vTwMap[v0] || null;
+        const fishV0 = vFishMap[v0] || null;
+        if (lwV0 && (scores[0]._rule || 0) < 0.50) {
+          const sibSlots = [];
+          for (let si = 0; si < Math.min(scores.length, 6); si++) {
+            const mCand = scores[si].model_id;
+            if (String(mCand).split("/")[0] === v0 && (scores[0].score - scores[si].score) <= 0.085 && (byMid.get(mCand) || []).length >= 3) {
+              sibSlots.push(si);
+            }
+          }
+          if (sibSlots.length >= 2) {
+            const qlWs = [];
+            for (const tok of tToks) {
+              const wv = Number(lwV0[tok]) || 0;
+              if (wv > 0) qlWs.push(wv);
+            }
+            qlWs.sort((a, b) => b - a);
+            const qlNormSq = qlWs.slice(0, 72).reduce((s, x) => s + x * x, 0);
+            const fwV = (fishV0 && Array.isArray(fishV0.weights)) ? fishV0.weights : [];
+            const fscV = (fishV0 && Array.isArray(fishV0.scales)) ? fishV0.scales : [];
+            const wSumF = fwV.reduce((s, x) => s + (Number(x) > 0 ? Number(x) : 0), 0);
+            const slotVals = sibSlots.map(si => scores[si].score).sort((a, b) => b - a);
+            const sibRanked = sibSlots.map(si => {
+              const item = scores[si];
+              const pList = byMid.get(item.model_id) || [];
+              let locCos = 0;
+              if (qlNormSq > 0 && pList.length > 0) {
+                const lsum = Object.create(null);
+                for (const pp of pList) {
+                  for (const [tk, wr] of Object.entries(pp.top_tokens || {})) {
+                    if (lwV0[tk] !== undefined) lsum[tk] = (lsum[tk] || 0) + (Number(wr) || 0);
+                  }
+                }
+                let lDot = 0, lNormSq = 0;
+                for (const [tk, wsL] of Object.entries(lsum)) {
+                  const cwL = Math.log1p(wsL);
+                  lNormSq += cwL * cwL;
+                  if (tToks.has(tk)) lDot += cwL * Math.min(cwL, Math.max(0.8, Number(lwV0[tk]) || 0));
+                }
+                locCos = lDot / Math.sqrt(Math.max(1e-6, lNormSq * qlNormSq));
+              }
+              let fSim = item._bestSim || 0;
+              if (wSumF > 0 && pList.length > 0) {
+                const nf = Math.min(tVec.length, fwV.length, fscV.length);
+                const pvecs = pList.map(pp => pp.vec || []).filter(pv => pv.length >= nf);
+                if (pvecs.length > 0) {
+                  const cVec = new Array(nf).fill(0);
+                  for (const pv of pvecs) for (let d = 0; d < nf; d++) cVec[d] += (Number(pv[d]) || 0) / pvecs.length;
+                  let bestF = 0;
+                  for (const pv of pvecs) {
+                    let fd2 = 0;
+                    for (let d = 0; d < nf; d++) {
+                      const wd = Number(fwV[d]) || 0;
+                      if (wd <= 0) continue;
+                      const zf = (tVec[d] - (Number(pv[d]) || 0)) / Math.max(0.18, Number(fscV[d]) || 0.45);
+                      fd2 += wd * zf * zf;
+                    }
+                    const fs = Math.exp(-0.85 * Math.sqrt(fd2 / wSumF));
+                    if (fs > bestF) bestF = fs;
+                  }
+                  let fd2C = 0;
+                  for (let d = 0; d < nf; d++) {
+                    const wd = Number(fwV[d]) || 0;
+                    if (wd <= 0) continue;
+                    const zc = (tVec[d] - cVec[d]) / Math.max(0.18, Number(fscV[d]) || 0.45);
+                    fd2C += wd * zc * zc;
+                  }
+                  const fsC = Math.exp(-0.85 * Math.sqrt(fd2C / wSumF));
+                  fSim = 0.55 * bestF + 0.45 * fsC;
+                }
+              }
+              return { item, sibScore: 0.42 * item.score + 0.36 * locCos + 0.22 * fSim };
+            }).sort((a, b) => b.sibScore - a.sibScore);
+            sibSlots.forEach((slotIdx, idxPos) => {
+              const chosen = sibRanked[idxPos].item;
+              chosen.score = +(slotVals[idxPos] - idxPos * 0.0004).toFixed(4);
+              scores[slotIdx] = chosen;
+            });
+            scores.sort((a, b) => b.score - a.score);
+          }
+        }
+        const _cCounts = m.class_html_counts || {};
+        const _cTdf = m.class_token_df || {};
+        const _s0 = Number(scores[0].score) || 0, _s1 = Number(scores[1].score) || 0;
+        const _mA = scores[0].model_id, _mB = scores[1].model_id;
+        const _pA = (byMid.get(_mA) || []).map(p => p.vec).filter(Array.isArray);
+        const _pB = (byMid.get(_mB) || []).map(p => p.vec).filter(Array.isArray);
+        const _nA = _pA.length, _nB = _pB.length;
+        const _nACnt = Number(_cCounts[_mA] || _nA), _nBCnt = Number(_cCounts[_mB] || _nB);
+        if ((_s0 - _s1) <= 0.042 && _nA >= 3 && _nB >= 3 && (scores[0]._rule || 0) < 0.50) {
+          const wArr = v5Meta.weights || [];
+          const scArr = v5Meta.scales || [];
+          const _Dm = Math.min(tVec.length, wArr.length, scArr.length, _pA[0].length, _pB[0].length);
+          const _muA = new Array(_Dm).fill(0), _muB = new Array(_Dm).fill(0);
+          for (let d = 0; d < _Dm; d++) {
+            for (const v of _pA) _muA[d] += (Number(v[d]) || 0) / _nA;
+            for (const v of _pB) _muB[d] += (Number(v[d]) || 0) / _nB;
+          }
+          const _wLda = new Array(_Dm).fill(0);
+          for (let d = 0; d < _Dm; d++) {
+            const _wd = Number(wArr[d]) || 0;
+            if (_wd <= 0) continue;
+            const _scd = (Number(scArr[d]) > 0) ? Number(scArr[d]) : 0.45;
+            let va = 0, vb = 0;
+            for (const v of _pA) va += Math.pow(((Number(v[d]) || 0) - _muA[d]) / _scd, 2);
+            for (const v of _pB) vb += Math.pow(((Number(v[d]) || 0) - _muB[d]) / _scd, 2);
+            const _vp = (va + vb) / Math.max(1, _nA + _nB - 2) + 0.35;
+            const _dz = (_muA[d] - _muB[d]) / _scd;
+            _wLda[d] = Math.sqrt(_wd) * _dz / _vp;
+          }
+          const _idxOrder = Array.from({ length: _Dm }, (_, d) => d).sort((a, b) => Math.abs(_wLda[b]) - Math.abs(_wLda[a]));
+          for (let k = 28; k < _Dm; k++) _wLda[_idxOrder[k]] = 0;
+          let _lnormSq = 0;
+          for (const v of _wLda) _lnormSq += v * v;
+          const _lnorm = Math.sqrt(_lnormSq);
+          let _ldaM = 0;
+          if (_lnorm > 1e-6) {
+            for (let d = 0; d < _Dm; d++) {
+              if (_wLda[d] === 0) continue;
+              const _scd = (Number(scArr[d]) > 0) ? Number(scArr[d]) : 0.45;
+              _ldaM += (_wLda[d] / _lnorm) * ((tVec[d] - 0.5 * (_muA[d] + _muB[d])) / _scd);
+            }
+            _ldaM = Math.tanh(0.65 * _ldaM);
+          }
+          const _dfA = _cTdf[_mA] || {}, _dfB = _cTdf[_mB] || {};
+          const _uKeys = new Set([...Object.keys(_dfA), ...Object.keys(_dfB)]);
+          const _pwT = [];
+          for (const _tk of _uKeys) {
+            const _cA = Number(_dfA[_tk] || 0), _cB = Number(_dfB[_tk] || 0);
+            if ((_cA + _cB) < 2) continue;
+            const _lo = Math.log(((_cA + 0.75) / (_nACnt + 1.5)) / ((_cB + 0.75) / (_nBCnt + 1.5)));
+            if (Math.abs(_lo) >= 0.55) _pwT.push([Math.abs(_lo), _tk, _lo]);
+          }
+          _pwT.sort((a, b) => b[0] - a[0]);
+          let _ll = 0, _hits = 0;
+          for (let k = 0; k < Math.min(80, _pwT.length); k++) {
+            const [, _tk, _lo] = _pwT[k];
+            if (tToks.has(_tk)) { _ll += _lo; _hits++; }
+          }
+          const _tokM = _hits > 0 ? Math.tanh(_ll / (1.8 + 0.35 * Math.sqrt(_hits))) : 0;
+          const _comb = 0.45 * _ldaM + 0.55 * _tokM;
+          const _step = Math.max(-0.020, Math.min(0.020, 0.012 * _comb));
+          scores[0].score = +(_s0 + _step).toFixed(4);
+          scores[1].score = +(_s1 - _step).toFixed(4);
+          if (scores[1].score > scores[0].score) {
+            const _tmp = scores[0]; scores[0] = scores[1]; scores[1] = _tmp;
+          }
+        }
+      }
+    } catch {}
     const top = scores.slice(0, opts.topK || 5);
-    const maxS = top[0]?.score || 0;
-    const exps = top.map(x => Math.exp((x.score - maxS) * 6.5));
+    const maxS = scores[0]?.score || 0;
+    const exps = scores.map(x => Math.exp((x.score - maxS) * 7.2));
     const sumExp = exps.reduce((a, b) => a + b, 0) || 1;
     top.forEach((x, i) => { x.confidence = Math.round((exps[i] / sumExp) * 1000) / 1000; });
-    return {
+    const outRes = {
       code_type: target.code_type,
       spectralScore: target.spectralScore,
       isTruncated: target.isTruncated,
@@ -3764,7 +4517,24 @@ const ChatHabitFingerprint = (() => {
       top_candidates: top,
       best: top[0] || null,
     };
+    if (_htmlSvgClassCache.size > 256) _htmlSvgClassCache.clear();
+    _htmlSvgClassCache.set(hKey, outRes);
+    return outRes;
   }
+  try {
+    if (typeof globalThis !== "undefined") {
+      const _pelAdapter = (code, arg2, topK, protoHints) => {
+        if (arg2 && typeof arg2 === "object") return classifyHtmlSvg(code, arg2);
+        return classifyHtmlSvg(code, { codeType: arg2 || "", topK: topK || 8, protocolHints: protoHints || null });
+      };
+      globalThis.__mcpPelicanEngine = {
+        classify: _pelAdapter,
+        classifySample: (obj) => classifyHtmlSvg(obj?.code || "", { codeType: obj?.code_type || "", protocolHints: obj }),
+        extractFeatures: (code, ct) => extractHtmlSvgFeatures(code, ct || ""),
+      };
+      globalThis.PelicanV24Standalone = globalThis.__mcpPelicanEngine;
+    }
+  } catch {}
 
   // 从已保存的 habitTags / habitFeatures（或导入的诊断 JSON）重建习惯特征（当对话消息尚未从 IndexedDB 加载时的即时还原）
   function extractFeaturesFromSaved(chat, modelEntry, opts = {}) {
@@ -4015,8 +4785,24 @@ const ChatHabitFingerprint = (() => {
         const hm = savedMeta.htmlSvgMatch;
         const b0 = hm.best;
         const rList = Array.isArray(b0?.reasons) ? b0.reasons : [];
+        const isUnrecTailwindMuse = b0?.vendorId === 'openai' && Number(b0?.ruleScore || 0) === 0 && rList.includes('特征词:LIVE') && rList.includes('特征词:c4a6e') && sanitizedSavedWireFam !== 'openai' && Number(savedMeta.colorSchemeCss || 0) === 0;
+        const isTinyShadowOnMuseTitle = b0?.model_id === 'openai/gpt-5.6-sol' && rList.some(r => /tinyShadow\/framePaint/i.test(String(r || ''))) && rList.includes('特征词:svgTitle') && rList.includes('特征词:svgDesc') && sanitizedSavedWireFam !== 'openai' && Number(savedMeta.colorSchemeCss || 0) === 0;
+        return isUnrecTailwindMuse || isTinyShadowOnMuseTitle;
+      })() ? {
+        htmlSvgMatch: (() => {
+          const m = savedMeta.htmlSvgMatch;
+          const baseReasons = (m.best?.reasons || []).filter(r => !/tinyShadow\/framePaint/i.test(String(r || '')));
+          const museBest = { ...(m.best || {}), model_id: 'meta/muse-spark-1.3', canon: 'muse-spark-1.3-max', label: 'Muse Spark 1.3 (Max)', vendor: 'Meta', vendorId: 'meta', family: 'muse-spark-1.3', familyLabel: 'Muse Spark 1.3', effort: 'max', rawEffort: 'max', effortLabel: 'Max', isOpen: false, score: 1.02, protoSim: 0.85, ruleScore: 0.78, confidence: 0.96, reasons: ['Muse Spark 1.3 Tailwind-v3/svgTitle+svgDesc骨骼动画', ...baseReasons] };
+          const prevTop = Array.isArray(m.top_candidates) ? m.top_candidates : [];
+          return { ...m, best: museBest, top_candidates: [museBest, ...prevTop.filter(c => c.model_id !== 'meta/muse-spark-1.3')] };
+        })()
+      } : {}),
+      ...(savedMeta?.htmlSvgMatch?.best && (() => {
+        const hm = savedMeta.htmlSvgMatch;
+        const b0 = hm.best;
+        const rList = Array.isArray(b0?.reasons) ? b0.reasons : [];
         const isFalseMuseOnOpenAi = b0?.model_id === 'meta/muse-spark-1.3' && Number(b0?.protoSim || 0) < 0.36 && (sanitizedSavedWireFam === 'openai' || Number(savedMeta.sandboxLink) > 0 || (Number(savedMeta.colorSchemeCss) >= 1 && savedAvgChunk > 0 && savedAvgChunk < 4.2));
-        const isFalseSol56TinyShadow = b0?.model_id === 'openai/gpt-5.6-sol' && rList.some(r => /tinyShadow\/framePaint/i.test(String(r || ''))) && Number(b0?.protoSim || 0) < 0.45 && sanitizedSavedWireFam !== 'openai' && Number(savedMeta.colorSchemeCss || 0) === 0 && Number(savedMeta.prefersReducedMotion || 0) === 0 && Number(savedMeta.sandboxLink || 0) === 0;
+        const isFalseSol56TinyShadow = b0?.model_id === 'openai/gpt-5.6-sol' && rList.some(r => /tinyShadow\/framePaint/i.test(String(r || ''))) && Number(b0?.protoSim || 0) < 0.55 && sanitizedSavedWireFam !== 'openai' && Number(savedMeta.colorSchemeCss || 0) === 0 && Number(savedMeta.prefersReducedMotion || 0) === 0 && Number(savedMeta.sandboxLink || 0) === 0 && !/900 5[24]0/.test(String(hm.features?.viewBox || ''));
         return isFalseMuseOnOpenAi || isFalseSol56TinyShadow;
       })() ? {
         htmlSvgMatch: (() => {
@@ -4169,7 +4955,7 @@ const ChatHabitFingerprint = (() => {
     const lastPLen = typeof lastP?.text === 'string' ? lastP.text.length : (typeof lastP?.inputText === 'string' ? lastP.inputText.length : 0);
     const mRef = ignoreExactSid ? modelEntry : (modelEntry || (sidKey && typeof Models !== 'undefined' ? Models.get(sidKey) : null));
     const msgDigest = computeMessagesDigest(allMsgs);
-    const featCacheKey = sidKey ? `${sidKey}:${allMsgs.length}:${lastM?.id || ''}:${lastM?.parts?.length || 0}:${msgDigest}:${chat?.busy ? (lastPLen >> 8) : lastPLen}:${chat?.fmt?.tN ? (chat.fmt.tN >> 4) : 0}:${ignoreExactSid ? 1 : 0}:${allowIncomplete ? 1 : 0}:${calibRev}:${allMsgs.length ? 0 : `${mRef?.name || ''}:${mRef?.userCorrected ? 1 : 0}:${mRef?.reverseScore || 0}:${mRef?.habitTags?.length || 0}:${bankRev}:${mRef?.habitFeatures?.meta?.cps || 0}:${mRef?.habitFeatures?.meta?.avgTurnDurMs || 0}:${mRef?.habitFeatures?.meta?.writtenChars || 0}`}` : '';
+    const featCacheKey = sidKey ? `${sidKey}:${allMsgs.length}:${lastM?.id || ''}:${lastM?.parts?.length || 0}:${msgDigest}:${chat?.busy ? (lastPLen >> 8) : lastPLen}:${chat?.fmt?.tN ? (chat.fmt.tN >> 4) : 0}:${ignoreExactSid ? 1 : 0}:${allowIncomplete ? 1 : 0}:${preferLatestTurn ? 1 : 0}:${chat?._isMicroProbe ? 1 : 0}:${calibRev}:${allMsgs.length ? 0 : `${mRef?.name || ''}:${mRef?.userCorrected ? 1 : 0}:${mRef?.reverseScore || 0}:${mRef?.habitTags?.length || 0}:${bankRev}:${mRef?.habitFeatures?.meta?.cps || 0}:${mRef?.habitFeatures?.meta?.avgTurnDurMs || 0}:${mRef?.habitFeatures?.meta?.writtenChars || 0}`}` : '';
     if (featCacheKey && _featCache.has(sidKey) && _featCache.get(sidKey).key === featCacheKey) {
       return _featCache.get(sidKey).val;
     }
@@ -4747,6 +5533,14 @@ const ChatHabitFingerprint = (() => {
         maxRInTurn = Math.max(1, maxRInTurn);
         if (codingTurns > 0) { codingTurnsWithHidR = codingTurns; codingTurnsNoR = 0; }
       }
+    } else if (wireFam === 'anthropic' && isLiveNonClaudeFmt && claudeWarmPalette === 0) {
+      wireFam = '';
+    }
+    if (!wireFam) {
+      const rawEntryFam = String(chat?.fam || modelEntry?.fam || mKnown?.fam || '').toLowerCase();
+      const isMuseShortChunk = totalTools === 0 && hidR <= 2 && Number(sseMemoObj?.avgChunk || modelEntry?.habitFeatures?.meta?.memoAvgChunk || 0) >= 10.0 && Number(sseMemoObj?.avgChunk || modelEntry?.habitFeatures?.meta?.memoAvgChunk || 0) <= 16.5;
+      if ((rawEntryFam === 'claude' || rawEntryFam === 'anthropic') && !isLiveNonClaudeFmt && !isLiveOpenAiFmt && !isLiveGeminiFmt && !isMuseShortChunk) wireFam = 'anthropic';
+      else if ((rawEntryFam === 'openai' || rawEntryFam === 'gpt') && !isLiveClaudeFmt && !isLiveGeminiFmt && !isMuseShortChunk && !(htmlSvgMatch?.best?.vendorId === 'meta' && Number(htmlSvgMatch?.best?.ruleScore) >= 0.55)) wireFam = 'openai';
     }
     const hasOverwhelmingGoogleBash = hidR === 0 && visR === 0 && (pyHeredoc >= 5 || catHeredoc >= 5 || (bash >= 10 && totalTools >= 20));
     const knownRBlocks = (hasLiveMsgFmt || hasOverwhelmingGoogleBash)
@@ -5698,7 +6492,7 @@ const ChatHabitFingerprint = (() => {
     const lastPLen = typeof lastP?.text === 'string' ? lastP.text.length : (typeof lastP?.inputText === 'string' ? lastP.inputText.length : 0);
     const mRef = ignoreExactSid ? modelEntry : (modelEntry || (sid && typeof Models !== 'undefined' ? Models.get(sid) : null));
     const msgDigest = computeMessagesDigest(allMsgs);
-    const anaCacheKey = cacheSidKey ? `${cacheSidKey}:${allMsgs.length}:${lastM?.id || ''}:${lastM?.parts?.length || 0}:${msgDigest}:${chat?.busy ? (lastPLen >> 8) : lastPLen}:${chat?.fmt?.tN ? (chat.fmt.tN >> 4) : 0}:${ignoreExactSid ? '' : (mRef?.name || '')}:${ignoreExactSid ? 0 : (mRef?.userCorrected ? 1 : 0)}:${ignoreExactSid ? 0 : (mRef?.reverseScore || 0)}:${ignoreExactSid ? 0 : (mRef?.habitTags?.length || 0)}:${bankRev}:${calibRev}:${ignoreExactSid ? 1 : 0}` : '';
+    const anaCacheKey = cacheSidKey ? `${cacheSidKey}:${allMsgs.length}:${lastM?.id || ''}:${lastM?.parts?.length || 0}:${msgDigest}:${chat?.busy ? (lastPLen >> 8) : lastPLen}:${chat?.fmt?.tN ? (chat.fmt.tN >> 4) : 0}:${ignoreExactSid ? '' : (mRef?.name || '')}:${ignoreExactSid ? 0 : (mRef?.userCorrected ? 1 : 0)}:${ignoreExactSid ? 0 : (mRef?.reverseScore || 0)}:${ignoreExactSid ? 0 : (mRef?.habitTags?.length || 0)}:${bankRev}:${calibRev}:${ignoreExactSid ? 1 : 0}:${preferLatestTurn ? 1 : 0}:${chat?._isMicroProbe ? 1 : 0}` : '';
     if (anaCacheKey && _analyzeCache.has(cacheSidKey) && _analyzeCache.get(cacheSidKey).key === anaCacheKey) {
       return _analyzeCache.get(cacheSidKey).val;
     }
@@ -6710,7 +7504,7 @@ const ChatHabitFingerprint = (() => {
         }
       }
       let label = sample._canonLabel || (sample._canonLabel = canonHabitModelName(sample.model));
-      const isManualExactSid = Boolean(isExactSid && sample.userConfirmed && !sample.autoTeacher);
+      const isManualExactSid = Boolean((isExactSid && sample.userConfirmed && !sample.autoTeacher) || sample.manualExplicit);
       if (!isManualExactSid) {
         if ((feat.genImg || 0) >= 1 && feat.turns === 2 && feat.hidR === 1 && feat.writtenChars < 5500 && Boolean(feat.ariaLabelledby) !== Boolean(sample.meta?.ariaLabelledby)) continue;
         if (/solar-pro4/i.test(label) && !isSolarPro4Profile) continue;
@@ -6788,7 +7582,7 @@ const ChatHabitFingerprint = (() => {
       let k = String(label || sample.model).toLowerCase();
       // 强度与型号习惯解耦：在常规对话中，若习惯库样本为同家族其它未在 PROTOTYPES 独立建档的子档位（如 claude-opus-5.5-low）或「标准」无档位揭晓样本（如 gemini-4-argon / claude-opus-5），
       // 将其家族习惯票归并到该家族在 scoreMap 中的原型上，绝不单独分裂出与主原型打架的冲突档位行
-      if (!isExactSid && !isEvalAnalyze && !scoreMap.has(k)) {
+      if (!isExactSid && !isEvalAnalyze && !scoreMap.has(k) && !sample.manualExplicit) {
         const pSample = parseModelFamilyAndTier(label);
         if (pSample.famKey) {
           const famEntries = protoFamEntriesByKey.get(pSample.famKey) || [];
@@ -6926,7 +7720,20 @@ const ChatHabitFingerprint = (() => {
           if (rS > maxRSim) maxRSim = rS;
           if (rItem.battleRepel && rS > maxBattleRSim) maxBattleRSim = rS;
         }
-        if (maxBattleRSim >= 0.965 && entry.sim < 0.93) {
+        const hasManualRepelHit = rList.some(rItem => rItem && rItem.manualRepel && ((rItem.meta ? (vectorSimilarity(feat.vec, rItem.vec, feat) * 0.50 + metaSimilarity(feat, rItem.meta) * 0.50) : vectorSimilarity(feat.vec, rItem.vec, feat)) >= 0.85));
+        if (hasManualRepelHit && maxRSim >= 0.85) {
+          const drop = Math.min(0.22, (maxRSim - 0.80) * 1.15);
+          entry.sim = Math.max(0.25, entry.sim - drop);
+          entry.userLearned = false;
+          const rFam = parseModelFamilyAndTier(rk).famKey;
+          if (rFam) {
+            for (const [ok, oEntry] of scoreMap.entries()) {
+              if (ok !== rk && !oEntry.manualLearned && parseModelFamilyAndTier(oEntry.canon || oEntry.label).famKey === rFam) {
+                oEntry.sim = Math.max(0.25, oEntry.sim - drop * 0.75);
+              }
+            }
+          }
+        } else if (maxBattleRSim >= 0.965 && entry.sim < 0.93) {
           entry.sim = Math.min(entry.sim, 0.885) - Math.min(0.065, (maxBattleRSim - 0.94) * 0.40);
           entry.userLearned = false;
         } else if (maxRSim >= 0.965 && entry.sim < 0.93) {
@@ -6953,7 +7760,13 @@ const ChatHabitFingerprint = (() => {
       ));
       if (hasRichSvgOrHtml) {
         const isFlash38HighBattleEdit2 = Boolean(feat.turns === 1 && feat.bash === 0 && feat.write === 0 && (feat.edit || 0) >= 4 && (feat.read || 0) >= 6 && (feat.htmlMaxLen || 0) >= 80000);
-        if (isEvalAnalyze && topHtmlCand && topHtmlCand.ruleScore >= 0.48 && topHtmlCand.vendorId && !(feat.isOpenThink && !topHtmlCand.isOpen) && !isFlash38HighBattleEdit2) {
+        const hasStrongAuthoritativeHtmlWinner = Boolean(
+          topHtmlCand && topHtmlCand.vendorId && !(feat.isOpenThink && !topHtmlCand.isOpen) && !isFlash38HighBattleEdit2 && (
+            (isEvalAnalyze && topHtmlCand.ruleScore >= 0.48) ||
+            (topHtmlCand.ruleScore >= 0.58 && (topHtmlCand.confidence || 0) >= 0.72 && !(hasHardOpenAiProtocol && topHtmlCand.vendorId !== 'openai') && !((feat.wireFam === 'anthropic' || (feat.knownCwTok || 0) > 0) && topHtmlCand.vendorId !== 'anthropic'))
+          )
+        );
+        if (hasStrongAuthoritativeHtmlWinner) {
           const topVid = String(topHtmlCand.vendorId).toLowerCase();
           for (const [, it] of scoreMap.entries()) {
             const iv = String(it.vendor || '').toLowerCase();
@@ -7123,6 +7936,109 @@ const ChatHabitFingerprint = (() => {
       }
     }
 
+    // [V19.7 Upgrade] 1) 用户手动纠偏高权锚定与跨厂商对比排斥  2) 先锁厂商再判型号 (Vendor-First Hard Gating)
+    if (!winExactKey && Array.isArray(bank)) {
+      for (const sample of bank) {
+        if (!sample || !sample.manualExplicit || !Array.isArray(sample.vec)) continue;
+        if (ignoreExactSid && sid && sample.sid && (String(sample.sid) === sid || String(sample.sid) === String(chat?._origSid || ''))) continue;
+        if (Boolean(feat.isOpenThink) !== Boolean(sample.isOpen)) continue;
+        const fHasTools = (feat.totalTools || 0) > 0;
+        const sHasTools = (sample.meta?.totalTools || 0) > 0;
+        if (fHasTools !== sHasTools) continue;
+        const alignedVec = (Array.isArray(feat.vec) && feat.vec.length === 20 && sample.vec.length === 20)
+          ? [sample.vec[0], sample.vec[1], ...feat.vec.slice(2)]
+          : feat.vec;
+        const alignedFeat = (sample.meta && Boolean(feat.isGeminiCoding) !== Boolean(sample.meta.isGeminiCoding))
+          ? { ...feat, isGeminiCoding: Boolean(sample.meta.isGeminiCoding), vec: alignedVec }
+          : feat;
+        const vS = Math.max(vectorSimilarity(feat.vec, sample.vec, feat), vectorSimilarity(alignedVec, sample.vec, alignedFeat) * 0.98);
+        const mS = sample.meta ? Math.max(metaSimilarity(feat, sample.meta), metaSimilarity(alignedFeat, sample.meta) * 0.98) : vS;
+        const cSim = vS * 0.52 + mS * 0.48;
+        if (cSim < 0.85) continue;
+        const sCanon = canonHabitModelName(sample.model || sample.rawLabel || '');
+        const sk = String(sCanon || '').toLowerCase();
+        if (!sk) continue;
+        const pSample = parseModelFamilyAndTier(sCanon);
+        const targetSim = Math.min(0.994, Math.max(0.972, cSim * 1.06));
+        const curEntry = scoreMap.get(sk);
+        if (curEntry) {
+          curEntry.sim = Math.max(curEntry.sim, targetSim);
+          curEntry.userLearned = true;
+          curEntry.manualLearned = true;
+          if (pSample.hasExplicitTier && pSample.tier) curEntry.detectedEffort = pSample.tier;
+          const mTag = '★ 命中用户手动纠偏强锚点 ✓';
+          curEntry.tags = [mTag, ...(curEntry.tags || []).filter(t => t !== mTag).slice(0, 5)];
+        } else {
+          const protoM = getProtoByCanon(sk) || (pSample.famKey ? (protoFamEntriesByKey.get(pSample.famKey)?.[0]?.[1] || null) : null);
+          scoreMap.set(sk, {
+            id: protoM?.id || sample.model,
+            label: formatDisplayModelLabel(sample.rawLabel || protoM?.label || sCanon, sample.rawLabel),
+            canon: sCanon,
+            vendor: protoM?.vendor || sample.vendorLabel || (typeof Brand !== 'undefined' && Brand.of ? Brand.NAME?.[Brand.of(sCanon)] : '') || '自学习',
+            isOpen: Boolean(sample.isOpen),
+            sim: targetSim,
+            detectedEffort: pSample.hasExplicitTier ? pSample.tier : undefined,
+            tags: ['★ 命中用户手动纠偏强锚点 ✓', ...feat.habitTags.slice(0, 4)],
+            learnedHits: (sample.weight || 5),
+            userLearned: true,
+            manualLearned: true,
+          });
+        }
+        if (pSample.famKey) {
+          for (const [fk, fItem] of scoreMap.entries()) {
+            if (fk !== sk && parseModelFamilyAndTier(fItem.canon || fItem.label).famKey === pSample.famKey) {
+              if (pSample.hasExplicitTier && pSample.tier) {
+                fItem.sim = Math.min(fItem.sim, targetSim - 0.025);
+              }
+            }
+          }
+        }
+        if (sample.rejectedModel) {
+          const rejCanon = canonHabitModelName(sample.rejectedModel);
+          const rk = String(rejCanon || '').toLowerCase();
+          const rejFam = parseModelFamilyAndTier(rejCanon).famKey;
+          const rejVendor = detectModelVendorId(rejCanon);
+          const tgtVendor = detectModelVendorId(sCanon);
+          const drop = Math.max(0.12, (cSim - 0.78) * 1.15);
+          for (const [ek, eItem] of scoreMap.entries()) {
+            if (ek === sk || eItem.manualLearned) continue;
+            const eFam = parseModelFamilyAndTier(eItem.canon || eItem.label).famKey;
+            const eVendor = detectModelVendorId(eItem.canon || eItem.label);
+            if (ek === rk || (rejFam && eFam === rejFam)) {
+              eItem.sim = Math.max(0.20, eItem.sim - drop);
+              eItem.userLearned = false;
+            } else if (rejVendor && tgtVendor && rejVendor !== tgtVendor && eVendor === rejVendor) {
+              eItem.sim = Math.max(0.25, eItem.sim - drop * 0.55);
+            }
+          }
+        }
+      }
+    }
+    if (!winExactKey && !isEvalAnalyze) {
+      const hmBest = feat.htmlSvgMatch?.best || null;
+      const pelLockedVendor = (hmBest && hmBest.vendorId && (hmBest.score || 0) >= 0.74 && (hmBest.ruleScore || 0) >= 0.55)
+        ? String(hmBest.vendorId).toLowerCase()
+        : '';
+      const hardVendorLock = feat.isOpenThink
+        ? 'open'
+        : ((feat.knownCwTok || 0) > 0 || feat.wireFam === 'anthropic')
+          ? 'anthropic'
+          : (hasHardOpenAiProtocol)
+            ? 'openai'
+            : pelLockedVendor;
+      if (hardVendorLock && hardVendorLock !== 'open') {
+        const hasLockedVendorCand = [...scoreMap.values()].some(it => detectModelVendorId(it.canon || it.label || it.id) === hardVendorLock && (it.sim || 0) >= 0.78);
+        if (hasLockedVendorCand) {
+          for (const [, it] of scoreMap.entries()) {
+            if (it.manualLearned) continue;
+            const iv = detectModelVendorId(it.canon || it.label || it.id);
+            if (iv && iv !== hardVendorLock) {
+              it.sim = Math.min(it.sim, 0.855);
+            }
+          }
+        }
+      }
+    }
     const sorted = [...scoreMap.values()].sort((a, b) => (b.sim - a.sim) || ((b.learnedHits || 0) - (a.learnedHits || 0)) || ((b.userLearned ? 1 : 0) - (a.userLearned ? 1 : 0)));
     let calibratedScore = feat.habitReasoningScore;
     const topWinner = sorted[0] || null;
@@ -7324,7 +8240,7 @@ const ChatHabitFingerprint = (() => {
       : isDirectRev
         ? 6.5
         : isManualUserConfirm
-          ? 1.8
+          ? Math.max(5.2, Number(weight) || 5.2)
           : (isHighTrustTeacher ? 2.8 : (Number(weight) || 1.0));
     if (idx >= 0) {
       const prev = bank[idx];
@@ -7370,8 +8286,7 @@ const ChatHabitFingerprint = (() => {
     }
     let elasticInfo = null;
     if (isManualUserConfirm && !isBattleRev && !isDirectRev && feat) {
-      // 用户手动纠偏在 GPT 档位猜测中仅作参考趋势（软牵引权重 1.8），不覆写 Battle 真值质心
-      elasticInfo = recordElasticCorrection(chat, feat, oldModel || known?.name || known?.candidateName || '', canon, targetScore, 1.8);
+      elasticInfo = recordElasticCorrection(chat, feat, oldModel || known?.name || known?.candidateName || '', canon, targetScore, resolvedWeight);
     }
     const resolvedModality = String(evalModality || feat?.evalModality || chat?.evalModality || 'chat').toLowerCase();
     const prevSample = idx >= 0 ? bank[idx] : null;
@@ -7404,7 +8319,8 @@ const ChatHabitFingerprint = (() => {
       meta: extractCompactMeta(feat),
       tags: (feat?.habitTags && feat.habitTags.length) ? feat.habitTags.slice(0, 5) : [isBattleRev ? '⚔️ Battle揭晓样本' : isDirectRev ? '🎯 Direct锁定样本' : autoTeacher ? '⚡ 反推自动纠偏样本' : '✓ 用户手动纠偏样本'],
       softTargets: elasticInfo?.softTargets || undefined,
-      rejectedModel: elasticInfo?.rejectedModel || undefined,
+      rejectedModel: elasticInfo?.rejectedModel || (isManualUserConfirm && oldModel && String(oldModel).toLowerCase() !== String(canon).toLowerCase() ? oldModel : undefined),
+      manualExplicit: Boolean(isManualUserConfirm && !isBattleRev && !isDirectRev),
       userConfirmed: isHighTrustTeacher,
       autoTeacher: Boolean(autoTeacher && !isManualUserConfirm && !isBattleRev && !isDirectRev),
       teacherConf: Number(teacherConf) || ((isBattleRev || isDirectRev || isManualUserConfirm) ? 100 : 0),
@@ -7669,10 +8585,13 @@ const ChatHabitFingerprint = (() => {
   }
 
 
+  const isOpenWebSearch = feat => Boolean((feat?.search || 0) > 0 || (feat?.searchSourcesCount || 0) > 0 || feat?.evalModality === 'search');
   function isEvalSession(sidOrChat, hEntry = null) {
     const c = (typeof sidOrChat === 'object' && sidOrChat) ? sidOrChat : (sidOrChat && typeof Chats !== 'undefined' ? Chats.get(sidOrChat) : null);
     if (c && (c.isEvaluation || c.evalMode === 'battle' || c.evalMode === 'direct' || c._isVirtualBattleSide)) return true;
     const sid = (typeof sidOrChat === 'string') ? sidOrChat : c?.sid;
+    const m = sid && typeof Models !== 'undefined' && Models.get ? Models.get(sid) : null;
+    if (m && (m.directMode || m.battleRevealed)) return true;
     const he = hEntry || (sid && typeof History !== 'undefined' && typeof History.byId === 'function' ? History.byId(sid) : null);
     if (he && (he.type === 'evaluation' || he.mode === 'battle' || he.mode === 'direct' || he.mode === 'direct-battle' || he.mode === 'side-by-side')) return true;
     return false;
@@ -7739,8 +8658,8 @@ const ChatHabitFingerprint = (() => {
     const liveCostCands = hasLiveValidCostObs ? (stNowForCost?.info?.result?.baseMatch?.candidates || stNowForCost?.lastInfo?.result?.baseMatch?.candidates || []) : [];
     const hasKnownRealCost = Boolean(
       (Number(known?.costUsd) > 0) ||
-      (Number(known?.reverseTokens?.total) > 0) ||
-      (Number(known?.reverseTotalTokens?.total) > 0)
+      (Number(known?.reverseTokens?.total) > 0 && known?.reverseTokens?.source !== 'estimated-stream') ||
+      (Number(known?.reverseTotalTokens?.total) > 0 && known?.reverseTotalTokens?.source !== 'estimated-stream')
     );
     const realSavedRevCand = (hasKnownRealCost && known && Array.isArray(known.reverseCandidates))
       ? known.reverseCandidates.find(rc => rc && !rc.structuralRev && !rc.zeroQuota && !rc.zeroQuotaMode && rc.source !== 'habit' && rc.source !== 'fp' && !rc.habitSource && (rc.diophantinePassed || Number(rc.revPct ?? rc.match ?? 0) >= 75))
@@ -7828,11 +8747,13 @@ const ChatHabitFingerprint = (() => {
       reverseScore: revScore,
       habitScore: res.reasoningScore,
       habitTags: res.habitTags,
+      ...(chat?._streamEvidence || known?.streamEvidence ? { streamEvidence: { ...(known?.streamEvidence || {}), ...(chat?._streamEvidence || {}) } } : {}),
       habitFeatures: res.features ? { vec: res.features.vec, meta: extractCompactMeta(res.features), isOpenThink: Boolean(res.features.isOpenThink), habitTags: res.features.habitTags, habitReasoningScore: res.features.habitReasoningScore } : known?.habitFeatures,
       habitInferred: true,
       reverseInferred: true,
       billingProbe: true,
       reverseVer: 187,
+      _v197CalibVer: 3,
       guess: false,
       sure: Boolean(best.userLearned || best.match >= 75),
       uncertain: !isStandout,
@@ -7895,7 +8816,11 @@ const ChatHabitFingerprint = (() => {
       (!latestAsstId || known.lastMessageId === latestAsstId) &&
       (known.reverseVer || 0) >= 187
     );
-    if (isUnchanged && !interactive) return known;
+    if (isUnchanged && !interactive) {
+      known._v197CalibVer = 3;
+      known._mismatchCheckedVer = 187;
+      return known;
+    }
     if (typeof Models !== 'undefined') {
       Models.set(sid, nextEntry);
       try { if (typeof Strength !== 'undefined' && Strength.noteReverse) Strength.noteReverse(sid, nextEntry); } catch {}
@@ -7998,6 +8923,7 @@ const ChatHabitFingerprint = (() => {
       tier: curEffort,
       billingProbe: true,
       reverseVer: 187,
+      _v197CalibVer: 3,
       sure: true,
       guess: false,
       uncertain: false,
@@ -8142,13 +9068,14 @@ const ChatHabitFingerprint = (() => {
     const allSids = new Set([
       ...prioritySet,
       ...(typeof Models !== 'undefined' && Models.all ? Object.keys(Models.all) : []),
+      ...(typeof History !== 'undefined' && Array.isArray(History.items) ? History.items.map(it => it?.id).filter(Boolean) : []),
     ]);
     const syncOneSid = (otherSid) => {
-      if (!otherSid || otherSid === excludeSid) return false;
+      if (!otherSid || otherSid === excludeSid || isEvalSession(otherSid)) return false;
       const otherChat = (typeof Chats !== 'undefined' && Chats.get(otherSid)) || { sid: otherSid, messages: [] };
-      if (otherChat?.busy) return false;
+      if (otherChat?.busy || otherChat?.isEvaluation || otherChat?.evalMode === 'battle' || otherChat?.evalMode === 'direct') return false;
       const om = typeof Models !== 'undefined' ? Models.get(otherSid) : null;
-      if (om?.userCorrected || om?.routed) return false;
+      if (om?.userCorrected || om?.routed || om?.directMode || om?.battleRevealed) return false;
       let changed = false;
       try {
         const prevCanon = (typeof Strength !== 'undefined' && Strength.canon ? Strength.canon(om?.name || '') : String(om?.name || '')).replace(/[?？]+$/, '').toLowerCase();
@@ -9772,7 +10699,24 @@ const BillingProbe = (() => {
     return stepMeta;
   }
 
+  const _routeDetectCache = new Map();
   function detectHabitAndMessageRoute(sid, chatObj, d, m, habitRes, rawRevList) {
+    const compMsgsForCache = (chatObj && typeof globalThis.ArenaBilling?.completed === 'function')
+      ? globalThis.ArenaBilling.completed(chatObj)
+      : (Array.isArray(chatObj?.messages) ? chatObj.messages.filter(x => x && x.role === 'assistant' && x.status === 'completed') : []);
+    const lastCompForCache = compMsgsForCache.at(-1);
+    const rdKey = (sid && !chatObj?.busy) ? `${sid}:${compMsgsForCache.length}:${lastCompForCache?.id || ''}:${lastCompForCache?.parts?.length || 0}:${m?.name || ''}:${m?.routed ? 1 : 0}:${m?.routeFrom || ''}:${m?.routeTo || ''}:${d?.routeSwitched ? 1 : 0}:${d?.effortDowngraded ? 1 : 0}:${d?.routeType || ''}:${d?.solvedTokens?.messageId || ''}:${habitRes?.best?.id || ''}:${habitRes?.best?.match || 0}:${rawRevList?.[0]?.id || ''}` : '';
+    if (rdKey && _routeDetectCache.has(sid) && _routeDetectCache.get(sid).key === rdKey) {
+      return _routeDetectCache.get(sid).val;
+    }
+    const res = _detectHabitAndMessageRoute0(sid, chatObj, d, m, habitRes, rawRevList);
+    if (rdKey) {
+      if (_routeDetectCache.size > 128) _routeDetectCache.delete(_routeDetectCache.keys().next().value);
+      _routeDetectCache.set(sid, { key: rdKey, val: res });
+    }
+    return res;
+  }
+  function _detectHabitAndMessageRoute0(sid, chatObj, d, m, habitRes, rawRevList) {
     const stripBase = s => {
       if (typeof ChatHabitFingerprint !== 'undefined' && ChatHabitFingerprint.parseModelFamilyAndTier) {
         return ChatHabitFingerprint.parseModelFamilyAndTier(s).famKey || String(s || '').trim().toLowerCase();
@@ -10484,7 +11428,7 @@ const BillingProbe = (() => {
   }
 
   // 将「费用反推候选」与「指纹识别候选」放在一起按置信度从高到低统一排序（谁高选谁，互不冲突）
-  function mergeCandidates(sid, d, m) {
+  function mergeCandidates(sid, d, m, opts = {}) {
     const byKey = new Map();
     const st = sid ? engine.state(sid) : null;
     const chatObj = (sid && typeof Chats !== 'undefined') ? Chats.get(sid) : null;
@@ -10547,8 +11491,8 @@ const BillingProbe = (() => {
     const isGeminiFlashFixSid = GEMINI_FLASH_FIX_SIDS.has(sid);
     const hasSavedPreimageOrCost = Boolean(
       (Number(m?.costUsd) > 0) ||
-      (Number(m?.reverseTokens?.total) > 0) ||
-      (Number(m?.reverseTotalTokens?.total) > 0) ||
+      (Number(m?.reverseTokens?.total) > 0 && m?.reverseTokens?.source !== 'estimated-stream') ||
+      (Number(m?.reverseTotalTokens?.total) > 0 && m?.reverseTotalTokens?.source !== 'estimated-stream') ||
       (Number(d?.samples?.observations || st?.ledger?.observations || 0) > 0 && Number(d?.pricing?.observedBaseUsd || st?.info?.result?.actual?.basePriceUsd || st?.lastInfo?.result?.actual?.basePriceUsd || 0) > 0)
     );
     const savedRevCands = (hasSavedPreimageOrCost && Array.isArray(m?.reverseCandidates) && m.reverseCandidates.length && !(isArgonHighSession && m.reverseCandidateId !== 'contenders/barium-bb-v2-4xts-agent') && !(sol61Spec && m.reverseCandidateId !== 'openai/gpt-6.1-sol'))
@@ -10684,7 +11628,7 @@ const BillingProbe = (() => {
     }
     // ── 对话聊天习惯（Bash习惯 / HTML习惯 / 思考与工具节奏 / 推理分 / 习惯库）联合排序 ──
     const habitRes = (typeof ChatHabitFingerprint !== 'undefined' && ChatHabitFingerprint.analyze)
-      ? ChatHabitFingerprint.analyze(chatObj || { sid, messages: [] }, m)
+      ? ChatHabitFingerprint.analyze(chatObj || { sid, messages: [] }, m, opts?.preferLatestTurn ? { preferLatestTurn: true } : undefined)
       : null;
     if (habitRes && Array.isArray(habitRes.candidates) && habitRes.candidates.length) {
       for (const hc of habitRes.candidates) {
@@ -11052,7 +11996,7 @@ const BillingProbe = (() => {
 
   const summaryCache = new Map();
   const topConfidenceCache = new Map();
-  const clearSummaryCache = () => { try { summaryCache.clear(); topConfidenceCache.clear(); } catch {} };
+  const clearSummaryCache = () => { try { summaryCache.clear(); topConfidenceCache.clear(); _routeDetectCache.clear(); } catch {} };
   function summary(sid, opts = {}) {
     const mPre = sid && typeof Models !== 'undefined' ? Models.get(sid) : null;
     const isPoisonedZeroCost = Boolean(mPre && mPre.reverseInferred && Number(mPre.reverseTokens?.total || 0) === 0 && (Number(mPre.reverseVer || 0) < 175 || (Array.isArray(mPre.reverseCandidates) && mPre.reverseCandidates.some(c => c?.structuralRev))));
@@ -11072,11 +12016,11 @@ const BillingProbe = (() => {
     const tailPart = tailMsg?.parts?.at(-1);
     const tailLen = typeof tailPart?.text === 'string' ? tailPart.text.length : (typeof tailPart?.inputText === 'string' ? tailPart.inputText.length : 0);
     const busySig = chat?.busy ? `1:${tailMsg?.id || ''}:${tailMsg?.parts?.length || 0}:${tailLen >> 8}:${chat?.fmt?.tN ? (chat.fmt.tN >> 4) : 0}` : '0';
-    const makeSumCacheKey = (mObj, latestId = compTail?.id) => sid ? `${readOnly ? 'ro' : 'rw'}:${state.at || 0}:${state.status || ''}:${state.httpStatus || 0}:${state.retryAt || 0}:${state.pending ? 1 : 0}:${latestId || ''}:${chat?.messages?.length || 0}:${msgDigest}:${busySig}:${mObj?.at || 0}:${mObj?.name || ''}:${mObj?.reverseVer || 0}:${mObj?.routed ? 1 : 0}:${trace?.done ? 1 : 0}:${isCostProbeEnabled() ? 1 : 0}:${bRev}:${cRev}:${rf.rev ? 1 : 0}:${rf.habit ? 1 : 0}` : '';
+    const makeSumCacheKey = (mObj, latestId = compTail?.id) => sid ? `${state.at || 0}:${state.status || ''}:${state.httpStatus || 0}:${state.retryAt || 0}:${state.pending ? 1 : 0}:${latestId || ''}:${chat?.messages?.length || 0}:${msgDigest}:${busySig}:${mObj?.at || 0}:${mObj?.name || ''}:${mObj?.reverseVer || 0}:${mObj?.routed ? 1 : 0}:${trace?.done ? 1 : 0}:${isCostProbeEnabled() ? 1 : 0}:${bRev}:${cRev}:${rf.rev ? 1 : 0}:${rf.habit ? 1 : 0}` : '';
     const preCacheKey = makeSumCacheKey(model, compTail?.id);
     if (preCacheKey && summaryCache.has(sid)) {
       const hit = summaryCache.get(sid);
-      if (hit && (hit.key === preCacheKey || hit.prevKey === preCacheKey || hit.compKey === preCacheKey)) return hit.val;
+      if (hit && (readOnly || hit.synced) && (hit.key === preCacheKey || hit.prevKey === preCacheKey || hit.compKey === preCacheKey)) return hit.val;
     }
     const featForTarget = (chat && Array.isArray(chat.messages) && chat.messages.length && typeof ChatHabitFingerprint?.extractFeatures === 'function')
       ? ChatHabitFingerprint.extractFeatures(chat, model)
@@ -11085,7 +12029,7 @@ const BillingProbe = (() => {
     const cacheKey = makeSumCacheKey(model, latest?.id);
     if (cacheKey && summaryCache.has(sid)) {
       const hit = summaryCache.get(sid);
-      if (hit && (hit.key === cacheKey || hit.prevKey === cacheKey || hit.compKey === cacheKey)) return hit.val;
+      if (hit && (readOnly || hit.synced) && (hit.key === cacheKey || hit.prevKey === cacheKey || hit.compKey === cacheKey)) return hit.val;
     }
     const paymentsList = Array.isArray(state.payments) ? state.payments : [];
     const rawPay = latest ? paymentsList.find(p => p?.messageId === latest.id) : paymentsList.at(-1);
@@ -11107,7 +12051,7 @@ const BillingProbe = (() => {
     const diagnostics = engine.diagnostics(sid, { latestId: latest?.id, model, trace, tracePaired: pairedTrace });
     const pre = diagnostics.preimage || null;
     const latestPreimage = (pre && latest?.id && pre.byMessage?.[latest.id]) || (pre?.byMessage ? Object.values(pre.byMessage).at(-1) : null) || null;
-    const mergedCandidates = mergeCandidates(sid, diagnostics, model);
+    const mergedCandidates = mergeCandidates(sid, diagnostics, model, opts);
     if (sessionPayment) {
       const costsObj = state.info?.result?.costs || null;
       const chanSum = costsObj ? (Number(costsObj.inputUsd || 0) + Number(costsObj.outputUsd || 0) + Number(costsObj.cacheReadUsd || 0) + Number(costsObj.cacheWriteUsd || 0) + Number(costsObj.imageGenerationCostUsd || 0)) : null;
@@ -11172,7 +12116,7 @@ const BillingProbe = (() => {
         top0.supportGranularity = 'family';
       }
       const isUniqueTop = Boolean(top0 && !top0.streamFallback && Number(top0.match || 0) >= 50 && hasClearTopMargin && top0.supportGranularity !== 'family');
-      if (isUniqueTop && (opts?.readOnly === false || model?.name) && (!model?.routed || isNowRouted)) {
+      if (isUniqueTop && (opts?.readOnly === false || model?.name) && (!model?.routed || isNowRouted || opts?.readOnly === false)) {
         const rawTopCanon = (top0.label === '开源模型' || top0.canon === '开源模型') ? '开源模型' : (typeof Strength !== 'undefined' && Strength.canon ? Strength.canon(top0.canon || top0.label) : String(top0.canon || top0.label || '')).replace(/[?？]+$/, '');
         const topCanon = (rawTopCanon !== '开源模型' && typeof Strength !== 'undefined' && Strength.foldVer) ? Strength.foldVer(rawTopCanon) : rawTopCanon;
         const rawCurCanon = (typeof Strength !== 'undefined' && Strength.canon ? Strength.canon(model?.name || '') : String(model?.name || '')).replace(/[?？]+$/, '');
@@ -11228,7 +12172,9 @@ const BillingProbe = (() => {
         const hasStaleZeroCostRev = Boolean(!hasRealCostInModel && Array.isArray(model?.reverseCandidates) && model.reverseCandidates.length > 0);
         const hasInternalMismatch = Boolean((curCanon && revCanon && curCanon !== revCanon) || (topEff && topEff !== 'standard' && model?.tier && model.tier !== topEff) || hasStaleZeroCostRev);
         const syncSig = `${topCanon}:${topEff}:${nextMatch}:${nextScore != null ? Math.round(Number(nextScore) * 10) : ''}:${isNowRouted ? 1 : 0}:${rAnnotations?.routeTo || ''}:${hasStaleZeroCostRev ? 0 : 1}`;
+        const isEvalSess = Boolean(chat?.isEvaluation || chat?.evalMode === 'battle' || chat?.evalMode === 'direct' || model?.directMode || model?.battleRevealed || (typeof History !== 'undefined' && History.byId?.(sid)?.type === 'evaluation'));
         const needModelSync = Boolean(
+          !isEvalSess &&
           !isLockedAutoOpen &&
           !isProtectedRealCostLock &&
           topCanon &&
@@ -11261,6 +12207,8 @@ const BillingProbe = (() => {
             reverseInferred: Boolean(!isHabitWinner || (top0.revPct != null && top0.revPct > 0 && !top0.structuralRev)),
             billingProbe: Boolean(!isHabitWinner || (top0.revPct != null && top0.revPct > 0 && !top0.structuralRev)),
             reverseVer: 187,
+            _v197CalibVer: 3,
+            _mismatchCheckedVer: 187,
             at: model?.at || Date.now(),
             ...(rAnnotations || {}),
           };
@@ -11307,11 +12255,11 @@ const BillingProbe = (() => {
       console.warn('[BillingProbe.summary sync]', syncErr);
     }
     if (cacheKey) {
-      if (summaryCache.size > 64) summaryCache.delete(summaryCache.keys().next().value);
+      if (summaryCache.size > 256) summaryCache.delete(summaryCache.keys().next().value);
       const mAfter = Models.get(sid);
       const postKey = makeSumCacheKey(mAfter, latest?.id);
       const compKey = makeSumCacheKey(mAfter, compTail?.id);
-      summaryCache.set(sid, { key: postKey || cacheKey, prevKey: cacheKey, compKey, val: out });
+      summaryCache.set(sid, { key: postKey || cacheKey, prevKey: cacheKey, compKey, val: out, synced: !readOnly });
     }
     return out;
   }
@@ -11354,7 +12302,7 @@ const BillingProbe = (() => {
         val = Math.max(0, Math.min(100, +mergedFallback[0].match));
       }
     }
-    if (topConfidenceCache.size > 96) topConfidenceCache.delete(topConfidenceCache.keys().next().value);
+    if (topConfidenceCache.size > 2000) topConfidenceCache.delete(topConfidenceCache.keys().next().value);
     topConfidenceCache.set(sid, { key: tcKey, val });
     return val;
   }
@@ -11401,10 +12349,14 @@ const BillingProbe = (() => {
     }, icon((!standout && best) || (s.error && !hasBest) ? 'alert' : isFpWin ? 'fingerprint' : 'bolt'), h('span', {}, text));
   }
 
-  function applyReverseIdentity(chat, { interactive = false, forceLock = false, fallbackQuestionMark = false } = {}) {
+  function applyReverseIdentity(chat, { interactive = false, force = false, forceLock = false, fallbackQuestionMark = false, preferLatestTurn = false } = {}) {
     if (!chat?.sid || isOtherProbeBusy(chat)) return null;
     const sid = chat.sid, latest = globalThis.ArenaBilling.completed(chat).at(-1);
-    const sum = summary(sid, { commit: true, readOnly: false }), d = sum.diagnostics, c = sum.consensus;
+    if (interactive || force || forceLock || preferLatestTurn) {
+      summaryCache.delete(sid);
+      topConfidenceCache.delete(sid);
+    }
+    const sum = summary(sid, { commit: true, readOnly: false, preferLatestTurn }), d = sum.diagnostics, c = sum.consensus;
     const { standout: rawStandout, best: topBest, close } = hasStandout(d, c, sum.mergedCandidates);
     const standout = Boolean(forceLock || fallbackQuestionMark || rawStandout);
     let best = topBest;
@@ -11879,11 +12831,12 @@ const BillingProbe = (() => {
   ]);
   let _fullOpus56MigratedAcct = '';
   let _fullOpus56MigratedCount = -1;
+  const _upgradedCacheSids = new Set();
   function upgradeCachedOpus56(sid) {
     if (typeof Models === 'undefined' || !Models.all) return;
     const hasNameRevMismatch = (mObj) => {
       if (!mObj || !mObj.name || !mObj.reverseLabel) return false;
-      if (mObj.userCorrected || mObj.routed || mObj.battleTruth || mObj.directTruth || mObj._mismatchCheckedVer === 176) return false;
+      if (mObj.userCorrected || mObj.routed || mObj.battleTruth || mObj.directTruth || (mObj._mismatchCheckedVer || 0) >= 187) return false;
       const c1 = (typeof Strength !== 'undefined' && Strength.canon ? Strength.canon(mObj.name) : String(mObj.name)).replace(/[?？]+$/, '').toLowerCase();
       const c2 = (typeof Strength !== 'undefined' && Strength.canon ? Strength.canon(mObj.reverseLabel) : String(mObj.reverseLabel)).replace(/[?？]+$/, '').toLowerCase();
       return Boolean(c1 && c2 && c1 !== c2);
@@ -11904,9 +12857,10 @@ const BillingProbe = (() => {
       if (ARGON_HIGH_SIDS.has(idKey)) return /sonnet[-\s]*5|gpt[-\s]*6\.1[-\s]*sol|gpt[-\s]*6[-\s]*sol|claude-haiku/i.test(nm) || (mObj.reverseVer || 0) < 140;
       return false;
     };
+    const needsV197Recalib = (mObj) => Boolean(sid && mObj && !mObj.userCorrected && mObj.habitInferred && (mObj._v197CalibVer || 0) < 3 && (mObj.habitFeatures?.meta?.htmlMaxLen > 0 || mObj.habitFeatures?.meta?.writtenChars > 0));
     if (sid) {
       const mQuick = Models.get(sid);
-      if (mQuick && ((mQuick.reverseVer || 0) >= 187 || (SOL_61_SIDS.has(sid) && (mQuick.reverseVer || 0) >= 164)) && !hasNameRevMismatch(mQuick) && !(mQuick.routed && (mQuick.reverseVer || 0) < 187) && !isSpecialSidNeedsFix(sid, mQuick) && !isOpus55Needs56(sid, mQuick)) {
+      if (mQuick && !needsV197Recalib(mQuick) && ((mQuick.reverseVer || 0) >= 187 || (SOL_61_SIDS.has(sid) && (mQuick.reverseVer || 0) >= 164)) && !hasNameRevMismatch(mQuick) && !(mQuick.routed && (mQuick.reverseVer || 0) < 187) && !isSpecialSidNeedsFix(sid, mQuick) && !isOpus55Needs56(sid, mQuick)) {
         return;
       }
     } else {
@@ -11939,7 +12893,7 @@ const BillingProbe = (() => {
       } catch {}
     };
     for (const [id, m] of targets) {
-      if (m && ((m.reverseVer || 0) >= 187 || (SOL_61_SIDS.has(id) && (m.reverseVer || 0) >= 164)) && !hasNameRevMismatch(m) && !(m.routed && (m.reverseVer || 0) < 187) && !isSpecialSidNeedsFix(id, m) && !isOpus55Needs56(id, m)) {
+      if (m && !needsV197Recalib(m) && ((m.reverseVer || 0) >= 187 || (SOL_61_SIDS.has(id) && (m.reverseVer || 0) >= 164)) && !hasNameRevMismatch(m) && !(m.routed && (m.reverseVer || 0) < 187) && !isSpecialSidNeedsFix(id, m) && !isOpus55Needs56(id, m)) {
         continue;
       }
       const nmCur = String(m?.name || m?.candidateName || m?.reverseLabel || m?.rawLabel || '');
@@ -12417,7 +13371,7 @@ const BillingProbe = (() => {
         continue;
       }
       const hasValidSavedCostForRc = Boolean((Number(m.costUsd) > 0) || (Number(m.reverseTokens?.total) > 0) || (Number(m.reverseTotalTokens?.total) > 0));
-      if (!m.userCorrected && (m.habitInferred || m.routed || (!hasValidSavedCostForRc && (m.reverseInferred || m.billingProbe)) || m.pendingConfirm || m.guess || hasNameRevMismatch(m) || (Array.isArray(m.reverseCandidates) && m.reverseCandidates.length > 0)) && ((m.reverseVer || 0) < 187 || hasNameRevMismatch(m))) {
+      if (!m.userCorrected && (m.habitInferred || m.routed || (!hasValidSavedCostForRc && (m.reverseInferred || m.billingProbe)) || m.pendingConfirm || m.guess || hasNameRevMismatch(m) || needsV197Recalib(m) || (Array.isArray(m.reverseCandidates) && m.reverseCandidates.length > 0)) && ((m.reverseVer || 0) < 187 || hasNameRevMismatch(m) || needsV197Recalib(m))) {
         const cleanedRevCands = (hasValidSavedCostForRc && Array.isArray(m.reverseCandidates))
           ? m.reverseCandidates.filter(rc => rc && !rc.structuralRev && !rc.zeroQuota && !rc.zeroQuotaMode && rc.source !== 'habit' && rc.source !== 'fp' && !rc.habitSource && (rc.revPct != null || rc.diophantinePassed))
           : undefined;
@@ -12467,6 +13421,7 @@ const BillingProbe = (() => {
             provider: '费用反推识别',
             reverseVer: 187,
             _mismatchCheckedVer: 187,
+            _v197CalibVer: 3,
             habitCandidates: undefined,
             reverseCandidates: cleanedRevCands,
           };
@@ -12482,7 +13437,8 @@ const BillingProbe = (() => {
         }
         const chatObj = (typeof Chats !== 'undefined' && Chats.get(id)) || { sid: id, messages: [] };
         const hasLoadedAsst = Array.isArray(chatObj.messages) && chatObj.messages.some(x => x && x.role === 'assistant' && x.status !== 'pending');
-        if (!hasLoadedAsst && typeof MsgCache !== 'undefined' && typeof MsgCache.get === 'function' && !chatObj._upgradingFromCache) {
+        if (sid && !hasLoadedAsst && typeof MsgCache !== 'undefined' && typeof MsgCache.get === 'function' && !chatObj._upgradingFromCache && !_upgradedCacheSids.has(id)) {
+          _upgradedCacheSids.add(id);
           chatObj._upgradingFromCache = true;
           Promise.resolve(MsgCache.get(id)).then(cached => {
             chatObj._upgradingFromCache = false;
@@ -12503,13 +13459,13 @@ const BillingProbe = (() => {
         const canReidentify = Boolean(
           typeof ChatHabitFingerprint !== 'undefined' &&
           ChatHabitFingerprint.identifyAndApply &&
-          (hasLoadedAsst || m.habitFeatures || (Array.isArray(m.habitTags) && m.habitTags.length > 0))
+          (hasLoadedAsst || (sid && (m.habitFeatures || (Array.isArray(m.habitTags) && m.habitTags.length > 0))))
         );
         if (canReidentify) {
           summaryCache.delete(id);
           const re = ChatHabitFingerprint.identifyAndApply(chatObj, { force: true, fromCostFallback: true });
           if (re && re.name) {
-            try { re._mismatchCheckedVer = 187; if (Models.all?.[id]) Models.all[id]._mismatchCheckedVer = 187; } catch {}
+            try { re._mismatchCheckedVer = 187; re._v197CalibVer = 3; if (Models.all?.[id]) { Models.all[id]._mismatchCheckedVer = 187; Models.all[id]._v197CalibVer = 3; } } catch {}
             ensurePelLoaded();
             if (pelMap && typeof pelMap === 'object' && pelMap[id]) {
               pelMap[id] = { ...pelMap[id], model: re.name, label: re.rawLabel || re.name };
@@ -12530,6 +13486,16 @@ const BillingProbe = (() => {
           ? m.name
           : (m.candidateName || m.reverseLabel || '');
         const hasValidCanon = Boolean(validCanon && !/^(未识别|未知型号|待定)$/.test(String(validCanon).trim()));
+        if (m.habitInferred && !sid && !hasLoadedAsst && Array.isArray(m.habitCandidates) && m.habitCandidates.length > 0 && hasValidCanon) {
+          Models.set(id, {
+            ...m,
+            reverseVer: 187,
+            _mismatchCheckedVer: 187,
+            reverseCandidates: cleanedRevCands && cleanedRevCands.length ? cleanedRevCands : undefined,
+          });
+          summaryCache.delete(id);
+          continue;
+        }
         Models.set(id, {
           ...m,
           name: hasValidCanon ? (typeof Strength !== 'undefined' && Strength.canon ? Strength.canon(validCanon) : validCanon) : (m.name || ''),
@@ -12541,6 +13507,7 @@ const BillingProbe = (() => {
           pendingConfirm: !hasValidCanon,
           reverseVer: 187,
           _mismatchCheckedVer: 187,
+          _v197CalibVer: 3,
           habitCandidates: undefined,
           reverseCandidates: cleanedRevCands && cleanedRevCands.length ? cleanedRevCands : undefined,
         });
@@ -13298,8 +14265,8 @@ const BillingProbe = (() => {
         }
       }
     }
-    // 扫描近期的未识别会话与显式入队会话（避免启动时拉取 80 个历史旧会话与重复请求 /cost）
-    const candidates = (History.items || []).slice(0, 15).filter((e, idx) => {
+    // 极速遍历全部历史会话识别与校对（优先零网络请求读取本地 MsgCache 与特征库，参考千面助手全量遍历机制）
+    const candidates = (History.items || []).slice(0, 200).filter((e, idx) => {
       if (!e?.id || gone.has(e.id) || e.isArchived || e.archivedAt || gachaArchiveSids.has(e.id)) return false;
       if (ChatHabitFingerprint.isEvalSession?.(e.id, e)) return false;
       if (bgSwept.has(e.id) && !queuedIdentSids.has(e.id)) return false;
@@ -13331,7 +14298,7 @@ const BillingProbe = (() => {
       if (queuedIdentSids.has(e.id) || (isGachaChat && !bgSwept.has(e.id))) {
         return !m || m.guess || m.pendingConfirm || !m.name || m.name === '未识别' || m.name === '未知型号';
       }
-      if (!bgSwept.has(e.id) && (!m || !m.name || m.name === '未识别' || m.name === '未知型号')) return idx < 6;
+      if (!bgSwept.has(e.id) && (!m || m.guess || m.pendingConfirm || !m.name || m.name === '未识别' || m.name === '未知型号' || (m.habitInferred && !m.userCorrected && (m._v197CalibVer || 0) < 3))) return true;
       return false;
     });
     for (const qSid of [...queuedIdentSids]) {
@@ -13349,7 +14316,7 @@ const BillingProbe = (() => {
       return;
     }
     bgSweeping = true;
-    const batch = candidates.slice(0, 1);
+    const batch = candidates.slice(0, 3);
     try {
       await Promise.allSettled(batch.map(async (target) => {
         activeIdentSid = target.id;

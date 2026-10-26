@@ -69,3 +69,42 @@ test('v0.13.148: timeout and transport errors trigger onErrorSwitch, cool down f
   assert.match(ripSrc,/检测到连接超时 · 正在自动切换最优节点 \/ ProxyIP/);
 });
 
+test('smart auto-route across auto-node, auto-ProxyIP, and auto-region: rotates on impure/high-risk/captcha/timeout and stays sticky when healthy',async()=>{
+  // 1. shouldRotateOnError triggers on impureIp, riskyIp, captchaTriggered, cfChallenge, and transport/timeout errors
+  assert.equal(P.shouldRotateOnError({impureIp:true}),true);
+  assert.equal(P.shouldRotateOnError({riskyIp:true}),true);
+  assert.equal(P.shouldRotateOnError({captchaTriggered:true}),true);
+  assert.equal(P.shouldRotateOnError({cfChallenge:true,responseFormat:true}),true);
+  assert.equal(P.shouldRotateOnError({routeTimeout:true,name:'AbortError'}),true);
+  assert.equal(P.shouldRotateOnError({status:403,responseFormat:true}),false);
+
+  // 2. Engine rotates when current IP becomes impure (fs >= 25, score <= 70) even if connectivity is 200 OK
+  const f=fixture();
+  f.data.pool.rep['203.0.113.8']={pu:{fs:35}}; // score = 60 (< 75)
+  f.data.pool.trust={jp:true};
+  f.io.probe=async c=>c.proxyIp==='jp'?{...healthy('JP',35),ip:'203.0.113.1',pure:{fs:5}}:healthy('JP',40);
+  const rImpure=await f.engine.run('impurity',true);
+  assert.equal(rImpure.ok,true);
+  assert.equal(rImpure.changed,true);
+  assert.equal(f.writes[0].route.proxyIp,'jp');
+
+  // 3. Engine with allowCrossRegionEscape (regAuto / exhausted region) escapes to another region even when routeMode is node
+  const f2=fixture();
+  f2.a.routeMode='node';
+  f2.a.routeAuto=true;
+  f2.a.nodeFailover=true;
+  f2.data.allowCrossRegionEscape=true;
+  f2.io.probe=async c=>c.region==='US'?healthy('US',50):{ok:false,kind:'network'};
+  const rCross=await f2.engine.run('error-switch',true);
+  assert.equal(rCross.ok,true);
+  assert.equal(rCross.changed,true);
+  assert.equal(f2.writes[0].route.region,'US');
+
+  // 4. Native manual apply with preservePolicy preserves nodeFailover !== false
+  const f3=applying();
+  const applyManual=N.createApply(f3.e);
+  const resManual=await applyManual({},{...f3.o,manual:true,mode:'auto',preservePolicy:true});
+  assert.equal(resManual.ok,true);
+  assert.equal(f3.a.nodeFailover,true);
+});
+

@@ -582,3 +582,129 @@ test('8. createAccountTokenRegistrar completes signup in 1 step via /auth/set-pa
   assert.equal(acct.email, 'mottos_90_taking+f9mw@icloud.com');
   assert.equal(acct.status.loggedIn, true);
 });
+
+test('9. MailToken.access preserves pre-existing verification link for fast-path consumption and registrar.cancel aborts active waitLink', async () => {
+  const acct = { id: 'acc_prelink_1', name: '账号 9', email: '', status: {} };
+  let savedPw = '';
+  let magicLinkCalled = 0;
+
+  const ses = {
+    async fetch(url, init = {}) {
+      if (url === 'https://arena.ai/cdn-cgi/trace') {
+        return { ok: true, status: 200, headers: new Map(), async text() { return 'ip=198.51.100.88\nloc=NL\n'; } };
+      }
+      if (url.startsWith('https://www.yunapi.pro/api/key=PRELINK_KEY')) {
+        return {
+          ok: true,
+          status: 200,
+          headers: new Map([['content-type', 'application/json']]),
+          async text() {
+            return JSON.stringify({
+              success: true,
+              data: {
+                subject: 'Confirm Your Signup',
+                content: 'Click here: https://arena.ai/nextjs-api/callback/email?token_hash=pkce_prelink_1&type=email&next=%2F',
+              },
+            });
+          },
+        };
+      }
+      if (url.startsWith('https://arena.ai/nextjs-api/callback/email?token_hash=pkce_prelink_1')) {
+        return {
+          ok: false,
+          status: 307,
+          headers: new Map([['location', 'https://arena.ai/auth/set-password?token=eyJprelinkI6MX0=']]),
+          async text() { return ''; },
+        };
+      }
+      if (url === 'https://arena.ai/nextjs-api/auth/set-password') {
+        return {
+          ok: true,
+          status: 200,
+          headers: new Map([['content-type', 'application/json']]),
+          async text() { return JSON.stringify({ success: true }); },
+        };
+      }
+      if (url === 'https://arena.ai/nextjs-api/sign-up/magic-link') {
+        magicLinkCalled++;
+        return { ok: true, status: 200, headers: new Map([['content-type', 'application/json']]), async text() { return '{"requiresVerification":true}'; } };
+      }
+      if (url === 'https://arena.ai/api/me') {
+        return {
+          ok: true,
+          status: 200,
+          headers: new Map([['content-type', 'application/json']]),
+          async json() { return { user: { id: 'u_pre_1', email: 'prelink@icloud.com', emailConfirmed: true } }; },
+        };
+      }
+      throw new Error('Unhandled fetch URL: ' + url);
+    },
+  };
+
+  const registrar = createAccountTokenRegistrar({
+    find: id => (id === acct.id ? acct : null),
+    password: () => savedPw,
+    setPassword: (_a, pw) => { savedPw = pw; },
+    session: () => ses,
+    prepare: async () => {},
+    syncCookies: async () => {},
+    save: () => {},
+    navigate: () => {},
+    read: async (s, u) => s.fetch(u),
+  });
+
+  // Simulate UI pre-check calling MailToken.access(tok) before registrar
+  const prevHost = globalThis.Host;
+  globalThis.Host = { fetchText: async u => ({ text: await (await ses.fetch(u)).text(), contentType: 'application/json' }) };
+  let tok;
+  try {
+    tok = MailToken.parse('prelink@icloud.com----https://www.yunapi.pro/api/key=PRELINK_KEY');
+    await MailToken.access(tok);
+  } finally {
+    if (prevHost === undefined) delete globalThis.Host; else globalThis.Host = prevHost;
+  }
+  assert.equal(tok._seen.size, 0, 'MailToken.access must not poison tok._seen before registrar runs');
+
+  const res = await registrar('acc_prelink_1', {
+    tok,
+    password: 'Brana#2026Pw',
+  });
+  assert.equal(res.ok, true);
+  assert.equal(magicLinkCalled, 0, 'Pre-existing valid signup link should complete without sending a duplicate magic-link email');
+
+  // Verify registrar.cancel(id) aborts an active waitLink loop quickly
+  const slowAcct = { id: 'acc_cancel_1', name: '账号 10', email: '', status: {} };
+  const slowSes = {
+    async fetch(url) {
+      if (url === 'https://arena.ai/cdn-cgi/trace') return { ok: true, status: 200, headers: new Map(), async text() { return 'ip=198.51.100.89\nloc=NL\n'; } };
+      if (url === 'https://arena.ai/') return { ok: true, status: 200, headers: new Map(), async text() { return '<html></html>'; } };
+      if (url.startsWith('https://www.google.com/recaptcha/enterprise/')) return { ok: true, status: 200, headers: new Map(), async text() { return ')]}\'\n["rresp","tok",null,null,null,null,1]'; } };
+      if (url === 'https://arena.ai/nextjs-api/sign-up/magic-link') return { ok: true, status: 200, headers: new Map([['content-type', 'application/json']]), async text() { return '{"requiresVerification":true}'; } };
+      if (url.startsWith('https://www.yunapi.pro/api/key=SLOW_KEY')) {
+        return { ok: true, status: 200, headers: new Map([['content-type', 'application/json']]), async text() { return JSON.stringify({ success: false, code: 'no_code', retryable: true }); } };
+      }
+      throw new Error('Unhandled slowSes URL: ' + url);
+    },
+  };
+  const slowRegistrar = createAccountTokenRegistrar({
+    find: id => (id === slowAcct.id ? slowAcct : null),
+    password: () => 'Brana#2026Pw',
+    setPassword: () => {},
+    session: () => slowSes,
+    prepare: async () => {},
+    syncCookies: async () => {},
+    save: () => {},
+    navigate: () => {},
+    read: async (s, u) => s.fetch(u),
+  });
+  setTimeout(() => slowRegistrar.cancel('acc_cancel_1'), 120);
+  await assert.rejects(
+    () => slowRegistrar('acc_cancel_1', {
+      tokenLine: 'slow@icloud.com----https://www.yunapi.pro/api/key=SLOW_KEY',
+      password: 'Brana#2026Pw',
+      mailTimeoutMs: 60000,
+      pollMs: 5000,
+    }),
+    err => Boolean(err && (err.cancelled || err.aborted || /已取消/.test(String(err.message || err))))
+  );
+});

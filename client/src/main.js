@@ -141,7 +141,8 @@ let BUNDLE = '', _bundleReleaseTimer = 0;
 const getBundle = () => {
   clearTimeout(_bundleReleaseTimer);
   if (!BUNDLE) BUNDLE = build(path.join(__dirname, '..', 'ui'), VERSION, { skipSyntaxCheck: true });
-  _bundleReleaseTimer = setTimeout(() => { BUNDLE = ''; try { global.gc?.(); } catch {} }, 2500);
+  _bundleReleaseTimer = setTimeout(() => { BUNDLE = ''; }, 300000);
+  _bundleReleaseTimer.unref?.();
   return BUNDLE;
 };
 const loadBundle = () => {};
@@ -317,22 +318,27 @@ function savePipPoolSoon(delay = 3500) {
 
 
 const pelshotsDiskFile = () => path.join(app.getPath('userData'), 'shared', 'pelshots.json');
-let _pelshotsSaveT = null;
+let _pelshotsSaveT = null, _memPelshots = null;
 function loadPelshotsFromDisk() {
+  if (_memPelshots) return _memPelshots;
   try {
     const f = pelshotsDiskFile();
-    if (fs.existsSync(f)) return JSON.parse(fs.readFileSync(f, 'utf8'));
+    if (fs.existsSync(f)) {
+      _memPelshots = JSON.parse(fs.readFileSync(f, 'utf8'));
+      return _memPelshots;
+    }
   } catch {}
   return null;
 }
 function savePelshotsSoon(obj) {
+  _memPelshots = obj || { rows: [], del: {}, pelican: {}, at: Date.now() };
   if (_pelshotsSaveT) clearTimeout(_pelshotsSaveT);
   _pelshotsSaveT = setTimeout(async () => {
     _pelshotsSaveT = null;
     try {
       const f = pelshotsDiskFile();
       await fs.promises.mkdir(path.dirname(f), { recursive: true });
-      await fs.promises.writeFile(f, JSON.stringify(obj || { rows: [], del: {}, pelican: {}, at: Date.now() }));
+      await fs.promises.writeFile(f, JSON.stringify(_memPelshots));
     } catch {}
   }, 1500);
 }
@@ -2039,8 +2045,11 @@ function rememberCostDpl(dpl, verified = false) {
     } catch {}
     return;
   }
-  if (!verified && !CORE_COST_DPLS.has(d)) return;
   if (EXPIRED_COST_DPLS.has(d)) return;
+  if (!verified && !CORE_COST_DPLS.has(d)) {
+    if (!COST_SKEW_DPLS.includes(d) && COST_SKEW_DPLS.length < 10) COST_SKEW_DPLS.push(d);
+    return;
+  }
   if (!COST_SKEW_DPLS.includes(d)) COST_SKEW_DPLS.push(d);
 }
 let lastProtoCost403At = 0;
@@ -2341,7 +2350,7 @@ ipcMain.handle('host:protoFetch', async (e, u, opt = {}) => {
           (/^dpl_[A-Za-z0-9]{16,48}$/.test(reqSkew) && !EXPIRED_COST_DPLS.has(reqSkew)) ? reqSkew : null,
           !EXPIRED_COST_DPLS.has(activeCostSkewDpl) ? activeCostSkewDpl : null,
           ...COST_SKEW_DPLS.filter(x => !EXPIRED_COST_DPLS.has(x)),
-        ].filter(x => x !== null && x !== ''))].slice(0, 1)
+        ].filter(x => x !== null && x !== '')).slice(0, 2), null]
       : [null];
 
     const isCostPath = opt?.costShown === true && mSid && /\/cost(?:\?|$)/i.test(raw);
@@ -2627,27 +2636,27 @@ ipcMain.handle('host:logout', async e => {
   a.noAuto = true; a.status = { ...(a.status || {}), loggedIn: false, at: Date.now() }; saveDB();   // 主动退出后不再自动登录，直到重新输入密码
   void navigateAccount(e.sender); return true;
 });
-ipcMain.handle('host:setTitle', (e, t) => { const w = BrowserWindow.fromWebContents(e.sender); if (w) applyWindowTaskMgrTitle(w, t); setTimeout(runNativeWorkingSetTrim, 500).unref?.(); return true; });
+ipcMain.handle('host:setTitle', (e, t) => { const w = BrowserWindow.fromWebContents(e.sender); if (w) applyWindowTaskMgrTitle(w, t); return true; });
 let _lastTrimAt = 0;
 let _lastExtTrimAt = 0;
-function runNativeWorkingSetTrim() {
-  if (process.platform !== 'win32') return;
+function runNativeWorkingSetTrim(force = false) {
+  if (process.platform !== 'win32' || !force) return;
   const nowTs = Date.now();
-  if (nowTs - _lastTrimAt < 2500) return;
+  if (!force && nowTs - _lastTrimAt < 180000) return;
   _lastTrimAt = nowTs;
   try {
-    global.gc?.();
     if (typeof wins !== 'undefined' && wins instanceof Map) {
       for (const w of wins.values()) {
-        if (w && !w.isDestroyed() && w.webContents && !w.webContents.isDestroyed() && !w.webContents.isCrashed?.() && !w.webContents.isLoadingMainFrame?.() && w.webContents.mainFrame) {
+        if (w && !w.isDestroyed() && (force || w.__hidden || w.isMinimized?.()) && w.webContents && !w.webContents.isDestroyed() && !w.webContents.isCrashed?.() && !w.webContents.isLoadingMainFrame?.() && w.webContents.mainFrame) {
           try { w.webContents.send('host:trimMem'); } catch {}
-          w.webContents.executeJavaScript('try{window.__branaTrimMemory?.();globalThis.gc?.()}catch{}').catch(() => {});
+          w.webContents.executeJavaScript('try{window.__branaTrimMemory?.()}catch{}').catch(() => {});
         }
       }
     }
     const metrics = typeof app.getAppMetrics === 'function' ? app.getAppMetrics() : [];
     const totalWsKb = metrics.reduce((acc, m) => acc + Number(m?.memory?.workingSetSize || 0), 0);
-    if (_lastExtTrimAt > 0 && nowTs - _lastExtTrimAt < 8000 && totalWsKb < 90 * 1024) return;
+    if (!force && totalWsKb < 1800 * 1024) return;
+    if (_lastExtTrimAt > 0 && nowTs - _lastExtTrimAt < 180000) return;
     _lastExtTrimAt = nowTs;
     const pids = metrics.map(m => String(m?.pid || '')).filter(Boolean);
     if (typeof KIDS !== 'undefined' && KIDS) {
@@ -2706,9 +2715,12 @@ function runNativeWorkingSetTrim() {
     }
   } catch {}
 }
-for (const ms of [2200, 4800, 7800, 11500, 16000, 22000]) setTimeout(runNativeWorkingSetTrim, ms).unref?.();
-setInterval(runNativeWorkingSetTrim, 8000).unref?.();
+setInterval(runNativeWorkingSetTrim, 180000).unref?.();
+let _cachedMemTag = '';
+let _cachedMemTagAt = 0;
 function formatProcessMemTag() {
+  const nowTs = Date.now();
+  if (_cachedMemTag && nowTs - _cachedMemTagAt < 15000) return _cachedMemTag;
   try {
     const metrics = typeof app.getAppMetrics === 'function' ? app.getAppMetrics() : [];
     let mainM = 0, renM = 0, gpuM = 0, netM = 0;
@@ -2719,9 +2731,13 @@ function formatProcessMemTag() {
       else if (m.type === 'GPU') gpuM += Math.max(10, Math.round(ws * 0.68));
       else if (m.type === 'Utility') netM += Math.max(4, Math.round(ws * 0.38));
     }
-    if (mainM || renM) return `【前台窗口·对话交互】[前台进程: 1主控${mainM}M+2界面渲染${renM}M ｜ 后台进程: 3显卡加速${gpuM}M+4网络通信${netM}M]`;
+    if (mainM || renM) {
+      _cachedMemTagAt = nowTs;
+      _cachedMemTag = `【前台窗口·对话交互】[前台进程: 1主控${mainM}M+2界面渲染${renM}M ｜ 后台进程: 3显卡加速${gpuM}M+4网络通信${netM}M]`;
+      return _cachedMemTag;
+    }
   } catch {}
-  return '【前台窗口·对话交互】[前台: 1主控+2界面渲染 ｜ 后台: 3显卡加速+4网络通信]';
+  return _cachedMemTag || '【前台窗口·对话交互】[前台: 1主控+2界面渲染 ｜ 后台: 3显卡加速+4网络通信]';
 }
 function applyWindowTaskMgrTitle(w, rawSubTitle) {
   if (!w || w.isDestroyed()) return;
@@ -2734,18 +2750,21 @@ function applyWindowTaskMgrTitle(w, rawSubTitle) {
   }
   const sub = w.__customSubTitle || '';
   const tag = formatProcessMemTag();
-  // 账号窗口：标题以账号显示名开头（备注优先，没有备注用邮箱前缀/账号名），任务管理器截断时也能按账号区分；
-  // 显示名每次按当前账号信息实时重算（不再冻结于 __baseAcctTitle），改备注/改名后周期刷新即可生效。
   let label = '';
   try { for (const [id, win] of wins) { if (win === w) { label = acctDisplayName(acct(id)); break; } } } catch {}
+  let nextTitle = '';
   if (label) {
     const subParts = sub.split(' · ').map(s => s.trim()).filter(s => s && s !== label && s !== APP_TITLE);
     const subShort = subParts.join(' · ').slice(0, 60);
-    w.setTitle((subShort ? `${label} · ${APP_TITLE} · ${subShort} ${tag}` : `${label} · ${APP_TITLE} ${tag}`).slice(0, 220));
-    return;
+    nextTitle = (subShort ? `${label} · ${APP_TITLE} · ${subShort} ${tag}` : `${label} · ${APP_TITLE} ${tag}`).slice(0, 220);
+  } else {
+    const baseT = w.__baseAcctTitle || APP_TITLE;
+    nextTitle = (sub && !baseT.includes(sub) ? `${tag} · ${baseT} · ${sub}` : `${tag} · ${baseT}`).slice(0, 220);
   }
-  const baseT = w.__baseAcctTitle || APP_TITLE;
-  w.setTitle((sub && !baseT.includes(sub) ? `${tag} · ${baseT} · ${sub}` : `${tag} · ${baseT}`).slice(0, 220));
+  if (w.__lastAppliedTitle !== nextTitle) {
+    w.__lastAppliedTitle = nextTitle;
+    w.setTitle(nextTitle);
+  }
 }
 setInterval(() => {
   try {
@@ -2753,7 +2772,7 @@ setInterval(() => {
       for (const w of wins.values()) if (w && !w.isDestroyed() && !w.__hidden) applyWindowTaskMgrTitle(w);
     }
   } catch {}
-}, 6000).unref?.();
+}, 30000).unref?.();
 
 // 图片：复制到剪贴板 / 另存为（对话里的附件图片、查看大图）
 ipcMain.handle('host:copyImage', async (e, b64) => {
@@ -4188,8 +4207,13 @@ ipcMain.handle('host:localScan', (e, ports) => {
   const job = runLocalScan(e, list).finally(() => localScanJobs.delete(key)); localScanJobs.set(key, job); return job;
 });
 
+const _staticBankSyncCache = new Map();
 ipcMain.on('host:staticBankSync', (e, id) => {
   try {
+    if (_staticBankSyncCache.has(id)) {
+      e.returnValue = _staticBankSyncCache.get(id);
+      return;
+    }
     const resolveMod = rel => {
       const baseName = path.basename(rel);
       const cands = [
@@ -4207,7 +4231,12 @@ ipcMain.on('host:staticBankSync', (e, id) => {
       if (f) {
         const s = fs.readFileSync(f, 'utf8').replace(/;\s*(?:Object\.defineProperty\b[\s\S]*|if\s*\(\s*typeof\s+(?:module|window|globalThis)\b[\s\S]*|module\.exports[\s\S]*)$/, '');
         const i = s.indexOf('{'), j = s.lastIndexOf('}');
-        if (i !== -1 && j > i) { e.returnValue = s.slice(i, j + 1); setImmediate(() => { try { global.gc?.(); } catch {} }); return; }
+        if (i !== -1 && j > i) {
+          const val = s.slice(i, j + 1);
+          _staticBankSyncCache.set(id, val);
+          e.returnValue = val;
+          return;
+        }
       }
     } else if (id === 'whatsmyllm' || id === 'whatsmyllm-seed') {
       const f = resolveMod('modules/habit-engine/domain/probe-vendor.js');
@@ -4218,8 +4247,9 @@ ipcMain.on('host:staticBankSync', (e, id) => {
         const p1 = p0 !== -1 ? s.indexOf('JSON.parse("', p0) : -1;
         const p2 = p1 !== -1 ? s.indexOf('")))', p1 + 12) : -1;
         if (p1 !== -1 && p2 > p1) {
-          e.returnValue = JSON.parse(s.slice(p1 + 11, p2 + 1));
-          setImmediate(() => { try { global.gc?.(); } catch {} });
+          const val = JSON.parse(s.slice(p1 + 11, p2 + 1));
+          _staticBankSyncCache.set(id, val);
+          e.returnValue = val;
           return;
         }
       }
@@ -4321,11 +4351,16 @@ ipcMain.handle('host:fingerprintStore', async (e,op,revision,payload) => {
   catch(err){return {error:String(err.message||err)};}
 });
 function cleanPelModel(s) { return String(s || '').replace(/\?+$/, '').trim(); }
+function pelModelKey(m) { return cleanPelModel(m).toLowerCase().replace(/\s*\((none|minimal|low|medium|high|xhigh|max)\)\s*$/i, '-$1').replace(/[\s_]+/g, '-'); }
 function isBetterPelModel(cand, cur) {
   const a = cleanPelModel(cand), b = cleanPelModel(cur);
   if (!a || a === '未识别' || a === '开源模型') return false;
   if (!b || b === '未识别' || b === '开源模型' || /\?$/.test(String(cur || ''))) return true;
-  return a !== b && a.length >= b.length;
+  const ka = pelModelKey(a), kb = pelModelKey(b);
+  if (ka === kb) return false;
+  const hasTier = k => /-(?:none|minimal|low|medium|high|xhigh|max)$/i.test(k);
+  if (hasTier(kb) && !hasTier(ka) && kb.startsWith(ka + '-')) return false;
+  return true;
 }
 function mergePelicanMapInto(dst, src) {
   if (!src || typeof src !== 'object') return false;
@@ -4347,8 +4382,11 @@ function mergePelicanMapInto(dst, src) {
 }
 function mergeSharedPelshots(v, sender = null, { broadcast = true } = {}) {
   DB.shared = DB.shared || {};
-  const prev = DB.shared.pelshots && typeof DB.shared.pelshots === 'object' && !Array.isArray(DB.shared.pelshots)
+  const rawPrev = (DB.shared.pelshots && typeof DB.shared.pelshots === 'object' && !Array.isArray(DB.shared.pelshots))
     ? DB.shared.pelshots
+    : (typeof loadPelshotsFromDisk === 'function' ? loadPelshotsFromDisk() : null);
+  const prev = rawPrev && typeof rawPrev === 'object' && !Array.isArray(rawPrev)
+    ? rawPrev
     : { rows: Array.isArray(DB.shared.pelshots) ? DB.shared.pelshots : [], del: {}, pelican: {}, at: 0 };
   const del = { ...(prev.del && typeof prev.del === 'object' ? prev.del : {}) };
   const pelMap = { ...(DB.shared.pelican && typeof DB.shared.pelican === 'object' ? DB.shared.pelican : {}), ...(prev.pelican && typeof prev.pelican === 'object' ? prev.pelican : {}) };
@@ -4533,6 +4571,80 @@ function harvestAccountPelicanSoon(force = false) {
   }, force ? 120 : 6000);
 }
 ipcMain.handle('host:shared', (e, k, v) => {
+  if (k === '__clipboardWrite') {
+    try {
+      clipboard.writeText(String(v ?? ''));
+      return { ok: true };
+    } catch (err) {
+      return { ok: false, error: err?.message || String(err) };
+    }
+  }
+  if (k === '__localApiGateway') {
+    if (!global.__branaLocalApiGateway) {
+      const { createLocalApiGateway } = require('./local-api-gateway');
+      global.__branaLocalApiGateway = createLocalApiGateway({
+        getFallbackWebContents: () => {
+          for (const w of wins.values()) {
+            if (w && !w.isDestroyed() && w.webContents && !w.webContents.isDestroyed()) return w.webContents;
+          }
+          return null;
+        },
+      });
+    }
+    return global.__branaLocalApiGateway.handleIpc(e.sender, v || {});
+  }
+  if (k === '__qrSyncServe') { return (async () => {
+    if (!v || typeof v !== 'object') return null;
+    if (!global.__branaQrSyncSrv) {
+      const store = new Map();
+      const srv = http.createServer((req, res) => {
+        res.setHeader('Access-Control-Allow-Origin', '*');
+        res.setHeader('Cache-Control', 'no-store');
+        const m = /^\/brana-sync\/([a-zA-Z0-9_-]{6,64})/.exec(req.url || '');
+        if (!m || !store.has(m[1])) {
+          res.writeHead(404, { 'Content-Type': 'application/json; charset=utf-8' });
+          res.end(JSON.stringify({ ok: false, error: 'expired_or_not_found' }));
+          return;
+        }
+        const entry = store.get(m[1]);
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(entry.json);
+      });
+      await new Promise((resolve) => {
+        srv.once('error', () => resolve());
+        srv.listen(0, '0.0.0.0', () => resolve());
+      });
+      global.__branaQrSyncSrv = { srv, store };
+    }
+    const { srv, store } = global.__branaQrSyncSrv;
+    const addr = srv.address();
+    const port = addr && typeof addr === 'object' ? addr.port : 0;
+    if (!port) return null;
+    const token = crypto.randomBytes(8).toString('base64url');
+    const nowMs = Date.now();
+    for (const [tk, ent] of store.entries()) {
+      if (nowMs - ent.at > 15 * 60e3) store.delete(tk);
+    }
+    store.set(token, { json: JSON.stringify(v), at: nowMs });
+    const nets = os.networkInterfaces ? os.networkInterfaces() : {};
+    const ips = [];
+    for (const [ifName, list] of Object.entries(nets)) {
+      if (/vethernet|wsl|vmware|vbox|virtual|hyper-v|loopback|tailscale|clash|tun|tap|meta/i.test(ifName)) continue;
+      for (const info of (list || [])) {
+        if (!info || info.internal || info.family !== 'IPv4') continue;
+        if (/^(192\.168\.|10\.|172\.(1[6-9]|2\d|3[01])\.)/.test(info.address)) ips.push(info.address);
+      }
+    }
+    if (!ips.length) {
+      for (const list of Object.values(nets)) {
+        for (const info of (list || [])) {
+          if (info && !info.internal && info.family === 'IPv4' && !/^169\.254\./.test(info.address)) ips.push(info.address);
+        }
+      }
+    }
+    const ip = ips[0] || '127.0.0.1';
+    return { ok: true, url: `http://${ip}:${port}/brana-sync/${token}`, ip, ips, port, token };
+  })(); }
   // 固定密码：{on, pw}，密码用系统钥匙串加密（和记住的账号密码一样），读出来时解密
   if (k === 'fixedpw') {
     DB.shared = DB.shared || {};
@@ -4978,15 +5090,14 @@ ipcMain.handle('host:shared', (e, k, v) => {
     }
     const baseSamples = mergeBankSamples(diskSamples, DB.shared.habitLearnBank?.samples || []);
     delete DB.shared.habitLearnBank;
-    global._memHabitBank = null;
     if (v === undefined) {
       const nextBank = { v: 2, updatedAt: Date.now(), samples: baseSamples.slice(0, 160), calibration: diskCalib };
+      global._memHabitBank = nextBank;
       try {
         if (fs.existsSync(bankFile) && fs.statSync(bankFile).size > 200000) {
           fs.writeFileSync(bankFile, JSON.stringify(nextBank), 'utf8');
         }
       } catch {}
-      setImmediate(() => { try { global.gc?.(); } catch {} });
       return nextBank;
     }
     if (v && typeof v === 'object') {
@@ -5001,7 +5112,6 @@ ipcMain.handle('host:shared', (e, k, v) => {
         : mergeCalibObj(diskCalib, v.calibration);
       const nextBank = { v: 2, updatedAt: Date.now(), samples: merged, calibration: mergedCal };
       persistHabitBankFiles(nextBank);
-      global._memHabitBank = null;
       try {
         for (const bw of BrowserWindow.getAllWindows()) {
           if (bw && !bw.isDestroyed() && bw.webContents && bw.webContents !== e?.sender) {
@@ -5009,7 +5119,6 @@ ipcMain.handle('host:shared', (e, k, v) => {
           }
         }
       } catch {}
-      setImmediate(() => { try { global.gc?.(); } catch {} });
       return nextBank;
     }
     return false;
@@ -5304,7 +5413,56 @@ async function storeSetCookies(ses, r) {
   }
 }
 async function refreshStatus(a, ses) {
-  return refreshAccountStatus(a, ses, { fetch: fetchAccountResponse, exists: x => acct(x.id) === x, save: saveSoon });
+  const trySilentSignIn = async () => {
+    if (!a || !a.email || !a.pw || a.noAuto || acct(a.id) !== a) return false;
+    const secret = decPw(a.pw);
+    if (!secret) return false;
+    try {
+      const ua = a.fp?.ua || UA;
+      const lang = a.fp?.lang || 'en-US,en;q=0.9';
+      const ctl = new AbortController(), tm = setTimeout(() => ctl.abort(), 15000);
+      let r;
+      try {
+        r = await ses.fetch('https://arena.ai/nextjs-api/sign-in/email', {
+          method: 'POST',
+          credentials: 'include',
+          cache: 'no-store',
+          signal: ctl.signal,
+          headers: {
+            'User-Agent': ua,
+            'Accept-Language': lang,
+            'Content-Type': 'application/json',
+            Accept: 'application/json',
+            Origin: 'https://arena.ai',
+            Referer: 'https://arena.ai/',
+          },
+          body: JSON.stringify({ email: a.email, password: secret, shouldLinkHistory: false }),
+        });
+      } finally { clearTimeout(tm); }
+      if (r && r.ok) {
+        await storeSetCookies(ses, r);
+        await ses.cookies.flushStore().catch(() => {});
+        a._pulseNextAt = 0;
+        a._pulseAttempt = 0;
+        return true;
+      }
+    } catch {}
+    return false;
+  };
+  try {
+    const existingCookies = ses?.cookies ? await ses.cookies.get({ url: 'https://arena.ai' }) : [];
+    const hasAuthCookie = existingCookies.some(c => /^arena-auth-prod-v1(?:\.\d+)?$/.test(String(c?.name || '')) && c?.value);
+    if (!hasAuthCookie && a?.email && a?.pw && !a?.noAuto) {
+      await trySilentSignIn();
+    }
+  } catch {}
+  let st = await refreshAccountStatus(a, ses, { fetch: fetchAccountResponse, exists: x => acct(x.id) === x, save: saveSoon });
+  if (st && st.loggedIn === false && a?.email && a?.pw && !a?.noAuto) {
+    if (await trySilentSignIn()) {
+      st = await refreshAccountStatus(a, ses, { fetch: fetchAccountResponse, exists: x => acct(x.id) === x, save: saveSoon });
+    }
+  }
+  return st;
 }
 
 async function authExit(ses) {
@@ -5394,8 +5552,25 @@ const registerTokenAccount = require('./account-auth').createAccountTokenRegistr
   navigate: a => { const w = wins.get(a.id); if (w && !w.isDestroyed()) void navigateAccount(w.webContents); },
 });
 ipcMain.handle('host:registerTokenAccount', async (e, id, opt) => {
-  try { return await withAuthTunnel(id, () => registerTokenAccount(id, opt && typeof opt === 'object' ? opt : {})); }
-  catch (err) { return { error: String(err.message || err), mailFailed: !!err?.mailFailed, tokenInvalid: !!err?.tokenInvalid, proxyFailed: !!err?.proxyFailed }; }
+  const safeOpt = opt && typeof opt === 'object' ? { ...opt } : {};
+  safeOpt.onStep = step => {
+    try {
+      if (e?.sender && !e.sender.isDestroyed()) {
+        e.sender.send('anc-cmd', { tokenRegStep: String(step || ''), id: String(id || '') });
+      }
+    } catch {}
+  };
+  try { return await withAuthTunnel(id, () => registerTokenAccount(id, safeOpt)); }
+  catch (err) { return { error: String(err.message || err), cancelled: !!(err?.cancelled || err?.aborted || err?.code === 'AUTH_CANCELLED'), mailFailed: !!err?.mailFailed, tokenInvalid: !!err?.tokenInvalid, proxyFailed: !!err?.proxyFailed }; }
+});
+ipcMain.handle('host:cancelTokenRegistration', (_e, id) => {
+  try {
+    if (id) registerTokenAccount.cancel?.(id);
+    else registerTokenAccount.cancelAll?.();
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: String(err?.message || err) };
+  }
 });
 ipcMain.handle('host:setCookies', async (e, id, list) => {
   const a = acct(id); if (!a || !Array.isArray(list)) return false;
@@ -5403,9 +5578,9 @@ ipcMain.handle('host:setCookies', async (e, id, list) => {
   for (const c of list) { if (!c || !/^arena-auth-prod-v1(\.\d+)?$/.test(String(c.name || '')) || typeof c.value !== 'string') continue; try { await ses.cookies.set({ url: 'https://arena.ai', name: c.name, value: c.value, domain: c.domain || undefined, path: c.path || '/', secure: true, httpOnly: !!c.httpOnly, sameSite: 'lax', expirationDate: c.expirationDate || Date.now() / 1000 + 30 * 86400 }); n++; } catch {} }
   await ses.cookies.flushStore().catch(() => {}); return n;
 });
-let lastQuotaRefreshAt = 0, lastQuotaRefreshResult = null;
+let lastQuotaRefreshAt = 0, lastQuotaRefreshResult = null, _quotaRefreshForce = false;
 const refreshAllAccounts = createAccountRefresh({
-  accounts: () => DB.accounts, exists: a => acct(a.id) === a, session: prepSession,
+  accounts: () => _quotaRefreshForce ? DB.accounts : (DB.accounts || []).filter(a => a && wins.has(a.id)), exists: a => acct(a.id) === a, session: prepSession,
   // Never reset a live account's proxy/connections while it is chatting or running gacha.
   prepare: async a => { if (activeAuthAccounts.has(a.id) || (a.provisionalReg && !a.status?.loggedIn)) return; const w = wins.get(a.id); if (!w || w.isDestroyed()) await applyProxy(a); },
   refresh: async (a, ses) => {
@@ -5423,10 +5598,15 @@ const refreshAllAccounts = createAccountRefresh({
 });
 ipcMain.handle('host:refreshQuotas', async (_e, force) => {
   if (!force && lastQuotaRefreshResult && Date.now() - lastQuotaRefreshAt < 180000) return lastQuotaRefreshResult;
-  const res = await refreshAllAccounts();
-  lastQuotaRefreshAt = Date.now();
-  lastQuotaRefreshResult = res;
-  return res;
+  _quotaRefreshForce = !!force;
+  try {
+    const res = await refreshAllAccounts();
+    lastQuotaRefreshAt = Date.now();
+    lastQuotaRefreshResult = res;
+    return res;
+  } finally {
+    _quotaRefreshForce = false;
+  }
 });
 
 // Probes are isolated, credential-free and globally bounded; slots are never shared concurrently.
@@ -5565,27 +5745,20 @@ function menu() {
   Menu.setApplicationMenu(Menu.buildFromTemplate(tpl));
 }
 
-// 显卡不可用 / 被禁用时 WebGL 会失效，reCAPTCHA 的 execute 会一直不返回（新对话发不出去）：允许退回软件渲染
-app.commandLine.appendSwitch('enable-unsafe-swiftshader');
+// 优先启用独立显卡 Direct3D11 硬件合成与多线程光栅化，且每个账号窗口独立渲染进程互不阻塞
 app.commandLine.appendSwitch('ignore-gpu-blocklist');
+app.commandLine.appendSwitch('enable-gpu-rasterization');
+app.commandLine.appendSwitch('enable-zero-copy');
+app.commandLine.appendSwitch('enable-unsafe-swiftshader');
 app.commandLine.appendSwitch('disable-site-isolation-trials');
-app.commandLine.appendSwitch('process-per-site');
 try {
   app.commandLine.appendSwitch('lang', 'zh-CN');
   app.commandLine.appendSwitch('accept-lang', 'zh-CN,zh,en-US,en');
   // legacy baseline: app.commandLine.appendSwitch('renderer-process-limit', '1'); --max-old-space-size=512 --initial-old-space-size=16 --max-semi-space-size=2
-  app.commandLine.appendSwitch('js-flags', '--max-old-space-size=2048 --expose-gc');
-  app.commandLine.appendSwitch('renderer-process-limit', '4');
-  app.commandLine.appendSwitch('num-raster-threads', '1');
+  app.commandLine.appendSwitch('js-flags', '--max-old-space-size=4096');
   app.commandLine.appendSwitch('no-sandbox');
   app.commandLine.appendSwitch('disable-gpu-sandbox');
-  app.commandLine.appendSwitch('disk-cache-size', '4194304');
-  app.commandLine.appendSwitch('media-cache-size', '1048576');
-  app.commandLine.appendSwitch('gpu-program-cache-size-kb', '256');
-  app.commandLine.appendSwitch('disable-gpu-shader-disk-cache');
-  app.commandLine.appendSwitch('enable-features', 'PartitionAllocMemoryReclaimer');
-  app.commandLine.appendSwitch('disable-features', 'BackForwardCache,CalculateNativeWinOcclusion,Translate,OptimizationHints,MediaRouter');
-  setInterval(() => { try { global.gc?.(); } catch {} }, 45000).unref?.();
+  app.commandLine.appendSwitch('disable-features', 'BackForwardCache,Translate,OptimizationHints,MediaRouter');
 } catch {}
 app.whenReady().then(async () => {
   BrowserPrivacy.secureResolver(app);
@@ -5614,6 +5787,42 @@ app.whenReady().then(async () => {
   DB.last = savedLast;
   try { saveDB(); } catch {}
   for (const id of bootIds) await openAccountSafe(id);
+  setTimeout(async () => {
+    try {
+      const openSet = new Set(bootIds);
+      const cands = (DB.accounts || []).filter(a => a && openSet.has(a.id) && a.email && a.pw && !a.noAuto && !(a.provisionalReg && !a.status?.loggedIn));
+      const needHeal = [];
+      for (const a of cands) {
+        const ses = prepSession(a);
+        const ck = ses?.cookies ? await ses.cookies.get({ url: 'https://arena.ai' }).catch(() => []) : [];
+        const hasAuth = ck.some(c => /^arena-auth-prod-v1(?:\.\d+)?$/.test(String(c?.name || '')) && c?.value);
+        if (!hasAuth || a.status?.loggedIn === false) needHeal.push(a);
+      }
+      if (needHeal.length) {
+        let idx = 0;
+        const healWorker = async () => {
+          while (idx < needHeal.length) {
+            const a = needHeal[idx++];
+            if (!a || acct(a.id) !== a || activeAuthAccounts.has(a.id)) continue;
+            const ses = prepSession(a);
+            try {
+              const w = wins.get(a.id);
+              if (!w || w.isDestroyed()) await applyProxy(a);
+              await refreshStatus(a, ses);
+            } catch {} finally {
+              const w = wins.get(a.id);
+              if (!activeAuthAccounts.has(a.id) && (!w || w.isDestroyed())) {
+                stopTunnel(a.id);
+                try { await ses.closeAllConnections(); } catch {}
+              }
+            }
+          }
+        };
+        await Promise.all(Array.from({ length: Math.min(3, needHeal.length) }, healWorker));
+        saveDB();
+      }
+    } catch {}
+  }, 1000).unref?.();
   setTimeout(async () => {
     try {
       const userData = app.getPath('userData');

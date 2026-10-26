@@ -28,6 +28,13 @@ ICON.mic = '<rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0
 ICON.qr = '<rect x="3" y="3" width="7" height="7" rx="1"/><rect x="5.2" y="5.2" width="2.6" height="2.6" rx="0.4" fill="currentColor" stroke="none"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="16.2" y="5.2" width="2.6" height="2.6" rx="0.4" fill="currentColor" stroke="none"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="5.2" y="16.2" width="2.6" height="2.6" rx="0.4" fill="currentColor" stroke="none"/><path d="M14 14h3v3h-3zM18 14h3v3h-3zM14 18h3v3h-3zM18 18h3v3h-3z"/>';
 ICON.camera = '<path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/>';
 ICON.check = '<path d="M5 12.5 9.5 17 19 7.5"/>';
+ICON.paperclip = '<path d="M21.44 11.05l-8.49 8.49a5.5 5.5 0 0 1-7.78-7.78l9.19-9.19a3.5 3.5 0 0 1 4.95 4.95l-9.2 9.19a1.5 1.5 0 0 1-2.12-2.12l8.49-8.48"/>';
+ICON.clip = ICON.paperclip;
+ICON.api = '<path d="M12 22v-5"/><path d="M9 8V3"/><path d="M15 8V3"/><path d="M18 8v4a6 6 0 0 1-12 0V8z"/>';
+ICON.cpu = '<rect x="5" y="5" width="14" height="14" rx="2"/><rect x="9" y="9" width="6" height="6" rx="1"/><path d="M9 2v3M15 2v3M9 19v3M15 19v3M2 9h3M2 15h3M19 9h3M19 15h3"/>';
+ICON.zap = '<path d="M13 3L4 14h7l-1 7 9-11h-7z"/>';
+ICON.terminal = '<path d="M4 17l6-6-6-6M12 19h8"/>';
+ICON.code = '<path d="M8 8l-4 4 4 4M16 8l4 4-4 4M13.5 5l-3 14"/>';
 ICON.eye = '<path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/>';
 ICON[' eye'] = ICON.eye;
 ICON.RefreshCw = ICON.refresh;
@@ -807,7 +814,41 @@ document.addEventListener('contextmenu', e => {
   const src = t.currentSrc || t.getAttribute('src'); if (!src || /^data:image\/svg/.test(src)) return;
   e.preventDefault(); ImgAct.menu(e, src, t.alt || '', false, t);
 });
-const copyText = async t => { try { await navigator.clipboard.writeText(t); toast('已复制'); } catch { const ta = h('textarea', {}, t); document.body.append(ta); ta.select(); document.execCommand('copy'); ta.remove(); toast('已复制'); } };
+const copyText = async (t, opts) => {
+  const s = String(t ?? '');
+  let ok = false;
+  try {
+    if (typeof BranaHost !== 'undefined') {
+      if (typeof BranaHost.copyText === 'function') {
+        const r = await BranaHost.copyText(s);
+        if (r && r.ok) ok = true;
+      } else if (typeof BranaHost.shared === 'function') {
+        const r = await BranaHost.shared('__clipboardWrite', s);
+        if (r && r.ok) ok = true;
+      }
+    }
+  } catch {}
+  if (!ok) {
+    try { await navigator.clipboard.writeText(s); ok = true; } catch {}
+  }
+  if (!ok) {
+    try {
+      const ta = document.createElement('textarea');
+      ta.value = s;
+      ta.setAttribute('readonly', '');
+      ta.style.cssText = 'position:fixed;top:-9999px;left:-9999px;opacity:0;pointer-events:none';
+      document.body.appendChild(ta);
+      ta.focus();
+      ta.select();
+      ta.setSelectionRange(0, s.length);
+      document.execCommand('copy');
+      ta.remove();
+      ok = true;
+    } catch {}
+  }
+  if (!opts || !opts.silent) toast(opts?.toastMsg || '已复制');
+  return ok;
+};
 // 对话状态：run 进行中（图标顺时针转）/ bad 出错（红）/ ok 正常完成（绿）/ '' 未知
 const chatState = c => { if (!c) return ''; if (typeof Hitl !== 'undefined' ? Hitl.blocked(c) : c.busy) return 'run'; const last = c.messages?.at(-1); const hasFailedMsg = Boolean(last?.failed || (c.messages || []).some(m => m?.role === 'user' && m.failed) || (typeof SentUserLog !== 'undefined' && SentUserLog.hasFailed?.(c.sid))); if (c.error || hasFailedMsg || (last?.parts || []).some(p => p.type === 'error')) return 'bad'; return c.loaded && last?.role === 'assistant' ? 'ok' : ''; };
 const stLogo = (vid, size, st) => { const l = vid ? vlogo(vid, size) : h('span', { class: 'vlogo none', style: { width: size + 'px', height: size + 'px' } }, st === 'run' ? '' : '·'); if (st) { l.classList.add('st-' + st); if (st === 'run') l.style.animationDelay = '-' + (Math.floor(typeof performance !== 'undefined' ? performance.now() : Date.now()) % 1100) + 'ms'; } return l; };
