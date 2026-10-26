@@ -4,6 +4,7 @@
 const test = require('node:test'), assert = require('node:assert/strict'), fs = require('node:fs'), path = require('node:path'), vm = require('node:vm');
 const main = fs.readFileSync(path.join(__dirname, '../src/main.js'), 'utf8');
 const code = main.slice(main.indexOf('async function openAccount(id, opt = {}) {'), main.indexOf('// Navigation failures are handled at their source'));
+const namingHelper = main.slice(main.indexOf('const acctDisplayName'), main.indexOf('\n};', main.indexOf('const acctDisplayName')) + 3);
 class Emitter { constructor() { this.h = new Map(); } on(n, f) { (this.h.get(n) || this.h.set(n, []).get(n)).push(f); return this; } once(n, f) { const g = (...a) => { this.off(n, g); f(...a); }; return this.on(n, g); } off(n, f) { this.h.set(n, (this.h.get(n) || []).filter(x => x !== f)); } emit(n, ...a) { for (const f of [...(this.h.get(n) || [])]) f(...a); } removeListener(n, f) { this.off(n, f); } }
 function env() {
   const timers = [], log = [];
@@ -22,7 +23,7 @@ function env() {
     constructor(opts) { super(); this.opts = opts; this.shown = false; this.destroyed = false; const wc = this.webContents = new Emitter(); wc.id = 7; wc.url = ''; wc.session = e.session; wc.getURL = () => wc.url; wc.isDestroyed = () => false; wc.executeJavaScript = async () => {}; wc.insertCSS = async () => {}; wc.setWindowOpenHandler = () => {}; wc.loadFile = async () => {}; wc.debugger = { isAttached: () => false }; }
     show() { this.shown = true; } isDestroyed() { return this.destroyed; } isMinimized() { return false; } focus() {} restore() {}
   };
-  vm.createContext(e); vm.runInContext(code + '\nthis.openAccount = openAccount;', e); return e;
+  vm.createContext(e); vm.runInContext(namingHelper + '\n' + code + '\nthis.openAccount = openAccount;', e); return e;
 }
 const settle = () => new Promise(r => setImmediate(r));
 test('a visible window opened while running gets the connecting splash and stays hidden until host:ready', async () => {

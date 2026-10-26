@@ -640,6 +640,15 @@ function saveDB(strict = false) {
 }
 const newId = () => crypto.randomBytes(5).toString('hex');
 const acct = id => DB.accounts.find(a => a.id === id);
+// 任务管理器 / 窗口标题里的账号显示名：优先账号备注，没有备注时用邮箱前缀 / 账号名，保证多个账号窗口在任务管理器里可区分
+const acctDisplayName = a => {
+  if (!a) return '';
+  const remark = String(a.remark || '').replace(/\s+/g, ' ').trim();
+  if (remark) return remark;
+  const email = String(a.email || '').trim();
+  if (email.includes('@')) return email.slice(0, email.indexOf('@'));
+  return String(a.name || email || '').trim();
+};
 // 抽卡状态只在该账号窗口（含后台隐藏窗口）还开着时有效；程序重启后不再显示「抽卡中」
 const winState = id => { const w = typeof wins !== 'undefined' && wins.get(id); return w && !w.isDestroyed() ? (w.__hidden ? 'hidden' : 'shown') : ''; };
 const liveStatus = a => { const st = a.status || null; if (!st || !st.gacha || winState(a.id) || !st.gacha.busy) return st; return { ...st, gacha: { ...st.gacha, busy: false } }; };
@@ -1396,7 +1405,7 @@ extensionTabs = require('./extension-tabs').createExtensionTabs({
   applyProxy:(a)=>applyProxy(a),privacyInit:wc=>uaMeta(wc),loadURL:loadURLAlive,
   registerTab:(id,wc,w)=>extensionCompat.registerTab(id,wc,w),
   reportError:(id,extensionId,error)=>{extensionCompat.reportError(id,extensionId,error);runtimeLog('extension-tab-failed',{kind:error?.name});},
-  windowOptions:a=>({width:1200,height:820,minWidth:720,minHeight:480,title:APP_TITLE+' · '+a.name+' · 扩展页面',icon:ICON,backgroundColor:themeBg(),autoHideMenuBar:true,titleBarStyle:process.platform==='darwin'?'hiddenInset':'hidden',...(process.platform==='darwin'?{trafficLightPosition:{x:14,y:13},roundedCorners:true}:{titleBarOverlay:themeOverlay()}),webPreferences:{preload:path.join(__dirname,'preload.js'),backgroundThrottling:false,spellcheck:false}}),
+  windowOptions:a=>({width:1200,height:820,minWidth:720,minHeight:480,title:APP_TITLE+' · '+(acctDisplayName(a)||a.name||'账号')+' · 扩展页面',icon:ICON,backgroundColor:themeBg(),autoHideMenuBar:true,titleBarStyle:process.platform==='darwin'?'hiddenInset':'hidden',...(process.platform==='darwin'?{trafficLightPosition:{x:14,y:13},roundedCorners:true}:{titleBarOverlay:themeOverlay()}),webPreferences:{preload:path.join(__dirname,'preload.js'),backgroundThrottling:false,spellcheck:false}}),
   decorate:(w,wc)=>{
     keepRound(w,10);keepViewport(w);
     wc.on('page-favicon-updated',(_e,urls)=>{wc.__bookmarkFavicons={page:wc.getURL(),urls};});
@@ -1483,7 +1492,7 @@ async function openAccount(id, opt = {}) {
   })();
   const w = new BrowserWindow({
     ...(wb && wb.x != null && wb.y != null ? { x: wb.x, y: wb.y } : {}),
-    width: wb?.width || 1320, height: wb?.height || 880, minWidth: 720, minHeight: 480, title: `${APP_TITLE} · ${(a.email || '').split('@')[0] || a.name}`, show: false, icon: ICON,
+    width: wb?.width || 1320, height: wb?.height || 880, minWidth: 720, minHeight: 480, title: `${APP_TITLE} · ${acctDisplayName(a) || '账号'}`, show: false, icon: ICON,
     backgroundColor: themeBg(), autoHideMenuBar: true,
     // 不要系统白色标题栏：内容铺满窗口，标签栏当拖动区；Windows / Linux 右上角保留系统按钮并跟随主题色
     titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'hidden',
@@ -1819,7 +1828,7 @@ ipcMain.handle('host:saveAccount', async (e, a) => {
     const np = String(a.proxy ?? cur.proxy ?? '').trim(), npi = String(a.proxyIp ?? cur.proxyIp ?? '').trim(); const changed = np !== (cur.proxy || '') || npi !== (cur.proxyIp || ''); cur.proxy = np; cur.proxyIp = npi; if (a.nodeId !== undefined) cur.nodeId = String(a.nodeId || '').slice(0, 40);
     if (a.fp) cur.fp = cleanFp(a.fp);
     // Apply only after all route/region fields have been assigned below.
-    const w = wins.get(cur.id); if (w && !w.isDestroyed()) w.setTitle(`${typeof APP_TITLE==='string'?APP_TITLE:'Brana AI'} · ${cur.name}`);
+    // 窗口标题在此统一于 handler 末尾按最新备注/邮箱刷新（applyWindowTaskMgrTitle），避免备注在本行之后才写入导致标题过期
   }
   if (a.routeMode !== undefined) Object.assign(cur, RouteState.prefs(a.routeMode));
   if (typeof a.nodeFailover === 'boolean' && RouteState.mode(cur) === 'node') cur.nodeFailover = a.nodeFailover;
@@ -1835,6 +1844,7 @@ ipcMain.handle('host:saveAccount', async (e, a) => {
   const ses = typeof prepSession === "function" ? prepSession(cur) : null;
   const routeChanged = !prevRouteSig || nextRouteSig !== prevRouteSig || nextFpJson !== prevFpJson || (ses ? (ses.__routeReadySignature !== nextRouteSig || Boolean(ses.__routeBlocked)) : true);
   if(routeChanged && !a.deferProxy && (a.region!==undefined||a.fp||a.proxy!==undefined||a.proxyIp!==undefined))await applyProxy(cur);
+  const acctWin = wins.get(cur.id); if (acctWin && !acctWin.isDestroyed()) applyWindowTaskMgrTitle(acctWin);
   saveDB(); return pub(cur);
 });
 // A name-only update must never apply proxy/password fields or create a missing account.
@@ -1844,7 +1854,7 @@ ipcMain.handle('host:renameAccount', (e, id, value) => {
   if (!name || name.length > 40 || /[\x00-\x1f\x7f]/.test(name)) throw new Error('名称须为 1–40 个字符，不能包含控制字符');
   const before = a.remark; a.remark = name;
   try { saveDB(true); } catch (err) { if (before === undefined) delete a.remark; else a.remark = before; throw err; }
-  const w = wins.get(id); if (w && !w.isDestroyed()) w.setTitle(`${typeof APP_TITLE==='string'?APP_TITLE:'Brana AI'} · ${name}`);
+  const w = wins.get(id); if (w && !w.isDestroyed()) applyWindowTaskMgrTitle(w);
   return { ok: true, id, name, remark: name };
 });
 ipcMain.handle('host:removeAccount', createAccountRemoval({
@@ -2722,9 +2732,19 @@ function applyWindowTaskMgrTitle(w, rawSubTitle) {
   if (rawSubTitle !== undefined) {
     w.__customSubTitle = String(rawSubTitle || '').replace(/^【(?:1·主控进程|前台窗口)[^】]*】\s*/, '').replace(/^\[[^\]]*\]\s*(?:·\s*)?/, '').replace(/^Brana(?: AI)?(?: v1\.0)?(?: · 开发预览)?(?: ·)?\s*/, '').trim();
   }
-  const baseT = w.__baseAcctTitle || APP_TITLE;
   const sub = w.__customSubTitle || '';
   const tag = formatProcessMemTag();
+  // 账号窗口：标题以账号显示名开头（备注优先，没有备注用邮箱前缀/账号名），任务管理器截断时也能按账号区分；
+  // 显示名每次按当前账号信息实时重算（不再冻结于 __baseAcctTitle），改备注/改名后周期刷新即可生效。
+  let label = '';
+  try { for (const [id, win] of wins) { if (win === w) { label = acctDisplayName(acct(id)); break; } } } catch {}
+  if (label) {
+    const subParts = sub.split(' · ').map(s => s.trim()).filter(s => s && s !== label && s !== APP_TITLE);
+    const subShort = subParts.join(' · ').slice(0, 60);
+    w.setTitle((subShort ? `${label} · ${APP_TITLE} · ${subShort} ${tag}` : `${label} · ${APP_TITLE} ${tag}`).slice(0, 220));
+    return;
+  }
+  const baseT = w.__baseAcctTitle || APP_TITLE;
   w.setTitle((sub && !baseT.includes(sub) ? `${tag} · ${baseT} · ${sub}` : `${tag} · ${baseT}`).slice(0, 220));
 }
 setInterval(() => {
@@ -5480,7 +5500,7 @@ const saveRouteDraft = RouteDrafts.createSave({
   },
   persist: () => saveDB(true),
   discard: async candidate => { stopTunnel(candidate.id); const ses = session.fromPartition(partOf(candidate.id)); await ses.closeAllConnections(); await ses.clearStorageData(); },
-  after(account, request) { routeProofs.consume(request.ticket); const w = wins.get(account.id); if (w && !w.isDestroyed()) w.setTitle((typeof APP_TITLE==='string'?APP_TITLE:'Brana AI')+' · '+account.name); },
+  after(account, request) { routeProofs.consume(request.ticket); const w = wins.get(account.id); if (w && !w.isDestroyed()) applyWindowTaskMgrTitle(w); },
 });
 ipcMain.handle('host:routeDraft', (e, request) => {
   try { const actor = routeActor(e); if (request?.op === 'open') return routeDrafts.open(actor, request.id || ''); if (request?.op === 'close') return routeDrafts.close(actor, request.draft); if (request?.op === 'status') return routeDrafts.status(actor, request.draft); throw Error('草稿操作无效'); }

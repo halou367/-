@@ -3844,7 +3844,7 @@ const UI = {
     const topConfSig = !isEvalEntry && typeof BillingProbe !== 'undefined' && BillingProbe.topConfidence ? BillingProbe.topConfidence(e.id, mi) : null;
     const goldChat = typeof Gold !== 'undefined' && typeof Gold.hasChat === 'function' ? Gold.hasChat(e.id) : false;
     const hasDoneDot = Boolean(!on && !isRunStep && typeof RunningTracker !== 'undefined' && RunningTracker.isUnread(e.id));
-    const sig = [CardSelect.mode,CardSelect.ids.has(e.id),SideTools.scope,on, !!c?.busy, st, hasDoneDot ? 1 : 0, gstep?.text || '', gstep?.pct || 0, gstep?.status || '', r.vip, r.hit, r.tint, isBattleEntry ? 'battle' : (r.vid || v.vid), shown, note, tm, v.title, mi?.name, mi?.reverseLabel, mi?.reverseEffort, mi?.tier, mi?.routed, mi?.reverseMatch, mi?.reverseScore, mi?.confidence, topConfSig, e.title, e.updatedAt, Fav.has(e.id), goldChat, mi?.fingerprint?.thinkSec, mi?.fingerprint?.reasoning?.score, isEvalEntry, isBattleEntry, battleStatus, e.mode, e.modality, e.modelAId, e.modelBId, c?.voteState?.voted, c?.voteState?.modelAName, c?.voteState?.modelBName].join('\u0001');
+    const sig = [CardSelect.mode,CardSelect.ids.has(e.id),SideTools.scope,on, !!c?.busy, st, hasDoneDot ? 1 : 0, gstep?.text || '', gstep?.pct || 0, gstep?.status || '', r.vip, r.hit, r.tint, isBattleEntry ? 'battle' : (r.vid || v.vid), shown, note, tm, v.title, mi?.name, mi?.reverseLabel, mi?.reverseEffort, mi?.tier, mi?.routed, mi?.routeFrom, mi?.routeTo, mi?.reverseMatch, mi?.reverseScore, mi?.confidence, topConfSig, e.title, e.updatedAt, Fav.has(e.id), goldChat, mi?.fingerprint?.thinkSec, mi?.fingerprint?.reasoning?.score, isEvalEntry, isBattleEntry, battleStatus, e.mode, e.modality, e.modelAId, e.modelBId, c?.voteState?.voted, c?.voteState?.modelAName, c?.voteState?.modelBName].join('\u0001');
     if (this._cards?.has(e.id)) return this.cardEl(r, cur, { e, c, v, mi, shown, note, tm, on, st, gstep, isBattleEntry, battleStatus, hasDoneDot });   // 同一会话出现两次（分页重叠）：第二个单独建
     const prev = this._cardOld?.get(e.id);
     if (prev && prev.sig === sig) { this._cards?.set(e.id, prev); return prev.el; }
@@ -4001,16 +4001,19 @@ const UI = {
         ? battleStatus
         : (!t.sid ? '新对话' : v.note || (v.model ? tabName(v.model) : '') || v.plain || '对话');
       const battleSt = isBattleTab ? (battleStatus === '生成中' ? 'run' : battleStatus === '已完成' ? 'ok' : 'wait') : st;
+      // 中途路由过的会话：标签常驻显示「⇄ 来源短名」，悬停给出完整「从 X 路由到 Y」
+      const routeFromShort = (!isBattleTab && mi?.routed && mi.routeFrom) ? String(mi.routeFrom).replace(/\s*\((?:None|Minimal|Low|Medium|High|XHigh|Max)\)\s*$/i, '').replace(/[?？]+$/, '').trim() : '';
+      const routeTip = (!isBattleTab && mi?.routed && (mi.routeFrom || mi.routeTo)) ? ('⚠️ 中途路由：' + (mi.routeFrom || '原模型') + ' → ' + (mi.routeTo || mi.name || '新模型')) : '';
       const tip = isBattleTab
         ? ['Battle 盲测 · ' + battleStatus, v?.time ? '最近对话 ' + v.time : ''].filter(Boolean).join('\n')
-        : [label, v?.model && v.model !== label ? v.model : '', v?.time ? '最近对话 ' + v.time : '', st === 'run' ? '进行中' : st === 'bad' ? '出错了' : st === 'ok' ? '已完成' : ''].filter(Boolean).join('\n');
+        : [label, v?.model && v.model !== label ? v.model : '', routeTip, v?.time ? '最近对话 ' + v.time : '', st === 'run' ? '进行中' : st === 'bad' ? '出错了' : st === 'ok' ? '已完成' : ''].filter(Boolean).join('\n');
       const pc = Palette.chip(t);   // 每个窗口有自己的颜色：标签小卡片也用它，一眼能分清
       const isSel = t.key === Tabs.active;
       const hasLamp = isSel && !!t.sid;
       const tabLogoEl = isBattleTab && typeof EvalView !== 'undefined' && typeof EvalView.renderBattleLogo === 'function'
         ? EvalView.renderBattleLogo(15, battleSt)
         : (!t.sid ? icon('plus', 'tab-new') : stLogo(v.vid, 15, st));
-      const tabTextNodes = isBattleTab ? [label] : [].concat(v?.note || !v?.model ? label : metricName(label));
+      const tabTextNodes = isBattleTab ? [label] : [].concat(v?.note || !v?.model ? label : metricName(label), (!isBattleTab && mi?.routed && !v?.note) ? h('span', { class: 'tab-route', title: routeTip, style: { marginLeft: '4px', opacity: '.72', fontSize: '11px', whiteSpace: 'nowrap' } }, '⇄' + (routeFromShort || '路由')) : []);
       frag.append(h('div', { class: 'tab' + (isSel ? ' on' : '') + (hasLamp ? ' tab-lamp-on' : '') + (!t.sid ? ' tab-blank' : '') + (isBattleTab ? ' tab-battle' : '') + (battleSt ? ' st-' + battleSt : '') + (pc ? ' tinted' : ''), style: pc ? { '--tc': pc.bg, '--tco': pc.on } : null, 'data-key': t.key, title: tip + (t.sid ? '\n长按 / 下拉：重新载入' : ''), onclick: e => { if (!e.target.closest('.x')) Tabs.focus(t.key); }, onauxclick: e => { if (e.button === 1) Tabs.close(t.key); } },
         tabLogoEl, h('span', { class: 'tab-t' }, ...tabTextNodes), h('button', { class: 'x', onclick: () => Tabs.close(t.key) }, icon('x'))));
     }

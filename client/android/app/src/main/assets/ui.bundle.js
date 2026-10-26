@@ -1162,7 +1162,7 @@ target.append(box);
 },
 };
 // ---- core.js ----
-const VERSION = '2.0.0-beta.4';
+const VERSION = '2.0.0-beta.5';
 const ORIGIN = 'https://arena.ai';
 const RC_V3 = '6LeTGMcsAAAAALuIlkVwIxaAuZA8VledA6d3Nnb0';
 const RC_V2 = '6Le3_cYsAAAAAGwWOK2RLDgNI15Bh8C0yLBOL1yL';
@@ -27605,7 +27605,7 @@ const UI = {
     const topConfSig = !isEvalEntry && typeof BillingProbe !== 'undefined' && BillingProbe.topConfidence ? BillingProbe.topConfidence(e.id, mi) : null;
     const goldChat = typeof Gold !== 'undefined' && typeof Gold.hasChat === 'function' ? Gold.hasChat(e.id) : false;
     const hasDoneDot = Boolean(!on && !isRunStep && typeof RunningTracker !== 'undefined' && RunningTracker.isUnread(e.id));
-    const sig = [CardSelect.mode,CardSelect.ids.has(e.id),SideTools.scope,on, !!c?.busy, st, hasDoneDot ? 1 : 0, gstep?.text || '', gstep?.pct || 0, gstep?.status || '', r.vip, r.hit, r.tint, isBattleEntry ? 'battle' : (r.vid || v.vid), shown, note, tm, v.title, mi?.name, mi?.reverseLabel, mi?.reverseEffort, mi?.tier, mi?.routed, mi?.reverseMatch, mi?.reverseScore, mi?.confidence, topConfSig, e.title, e.updatedAt, Fav.has(e.id), goldChat, mi?.fingerprint?.thinkSec, mi?.fingerprint?.reasoning?.score, isEvalEntry, isBattleEntry, battleStatus, e.mode, e.modality, e.modelAId, e.modelBId, c?.voteState?.voted, c?.voteState?.modelAName, c?.voteState?.modelBName].join('\u0001');
+    const sig = [CardSelect.mode,CardSelect.ids.has(e.id),SideTools.scope,on, !!c?.busy, st, hasDoneDot ? 1 : 0, gstep?.text || '', gstep?.pct || 0, gstep?.status || '', r.vip, r.hit, r.tint, isBattleEntry ? 'battle' : (r.vid || v.vid), shown, note, tm, v.title, mi?.name, mi?.reverseLabel, mi?.reverseEffort, mi?.tier, mi?.routed, mi?.routeFrom, mi?.routeTo, mi?.reverseMatch, mi?.reverseScore, mi?.confidence, topConfSig, e.title, e.updatedAt, Fav.has(e.id), goldChat, mi?.fingerprint?.thinkSec, mi?.fingerprint?.reasoning?.score, isEvalEntry, isBattleEntry, battleStatus, e.mode, e.modality, e.modelAId, e.modelBId, c?.voteState?.voted, c?.voteState?.modelAName, c?.voteState?.modelBName].join('\u0001');
     if (this._cards?.has(e.id)) return this.cardEl(r, cur, { e, c, v, mi, shown, note, tm, on, st, gstep, isBattleEntry, battleStatus, hasDoneDot });   // 同一会话出现两次（分页重叠）：第二个单独建
     const prev = this._cardOld?.get(e.id);
     if (prev && prev.sig === sig) { this._cards?.set(e.id, prev); return prev.el; }
@@ -27762,16 +27762,19 @@ const UI = {
         ? battleStatus
         : (!t.sid ? '新对话' : v.note || (v.model ? tabName(v.model) : '') || v.plain || '对话');
       const battleSt = isBattleTab ? (battleStatus === '生成中' ? 'run' : battleStatus === '已完成' ? 'ok' : 'wait') : st;
+      // 中途路由过的会话：标签常驻显示「⇄ 来源短名」，悬停给出完整「从 X 路由到 Y」
+      const routeFromShort = (!isBattleTab && mi?.routed && mi.routeFrom) ? String(mi.routeFrom).replace(/\s*\((?:None|Minimal|Low|Medium|High|XHigh|Max)\)\s*$/i, '').replace(/[?？]+$/, '').trim() : '';
+      const routeTip = (!isBattleTab && mi?.routed && (mi.routeFrom || mi.routeTo)) ? ('⚠️ 中途路由：' + (mi.routeFrom || '原模型') + ' → ' + (mi.routeTo || mi.name || '新模型')) : '';
       const tip = isBattleTab
         ? ['Battle 盲测 · ' + battleStatus, v?.time ? '最近对话 ' + v.time : ''].filter(Boolean).join('\n')
-        : [label, v?.model && v.model !== label ? v.model : '', v?.time ? '最近对话 ' + v.time : '', st === 'run' ? '进行中' : st === 'bad' ? '出错了' : st === 'ok' ? '已完成' : ''].filter(Boolean).join('\n');
+        : [label, v?.model && v.model !== label ? v.model : '', routeTip, v?.time ? '最近对话 ' + v.time : '', st === 'run' ? '进行中' : st === 'bad' ? '出错了' : st === 'ok' ? '已完成' : ''].filter(Boolean).join('\n');
       const pc = Palette.chip(t);   // 每个窗口有自己的颜色：标签小卡片也用它，一眼能分清
       const isSel = t.key === Tabs.active;
       const hasLamp = isSel && !!t.sid;
       const tabLogoEl = isBattleTab && typeof EvalView !== 'undefined' && typeof EvalView.renderBattleLogo === 'function'
         ? EvalView.renderBattleLogo(15, battleSt)
         : (!t.sid ? icon('plus', 'tab-new') : stLogo(v.vid, 15, st));
-      const tabTextNodes = isBattleTab ? [label] : [].concat(v?.note || !v?.model ? label : metricName(label));
+      const tabTextNodes = isBattleTab ? [label] : [].concat(v?.note || !v?.model ? label : metricName(label), (!isBattleTab && mi?.routed && !v?.note) ? h('span', { class: 'tab-route', title: routeTip, style: { marginLeft: '4px', opacity: '.72', fontSize: '11px', whiteSpace: 'nowrap' } }, '⇄' + (routeFromShort || '路由')) : []);
       frag.append(h('div', { class: 'tab' + (isSel ? ' on' : '') + (hasLamp ? ' tab-lamp-on' : '') + (!t.sid ? ' tab-blank' : '') + (isBattleTab ? ' tab-battle' : '') + (battleSt ? ' st-' + battleSt : '') + (pc ? ' tinted' : ''), style: pc ? { '--tc': pc.bg, '--tco': pc.on } : null, 'data-key': t.key, title: tip + (t.sid ? '\n长按 / 下拉：重新载入' : ''), onclick: e => { if (!e.target.closest('.x')) Tabs.focus(t.key); }, onauxclick: e => { if (e.button === 1) Tabs.close(t.key); } },
         tabLogoEl, h('span', { class: 'tab-t' }, ...tabTextNodes), h('button', { class: 'x', onclick: () => Tabs.close(t.key) }, icon('x'))));
     }
@@ -51126,7 +51129,7 @@ const mOpen = text.match(/```(?:html|xml|svg)?\s*([\s\S]+)/i);
     let lunaNotSurePhrase = 0, solClarifyPhrase = 0, astraSelfContainedPhrase = 0, terraPhrase = 0;
     let straightApostrophe = 0, writeUnderscoreName = 0, genImg = 0, checkmarkEmoji = 0;
     let msgFmtTN = 0, msgFmtTChars = 0, msgFmtTidCount = 0, msgFmtTidChars = 0, msgFmtRWireDeltas = 0, hasLiveMsgFmt = false;
-    let wireFam = '';
+    let wireFam = '', lastTurnWireFam = '', lastTurnAvgChunk = 0;
     // 全模态（文字/图片/视频/代码网页/搜索）与同家族档位微差统计量（仅针对最近 3 轮对话）
     let tableCount = 0, listLineCount = 0, selfCheckCount = 0, thinkStepLines = 0, thinkDurSumMs = 0, thinkDurCount = 0;
     let codeOmissionCount = 0, codeDefensiveCount = 0;
@@ -51215,6 +51218,8 @@ const fenceMatches = txt.match(/^```/gm);
       let turnHasTool = false, seenToolInTurn = false, preTextInTurn = false;
       let curStepTools = 0, turnPreChars = 0, pendingBetweenChars = 0;
       let turnHidR = 0, turnVisR = 0, turnWrite = 0, turnEdit = 0, turnCodeBash = 0, turnInlineHtmlChars = 0, turnTextChars = 0;
+      let turnWireFam = (typeof m?._fmt === 'string' && (m._fmt === 'openai' || m._fmt === 'anthropic')) ? m._fmt : '';
+      if (turnWireFam && !wireFam) wireFam = turnWireFam;
       for (const p of parts) {
         if (!p) continue;
         const ty = String(p.type || '');
@@ -51269,10 +51274,12 @@ const fenceMatches = txt.match(/^```/gm);
           const tcId = String(p.toolCallId || p.id || '');
           if (tcId) {
             if (/^(?:call_\d+_|call_[0-9a-f]{24}$|functions\.|_\d+_[0-9a-f]{6,}|chatcmpl-tool-)/i.test(tcId)) {
-              wireFam = /^call_\d+_/.test(tcId) ? 'deepseek' : 'kimi';
-            } else if (!wireFam) {
-              if (/^(?:toolu|srvtoolu|msg)_01/.test(tcId)) wireFam = 'anthropic';
-              else if (/^call_[A-Za-z0-9]{24}$/.test(tcId) && !/^call_[0-9a-f]{24}$/.test(tcId)) wireFam = 'openai';
+              turnWireFam = /^call_\d+_/.test(tcId) ? 'deepseek' : 'kimi';
+              wireFam = turnWireFam;
+            } else {
+              if (/^(?:toolu|srvtoolu|msg)_01/.test(tcId)) turnWireFam = turnWireFam || 'anthropic';
+              else if (/^call_[A-Za-z0-9]{24}$/.test(tcId) && !/^call_[0-9a-f]{24}$/.test(tcId)) turnWireFam = turnWireFam || 'openai';
+              if (!wireFam && turnWireFam) wireFam = turnWireFam;
             }
           }
           const inp = p.input || p.args || {};
@@ -51406,12 +51413,15 @@ const fenceMatches = txt.match(/^```/gm);
           }
         }
       }
-      const mf = m?._fmt || m?.fmt || null;
+      const mf = (m?._fmt && typeof m._fmt === 'object') ? m._fmt : ((m?.fmt && typeof m.fmt === 'object') ? m.fmt : (m?._streamStats && typeof m._streamStats === 'object' ? m._streamStats : null));
       if (mf && typeof mf === 'object') {
-        const mfTN = Number(mf.tN) || 0;
-        const mfTChars = Number(mf.tChars) || 0;
+        const mfTN = Number(mf.tN ?? mf.deltaCount) || 0;
+        const mfTChars = Number(mf.tChars) || (mfTN > 0 && Number(mf.avgChunk) > 0 ? Math.round(mfTN * Number(mf.avgChunk)) : 0);
         msgFmtTN += mfTN;
         msgFmtTChars += mfTChars;
+        if (m === asstMsgs.at(-1) && mfTN >= 4 && mfTChars > 0) {
+          lastTurnAvgChunk = mfTChars / mfTN;
+        }
         msgFmtTidCount += Number(mf.tidCount) || 0;
         msgFmtTidChars += Number(mf.tidChars) || 0;
         msgFmtRWireDeltas += Number(mf.rWireDeltas || mf.rE || mf.rChunks) || 0;
@@ -51425,6 +51435,10 @@ const fenceMatches = txt.match(/^```/gm);
             hidR += mfRs.length;
           }
         }
+      }
+      if (m === asstMsgs.at(-1)) {
+        lastTurnWireFam = turnWireFam;
+        if (turnWireFam === 'openai' || turnWireFam === 'anthropic') wireFam = turnWireFam;
       }
       if (turnHidR > maxRInTurn) maxRInTurn = turnHidR;
       if (curStepTools >= 2) parallelSteps++;
@@ -51540,7 +51554,7 @@ const fenceMatches = txt.match(/^```/gm);
       const lastBest = lastHm?.best || null;
       const sameSubstantiveGenre = firstItem.code.length >= 4200 && lastItem.code.length >= 4200 && firstHm?.code_type === lastHm?.code_type;
       const bothStrongHtmlEvidence = Boolean((Number(firstBest?.ruleScore) >= 0.55 || Number(firstBest?.protoSim) >= 0.78) && (Number(lastBest?.ruleScore) >= 0.55 || Number(lastBest?.protoSim) >= 0.78));
-      const conflictsHardWire = (wireFam === 'openai' && lastBest?.vendorId !== 'openai') || (wireFam === 'anthropic' && lastBest?.vendorId !== 'anthropic');
+      const conflictsHardWire = (lastTurnWireFam === 'openai' && lastBest?.vendorId !== 'openai') || (lastTurnWireFam === 'anthropic' && lastBest?.vendorId !== 'anthropic');
       if (sameSubstantiveGenre && bothStrongHtmlEvidence && !conflictsHardWire && firstBest && lastBest && (firstBest.confidence || 0) >= 0.85 && (lastBest.confidence || 0) >= 0.85 && firstBest.model_id !== lastBest.model_id && (firstBest.vendorId !== lastBest.vendorId || preferLatestTurn)) {
         htmlSvgRoutePivot = {
           fromModel: firstBest.canon || firstBest.model_id,
@@ -51551,6 +51565,9 @@ const fenceMatches = txt.match(/^```/gm);
           toConf: lastBest.confidence,
         };
         finalArtifactCode = lastItem.code;
+        if (!lastTurnWireFam && wireFam && lastBest.vendorId && wireFam !== lastBest.vendorId) {
+          wireFam = '';
+        }
       } else if (preferLatestTurn && lastItem?.code) {
         finalArtifactCode = lastItem.code;
       }
@@ -51568,7 +51585,7 @@ const fenceMatches = txt.match(/^```/gm);
     const topRevCand = null;
     const msgFmtAvgChunk = (msgFmtTN >= 3 && msgFmtTChars > 0) ? Math.round((msgFmtTChars / msgFmtTN) * 10) / 10 : 0;
     const msgFmtTidAvg = (msgFmtTidCount >= 4 && msgFmtTidChars > 0) ? Math.round((msgFmtTidChars / msgFmtTidCount) * 10) / 10 : 0;
-    const isLiveOpenAiFmt = !isEvalChat && hasLiveMsgFmt && visR === 0 && ((msgFmtTN >= 15 && msgFmtAvgChunk >= 1.0 && msgFmtAvgChunk <= 3.8) || (msgFmtTN < 6 && msgFmtTidCount >= 18 && msgFmtTidAvg > 0 && msgFmtTidAvg <= 4.2));
+    const isLiveOpenAiFmt = !isEvalChat && hasLiveMsgFmt && visR === 0 && !(turns >= 2 && lastTurnAvgChunk >= 12.0 && lastTurnWireFam !== 'openai') && ((msgFmtTN >= 15 && msgFmtAvgChunk >= 1.0 && msgFmtAvgChunk <= 3.8) || (msgFmtTN < 6 && msgFmtTidCount >= 18 && msgFmtTidAvg > 0 && msgFmtTidAvg <= 4.2));
     const isLiveGeminiFmt = !isEvalChat && hasLiveMsgFmt && visR === 0 && !isLiveOpenAiFmt && msgFmtTN >= 3 && (msgFmtTN / Math.max(1, turns)) <= 28 && msgFmtAvgChunk >= 28.0 && sandboxLink === 0 && lowerDoctype === 0 && colorSchemeCss === 0 && prefersReducedMotion === 0 && claudeWarmPalette === 0 && boxComment === 0;
     const isLiveNonClaudeFmt = Boolean(
       (hidR === 0 && msgFmtRWireDeltas === 0 && msgFmtTidCount === 0 && turns === 1 && write === 1 && totalTools === 1 && writtenChars >= 35000 && prefersReducedMotion >= 1 && boxComment === 0) ||
@@ -52689,7 +52706,12 @@ const fenceMatches = txt.match(/^```/gm);
       !feat.isGeminiCoding && !feat.isOpenThink && !hasHardOpenAiProtocol && feat.wireFam !== 'openai' && feat.wireFam !== 'anthropic' && feat.turns === 2 && feat.write === 1 && withinOptPresent(2) && feat.hidR >= 35 && feat.hidR <= 47 && avgChunk >= 3.5 && avgChunk <= 6.5 && (feat.lowerDoctype || 0) >= 1 && (feat.colorSchemeCss || 0) >= 1 && (feat.prefersReducedMotion || 0) >= 1
     );
     const htmlSvgCands = (feat.htmlSvgMatch && Array.isArray(feat.htmlSvgMatch.top_candidates) && feat.htmlSvgMatch.top_candidates.length > 0) ? feat.htmlSvgMatch.top_candidates : (feat.htmlSvgMatch?.best ? [feat.htmlSvgMatch.best] : []);
-    const hasHtmlMuse13Rule = Boolean(!hasHardOpenAiProtocol && !hasHardAnthropicEvidence && feat.wireFam !== 'openai' && feat.wireFam !== 'anthropic' && htmlSvgCands.some(c => c.model_id === 'meta/muse-spark-1.3' && c.ruleScore >= 0.55 && ((c.protoSim || 0) >= 0.25 || (feat.colorSchemeCss || 0) === 0)));
+    // 强 Muse HTML 指纹（knee 逆运动学 / svgTitle+svgDesc 类，ruleScore 0.78）是结构级证据：Muse 自己写的页面同样带
+    // /* ---- */ 注释框与 python heredoc，这些软「Anthropic 表象」不能否决它（与轮次路由里 turnHtmlVendor==='meta'
+    // 放行 boxComment 的口径一致）；wire 级硬证据（knownCwTok / 暖色板 / wireFam）与 OpenAI 协议门仍照常否决。
+    const hasStrongMuseHtmlRule = htmlSvgCands.some(c => c.model_id === 'meta/muse-spark-1.3' && c.ruleScore >= 0.78);
+    const anthropicVetoIsSoftOnly = !((feat.knownCwTok || 0) > 0 || (feat.claudeWarmPalette || 0) > 0);
+    const hasHtmlMuse13Rule = Boolean(!hasHardOpenAiProtocol && feat.wireFam !== 'openai' && feat.wireFam !== 'anthropic' && htmlSvgCands.some(c => c.model_id === 'meta/muse-spark-1.3' && c.ruleScore >= 0.55 && ((c.protoSim || 0) >= 0.25 || (feat.colorSchemeCss || 0) === 0)) && (!hasHardAnthropicEvidence || (hasStrongMuseHtmlRule && anthropicVetoIsSoftOnly)));
     const isMuseSpark13Max = Boolean(
       !feat.isGeminiCoding && !feat.isOpenThink && !hasHardOpenAiProtocol && feat.wireFam !== 'openai' && feat.wireFam !== 'anthropic' && !isMuseSpark12Max && !isMuseSpark13High && !isMuseSpark13Low && (
         hasHtmlMuse13Rule ||
@@ -54524,6 +54546,20 @@ const fenceMatches = txt.match(/^```/gm);
     return false;
   }
 
+  // 「中途才切到开源」的路由形状：首轮助手没有可见思考、后续轮次出现可见开源思考。
+  // 这种对话不能整体标记为开源模型，必须走路由记录（原模型 → 开源模型）。
+  function closedToOpenRouteShape(chat) {
+    try {
+      const asst = (Array.isArray(chat?.messages) ? chat.messages : []).filter(m => m && m.role === 'assistant');
+      if (asst.length < 2) return false;
+      const vis = m => Boolean(m?.metadata?.openThinkStopped || (Array.isArray(m?.parts) ? m.parts : []).some(p => p && (p.type === 'reasoning' || p.type === 'thinking') && /[^\s.…·。]/.test(String(p.text || p.reasoning || '').trim())));
+      if (vis(asst[0])) return false;
+      if (asst.slice(1).some(vis)) return true;
+      const kind = (typeof ThinkingStatus !== 'undefined' && ThinkingStatus.of) ? ThinkingStatus.of(chat)?.kind : '';
+      return kind === 'compat-thinking' || kind === 'open';
+    } catch { return false; }
+  }
+
   function identifyAndApply(chat, { force = false, fromCostFallback = false, interactive = false, preferLatestTurn = false } = {}) {
     if (!chat?.sid || isEvalSession(chat)) return null;
     const sid = chat.sid;
@@ -54533,22 +54569,32 @@ const fenceMatches = txt.match(/^```/gm);
       delete known.userCorrected;
       delete known.userCorrectedAt;
     }
-    if (known?.fingerprint?.result && !interactive) return known;
+    // 开源收敛必须先于指纹/云标题等一切缓存短路：指纹或习惯曾给对话写过闭源名时，
+    // 若当前已权威检出开源思考（与右侧面板同一信号），先把存储身份收敛为「开源模型」，
+    // 否则标题（列表/标签/对话头）会永远停在旧闭源名、与右栏互相矛盾。
+    // 「首轮无可见思考、后续轮次才开源」是中途路由形状：不在此整体覆盖，落入下方
+    // 正常识别记录 closed→open 路由（routed + routeFrom/routeTo），标题随之显示路由目标。
+    let openRouteFallThrough = false;
+    const hasAuthoritativeApiPre = Boolean(known && !known.guess && !known.fromTitle && !known.reverseInferred && !known.billingProbe && !known.habitInferred && (known.response || known.internal));
+    if (!interactive && !hasAuthoritativeApiPre && typeof BillingProbe !== 'undefined' && typeof BillingProbe.shouldSkipCostForOpenSource === 'function' && typeof BillingProbe.markAsOpenSourceModel === 'function' && BillingProbe.shouldSkipCostForOpenSource(chat)) {
+      const routeShape = closedToOpenRouteShape(chat);
+      const canForceOpen = !known?.userCorrected && !known?.manualOpenInferred;
+      const markedOpen = BillingProbe.markAsOpenSourceModel(chat, (!routeShape && canForceOpen) ? { force: true } : {});
+      if (!markedOpen || markedOpen.name === '开源模型') return markedOpen;
+      if (!canForceOpen || !routeShape) return markedOpen;
+      openRouteFallThrough = true;
+    }
+    if (known?.fingerprint?.result && !interactive && !openRouteFallThrough) return known;
     const cloudTitle = (typeof History !== 'undefined' && History.byId?.(sid)?.title) || chat?.title || '';
     const restoredMeta = typeof TitleSync !== 'undefined' ? TitleSync.restored?.(sid) : null;
     const compAsstForGuard = Array.isArray(chat?.messages) ? chat.messages.filter(x => x && x.role === 'assistant' && !x.failed && x.status !== 'failed' && x.status !== 'pending') : [];
     const hasLoadedMsgs = compAsstForGuard.length > 0;
-    const hasNewerLoadedTurn = Boolean(hasLoadedMsgs && ((compAsstForGuard.length > (Number(known?.completedTurnCount) || 0)) || !known?.lastMessageId || (compAsstForGuard.at(-1)?.id && compAsstForGuard.at(-1).id !== known.lastMessageId) || (known?.reverseVer || 0) < 183));
-    if (!interactive && !force && !preferLatestTurn && ((typeof TitleCipher !== 'undefined' && TitleCipher.isEncoded?.(cloudTitle)) || (restoredMeta && !restoredMeta.fromPrefix)) && !(known?.lastMessageId && compAsstForGuard.at(-1)?.id && compAsstForGuard.at(-1).id !== known.lastMessageId)) return known;
+    const hasNewerLoadedTurn = Boolean(hasLoadedMsgs && ((compAsstForGuard.length > (Number(known?.completedTurnCount) || 0)) || !known?.lastMessageId || (compAsstForGuard.at(-1)?.id && compAsstForGuard.at(-1).id !== known.lastMessageId) || (known?.reverseVer || 0) < 187));
+    if (!interactive && !force && !preferLatestTurn && ((typeof TitleCipher !== 'undefined' && TitleCipher.isEncoded?.(cloudTitle)) || (restoredMeta && !restoredMeta.fromPrefix)) && !(known?.lastMessageId && compAsstForGuard.at(-1)?.id && compAsstForGuard.at(-1).id !== known.lastMessageId) && !openRouteFallThrough) return known;
     if (!interactive && !force && !hasLoadedMsgs && restoredMeta?.fromPrefix && (!known?.habitFeatures && (known?.reverseVer || 0) >= 174)) return known;
     const hasAuthoritativeApi = known && !known.guess && !known.fromTitle && !known.reverseInferred && !known.billingProbe && !known.habitInferred && (known.response || (known.internal && !known.billingProbe));
     if (hasAuthoritativeApi && !force) return known;
-    // 识别到开源模型后，除非用户手动点击「反推锁定」（interactive: true），否则直接标记为「开源模型」并同步修改对话名称，不再浪费算力去推理具体计费型号
-    if (!interactive && typeof BillingProbe !== 'undefined' && typeof BillingProbe.shouldSkipCostForOpenSource === 'function' && BillingProbe.shouldSkipCostForOpenSource(chat)) {
-      if (typeof BillingProbe.markAsOpenSourceModel === 'function') {
-        return BillingProbe.markAsOpenSourceModel(chat);
-      }
-    }
+    // 注：开源思考的收敛已前移到指纹短路之前（见上方 openRouteFallThrough），此处不再重复处理。
     const costEnabledNow = typeof BillingProbe !== 'undefined' && typeof BillingProbe.isCostProbeEnabled === 'function' ? BillingProbe.isCostProbeEnabled() : true;
     const stNowForCost = (typeof BillingProbe !== 'undefined' && typeof BillingProbe.getLiveState === 'function')
       ? BillingProbe.getLiveState(sid)
@@ -54591,14 +54637,19 @@ const fenceMatches = txt.match(/^```/gm);
     if (!res || !res.best) return null;
     if (!interactive && res.features && (Number(res.features.chars) || 0) < 25 && (Number(res.features.totalTools) || 0) === 0 && (Number(res.features.codeBlocks) || 0) === 0 && (Number(res.features.rBlocks) || 0) === 0) return known || null;
     if (!interactive && res.features?.isOpenThink && typeof BillingProbe !== 'undefined' && typeof BillingProbe.markAsOpenSourceModel === 'function') {
-      return BillingProbe.markAsOpenSourceModel(chat);
+      const markedOpen2 = BillingProbe.markAsOpenSourceModel(chat);
+      if (!markedOpen2 || markedOpen2.name === '开源模型' || !closedToOpenRouteShape(chat)) return markedOpen2;
+      // 中途路由形状被标记守卫拒绝：继续下方 detectHabitAndMessageRoute 记录 closed→open 路由
     }
     const habRouteNow = habRoutePreCheck || ((typeof BillingProbe !== 'undefined' && typeof BillingProbe.detectHabitAndMessageRoute === 'function')
       ? BillingProbe.detectHabitAndMessageRoute(sid, chat, null, known, res, known?.reverseCandidates)
       : null);
     const isNowMidTurnRouted = Boolean(habRouteNow?.routed);
-    const best = res.best;
-    const second = res.candidates[1] || null;
+    const effectiveHabitCands = (isNowMidTurnRouted && Array.isArray(habRouteNow?.postHabitCandidates) && habRouteNow.postHabitCandidates.length > 0)
+      ? habRouteNow.postHabitCandidates
+      : res.candidates;
+    const best = (isNowMidTurnRouted && habRouteNow?.toHabitCand) ? habRouteNow.toHabitCand : res.best;
+    const second = effectiveHabitCands[1] || null;
     const isStandout = !second || (best.match - second.match) >= 0.5 || best.match >= 82;
     const rawBestDecomp = decomposeModelIdentity(best.canon || best.label);
     const decomp = rawBestDecomp.hasExplicitTier
@@ -54649,13 +54700,13 @@ const fenceMatches = txt.match(/^```/gm);
       habitInferred: true,
       reverseInferred: true,
       billingProbe: true,
-      reverseVer: 183,
+      reverseVer: 187,
       guess: false,
       sure: Boolean(best.userLearned || best.match >= 75),
       uncertain: !isStandout,
       pendingConfirm: false,
       fromTitle: false,
-      habitCandidates: res.candidates,
+      habitCandidates: effectiveHabitCands,
       reverseCandidates: preservedRevCands.length ? preservedRevCands : undefined,
       est: { ...(known?.est || {}), score: revScore, source: 'habit' },
       provider: nextProvider,
@@ -54710,7 +54761,7 @@ const fenceMatches = txt.match(/^```/gm);
       known.reverseScore === nextEntry.reverseScore &&
       known.provider === nextEntry.provider &&
       (!latestAsstId || known.lastMessageId === latestAsstId) &&
-      (known.reverseVer || 0) >= 183
+      (known.reverseVer || 0) >= 187
     );
     if (isUnchanged && !interactive) return known;
     if (typeof Models !== 'undefined') {
@@ -54814,7 +54865,7 @@ const fenceMatches = txt.match(/^```/gm);
       reverseInferred: true,
       tier: curEffort,
       billingProbe: true,
-      reverseVer: 183,
+      reverseVer: 187,
       sure: true,
       guess: false,
       uncertain: false,
@@ -56603,6 +56654,7 @@ const BillingProbe = (() => {
     };
     const inferFam = s => {
       const low = String(s || '').toLowerCase();
+      if (/muse|meta|spark|wonder/.test(low)) return 'meta';
       if (/gemini|google|argon|barium-bb-v2-4xts/.test(low)) return 'google';
       if (/gpt|openai|o1|o3|o4|sol|luna|astra|terra/.test(low)) return 'openai';
       if (/claude|anthropic|opus|sonnet|haiku|fable/.test(low)) return 'anthropic';
@@ -56626,7 +56678,12 @@ const BillingProbe = (() => {
         let rParts = 0, rEnc = 0, rOpen = 0, tCount = 0, tLen = 0, lowerDoc = 0, upperDoc = 0;
         let preToolChars = 0, interToolChars = 0, seenTool = false, pendingBetween = 0;
         let boxComment = 0, warmPalette = 0, sandboxLink = 0, colorCss = 0, redMotion = 0, wireFam = '';
+        let bashGrepPipe = 0, turnHtmlVendor = '';
         if (msg?._fmt === 'anthropic' || msg?._fmt === 'openai') wireFam = msg._fmt;
+        const turnMf = (msg?._fmt && typeof msg._fmt === 'object') ? msg._fmt : ((msg?.fmt && typeof msg.fmt === 'object') ? msg.fmt : (msg?._streamStats && typeof msg._streamStats === 'object' ? msg._streamStats : null));
+        const stTN = Number(turnMf?.tN ?? turnMf?.deltaCount) || 0;
+        const stTChars = Number(turnMf?.tChars) || (stTN > 0 && Number(turnMf?.avgChunk) > 0 ? Math.round(stTN * Number(turnMf.avgChunk)) : 0);
+        const stAvgChunk = stTN >= 4 && stTChars > 0 ? (stTChars / stTN) : Number(turnMf?.avgChunk || 0);
         for (const p of parts) {
           if (!p) continue;
           if (p.type === 'reasoning') {
@@ -56643,7 +56700,21 @@ const BillingProbe = (() => {
               if (/^(?:toolu|srvtoolu|msg)_01/.test(tcId)) wireFam = 'anthropic';
               else if (/^call_[A-Za-z0-9]{24}$/.test(tcId) && !/^call_[0-9a-f]{24}$/.test(tcId)) wireFam = 'openai';
             }
-            const inpStr = typeof p.input === 'string' ? p.input : JSON.stringify(p.input || '');
+            const tNm = String(p.toolName || String(p.type || '').replace(/^tool-/, '')).toLowerCase();
+            const inpObj = (p.input && typeof p.input === 'object') ? p.input : {};
+            const inpStr = typeof p.input === 'string' ? p.input : JSON.stringify(inpObj);
+            if (/\bgrep\s+-(?:Eo|oE|o)\b[^\n]*\|\s*wc\s+-l\b|\bstat\s+-c\b/.test(inpStr)) bashGrepPipe++;
+            if ((tNm === 'write_file' || tNm === 'create_file' || tNm === 'write_to_file') && typeof ChatHabitFingerprint !== 'undefined' && typeof ChatHabitFingerprint.classifyHtmlSvg === 'function') {
+              const hc = String(inpObj.content ?? inpObj.code ?? inpObj.CodeContent ?? '');
+              if (hc.length >= 260 && (/<svg\b/i.test(hc) || hc.length >= 3800)) {
+                try {
+                  const hmTurn = ChatHabitFingerprint.classifyHtmlSvg(hc, { isOpenThink: false, strictOpenClosed: true });
+                  if (hmTurn?.best?.vendorId && (Number(hmTurn.best.ruleScore) >= 0.55 || Number(hmTurn.best.score) >= 0.88) && Number(hmTurn.best.confidence) >= 0.85) {
+                    turnHtmlVendor = hmTurn.best.vendorId;
+                  }
+                } catch {}
+              }
+            }
             if (/<!doctype html>/.test(inpStr)) lowerDoc++;
             if (/<!DOCTYPE html>/.test(inpStr)) upperDoc++;
             if (/\/\*\s*[─═=-]{2,}/.test(inpStr)) boxComment++;
@@ -56667,10 +56738,28 @@ const BillingProbe = (() => {
         const isMicroProbeTurn = Boolean(idx === 0 && tCount === 0 && tLen < 260 && rOpen === 0 && lowerDoc === 0 && upperDoc === 0);
         const substantive = !isMicroProbeTurn && (tCount > 0 || tLen > 20 || rParts > 0);
         const interrupted = tLen === 0 && rParts === 0;
-        const openaiSig = wireFam === 'openai' || lowerDoc > 0 || sandboxLink > 0 || (colorCss > 0 && redMotion > 0 && warmPalette === 0 && boxComment === 0) || (rEnc >= 6 && preToolChars === 0 && interToolChars === 0 && boxComment === 0 && warmPalette === 0);
-        const claudeSig = wireFam === 'anthropic' || warmPalette > 0 || (boxComment > 0 && lowerDoc === 0) || (rEnc >= 1 && rEnc <= 4 && (preToolChars >= 80 || interToolChars >= 80) && lowerDoc === 0 && sandboxLink === 0);
-        const turnFam = rOpen > 0 ? 'open' : openaiSig && !claudeSig ? 'openai' : claudeSig && !openaiSig ? 'anthropic' : (rParts === 0 && substantive) ? 'google' : '';
-        return { idx, id: msg.id, rParts, rEnc, rOpen, tCount, tLen, lowerDoc, upperDoc, substantive, isMicroProbeTurn, interrupted, openaiSig, claudeSig, turnFam };
+        const strictOpenaiSig = Boolean(
+          wireFam === 'openai' ||
+          sandboxLink > 0 ||
+          (colorCss > 0 && redMotion > 0 && warmPalette === 0 && boxComment === 0 && !(stTN >= 4 && stAvgChunk >= 10.0) && turnHtmlVendor !== 'meta') ||
+          (stTN >= 12 && stAvgChunk >= 1.0 && stAvgChunk <= 3.8 && rEnc >= 3 && warmPalette === 0 && boxComment === 0 && bashGrepPipe === 0 && turnHtmlVendor !== 'meta') ||
+          (turnHtmlVendor === 'openai' && !(stTN >= 4 && stAvgChunk >= 12.0) && bashGrepPipe === 0)
+        );
+        const metaSig = Boolean(
+          !strictOpenaiSig &&
+          wireFam !== 'openai' &&
+          wireFam !== 'anthropic' &&
+          rOpen === 0 &&
+          colorCss === 0 &&
+          sandboxLink === 0 &&
+          warmPalette === 0 &&
+          (boxComment === 0 || turnHtmlVendor === 'meta') &&
+          (turnHtmlVendor === 'meta' || (rParts >= 1 && (bashGrepPipe > 0 || (stTN >= 4 && stAvgChunk >= 12.0))))
+        );
+        const openaiSig = !metaSig && (strictOpenaiSig || lowerDoc > 0 || (rEnc >= 6 && preToolChars === 0 && interToolChars === 0 && boxComment === 0 && warmPalette === 0));
+        const claudeSig = wireFam === 'anthropic' || warmPalette > 0 || (boxComment > 0 && lowerDoc === 0 && turnHtmlVendor !== 'meta') || (rEnc >= 1 && rEnc <= 4 && (preToolChars >= 80 || interToolChars >= 80) && lowerDoc === 0 && sandboxLink === 0 && turnHtmlVendor !== 'meta');
+        const turnFam = rOpen > 0 ? 'open' : metaSig && !claudeSig ? 'meta' : openaiSig && !claudeSig ? 'openai' : claudeSig && !openaiSig ? 'anthropic' : (rParts === 0 && substantive) ? 'google' : '';
+        return { idx, id: msg.id, rParts, rEnc, rOpen, tCount, tLen, lowerDoc, upperDoc, substantive, isMicroProbeTurn, interrupted, openaiSig, strictOpenaiSig, metaSig, claudeSig, turnFam };
       });
 
       for (let i = 1; i < turnStats.length; i++) {
@@ -56774,6 +56863,25 @@ const BillingProbe = (() => {
           };
           break;
         }
+        const preAllMeta = pre.every(t => t.metaSig && !t.strictOpenaiSig && !t.claudeSig);
+        const postAllStrictOpenAi = cur.strictOpenaiSig && !cur.metaSig && !cur.claudeSig && post.every(t => t.strictOpenaiSig && !t.metaSig);
+        const preAllStrictOpenAi = pre.every(t => t.strictOpenaiSig && !t.metaSig && !t.claudeSig);
+        const postAllMeta = cur.metaSig && !cur.strictOpenaiSig && !cur.claudeSig && post.every(t => t.metaSig && !t.strictOpenaiSig);
+        if ((preAllMeta && postAllStrictOpenAi) || (preAllStrictOpenAi && postAllMeta)) {
+          msgPivot = {
+            type: preAllMeta ? 'meta-to-openai' : 'openai-to-meta',
+            pivotIdx: i,
+            fromTurn: (prevSubstantive ? prevSubstantive.idx : i - 1) + 1,
+            toTurn: i + 1,
+            prevMessageId: prevSubstantive?.id || turnStats[i - 1]?.id || null,
+            pivotMessageId: cur.id || null,
+            pivotRParts: cur.rParts,
+            pivotREnc: cur.rEnc,
+            pivotTools: cur.tCount,
+            hadInterruptedFailover: Boolean(hadInterruptedFailover),
+          };
+          break;
+        }
       }
     }
 
@@ -56822,6 +56930,22 @@ const BillingProbe = (() => {
           if (postRes?.best && postRes.best.match >= 65) {
             postHabitRes = postRes;
             topHabit = postRes.candidates?.[0] || postRes.best;
+            // 强 HTML/SVG 单文件指纹与逐轮路由方向一致时，以代码指纹校准切片习惯排名：
+            // Muse 鹈鹕页常带 /* ---- */ 分节注释会被习惯向量误读为 Claude/OpenAI，
+            // 但 knee/scarf 等专属规则分 (ruleScore>=0.55, confidence>=0.85) 是更硬的证据。
+            try {
+              const postHm = postRes?.features?.htmlSvgMatch?.best || null;
+              const pivotType = String(msgPivot?.type || '');
+              const expectVendor = pivotType.endsWith('-to-meta') ? 'meta' : pivotType.endsWith('-to-openai') ? 'openai' : pivotType.endsWith('-to-anthropic') ? 'anthropic' : '';
+              if (postHm && expectVendor && postHm.vendorId === expectVendor && (Number(postHm.ruleScore) >= 0.55 || Number(postHm.score) >= 0.88) && Number(postHm.confidence) >= 0.85) {
+                const hmCand = (postRes.candidates || []).find(c => c && (c.canon === postHm.canon || c.id === postHm.model_id));
+                if (hmCand && hmCand.canon !== topHabit?.canon) {
+                  const aligned = { ...hmCand, match: Math.max(Number(hmCand.match) || 0, 82) };
+                  topHabit = aligned;
+                  postHabitRes = { ...postRes, best: aligned, candidates: [aligned, ...(postRes.candidates || []).filter(c => c && c.canon !== aligned.canon)] };
+                }
+              }
+            } catch {}
           }
         }
       } catch {}
@@ -56948,7 +57072,7 @@ const BillingProbe = (() => {
       solvedTurns >= totalTurns &&
       !d?.routeSwitched
     );
-    const isHardStructuralPivot = Boolean(msgPivot && (msgPivot.type === 'zero-to-enc' || msgPivot.type === 'enc-to-zero' || msgPivot.type === 'closed-to-open' || msgPivot.type === 'open-to-closed' || msgPivot.type === 'pelican-retest-route'));
+    const isHardStructuralPivot = Boolean(msgPivot && (msgPivot.type === 'zero-to-enc' || msgPivot.type === 'enc-to-zero' || msgPivot.type === 'closed-to-open' || msgPivot.type === 'open-to-closed' || msgPivot.type === 'pelican-retest-route' || msgPivot.type === 'meta-to-openai' || msgPivot.type === 'openai-to-meta'));
     if (costCoveredLatest && !isHardStructuralPivot) return { routed: false };
 
     const toHabitMatch = msgPivot?.type === 'closed-to-open' ? Math.max(96, Number(topHabit?.match || 0)) : Number(topHabit?.match || 0);
@@ -56982,7 +57106,7 @@ const BillingProbe = (() => {
       msgPivot &&
       (fromFam !== toFam || msgPivot.type === 'closed-to-open' || msgPivot.type === 'open-to-closed' || msgPivot.type === 'pelican-retest-route') &&
       toHabitMatch >= 82 &&
-      (habitGap >= 12 || googleToEncConflict || encToGoogleConflict || msgPivot.type === 'anthropic-to-openai' || msgPivot.type === 'openai-to-anthropic' || msgPivot.type === 'closed-to-open' || msgPivot.type === 'open-to-closed' || msgPivot.type === 'pelican-retest-route')
+      (habitGap >= 12 || googleToEncConflict || encToGoogleConflict || msgPivot.type === 'anthropic-to-openai' || msgPivot.type === 'openai-to-anthropic' || msgPivot.type === 'meta-to-openai' || msgPivot.type === 'openai-to-meta' || msgPivot.type === 'closed-to-open' || msgPivot.type === 'open-to-closed' || msgPivot.type === 'pelican-retest-route')
     );
     const metaConflictConfirmed = Boolean(
       !costCoveredLatest &&
@@ -57012,6 +57136,10 @@ const BillingProbe = (() => {
       reasonParts.push(`第 #${toTurn} 轮起由 Anthropic 特征切换为 OpenAI 隐藏思考与代码/工具习惯`);
     } else if (msgPivot?.type === 'openai-to-anthropic') {
       reasonParts.push(`第 #${toTurn} 轮起由 OpenAI 特征切换为 Anthropic 叙事与代码/工具习惯`);
+    } else if (msgPivot?.type === 'meta-to-openai') {
+      reasonParts.push(`第 #${toTurn} 轮起由 Meta Muse 特征切换为 OpenAI 细粒度流块与隐藏思考习惯`);
+    } else if (msgPivot?.type === 'openai-to-meta') {
+      reasonParts.push(`第 #${toTurn} 轮起由 OpenAI 特征切换为 Meta Muse 大流块与代码/工具习惯`);
     } else if (msgPivot?.type === 'closed-to-open') {
       reasonParts.push(`第 #${toTurn} 轮起由闭源隐藏思考切换为开源可见思考`);
     } else if (msgPivot?.type === 'open-to-closed') {
@@ -57038,6 +57166,7 @@ const BillingProbe = (() => {
       latestMessageId: latestMsg?.id || null,
       reason: reasonParts.join('，'),
       toHabitCand: topHabit,
+      postHabitCandidates: postHabitRes?.candidates || null,
       fromRevCand: topRev,
       fromHabitCand: preHabitBest,
     };
@@ -57999,7 +58128,7 @@ const BillingProbe = (() => {
             habitInferred: isHabitWinner,
             reverseInferred: Boolean(!isHabitWinner || (top0.revPct != null && top0.revPct > 0 && !top0.structuralRev)),
             billingProbe: Boolean(!isHabitWinner || (top0.revPct != null && top0.revPct > 0 && !top0.structuralRev)),
-            reverseVer: 183,
+            reverseVer: 187,
             at: model?.at || Date.now(),
             ...(rAnnotations || {}),
           };
@@ -58163,7 +58292,7 @@ const BillingProbe = (() => {
     const restoredMeta = typeof TitleSync !== 'undefined' ? TitleSync.restored?.(sid) : null;
     const compAsstForGuard = Array.isArray(chat?.messages) ? chat.messages.filter(x => x && x.role === 'assistant' && !x.failed && x.status !== 'failed' && x.status !== 'pending') : [];
     const hasLoadedMsgs = compAsstForGuard.length > 0;
-    const hasNewerLoadedTurn = Boolean(hasLoadedMsgs && ((compAsstForGuard.length > (Number(known?.completedTurnCount) || 0)) || !known?.lastMessageId || (compAsstForGuard.at(-1)?.id && compAsstForGuard.at(-1).id !== known.lastMessageId) || (known?.reverseVer || 0) < 183));
+    const hasNewerLoadedTurn = Boolean(hasLoadedMsgs && ((compAsstForGuard.length > (Number(known?.completedTurnCount) || 0)) || !known?.lastMessageId || (compAsstForGuard.at(-1)?.id && compAsstForGuard.at(-1).id !== known.lastMessageId) || (known?.reverseVer || 0) < 187));
     if (!interactive && !forceLock && ((typeof TitleCipher !== 'undefined' && TitleCipher.isEncoded?.(cloudTitle)) || (restoredMeta && !restoredMeta.fromPrefix)) && !(known?.lastMessageId && compAsstForGuard.at(-1)?.id && compAsstForGuard.at(-1).id !== known.lastMessageId)) {
       return { entry: known, best, close: [best], standout: true, preimage: sum.preimage, payment: sum.payment };
     }
@@ -58327,7 +58456,7 @@ const BillingProbe = (() => {
       habitCandidates: freshHabitList ? freshHabitList.slice(0, 5) : (Array.isArray(sum.mergedCandidates) ? sum.mergedCandidates.filter(c => c && (c.habitPct != null || c.habitSource || c.source === 'fp')).slice(0, 5) : (known?.habitCandidates || undefined)),
       reverseTiedCount: standout ? 1 : Math.max(close.length, 2),
       reverseEpoch: best.matchedVariant || '2026-10-15',
-      reverseVer: 183,
+      reverseVer: 187,
       reverseTokens: latestTok,
       reverseTotalTokens: sum.preimage?.totals || null,
       reverseScore: revScore,
@@ -58645,7 +58774,7 @@ const BillingProbe = (() => {
     };
     if (sid) {
       const mQuick = Models.get(sid);
-      if (mQuick && ((mQuick.reverseVer || 0) >= 183 || (SOL_61_SIDS.has(sid) && (mQuick.reverseVer || 0) >= 164)) && !hasNameRevMismatch(mQuick) && !(mQuick.routed && (mQuick.reverseVer || 0) < 155) && !isSpecialSidNeedsFix(sid, mQuick) && !isOpus55Needs56(sid, mQuick)) {
+      if (mQuick && ((mQuick.reverseVer || 0) >= 187 || (SOL_61_SIDS.has(sid) && (mQuick.reverseVer || 0) >= 164)) && !hasNameRevMismatch(mQuick) && !(mQuick.routed && (mQuick.reverseVer || 0) < 187) && !isSpecialSidNeedsFix(sid, mQuick) && !isOpus55Needs56(sid, mQuick)) {
         return;
       }
     } else {
@@ -58678,7 +58807,7 @@ const BillingProbe = (() => {
       } catch {}
     };
     for (const [id, m] of targets) {
-      if (m && ((m.reverseVer || 0) >= 183 || (SOL_61_SIDS.has(id) && (m.reverseVer || 0) >= 164)) && !hasNameRevMismatch(m) && !(m.routed && (m.reverseVer || 0) < 155) && !isSpecialSidNeedsFix(id, m) && !isOpus55Needs56(id, m)) {
+      if (m && ((m.reverseVer || 0) >= 187 || (SOL_61_SIDS.has(id) && (m.reverseVer || 0) >= 164)) && !hasNameRevMismatch(m) && !(m.routed && (m.reverseVer || 0) < 187) && !isSpecialSidNeedsFix(id, m) && !isOpus55Needs56(id, m)) {
         continue;
       }
       const nmCur = String(m?.name || m?.candidateName || m?.reverseLabel || m?.rawLabel || '');
@@ -59156,7 +59285,7 @@ const BillingProbe = (() => {
         continue;
       }
       const hasValidSavedCostForRc = Boolean((Number(m.costUsd) > 0) || (Number(m.reverseTokens?.total) > 0) || (Number(m.reverseTotalTokens?.total) > 0));
-      if (!m.userCorrected && (m.habitInferred || (!hasValidSavedCostForRc && (m.reverseInferred || m.billingProbe)) || m.pendingConfirm || m.guess || hasNameRevMismatch(m) || (Array.isArray(m.reverseCandidates) && m.reverseCandidates.length > 0)) && ((m.reverseVer || 0) < 183 || hasNameRevMismatch(m))) {
+      if (!m.userCorrected && (m.habitInferred || m.routed || (!hasValidSavedCostForRc && (m.reverseInferred || m.billingProbe)) || m.pendingConfirm || m.guess || hasNameRevMismatch(m) || (Array.isArray(m.reverseCandidates) && m.reverseCandidates.length > 0)) && ((m.reverseVer || 0) < 187 || hasNameRevMismatch(m))) {
         const cleanedRevCands = (hasValidSavedCostForRc && Array.isArray(m.reverseCandidates))
           ? m.reverseCandidates.filter(rc => rc && !rc.structuralRev && !rc.zeroQuota && !rc.zeroQuotaMode && rc.source !== 'habit' && rc.source !== 'fp' && !rc.habitSource && (rc.revPct != null || rc.diophantinePassed))
           : undefined;
@@ -59204,8 +59333,8 @@ const BillingProbe = (() => {
             guess: false,
             pendingConfirm: false,
             provider: '费用反推识别',
-            reverseVer: 183,
-            _mismatchCheckedVer: 183,
+            reverseVer: 187,
+            _mismatchCheckedVer: 187,
             habitCandidates: undefined,
             reverseCandidates: cleanedRevCands,
           };
@@ -59248,7 +59377,7 @@ const BillingProbe = (() => {
           summaryCache.delete(id);
           const re = ChatHabitFingerprint.identifyAndApply(chatObj, { force: true, fromCostFallback: true });
           if (re && re.name) {
-            try { re._mismatchCheckedVer = 183; if (Models.all?.[id]) Models.all[id]._mismatchCheckedVer = 183; } catch {}
+            try { re._mismatchCheckedVer = 187; if (Models.all?.[id]) Models.all[id]._mismatchCheckedVer = 187; } catch {}
             ensurePelLoaded();
             if (pelMap && typeof pelMap === 'object' && pelMap[id]) {
               pelMap[id] = { ...pelMap[id], model: re.name, label: re.rawLabel || re.name };
@@ -59278,8 +59407,8 @@ const BillingProbe = (() => {
           sure: hasValidCanon ? true : Boolean(m.sure),
           guess: !hasValidCanon,
           pendingConfirm: !hasValidCanon,
-          reverseVer: 183,
-          _mismatchCheckedVer: 183,
+          reverseVer: 187,
+          _mismatchCheckedVer: 187,
           habitCandidates: undefined,
           reverseCandidates: cleanedRevCands && cleanedRevCands.length ? cleanedRevCands : undefined,
         });
@@ -59348,10 +59477,10 @@ const BillingProbe = (() => {
       // 关闭 /cost 开关时：完全不请求 /api/chat/:id/cost，直接用对话习惯指纹与推理分零延迟识别（仅当未识别或版本过期时执行一次，杜绝重复刷屏）
       if (!costOn) {
         const mNow = typeof Models !== 'undefined' ? Models.get(chat.sid) : null;
-        if (autoSeen.get(chat) === stamp && mNow?.name && (mNow.reverseVer || 0) >= 183 && mNow.lastMessageId === last) return;
+        if (autoSeen.get(chat) === stamp && mNow?.name && (mNow.reverseVer || 0) >= 187 && mNow.lastMessageId === last) return;
         autoSeen.set(chat, stamp);
-        if (!mNow || (!mNow.userCorrected && (!mNow.name || mNow.pendingConfirm || mNow.guess || (mNow.reverseVer || 0) < 183 || !mNow.lastMessageId || mNow.lastMessageId !== last))) {
-          try { ChatHabitFingerprint.identifyAndApply(chat, { force: (mNow?.reverseVer || 0) < 183 || !mNow?.lastMessageId || mNow.lastMessageId !== last }); } catch {}
+        if (!mNow || (!mNow.userCorrected && (!mNow.name || mNow.pendingConfirm || mNow.guess || (mNow.reverseVer || 0) < 187 || !mNow.lastMessageId || mNow.lastMessageId !== last))) {
+          try { ChatHabitFingerprint.identifyAndApply(chat, { force: (mNow?.reverseVer || 0) < 187 || !mNow?.lastMessageId || mNow.lastMessageId !== last }); } catch {}
         }
         return;
       }
@@ -59378,7 +59507,7 @@ const BillingProbe = (() => {
       chat._lastAutoProbeAt = now();
       autoSeen.set(chat, stamp);
       // 先零延迟跑一次对话习惯指纹兜底，再按需异步拉取 /cost 账单（非当前前台且非抽卡的后台会话不主动发网络 /cost 请求）
-      try { ChatHabitFingerprint.identifyAndApply(chat, { force: false }); } catch {}
+      try { ChatHabitFingerprint.identifyAndApply(chat, { force: (mNow?.reverseVer || 0) < 187 }); } catch {}
       if (globalCost403Until > now() || globalCost429Until > now() || chat._lastCost403TurnId === last) return;
       const isFgChat = typeof Tabs === 'undefined' || !Tabs.cur?.sid || Tabs.cur.sid === chat.sid;
       const isGacha = Boolean(chat.gacha || (typeof Gacha !== 'undefined' && Gacha.isGachaChat?.(chat.sid, chat)));
