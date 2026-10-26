@@ -248,7 +248,61 @@ function slimElectronOutDir(appOutDir) {
   slimAppAsar(appOutDir);
 }
 
+// Fix electron-builder <= 26.8.1 NSIS multiUser.nsh out-of-bounds read (0xC0000005 / -1073741819 on Windows Server 2025):
+// System::Call '*$2(&w${NSIS_MAX_STRLEN} .s)' reads 16 KB past CoTaskMemAlloc'd SHGetKnownFolderPath buffer into unmapped pages.
+function patchNsisTemplates(extraSearchDirs = []) {
+  const candidates = new Set();
+  const searchPaths = [
+    ...(require.main?.paths || []),
+    ...module.paths,
+    ...extraSearchDirs.flatMap(d => d ? [d, path.join(d, 'node_modules')] : []),
+  ];
+  try {
+    const pkgJson = require.resolve('app-builder-lib/package.json', { paths: searchPaths });
+    candidates.add(path.join(path.dirname(pkgJson), 'templates', 'nsis', 'multiUser.nsh'));
+  } catch {}
+  for (const base of extraSearchDirs) {
+    if (!base) continue;
+    candidates.add(path.join(base, 'node_modules', 'app-builder-lib', 'templates', 'nsis', 'multiUser.nsh'));
+    candidates.add(path.join(base, '..', 'node_modules', 'app-builder-lib', 'templates', 'nsis', 'multiUser.nsh'));
+  }
+  let patchedCount = 0;
+  for (const multiUserPath of candidates) {
+    try {
+      if (!fs.existsSync(multiUserPath)) continue;
+      const orig = fs.readFileSync(multiUserPath, 'utf8');
+      if (orig.includes('kernel32::lstrcpynW(t .s, p r2')) {
+        patchedCount++;
+        continue;
+      }
+      if (!orig.includes("System::Call '*$2(&w${NSIS_MAX_STRLEN} .s)'")) continue;
+      const eol = orig.includes('\r\n') ? '\r\n' : '\n';
+      const buggyRe = /\$\{If\}\s+\$1\s*==\s*0\r?\n\s*System::Call\s+'\*\$2\(&w\$\{NSIS_MAX_STRLEN\}\s+\.s\)'\r?\n\s*StrCpy\s+\$0\s+\$1\r?\n\s*System::Call\s+'OLE32::CoTaskMemFree\(p r2\)'\r?\n\s*\$\{endif\}\r?\n\s*System::Store\s+L/i;
+      const replacement = [
+        '${If} $1 == 0',
+        "        System::Call 'kernel32::lstrcpynW(t .s, p r2, i ${NSIS_MAX_STRLEN})'",
+        "        System::Call 'OLE32::CoTaskMemFree(p r2)'",
+        '        System::Store L',
+        '        Pop $0',
+        '        ${If} $0 == ""',
+        '          StrCpy $0 "$LocalAppData\\Programs"',
+        '        ${EndIf}',
+        '      ${Else}',
+        '        System::Store L',
+        '      ${EndIf}',
+      ].join(eol);
+      const next = orig.replace(buggyRe, replacement);
+      if (next !== orig) {
+        fs.writeFileSync(multiUserPath, next, 'utf8');
+        patchedCount++;
+      }
+    } catch {}
+  }
+  return patchedCount;
+}
+
 exports.default = async function afterPack(context) {
+  patchNsisTemplates([context?.packager?.projectDir, path.resolve(__dirname, '..')].filter(Boolean));
   slimElectronOutDir(context.appOutDir);
   if (context.electronPlatformName !== 'win32') return;
   const exeName = `${context.packager.appInfo.productFilename}.exe`;
@@ -258,5 +312,11 @@ exports.default = async function afterPack(context) {
   patchExeAsarIntegrity(context.appOutDir, path.join(context.appOutDir, 'resources', 'app.asar'));
 };
 exports.slimElectronOutDir = slimElectronOutDir;
+exports.patchNsisTemplates = patchNsisTemplates;
+
+if (require.main === module && process.argv.includes('--patch-nsis')) {
+  const n = patchNsisTemplates([process.cwd(), path.resolve(__dirname, '..')]);
+  console.log('[after-pack] patchNsisTemplates checked/patched:', n);
+}
 exports.slimResourcesPak = slimResourcesPak;
 exports.slimAppAsar = slimAppAsar;

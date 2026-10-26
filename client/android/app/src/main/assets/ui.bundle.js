@@ -1162,7 +1162,7 @@ target.append(box);
 },
 };
 // ---- core.js ----
-const VERSION = '2.0.0-beta.3';
+const VERSION = '2.0.0-beta.4';
 const ORIGIN = 'https://arena.ai';
 const RC_V3 = '6LeTGMcsAAAAALuIlkVwIxaAuZA8VledA6d3Nnb0';
 const RC_V2 = '6Le3_cYsAAAAAGwWOK2RLDgNI15Bh8C0yLBOL1yL';
@@ -22549,12 +22549,11 @@ if (typeof BillingProbe.applyReverseIdentity === 'function') BillingProbe.applyR
 const latestMi = Models.get(sid);
 const hmBest = latestMi?.habitFeatures?.htmlSvgMatch?.best || chat?._habitFeatures?.htmlSvgMatch?.best || null;
 const hmCanon = hmBest?.canon ? Strength.canon(hmBest.canon) : '';
-const hmConf = Number(hmBest?.match || (hmBest?.prob != null ? hmBest.prob * 100 : 0) || 0);
+const hmConf = Number(hmBest?.match || (hmBest?.prob != null ? hmBest.prob * 100 : 0) || (hmBest?.confidence != null ? hmBest.confidence * 100 : 0) || 0);
+const hmStrongEvidence = Boolean((Number(hmBest?.ruleScore) || 0) >= 0.58 || (Number(hmBest?.protoSim) || 0) >= 0.82);
 const spectralScore = latestMi?.habitFeatures?.htmlSvgMatch?.spectralScore ?? chat?._habitFeatures?.htmlSvgMatch?.spectralScore ?? null;
 const latestMiCanon = (latestMi && !latestMi.guess && latestMi.name) ? Strength.canon(latestMi.name) : '';
-const latestName = (hmCanon && hmConf >= 72 && (!latestMiCanon || latestMiCanon === prevModel))
-? hmCanon
-: (latestMiCanon || hmCanon || name);
+const latestName = latestMiCanon || ((hmCanon && hmConf >= 82 && hmStrongEvidence) ? hmCanon : '') || name;
 if (prevModel && latestName && Strength.canon(prevModel) !== Strength.canon(latestName)) {
 chat.routed = true;
 chat.routeFrom = prevModel;
@@ -25863,12 +25862,26 @@ entry = { stamp, files };
 if (R._fileTextCache.size >= 40) R._fileTextCache.delete(R._fileTextCache.keys().next().value);
 R._fileTextCache.set(cSid, entry);
 }
+const preferResolved = (cur, res) => {
+if (!res) return false;
+if (!cur || cur.includes('…[cached]')) return true;
+if (/\.(?:html?|svg)$/i.test(norm) && !/<\/(?:html|svg)\s*>\s*$/i.test(cur.trim()) && /<\/(?:html|svg)\s*>\s*$/i.test(res.trim())) return true;
+return false;
+};
 const hit = entry.files.get(norm);
-const resolved = (typeof HtmlPreview !== 'undefined' && typeof HtmlPreview.resolvedText === 'function') ? HtmlPreview.resolvedText(cSid, norm) : '';
-if (resolved && (!hit || hit.includes('…[cached]') || resolved.length > hit.length)) return resolved;
+const effLookupSid = chat.sid || sid || '';
+const resolved = (effLookupSid && typeof HtmlPreview !== 'undefined' && typeof HtmlPreview.resolvedText === 'function') ? HtmlPreview.resolvedText(effLookupSid, norm) : '';
+if (preferResolved(hit, resolved)) return resolved;
 if (hit) return hit;
 }
-const resolvedFallback = (typeof HtmlPreview !== 'undefined' && typeof HtmlPreview.resolvedText === 'function' && norm) ? HtmlPreview.resolvedText(chat?.sid || sid, norm) : '';
+const effFallbackSid = chat?.sid || sid || '';
+const resolvedFallback = (effFallbackSid && typeof HtmlPreview !== 'undefined' && typeof HtmlPreview.resolvedText === 'function' && norm) ? HtmlPreview.resolvedText(effFallbackSid, norm) : '';
+const preferResolvedFb = (cur, res) => {
+if (!res) return false;
+if (!cur || cur.includes('…[cached]')) return true;
+if (/\.(?:html?|svg)$/i.test(norm) && !/<\/(?:html|svg)\s*>\s*$/i.test(cur.trim()) && /<\/(?:html|svg)\s*>\s*$/i.test(res.trim())) return true;
+return false;
+};
 let text = '', found = false;
 for (const m of chat?.messages || []) {
 for (const p of m.parts || []) {
@@ -25887,13 +25900,13 @@ if (typeof oldT === 'string' && typeof newT === 'string' && oldT && text.include
 }
 }
 if (found && text) {
-if (resolvedFallback && (text.includes('…[cached]') || resolvedFallback.length > text.length)) return resolvedFallback;
+if (preferResolvedFb(text, resolvedFallback)) return resolvedFallback;
 return text;
 }
 if (fallbackPart) {
 const i = R.tinput(fallbackPart) || {};
 const fb = typeof i.content === 'string' ? i.content : typeof i.text === 'string' ? i.text : text;
-if (resolvedFallback && (!fb || fb.includes('…[cached]') || resolvedFallback.length > fb.length)) return resolvedFallback;
+if (preferResolvedFb(fb, resolvedFallback)) return resolvedFallback;
 return fb;
 }
 return resolvedFallback || text;
@@ -31026,25 +31039,91 @@ const CODE = /\.(?:m?[jt]sx?|cjs|json|jsonc|css|scss|less|py|rb|go|rs|java|kt|sw
 const kindOf = path => { const f = String(path || '').split(/[?#]/)[0]; return /\.(?:html?|svg)$/i.test(f) ? 'html' : /\.(?:md|markdown|mdx)$/i.test(f) ? 'md' : CODE.test(f) ? 'code' : null; };
 const previewable = path => kindOf(path) !== null;
 const hasScript = html => /<script[\s>]/i.test(html) || /\son[a-z]+\s*=/i.test(html);
-function docOf(text, name, { run = false, thumb = false } = {}) {
-const cKey = (run ? '1:' : '0:') + (thumb ? '1:' : '0:') + textSig(String(text || ''), name);
+function resolveRelPvPath(basePath, ref) {
+let r = String(ref || '').trim();
+if (!r || /^(?:[a-z][a-z0-9+.-]*:|\/\/|#)/i.test(r)) return null;
+r = r.split(/[?#]/)[0];
+if (!r) return null;
+const cleanBase = normPvPath(basePath);
+const dir = cleanBase.includes('/') ? cleanBase.split('/').slice(0, -1) : [];
+const parts = r.startsWith('/') ? [] : [...dir];
+for (const seg of r.replace(/^\/home\/user\//, '').replace(/^~\//, '').replace(/^\/+/, '').split('/')) {
+if (!seg || seg === '.') continue;
+if (seg === '..') parts.pop();
+else parts.push(seg);
+}
+return parts.join('/') || null;
+}
+function lookupSessionAssetText(sid, relPath) {
+if (!sid || !relPath) return '';
+const norm = normPvPath(relPath);
+if (!norm) return '';
+try {
+if (typeof R !== 'undefined' && typeof R.latestFileText === 'function') {
+const lt = String(R.latestFileText(sid, norm) || '');
+if (lt && !isStubText(lt)) return lt;
+}
+} catch {}
+return resolvedText(sid, norm);
+}
+function docOf(text, name, { run = false, thumb = false, sid = '', basePath = '' } = {}) {
+const rawStr = String(text || '');
+const hasExtAssetRef = /<(?:link|script|img|source|image)\b/i.test(rawStr);
+const assetVer = (sid && hasExtAssetRef) ? (':' + sid + ':' + _resolvedVer + ':' + (typeof Chats !== 'undefined' && typeof R !== 'undefined' && R._chatWriteStamp && Chats.get?.(sid) ? R._chatWriteStamp(Chats.get(sid)) : '')) : '';
+const cKey = (run ? '1:' : '0:') + (thumb ? '1:' : '0:') + textSig(rawStr, basePath || name) + assetVer;
 const hit = docCache.get(cKey);
 if (hit !== undefined) return hit;
-const svg = /\.svg$/i.test(name || '') || (/^\s*(?:<\?xml[^>]*>\s*)?<svg[\s>]/i.test(text) && !/<html[\s>]/i.test(text));
-const src = svg ? '<!doctype html><html><head><meta charset="utf-8"><style>html,body{margin:0;width:100%;height:100%;background:#fff}body{display:flex;align-items:center;justify-content:center}svg{width:100%;height:100%}</style></head><body>' + text.replace(/^\s*<\?xml[^>]*>/i, '') + '</body></html>' : text;
+const svg = /\.svg$/i.test(name || '') || (/^\s*(?:<\?xml[^>]*>\s*)?<svg[\s>]/i.test(rawStr) && !/<html[\s>]/i.test(rawStr));
+const src = svg ? '<!doctype html><html><head><meta charset="utf-8"><style>html,body{margin:0;width:100%;height:100%;background:#fff}body{display:flex;align-items:center;justify-content:center}svg{width:100%;height:100%}</style></head><body>' + rawStr.replace(/^\s*<\?xml[^>]*>/i, '') + '</body></html>' : rawStr;
 const d = new DOMParser().parseFromString(src, 'text/html');
 d.querySelectorAll('meta[http-equiv]').forEach(m => m.remove());
-if (!run) d.querySelectorAll('script').forEach(s => s.remove());
+const refBase = basePath || name || '';
+for (const l of [...d.querySelectorAll('link[rel~="stylesheet"][href]')]) {
+const rel = sid ? resolveRelPvPath(refBase, l.getAttribute('href')) : null;
+const cssTxt = rel ? lookupSessionAssetText(sid, rel) : '';
+if (cssTxt) {
+const stEl = d.createElement('style');
+stEl.textContent = cssTxt;
+l.replaceWith(stEl);
+} else {
+l.remove();
+}
+}
+if (!run) {
+d.querySelectorAll('script').forEach(s => s.remove());
+} else {
+for (const sc of [...d.querySelectorAll('script[src]')]) {
+const rawSrc = sc.getAttribute('src') || '';
+const rel = sid ? resolveRelPvPath(refBase, rawSrc) : null;
+const jsTxt = rel ? lookupSessionAssetText(sid, rel) : '';
+if (jsTxt) {
+sc.removeAttribute('src');
+sc.textContent = jsTxt;
+} else if (/^(?:https?:|\/\/)/i.test(rawSrc.trim())) {
+sc.remove();
+}
+}
+}
+if (sid) {
+for (const el of [...d.querySelectorAll('img[src],source[src],image')]) {
+const at = el.hasAttribute('src') ? 'src' : el.hasAttribute('href') ? 'href' : 'xlink:href';
+const rel = resolveRelPvPath(refBase, el.getAttribute(at));
+if (rel && /\.svg$/i.test(rel)) {
+const svgTxt = lookupSessionAssetText(sid, rel);
+if (svgTxt) el.setAttribute(at, 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svgTxt));
+}
+}
+}
 d.querySelectorAll('a[href]').forEach(a => { if (!/^#/.test(a.getAttribute('href'))) a.removeAttribute('href'); });
 d.querySelectorAll('form').forEach(f => f.removeAttribute('action'));
 const m = d.createElement('meta'); m.setAttribute('http-equiv', 'Content-Security-Policy'); m.setAttribute('content', run ? CSP_RUN : CSP);
 if (run) {
 const syncSc = d.createElement('script');
-syncSc.textContent = `(function(){var E=Math.floor(Date.now()/3600000)*3600000;var sNow=function(){return Date.now()-E;};try{Object.defineProperty(performance,'now',{value:sNow,configurable:true,writable:true});}catch(e){}try{var oRaf=window.requestAnimationFrame;if(typeof oRaf==='function'){window.requestAnimationFrame=function(cb){return oRaf.call(window,function(){cb(sNow());});};}}catch(e){}function sync(){try{var t=sNow();if(document.getAnimations){var as=document.getAnimations({subtree:true});for(var i=0;i<as.length;i++){try{as[i].play();var tm=as[i].effect&&as[i].effect.getComputedTiming?as[i].effect.getComputedTiming():null;if(tm&&(tm.iterations===Infinity||tm.iterations>=5)){as[i].currentTime=t;}}catch(e){}}}var svgs=document.querySelectorAll('svg');for(var j=0;j<svgs.length;j++){try{if(svgs[j].unpauseAnimations)svgs[j].unpauseAnimations();if(svgs[j].setCurrentTime)svgs[j].setCurrentTime(t/1000);}catch(e){}}}catch(e){}}if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',sync,{once:true});else sync();window.addEventListener('load',function(){sync();setTimeout(sync,60);},{once:true});})();`;
+syncSc.textContent = `(function(){function unpause(){try{var svgs=document.querySelectorAll('svg');for(var j=0;j<svgs.length;j++){if(svgs[j].animationsPaused&&svgs[j].animationsPaused()&&svgs[j].unpauseAnimations)svgs[j].unpauseAnimations();}}catch(e){}}if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',unpause,{once:true});else unpause();})();`;
 d.head.prepend(syncSc);
 }
 d.head.prepend(m);
-if (thumb) { const s = d.createElement('style'); s.textContent = NOBAR; d.head.append(s); }   // 小窗隐藏滚动条，保留动态动画与脚本同步运行
+if (thumb) { const s = d.createElement('style'); s.textContent = NOBAR; d.head.append(s); }   // 小窗隐藏滚动条，保留原生时间轴动画与脚本运行
 const out = '<!doctype html>' + d.documentElement.outerHTML;
 if (docCache.size >= 64) docCache.delete(docCache.keys().next().value);
 docCache.set(cKey, out);
@@ -31052,17 +31131,13 @@ return out;
 }
 const isSvgDoc = (text, name) => /\.svg$/i.test(name || '') || (/^\s*(?:<\?xml[^>]*>\s*)?<svg[\s>]/i.test(text) && !/<html[\s>]/i.test(text));
 async function inlineAssets(html, path, ctx) {
-const d = new DOMParser().parseFromString(html, 'text/html'), dir = String(path).split('/').slice(0, -1);
-const resolve = ref => {
-let r = String(ref || '').trim(); if (!r || /^(?:[a-z][a-z0-9+.-]*:|\/\/|#)/i.test(r)) return null;
-r = r.split(/[?#]/)[0]; const parts = r.startsWith('/') ? [] : [...dir];
-for (const x of r.replace(/^\/home\/user\//, '').replace(/^\//, '').split('/')) { if (!x || x === '.') continue; if (x === '..') parts.pop(); else parts.push(x); }
-return parts.join('/');
-};
+const d = new DOMParser().parseFromString(html, 'text/html');
+const resolve = ref => resolveRelPvPath(path, ref);
 let budget = 8 * 1024 * 1024, n = 0;
 const blobOf = async ref => { const p = resolve(ref); if (!p || n >= 40 || budget <= 0) return null; try { const ent = await ctx.entry(p); if (!ent || ent.e.type === 'dir' || +ent.e.size > 3 * 1024 * 1024) return null; const b = await Workspace.fileBlob(ent.e); n++; budget -= b.size; return b; } catch { return null; } };
 const dataUrl = (b, mime) => new Promise(res => { const fr = new FileReader(); fr.onload = () => res(String(fr.result)); fr.onerror = () => res(null); fr.readAsDataURL(mime ? new Blob([b], { type: mime }) : b); });
-for (const l of [...d.querySelectorAll('link[rel~="stylesheet"][href]')]) { const b = await blobOf(l.getAttribute('href')); if (b) { const st = d.createElement('style'); st.textContent = await b.text(); l.replaceWith(st); } else l.remove(); }
+for (const l of [...d.querySelectorAll('link[rel~="stylesheet"][href]')]) { const b = await blobOf(l.getAttribute('href')); if (b) { const stEl = d.createElement('style'); stEl.textContent = await b.text(); l.replaceWith(stEl); } else l.remove(); }
+for (const sc of [...d.querySelectorAll('script[src]')]) { const b = await blobOf(sc.getAttribute('src')); if (b) { sc.removeAttribute('src'); sc.textContent = await b.text(); } else if (/^(?:https?:|\/\/)/i.test(String(sc.getAttribute('src') || '').trim())) sc.remove(); }
 for (const el of [...d.querySelectorAll('img[src],source[src],image')]) {
 const at = el.hasAttribute('src') ? 'src' : el.hasAttribute('href') ? 'href' : 'xlink:href', ref = el.getAttribute(at), b = await blobOf(ref);
 if (b) { const u = await dataUrl(b, WorkspacePath.mime?.(resolve(ref) || '') || b.type); if (u) el.setAttribute(at, u); }
@@ -31087,28 +31162,34 @@ if (/<\/(?:html|svg)\s*>\s*$/i.test(s)) return true;
 if (/\.svg$/i.test(name || '')) return /<\/svg\s*>/i.test(s);
 return /<(?:body|svg|main|canvas|section|div)\b/i.test(s) && /<\/(?:html|body|svg|main|canvas|script|div)\s*>/i.test(s);
 };
+const isClosedHtmlDoc = s => /<\/(?:html|svg)\s*>\s*$/i.test(String(s || '').trim());
 function resolvedText(sid, path) {
 const norm = normPvPath(path);
-if (!norm) return '';
-return (sid && resolvedTexts.get(sid + ':' + norm)) || resolvedTexts.get('*:' + norm) || '';
+const sKey = String(sid || '').trim();
+if (!norm || !sKey) return '';
+return resolvedTexts.get(sKey + ':' + norm) || '';
 }
-function cacheResolvedText(sid, path, text) {
-const norm = normPvPath(path), s = String(text || '');
-if (!norm || !s.trim() || isStubText(s)) return false;
-const k = (sid || '') + ':' + norm, prev = resolvedTexts.get(k) || '';
+function cacheResolvedText(sid, path, text, opts = {}) {
+const norm = normPvPath(path), s = String(text || ''), sKey = String(sid || '').trim();
+if (!norm || !sKey || !s.trim() || isStubText(s)) return false;
+const k = sKey + ':' + norm, prev = resolvedTexts.get(k) || '';
 if (prev === s) return false;
-if (prev && prev.length > s.length && !isStubText(prev)) return false;
+if (!opts.authoritative && prev && !isStubText(prev) && kindOf(norm) === 'html' && isClosedHtmlDoc(prev) && !isClosedHtmlDoc(s)) {
+return false;
+}
 if (resolvedTexts.size >= 80) resolvedTexts.delete(resolvedTexts.keys().next().value);
-if (sid) resolvedTexts.set(k, s);
-resolvedTexts.set('*:' + norm, s);
+resolvedTexts.set(k, s);
 _resolvedVer++;
 try {
-if (sid && typeof Chats !== 'undefined') {
-const chat = Chats.get?.(sid);
+if (typeof Chats !== 'undefined') {
+const chat = Chats.get?.(sKey);
 if (chat && Array.isArray(chat.messages)) {
 let patchedChat = false;
-for (const m of chat.messages) {
-for (const p of (m?.parts || [])) {
+for (let mi = chat.messages.length - 1; mi >= 0; mi--) {
+const m = chat.messages[mi];
+const parts = m?.parts || [];
+for (let pi = parts.length - 1; pi >= 0; pi--) {
+const p = parts[pi];
 if (!p || !(String(p.type || '').startsWith('tool-') || p.type === 'dynamic-tool')) continue;
 const tn = String(p.toolName || p.name || p.type || '').replace(/^tool-/, '').toLowerCase();
 if (!/^(write_?file|create_?file|overwrite_?file|write)$/.test(tn)) continue;
@@ -31116,16 +31197,18 @@ const inp = (typeof R !== 'undefined' && R.tinput ? R.tinput(p) : p.input) || {}
 const pNorm = normPvPath(inp.path || inp.file_path || '');
 if (pNorm !== norm) continue;
 const curC = typeof p.input?.content === 'string' ? p.input.content : (typeof p.input?.text === 'string' ? p.input.text : '');
-if (!p.input || isStubText(curC) || curC.length < s.length) {
+if (!p.input || isStubText(curC)) {
 p.input = { ...(p.input && typeof p.input === 'object' ? p.input : {}), path: inp.path || inp.file_path || norm, content: s };
 delete p.inputText; delete p._parsedInputRaw; delete p._parsedInputVal;
 m.v = (m.v || 0) + 1;
 patchedChat = true;
 }
+mi = -1;
+break;
 }
 }
+try { R?._fileTextCache?.delete(sKey); R?._writesCache?.delete(sKey); } catch {}
 if (patchedChat) {
-try { R?._fileTextCache?.delete(sid); R?._writesCache?.delete(sid); } catch {}
 try { if (typeof MsgCache !== 'undefined') MsgCache.put?.(chat); } catch {}
 }
 }
@@ -31135,7 +31218,7 @@ try {
 const lineCnt = countLinesFast(s);
 if (typeof document !== 'undefined') {
 document.querySelectorAll('details.wcard').forEach(d => {
-if (normPvPath(d._filePath) === norm && (!sid || !d._wsid || d._wsid === sid)) {
+if (normPvPath(d._filePath) === norm && (!d._wsid || d._wsid === sKey)) {
 if (d._linesEl && lineCnt) d._linesEl.textContent = lineCnt + ' 行';
 const pre = d.querySelector('pre.wc-code');
 if (pre) pre.textContent = s.length > 60000 ? s.slice(0, 60000) + '\n…' : s;
@@ -31145,17 +31228,22 @@ if (pre) pre.textContent = s.length > 60000 ? s.slice(0, 60000) + '\n…' : s;
 } catch {}
 try {
 cards.forEach(c => {
-if (c?.o && normPvPath(c.o.path) === norm) c.paint();
+if (!c?.o || normPvPath(c.o.path) !== norm) return;
+const cSid = String(c.o.getWsid?.() || '').trim();
+if (!cSid || cSid === sKey) c.paint();
 });
 } catch {}
 return true;
 }
 async function healFileText(sid, path) {
+const opts = arguments[2] || {};
 const norm = normPvPath(path);
-const effSid = sid || (typeof Tabs !== 'undefined' ? Tabs.cur?.sid : null) || '';
+const effSid = String(sid || (st && normPvPath(st.path) === norm ? (st.sid || st.wsid) : '') || (typeof Tabs !== 'undefined' ? Tabs.cur?.sid : '') || '').trim();
 if (!norm || !effSid) return '';
+if (!opts.force) {
 const existing = resolvedText(effSid, norm);
-if (existing && isUsablePreviewText(existing, norm) && /<\/(?:html|svg)\s*>\s*$/i.test(existing.trim())) return existing;
+if (existing && isUsablePreviewText(existing, norm) && isClosedHtmlDoc(existing)) return existing;
+}
 const hKey = effSid + ':' + norm;
 if (healingFiles.has(hKey)) return healingFiles.get(hKey);
 const job = (async () => {
@@ -31173,11 +31261,11 @@ if (hit?.e) {
 const blob = await Workspace.fileBlob(hit.e);
 let txt = (await blob.text()).slice(0, MAXCODE);
 if (txt && !isStubText(txt)) {
-if (kindOf(norm) === 'html' && !/\.svg$/i.test(norm) && /<(?:link|img|source|image)\b/i.test(txt)) {
+if (kindOf(norm) === 'html' && !/\.svg$/i.test(norm) && /<(?:link|script|img|source|image)\b/i.test(txt)) {
 try { txt = await inlineAssets(txt, norm, ctx); } catch {}
 }
-cacheResolvedText(effSid, norm, txt);
-if (st && st.sid === effSid && normPvPath(st.path) === norm) render();
+cacheResolvedText(effSid, norm, txt, { authoritative: true });
+if (st && (st.sid === effSid || st.wsid === effSid) && normPvPath(st.path) === norm) render();
 return txt;
 }
 }
@@ -31194,8 +31282,8 @@ if (!inp || typeof inp !== 'object') continue;
 const pNorm = normPvPath(inp.path || inp.file_path || '');
 const c = typeof inp.content === 'string' ? inp.content : (typeof inp.text === 'string' ? inp.text : '');
 if (pNorm === norm && c && !isStubText(c)) {
-cacheResolvedText(effSid, norm, c);
-if (st && st.sid === effSid && normPvPath(st.path) === norm) render();
+cacheResolvedText(effSid, norm, c, { authoritative: true });
+if (st && (st.sid === effSid || st.wsid === effSid) && normPvPath(st.path) === norm) render();
 return c;
 }
 }
@@ -31210,20 +31298,26 @@ return '';
 healingFiles.set(hKey, job);
 return job;
 }
+const shouldUseDirectOverResolved = (direct, res, path) => {
+if (!direct || isStubText(direct)) return false;
+if (!res) return true;
+if (kindOf(path) === 'html' && !isClosedHtmlDoc(direct) && isClosedHtmlDoc(res)) return false;
+return true;
+};
 const textOf = () => {
 try {
 const sid = st?.sid || st?.wsid || (typeof Tabs !== 'undefined' ? Tabs.cur?.sid : null);
 const res = st?.path ? resolvedText(sid, st.path) : '';
 const direct = String(st?.get?.() ?? '');
-if (direct && !isStubText(direct) && (!res || direct.length >= res.length)) {
-if (st?.path && isUsablePreviewText(direct, st.name)) cacheResolvedText(sid, st.path, direct);
+if (shouldUseDirectOverResolved(direct, res, st?.path || st?.name)) {
+if (sid && st?.path && isUsablePreviewText(direct, st.name)) cacheResolvedText(sid, st.path, direct);
 return direct;
 }
-if (res) return res;
 if (sid && st?.path && typeof R !== 'undefined' && R.latestFileText) {
 const lt = String(R.latestFileText(sid, st.path) || '');
-if (lt && !isStubText(lt)) return lt;
+if (lt && !isStubText(lt) && shouldUseDirectOverResolved(lt, res, st.path)) return lt;
 }
+if (res) return res;
 return isStubText(direct) ? '' : direct;
 } catch { return ''; }
 };
@@ -31231,15 +31325,15 @@ const textFrom = (fn, sid, path) => {
 try {
 const res = path ? resolvedText(sid, path) : '';
 const direct = String(fn?.() ?? '');
-if (direct && !isStubText(direct) && (!res || direct.length >= res.length)) {
-if (path && isUsablePreviewText(direct, path)) cacheResolvedText(sid, path, direct);
+if (shouldUseDirectOverResolved(direct, res, path)) {
+if (sid && path && isUsablePreviewText(direct, path)) cacheResolvedText(sid, path, direct);
 return direct;
 }
-if (res) return res;
-if (path && typeof R !== 'undefined' && R.latestFileText) {
+if (sid && path && typeof R !== 'undefined' && R.latestFileText) {
 const lt = String(R.latestFileText(sid, path) || '');
-if (lt && !isStubText(lt)) return lt;
+if (lt && !isStubText(lt) && shouldUseDirectOverResolved(lt, res, path)) return lt;
 }
+if (res) return res;
 return isStubText(direct) ? '' : direct;
 } catch { return ''; }
 };
@@ -31414,8 +31508,10 @@ const prev = c.mount; c.mount = mountStage(c.stage, f, text, name, { thumb: true
 f.addEventListener('load', () => {
 old?.remove(); prev?.destroy(); f.style.visibility = ''; c.shown = text; c.ph.hidden = true;
 }, { once: true });
-probe.srcdoc = docOf(text, name, { run: false, thumb: true });
-f.srcdoc = docOf(text, name, { run: true, thumb: true });
+const cardSid = c.o?.getWsid?.() || '';
+const cardPath = c.o?.path || name;
+probe.srcdoc = docOf(text, name, { run: false, thumb: true, sid: cardSid, basePath: cardPath });
+f.srcdoc = docOf(text, name, { run: true, thumb: true, sid: cardSid, basePath: cardPath });
 c.stage.append(probe, f);
 };
 c.render = (text, name) => {
@@ -32111,7 +32207,9 @@ const stage = h('div', { class: 'pv-stage' }, f, p);
 applyStageVp(stage);
 f.setAttribute('sandbox', 'allow-scripts'); f.setAttribute('csp', CSP_RUN);
 p.setAttribute('sandbox', 'allow-same-origin'); p.setAttribute('csp', CSP);
-f.srcdoc = docOf(src, st.name, { run: true }); p.srcdoc = docOf(src, st.name);
+const pvSid = st.sid || st.wsid || '';
+f.srcdoc = docOf(src, st.name, { run: true, sid: pvSid, basePath: st.path || st.name });
+p.srcdoc = docOf(src, st.name, { run: false, sid: pvSid, basePath: st.path || st.name });
 frame = f; st.probe = p; st.frameAt = now();
 body.append(stage);
 stageToMount = { stage, f, p, src };
@@ -50245,13 +50343,26 @@ const mOpen = text.match(/```(?:html|xml|svg)?\s*([\s\S]+)/i);
       if (vb.includes("0 0 900 520") && (cl.includes("sunrays") || cl.includes("plumeg") || cl.includes("chainfwd"))) add("z-ai/glm-5.3", 0.58, "GLM 5.3 900×520+sunRays/plumeG");
       if ((cl.includes("wheelspin") || cl.includes("cloudrift") || cl.includes("clouddrift1") || (cl.includes("hillback") && cl.includes("hillfore")) || (f.lines <= 35 && b > 25000) || (f.n_path === 0 && b > 15000)) && !cl.includes(".masthead") && !vbs.includes("0 0 120 50") && !(vb.includes("0 0 800 500") && (cl.includes("crank-spin") || cl.includes("tailwag") || cl.includes("#87ceeb")))) add("moonshotai/kimi-k3", 0.55, "Kimi K3 关键帧/几何图元结构");
       if (b <= 11200 && (cl.includes("cranka") || cl.includes("crankb") || (vb.includes("0 0 800 500") && (cl.includes("#ff9a2e") || cl.includes("legfront") || cl.includes("pelican-head") || cl.includes("#fff8e7") || cl.includes("pedal-spin") || cl.includes("spokes") || cl.includes("groundline") || (cl.includes("@keyframes ride") && cl.includes("@keyframes ground")))))) add("anthropic/claude-haiku-5.5", 0.55, "Claude Haiku 5.5 紧凑800×500+crankA/crankB");
-      const isMuseKneeSvg = (cl.includes('aria-labelledby="svgtitle svgdesc"') || cl.includes('aria-labelledby="titulosvg descsvg"') || (cl.includes('id="svgtitle"') && cl.includes('id="svgdesc"')) || (cl.includes('id="titulosvg"') && cl.includes('id="descsvg"')) || cl.includes("scarfflutter") || (cl.includes("scarftail") && !cl.includes("scarftail1")) || (cl.includes("scarfa") && cl.includes("scarfb")) || (cl.includes("hip_n") && cl.includes("hip_f")) || (((cl.includes("legnear") && cl.includes("legfar")) || (cl.includes("thighnear") && cl.includes("thighfar")) || (cl.includes("nearthigh") && cl.includes("farthigh"))) && ((cl.includes("footnear") && cl.includes("footfar")) || (cl.includes("nearfoot") && cl.includes("farfoot")))) || (cl.includes("legbackhilight") && cl.includes("legfronthilight")) || (cl.includes("head-bill") && cl.includes("fish-tail") && cl.includes("spin-rear") && cl.includes("spin-front"))) && (cl.includes("function knee(") || cl.includes("function kneeposition(") || cl.includes("function solveknee(") || cl.includes("function ikknee(") || cl.includes("function setleg(") || cl.includes("function updateleg(") || cl.includes("function placeleg(") || cl.includes("math.hypot(dx, dy) || 1") || /math\.min\(\s*\(\s*now\s*-\s*last\s*\)\s*\/\s*1000\s*,\s*0\.05\s*\)/.test(cl) || (cl.includes("pedalnear") && cl.includes("pedalfar")) || (cl.includes("legnear") && cl.includes("legfar")) || (cl.includes("spin-rear") && cl.includes("spin-front")));
-      if (isMuseKneeSvg || cl.includes("grassblock") || cl.includes("treeblock") || (cl.includes('id="roadg"') && cl.includes('id="pouchg"') && cl.includes('id="sung"') && !cl.includes('id="plumeg"')) || (cl.includes("rearspokelines") && cl.includes("frontspokelines")) || (cl.includes("dashstrip") && cl.includes("grasstufts") && cl.includes("buildstrip")) || cl.includes('spokes("spokesrear")')) add("meta/muse-spark-1.3", isMuseKneeSvg ? 0.78 : 0.68, isMuseKneeSvg ? "Muse Spark 1.3 knee逆运动学/svgTitle+svgDesc/scarfFlutter" : "Muse Spark 1.3 roadG/pouchG/rearSpokeLines/dashStrip");
+      const hasOpenAiColorSchemeInHtml = /color-scheme\s*:/.test(cl);
+      const hasMuseIkSolverFn = cl.includes("function knee(") || cl.includes("function kneeposition(") || cl.includes("function solveknee(") || cl.includes("function ikknee(") || cl.includes("function setleg(") || cl.includes("function updateleg(") || cl.includes("function placeleg(") || cl.includes("math.hypot(dx, dy) || 1") || /math\.min\(\s*\(\s*now\s*-\s*last\s*\)\s*\/\s*1000\s*,\s*0\.05\s*\)/.test(cl);
+      const hasMuseExclusiveDom = cl.includes("scarfflutter") || (cl.includes("scarftail") && !cl.includes("scarftail1")) || (cl.includes("scarfa") && cl.includes("scarfb")) || (cl.includes("hip_n") && cl.includes("hip_f")) || (cl.includes("legbackhilight") && cl.includes("legfronthilight")) || (cl.includes("head-bill") && cl.includes("fish-tail") && cl.includes("spin-rear") && cl.includes("spin-front"));
+      const hasMuseSvgTitlePair = cl.includes('aria-labelledby="svgtitle svgdesc"') || cl.includes('aria-labelledby="titulosvg descsvg"') || (cl.includes('id="svgtitle"') && cl.includes('id="svgdesc"')) || (cl.includes('id="titulosvg"') && cl.includes('id="descsvg"'));
+      const hasMuseNearFarAnatomy = (((cl.includes("legnear") && cl.includes("legfar")) || (cl.includes("thighnear") && cl.includes("thighfar")) || (cl.includes("nearthigh") && cl.includes("farthigh"))) && ((cl.includes("footnear") && cl.includes("footfar")) || (cl.includes("nearfoot") && cl.includes("farfoot"))));
+      const isMuseKneeSvg = !hasOpenAiColorSchemeInHtml && (
+        (hasMuseExclusiveDom && (hasMuseIkSolverFn || (cl.includes("pedalnear") && cl.includes("pedalfar")) || (cl.includes("legnear") && cl.includes("legfar")) || (cl.includes("spin-rear") && cl.includes("spin-front")))) ||
+        (hasMuseSvgTitlePair && (hasMuseIkSolverFn || (cl.includes("pedalnear") && cl.includes("pedalfar")) || (cl.includes("spin-rear") && cl.includes("spin-front")))) ||
+        (hasMuseNearFarAnatomy && hasMuseIkSolverFn)
+      );
+      const hasMuseStructuralBlock = cl.includes("grassblock") || cl.includes("treeblock") || (cl.includes('id="roadg"') && cl.includes('id="pouchg"') && cl.includes('id="sung"') && !cl.includes('id="plumeg"')) || (cl.includes("rearspokelines") && cl.includes("frontspokelines")) || (cl.includes("dashstrip") && cl.includes("grasstufts") && cl.includes("buildstrip")) || cl.includes('spokes("spokesrear")');
+      if (isMuseKneeSvg || hasMuseStructuralBlock) add("meta/muse-spark-1.3", isMuseKneeSvg ? 0.78 : 0.68, isMuseKneeSvg ? "Muse Spark 1.3 knee逆运动学/svgTitle+svgDesc/scarfFlutter" : "Muse Spark 1.3 roadG/pouchG/rearSpokeLines/dashStrip");
       if ((cl.includes("bird-feather") && cl.includes("grass-sway")) || (cl.includes("pouchpaint") && cl.includes("beakpaint") && cl.includes("riderbob"))) add("xiaomi/mimo-v2.6-flash", 0.55, "MiMo V2.6 Flash grass-sway/pouchPaint");
       if ((cl.includes("driftscenery") && cl.includes("driftforeground")) || (cl.includes("spokesrear") && cl.includes("spokesfront") && vb.includes("0 0 800 500"))) add("anthropic/claude-opus-5", 0.58, "Claude Opus 5 driftScenery/spokesRear");
       if (cl.includes("sceneryrow") || (cl.includes('id="hills2"') && vb.includes("0 0 800 450"))) add("deepseek/deepseek-v4.1-flash", 0.55, "DeepSeek V4.1 Flash sceneryRow/hills2");
       if (cl.includes("backlegoutline") || cl.includes("frontlegoutline") || (cl.includes("rearspokes") && cl.includes("frontspokes") && cl.includes("speckle"))) add("openai/gpt-6-sol", 0.55, "GPT 6 Sol backLegOutline/frontLegOutline");
-      if (cl.includes("tinyshadow") && cl.includes("framepaint")) add("openai/gpt-5.6-sol", 0.55, "GPT 5.6 Sol tinyShadow/framePaint");
+      if (cl.includes("tinyshadow") && cl.includes("framepaint")) {
+        const hasSolOpenAiCss = /color-scheme\s*:/.test(cl) || cl.includes("prefers-reduced-motion") || cl.includes("sandbox:") || vb.includes("0 0 900 520") || vb.includes("0 0 900 540");
+        add("openai/gpt-5.6-sol", hasSolOpenAiCss ? 0.55 : 0.16, "GPT 5.6 Sol tinyShadow/framePaint");
+      }
       if (cl.includes("farlegpath") || cl.includes("farshoe") || cl.includes("badgepulse")) add("openai/gpt-5.6-luna", 0.55, "GPT 5.6 Luna farLegPath/farShoe/badgePulse");
       if (cl.includes("walk-clip") || (cl.includes("boardwalk") && cl.includes("wheel-spin--back"))) add("openai/gpt-5.5", 0.55, "GPT 5.5 boardwalk/walk-clip/BEM");
       if ((cl.includes("pedalu") && cl.includes("pedald") && (cl.includes("legu") || cl.includes("legd"))) || (vb.includes("0 0 800 500") && cl.includes("crank-spin") && cl.includes("tailwag") && cl.includes("#87ceeb")) || ((cl.includes("crankr") && cl.includes("crankl") && cl.includes("pedalr") && cl.includes("pedall")) || (cl.includes("cloudtile") && cl.includes("farhilltile") && cl.includes("nearhilltile")) || (cl.includes("wheel_r") && cl.includes("crank_r") && cl.includes("thigh") && !f.raw.includes("WHEEL_R")) || (cl.includes("rearspin") && cl.includes("frontspin") && (cl.includes("placeleg") || cl.includes("wheelmarkup"))))) add("anthropic/claude-fable-5.1", 0.68, "Claude Fable 5.1 crankR/pedalR/farHillTile/IK逆运动学");
@@ -50546,7 +50657,7 @@ const mOpen = text.match(/```(?:html|xml|svg)?\s*([\s\S]+)/i);
     ];
     const tags = [...new Set(rawTags.map(String).filter(Boolean))];
     const tagStr = tags.join(' | ');
-    if (!tags.length && !savedFeat?.vec && !modelEntry?.streamEvidence && !CONFIRMED_GEMINI_FLASH_SIDS.has(sid)) return null;
+    if (!tags.length && !savedFeat?.vec && !savedFeat?.meta && !modelEntry?.streamEvidence && !CONFIRMED_GEMINI_FLASH_SIDS.has(sid)) return null;
     const bankSample = bankSampleEarly;
     const explicitOpenThink = savedFeat?.meta?.isOpenThink ?? savedFeat?.isOpenThink ?? bankSample?.meta?.isOpenThink ?? bankSample?.isOpen;
     const isOpenThink = explicitOpenThink !== undefined ? Boolean(explicitOpenThink) : /开源(?:可见)?思考/.test(tagStr);
@@ -50766,6 +50877,28 @@ const mOpen = text.match(/```(?:html|xml|svg)?\s*([\s\S]+)/i);
           const prevTop = Array.isArray(m.top_candidates) ? m.top_candidates : (Array.isArray(m.candidates) ? m.candidates : []);
           const upgradedCands = [museBest, ...prevTop.filter(c => c.model_id !== 'meta/muse-spark-1.3')];
           return { ...m, best: museBest, top_candidates: upgradedCands };
+        })()
+      } : {}),
+      ...(savedMeta?.htmlSvgMatch?.best && (() => {
+        const hm = savedMeta.htmlSvgMatch;
+        const b0 = hm.best;
+        const rList = Array.isArray(b0?.reasons) ? b0.reasons : [];
+        const isFalseMuseOnOpenAi = b0?.model_id === 'meta/muse-spark-1.3' && Number(b0?.protoSim || 0) < 0.36 && (sanitizedSavedWireFam === 'openai' || Number(savedMeta.sandboxLink) > 0 || (Number(savedMeta.colorSchemeCss) >= 1 && savedAvgChunk > 0 && savedAvgChunk < 4.2));
+        const isFalseSol56TinyShadow = b0?.model_id === 'openai/gpt-5.6-sol' && rList.some(r => /tinyShadow\/framePaint/i.test(String(r || ''))) && Number(b0?.protoSim || 0) < 0.45 && sanitizedSavedWireFam !== 'openai' && Number(savedMeta.colorSchemeCss || 0) === 0 && Number(savedMeta.prefersReducedMotion || 0) === 0 && Number(savedMeta.sandboxLink || 0) === 0;
+        return isFalseMuseOnOpenAi || isFalseSol56TinyShadow;
+      })() ? {
+        htmlSvgMatch: (() => {
+          const hm = savedMeta.htmlSvgMatch;
+          const prevTop = Array.isArray(hm.top_candidates) ? hm.top_candidates.map(c => ({ ...c })) : [({ ...hm.best })];
+          const fixed = prevTop.map((c, idx) => {
+            if (idx === 0) {
+              const adjRule = 0.12;
+              const adjScore = Math.round(((Number(c.protoSim) || 0.25) * 0.65 + (Number(c.tokenNorm) || 0) * 0.20 + adjRule * 0.15) * 1000) / 1000;
+              return { ...c, ruleScore: adjRule, score: adjScore, confidence: Math.min(0.28, Number(c.confidence) || 0.28) };
+            }
+            return c;
+          }).sort((a, b) => (Number(b.score) || 0) - (Number(a.score) || 0));
+          return { ...hm, best: fixed[0] || hm.best, top_candidates: fixed };
         })()
       } : {}),
       ...(((Number(savedMeta.turns) >= 2 && Math.max(Number(savedMeta.writtenChars) || 0, Number(savedMeta.htmlMaxLen) || 0) > 4500) || Math.max(Number(savedMeta.writtenChars) || 0, Number(savedMeta.htmlMaxLen) || 0) > 7500) ? { isMicroProbeChat: false } : {}),
@@ -51142,10 +51275,17 @@ const fenceMatches = txt.match(/^```/gm);
               else if (/^call_[A-Za-z0-9]{24}$/.test(tcId) && !/^call_[0-9a-f]{24}$/.test(tcId)) wireFam = 'openai';
             }
           }
-          const inp = p.input || {};
-          if (tName === 'bash' || tName === 'execute_command') {
+          const inp = p.input || p.args || {};
+          const isBashTool = tName === 'bash' || tName === 'execute_command' || tName === 'run_command' || tName === 'shell' || tName === 'run_terminal_cmd' || tName === 'terminal';
+          const isWriteTool = tName === 'write_file' || tName === 'create_file' || tName === 'write_to_file' || tName === 'save_file' || tName === 'overwrite_file';
+          const isEditTool = tName === 'edit_file' || tName === 'replace_in_file' || tName === 'str_replace' || tName === 'str_replace_editor' || tName === 'apply_patch' || tName === 'multi_edit' || tName === 'patch_file';
+          const isReadTool = tName === 'read_file' || tName === 'view_file' || tName === 'open_file' || tName === 'cat_file';
+          const isPresentTool = tName === 'present_file' || tName === 'show_file' || tName === 'open_preview' || tName === 'preview_file';
+          const isGenImgTool = tName === 'generate_image' || tName === 'edit_image';
+          const isAskUserTool = tName === 'ask_user' || tName === 'ask_followup_question' || tName === 'request_user_input';
+          if (isBashTool) {
             bash++;
-            const cmd = String(inp.command || '');
+            const cmd = String(inp.command ?? inp.cmd ?? inp.CommandLine ?? inp.script ?? '');
             if (/python3?\s+-\s*<<|python3?\s+-c\b|python3?\s+\S+\.py\b/.test(cmd)) { pyHeredoc++; turnCodeBash++; }
             if (/cat\s+<<|<<\s*['"]?EOF/.test(cmd)) { catHeredoc++; turnCodeBash++; }
             if (/\btest_(?:geometry|kinematics|ik|pelican|render|svg|math|anim)\w*\.py\b|\bdef\s+test_ik\b|\brm\s+-f\s+test_\w+\.py\b/i.test(cmd)) {
@@ -51192,20 +51332,20 @@ const fenceMatches = txt.match(/^```/gm);
               if (/\b(?:node\s+--check|py_compile|tsc|npm\s+run\s+(?:build|package))\b/.test(cmd)) bashBuildRuns++;
             }
             scanHtmlHabits(cmd);
-          } else if (tName === 'write_file') {
+          } else if (isWriteTool) {
             write++;
             turnWrite++;
-            const fpath = String(inp.path || inp.file_path || '');
+            const fpath = String(inp.path || inp.file_path || inp.TargetFile || inp.filename || '');
             if (/[a-z]+_[a-z]+\.html$/i.test(fpath)) writeUnderscoreName++;
-            const content = String(inp.content || '');
+            const content = String(inp.content ?? inp.code ?? inp.file_text ?? inp.CodeContent ?? '');
             writtenChars += content.length;
             if (content) editAddedLines += content.split('\n').length;
             scanHtmlHabits(content, m === asstMsgs.at(-1));
-          } else if (tName === 'edit_file') {
+          } else if (isEditTool) {
             edit++;
             turnEdit++;
-            const ot = String(inp.old_text ?? inp.old_string ?? '');
-            const nt = String(inp.new_text ?? inp.new_string ?? '');
+            const ot = String(inp.old_text ?? inp.old_string ?? inp.old_str ?? '');
+            const nt = String(inp.new_text ?? inp.new_string ?? inp.new_str ?? inp.patch ?? inp.diff ?? '');
             writtenChars += nt.length;
             if (typeof CmdTranslate !== 'undefined' && CmdTranslate.lineDiff) {
               const df = CmdTranslate.lineDiff(ot, nt);
@@ -51216,14 +51356,14 @@ const fenceMatches = txt.match(/^```/gm);
               editDeletedLines += ot ? ot.split('\n').length : 0;
             }
             scanHtmlHabits(nt);
-          } else if (tName === 'read_file') {
+          } else if (isReadTool) {
             read++;
-          } else if (tName === 'present_file') {
+          } else if (isPresentTool) {
             present++;
-          } else if (tName === 'generate_image') {
+          } else if (isGenImgTool) {
             genImg++;
             otherTools++;
-          } else if (tName === 'ask_user') {
+          } else if (isAskUserTool) {
             askUser++;
             const qs = Array.isArray(inp.questions) ? inp.questions : [];
             const qJson = JSON.stringify(qs);
@@ -51259,7 +51399,7 @@ const fenceMatches = txt.match(/^```/gm);
                 }
               }
             }
-          } else if (tName.includes('search') || tName === 'fetch_page') {
+          } else if (tName.includes('search') || tName === 'fetch_page' || tName === 'web_fetch' || tName === 'read_url' || tName === 'open_url') {
             search++;
           } else {
             otherTools++;
@@ -51398,7 +51538,10 @@ const fenceMatches = txt.match(/^```/gm);
       const lastHm = classifyHtmlSvg(lastItem.code, { isOpenThink: false, strictOpenClosed: false });
       const firstBest = firstHm?.best || null;
       const lastBest = lastHm?.best || null;
-      if (firstBest && lastBest && (firstBest.confidence || 0) >= 0.85 && (lastBest.confidence || 0) >= 0.85 && firstBest.model_id !== lastBest.model_id && (firstBest.vendorId !== lastBest.vendorId || preferLatestTurn)) {
+      const sameSubstantiveGenre = firstItem.code.length >= 4200 && lastItem.code.length >= 4200 && firstHm?.code_type === lastHm?.code_type;
+      const bothStrongHtmlEvidence = Boolean((Number(firstBest?.ruleScore) >= 0.55 || Number(firstBest?.protoSim) >= 0.78) && (Number(lastBest?.ruleScore) >= 0.55 || Number(lastBest?.protoSim) >= 0.78));
+      const conflictsHardWire = (wireFam === 'openai' && lastBest?.vendorId !== 'openai') || (wireFam === 'anthropic' && lastBest?.vendorId !== 'anthropic');
+      if (sameSubstantiveGenre && bothStrongHtmlEvidence && !conflictsHardWire && firstBest && lastBest && (firstBest.confidence || 0) >= 0.85 && (lastBest.confidence || 0) >= 0.85 && firstBest.model_id !== lastBest.model_id && (firstBest.vendorId !== lastBest.vendorId || preferLatestTurn)) {
         htmlSvgRoutePivot = {
           fromModel: firstBest.canon || firstBest.model_id,
           toModel: lastBest.canon || lastBest.model_id,
@@ -51432,7 +51575,7 @@ const fenceMatches = txt.match(/^```/gm);
       (msgFmtRWireDeltas === 0 && msgFmtTidCount > 0 && msgFmtTidCount <= 6 && msgFmtTidAvg >= 1800 && hidR >= 2) ||
       (hidR >= 2 && (msgFmtAvgChunk >= 15.0 || (prefersReducedMotion >= 1 && boxComment === 0 && claudeWarmPalette === 0 && edit === 0 && read === 0))) ||
       (htmlSvgMatch?.best?.vendorId && htmlSvgMatch.best.vendorId !== 'anthropic' && Number(htmlSvgMatch.best.ruleScore) >= 0.45) ||
-      (bashGrepPipeWc > 0 || ((bashWcSeparate > 0 || bashPy2Heredoc > 0 || bashNodeColonPrefix > 0) && bashWcCombined === 0 && bashPy3EofHeredoc === 0))
+      (wireFam !== 'anthropic' && boxComment === 0 && claudeWarmPalette === 0 && ((bashGrepPipeWc > 0 && bashWcCombined === 0 && bashPy3EofHeredoc === 0 && bashSedUnquoted === 0) || ((bashWcSeparate > 0 || bashPy2Heredoc > 0 || bashNodeColonPrefix > 0) && bashWcCombined === 0 && bashPy3EofHeredoc === 0)))
     );
     const isLiveClaudeFmt = !isEvalChat && hasLiveMsgFmt && visR === 0 && !isLiveOpenAiFmt && !isLiveGeminiFmt && !isLiveNonClaudeFmt && ((msgFmtTN >= 15 && msgFmtAvgChunk >= 4.0 && msgFmtAvgChunk <= 25.0) || (msgFmtTN >= 6 && msgFmtAvgChunk >= 4.0 && msgFmtAvgChunk <= 25.0 && hidR > 0) || (msgFmtTidCount > 0 && msgFmtTidCount <= 8 && !(msgFmtTN >= 3 && msgFmtAvgChunk >= 28.0))) && sandboxLink === 0 && lowerDoctype === 0 && colorSchemeCss === 0;
     if (isLiveGeminiFmt) {
@@ -52449,9 +52592,43 @@ const fenceMatches = txt.match(/^```/gm);
       (feat.totalTools === 0 && feat.meanChars >= 330 && (feat.avgTurnDurMs >= 15000 || (feat.turns >= 2 && (feat.memoAvgChunk || 0) >= 20 && (feat.memoAvgChunk || 0) <= 80) || (feat.turns === 1 && (feat.avgTurnDurMs || 0) === 0 && (feat.htmlMaxLen || 0) >= 14000 && (feat.evalModality === 'chat' || (feat.htmlSvgMatch?.best?.canon === 'gemini-4-argon-max' && (feat.htmlSvgMatch?.best?.ruleScore || 0) >= 0.70)))))
     );
     const isPureBashTurn = Boolean((feat.bash || 0) >= 1 && (feat.write || 0) === 0 && (feat.edit || 0) === 0);
-    const hasOpenAiBashSig = Boolean(!feat.isGeminiCoding && !feat.isOpenThink && (feat.bashGrepPipeWc || 0) === 0 && ((feat.bashWcSeparate || 0) > 0 || (feat.bashPy2Heredoc || 0) > 0 || (feat.bashNodeColonPrefix || 0) > 0) && (feat.bashWcCombined || 0) === 0 && (feat.bashPy3EofHeredoc || 0) === 0);
-    const hasMuseBashSig = Boolean(!feat.isGeminiCoding && !feat.isOpenThink && ((feat.bashGrepPipeWc || 0) > 0 || (isPureBashTurn && (feat.bashWcLsLh || 0) > 0 && (feat.bashWcSeparate || 0) === 0 && (feat.bashWcCombined || 0) === 0 && feat.hidR === 1 && (feat.preToolTextChars || 0) >= 15 && (feat.preToolTextChars || 0) <= 65)));
-    const hasAnthropicBashSig = Boolean(!feat.isGeminiCoding && !feat.isOpenThink && !hasMuseBashSig && !hasOpenAiBashSig && ((feat.bashWcCombined || 0) > 0 || (feat.bashPy3EofHeredoc || 0) > 0 || (feat.bashStatPrintf || 0) > 0 || (feat.bashSedUnquoted || 0) > 0));
+    const avgChunkEarly = Number(feat.memoAvgChunk) || 0;
+    const deltaCntEarly = Number(feat.memoDeltaCount) || 0;
+    const coreTools = (feat.bash || 0) + (feat.write || 0) + (feat.edit || 0) + (feat.read || 0) + (feat.search || 0) + (feat.askUser || 0) + (feat.genImg || 0);
+    const presentExtra = Math.max(0, (feat.totalTools || 0) - coreTools);
+    const withinOptPresent = (expectedTotal) => feat.totalTools === expectedTotal || (coreTools > 0 && coreTools <= expectedTotal && (feat.totalTools || 0) >= coreTools && presentExtra <= Math.max(2, (feat.write || 0) * 2 + 1));
+    const hasHardOpenAiProtocol = Boolean(
+      !feat.isGeminiCoding && !feat.isOpenThink && (
+        (feat.sandboxLink || 0) > 0 ||
+        (feat.wireFam === 'openai' && (
+          (deltaCntEarly >= 15 && avgChunkEarly >= 1.0 && avgChunkEarly < 4.2) ||
+          ((feat.colorSchemeCss || 0) >= 1 && ((feat.lowerDoctype || 0) >= 1 || (feat.prefersReducedMotion || 0) >= 1)) ||
+          (feat.askIdHasUnderscore || 0) > 0 ||
+          (feat.hidR || 0) >= 18
+        )) ||
+        (deltaCntEarly >= 20 && avgChunkEarly >= 1.0 && avgChunkEarly < 3.6 && (feat.colorSchemeCss || 0) >= 1 && (feat.lowerDoctype || 0) >= 1 && (feat.prefersReducedMotion || 0) >= 1)
+      )
+    );
+    const hasHardAnthropicEvidence = Boolean(
+      !feat.isGeminiCoding && !feat.isOpenThink && !hasHardOpenAiProtocol && feat.wireFam !== 'openai' && (
+        feat.wireFam === 'anthropic' ||
+        (feat.knownCwTok || 0) > 0 ||
+        (feat.claudeWarmPalette || 0) > 0 ||
+        (feat.boxComment || 0) >= 1 ||
+        (feat.bashPy3EofHeredoc || 0) > 0 ||
+        (feat.bashSedUnquoted || 0) > 0 ||
+        (deltaCntEarly >= 6 && avgChunkEarly >= 4.0 && avgChunkEarly <= 19.5 && (feat.sandboxLink || 0) === 0 && (feat.lowerDoctype || 0) === 0 && (feat.colorSchemeCss || 0) === 0 && ((feat.cnColon || 0) >= 2 || (feat.interToolTextChars || 0) >= 80 || (feat.preToolTextChars || 0) >= 120 || (feat.straightApostrophe || 0) >= 2 || (feat.bashWcCombined || 0) > 0))
+      )
+    );
+    const hasMuseBashSig = Boolean(
+      !feat.isGeminiCoding && !feat.isOpenThink && !hasHardOpenAiProtocol && !hasHardAnthropicEvidence && feat.wireFam !== 'openai' && feat.wireFam !== 'anthropic' && (feat.colorSchemeCss || 0) === 0 && (feat.sandboxLink || 0) === 0 && (
+        ((feat.bashGrepPipeWc || 0) > 0 && !((feat.bashWcCombined || 0) > 0 && ((avgChunkEarly > 0 && avgChunkEarly < 4.2) || (feat.lowerDoctype || 0) > 0 || (feat.prefersReducedMotion || 0) > 0))) ||
+        (isPureBashTurn && (feat.bashWcLsLh || 0) > 0 && (feat.bashWcSeparate || 0) === 0 && (feat.bashWcCombined || 0) === 0 && feat.hidR === 1 && (feat.preToolTextChars || 0) >= 15 && (feat.preToolTextChars || 0) <= 65) ||
+        (!isPureBashTurn && !Boolean(feat.isMicroProbeChat) && (feat.bashWcLsLh || 0) > 0 && feat.turns >= 2 && (feat.write || 0) >= 1 && (feat.lowerDoctype || 0) === 0 && (feat.prefersReducedMotion || 0) === 0 && avgChunkEarly >= 8.0)
+      )
+    );
+    const hasOpenAiBashSig = Boolean(!feat.isGeminiCoding && !feat.isOpenThink && !hasMuseBashSig && !hasHardAnthropicEvidence && (feat.bashGrepPipeWc || 0) === 0 && ((feat.bashWcSeparate || 0) > 0 || (feat.bashPy2Heredoc || 0) > 0 || (feat.bashNodeColonPrefix || 0) > 0) && (feat.bashWcCombined || 0) === 0 && (feat.bashPy3EofHeredoc || 0) === 0);
+    const hasAnthropicBashSig = Boolean(!feat.isGeminiCoding && !feat.isOpenThink && !hasMuseBashSig && !hasOpenAiBashSig && !hasHardOpenAiProtocol && ((feat.bashWcCombined || 0) > 0 || (feat.bashPy3EofHeredoc || 0) > 0 || (feat.bashStatPrintf || 0) > 0 || (feat.bashSedUnquoted || 0) > 0));
     const isKnownArgon = !CONFIRMED_GEMINI_FLASH_SIDS.has(sid) && (
       KNOWN_ARGON_SIDS.has(sid) ||
       Boolean(isArgonBehavior) ||
@@ -52464,15 +52641,15 @@ const fenceMatches = txt.match(/^```/gm);
     const isHaikuPlainMedium = feat.totalTools === 0 && !(feat.turns === 1 && feat.hidR === 0 && (feat.meanChars || 0) >= 700 && (feat.meanChars || 0) <= 850 && (feat.straightApostrophe || 0) >= 2) && feat.straightApostrophe >= 1 && feat.curlyApostrophe === 0 && feat.meanChars >= 380 && feat.meanChars <= 1600;
     const wPerWrite = (feat.writtenChars || 0) / Math.max(1, feat.write || 1);
     const isFable51CodingCore = Boolean(
-      !feat.isGeminiCoding && !feat.isOpenThink && (
+      !feat.isGeminiCoding && !feat.isOpenThink && !hasHardOpenAiProtocol && feat.wireFam !== 'openai' && (
         (((feat.turns === 1 && feat.hidR === 1) || ((feat.codingTurns || 1) === 1 && (feat.nonCodeMeanChars || 0) > 0 && (feat.nonCodeMeanChars || 0) <= 180 && (feat.maxRInTurn || 1) === 1)) &&
-        feat.write === 1 && feat.totalTools === 2 &&
+        feat.write === 1 && withinOptPresent(2) &&
         (feat.bash || 0) === 0 && (feat.preToolTextChars || 0) === 0 && (feat.interToolTextChars || 0) === 0 &&
         (((feat.cps || 0) >= 95) || ((feat.cps || 0) === 0 && ((feat.avgTurnDurMs || 0) === 0 || (feat.avgTurnDurMs || 0) >= 3600000) && (feat.memoDeltaCount || 0) >= 40)) && ((feat.memoAvgChunk || 0) >= 10.5 && (feat.memoAvgChunk || 0) <= 15.2) &&
         (feat.writtenChars || 0) >= 11500 && (feat.writtenChars || 0) <= 16500 &&
         (feat.straightApostrophe || 0) >= 2 &&
         (feat.prefersReducedMotion || 0) === 0 && (feat.colorSchemeCss || 0) === 0 && (feat.sandboxLink || 0) === 0 && (feat.boxComment || 0) === 0) ||
-        (feat.turns === 1 && feat.hidR === 1 && feat.totalTools === 2 && feat.write === 1 && (feat.bash || 0) === 0 && (feat.edit || 0) === 0 && (feat.preToolTextChars || 0) === 0 && (feat.interToolTextChars || 0) === 0 && cpsEarly >= 52 && cpsEarly <= 75 && (feat.avgTurnDurMs || 0) >= 165000 && (feat.writtenChars || 0) >= 12000 && (feat.writtenChars || 0) <= 18000) ||
+        (feat.turns === 1 && feat.hidR === 1 && withinOptPresent(2) && feat.write === 1 && (feat.bash || 0) === 0 && (feat.edit || 0) === 0 && (feat.preToolTextChars || 0) === 0 && (feat.interToolTextChars || 0) === 0 && cpsEarly >= 52 && cpsEarly <= 75 && (feat.avgTurnDurMs || 0) >= 165000 && (feat.writtenChars || 0) >= 12000 && (feat.writtenChars || 0) <= 18000) ||
         (feat.htmlSvgMatch?.best?.id === 'anthropic/claude-fable-5.1' && (feat.htmlSvgMatch?.best?.ruleScore || 0) >= 0.65)
       )
     );
@@ -52497,36 +52674,36 @@ const fenceMatches = txt.match(/^```/gm);
     );
     const isSonnetPlainMulti = feat.turns === 2 && feat.totalTools === 0 && feat.memoAvgChunk >= 240 && feat.curlyApostrophe === 0;
     const isSolarPro4Profile = Boolean(
-      !feat.isGeminiCoding && !feat.isOpenThink && (
+      !feat.isGeminiCoding && !feat.isOpenThink && !hasHardOpenAiProtocol && !hasHardAnthropicEvidence && feat.wireFam !== 'openai' && feat.wireFam !== 'anthropic' && (
         feat.htmlSvgMatch?.best?.id === 'upstage/solar-pro4' ||
         (feat.turns === 1 && feat.hidR === 1 && feat.totalTools === 0 && (feat.cps || 0) >= 30 && (feat.cps || 0) <= 44 && avgChunk >= 6.5 && avgChunk <= 15.0 && (feat.avgTurnDurMs || 0) >= 250000 && (feat.htmlMaxLen || 0) >= 10000 && (feat.htmlMaxLen || 0) <= 16000 && (feat.lowerDoctype || 0) === 0 && (feat.colorSchemeCss || 0) === 0 && (feat.prefersReducedMotion || 0) === 0)
       )
     );
     const isMuseSpark12Max = Boolean(
-      !feat.isGeminiCoding && !feat.isOpenThink && feat.turns === 1 && feat.write === 1 && feat.totalTools === 1 && (feat.cps || 0) >= 500 && (feat.writtenChars || 0) >= 35000 && (feat.emDash || 0) >= 4
+      !feat.isGeminiCoding && !feat.isOpenThink && !hasHardOpenAiProtocol && feat.wireFam !== 'openai' && feat.wireFam !== 'anthropic' && feat.turns === 1 && feat.write === 1 && withinOptPresent(1) && (feat.cps || 0) >= 500 && (feat.writtenChars || 0) >= 35000 && (feat.emDash || 0) >= 4
     );
     const isMuseSpark13High = Boolean(
-      !feat.isGeminiCoding && !feat.isOpenThink && feat.turns === 2 && feat.write === 1 && feat.askUser === 1 && feat.totalTools === 3 && (feat.cps || 0) >= 195 && (feat.cps || 0) <= 280 && (feat.avgTurnDurMs || 0) > 0 && (feat.avgTurnDurMs || 0) <= 34000 && (feat.preToolTextChars || 0) >= 140 && (feat.emDash || 0) >= 2 && (feat.prefersReducedMotion || 0) >= 1 && (feat.lowerDoctype || 0) === 0
+      !feat.isGeminiCoding && !feat.isOpenThink && !hasHardOpenAiProtocol && feat.wireFam !== 'openai' && feat.wireFam !== 'anthropic' && feat.turns === 2 && feat.write === 1 && feat.askUser === 1 && withinOptPresent(3) && (feat.cps || 0) >= 195 && (feat.cps || 0) <= 280 && (feat.avgTurnDurMs || 0) > 0 && (feat.avgTurnDurMs || 0) <= 34000 && (feat.preToolTextChars || 0) >= 140 && (feat.emDash || 0) >= 2 && (feat.prefersReducedMotion || 0) >= 1 && (feat.lowerDoctype || 0) === 0
     );
     const isMuseSpark13Low = Boolean(
-      !feat.isGeminiCoding && !feat.isOpenThink && feat.turns === 2 && feat.write === 1 && feat.totalTools === 2 && feat.hidR >= 35 && feat.hidR <= 47 && avgChunk >= 3.5 && avgChunk <= 6.5 && (feat.lowerDoctype || 0) >= 1 && (feat.colorSchemeCss || 0) >= 1 && (feat.prefersReducedMotion || 0) >= 1
+      !feat.isGeminiCoding && !feat.isOpenThink && !hasHardOpenAiProtocol && feat.wireFam !== 'openai' && feat.wireFam !== 'anthropic' && feat.turns === 2 && feat.write === 1 && withinOptPresent(2) && feat.hidR >= 35 && feat.hidR <= 47 && avgChunk >= 3.5 && avgChunk <= 6.5 && (feat.lowerDoctype || 0) >= 1 && (feat.colorSchemeCss || 0) >= 1 && (feat.prefersReducedMotion || 0) >= 1
     );
     const htmlSvgCands = (feat.htmlSvgMatch && Array.isArray(feat.htmlSvgMatch.top_candidates) && feat.htmlSvgMatch.top_candidates.length > 0) ? feat.htmlSvgMatch.top_candidates : (feat.htmlSvgMatch?.best ? [feat.htmlSvgMatch.best] : []);
-    const hasHtmlMuse13Rule = Boolean(htmlSvgCands.some(c => c.model_id === 'meta/muse-spark-1.3' && c.ruleScore >= 0.55));
+    const hasHtmlMuse13Rule = Boolean(!hasHardOpenAiProtocol && !hasHardAnthropicEvidence && feat.wireFam !== 'openai' && feat.wireFam !== 'anthropic' && htmlSvgCands.some(c => c.model_id === 'meta/muse-spark-1.3' && c.ruleScore >= 0.55 && ((c.protoSim || 0) >= 0.25 || (feat.colorSchemeCss || 0) === 0)));
     const isMuseSpark13Max = Boolean(
-      !feat.isGeminiCoding && !feat.isOpenThink && !isMuseSpark12Max && !isMuseSpark13High && !isMuseSpark13Low && (
+      !feat.isGeminiCoding && !feat.isOpenThink && !hasHardOpenAiProtocol && feat.wireFam !== 'openai' && feat.wireFam !== 'anthropic' && !isMuseSpark12Max && !isMuseSpark13High && !isMuseSpark13Low && (
         hasHtmlMuse13Rule ||
         hasMuseBashSig ||
         (Boolean(feat.isMicroProbeChat) && feat.turns === 1 && feat.write === 1 && feat.bash === 1 && (feat.sandboxLink || 0) === 0 && ((feat.preToolTextChars >= 55 && feat.hidR >= 2 && feat.hidR <= 4 && (feat.claudeWarmPalette || 0) === 0 && (cpsEarly < 165)) || (feat.hidR === 1 && (feat.prefersReducedMotion || 0) >= 1 && avgChunk >= 11.5 && avgChunk <= 13.5 && (feat.writtenChars || 0) <= 1500))) ||
-        (feat.turns === 1 && feat.write === 1 && feat.totalTools === 1 && (feat.bash || 0) === 0 && (feat.writtenChars || 0) >= 35000 && (feat.writtenChars || 0) < 44500 && (feat.cps || 0) >= 240 && (feat.cps || 0) < 500 && (feat.prefersReducedMotion || 0) >= 1 && (feat.ariaLabelledby || 0) >= 1 && (feat.boxComment || 0) === 0 && (feat.claudeWarmPalette || 0) === 0) ||
+        (feat.turns === 1 && feat.write === 1 && withinOptPresent(1) && (feat.bash || 0) === 0 && (feat.writtenChars || 0) >= 35000 && (feat.writtenChars || 0) < 44500 && (feat.cps || 0) >= 240 && (feat.cps || 0) < 500 && (feat.prefersReducedMotion || 0) >= 1 && (feat.ariaLabelledby || 0) >= 1 && (feat.boxComment || 0) === 0 && (feat.claudeWarmPalette || 0) === 0) ||
         (feat.turns === 2 && feat.write === 1 && feat.bash === 0 && (feat.genImg || 0) === 0 && feat.hidR >= 4 && feat.hidR <= 6 && feat.maxRInTurn === 3 && (feat.preToolTextChars || 0) >= 70 && (feat.writtenChars || 0) <= 26000 && ((avgChunk >= 10.5 && avgChunk <= 29.0) || (avgChunk === 0 && (feat.cps || 0) >= 120)) && (feat.emDash || 0) >= 2) ||
-        (feat.turns === 3 && feat.write === 1 && feat.totalTools === 2 && feat.hidR === 5 && avgChunk >= 6.5 && avgChunk <= 9.0 && (feat.writtenChars || 0) >= 19000 && (feat.emDash || 0) >= 4) ||
-        (feat.turns === 1 && feat.write === 1 && feat.totalTools === 2 && feat.hidR === 3 && (feat.cps || 0) >= 165 && (feat.cps || 0) <= 550 && (feat.preToolTextChars || 0) >= 55 && ((feat.emDash || 0) >= 2 || (feat.boxComment || 0) >= 1 || (feat.prefersReducedMotion || 0) >= 1)) ||
-        (feat.turns === 1 && feat.write === 1 && feat.totalTools === 2 && feat.hidR === 1 && (feat.avgTurnDurMs || 0) >= 400000 && (feat.cps || 0) >= 20 && (feat.cps || 0) <= 35 && (feat.writtenChars || 0) >= 12000 && (feat.writtenChars || 0) <= 16500 && (feat.lowerDoctype || 0) === 0 && (feat.prefersReducedMotion || 0) === 0) ||
-        (feat.turns === 2 && feat.write === 1 && feat.bash === 1 && feat.totalTools === 3 && feat.hidR === 3 && avgChunk >= 11.5 && avgChunk <= 13.5 && (feat.memoDeltaCount || 0) >= 400 && (feat.writtenChars || 0) >= 1800 && (feat.writtenChars || 0) <= 3500 && (feat.htmlMaxLen || 0) >= 6000) ||
-        (feat.turns === 2 && feat.write === 3 && feat.bash === 2 && feat.totalTools === 7 && feat.hidR === 9 && (feat.cps || 0) >= 145 && avgChunk >= 1.2 && avgChunk <= 2.2 && (feat.memoDeltaCount || 0) >= 200) ||
+        (feat.turns === 3 && feat.write === 1 && withinOptPresent(2) && feat.hidR === 5 && avgChunk >= 6.5 && avgChunk <= 9.0 && (feat.writtenChars || 0) >= 19000 && (feat.emDash || 0) >= 4) ||
+        (feat.turns === 1 && feat.write === 1 && withinOptPresent(2) && feat.hidR === 3 && (feat.cps || 0) >= 165 && (feat.cps || 0) <= 550 && (feat.preToolTextChars || 0) >= 55 && ((feat.emDash || 0) >= 2 || (feat.boxComment || 0) >= 1 || (feat.prefersReducedMotion || 0) >= 1)) ||
+        (feat.turns === 1 && feat.write === 1 && withinOptPresent(2) && (feat.bash || 0) === 0 && (feat.edit || 0) === 0 && feat.hidR >= 1 && (feat.avgTurnDurMs || 0) >= 360000 && (feat.cps || 0) >= 18 && (feat.cps || 0) <= 38 && (feat.writtenChars || 0) >= 11500 && (feat.writtenChars || 0) <= 18500 && (feat.colorSchemeCss || 0) === 0 && (feat.prefersReducedMotion || 0) === 0 && (feat.sandboxLink || 0) === 0 && !hasHardAnthropicEvidence && (avgChunk === 0 || avgChunk >= 4.3)) ||
+        (feat.turns === 2 && feat.write === 1 && feat.bash === 1 && withinOptPresent(3) && feat.hidR === 3 && avgChunk >= 11.5 && avgChunk <= 13.5 && (feat.memoDeltaCount || 0) >= 400 && (feat.writtenChars || 0) >= 1800 && (feat.writtenChars || 0) <= 3500 && (feat.htmlMaxLen || 0) >= 6000) ||
+        (feat.turns === 2 && feat.write === 3 && feat.bash === 2 && withinOptPresent(7) && feat.hidR === 9 && (feat.cps || 0) >= 145 && avgChunk >= 1.2 && avgChunk <= 2.2 && (feat.memoDeltaCount || 0) >= 200) ||
         ((feat.turns || 0) >= 2 && (feat.turns || 0) <= 4 && (feat.write || 0) >= 2 && (feat.write || 0) <= 4 && (feat.bash || 0) >= 1 && (feat.bash || 0) <= 2 && (feat.edit || 0) <= 1 && (feat.read || 0) === 0 && (feat.hidR || 0) >= 6 && (feat.hidR || 0) <= 12 && (feat.preNarrate || 0) >= 0.95 && (feat.preToolTextChars || 0) >= 85 && (feat.preToolTextChars || 0) <= 220 && (feat.writtenChars || 0) >= 14000 && (feat.writtenChars || 0) <= 42000 && (feat.htmlMaxLen || 0) >= 12000 && (feat.htmlMaxLen || 0) <= 28000 && (feat.avgTurnDurMs || 0) >= 95000 && (feat.avgTurnDurMs || 0) <= 210000 && (feat.cps || 0) >= 32 && (feat.cps || 0) <= 115 && ((feat.ariaLabelledby || 0) >= 1 || (feat.prefersReducedMotion || 0) >= 2 || (feat.raf || 0) >= 1) && (feat.svgRich || 0) >= 1 && ((feat.lowerDoctype || 0) === 0 || (feat.preNarrate || 0) >= 0.95) && (feat.colorSchemeCss || 0) === 0 && (feat.sandboxLink || 0) === 0 && (feat.claudeWarmPalette || 0) === 0 && (feat.cnColon || 0) === 0 && (feat.writeUnderscoreName || 0) === 0) ||
-        (feat.turns === 2 && feat.write === 1 && feat.totalTools === 2 && feat.hidR >= 48 && avgChunk >= 9.0 && avgChunk <= 15.0 && (feat.lowerDoctype || 0) >= 1 && (feat.colorSchemeCss || 0) >= 1 && (feat.prefersReducedMotion || 0) >= 1) ||
+        (feat.turns === 2 && feat.write === 1 && withinOptPresent(2) && feat.hidR >= 48 && avgChunk >= 9.0 && avgChunk <= 15.0 && (feat.lowerDoctype || 0) >= 1 && (feat.colorSchemeCss || 0) >= 1 && (feat.prefersReducedMotion || 0) >= 1) ||
         (feat.turns === 1 && feat.hidR === 0 && feat.totalTools === 1 && (feat.bash || 0) === 0 && (feat.write || 0) === 0 && (feat.edit || 0) === 0 && (feat.read || 0) === 0 && (feat.preNarrate || 0) >= 0.8 && (feat.htmlMaxLen || 0) >= 60000 && (feat.boxComment || 0) >= 1)
       )
     );
@@ -52704,7 +52881,11 @@ const fenceMatches = txt.match(/^```/gm);
       const pLabel = proto.label.toLowerCase();
 
       // 1. 协议与跨家族边界约束
-      const effWireFam = isNonBig3Profile ? '' : ((isFable51CodingCore || hasHtmlFable51Early) ? 'anthropic' : ((isLunaHigh1TurnCoding || isSol61XHighSingleWrite) ? 'openai' : feat.wireFam));
+      const effWireFam = hasHardOpenAiProtocol
+        ? 'openai'
+        : (feat.wireFam === 'anthropic' || (feat.knownCwTok || 0) > 0)
+          ? 'anthropic'
+          : (isNonBig3Profile ? '' : ((isFable51CodingCore || hasHtmlFable51Early) ? 'anthropic' : ((isLunaHigh1TurnCoding || isSol61XHighSingleWrite) ? 'openai' : feat.wireFam)));
       if (effWireFam === 'anthropic') {
         if (proto.vendor === 'Anthropic') sim = Math.min(0.99, sim + 0.14);
         else sim *= 0.65;
@@ -53633,7 +53814,11 @@ const fenceMatches = txt.match(/^```/gm);
           if ((!isEvalAnalyze || feat.isOpenThink) && Boolean(hc.isOpen) !== Boolean(feat.isOpenThink)) continue;
           if (isFlash38HighBattleEdit2 && /argon/i.test(hc.canon || '')) continue;
           if (!isEvalAnalyze && isAnyMuseProfile && hc.vendorId !== "meta") continue;
-          const effHtmlWireFam = isNonBig3Profile ? "" : ((isFable51CodingCore || hasHtmlFable51Early) ? "anthropic" : ((isLunaHigh1TurnCoding || isSol61XHighSingleWrite) ? "openai" : feat.wireFam));
+          const effHtmlWireFam = (hasHardOpenAiProtocol || isDefiniteOpenAiChunkStream)
+            ? "openai"
+            : (feat.wireFam === "anthropic" || (feat.knownCwTok || 0) > 0 || isFable51CodingCore || hasHtmlFable51Early)
+              ? "anthropic"
+              : (isNonBig3Profile ? "" : ((isLunaHigh1TurnCoding || isSol61XHighSingleWrite) ? "openai" : feat.wireFam));
           if (effHtmlWireFam === "anthropic" && hc.vendorId !== "anthropic") continue;
           if (effHtmlWireFam === "openai" && hc.vendorId !== "openai") continue;
           const hk = String(hc.canon || "").toLowerCase();
@@ -54354,7 +54539,7 @@ const fenceMatches = txt.match(/^```/gm);
     const compAsstForGuard = Array.isArray(chat?.messages) ? chat.messages.filter(x => x && x.role === 'assistant' && !x.failed && x.status !== 'failed' && x.status !== 'pending') : [];
     const hasLoadedMsgs = compAsstForGuard.length > 0;
     const hasNewerLoadedTurn = Boolean(hasLoadedMsgs && ((compAsstForGuard.length > (Number(known?.completedTurnCount) || 0)) || !known?.lastMessageId || (compAsstForGuard.at(-1)?.id && compAsstForGuard.at(-1).id !== known.lastMessageId) || (known?.reverseVer || 0) < 183));
-    if (!interactive && ((typeof TitleCipher !== 'undefined' && TitleCipher.isEncoded?.(cloudTitle)) || (restoredMeta && !restoredMeta.fromPrefix)) && !(known?.lastMessageId && compAsstForGuard.at(-1)?.id && compAsstForGuard.at(-1).id !== known.lastMessageId)) return known;
+    if (!interactive && !force && !preferLatestTurn && ((typeof TitleCipher !== 'undefined' && TitleCipher.isEncoded?.(cloudTitle)) || (restoredMeta && !restoredMeta.fromPrefix)) && !(known?.lastMessageId && compAsstForGuard.at(-1)?.id && compAsstForGuard.at(-1).id !== known.lastMessageId)) return known;
     if (!interactive && !force && !hasLoadedMsgs && restoredMeta?.fromPrefix && (!known?.habitFeatures && (known?.reverseVer || 0) >= 174)) return known;
     const hasAuthoritativeApi = known && !known.guess && !known.fromTitle && !known.reverseInferred && !known.billingProbe && !known.habitInferred && (known.response || (known.internal && !known.billingProbe));
     if (hasAuthoritativeApi && !force) return known;

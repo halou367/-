@@ -2098,12 +2098,26 @@ const R = {
         if (R._fileTextCache.size >= 40) R._fileTextCache.delete(R._fileTextCache.keys().next().value);
         R._fileTextCache.set(cSid, entry);
       }
+      const preferResolved = (cur, res) => {
+        if (!res) return false;
+        if (!cur || cur.includes('…[cached]')) return true;
+        if (/\.(?:html?|svg)$/i.test(norm) && !/<\/(?:html|svg)\s*>\s*$/i.test(cur.trim()) && /<\/(?:html|svg)\s*>\s*$/i.test(res.trim())) return true;
+        return false;
+      };
       const hit = entry.files.get(norm);
-      const resolved = (typeof HtmlPreview !== 'undefined' && typeof HtmlPreview.resolvedText === 'function') ? HtmlPreview.resolvedText(cSid, norm) : '';
-      if (resolved && (!hit || hit.includes('…[cached]') || resolved.length > hit.length)) return resolved;
+      const effLookupSid = chat.sid || sid || '';
+      const resolved = (effLookupSid && typeof HtmlPreview !== 'undefined' && typeof HtmlPreview.resolvedText === 'function') ? HtmlPreview.resolvedText(effLookupSid, norm) : '';
+      if (preferResolved(hit, resolved)) return resolved;
       if (hit) return hit;
     }
-    const resolvedFallback = (typeof HtmlPreview !== 'undefined' && typeof HtmlPreview.resolvedText === 'function' && norm) ? HtmlPreview.resolvedText(chat?.sid || sid, norm) : '';
+    const effFallbackSid = chat?.sid || sid || '';
+    const resolvedFallback = (effFallbackSid && typeof HtmlPreview !== 'undefined' && typeof HtmlPreview.resolvedText === 'function' && norm) ? HtmlPreview.resolvedText(effFallbackSid, norm) : '';
+    const preferResolvedFb = (cur, res) => {
+      if (!res) return false;
+      if (!cur || cur.includes('…[cached]')) return true;
+      if (/\.(?:html?|svg)$/i.test(norm) && !/<\/(?:html|svg)\s*>\s*$/i.test(cur.trim()) && /<\/(?:html|svg)\s*>\s*$/i.test(res.trim())) return true;
+      return false;
+    };
     let text = '', found = false;
     for (const m of chat?.messages || []) {
       for (const p of m.parts || []) {
@@ -2122,13 +2136,13 @@ const R = {
       }
     }
     if (found && text) {
-      if (resolvedFallback && (text.includes('…[cached]') || resolvedFallback.length > text.length)) return resolvedFallback;
+      if (preferResolvedFb(text, resolvedFallback)) return resolvedFallback;
       return text;
     }
     if (fallbackPart) {
       const i = R.tinput(fallbackPart) || {};
       const fb = typeof i.content === 'string' ? i.content : typeof i.text === 'string' ? i.text : text;
-      if (resolvedFallback && (!fb || fb.includes('…[cached]') || resolvedFallback.length > fb.length)) return resolvedFallback;
+      if (preferResolvedFb(fb, resolvedFallback)) return resolvedFallback;
       return fb;
     }
     return resolvedFallback || text;

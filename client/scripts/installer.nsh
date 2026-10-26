@@ -6,14 +6,15 @@
   Push $0
   ReadEnvStr $0 "ANC_DIR"
   ${if} $0 != ""
-    IfFileExists "$0\${APP_EXECUTABLE_FILENAME}" +2 0
-    IfFileExists "$0\*.*" 0 +7
+    ${if} ${FileExists} "$0\${APP_EXECUTABLE_FILENAME}"
+    ${orIf} ${FileExists} "$0\*.*"
       StrCpy $INSTDIR "$0"
       StrCpy $hasPerMachineInstallation "0"
       StrCpy $installMode "CurrentUser"
       SetShellVarContext current
       WriteRegStr HKCU "${INSTALL_REGISTRY_KEY}" InstallLocation "$0"
       WriteRegStr HKLM "${INSTALL_REGISTRY_KEY}" InstallLocation "$0"
+    ${endif}
   ${endif}
   Pop $0
 !macroend
@@ -34,24 +35,42 @@
   FileClose $2
   StrCpy $0 "0"
   Delete "$INSTDIR\BranaAI-*.exe"
+  ReadEnvStr $2 "BRANA_UPDATING"
   ${if} ${isUpdated}
+  ${orIf} $2 == "1"
     DeleteRegValue HKCU "${UNINSTALL_REGISTRY_KEY}" "UninstallString"
     DeleteRegValue HKCU "${UNINSTALL_REGISTRY_KEY}" "QuietUninstallString"
     DeleteRegValue HKLM "${UNINSTALL_REGISTRY_KEY}" "UninstallString"
     DeleteRegValue HKLM "${UNINSTALL_REGISTRY_KEY}" "QuietUninstallString"
   ${endif}
-  IfFileExists "$INSTDIR\${APP_EXECUTABLE_FILENAME}" 0 _brana_skip_ps_close
+  StrCpy $1 "0"
+  ${if} ${FileExists} "$INSTDIR\${APP_EXECUTABLE_FILENAME}"
     ClearErrors
     FileOpen $2 "$INSTDIR\${APP_EXECUTABLE_FILENAME}" a
-    ${ifNot} ${Errors}
+    ${if} ${Errors}
+      StrCpy $1 "1"
+    ${else}
       FileClose $2
-      Goto _brana_skip_ps_close
     ${endif}
     ClearErrors
+  ${endif}
+  ${if} $1 == "0"
+  ${andIf} ${FileExists} "$INSTDIR\resources\bin\xray.exe"
+    ClearErrors
+    FileOpen $2 "$INSTDIR\resources\bin\xray.exe" a
+    ${if} ${Errors}
+      StrCpy $1 "1"
+    ${else}
+      FileClose $2
+    ${endif}
+    ClearErrors
+  ${endif}
+  StrCmp $1 "0" _brana_skip_ps_close 0
     ; NSIS is 32-bit. Use native PowerShell on 64-bit Windows for CIM support only when executable is locked.
     StrCpy $1 "$SYSDIR\WindowsPowerShell\v1.0\powershell.exe"
-    IfFileExists "$WINDIR\SysNative\WindowsPowerShell\v1.0\powershell.exe" 0 +2
+    ${if} ${FileExists} "$WINDIR\SysNative\WindowsPowerShell\v1.0\powershell.exe"
       StrCpy $1 "$WINDIR\SysNative\WindowsPowerShell\v1.0\powershell.exe"
+    ${endif}
     nsExec::Exec /TIMEOUT=60000 `"$1" -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File "$PLUGINSDIR\brana-close-app.ps1" -ConfigFile "$PLUGINSDIR\brana-close-app.cfg"`
     Pop $0
   _brana_skip_ps_close:
@@ -66,6 +85,54 @@
   Pop $2
   Pop $1
   Pop $0
+!macroend
+
+!macro customUnInit
+  ${ifNot} ${isUpdated}
+    Push $0
+    Push $1
+    Push $2
+    StrCpy $1 "0"
+    ${if} ${FileExists} "$INSTDIR\${APP_EXECUTABLE_FILENAME}"
+      ClearErrors
+      FileOpen $2 "$INSTDIR\${APP_EXECUTABLE_FILENAME}" a
+      ${if} ${Errors}
+        StrCpy $1 "1"
+      ${else}
+        FileClose $2
+      ${endif}
+      ClearErrors
+    ${endif}
+    ${if} $1 == "0"
+    ${andIf} ${FileExists} "$INSTDIR\resources\bin\xray.exe"
+      ClearErrors
+      FileOpen $2 "$INSTDIR\resources\bin\xray.exe" a
+      ${if} ${Errors}
+        StrCpy $1 "1"
+      ${else}
+        FileClose $2
+      ${endif}
+      ClearErrors
+    ${endif}
+    ${if} $1 == "1"
+      InitPluginsDir
+      File /oname=$PLUGINSDIR\brana-close-app.ps1 "${BRANA_CLOSE_SCRIPT}"
+      FileOpen $2 "$PLUGINSDIR\brana-close-app.cfg" w
+      FileWriteUTF16LE $2 "$INSTDIR$\r$\n$\r$\n$\r$\n${APP_EXECUTABLE_FILENAME}$\r$\n"
+      FileClose $2
+      StrCpy $1 "$SYSDIR\WindowsPowerShell\v1.0\powershell.exe"
+      ${if} ${FileExists} "$WINDIR\SysNative\WindowsPowerShell\v1.0\powershell.exe"
+        StrCpy $1 "$WINDIR\SysNative\WindowsPowerShell\v1.0\powershell.exe"
+      ${endif}
+      nsExec::Exec /TIMEOUT=60000 `"$1" -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File "$PLUGINSDIR\brana-close-app.ps1" -ConfigFile "$PLUGINSDIR\brana-close-app.cfg"`
+      Pop $0
+      Delete "$PLUGINSDIR\brana-close-app.cfg"
+    ${endif}
+    Delete "$INSTDIR\BranaAI-*.exe"
+    Pop $2
+    Pop $1
+    Pop $0
+  ${endif}
 !macroend
 
 ; Never overwrite locked files after a failed old-version uninstall,

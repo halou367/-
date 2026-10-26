@@ -55,3 +55,4 @@ for (const name of ['vless.js', 'route-state.js', 'route-policy.js', 'route-host
     fs.copyFileSync(srcP, dstP);
   }
 }
+try { require('./after-pack').patchNsisTemplates([root]); } catch {}

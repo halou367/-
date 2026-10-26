@@ -109,12 +109,11 @@ const PelicanTest = (() => {
           const latestMi = Models.get(sid);
           const hmBest = latestMi?.habitFeatures?.htmlSvgMatch?.best || chat?._habitFeatures?.htmlSvgMatch?.best || null;
           const hmCanon = hmBest?.canon ? Strength.canon(hmBest.canon) : '';
-          const hmConf = Number(hmBest?.match || (hmBest?.prob != null ? hmBest.prob * 100 : 0) || 0);
+          const hmConf = Number(hmBest?.match || (hmBest?.prob != null ? hmBest.prob * 100 : 0) || (hmBest?.confidence != null ? hmBest.confidence * 100 : 0) || 0);
+          const hmStrongEvidence = Boolean((Number(hmBest?.ruleScore) || 0) >= 0.58 || (Number(hmBest?.protoSim) || 0) >= 0.82);
           const spectralScore = latestMi?.habitFeatures?.htmlSvgMatch?.spectralScore ?? chat?._habitFeatures?.htmlSvgMatch?.spectralScore ?? null;
           const latestMiCanon = (latestMi && !latestMi.guess && latestMi.name) ? Strength.canon(latestMi.name) : '';
-          const latestName = (hmCanon && hmConf >= 72 && (!latestMiCanon || latestMiCanon === prevModel))
-            ? hmCanon
-            : (latestMiCanon || hmCanon || name);
+          const latestName = latestMiCanon || ((hmCanon && hmConf >= 82 && hmStrongEvidence) ? hmCanon : '') || name;
           if (prevModel && latestName && Strength.canon(prevModel) !== Strength.canon(latestName)) {
             chat.routed = true;
             chat.routeFrom = prevModel;

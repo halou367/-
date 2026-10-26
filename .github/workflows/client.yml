@@ -162,7 +162,8 @@ jobs:
       - name: Build installer (NSIS)
         shell: pwsh
         run: |
-          npx electron-builder --win nsis --x64 --publish never 2>&1 | Tee-Object -FilePath nsis.log
+          node scripts/after-pack.js --patch-nsis
+          npx --no-install electron-builder --win nsis --x64 --publish never 2>&1 | Tee-Object -FilePath nsis.log
           if ($LASTEXITCODE) { Get-Content nsis.log -Tail 25 | ForEach-Object { "::error title=nsis::$_" }; throw 'nsis build failed' }
           New-Item -ItemType Directory -Force -Path pkg | Out-Null
           Move-Item release/BranaAi-Setup-*.exe pkg/
@@ -177,8 +178,13 @@ jobs:
           if ($LASTEXITCODE) { throw 'installer integrity check failed' }
           $v = node -p "require('./package.json').version"
           $dir = Join-Path $env:RUNNER_TEMP 'BranaAiTest'
+          $beforeInstall = Get-Date
           $p = Start-Process -FilePath (Resolve-Path "pkg/BranaAi-Setup-$v.exe") -ArgumentList '/S', "/D=$dir" -Wait -PassThru
-          if ($p.ExitCode -ne 0) { throw "silent install exit code $($p.ExitCode)" }
+          if ($p.ExitCode -ne 0) {
+            Start-Sleep -Seconds 1
+            Get-WinEvent -FilterHashtable @{LogName='Application'; ID=1000,1001; StartTime=$beforeInstall.AddSeconds(-2)} -ErrorAction SilentlyContinue | ForEach-Object { Write-Warning $_.Message }
+            throw "silent install exit code $($p.ExitCode)"
+          }
           if (!(Test-Path "$dir/Brana AI.exe")) { throw 'installed app exe missing' }
           if (!(Test-Path "$dir/resources/bin/xray.exe")) { throw 'installed xray.exe missing' }
           if (!(Test-Path "$dir/resources/app.asar")) { throw 'installed app.asar missing' }

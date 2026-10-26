@@ -29,45 +29,107 @@ const HtmlPreview = (() => {
   const kindOf = path => { const f = String(path || '').split(/[?#]/)[0]; return /\.(?:html?|svg)$/i.test(f) ? 'html' : /\.(?:md|markdown|mdx)$/i.test(f) ? 'md' : CODE.test(f) ? 'code' : null; };
   const previewable = path => kindOf(path) !== null;
   const hasScript = html => /<script[\s>]/i.test(html) || /\son[a-z]+\s*=/i.test(html);
-  // 把任意 html / svg 文本整理成「只读」文档：补 CSP、去掉自动跳转和外链，svg 单文件包一层页面
-  function docOf(text, name, { run = false, thumb = false } = {}) {
-    const cKey = (run ? '1:' : '0:') + (thumb ? '1:' : '0:') + textSig(String(text || ''), name);
+  function resolveRelPvPath(basePath, ref) {
+    let r = String(ref || '').trim();
+    if (!r || /^(?:[a-z][a-z0-9+.-]*:|\/\/|#)/i.test(r)) return null;
+    r = r.split(/[?#]/)[0];
+    if (!r) return null;
+    const cleanBase = normPvPath(basePath);
+    const dir = cleanBase.includes('/') ? cleanBase.split('/').slice(0, -1) : [];
+    const parts = r.startsWith('/') ? [] : [...dir];
+    for (const seg of r.replace(/^\/home\/user\//, '').replace(/^~\//, '').replace(/^\/+/, '').split('/')) {
+      if (!seg || seg === '.') continue;
+      if (seg === '..') parts.pop();
+      else parts.push(seg);
+    }
+    return parts.join('/') || null;
+  }
+  function lookupSessionAssetText(sid, relPath) {
+    if (!sid || !relPath) return '';
+    const norm = normPvPath(relPath);
+    if (!norm) return '';
+    try {
+      if (typeof R !== 'undefined' && typeof R.latestFileText === 'function') {
+        const lt = String(R.latestFileText(sid, norm) || '');
+        if (lt && !isStubText(lt)) return lt;
+      }
+    } catch {}
+    return resolvedText(sid, norm);
+  }
+  // 把任意 html / svg 文本整理成「只读」文档：补 CSP、内联当前会话相对路径资源、去掉自动跳转和外链，svg 单文件包一层页面
+  function docOf(text, name, { run = false, thumb = false, sid = '', basePath = '' } = {}) {
+    const rawStr = String(text || '');
+    const hasExtAssetRef = /<(?:link|script|img|source|image)\b/i.test(rawStr);
+    const assetVer = (sid && hasExtAssetRef) ? (':' + sid + ':' + _resolvedVer + ':' + (typeof Chats !== 'undefined' && typeof R !== 'undefined' && R._chatWriteStamp && Chats.get?.(sid) ? R._chatWriteStamp(Chats.get(sid)) : '')) : '';
+    const cKey = (run ? '1:' : '0:') + (thumb ? '1:' : '0:') + textSig(rawStr, basePath || name) + assetVer;
     const hit = docCache.get(cKey);
     if (hit !== undefined) return hit;
-    const svg = /\.svg$/i.test(name || '') || (/^\s*(?:<\?xml[^>]*>\s*)?<svg[\s>]/i.test(text) && !/<html[\s>]/i.test(text));
-    const src = svg ? '<!doctype html><html><head><meta charset="utf-8"><style>html,body{margin:0;width:100%;height:100%;background:#fff}body{display:flex;align-items:center;justify-content:center}svg{width:100%;height:100%}</style></head><body>' + text.replace(/^\s*<\?xml[^>]*>/i, '') + '</body></html>' : text;
+    const svg = /\.svg$/i.test(name || '') || (/^\s*(?:<\?xml[^>]*>\s*)?<svg[\s>]/i.test(rawStr) && !/<html[\s>]/i.test(rawStr));
+    const src = svg ? '<!doctype html><html><head><meta charset="utf-8"><style>html,body{margin:0;width:100%;height:100%;background:#fff}body{display:flex;align-items:center;justify-content:center}svg{width:100%;height:100%}</style></head><body>' + rawStr.replace(/^\s*<\?xml[^>]*>/i, '') + '</body></html>' : rawStr;
     const d = new DOMParser().parseFromString(src, 'text/html');
     d.querySelectorAll('meta[http-equiv]').forEach(m => m.remove());
-    if (!run) d.querySelectorAll('script').forEach(s => s.remove());
+    const refBase = basePath || name || '';
+    for (const l of [...d.querySelectorAll('link[rel~="stylesheet"][href]')]) {
+      const rel = sid ? resolveRelPvPath(refBase, l.getAttribute('href')) : null;
+      const cssTxt = rel ? lookupSessionAssetText(sid, rel) : '';
+      if (cssTxt) {
+        const stEl = d.createElement('style');
+        stEl.textContent = cssTxt;
+        l.replaceWith(stEl);
+      } else {
+        l.remove();
+      }
+    }
+    if (!run) {
+      d.querySelectorAll('script').forEach(s => s.remove());
+    } else {
+      for (const sc of [...d.querySelectorAll('script[src]')]) {
+        const rawSrc = sc.getAttribute('src') || '';
+        const rel = sid ? resolveRelPvPath(refBase, rawSrc) : null;
+        const jsTxt = rel ? lookupSessionAssetText(sid, rel) : '';
+        if (jsTxt) {
+          sc.removeAttribute('src');
+          sc.textContent = jsTxt;
+        } else if (/^(?:https?:|\/\/)/i.test(rawSrc.trim())) {
+          sc.remove();
+        }
+      }
+    }
+    if (sid) {
+      for (const el of [...d.querySelectorAll('img[src],source[src],image')]) {
+        const at = el.hasAttribute('src') ? 'src' : el.hasAttribute('href') ? 'href' : 'xlink:href';
+        const rel = resolveRelPvPath(refBase, el.getAttribute(at));
+        if (rel && /\.svg$/i.test(rel)) {
+          const svgTxt = lookupSessionAssetText(sid, rel);
+          if (svgTxt) el.setAttribute(at, 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svgTxt));
+        }
+      }
+    }
     d.querySelectorAll('a[href]').forEach(a => { if (!/^#/.test(a.getAttribute('href'))) a.removeAttribute('href'); });
     d.querySelectorAll('form').forEach(f => f.removeAttribute('action'));
     const m = d.createElement('meta'); m.setAttribute('http-equiv', 'Content-Security-Policy'); m.setAttribute('content', run ? CSP_RUN : CSP);
     if (run) {
       const syncSc = d.createElement('script');
-      syncSc.textContent = `(function(){var E=Math.floor(Date.now()/3600000)*3600000;var sNow=function(){return Date.now()-E;};try{Object.defineProperty(performance,'now',{value:sNow,configurable:true,writable:true});}catch(e){}try{var oRaf=window.requestAnimationFrame;if(typeof oRaf==='function'){window.requestAnimationFrame=function(cb){return oRaf.call(window,function(){cb(sNow());});};}}catch(e){}function sync(){try{var t=sNow();if(document.getAnimations){var as=document.getAnimations({subtree:true});for(var i=0;i<as.length;i++){try{as[i].play();var tm=as[i].effect&&as[i].effect.getComputedTiming?as[i].effect.getComputedTiming():null;if(tm&&(tm.iterations===Infinity||tm.iterations>=5)){as[i].currentTime=t;}}catch(e){}}}var svgs=document.querySelectorAll('svg');for(var j=0;j<svgs.length;j++){try{if(svgs[j].unpauseAnimations)svgs[j].unpauseAnimations();if(svgs[j].setCurrentTime)svgs[j].setCurrentTime(t/1000);}catch(e){}}}catch(e){}}if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',sync,{once:true});else sync();window.addEventListener('load',function(){sync();setTimeout(sync,60);},{once:true});})();`;
+      syncSc.textContent = `(function(){function unpause(){try{var svgs=document.querySelectorAll('svg');for(var j=0;j<svgs.length;j++){if(svgs[j].animationsPaused&&svgs[j].animationsPaused()&&svgs[j].unpauseAnimations)svgs[j].unpauseAnimations();}}catch(e){}}if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',unpause,{once:true});else unpause();})();`;
       d.head.prepend(syncSc);
     }
     d.head.prepend(m);
-    if (thumb) { const s = d.createElement('style'); s.textContent = NOBAR; d.head.append(s); }   // 小窗隐藏滚动条，保留动态动画与脚本同步运行
+    if (thumb) { const s = d.createElement('style'); s.textContent = NOBAR; d.head.append(s); }   // 小窗隐藏滚动条，保留原生时间轴动画与脚本运行
     const out = '<!doctype html>' + d.documentElement.outerHTML;
     if (docCache.size >= 64) docCache.delete(docCache.keys().next().value);
     docCache.set(cKey, out);
     return out;
   }
   const isSvgDoc = (text, name) => /\.svg$/i.test(name || '') || (/^\s*(?:<\?xml[^>]*>\s*)?<svg[\s>]/i.test(text) && !/<html[\s>]/i.test(text));
-  // 从工作区打开的 html：把相对路径的 CSS / 图片读出来内联进页面（脚本不跑，所以 JS 不用管）；读不到的就跳过
+  // 从工作区打开的 html：把相对路径的 CSS / JS / 图片读出来内联进页面；读不到的外链安全跳过
   async function inlineAssets(html, path, ctx) {
-    const d = new DOMParser().parseFromString(html, 'text/html'), dir = String(path).split('/').slice(0, -1);
-    const resolve = ref => {
-      let r = String(ref || '').trim(); if (!r || /^(?:[a-z][a-z0-9+.-]*:|\/\/|#)/i.test(r)) return null;
-      r = r.split(/[?#]/)[0]; const parts = r.startsWith('/') ? [] : [...dir];
-      for (const x of r.replace(/^\/home\/user\//, '').replace(/^\//, '').split('/')) { if (!x || x === '.') continue; if (x === '..') parts.pop(); else parts.push(x); }
-      return parts.join('/');
-    };
+    const d = new DOMParser().parseFromString(html, 'text/html');
+    const resolve = ref => resolveRelPvPath(path, ref);
     let budget = 8 * 1024 * 1024, n = 0;
     const blobOf = async ref => { const p = resolve(ref); if (!p || n >= 40 || budget <= 0) return null; try { const ent = await ctx.entry(p); if (!ent || ent.e.type === 'dir' || +ent.e.size > 3 * 1024 * 1024) return null; const b = await Workspace.fileBlob(ent.e); n++; budget -= b.size; return b; } catch { return null; } };
     const dataUrl = (b, mime) => new Promise(res => { const fr = new FileReader(); fr.onload = () => res(String(fr.result)); fr.onerror = () => res(null); fr.readAsDataURL(mime ? new Blob([b], { type: mime }) : b); });
-    for (const l of [...d.querySelectorAll('link[rel~="stylesheet"][href]')]) { const b = await blobOf(l.getAttribute('href')); if (b) { const st = d.createElement('style'); st.textContent = await b.text(); l.replaceWith(st); } else l.remove(); }
+    for (const l of [...d.querySelectorAll('link[rel~="stylesheet"][href]')]) { const b = await blobOf(l.getAttribute('href')); if (b) { const stEl = d.createElement('style'); stEl.textContent = await b.text(); l.replaceWith(stEl); } else l.remove(); }
+    for (const sc of [...d.querySelectorAll('script[src]')]) { const b = await blobOf(sc.getAttribute('src')); if (b) { sc.removeAttribute('src'); sc.textContent = await b.text(); } else if (/^(?:https?:|\/\/)/i.test(String(sc.getAttribute('src') || '').trim())) sc.remove(); }
     for (const el of [...d.querySelectorAll('img[src],source[src],image')]) {
       const at = el.hasAttribute('src') ? 'src' : el.hasAttribute('href') ? 'href' : 'xlink:href', ref = el.getAttribute(at), b = await blobOf(ref);
       if (b) { const u = await dataUrl(b, WorkspacePath.mime?.(resolve(ref) || '') || b.type); if (u) el.setAttribute(at, u); }
@@ -92,28 +154,34 @@ const HtmlPreview = (() => {
     if (/\.svg$/i.test(name || '')) return /<\/svg\s*>/i.test(s);
     return /<(?:body|svg|main|canvas|section|div)\b/i.test(s) && /<\/(?:html|body|svg|main|canvas|script|div)\s*>/i.test(s);
   };
+  const isClosedHtmlDoc = s => /<\/(?:html|svg)\s*>\s*$/i.test(String(s || '').trim());
   function resolvedText(sid, path) {
     const norm = normPvPath(path);
-    if (!norm) return '';
-    return (sid && resolvedTexts.get(sid + ':' + norm)) || resolvedTexts.get('*:' + norm) || '';
+    const sKey = String(sid || '').trim();
+    if (!norm || !sKey) return '';
+    return resolvedTexts.get(sKey + ':' + norm) || '';
   }
-  function cacheResolvedText(sid, path, text) {
-    const norm = normPvPath(path), s = String(text || '');
-    if (!norm || !s.trim() || isStubText(s)) return false;
-    const k = (sid || '') + ':' + norm, prev = resolvedTexts.get(k) || '';
+  function cacheResolvedText(sid, path, text, opts = {}) {
+    const norm = normPvPath(path), s = String(text || ''), sKey = String(sid || '').trim();
+    if (!norm || !sKey || !s.trim() || isStubText(s)) return false;
+    const k = sKey + ':' + norm, prev = resolvedTexts.get(k) || '';
     if (prev === s) return false;
-    if (prev && prev.length > s.length && !isStubText(prev)) return false;
+    if (!opts.authoritative && prev && !isStubText(prev) && kindOf(norm) === 'html' && isClosedHtmlDoc(prev) && !isClosedHtmlDoc(s)) {
+      return false;
+    }
     if (resolvedTexts.size >= 80) resolvedTexts.delete(resolvedTexts.keys().next().value);
-    if (sid) resolvedTexts.set(k, s);
-    resolvedTexts.set('*:' + norm, s);
+    resolvedTexts.set(k, s);
     _resolvedVer++;
     try {
-      if (sid && typeof Chats !== 'undefined') {
-        const chat = Chats.get?.(sid);
+      if (typeof Chats !== 'undefined') {
+        const chat = Chats.get?.(sKey);
         if (chat && Array.isArray(chat.messages)) {
           let patchedChat = false;
-          for (const m of chat.messages) {
-            for (const p of (m?.parts || [])) {
+          for (let mi = chat.messages.length - 1; mi >= 0; mi--) {
+            const m = chat.messages[mi];
+            const parts = m?.parts || [];
+            for (let pi = parts.length - 1; pi >= 0; pi--) {
+              const p = parts[pi];
               if (!p || !(String(p.type || '').startsWith('tool-') || p.type === 'dynamic-tool')) continue;
               const tn = String(p.toolName || p.name || p.type || '').replace(/^tool-/, '').toLowerCase();
               if (!/^(write_?file|create_?file|overwrite_?file|write)$/.test(tn)) continue;
@@ -121,16 +189,18 @@ const HtmlPreview = (() => {
               const pNorm = normPvPath(inp.path || inp.file_path || '');
               if (pNorm !== norm) continue;
               const curC = typeof p.input?.content === 'string' ? p.input.content : (typeof p.input?.text === 'string' ? p.input.text : '');
-              if (!p.input || isStubText(curC) || curC.length < s.length) {
+              if (!p.input || isStubText(curC)) {
                 p.input = { ...(p.input && typeof p.input === 'object' ? p.input : {}), path: inp.path || inp.file_path || norm, content: s };
                 delete p.inputText; delete p._parsedInputRaw; delete p._parsedInputVal;
                 m.v = (m.v || 0) + 1;
                 patchedChat = true;
               }
+              mi = -1;
+              break;
             }
           }
+          try { R?._fileTextCache?.delete(sKey); R?._writesCache?.delete(sKey); } catch {}
           if (patchedChat) {
-            try { R?._fileTextCache?.delete(sid); R?._writesCache?.delete(sid); } catch {}
             try { if (typeof MsgCache !== 'undefined') MsgCache.put?.(chat); } catch {}
           }
         }
@@ -140,7 +210,7 @@ const HtmlPreview = (() => {
       const lineCnt = countLinesFast(s);
       if (typeof document !== 'undefined') {
         document.querySelectorAll('details.wcard').forEach(d => {
-          if (normPvPath(d._filePath) === norm && (!sid || !d._wsid || d._wsid === sid)) {
+          if (normPvPath(d._filePath) === norm && (!d._wsid || d._wsid === sKey)) {
             if (d._linesEl && lineCnt) d._linesEl.textContent = lineCnt + ' 行';
             const pre = d.querySelector('pre.wc-code');
             if (pre) pre.textContent = s.length > 60000 ? s.slice(0, 60000) + '\n…' : s;
@@ -150,17 +220,22 @@ const HtmlPreview = (() => {
     } catch {}
     try {
       cards.forEach(c => {
-        if (c?.o && normPvPath(c.o.path) === norm) c.paint();
+        if (!c?.o || normPvPath(c.o.path) !== norm) return;
+        const cSid = String(c.o.getWsid?.() || '').trim();
+        if (!cSid || cSid === sKey) c.paint();
       });
     } catch {}
     return true;
   }
   async function healFileText(sid, path) {
+    const opts = arguments[2] || {};
     const norm = normPvPath(path);
-    const effSid = sid || (typeof Tabs !== 'undefined' ? Tabs.cur?.sid : null) || '';
+    const effSid = String(sid || (st && normPvPath(st.path) === norm ? (st.sid || st.wsid) : '') || (typeof Tabs !== 'undefined' ? Tabs.cur?.sid : '') || '').trim();
     if (!norm || !effSid) return '';
-    const existing = resolvedText(effSid, norm);
-    if (existing && isUsablePreviewText(existing, norm) && /<\/(?:html|svg)\s*>\s*$/i.test(existing.trim())) return existing;
+    if (!opts.force) {
+      const existing = resolvedText(effSid, norm);
+      if (existing && isUsablePreviewText(existing, norm) && isClosedHtmlDoc(existing)) return existing;
+    }
     const hKey = effSid + ':' + norm;
     if (healingFiles.has(hKey)) return healingFiles.get(hKey);
     const job = (async () => {
@@ -178,11 +253,11 @@ const HtmlPreview = (() => {
               const blob = await Workspace.fileBlob(hit.e);
               let txt = (await blob.text()).slice(0, MAXCODE);
               if (txt && !isStubText(txt)) {
-                if (kindOf(norm) === 'html' && !/\.svg$/i.test(norm) && /<(?:link|img|source|image)\b/i.test(txt)) {
+                if (kindOf(norm) === 'html' && !/\.svg$/i.test(norm) && /<(?:link|script|img|source|image)\b/i.test(txt)) {
                   try { txt = await inlineAssets(txt, norm, ctx); } catch {}
                 }
-                cacheResolvedText(effSid, norm, txt);
-                if (st && st.sid === effSid && normPvPath(st.path) === norm) render();
+                cacheResolvedText(effSid, norm, txt, { authoritative: true });
+                if (st && (st.sid === effSid || st.wsid === effSid) && normPvPath(st.path) === norm) render();
                 return txt;
               }
             }
@@ -199,8 +274,8 @@ const HtmlPreview = (() => {
               const pNorm = normPvPath(inp.path || inp.file_path || '');
               const c = typeof inp.content === 'string' ? inp.content : (typeof inp.text === 'string' ? inp.text : '');
               if (pNorm === norm && c && !isStubText(c)) {
-                cacheResolvedText(effSid, norm, c);
-                if (st && st.sid === effSid && normPvPath(st.path) === norm) render();
+                cacheResolvedText(effSid, norm, c, { authoritative: true });
+                if (st && (st.sid === effSid || st.wsid === effSid) && normPvPath(st.path) === norm) render();
                 return c;
               }
             }
@@ -215,20 +290,26 @@ const HtmlPreview = (() => {
     healingFiles.set(hKey, job);
     return job;
   }
+  const shouldUseDirectOverResolved = (direct, res, path) => {
+    if (!direct || isStubText(direct)) return false;
+    if (!res) return true;
+    if (kindOf(path) === 'html' && !isClosedHtmlDoc(direct) && isClosedHtmlDoc(res)) return false;
+    return true;
+  };
   const textOf = () => {
     try {
       const sid = st?.sid || st?.wsid || (typeof Tabs !== 'undefined' ? Tabs.cur?.sid : null);
       const res = st?.path ? resolvedText(sid, st.path) : '';
       const direct = String(st?.get?.() ?? '');
-      if (direct && !isStubText(direct) && (!res || direct.length >= res.length)) {
-        if (st?.path && isUsablePreviewText(direct, st.name)) cacheResolvedText(sid, st.path, direct);
+      if (shouldUseDirectOverResolved(direct, res, st?.path || st?.name)) {
+        if (sid && st?.path && isUsablePreviewText(direct, st.name)) cacheResolvedText(sid, st.path, direct);
         return direct;
       }
-      if (res) return res;
       if (sid && st?.path && typeof R !== 'undefined' && R.latestFileText) {
         const lt = String(R.latestFileText(sid, st.path) || '');
-        if (lt && !isStubText(lt)) return lt;
+        if (lt && !isStubText(lt) && shouldUseDirectOverResolved(lt, res, st.path)) return lt;
       }
+      if (res) return res;
       return isStubText(direct) ? '' : direct;
     } catch { return ''; }
   };
@@ -236,15 +317,15 @@ const HtmlPreview = (() => {
     try {
       const res = path ? resolvedText(sid, path) : '';
       const direct = String(fn?.() ?? '');
-      if (direct && !isStubText(direct) && (!res || direct.length >= res.length)) {
-        if (path && isUsablePreviewText(direct, path)) cacheResolvedText(sid, path, direct);
+      if (shouldUseDirectOverResolved(direct, res, path)) {
+        if (sid && path && isUsablePreviewText(direct, path)) cacheResolvedText(sid, path, direct);
         return direct;
       }
-      if (res) return res;
-      if (path && typeof R !== 'undefined' && R.latestFileText) {
+      if (sid && path && typeof R !== 'undefined' && R.latestFileText) {
         const lt = String(R.latestFileText(sid, path) || '');
-        if (lt && !isStubText(lt)) return lt;
+        if (lt && !isStubText(lt) && shouldUseDirectOverResolved(lt, res, path)) return lt;
       }
+      if (res) return res;
       return isStubText(direct) ? '' : direct;
     } catch { return ''; }
   };
@@ -425,8 +506,10 @@ const HtmlPreview = (() => {
       f.addEventListener('load', () => {
         old?.remove(); prev?.destroy(); f.style.visibility = ''; c.shown = text; c.ph.hidden = true;
       }, { once: true });
-      probe.srcdoc = docOf(text, name, { run: false, thumb: true });
-      f.srcdoc = docOf(text, name, { run: true, thumb: true });
+      const cardSid = c.o?.getWsid?.() || '';
+      const cardPath = c.o?.path || name;
+      probe.srcdoc = docOf(text, name, { run: false, thumb: true, sid: cardSid, basePath: cardPath });
+      f.srcdoc = docOf(text, name, { run: true, thumb: true, sid: cardSid, basePath: cardPath });
       c.stage.append(probe, f);
     };
     c.render = (text, name) => {
@@ -1146,7 +1229,9 @@ const HtmlPreview = (() => {
       // 测量 / 记录用 p：同源、不跑脚本，排版尺寸和样式动画从这里读
       f.setAttribute('sandbox', 'allow-scripts'); f.setAttribute('csp', CSP_RUN);
       p.setAttribute('sandbox', 'allow-same-origin'); p.setAttribute('csp', CSP);
-      f.srcdoc = docOf(src, st.name, { run: true }); p.srcdoc = docOf(src, st.name);
+      const pvSid = st.sid || st.wsid || '';
+      f.srcdoc = docOf(src, st.name, { run: true, sid: pvSid, basePath: st.path || st.name });
+      p.srcdoc = docOf(src, st.name, { run: false, sid: pvSid, basePath: st.path || st.name });
       frame = f; st.probe = p; st.frameAt = now();
       body.append(stage);
       stageToMount = { stage, f, p, src };
