@@ -28,6 +28,13 @@ ICON.mic = '<rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0
 ICON.qr = '<rect x="3" y="3" width="7" height="7" rx="1"/><rect x="5.2" y="5.2" width="2.6" height="2.6" rx="0.4" fill="currentColor" stroke="none"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="16.2" y="5.2" width="2.6" height="2.6" rx="0.4" fill="currentColor" stroke="none"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="5.2" y="16.2" width="2.6" height="2.6" rx="0.4" fill="currentColor" stroke="none"/><path d="M14 14h3v3h-3zM18 14h3v3h-3zM14 18h3v3h-3zM18 18h3v3h-3z"/>';
 ICON.camera = '<path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/>';
 ICON.check = '<path d="M5 12.5 9.5 17 19 7.5"/>';
+ICON.paperclip = '<path d="M21.44 11.05l-8.49 8.49a5.5 5.5 0 0 1-7.78-7.78l9.19-9.19a3.5 3.5 0 0 1 4.95 4.95l-9.2 9.19a1.5 1.5 0 0 1-2.12-2.12l8.49-8.48"/>';
+ICON.clip = ICON.paperclip;
+ICON.api = '<path d="M12 22v-5"/><path d="M9 8V3"/><path d="M15 8V3"/><path d="M18 8v4a6 6 0 0 1-12 0V8z"/>';
+ICON.cpu = '<rect x="5" y="5" width="14" height="14" rx="2"/><rect x="9" y="9" width="6" height="6" rx="1"/><path d="M9 2v3M15 2v3M9 19v3M15 19v3M2 9h3M2 15h3M19 9h3M19 15h3"/>';
+ICON.zap = '<path d="M13 3L4 14h7l-1 7 9-11h-7z"/>';
+ICON.terminal = '<path d="M4 17l6-6-6-6M12 19h8"/>';
+ICON.code = '<path d="M8 8l-4 4 4 4M16 8l4 4-4 4M13.5 5l-3 14"/>';
 ICON.eye = '<path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/>';
 ICON[' eye'] = ICON.eye;
 ICON.RefreshCw = ICON.refresh;
@@ -595,8 +602,41 @@ const attView = (u, mine, onDel) => {
   const del = onDel ? h('button', { class: 'att-del', title: '移除', onclick: e => { e.stopPropagation(); onDel(); } }, '×') : null;
   const st = up ? h('span', { class: 'att-prog' }, h('i', { style: { '--p': pct } }), h('b', {}, a.stage === '上传' ? pct + '%' : (a.stage || '…'))) : bad ? h('span', { class: 'att-prog bad', title: a.err || '' }, '!') : null;
   if (u.src && /^image\//.test(u.type || '')) {
-    const img = h('img', { class: 'zimg', src: u.src, alt: u.name, 'data-name': u.name || '', loading: 'lazy', draggable: 'false', onerror: () => { img.replaceWith(h('span', { class: 'att-noimg' }, icon('file'))); } });
-    return h('span', { class: 'att-img' + (up ? ' up' : '') + (bad ? ' bad' : ''), title: (a?.err || u.name), onclick: e => { if (e.target.closest('.att-del')) return; ImgView.open(u.src, u.name, e.currentTarget); } }, img, st, del);
+    const img = h('img', {
+      class: 'zimg',
+      src: u.src,
+      alt: u.name,
+      'data-name': u.name || '',
+      loading: 'lazy',
+      draggable: 'false',
+      onerror: () => {
+        if (!img._r2Retried && typeof EvalEngine !== 'undefined' && typeof EvalEngine.refreshSignedAttachmentUrl === 'function') {
+          img._r2Retried = true;
+          EvalEngine.refreshSignedAttachmentUrl(u.src, u.r2Key || u.name || '').then(fresh => {
+            if (fresh && fresh !== u.src) {
+              u.src = fresh;
+              img.src = fresh;
+              return;
+            }
+            img.replaceWith(h('span', { class: 'att-noimg' }, icon('file')));
+          }).catch(() => {
+            img.replaceWith(h('span', { class: 'att-noimg' }, icon('file')));
+          });
+          return;
+        }
+        img.replaceWith(h('span', { class: 'att-noimg' }, icon('file')));
+      }
+    });
+    if (typeof EvalEngine !== 'undefined' && typeof EvalEngine.isR2UrlExpired === 'function' && EvalEngine.isR2UrlExpired(u.src)) {
+      img._r2Retried = true;
+      EvalEngine.refreshSignedAttachmentUrl(u.src, u.r2Key || u.name || '').then(fresh => {
+        if (fresh && fresh !== u.src) {
+          u.src = fresh;
+          img.src = fresh;
+        }
+      }).catch(() => {});
+    }
+    return h('span', { class: 'att-img' + (up ? ' up' : '') + (bad ? ' bad' : ''), title: (a?.err || u.name), onclick: e => { if (e.target.closest('.att-del')) return; ImgView.open(img.src || u.src, u.name, e.currentTarget); } }, img, st, del);
   }
   return h('span', { class: 'att-chip ' + (a?.state || ''), title: a?.err || u.name },
     up ? h('i', { class: 'spin' }) : bad ? h('span', { class: 'att-x' }, '!') : icon('file'),
@@ -607,9 +647,18 @@ const hashOfUrl = u => (/([A-Za-z0-9_-]{43})(?=$|[?#])/.exec(String(u || '')) ||
 const userAtts = m => {
   if (m._prev?.length) return m._prev.map(a => ({ name: a.name, type: a.type, src: a.url, a }));
   const ups = (m.metadata?.uploads || []).map(u => { const hs = Uploads.hashOfKey(u.key) || u.hash || hashOfUrl(u.url); return { name: u.filename, type: u.mediaType, hs, src: hs && /^image\//.test(u.mediaType || '') ? Uploads.webPath(hs) : null }; });
+  const expAtts = (Array.isArray(m.experimental_attachments) ? m.experimental_attachments : []).filter(a => a && a.url).map(a => {
+    const ct = a.contentType || (/\.(png|jpe?g|webp|gif|svg)(\?|$)/i.test(a.url) ? 'image/png' : 'application/octet-stream');
+    const shortName = String(a.name || '').split('/').pop() || 'image';
+    return { name: shortName, r2Key: a.name || '', type: ct, hs: a.name || a.url, src: /^image\//i.test(ct) ? a.url : null };
+  });
   const used = new Set();
-  const files = (m.parts || []).filter(p => p.type === 'file').map(p => ({ name: p.filename || p.name || 'file', type: p.mediaType, hs: hashOfUrl(p.url), src: /^image\//.test(p.mediaType || '') && /^(https?:|\/|data:|blob:)/.test(p.url || '') ? p.url : null }))
-    .filter(f => {
+  const files = (m.parts || []).filter(p => p && (p.type === 'file' || p.type === 'image' || p.type === 'video')).map(p => {
+    const ct = p.mediaType || p.contentType || (p.type === 'image' ? 'image/png' : p.type === 'video' ? 'video/mp4' : '');
+    const rawName = p.filename || p.name || 'file';
+    const shortName = String(rawName).split('/').pop() || rawName;
+    return { name: shortName, r2Key: p.name || '', type: ct, hs: hashOfUrl(p.url) || p.name || p.url, src: /^image\//i.test(ct) && /^(https?:|\/|data:|blob:)/.test(p.url || '') ? p.url : null };
+  }).filter(f => {
       let i = f.hs ? ups.findIndex((u, k) => !used.has(k) && u.hs === f.hs) : -1;
       if (i < 0) i = ups.findIndex((u, k) => !used.has(k) && (!f.hs || !u.hs) && u.name === f.name && (u.type || '') === (f.type || ''));
       if (i < 0) return true;
@@ -617,7 +666,7 @@ const userAtts = m => {
     });
   // 同一个来源里重复的也去掉（同一张图同时出现两次）
   const seen = new Set();
-  return [...ups, ...files].filter(u => { const k = u.hs || (u.src ? u.src : null); if (!k) return true; if (seen.has(k)) return false; seen.add(k); return true; });
+  return [...ups, ...expAtts, ...files].filter(u => { const k = u.r2Key || u.hs || (u.src ? u.src : null); if (!k) return true; if (seen.has(k)) return false; seen.add(k); return true; });
 };
 // 看大图：当前对话里所有图片组成相册，左右滑动 / 方向键切换上一张 / 下一张，下滑 / 点空白 / Esc 关闭
 const attZoom = (src, name, from) => {
@@ -807,7 +856,41 @@ document.addEventListener('contextmenu', e => {
   const src = t.currentSrc || t.getAttribute('src'); if (!src || /^data:image\/svg/.test(src)) return;
   e.preventDefault(); ImgAct.menu(e, src, t.alt || '', false, t);
 });
-const copyText = async t => { try { await navigator.clipboard.writeText(t); toast('已复制'); } catch { const ta = h('textarea', {}, t); document.body.append(ta); ta.select(); document.execCommand('copy'); ta.remove(); toast('已复制'); } };
+const copyText = async (t, opts) => {
+  const s = String(t ?? '');
+  let ok = false;
+  try {
+    if (typeof BranaHost !== 'undefined') {
+      if (typeof BranaHost.copyText === 'function') {
+        const r = await BranaHost.copyText(s);
+        if (r && r.ok) ok = true;
+      } else if (typeof BranaHost.shared === 'function') {
+        const r = await BranaHost.shared('__clipboardWrite', s);
+        if (r && r.ok) ok = true;
+      }
+    }
+  } catch {}
+  if (!ok) {
+    try { await navigator.clipboard.writeText(s); ok = true; } catch {}
+  }
+  if (!ok) {
+    try {
+      const ta = document.createElement('textarea');
+      ta.value = s;
+      ta.setAttribute('readonly', '');
+      ta.style.cssText = 'position:fixed;top:-9999px;left:-9999px;opacity:0;pointer-events:none';
+      document.body.appendChild(ta);
+      ta.focus();
+      ta.select();
+      ta.setSelectionRange(0, s.length);
+      document.execCommand('copy');
+      ta.remove();
+      ok = true;
+    } catch {}
+  }
+  if (!opts || !opts.silent) toast(opts?.toastMsg || '已复制');
+  return ok;
+};
 // 对话状态：run 进行中（图标顺时针转）/ bad 出错（红）/ ok 正常完成（绿）/ '' 未知
 const chatState = c => { if (!c) return ''; if (typeof Hitl !== 'undefined' ? Hitl.blocked(c) : c.busy) return 'run'; const last = c.messages?.at(-1); const hasFailedMsg = Boolean(last?.failed || (c.messages || []).some(m => m?.role === 'user' && m.failed) || (typeof SentUserLog !== 'undefined' && SentUserLog.hasFailed?.(c.sid))); if (c.error || hasFailedMsg || (last?.parts || []).some(p => p.type === 'error')) return 'bad'; return c.loaded && last?.role === 'assistant' ? 'ok' : ''; };
 const stLogo = (vid, size, st) => { const l = vid ? vlogo(vid, size) : h('span', { class: 'vlogo none', style: { width: size + 'px', height: size + 'px' } }, st === 'run' ? '' : '·'); if (st) { l.classList.add('st-' + st); if (st === 'run') l.style.animationDelay = '-' + (Math.floor(typeof performance !== 'undefined' ? performance.now() : Date.now()) % 1100) + 'ms'; } return l; };
@@ -3057,18 +3140,30 @@ const R = {
     if (p.type === 'error') return h('div', { class: 'part-err' }, '⚠ ' + (typeof formatOfficialErrorText === 'function' ? formatOfficialErrorText(p.text) : p.text));
     if (p.type.startsWith('tool-') || p.type === 'dynamic-tool') return R.tool(p);
     if (p.type === 'source-url') return h('a', { class: 'src', href: p.url, target: '_blank' }, p.title || p.url);
-    if (p.type === 'file') return /^image\//.test(p.mediaType || '') ? R.media('f:' + p.url, () => h('img', { class: 'file-img zimg', src: p.url, 'data-name': p.filename || '', onclick: e => ImgView.open(p.url, p.filename || '', e.currentTarget) })) : h('a', { class: 'src', href: p.url, target: '_blank' }, p.filename || '文件');
+    if (p.type === 'sources' && Array.isArray(p.sources)) {
+      if (typeof EvalView !== 'undefined' && typeof EvalView.renderSourcesPart === 'function') return EvalView.renderSourcesPart(p.sources);
+      return h('div', { class: 'eval-sources' }, ...p.sources.filter(Boolean).slice(0, 12).map(s => h('a', { class: 'src', href: s.url || '#', target: '_blank' }, s.title || s.url)));
+    }
+    if (p.type === 'image' || p.type === 'video' || (p.type === 'file' && /^(image|video)\//i.test(p.mediaType || p.contentType || ''))) {
+      if (typeof EvalView !== 'undefined' && typeof EvalView.renderMediaPart === 'function') {
+        return EvalView.renderMediaPart(p);
+      }
+      const u = p.url || p.image || p.src || '';
+      if (!u) return null;
+      return R.media('f:' + u, () => h('img', { class: 'file-img zimg', src: u, 'data-name': p.filename || p.name || '', onclick: e => ImgView.open(u, p.filename || p.name || '', e.currentTarget) }));
+    }
+    if (p.type === 'file') return h('a', { class: 'src', href: p.url, target: '_blank' }, p.filename || p.name || '文件');
     if (p.type.startsWith('data-')) return null;
     return null;
   },
-  // prev：上一次渲染的同一条消息节点。助手消息原地更新（外壳 / 正文节点不换），只替换变了的部分
   message(m, chat, isLast, prev, seg) {
     if (!prev || m.role === 'user' || prev.dataset.id !== m.id) return R.message0(m, chat, isLast, null, seg);
     const out = {}, el = R.message0(m, chat, isLast, out, seg);
     if (!out.kids) return el;
     prev.className = out.cls;
     const isSettledAsst0 = m.role === 'assistant' && !m.metadata?.pending && !m._incomplete && Boolean(m._finishedAt || m.metadata?.timing?.completedAt || m.metadata?.aborted || m.metadata?.error || m.metadata?.finishReason === 'stop' || m.metadata?.finishReason === 'end-turn');
-    const liveNow = !m.failed && !Hitl.idleWait(chat) && !(isSettledAsst0 && !chat?.streaming) && (chat.live === m || !!(isLast && m.role === 'assistant' && !isSettledAsst0 && Hitl.blocked(chat) && !chat?.waitingForeign));
+    const isEvalLive0 = Boolean(chat?._evalStreaming && isLast && m.role === 'assistant' && (m.metadata?.pending || m.status === 'pending' || m.status === 'streaming'));
+    const liveNow = !m.failed && !Hitl.idleWait(chat) && !(isSettledAsst0 && !chat?.streaming) && (chat.live === m || isEvalLive0 || !!(isLast && m.role === 'assistant' && !isSettledAsst0 && Hitl.blocked(chat) && !chat?.waitingForeign));
     if (liveNow) prev.setAttribute('data-streaming', 'true'); else prev.removeAttribute('data-streaming');
     patchKids(prev, out.kids);
     return prev;
@@ -3092,7 +3187,8 @@ const R = {
       }, 30);
     }
     const isSettledAsst = m.role === 'assistant' && !m.metadata?.pending && !m._incomplete && Boolean(m._finishedAt || m.metadata?.timing?.completedAt || m.metadata?.aborted || m.metadata?.error || m.metadata?.finishReason === 'stop' || m.metadata?.finishReason === 'end-turn');
-    const live = !m.failed && !Hitl.idleWait(chat) && !(isSettledAsst && !chat?.streaming) && (chat.live === m || !!(isLast && m.role === 'assistant' && !isSettledAsst && ((Hitl.blocked(chat) && !chat?.waitingForeign) || isIncTail)));
+    const isEvalLive = Boolean(chat?._evalStreaming && isLast && m.role === 'assistant' && (m.metadata?.pending || m.status === 'pending' || m.status === 'streaming'));
+    const live = !m.failed && !Hitl.idleWait(chat) && !(isSettledAsst && !chat?.streaming) && (chat.live === m || isEvalLive || !!(isLast && m.role === 'assistant' && !isSettledAsst && ((Hitl.blocked(chat) && !chat?.waitingForeign) || isIncTail)));
     const segCls = m.role === 'assistant' && seg ? (seg.head ? ' seg-head' : seg.mid ? ' seg-mid' : seg.tail ? ' seg-tail' : '') : '';
     const isAutoCont = m.role === 'user' && !!(m._autoContinue || m.metadata?.autoContinue);
     const el = h('div', {
@@ -3221,6 +3317,24 @@ const R = {
       if (n) segs.push(n);
     });
     flush();
+    if (Array.isArray(m.experimental_attachments) && m.experimental_attachments.length && !(m.parts || []).some(p => p && (p.type === 'image' || p.type === 'video'))) {
+      m.experimental_attachments.forEach((att, ai) => {
+        if (!att || !att.url) return;
+        const mp = {
+          type: /^video\//i.test(att.contentType || '') ? 'video' : 'image',
+          url: att.url,
+          contentType: att.contentType || 'image/png',
+          name: att.name || '',
+        };
+        const n = Seg.use(mid, 'ea:' + ai, mp.type + ':' + mp.url, () => R.part(mp, { live }));
+        if (n) segs.push(n);
+      });
+    }
+    if (Array.isArray(m.sources) && m.sources.length && !(m.parts || []).some(p => p && p.type === 'sources')) {
+      const sp = { type: 'sources', sources: m.sources };
+      const n = Seg.use(mid, 'src:all', String(m.sources.length), () => R.part(sp, { live }));
+      if (n) segs.push(n);
+    }
     if (isEvalMsg && typeof EvalView !== 'undefined' && typeof EvalView.renderWebDevStatusFooter === 'function') {
       const wdFoot = EvalView.renderWebDevStatusFooter(chat, m, 'a', live);
       if (wdFoot) segs.push(wdFoot);
@@ -3293,7 +3407,7 @@ const R = {
         h('div', { class: 'typing', title: '正在生成与执行中…' }, h('i'), h('i'), h('i')),
         h('span', { class: 'phase typing-phase' }, h('span', { class: 'ph-t' }), h('span', { class: 'dim anc-since' }))
       ));
-      const rawPhTxt = (typeof ThinkingStatus !== 'undefined' && ThinkingStatus.phase) ? ThinkingStatus.phase(chat) : (chat?.phase || '生成中');
+      const rawPhTxt = (isEvalMsg && (m.genPhase || chat?.phase)) ? (m.genPhase || chat.phase) : ((typeof ThinkingStatus !== 'undefined' && ThinkingStatus.phase) ? ThinkingStatus.phase(chat) : (chat?.phase || '生成中'));
       const lastSegEl = segs.length ? segs[segs.length - 1] : null;
       const activeReasonTitle = (lastSegEl && lastSegEl.classList?.contains('reason') && lastSegEl.querySelector?.('.rs-t')?.textContent) || '';
       const phTxt = (activeReasonTitle && (activeReasonTitle === rawPhTxt || (/思考中/.test(activeReasonTitle) && /思考中/.test(rawPhTxt)))) ? '' : rawPhTxt;
@@ -3336,6 +3450,9 @@ const R = {
       // 结束时间 + 用时（多段连续工具合并显示总时长，避免同一结束时间重复刷屏）
       const meta=h('div',{class:'msg-meta','aria-label':'Message cost'}), tools=h('div',{class:'msg-tools'});
       const rawT0 = tm?.startedAt || idTime(m.id), t0 = (seg?.turnStartAt && (!rawT0 || seg.turnStartAt < rawT0)) ? seg.turnStartAt : rawT0, t1 = tm?.completedAt || 0;
+      if (isEvalMsg && m.status === 'success') {
+        meta.append(h('span', { class: 'badge dim eval-done-badge' }, m.genPhase && m.genPhase.startsWith('✓') ? m.genPhase : '✓ 生成完毕'));
+      }
       if (t1) meta.append(h('span', { class: 'mtime', title: (t0 ? '开始 ' + clockFull(t0) + '\n' : '') + '结束 ' + clockFull(t1) }, '结束 ' + clock(t1)));
       if (t0 && t1 && t1 > t0) meta.append(h('span', { class: 'dim' }, durTxt((t1 - t0) / 1000)));
       if (md.aborted || md.feedback?.interruption === 'stop') {
@@ -3997,9 +4114,12 @@ const UI = {
       const battleStatus = isBattleTab
         ? ((typeof EvalView !== 'undefined' && typeof EvalView.getBattleStatusLabel === 'function') ? EvalView.getBattleStatusLabel(c, he) : (v?.battleStatus || '待选择'))
         : '';
+      const blankDirectLabel = (!t.sid && typeof ModeState !== 'undefined' && typeof ModeState.getMode === 'function' && ModeState.getMode() === 'direct')
+        ? tabName(ModeState.getDirectModel?.()?.displayName || ModeState.getDirectModel?.()?.publicName || ModeState.getDirectModel?.()?.name || 'Direct 直连')
+        : '新对话';
       const label = isBattleTab
         ? battleStatus
-        : (!t.sid ? '新对话' : v.note || (v.model ? tabName(v.model) : '') || v.plain || '对话');
+        : (!t.sid ? blankDirectLabel : v.note || (v.model ? tabName(v.model) : '') || v.plain || '对话');
       const battleSt = isBattleTab ? (battleStatus === '生成中' ? 'run' : battleStatus === '已完成' ? 'ok' : 'wait') : st;
       // 中途路由过的会话：标签常驻显示「⇄ 来源短名」，悬停给出完整「从 X 路由到 Y」
       const routeFromShort = (!isBattleTab && mi?.routed && mi.routeFrom) ? String(mi.routeFrom).replace(/\s*\((?:None|Minimal|Low|Medium|High|XHigh|Max)\)\s*$/i, '').replace(/[?？]+$/, '').trim() : '';
@@ -4142,8 +4262,8 @@ const UI = {
   renderChat(chat, full) {
     const E = this.els; if (!E || E.chat !== chat) return;
     // 头部
-    const isBattleChat = Boolean((chat?.isEvaluation && chat?.evalMode === 'battle') || (typeof EvalView !== 'undefined' && EvalView.isBattleChat(chat)));
-    const isDirectChat = Boolean((chat?.isEvaluation && chat?.evalMode === 'direct') || (typeof EvalView !== 'undefined' && EvalView.isDirectChat(chat)));
+    const isBattleChat = Boolean((chat?.isEvaluation && chat?.evalMode === 'battle') || (typeof EvalView !== 'undefined' && typeof EvalView.isBattleChat === 'function' && EvalView.isBattleChat(chat)));
+    const isDirectChat = Boolean((chat?.isEvaluation && chat?.evalMode === 'direct') || (typeof EvalView !== 'undefined' && typeof EvalView.isDirectChat === 'function' && EvalView.isDirectChat(chat)));
     const isEvalChat = isBattleChat || isDirectChat || Boolean(chat?.isEvaluation);
     if (isDirectChat) {
       const directName = chat.directModelName
@@ -4154,8 +4274,10 @@ const UI = {
           ? (ModeState.getDirectModel()?.displayName || ModeState.getDirectModel()?.publicName)
           : '')
         || '';
-      if (directName && Models.get(chat.sid)?.name !== directName) {
-        Models.set(chat.sid, { name: directName, sure: true, directMode: true, provider: 'Direct 直连锁定' });
+      const canonDirect = (directName && typeof Strength !== 'undefined' && Strength.canon) ? Strength.canon(directName) : directName;
+      const curMi = Models.get(chat.sid);
+      if (canonDirect && (curMi?.name !== canonDirect || !curMi?.directMode)) {
+        Models.set(chat.sid, { name: canonDirect, sure: true, directMode: true, provider: 'Direct 直连锁定' });
       }
     }
     if ((chat._startupResuming || chat._recoveringIncomplete) && chat.loaded && !chat.cached && !chat.loading && chat.status === 'streaming' && !chat.live && !chat.awaitId && !chat.preSend && !chat.sending) {
@@ -4348,10 +4470,12 @@ const UI = {
           (typeof isIncompleteAssistantMsg === 'function' && isIncompleteAssistantMsg(m))
         ));
         const isSettledTailAsst = m.role === 'assistant' && !m.metadata?.pending && !m._incomplete && Boolean(m._finishedAt || m.metadata?.timing?.completedAt || m.metadata?.aborted || m.metadata?.error || m.metadata?.finishReason === 'stop' || m.metadata?.finishReason === 'end-turn');
-        const isRunningTail = !m.failed && !Hitl.idleWait(chat) && !(isSettledTailAsst && !chat?.streaming) && (chat.live === m || !!(i === lastIdx && m.role === 'assistant' && !isSettledTailAsst && ((Hitl.blocked(chat) && !chat.waitingForeign) || isIncTail)));
+        const isEvalRunTail = Boolean(chat?._evalStreaming && i === lastIdx && m.role === 'assistant' && (m.metadata?.pending || m.status === 'pending' || m.status === 'streaming'));
+        const isRunningTail = !m.failed && !Hitl.idleWait(chat) && !(isSettledTailAsst && !chat?.streaming) && (chat.live === m || isEvalRunTail || !!(i === lastIdx && m.role === 'assistant' && !isSettledTailAsst && ((Hitl.blocked(chat) && !chat.waitingForeign) || isIncTail)));
         const pArr = m.parts || [], pLen = pArr.length, lastP = pLen ? pArr[pLen - 1] : null;
-        const cSig = pLen + ':' + (lastP?.type || '') + ':' + (lastP?.text?.length || 0) + ':' + (lastP?.state || '') + ':' + (m.text?.length || 0);
-        const key = (m.v || 0) + '|' + cSig + '|' + segKey + '|' + (i === lastIdx ? 'L' + chat.status + (chat.hitlStage?.size || 0) : '') + '|' + (m.failed ? 'f' : '') + '|' + (isRunningTail ? 'live:' + phase : '') + '|' + this.modelsV + ':' + modelVersion + '|' + (pArr.some(p=>p.type==='reasoning')?ThinkingStatus.label(chat,m,isRunningTail):'');
+        const attSig = Array.isArray(m.experimental_attachments) ? m.experimental_attachments.map(a => String(a?.url || '').slice(-24)).join(',') : '';
+        const cSig = pLen + ':' + (lastP?.type || '') + ':' + (lastP?.text?.length || 0) + ':' + (lastP?.state || '') + ':' + String(lastP?.url || '').slice(-24) + ':' + attSig + ':' + (m.status || '') + ':' + (m.genPhase || '') + ':' + (m.text?.length || 0);
+        const key = (m.v || 0) + '|' + cSig + '|' + segKey + '|' + (i === lastIdx ? 'L' + chat.status + (chat.hitlStage?.size || 0) : '') + '|' + (m.failed ? 'f' : '') + '|' + (isRunningTail ? 'live:' + (m.genPhase || phase) : '') + '|' + this.modelsV + ':' + modelVersion + '|' + (pArr.some(p=>p.type==='reasoning')?ThinkingStatus.label(chat,m,isRunningTail):'');
         let c = this.cache.get(m.id);
         if (!c || c.key !== key || !c.el || typeof c.el.nodeType !== 'number') {
           let el = null;
@@ -4724,8 +4848,9 @@ const UI = {
     const P = this.pane;   // 这个输入框属于哪一页（手机上相邻窗口的页也有自己的输入框）：按钮状态 / 队列只改这一页
     try { Drafts.intoTab(tab); } catch {}
     const rcAct = () => chat ? (chat.real ? 'chat_submit' : 'agentic_chat_submit') : 'agentic_chat_submit';
-    let histIdx = -1, histSavedDraft = tab.draft || '', histApplying = false;
-    const ta = h('textarea', { rows: 1, 'data-tab': tab.key, placeholder: chat ? '继续对话…' : '想让它做什么？（Enter 发送）', onfocus: () => Recaptcha.warm(rcAct()), oninput: () => { if (!histApplying) { histIdx = -1; histSavedDraft = ta.value; } autosize(); tab.draft = ta.value; Drafts.setTab(tab); if (tab.sid && Chats.get(tab.sid)?.busy) this.withPane(P, () => this.syncComposer(Chats.get(tab.sid))); if (ta.value.trim()) Recaptcha.warm(rcAct()); clearTimeout(this.draftT); this.draftT = setTimeout(() => Tabs.save(), 400); } });
+    let histIdx = -1, histSavedDraft = tab.draft || '', histApplying = false, _wasTyped = Boolean((tab.draft || '').trim()), _lastSingleH = 0, _lastWasMulti = false;
+    const ta = h('textarea', { rows: 1, 'data-tab': tab.key, placeholder: chat ? '继续对话…' : '想让它做什么？（Enter 发送）', onfocus: () => Recaptcha.warm(rcAct()), oninput: () => { if (!histApplying) { histIdx = -1; histSavedDraft = ta.value; } autosize(); tab.draft = ta.value; const nowTyped = Boolean(ta.value.trim()); if (tab.sid && Chats.get(tab.sid)?.busy && nowTyped !== _wasTyped) this.withPane(P, () => this.syncComposer(Chats.get(tab.sid))); if (nowTyped && !_wasTyped) Recaptcha.warm(rcAct()); _wasTyped = nowTyped; clearTimeout(this.draftT); this.draftT = setTimeout(() => { this.draftT = 0; Drafts.setTab(tab); Tabs.save(); }, 220); } });
+    ta.addEventListener('blur', () => { if (this.draftT) { clearTimeout(this.draftT); this.draftT = 0; Drafts.setTab(tab); Tabs.save(); } });
     ta.value = tab.draft || '';
     // 手机：文字快碰到厂商按钮（这一行放不下、要换行了）时，厂商按钮才移到发送按钮上方（带动画），输入框横向让出这一格；
     // 字数少、一行放得下时厂商按钮留在原位
@@ -4735,9 +4860,15 @@ const UI = {
       if (b && b.classList.contains('cbox')) {
         b.classList.remove('has-txt', 'g-up', 'g-down');
       }
+      const val = ta.value || '';
+      if (_lastSingleH > 0 && !_lastWasMulti && val.length > 0 && val.length < 36 && !val.includes('\n')) return;
       // 统一两行输入框（上方文本、下方功能栏），高度按内容自适应生长
       const maxH = Math.round(Math.max(160, Math.min(innerHeight * (isMob() ? 0.35 : 0.45), 520)));
-      ta.style.maxHeight = maxH + 'px'; ta.style.height = 'auto'; ta.style.height = Math.min(ta.scrollHeight, maxH) + 'px'; ta.style.overflowY = ta.scrollHeight > maxH ? 'auto' : 'hidden';
+      ta.style.maxHeight = maxH + 'px'; ta.style.height = 'auto';
+      const sh = ta.scrollHeight, nh = Math.min(sh, maxH);
+      ta.style.height = nh + 'px'; ta.style.overflowY = sh > maxH ? 'auto' : 'hidden';
+      if (!val && nh > 0) { _lastSingleH = nh; _lastWasMulti = false; }
+      else if (nh > 0) _lastWasMulti = nh > (_lastSingleH || 40) + 4 || val.includes('\n');
     };
     const btn = h('button', { class: 'sendbtn', type: 'submit', title: '发送', 'aria-label': 'Send message', onclick: () => go() }, icon('send'));
     const chint = h('span', { class: 'chint' }, chat ? '' : '');
@@ -4800,7 +4931,65 @@ const UI = {
       paintAtt(); Recaptcha.warm(chat ? undefined : 'agentic_chat_submit');
     };
     const fin = h('input', { type: 'file', multiple: true, style: 'display:none', onchange: () => { addFiles([...fin.files]); fin.value = ''; } });
-    const plus = h('button', { class: 'ib attbtn', type: 'button', title: '添加附件（也可以粘贴或拖进来）', 'aria-label': 'Add files and connections', onclick: e => { e.stopPropagation(); fin.click(); } }, icon('plus'));
+    const isApiActive = () => typeof LocalApiGateway !== 'undefined' && LocalApiGateway.isBoundTo?.(tab?.sid);
+    const openPlusMenu = e => {
+      e.stopPropagation();
+      if (e.shiftKey) { fin.click(); return; }
+      const existing = document.querySelector('.menu.plus-menu:not(.anc-gh)');
+      if (existing) { existing.remove(); return; }
+      document.querySelectorAll('.menu:not(.anc-gh):not(.amenu)').forEach(m => m.remove());
+      this._menuOpenAt = now();
+      const curSid = tab?.sid || null;
+      const curChat = curSid ? chatOf(curSid) : chat;
+      const gwRunning = typeof LocalApiGateway !== 'undefined' && LocalApiGateway.isRunning?.();
+      const gwState = typeof LocalApiGateway !== 'undefined' && LocalApiGateway.getState ? LocalApiGateway.getState() : null;
+      const rawMod = (curSid && typeof Models !== 'undefined' && Models.get(curSid)?.name) || (curSid && typeof Trace !== 'undefined' && Trace.latest?.(curSid)?.best) || '';
+      const modShort = rawMod ? (typeof cardName === 'function' ? cardName(rawMod) : rawMod) : '';
+      const m = h('div', { class: 'menu plus-menu', onclick: ev => ev.stopPropagation() },
+        h('button', { type: 'button', onclick: () => { m.remove(); fin.click(); } },
+          icon('paperclip'),
+          h('div', { class: 'pm-txt' },
+            h('span', { class: 'pm-t' }, '添加附件'),
+            h('small', {}, '上传图片或文件（支持粘贴与拖拽）')
+          )
+        ),
+        typeof LocalApiGateway !== 'undefined' ? h('button', { type: 'button', class: gwRunning ? 'on' : '', onclick: () => { m.remove(); LocalApiGateway.openModal(curChat, tab); } },
+          icon('api'),
+          h('div', { class: 'pm-txt' },
+            h('div', { class: 'pm-t-row' },
+              h('span', { class: 'pm-t' }, 'API 反代导出'),
+              gwRunning ? h('span', { class: 'gpill ok pm-pill' }, ':' + (gwState?.port || 18765)) : (modShort ? h('span', { class: 'tag pm-pill' }, modShort) : null)
+            ),
+            h('small', {}, '将当前对话转译为本地标准 API 接口')
+          )
+        ) : null
+      );
+      document.body.append(m);
+      const r = plus.getBoundingClientRect();
+      if (typeof placeInward === 'function') {
+        placeInward(m, r, { pad: 8, gap: 6, useBottom: true, keepWidth: true });
+      } else {
+        m.style.left = Math.max(8, Math.round(r.left)) + 'px';
+        m.style.bottom = Math.max(8, Math.round(innerHeight - r.top + 6)) + 'px';
+      }
+      setTimeout(() => {
+        const off = ev => {
+          if (!m.isConnected) { document.removeEventListener('pointerdown', off, true); return; }
+          if (!m.contains(ev.target) && !plus.contains(ev.target)) {
+            m.remove();
+            document.removeEventListener('pointerdown', off, true);
+          }
+        };
+        document.addEventListener('pointerdown', off, true);
+      }, 0);
+    };
+    const plus = h('button', {
+      class: 'ib attbtn' + (isApiActive() ? ' api-on' : ''),
+      type: 'button',
+      title: '展开工具：添加附件 / 本地 API 反代导出（按住 Shift 点击直接选文件）',
+      'aria-label': 'Add files and connections',
+      onclick: openPlusMenu,
+    }, icon('plus'), h('i', { class: 'att-api-dot' }));
     ta.addEventListener('paste', e => { const fs = [...(e.clipboardData?.files || [])]; if (fs.length) { e.preventDefault(); addFiles(fs); } });
     const go = async () => {
       if (slash?.submit()) return;
@@ -4872,7 +5061,7 @@ const UI = {
             files = await filesP;
             if (hint) hint.textContent = '';
           }
-          await this.startNew(tab, text, ta, null, files);
+          await this.startNew(tab, text, ta, null, files, list);
         }
       } catch (e) {
         toast(describe(e), 'err');
@@ -4965,10 +5154,12 @@ const UI = {
         }
       } finally { syncingPm = false; }
     };
+    let _pmSyncT = 0;
     pm.addEventListener('input', syncTaFromPm);
     pmObserver = new MutationObserver(syncTaFromPm);
     pmObserver.observe(pm, { childList: true, subtree: true, characterData: true });
-    ta.addEventListener('input', syncPmFromTa);
+    ta.addEventListener('input', () => { clearTimeout(_pmSyncT); _pmSyncT = setTimeout(syncPmFromTa, 80); });
+    ta.addEventListener('blur', () => { if (_pmSyncT) { clearTimeout(_pmSyncT); _pmSyncT = 0; syncPmFromTa(); } });
     syncPmFromTa();
     const resolvedMode = (typeof ModeSwitcher !== 'undefined' && typeof ModeSwitcher._resolveState === 'function')
       ? ModeSwitcher._resolveState(chat, tab).curMode
@@ -5017,7 +5208,7 @@ const UI = {
     }
     this.paintQ?.();
   },
-  async startNew(tab, text, ta, v2, files) {
+  async startNew(tab, text, ta, v2, files, previews = null) {
     const hint = this.els?.composer?.querySelector('.chint') || $('#view .chint'); if (hint) hint.textContent = '正在创建对话…';
     // 像网页一样：点发送后立刻把自己的消息和「正在思考」放进对话区（乐观显示），不用干等 reCAPTCHA + create-chat 返回才有反应。
     // 创建成功后 showTab 会整页换成真实对话；失败就撤掉，恢复原来的欢迎页（输入框里的文字没清，可以直接重发）。
@@ -5026,7 +5217,7 @@ const UI = {
     if (pend) { hero?.remove(); thread.append(pend); if (this.els?.scroller) this.els.scroller.scrollTop = this.els.scroller.scrollHeight; }
     const unpend = () => { if (pend?.isConnected) { pend.remove(); if (hero && !thread.querySelector(':scope > .hero')) thread.append(hero); } };
     try {
-      const c = await createChat(text, { v2, files });
+      const c = await createChat(text, { v2, files, previews });
       ta.value = ''; tab.draft = ''; this.atts.delete(tab.key); tab.sid = c.sid; tab.title = text.slice(0, 40); tab.touchedAt = now(); Tabs.enforceLimit(tab.key); Tabs.save();
       // createChat 已经把新对话放进侧栏了：这里只在没有时补一条（以前重复 unshift，侧栏出现两条一样的）
       if (!History.byId(c.sid)) History.items.unshift({ type: c.isEvaluation ? 'evaluation' : 'agentic', mode: c.evalMode || undefined, modality: c.modality || undefined, modelAId: c.modelAId || undefined, id: c.sid, title: text.slice(0, 60), updatedAt: new Date().toISOString(), createdAt: new Date().toISOString(), _local: true });

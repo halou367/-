@@ -344,3 +344,1208 @@ function useKeys(inp, cr, out, rs, full) {
   };
   return K(one('in', '输入', inp, Number(cr) > 0 && Number(inp) > 0 ? '（其中缓存 ' + Math.round(cr / inp * 100) + '%）' : ''), Number(cr) > 0 ? one('cache', '缓存', cr) : null, one('out', '输出', out), Number(rs) > 0 ? one('rsn', '思考', rs) : null);
 }
+
+
+// ==================== 本地 API 反代网关 (LocalApiGateway) ====================
+const LocalApiGateway = (() => {
+  const _state = {
+    running: false,
+    port: 18765,
+    host: '127.0.0.1',
+    apiKey: '',
+    requireKey: false,
+    sessionMode: 'bound',
+    toolMode: 'auto_bridge',
+    protocolTab: 'auto',
+    snippetTab: 'client',
+    boundSid: null,
+    boundTitle: '',
+    modelName: '自动识别 / 当前会话模型',
+    modelId: 'brana-current',
+    modelFam: '',
+    vendorProtocol: 'openai',
+    reqCount: 0,
+    lastReqAt: 0,
+    lastError: '',
+    logs: [],
+    baseUrlOpenAI: 'http://127.0.0.1:18765/v1',
+    baseUrlAnthropic: 'http://127.0.0.1:18765',
+    baseUrlGemini: 'http://127.0.0.1:18765/v1beta',
+    endpointOpenAI: 'http://127.0.0.1:18765/v1/chat/completions',
+    endpointResponses: 'http://127.0.0.1:18765/v1/responses',
+    endpointAnthropic: 'http://127.0.0.1:18765/v1/messages',
+    endpointGemini: 'http://127.0.0.1:18765/v1beta/models/brana-current:generateContent',
+  };
+
+  let _modalBack = null;
+  let _renderModalBody = null;
+  let _lastModalSig = '';
+  let _lastSyncKey = '';
+  let _pointerDownInModal = false;
+  let _pendingModalRender = false;
+  let _reqChain = Promise.resolve();
+  const _handledReqIds = new Set();
+  const _statelessMap = new Map();
+
+  function inferVendor(modelSlugOrName, fam) {
+    const m = String(modelSlugOrName || '').toLowerCase();
+    const f = String(fam || '').toLowerCase();
+    if (f === 'anthropic' || m.includes('claude') || m.includes('opus') || m.includes('sonnet') || m.includes('haiku') || m.includes('fable')) return 'anthropic';
+    if (f === 'google' || m.includes('gemini') || m.includes('gemma')) return 'gemini';
+    return 'openai';
+  }
+
+  function toModelSlug(name, internal) {
+    const raw = String(internal && internal !== 'auto' && internal !== 'default' ? internal : (name || '')).trim();
+    if (!raw || /自动识别|当前会话|当前对话|匿名盲测/.test(raw)) return 'brana-current';
+    const slug = raw.toLowerCase().replace(/\(([^)]+)\)/g, '-$1').replace(/[^a-z0-9._-]+/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '');
+    return slug || 'brana-current';
+  }
+
+  function computeModalSig() {
+    const logsSig = Array.isArray(_state.logs)
+      ? _state.logs.slice(0, 8).map(l => `${l.id || ''}:${l.status || ''}:${l.model || ''}:${l.toolsCount || 0}`).join('|')
+      : '';
+    return [
+      _state.running ? 1 : 0,
+      _state.port || 18765,
+      _state.apiKey || '',
+      _state.requireKey ? 1 : 0,
+      _state.sessionMode || 'bound',
+      _state.toolMode || 'auto_bridge',
+      _state.protocolTab || 'auto',
+      _state.snippetTab || 'client',
+      _state.boundSid || '',
+      _state.modelName || '',
+      _state.modelId || '',
+      _state.modelFam || '',
+      _state.vendorProtocol || 'openai',
+      _state.reqCount || 0,
+      _state.lastError || '',
+      logsSig,
+    ].join('\u0001');
+  }
+
+  function syncPlusIndicator() {
+    try {
+      const curSid = typeof Tabs !== 'undefined' ? Tabs.cur?.sid : null;
+      const on = Boolean(_state.running && (_state.sessionMode === 'stateless' || !_state.boundSid || _state.boundSid === curSid));
+      document.querySelectorAll('.crow .attbtn').forEach(el => el.classList.toggle('api-on', on));
+    } catch {}
+  }
+
+  function readChatModelMeta(chat, sid) {
+    const targetSid = sid || chat?.sid || (typeof Tabs !== 'undefined' ? Tabs.cur?.sid : null) || _state.boundSid;
+    const c = chat || (targetSid && typeof Chats !== 'undefined' ? Chats.get(targetSid) : null);
+    const hEntry = (targetSid && typeof History !== 'undefined' && typeof History.byId === 'function') ? History.byId(targetSid) : null;
+    const m = (targetSid && typeof Models !== 'undefined' ? Models.get(targetSid) : null) || c?.model || null;
+    const curGlobalMode = (typeof ModeState !== 'undefined' && typeof ModeState.getMode === 'function') ? ModeState.getMode() : 'agent';
+    const isDirect = Boolean(
+      c?.evalMode === 'direct' ||
+      hEntry?.mode === 'direct' ||
+      hEntry?.mode === 'direct-battle' ||
+      hEntry?.mode === 'side-by-side' ||
+      m?.directMode ||
+      (!c && !targetSid && curGlobalMode === 'direct')
+    );
+    const isBattle = !isDirect && Boolean(
+      c?.evalMode === 'battle' ||
+      hEntry?.mode === 'battle' ||
+      (hEntry?.type === 'evaluation' && !hEntry?.mode) ||
+      m?.battleRevealed ||
+      (!c && !targetSid && curGlobalMode === 'battle')
+    );
+    const isUuidLike = (s) => /^[0-9a-f]{8}-[0-9a-f]{4}-/i.test(String(s || '').trim());
+
+    if (isDirect) {
+      const dm = (typeof ModeState !== 'undefined' && typeof ModeState.getDirectModel === 'function') ? ModeState.getDirectModel() : null;
+      const catName = (c?.modelAId && typeof ModelCatalog !== 'undefined' && typeof ModelCatalog.resolveModelName === 'function')
+        ? ModelCatalog.resolveModelName(c.modelAId, c?.revealedModels)
+        : '';
+      const validCat = (catName && !isUuidLike(catName)) ? catName : '';
+      const validMi = (m?.name && !isUuidLike(m.name) && !/^(未识别|未知型号|待定)$/.test(String(m.name).trim())) ? String(m.name).trim() : '';
+      const dmName = String(dm?.displayName || dm?.publicName || dm?.name || dm?.slug || '').trim();
+      const rawPicked = String(c?.directModelName || validCat || validMi || dmName || 'brana-direct').trim();
+      const rawName = (rawPicked && typeof Strength !== 'undefined' && Strength.canon) ? Strength.canon(rawPicked) : rawPicked;
+      const rawSlug = String((!c && dm?.slug) || (!c && dm?.name) || rawName || '').trim();
+      const vid = (rawName && typeof Brand !== 'undefined' && Brand.of) ? Brand.of(rawName) : '';
+      const rawFam = String(m?.fam || dm?.provider || vid || '').trim();
+      const modelId = toModelSlug(rawName, !isUuidLike(rawSlug) ? rawSlug : '');
+      const vendorProtocol = inferVendor(modelId + ' ' + rawName, rawFam);
+      return {
+        sid: targetSid || null,
+        title: String(c?.title || hEntry?.title || ('Direct · ' + (rawName || '直连会话'))).slice(0, 60),
+        modelName: rawName || 'Direct 直连模型',
+        modelInternal: !isUuidLike(rawSlug) ? rawSlug : rawName,
+        modelFam: rawFam,
+        vid,
+        modelId,
+        vendorProtocol,
+      };
+    }
+
+    if (isBattle) {
+      const aName = String(c?.voteState?.modelAName || m?.modelA || ((c?.modelAId || hEntry?.modelAId) && typeof ModelCatalog !== 'undefined' && ModelCatalog.resolveModelName ? ModelCatalog.resolveModelName(c?.modelAId || hEntry?.modelAId, c?.revealedModels) : '') || '').trim();
+      const bName = String(c?.voteState?.modelBName || m?.modelB || ((c?.modelBId || hEntry?.modelBId) && typeof ModelCatalog !== 'undefined' && ModelCatalog.resolveModelName ? ModelCatalog.resolveModelName(c?.modelBId || hEntry?.modelBId, c?.revealedModels) : '') || '').trim();
+      const validA = (aName && !isUuidLike(aName) && !/^(未知|待定|Model A)$/i.test(aName)) ? aName : '';
+      const validB = (bName && !isUuidLike(bName) && !/^(未知|待定|Model B)$/i.test(bName)) ? bName : '';
+      const canonA = (validA && typeof Strength !== 'undefined' && Strength.canon) ? Strength.canon(validA) : validA;
+      const canonB = (validB && typeof Strength !== 'undefined' && Strength.canon) ? Strength.canon(validB) : validB;
+      const displayBattle = (canonA && canonB) ? `${canonA} vs ${canonB}` : (canonA || 'Battle 匿名盲测双模型');
+      const primarySlug = canonA ? toModelSlug(canonA, canonA) : 'brana-battle';
+      const vid = (canonA && typeof Brand !== 'undefined' && Brand.of) ? Brand.of(canonA) : '';
+      const rawFam = String(m?.fam || vid || '').trim();
+      const vendorProtocol = inferVendor(primarySlug + ' ' + canonA, rawFam);
+      return {
+        sid: targetSid || null,
+        title: String(c?.title || hEntry?.title || 'Battle 盲测会话').slice(0, 60),
+        modelName: displayBattle,
+        modelInternal: primarySlug,
+        modelFam: rawFam,
+        vid,
+        modelId: primarySlug,
+        vendorProtocol,
+      };
+    }
+
+    const traceBest = (targetSid && typeof Trace !== 'undefined' && Trace.latest) ? (Trace.latest(targetSid)?.best || '') : '';
+    const titleMod = (targetSid && typeof Titles !== 'undefined' && Titles.view) ? (Titles.view(targetSid, c?.title || '')?.model || '') : '';
+    const candPick = String(m?.name || m?.candidates?.[0]?.id || traceBest || titleMod || '').trim();
+    const rawPicked = !isUuidLike(candPick) ? candPick : '';
+    const rawName = (rawPicked && typeof Strength !== 'undefined' && Strength.canon) ? Strength.canon(rawPicked) : rawPicked;
+    const rawInternal = String((!isUuidLike(m?.internal) && m?.internal) || (!isUuidLike(m?.response) && m?.response) || rawName || '').trim();
+    const vid = (rawName && typeof Brand !== 'undefined' && Brand.of) ? Brand.of(rawName) : '';
+    const rawFam = String(m?.fam || vid || '').trim();
+    const modelName = rawName || '当前对话模型（对话后自动锁定名称）';
+    const modelId = toModelSlug(rawName, rawInternal);
+    const vendorProtocol = inferVendor(modelId + ' ' + rawName, rawFam);
+    return {
+      sid: targetSid || null,
+      title: String(c?.title || hEntry?.title || '当前对话').slice(0, 60),
+      modelName,
+      modelInternal: rawInternal,
+      modelFam: rawFam,
+      vid,
+      modelId,
+      vendorProtocol,
+    };
+  }
+
+  async function callHost(payload) {
+    try {
+      if (typeof BranaHost !== 'undefined') {
+        const fn = BranaHost.apiGateway
+          ? () => BranaHost.apiGateway(payload)
+          : (BranaHost.shared ? () => BranaHost.shared('__localApiGateway', payload) : null);
+        if (fn) {
+          const res = await fn();
+          if (res && typeof res === 'object' && 'running' in res) {
+            Object.assign(_state, res);
+            syncPlusIndicator();
+            if (typeof _renderModalBody === 'function') {
+              const nextSig = computeModalSig();
+              if (payload?.op !== 'sync' || nextSig !== _lastModalSig) {
+                if (_pointerDownInModal) _pendingModalRender = true;
+                else _renderModalBody();
+              }
+            }
+          }
+          return res;
+        }
+      }
+    } catch {}
+    syncPlusIndicator();
+    return _state;
+  }
+
+  async function syncCurrentContext(chat, tab) {
+    const meta = readChatModelMeta(chat, tab?.sid);
+    const syncKey = [meta.sid || '', meta.title || '', meta.modelName || '', meta.modelInternal || '', meta.modelFam || '', meta.modelId || ''].join('\u0001');
+    _state.boundSid = meta.sid;
+    _state.boundTitle = meta.title;
+    _state.modelName = meta.modelName;
+    _state.modelId = meta.modelId;
+    _state.modelFam = meta.modelFam;
+    _state.vendorProtocol = meta.vendorProtocol;
+    if (syncKey === _lastSyncKey && _state.running) {
+      syncPlusIndicator();
+      return _state;
+    }
+    _lastSyncKey = syncKey;
+    return await callHost({
+      op: 'sync',
+      boundSid: meta.sid,
+      boundTitle: meta.title,
+      modelName: meta.modelName,
+      modelInternal: meta.modelInternal,
+      modelFam: meta.modelFam,
+    });
+  }
+
+  function createToolStreamSplitter(onTextDelta, onToolCall) {
+    let processedLen = 0;
+    const emittedToolSpans = new Set();
+    const OPEN_TAG = '<brana_tool_call>';
+    const CLOSE_TAG = '</brana_tool_call>';
+
+    return {
+      feed(fullText) {
+        const str = String(fullText || '');
+        while (processedLen < str.length) {
+          const rem = str.slice(processedLen);
+          const openIdx = rem.indexOf(OPEN_TAG);
+          if (openIdx === -1) {
+            let holdBack = 0;
+            const maxCheck = Math.min(rem.length, OPEN_TAG.length - 1);
+            for (let k = maxCheck; k >= 1; k--) {
+              if (OPEN_TAG.startsWith(rem.slice(rem.length - k))) {
+                holdBack = k;
+                break;
+              }
+            }
+            const safeLen = rem.length - holdBack;
+            if (safeLen > 0) {
+              onTextDelta(rem.slice(0, safeLen));
+              processedLen += safeLen;
+            }
+            break;
+          }
+          if (openIdx > 0) {
+            onTextDelta(rem.slice(0, openIdx));
+            processedLen += openIdx;
+            continue;
+          }
+          const closeIdx = rem.indexOf(CLOSE_TAG, OPEN_TAG.length);
+          if (closeIdx === -1) break;
+          const jsonStr = rem.slice(OPEN_TAG.length, closeIdx).trim();
+          const spanKey = processedLen + ':' + closeIdx;
+          if (!emittedToolSpans.has(spanKey)) {
+            emittedToolSpans.add(spanKey);
+            try {
+              const parsed = JSON.parse(jsonStr);
+              if (parsed && parsed.name) {
+                onToolCall({
+                  id: 'call_' + Math.random().toString(36).slice(2, 10),
+                  name: String(parsed.name),
+                  arguments: typeof parsed.arguments === 'string' ? parsed.arguments : JSON.stringify(parsed.arguments || parsed.input || {}),
+                });
+              }
+            } catch {
+              onTextDelta(rem.slice(0, closeIdx + CLOSE_TAG.length));
+            }
+          }
+          processedLen += closeIdx + CLOSE_TAG.length;
+        }
+      },
+      flush(fullText) {
+        const str = String(fullText || '');
+        if (processedLen < str.length) {
+          const tail = str.slice(processedLen);
+          const openIdx = tail.indexOf(OPEN_TAG);
+          if (openIdx >= 0 && tail.indexOf(CLOSE_TAG, openIdx + OPEN_TAG.length) >= 0) {
+            this.feed(str);
+            return;
+          }
+          onTextDelta(tail);
+          processedLen = str.length;
+        }
+      },
+    };
+  }
+
+  function buildTurnPrompt(chat, job) {
+    const msgs = Array.isArray(job.messages) ? job.messages : [];
+    const tools = Array.isArray(job.tools) ? job.tools : [];
+    const useToolBridge = tools.length > 0 && job.toolMode !== 'arena_native_only';
+    const toolsSig = useToolBridge ? tools.map((t) => t.name).sort().join(',') : '';
+    const hasExistingTurns = Boolean(chat && Array.isArray(chat.messages) && chat.messages.length > 0);
+    const blocks = [];
+
+    if (useToolBridge && (!chat || chat._apiToolsSig !== toolsSig)) {
+      const toolLines = tools.slice(0, 40).map((t) => {
+        const desc = String(t.description || '').replace(/\s+/g, ' ').slice(0, 200);
+        const schema = JSON.stringify(t.parameters || { type: 'object', properties: {} });
+        return '- `' + t.name + '`: ' + desc + ' | schema: ' + schema;
+      });
+      blocks.push(
+        '[External Client Tool Bridge]\n' +
+        '当前外部客户端提供了以下本地工具（Tools）：\n' +
+        toolLines.join('\n') + '\n\n' +
+        '【调用规则】：当你需要调用上述外部客户端工具时，请不要调用云端内置沙盒工具，而是直接在回复中输出如下 XML 标签（可输出一个或多个，内部为严格合法的 JSON）：\n' +
+        '<brana_tool_call>{"name":"工具名","arguments":{...}}</brana_tool_call>\n' +
+        '如果不需要调用工具，请直接正常回复用户。'
+      );
+    }
+
+    if (!hasExistingTurns) {
+      if (job.systemText && String(job.systemText).trim()) {
+        blocks.push('[System Instruction]\n' + String(job.systemText).trim());
+      }
+      if (msgs.length <= 1) {
+        const m0 = msgs[0];
+        if (m0?.content) blocks.push(String(m0.content));
+      } else {
+        const prior = msgs.slice(0, -1);
+        const last = msgs[msgs.length - 1];
+        const histLines = prior.map((m) => {
+          if (m.role === 'tool') return '[Tool Result (' + (m.toolCallId || 'tool') + ')]: ' + String(m.content || '');
+          return (m.role === 'assistant' ? 'Assistant: ' : 'User: ') + String(m.content || '');
+        });
+        if (histLines.length) blocks.push('[Conversation Context]\n' + histLines.join('\n\n'));
+        if (last) {
+          if (last.role === 'tool') {
+            blocks.push('[本地工具执行结果 (' + (last.toolCallId || 'tool') + ')]:\n' + String(last.content || ''));
+          } else {
+            blocks.push(String(last.content || ''));
+          }
+        }
+      }
+    } else {
+      let lastAsstIdx = -1;
+      for (let i = msgs.length - 1; i >= 0; i--) {
+        if (msgs[i]?.role === 'assistant') {
+          lastAsstIdx = i;
+          break;
+        }
+      }
+      const deltaMsgs = lastAsstIdx >= 0 ? msgs.slice(lastAsstIdx + 1) : msgs.slice(-1);
+      for (const dm of deltaMsgs) {
+        if (!dm) continue;
+        if (dm.role === 'tool') {
+          blocks.push(
+            '[本地工具执行结果 (tool_call_id: ' + (dm.toolCallId || 'tool') + ')]' +
+            (dm.isError ? ' [执行出错]' : '') + ':\n' +
+            String(dm.content || '')
+          );
+        } else if (dm.content) {
+          blocks.push(String(dm.content));
+        }
+      }
+      if (useToolBridge && deltaMsgs.some((m) => m?.role === 'tool')) {
+        blocks.push('（如需继续调用外部工具，请继续输出 <brana_tool_call>{"name":"...","arguments":{...}}</brana_tool_call>；如已完成，请直接输出最终回复。）');
+      }
+    }
+
+    const promptText = blocks.filter(Boolean).join('\n\n').trim() || '继续';
+    return { promptText, toolsSig };
+  }
+
+  function sendStreamEvent(payload) {
+    try {
+      if (typeof BranaHost !== 'undefined') {
+        if (BranaHost.apiGateway) BranaHost.apiGateway({ op: 'stream', ...payload });
+        else if (BranaHost.shared) BranaHost.shared('__localApiGateway', { op: 'stream', ...payload });
+      }
+    } catch {}
+  }
+
+  async function waitChatIdle(chat, maxMs = 120000) {
+    const t0 = Date.now();
+    while (chat && (chat.busy || chat.streaming || chat._evalStreaming || chat._evalPollingInc) && Date.now() - t0 < maxMs) {
+      await new Promise((r) => setTimeout(r, 80));
+    }
+  }
+
+  async function runSingleApiRequest(job) {
+    const reqId = job?.reqId;
+    if (!reqId) return;
+
+    try {
+      const mode = job.sessionMode || _state.sessionMode || 'bound';
+      let targetSid = null;
+      let statKey = '';
+
+      if (mode === 'stateless') {
+        const firstUser = (job.messages || []).find((m) => m.role === 'user');
+        statKey = String(job.systemText || '').slice(0, 120) + '||' + String(firstUser?.content || '').slice(0, 200);
+        if ((job.messages || []).length > 1 && _statelessMap.has(statKey)) {
+          targetSid = _statelessMap.get(statKey);
+        }
+      } else {
+        targetSid = job.boundSid || _state.boundSid || (typeof Tabs !== 'undefined' ? Tabs.cur?.sid : null);
+      }
+
+      let chat = targetSid && typeof Chats !== 'undefined'
+        ? (Chats.get(targetSid) || (typeof chatOf === 'function' ? chatOf(targetSid) : null))
+        : null;
+
+      if (chat && !chat.loaded && (!Array.isArray(chat.messages) || chat.messages.length === 0)) {
+        try { await chat.load(); } catch {}
+      }
+      if (chat) {
+        await waitChatIdle(chat, 180000);
+      }
+
+      const { promptText, toolsSig } = buildTurnPrompt(chat, job);
+      const externalToolNames = new Set((job.tools || []).map((t) => String(t?.name || '')).filter(Boolean));
+      const emittedNativeToolIds = new Set();
+
+      let sentReasonLen = 0;
+      const splitter = createToolStreamSplitter(
+        (textDelta) => {
+          if (textDelta) sendStreamEvent({ reqId, type: 'text', delta: textDelta });
+        },
+        (toolCall) => {
+          if (toolCall) sendStreamEvent({ reqId, type: 'tool_call', call: toolCall });
+        }
+      );
+
+      const baselineMsgIds = new Set();
+      if (chat && Array.isArray(chat.messages)) {
+        for (const oldM of chat.messages) {
+          if (oldM && oldM.role === 'assistant' && oldM.id) baselineMsgIds.add(oldM.id);
+        }
+      }
+
+      const inspectActiveTurn = (c) => {
+        if (!c) return;
+        let m = c.live;
+        if (!m && Array.isArray(c.turns) && c.turns.length > 0) {
+          const lastT = c.turns[c.turns.length - 1];
+          const candA = lastT?.msgA && !baselineMsgIds.has(lastT.msgA.id) ? lastT.msgA : null;
+          const candB = lastT?.msgB && !baselineMsgIds.has(lastT.msgB.id) ? lastT.msgB : null;
+          if (candA && !candA.failed && candA.status !== 'failed') m = candA;
+          else if (candB && !candB.failed && candB.status !== 'failed') m = candB;
+          else m = candA || candB;
+        }
+        if (!m && Array.isArray(c.messages) && c.messages.length > 0) {
+          for (let i = c.messages.length - 1; i >= 0; i--) {
+            const cand = c.messages[i];
+            if (!cand) continue;
+            if (cand.role === 'user') break;
+            if (cand.role === 'assistant' && !baselineMsgIds.has(cand.id)) {
+              if (!m || String(cand.participantPosition || '').toLowerCase() === 'a') m = cand;
+            }
+          }
+        }
+        if (!m || !Array.isArray(m.parts)) return;
+
+        let rFull = '';
+        let tFull = '';
+        for (const p of m.parts) {
+          if (!p) continue;
+          if (p.type === 'reasoning') rFull += String(p.text || '');
+          else if (p.type === 'text') tFull += String(p.text || '');
+          else if ((p.type === 'dynamic-tool' || String(p.type || '').startsWith('tool-')) && p.toolName && job.toolMode !== 'arena_native_only') {
+            if (job.toolMode === 'client_tools_only' || externalToolNames.has(p.toolName)) {
+              const tcId = String(p.toolCallId || p.id || '');
+              if (tcId && !emittedNativeToolIds.has(tcId) && (p.state === 'input-available' || p.state === 'output-available' || p.state === 'done' || p.input)) {
+                emittedNativeToolIds.add(tcId);
+                sendStreamEvent({
+                  reqId,
+                  type: 'tool_call',
+                  call: {
+                    id: tcId,
+                    name: String(p.toolName),
+                    arguments: typeof p.input === 'string' ? p.input : JSON.stringify(p.input || {}),
+                  },
+                });
+              }
+            }
+          }
+        }
+
+        if (rFull.length > sentReasonLen) {
+          const rDelta = rFull.slice(sentReasonLen);
+          sentReasonLen = rFull.length;
+          sendStreamEvent({ reqId, type: 'reasoning', delta: rDelta });
+        }
+        if (tFull.length > 0) {
+          splitter.feed(tFull);
+        }
+        return { rFull, tFull, m };
+      };
+
+      let busOff = null;
+      let evalBusOff = null;
+      let pollTimer = null;
+      const attachListeners = (c) => {
+        if (!c) return;
+        c._allowOpenThink = true;
+        if (toolsSig) c._apiToolsSig = toolsSig;
+        if (typeof Bus !== 'undefined' && Bus.on) {
+          if (!busOff) {
+            busOff = Bus.on('chat', (evChat) => {
+              if (evChat === c || (c.sid && evChat?.sid === c.sid)) {
+                inspectActiveTurn(c);
+              }
+            });
+          }
+          if (!evalBusOff) {
+            evalBusOff = Bus.on('eval:stream', (ev) => {
+              if (ev?.chat === c || (c.sid && ev?.sid === c.sid)) {
+                inspectActiveTurn(c);
+              }
+            });
+          }
+        }
+        if (!pollTimer) pollTimer = setInterval(() => inspectActiveTurn(c), 45);
+      };
+
+      const cleanupListeners = () => {
+        if (busOff) { try { busOff(); } catch {} busOff = null; }
+        if (evalBusOff) { try { evalBusOff(); } catch {} evalBusOff = null; }
+        if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+      };
+
+      let finalSnap = null;
+      try {
+        if (!chat) {
+          if (typeof createChat !== 'function') throw new Error('客户端尚未就绪 (createChat 不可用)');
+          const existingSids = new Set(typeof Chats !== 'undefined' && Chats.keys ? [...Chats.keys()] : []);
+          const createP = createChat(promptText, { files: [] });
+          const watchStart = Date.now();
+          while (!chat && Date.now() - watchStart < 8000) {
+            if (typeof Chats !== 'undefined') {
+              for (const cand of Chats.values()) {
+                if (cand && (!existingSids.has(cand.sid) || cand.busy || cand.streaming || cand._evalStreaming || cand.status === 'submitted') && (!targetSid || cand.sid === targetSid)) {
+                  chat = cand;
+                  break;
+                }
+              }
+            }
+            if (chat) break;
+            await new Promise((r) => setTimeout(r, 35));
+          }
+          if (chat) attachListeners(chat);
+          const created = await createP;
+          if (created && created !== chat) {
+            chat = created;
+            attachListeners(chat);
+          }
+          if (chat?.sid) {
+            if (mode === 'stateless' && statKey) {
+              _statelessMap.set(statKey, chat.sid);
+            } else {
+              _state.boundSid = chat.sid;
+              if (typeof Tabs !== 'undefined' && Tabs.cur && !Tabs.cur.sid) {
+                Tabs.cur.sid = chat.sid;
+                if (typeof Tabs.save === 'function') Tabs.save();
+                try { UI?.renderList?.(); UI?.renderTabs?.(); UI?.showTab?.(); } catch {}
+              }
+            }
+          }
+        } else {
+          attachListeners(chat);
+          await chat.send(promptText, { files: [] });
+        }
+
+        await waitChatIdle(chat, 240000);
+        finalSnap = inspectActiveTurn(chat);
+        if (finalSnap?.tFull) {
+          splitter.flush(finalSnap.tFull);
+        }
+      } finally {
+        cleanupListeners();
+      }
+
+      const chatErr = chat?.err || chat?.error;
+      if (chatErr && !finalSnap?.tFull && (!chat.messages?.length || chat.status === 'error')) {
+        sendStreamEvent({ reqId, type: 'error', error: String(chatErr) });
+        return;
+      }
+
+      const meta = readChatModelMeta(chat, chat?.sid);
+      sendStreamEvent({
+        reqId,
+        type: 'done',
+        modelId: meta.modelId,
+        modelName: meta.modelName,
+        modelInternal: meta.modelInternal,
+        modelFam: meta.modelFam,
+      });
+      syncCurrentContext(chat);
+    } catch (err) {
+      sendStreamEvent({
+        reqId,
+        type: 'error',
+        error: String(err?.message || err || '执行对话请求失败'),
+      });
+    }
+  }
+
+  function _onMainRequest(job) {
+    if (!job || !job.reqId) return;
+    if (_handledReqIds.has(job.reqId)) return;
+    _handledReqIds.add(job.reqId);
+    if (_handledReqIds.size > 200) {
+      const first = _handledReqIds.values().next().value;
+      if (first) _handledReqIds.delete(first);
+    }
+    _reqChain = _reqChain.then(() => runSingleApiRequest(job)).catch(() => {});
+  }
+
+  function resolveActiveProtoInfo() {
+    const pTab = _state.protocolTab || 'auto';
+    const effProto = pTab === 'auto' ? (_state.vendorProtocol || 'openai') : pTab;
+    const hostPort = 'http://' + (_state.host || '127.0.0.1') + ':' + (_state.port || 18765);
+    const modelId = _state.modelId || 'brana-current';
+    if (effProto === 'anthropic') {
+      return {
+        effProto: 'anthropic',
+        protoLabel: 'Anthropic 原生协议 (Messages API)',
+        baseUrl: hostPort,
+        endpoint: hostPort + '/v1/messages',
+        modelId,
+        note: '当前会话识别为 Claude 系列，已自动匹配 Anthropic 原生 /v1/messages 协议（同时兼容 OpenAI /v1/chat/completions）',
+      };
+    }
+    if (effProto === 'gemini') {
+      return {
+        effProto: 'gemini',
+        protoLabel: 'Google Gemini 原生协议 (v1beta)',
+        baseUrl: hostPort + '/v1beta',
+        endpoint: hostPort + '/v1beta/models/' + modelId + ':generateContent',
+        modelId,
+        note: '当前会话识别为 Gemini 系列，已自动匹配 Google v1beta 原生协议（同时兼容 OpenAI /v1/chat/completions）',
+      };
+    }
+    return {
+      effProto: 'openai',
+      protoLabel: 'OpenAI 标准兼容协议 (/v1)',
+      baseUrl: hostPort + '/v1',
+      endpoint: hostPort + '/v1/chat/completions',
+      modelId,
+      note: '通用 OpenAI 标准格式，可直接接入 Cherry Studio、Cursor、Cline、OpenWebUI、NextChat、LobeChat 等任意客户端（同时兼容 /v1/messages 与 /v1/responses）',
+    };
+  }
+
+  function buildSnippetText(info) {
+    const tab = _state.snippetTab || 'client';
+    const key = _state.apiKey || 'sk-brana-local';
+    const hostPort = 'http://' + (_state.host || '127.0.0.1') + ':' + (_state.port || 18765);
+    if (tab === 'claude_code') {
+      return [
+        '# Claude Code / Anthropic 终端接入配置 (Bash / PowerShell)',
+        'export ANTHROPIC_BASE_URL="' + hostPort + '"',
+        'export ANTHROPIC_AUTH_TOKEN="' + key + '"',
+        'export ANTHROPIC_MODEL="' + info.modelId + '"',
+        '',
+        '# PowerShell:',
+        '$env:ANTHROPIC_BASE_URL="' + hostPort + '"',
+        '$env:ANTHROPIC_AUTH_TOKEN="' + key + '"',
+        '$env:ANTHROPIC_MODEL="' + info.modelId + '"',
+      ].join('\n');
+    }
+    if (tab === 'curl') {
+      if (info.effProto === 'anthropic') {
+        return [
+          'curl ' + hostPort + '/v1/messages \\',
+          '  -H "Content-Type: application/json" \\',
+          '  -H "x-api-key: ' + key + '" \\',
+          '  -H "anthropic-version: 2023-06-01" \\',
+          '  -d \'{"model":"' + info.modelId + '","max_tokens":2048,"stream":true,"messages":[{"role":"user","content":"你好"}]}\'',
+        ].join('\n');
+      }
+      return [
+        'curl ' + hostPort + '/v1/chat/completions \\',
+        '  -H "Content-Type: application/json" \\',
+        '  -H "Authorization: Bearer ' + key + '" \\',
+        '  -d \'{"model":"' + info.modelId + '","stream":true,"messages":[{"role":"user","content":"你好"}]}\'',
+      ].join('\n');
+    }
+    if (tab === 'sdk') {
+      return [
+        '// OpenAI Python / Node.js SDK 接入示例',
+        'import OpenAI from "openai";',
+        'const client = new OpenAI({',
+        '  baseURL: "' + hostPort + '/v1",',
+        '  apiKey: "' + key + '",',
+        '});',
+        'const res = await client.chat.completions.create({',
+        '  model: "' + info.modelId + '", // 也可填 "brana-current" 始终跟随当前对话',
+        '  messages: [{ role: "user", content: "你好" }],',
+        '  stream: true,',
+        '});',
+      ].join('\n');
+    }
+    return [
+      '【本地 AI 客户端一键接入参数】',
+      '接口协议: ' + info.protoLabel,
+      'API 地址 (Base URL): ' + info.baseUrl,
+      '完整端点 (Endpoint): ' + info.endpoint,
+      'API 密钥 (API Key): ' + key,
+      '模型名称 (Model ID): ' + info.modelId,
+      '动态跟随别名: brana-current (填写此模型名将自动跟随客户端当前绑定的对话)',
+    ].join('\n');
+  }
+
+  async function openModal(chat, tab) {
+    if (_modalBack) {
+      try { _modalBack.remove(); } catch {}
+      _modalBack = null;
+    }
+
+    const meta = readChatModelMeta(chat, tab?.sid);
+    _state.boundSid = meta.sid;
+    _state.boundTitle = meta.title;
+    _state.modelName = meta.modelName;
+    _state.modelId = meta.modelId;
+    _state.modelFam = meta.modelFam;
+    _state.vendorProtocol = meta.vendorProtocol;
+
+    const close = () => {
+      if (_modalBack) {
+        try { _modalBack.remove(); } catch {}
+        _modalBack = null;
+        _renderModalBody = null;
+      }
+      syncPlusIndicator();
+    };
+
+    const bodyEl = h('div', { class: 'modal-b api-gw-b' });
+    const statusBadge = h('span', { class: 'api-gw-st' }, '启动中...');
+
+    const modal = h(
+      'div',
+      { class: 'modal api-gw-modal', onclick: (e) => e.stopPropagation() },
+      h(
+        'div',
+        { class: 'modal-h' },
+        icon('api'),
+        h('b', {}, '本地 API 反代网关'),
+        h('span', { class: 'dim' }, '将当前对话直接反代为本地标准 API · 自动按模型厂商转译'),
+        h('span', { class: 'grow' }),
+        statusBadge,
+        h('button', { class: 'ib', title: '关闭', onclick: close }, icon('x'))
+      ),
+      bodyEl
+    );
+
+    _modalBack = h('div', { class: 'modal-back', onclick: close }, modal);
+    _pointerDownInModal = false;
+    _pendingModalRender = false;
+    modal.addEventListener('pointerdown', () => { _pointerDownInModal = true; }, true);
+    const clearPtr = () => {
+      if (!_pointerDownInModal) return;
+      _pointerDownInModal = false;
+      if (_pendingModalRender && typeof _renderModalBody === 'function') {
+        _pendingModalRender = false;
+        setTimeout(() => { if (!_pointerDownInModal && typeof _renderModalBody === 'function') _renderModalBody(); }, 80);
+      }
+    };
+    window.addEventListener('pointerup', clearPtr, true);
+    window.addEventListener('pointercancel', clearPtr, true);
+    document.body.append(_modalBack);
+
+    const copyVal = (txt, label, btnEl) => {
+      const str = String(txt ?? '');
+      const cleanLbl = String(label || '').trim();
+      const msg = '已复制' + (cleanLbl ? ' ' + cleanLbl : '') + '：' + str.slice(0, 48);
+      if (typeof copyText === 'function') {
+        void copyText(str, { toastMsg: msg });
+      } else {
+        try { navigator.clipboard.writeText(str); } catch {}
+        if (typeof toast === 'function') toast(msg);
+      }
+      if (btnEl && btnEl.classList) {
+        btnEl.classList.add('copied');
+        clearTimeout(btnEl._cpTimer);
+        btnEl._cpTimer = setTimeout(() => {
+          try { btnEl.classList.remove('copied'); } catch {}
+        }, 1200);
+      }
+    };
+
+    _renderModalBody = () => {
+      if (!bodyEl || !_modalBack) return;
+      _lastModalSig = computeModalSig();
+      const info = resolveActiveProtoInfo();
+      const vendorTag = _state.vendorProtocol === 'anthropic'
+        ? 'Anthropic 原生'
+        : (_state.vendorProtocol === 'gemini' ? 'Gemini 原生' : 'OpenAI 标准');
+
+      statusBadge.className = 'api-gw-st ' + (_state.running ? 'on' : 'off');
+      statusBadge.textContent = _state.running
+        ? ('运行中 · 127.0.0.1:' + _state.port)
+        : '已停止';
+
+      const portInp = h('input', {
+        class: 'inp api-gw-port',
+        type: 'number',
+        min: '1024',
+        max: '65535',
+        value: String(_state.port || 18765),
+        title: '本地监听端口',
+      });
+
+      const fieldRow = (label, val, copyLabel, extraKids = []) =>
+        h(
+          'div',
+          { class: 'api-gw-row' },
+          h('span', { class: 'api-gw-lbl' }, label),
+          h(
+            'code',
+            {
+              class: 'api-gw-val',
+              title: '点击复制：' + val,
+              onclick: (e) => { e.stopPropagation(); copyVal(val, copyLabel || label, e.currentTarget); },
+            },
+            val
+          ),
+          ...extraKids.filter(Boolean),
+          h(
+            'button',
+            {
+              type: 'button',
+              class: 'ib api-gw-cp',
+              title: '复制' + (copyLabel || label),
+              onclick: (e) => { e.stopPropagation(); copyVal(val, copyLabel || label, e.currentTarget); },
+            },
+            icon('copy')
+          )
+        );
+
+      const snippetText = buildSnippetText(info);
+
+      bodyEl.replaceChildren(
+        h(
+          'div',
+          { class: 'api-gw-card api-gw-hero' },
+          h(
+            'div',
+            { class: 'api-gw-hero-l' },
+            h(
+              'div',
+              { class: 'api-gw-title-row' },
+              h('span', { class: 'api-gw-dot ' + (_state.running ? 'on' : 'off') }),
+              h('b', {}, _state.running ? ('本地反代已开启 (http://127.0.0.1:' + _state.port + ')') : '本地反代服务未开启'),
+              _state.reqCount > 0 ? h('span', { class: 'api-gw-tag' }, '已处理 ' + _state.reqCount + ' 次请求') : null
+            ),
+            h(
+              'div',
+              { class: 'api-gw-sub' },
+              (_state.modelFam && typeof VIcon !== 'undefined' && VIcon.el && Brand?.NAME?.[_state.modelFam]) ? VIcon.el(_state.modelFam, 14) : icon('cpu'),
+              h('span', {}, '识别模型：'),
+              h('b', { class: 'api-gw-mname' }, _state.modelName || '自动识别'),
+              h('code', { class: 'api-gw-mslug', title: '点击复制模型 ID', onclick: (e) => { e.stopPropagation(); copyVal(_state.modelId, '模型 ID', e.currentTarget); } }, _state.modelId),
+              h('span', { class: 'api-gw-vbadge' }, vendorTag)
+            ),
+            _state.lastError ? h('div', { class: 'api-gw-err' }, _state.lastError) : null
+          ),
+          h(
+            'div',
+            { class: 'api-gw-hero-r' },
+            h('span', { class: 'dim', style: { fontSize: '12px' } }, '端口'),
+            portInp,
+            h(
+              'button',
+              {
+                class: 'btn',
+                onclick: async () => {
+                  const p = Number(portInp.value) || 18765;
+                  await callHost({ op: 'start', port: p });
+                  if (typeof toast === 'function') toast('已应用端口 ' + _state.port);
+                },
+              },
+              icon('refresh'),
+              '应用端口'
+            ),
+            h(
+              'button',
+              {
+                class: 'btn ' + (_state.running ? '' : 'pri'),
+                onclick: async () => {
+                  if (_state.running) {
+                    await callHost({ op: 'stop' });
+                    if (typeof toast === 'function') toast('本地 API 反代已停止');
+                  } else {
+                    const p = Number(portInp.value) || _state.port || 18765;
+                    await callHost({ op: 'start', port: p });
+                    if (typeof toast === 'function') toast('本地 API 反代已启动: 127.0.0.1:' + _state.port);
+                  }
+                },
+              },
+              icon(_state.running ? 'x' : 'zap'),
+              _state.running ? '停止反代' : '开启反代'
+            )
+          )
+        ),
+
+        h(
+          'div',
+          { class: 'api-gw-modes' },
+          h(
+            'div',
+            { class: 'api-gw-mgroup' },
+            h('span', { class: 'api-gw-mlbl' }, '会话承载模式'),
+            h(
+              'div',
+              { class: 'api-gw-seg' },
+              h(
+                'button',
+                {
+                  class: _state.sessionMode === 'bound' ? 'on' : '',
+                  onclick: () => callHost({ op: 'update', sessionMode: 'bound', boundSid: meta.sid }),
+                  title: '外部 AI 请求直接发入当前对话窗口，客户端界面实时同步流式回复与模型识别',
+                },
+                icon('link'),
+                '绑定当前对话'
+              ),
+              h(
+                'button',
+                {
+                  class: _state.sessionMode === 'stateless' ? 'on' : '',
+                  onclick: () => callHost({ op: 'update', sessionMode: 'stateless' }),
+                  title: '外部客户端发起新对话时自动在客户端创建独立会话',
+                },
+                icon('plus'),
+                '无状态自动新建'
+              )
+            )
+          ),
+          h(
+            'div',
+            { class: 'api-gw-mgroup' },
+            h('span', { class: 'api-gw-mlbl' }, '工具调用 (Tools)'),
+            h(
+              'div',
+              { class: 'api-gw-seg' },
+              h(
+                'button',
+                {
+                  class: _state.toolMode === 'auto_bridge' ? 'on' : '',
+                  onclick: () => callHost({ op: 'update', toolMode: 'auto_bridge' }),
+                  title: '当外部客户端传入 tools 时自动转译为 tool_calls 供本地客户端执行；普通聊天走原生回复',
+                },
+                icon('zap'),
+                '智能自适应桥接'
+              ),
+              h(
+                'button',
+                {
+                  class: _state.toolMode === 'client_tools_only' ? 'on' : '',
+                  onclick: () => callHost({ op: 'update', toolMode: 'client_tools_only' }),
+                  title: '始终优先转译为本地客户端工具调用',
+                },
+                '仅本地客户端工具'
+              ),
+              h(
+                'button',
+                {
+                  class: _state.toolMode === 'arena_native_only' ? 'on' : '',
+                  onclick: () => callHost({ op: 'update', toolMode: 'arena_native_only' }),
+                  title: '不注入外部工具桥接，仅使用云端原生回复',
+                },
+                '仅云端原生'
+              )
+            )
+          )
+        ),
+
+        h(
+          'div',
+          { class: 'dk-tabs api-gw-ptabs' },
+          ...[
+            ['auto', '自动按厂商 (' + vendorTag + ')'],
+            ['openai', 'OpenAI 兼容格式 (/v1)'],
+            ['anthropic', 'Anthropic 原生 (/v1/messages)'],
+            ['gemini', 'Gemini 原生 (/v1beta)'],
+          ].map(([k, lbl]) =>
+            h(
+              'button',
+              {
+                class: (_state.protocolTab || 'auto') === k ? 'on' : '',
+                onclick: () => {
+                  _state.protocolTab = k;
+                  _renderModalBody();
+                },
+              },
+              lbl
+            )
+          )
+        ),
+
+        h('div', { class: 'api-gw-pnote' }, info.note),
+
+        h(
+          'div',
+          { class: 'api-gw-card api-gw-fields' },
+          fieldRow('API 地址 (Base URL)', info.baseUrl, ' Base URL'),
+          fieldRow('完整接口 (Endpoint)', info.endpoint, '接口地址'),
+          fieldRow('模型名称 (Model ID)', info.modelId, '模型名称', [
+            h(
+              'button',
+              {
+                type: 'button',
+                class: 'btn api-gw-alias',
+                title: '复制动态别名 brana-current（始终跟随当前绑定对话，切换对话无需改配置）',
+                onclick: (e) => { e.stopPropagation(); copyVal('brana-current', '动态模型别名', e.currentTarget); },
+              },
+              icon('copy'),
+              '通用别名: brana-current'
+            ),
+          ]),
+          fieldRow('API 密钥 (API Key)', _state.apiKey || 'sk-brana-local', ' API Key', [
+            h(
+              'button',
+              {
+                class: 'ib',
+                title: '重新生成随机密钥',
+                onclick: async () => {
+                  await callHost({ op: 'update', regenKey: true });
+                  if (typeof toast === 'function') toast('已生成新的 API 密钥');
+                },
+              },
+              icon('refresh')
+            ),
+            h(
+              'button',
+              {
+                class: 'btn api-gw-alias ' + (_state.requireKey ? 'on' : ''),
+                title: '开启后仅允许携带正确 API Key 的请求访问；关闭时兼容任意本地无密客户端',
+                onclick: () => callHost({ op: 'update', requireKey: !_state.requireKey }),
+              },
+              _state.requireKey ? '已开启密钥校验' : '免密兼容模式'
+            ),
+          ])
+        ),
+
+        h(
+          'div',
+          { class: 'api-gw-card api-gw-snippets' },
+          h(
+            'div',
+            { class: 'api-gw-sn-h' },
+            h(
+              'div',
+              { class: 'dk-tabs api-gw-sntabs' },
+              ...[
+                ['client', '通用客户端配置'],
+                ['claude_code', 'Claude Code 终端'],
+                ['curl', 'cURL 调试命令'],
+                ['sdk', 'Python / JS SDK'],
+              ].map(([k, lbl]) =>
+                h(
+                  'button',
+                  {
+                    class: (_state.snippetTab || 'client') === k ? 'on' : '',
+                    onclick: () => {
+                      _state.snippetTab = k;
+                      _renderModalBody();
+                    },
+                  },
+                  lbl
+                )
+              )
+            ),
+            h('span', { class: 'grow' }),
+            h(
+              'button',
+              {
+                class: 'btn',
+                onclick: async () => {
+                  try {
+                    const t0 = Date.now();
+                    const r = await fetch('http://127.0.0.1:' + _state.port + '/v1/models');
+                    const j = await r.json();
+                    const ms = Date.now() - t0;
+                    if (r.ok && Array.isArray(j?.data)) {
+                      if (typeof toast === 'function') {
+                        toast('本地网关自检通过 (' + ms + 'ms) · 已暴露模型: ' + j.data.map((x) => x.id).slice(0, 3).join(', '));
+                      }
+                    } else {
+                      if (typeof toast === 'function') toast('网关响应异常: HTTP ' + r.status);
+                    }
+                  } catch (e) {
+                    if (typeof toast === 'function') toast('自检连接失败: ' + (e?.message || e));
+                  }
+                },
+              },
+              icon('check'),
+              '联通自检'
+            ),
+            h(
+              'button',
+              {
+                type: 'button',
+                class: 'btn pri',
+                onclick: (e) => { e.stopPropagation(); copyVal(snippetText, '接入配置', e.currentTarget); },
+              },
+              icon('copy'),
+              '一键复制配置'
+            )
+          ),
+          h('pre', { class: 'api-gw-pre' }, snippetText)
+        ),
+
+        Array.isArray(_state.logs) && _state.logs.length > 0
+          ? h(
+              'div',
+              { class: 'api-gw-card api-gw-logs' },
+              h(
+                'div',
+                { class: 'api-gw-log-h' },
+                icon('server'),
+                h('b', {}, '最近反代请求记录 (' + _state.logs.length + ')'),
+                h('span', { class: 'grow' }),
+                h(
+                  'button',
+                  { class: 'btn', onclick: () => callHost({ op: 'clearLogs' }) },
+                  '清空记录'
+                )
+              ),
+              h(
+                'div',
+                { class: 'api-gw-log-list' },
+                ..._state.logs.slice(0, 8).map((lg) =>
+                  h(
+                    'div',
+                    { class: 'api-gw-log-it' },
+                    h('span', { class: 'api-gw-pbadge ' + lg.protocol }, String(lg.protocol || 'openai').toUpperCase()),
+                    h('code', { class: 'api-gw-lmod' }, lg.model || 'brana-current'),
+                    lg.toolsCount > 0 ? h('span', { class: 'api-gw-tbadge' }, 'Tools×' + lg.toolsCount) : null,
+                    h('span', { class: 'api-gw-lprev grow' }, lg.preview || '(空内容)'),
+                    h('span', { class: 'api-gw-lst ' + lg.status }, lg.status === 'done' ? '完成' : (lg.status === 'error' ? '错误' : '流式生成中'))
+                  )
+                )
+              )
+            )
+          : null
+      );
+    };
+
+    const initPayload = {
+      op: _state.running ? 'sync' : 'start',
+      boundSid: meta.sid,
+      boundTitle: meta.title,
+      modelName: meta.modelName,
+      modelInternal: meta.modelInternal,
+      modelFam: meta.modelFam,
+    };
+    await callHost(initPayload);
+    _renderModalBody();
+    if (typeof View !== 'undefined' && typeof View.render === 'function') {
+      try { View.render(); } catch {}
+    }
+  }
+
+  setTimeout(() => {
+    try {
+      if (typeof BranaHost !== 'undefined' && typeof BranaHost.onApiGatewayReq === 'function') {
+        BranaHost.onApiGatewayReq((job) => _onMainRequest(job));
+      }
+      if (typeof Bus !== 'undefined' && typeof Bus.on === 'function') {
+        for (const ev of ['models', 'modechange', 'directmodelchange', 'eval:vote-revealed']) {
+          Bus.on(ev, () => {
+            if (_state.running || _modalBack) syncCurrentContext();
+          });
+        }
+      }
+    } catch {}
+  }, 50);
+
+  const api = {
+    openModal,
+    syncCurrentContext,
+    isRunning: () => Boolean(_state.running),
+    isBoundTo: (sid) => Boolean(_state.running && (_state.sessionMode === 'stateless' || !_state.boundSid || _state.boundSid === sid)),
+    getState: () => _state,
+    _onMainRequest,
+    _createToolStreamSplitter: createToolStreamSplitter,
+    _buildTurnPrompt: buildTurnPrompt,
+  };
+  try { window.__BranaLocalApiGateway = api; } catch {}
+  try { globalThis.__BranaLocalApiGateway = api; } catch {}
+  return api;
+})();

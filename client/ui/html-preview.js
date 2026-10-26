@@ -369,6 +369,7 @@ const HtmlPreview = (() => {
         if (cached && stage.clientWidth > 0 && stage.clientHeight > 0) {
           W = cached.W; H = cached.H; wfit = cached.wfit; fill = cached.fill; lastPw = stage.clientWidth;
           if (cached.bg) stage.style.background = cached.bg;
+          if (o.probe) { try { o.probe.remove(); } catch {} }
           place();
           return;
         }
@@ -516,9 +517,23 @@ const HtmlPreview = (() => {
       c.pending = false;
       scheduleCardMount(c);
     };
-    // 滚动到可见范围才真正创建页面（长对话里很多个 html 不会同时加载；且滚动进行中推迟挂载避免卡帧）
+    // 滚动到可见范围才真正创建页面，滚出视口外时暂停 iframe 动画合成以释放 CPU/GPU
     const go = () => { c.live = true; if (c.o && c.text != null && (c.shown !== c.text || !c.stage.querySelector('iframe'))) c.render(c.text, String(c.o.path || '').split('/').pop()); };
-    if (typeof IntersectionObserver === 'function') { const io = new IntersectionObserver(es => { if (es.some(e => e.isIntersecting)) { io.disconnect(); go(); } }, { rootMargin: '300px' }); io.observe(c.el); c.io = io; } else c.live = true;
+    if (typeof IntersectionObserver === 'function') {
+      const io = new IntersectionObserver(es => {
+        const vis = es.some(e => e.isIntersecting);
+        if (vis) {
+          go();
+          const fr = c.stage.querySelector('iframe.pvc-frame');
+          if (fr && fr.style.display === 'none') fr.style.display = '';
+        } else if (c.shown) {
+          const fr = c.stage.querySelector('iframe.pvc-frame');
+          if (fr && fr.style.visibility !== 'hidden') fr.style.display = 'none';
+        }
+      }, { rootMargin: '360px' });
+      io.observe(c.el);
+      c.io = io;
+    } else c.live = true;
     return c;
   }
   // 同一个 Write 在对话里反复重绘时复用同一个小窗节点（不重新创建页面，不闪）；流式写入期间等写完（出现结束标签）才渲染
@@ -1571,7 +1586,7 @@ const PelicanShots = (() => {
     return ok;
   }
   let pullP = null;
-  async function pull(forceHarvest = false, quiet = true) {
+  async function pull(forceHarvest = false, quiet = true, fromRemoteSync = false) {
     if (pullP && !forceHarvest) return pullP;
     pullP = (async () => {
       try {
@@ -1605,8 +1620,9 @@ const PelicanShots = (() => {
             }
           }
         }
-        const remoteSig = JSON.stringify(remoteRows1.map(x => [x.id, x.model, x.score, x.think, x.acct]));
-        const mergedSig = JSON.stringify(merged.map(x => [x.id, x.model, x.score, x.think, x.acct]));
+        const sigOfRows = rs => JSON.stringify([...(Array.isArray(rs) ? rs : [])].sort((a, b) => (a.at || 0) - (b.at || 0) || String(a.id || '').localeCompare(String(b.id || ''))).map(x => [x.id, x.model, x.score, x.think, x.acct]));
+        const remoteSig = sigOfRows(remoteRows1);
+        const mergedSig = sigOfRows(merged);
         const hasNewModelEnrich = Object.keys(modelsSlim).some(sid => {
           const r = remoteRows1.find(x => x?.sid === sid);
           return r && isBetterModel(modelsSlim[sid]?.name, r.model);
@@ -1615,7 +1631,7 @@ const PelicanShots = (() => {
         const remotePelObj = (remote && !Array.isArray(remote) && remote.pelican && typeof remote.pelican === 'object') ? remote.pelican : {};
         const hasNewDel = Object.keys(dm).some(id => !remoteDelObj[id] || dm[id] > remoteDelObj[id]);
         const hasNewPel = Object.keys(pelLocal).some(id => !remotePelObj[id] || (pelLocal[id]?.at || 0) > (remotePelObj[id]?.at || 0));
-        if (forceHarvest || !remote || mergedSig !== remoteSig || hasNewModelEnrich || hasNewDel || hasNewPel || Host.platform === 'android') {
+        if (!fromRemoteSync && (forceHarvest || !remote || mergedSig !== remoteSig || hasNewModelEnrich || hasNewDel || hasNewPel || Host.platform === 'android')) {
           await writeShared({ rows: merged, del: dm, pelican: pelLocal, models: modelsSlim, acct, harvest: !!forceHarvest });
         }
         if (forceHarvest && Host.platform !== 'android') {

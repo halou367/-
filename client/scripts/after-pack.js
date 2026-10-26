@@ -5,7 +5,7 @@ const crypto = require('node:crypto');
 let embedIcon = () => {}; try { embedIcon = require('./win-pe-icon').embedIcon || embedIcon; } catch {}
 
 const KEEP_LOCALES = new Set(['zh-CN.pak', 'en-US.pak']);
-const STRIP_FILES = ['LICENSES.chromium.html', 'LICENSE.electron.txt', 'dxcompiler.dll', 'dxil.dll', 'd3dcompiler_47.dll'];
+const STRIP_FILES = ['LICENSES.chromium.html', 'LICENSE.electron.txt'];
 const STRIP_BIN_FILES = ['geoip.dat', 'geosite.dat', 'wintun.dll', 'VERSION.dll', 'VERSION.pdb', 'VERSION.dll.lib', 'VERSION.dll.exp'];
 const KEEP_ASAR_UI = new Set([
   'auth-flow.js', 'net-policy.js', 'mail-token.js', 'route-state.js', 'webbar.js',

@@ -40,7 +40,7 @@ function build(uiDir, version, opt = {}) {
       try {
         if (fname === 'probe-bank-ikale.js' && raw.includes('const IkaleBank =')) {
           if (opt?.slimDesktopBundle) {
-            return 'let _ikaleParsed = null, _ikaleTimer = 0;\nconst _getIkale = () => { clearTimeout(_ikaleTimer); if (!_ikaleParsed) { let r = (typeof window !== "undefined" && window.BranaHost?.staticBankSync) ? window.BranaHost.staticBankSync("ikale") : "{}"; if (typeof r === "string") r = r.replace(/;\\s*(?:if\\s*\\(\\s*typeof\\s+(?:module|window|globalThis)\\b[\\s\\S]*|module\\.exports[\\s\\S]*)$/, ""); _ikaleParsed = JSON.parse(r || "{}"); } _ikaleTimer = setTimeout(() => { _ikaleParsed = null; }, 3500); return _ikaleParsed; };\nconst IkaleBank = new Proxy({}, { get(_, k) { return _getIkale()[k]; }, ownKeys() { return Reflect.ownKeys(_getIkale()); }, getOwnPropertyDescriptor(_, k) { return Object.getOwnPropertyDescriptor(_getIkale(), k); }, has(_, k) { return k in _getIkale(); } });\n';
+            return 'let _ikaleParsed = null;\nconst _getIkale = () => { if (!_ikaleParsed) { let r = (typeof window !== "undefined" && window.BranaHost?.staticBankSync) ? window.BranaHost.staticBankSync("ikale") : "{}"; if (typeof r === "string") r = r.replace(/;\\s*(?:if\\s*\\(\\s*typeof\\s+(?:module|window|globalThis)\\b[\\s\\S]*|module\\.exports[\\s\\S]*)$/, ""); _ikaleParsed = JSON.parse(r || "{}"); } return _ikaleParsed; };\nconst IkaleBank = new Proxy({}, { get(_, k) { return _getIkale()[k]; }, ownKeys() { return Reflect.ownKeys(_getIkale()); }, getOwnPropertyDescriptor(_, k) { return Object.getOwnPropertyDescriptor(_getIkale(), k); }, has(_, k) { return k in _getIkale(); } });\n';
           }
           const cleanRaw = raw.replace(/;\s*(?:if\s*\(\s*typeof\s+(?:module|window|globalThis)\b[\s\S]*|module\.exports[\s\S]*)$/, '');
           const i = cleanRaw.indexOf('{'), j = cleanRaw.lastIndexOf('}');
@@ -51,7 +51,7 @@ function build(uiDir, version, opt = {}) {
         }
         if (fname === 'habit-builtin-bank.js' && /(?:const|let|var)\s+BUILTIN_HABIT_BANK\s*=/.test(raw)) {
           if (opt?.slimDesktopBundle) {
-            return 'let _hbParsed = null, _hbTimer = 0;\nconst _getHb = () => { clearTimeout(_hbTimer); if (!_hbParsed) { let r = (typeof window !== "undefined" && window.BranaHost?.staticBankSync) ? window.BranaHost.staticBankSync("habit") : "{}"; if (typeof r === "string") r = r.replace(/;\\s*(?:if\\s*\\(\\s*typeof\\s+(?:module|window|globalThis)\\b[\\s\\S]*|module\\.exports[\\s\\S]*)$/, ""); _hbParsed = JSON.parse(r || "{}"); } _hbTimer = setTimeout(() => { _hbParsed = null; }, 3500); return _hbParsed; };\nconst BUILTIN_HABIT_BANK = new Proxy({}, { get(_, k) { if (k === "__releaseSamples") return () => { _hbParsed = null; }; return _getHb()[k]; }, ownKeys() { return Reflect.ownKeys(_getHb()); }, getOwnPropertyDescriptor(_, k) { return Object.getOwnPropertyDescriptor(_getHb(), k); }, has(_, k) { return k in _getHb(); } });\nif (typeof globalThis !== "undefined") globalThis.BUILTIN_HABIT_BANK = BUILTIN_HABIT_BANK;\n';
+            return 'let _hbParsed = null;\nconst _getHb = () => { if (!_hbParsed) { let r = (typeof window !== "undefined" && window.BranaHost?.staticBankSync) ? window.BranaHost.staticBankSync("habit") : "{}"; if (typeof r === "string") r = r.replace(/;\\s*(?:if\\s*\\(\\s*typeof\\s+(?:module|window|globalThis)\\b[\\s\\S]*|module\\.exports[\\s\\S]*)$/, ""); _hbParsed = JSON.parse(r || "{}"); } return _hbParsed; };\nconst BUILTIN_HABIT_BANK = new Proxy({}, { get(_, k) { if (k === "__releaseSamples") return () => { if (_hbParsed) delete _hbParsed.samples; }; return _getHb()[k]; }, ownKeys() { return Reflect.ownKeys(_getHb()); }, getOwnPropertyDescriptor(_, k) { return Object.getOwnPropertyDescriptor(_getHb(), k); }, has(_, k) { return k in _getHb(); } });\nif (typeof globalThis !== "undefined") globalThis.BUILTIN_HABIT_BANK = BUILTIN_HABIT_BANK;\n';
           }
           const cleanRaw = raw.replace(/;\s*(?:if\s*\(\s*typeof\s+(?:module|window|globalThis)\b[\s\S]*|module\.exports[\s\S]*)$/, '');
           const i = cleanRaw.indexOf('{'), j = cleanRaw.lastIndexOf('}');
@@ -67,10 +67,9 @@ function build(uiDir, version, opt = {}) {
           if (iBank !== -1 && iSeed > iBank && iEnd > iSeed) {
             if (opt?.slimDesktopBundle) {
               raw = raw.slice(0, iBank)
-                + 'get bank() { clearTimeout(_bt); if (!_bank) { _bank = engine.validateBank(JSON.parse((typeof window !== "undefined" && window.BranaHost?.staticBankSync && window.BranaHost.staticBankSync("whatsmyllm")) || "{}")); } _bt = setTimeout(() => { _bank = null; }, 3500); return _bank; }, '
-                + 'get seedBank() { clearTimeout(_sbt); if (!_seedBank) { _seedBank = engine.validateBank(JSON.parse((typeof window !== "undefined" && window.BranaHost?.staticBankSync && window.BranaHost.staticBankSync("whatsmyllm-seed")) || "{}")); } _sbt = setTimeout(() => { _seedBank = null; }, 3500); return _seedBank; }'
+                + 'get bank() { if (!_bank) { _bank = engine.validateBank(JSON.parse((typeof window !== "undefined" && window.BranaHost?.staticBankSync && window.BranaHost.staticBankSync("whatsmyllm")) || "{}")); } return _bank; }, '
+                + 'get seedBank() { if (!_seedBank) { _seedBank = engine.validateBank(JSON.parse((typeof window !== "undefined" && window.BranaHost?.staticBankSync && window.BranaHost.staticBankSync("whatsmyllm-seed")) || "{}")); } return _seedBank; }'
                 + raw.slice(iEnd);
-              raw = raw.replace('let _bank, _seedBank;', 'let _bank, _seedBank, _bt = 0, _sbt = 0;');
             } else {
               const bStart = raw.indexOf('JSON.parse(', iBank) + 11;
               const bEnd = raw.lastIndexOf(')))', iSeed);

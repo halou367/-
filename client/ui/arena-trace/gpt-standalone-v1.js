@@ -5,11 +5,10 @@
  * 1:1 Behavioral Parity with `gpt_standalone_classifier_v1.py`.
  */
 (function (root, factory) {
-  const api = factory();
-  root.ArenaGptStandaloneV1 = api;
-  root.GptStandaloneClassifierV1 = api;
   if (typeof module === 'object' && module.exports) {
-    module.exports = api;
+    module.exports = factory();
+  } else {
+    root.ArenaGptStandaloneV1 = factory();
   }
 }(typeof globalThis !== 'undefined' ? globalThis : (typeof window !== 'undefined' ? window : this), function () {
   'use strict';
@@ -27,7 +26,7 @@
 
   const RE_ANTHROPIC_WIRE = /^(?:srv)?toolu_|^msg_01[1-9A-HJ-NP-Za-km-z]{18,}/i;
   const RE_OPENAI_RS_STREAM = /^(?:(?:rs|fc|fo)_[A-Za-z0-9_-]{16,}|msg_[0-9a-f]{20,})$/i;
-  const RE_OPENAI_TOOL_ID = /^(?:tc|fc)_[A-Za-z0-9_-]{16,}|^call_(?![0-9a-f]{24}\b)(?!\d+_)[A-Za-z0-9_-]{18,}/i;
+  const RE_OPENAI_TOOL_ID = /^(?:fc|rs)_[A-Za-z0-9_-]{16,}|^call_(?![0-9a-f]{24}\b)(?!\d+_)[A-Za-z0-9_-]{18,}/i;
   const RE_NON_OAI_HEX24 = /^call_[0-9a-f]{24}$/i;
   const RE_NON_OAI_GLM = /^call_\d+_/i;
   const RE_NON_OAI_VLLM = /^chatcmpl-tool-/i;
@@ -186,6 +185,7 @@
     }
     const isSvg32 = hasSvg && bLen < 4500 && ((vbW === 32 && vbH === 32) || (bLen < 3000 && (low.indexOf('width="32"') !== -1 || low.indexOf('viewbox="0 0 32 32"') !== -1)));
     const hasRoot = low.indexOf(':root') !== -1;
+    const hasCdataScript = low.indexOf('<![cdata[') !== -1 || low.indexOf('//]]>') !== -1;
 
     let scriptCnt = 0;
     let jsSrc = '';
@@ -246,15 +246,42 @@
     const hasPctGrad = low.indexOf('x1="0%"') !== -1 || low.indexOf('y2="100%"') !== -1 || low.indexOf('x2="100%"') !== -1;
 
     const isArgonProcedural = Boolean(
-      jsBytes >= 12000
-      && hasRaf
-      && ((!hasIife && createNs >= 8) || jsBytes >= 22000 || (hasArgonFlexSig && hasPctGrad && jsBytes >= 11000))
+      (bLen >= 25000 && jsBytes >= 6000)
+      || (
+        jsBytes >= 12000
+        && hasRaf
+        && ((!hasIife && createNs >= 8) || jsBytes >= 22000 || (hasArgonFlexSig && hasPctGrad && jsBytes >= 11000))
+      )
     );
+    const hasLowerDoctype = src.indexOf('<!doctype html>') !== -1;
+    const vbKey = vbW > 0 ? `${Math.round(vbW)}x${Math.round(vbH)}` : '';
+    const hasVp = low.indexOf('name="viewport"') !== -1 || low.indexOf("name='viewport'") !== -1;
+    const svgEndIdx = low.lastIndexOf('</svg>');
+    const styleIdx = low.indexOf('<style');
+    const styleAfterSvg = svgEndIdx > 0 && styleIdx > svgEndIdx;
+    const _twSet = new Set(['38bdf8','0ea5e9','0284c7','0369a1','7dd3fc','bae6fd','e0f2fe','f0f9ff','f8fafc','f1f5f9','e2e8f0','cbd5e1','94a3b8','64748b','475569','334155','1e293b','0f172a','fbbf24','f59e0b','d97706','fcd34d','fde68a','fef08a','f97316','ea580c','fb923c','ef4444','dc2626','22c55e','10b981','14b8a6','6366f1','8b5cf6','ec4899']);
+    const _twFound = new Set();
+    if (src.indexOf('#') !== -1) {
+      RE_HEX6_SAMPLE.lastIndex = 0;
+      let _tm;
+      while ((_tm = RE_HEX6_SAMPLE.exec(src)) !== null) {
+        const _hl = _tm[1].toLowerCase();
+        if (_twSet.has(_hl)) _twFound.add(_hl);
+      }
+    }
+    const isMuseEnvelope = (vbKey === '1000x600' && low.includes('100vw') && kfCnt >= 10 && jsBytes === 0) || ((!hasLowerDoctype && !hasRoot) && (
+      styleAfterSvg
+      || ((vbKey === '900x450' || vbKey === '900x500' || vbKey === '900x540' || vbKey === '900x560' || vbKey === '900x600' || vbKey === '900x620' || vbKey === '900x650' || vbKey === '1000x500') && (_twFound.size >= 2 || hasVp))
+      || (_twFound.size >= 3 && hasVp)
+    ));
 
     const out = {
+      has_lower_doctype: hasLowerDoctype,
+      is_muse_envelope: isMuseEnvelope,
       has_svg: hasSvg,
       has_html: hasHtml,
       has_root: hasRoot,
+      has_cdata_script: hasCdataScript,
       is_svg32: isSvg32,
       bytes: bLen,
       vb_w: vbW,
@@ -358,8 +385,25 @@
     if (rSig === 'empty-deltas' && rp <= 5 && !hasExplicitWire) {
       veto.push('VETO_ANTHROPIC_EMPTY_DELTAS_WIRE');
     }
-    if (art.is_argon_procedural && !hasExplicitWire) {
+    if (sample.visibleReasoning === true && !hasOaiStream && !hasOaiTool) {
+      veto.push('VETO_VISIBLE_REASONING_FLAG');
+    }
+    if ((Number(sample.rAvgChunk || sample.rAvg || 0) >= 18.0 && rc > 0) || (Number(sample.avgChunk || sample.xAvg || 0) >= 16.5 && !hasOaiStream && !hasOaiTool && rc > 0)) {
+      veto.push('VETO_GOOGLE_WIDE_REASONING_OR_TEXT_CHUNKS');
+    }
+    if (art.is_argon_procedural && !hasOaiStream) {
       veto.push(`VETO_GOOGLE_ARGON_PROCEDURAL_ENGINE(js=${art.js_bytes}B,createNS=${art.create_ns})`);
+    }
+    if (!hasExplicitWire && art.bytes >= 3500 && !art.is_svg32) {
+      if ((art.vb_w === 800 || art.vb_w === 600) && art.comments >= 13 && art.bytes < 23000 && !art.has_root && !art.has_lower_doctype) {
+        veto.push(`VETO_ANTHROPIC_800W_RICH_LAYER_COMMENTS(vb=${art.vb_w}x${art.vb_h},cmt=${art.comments})`);
+      } else if (art.is_muse_envelope) {
+        veto.push(`VETO_META_MUSE_TAILWIND_ENVELOPE(vb=${art.vb_w}x${art.vb_h})`);
+      } else if (art.has_cdata_script) {
+        veto.push('VETO_NON_OPENAI_SVG_CDATA_SCRIPT');
+      } else if (art.vb_w === 1000 && art.vb_h === 600 && art.raf && art.smil === 0 && art.keyframes >= 4 && !art.has_lower_doctype && !art.has_root) {
+        veto.push('VETO_GLM_1000X600_HYBRID_RAF_KF');
+      }
     }
     const sysInTok = Math.trunc(Number(sample.turn1SysInputTokens || sample.sysPromptTokens || 0));
     if (sysInTok >= 6200 && !hasExplicitWire) {
@@ -386,8 +430,13 @@
     }
 
     if (art.has_svg && art.bytes >= 3500 && rp === 0 && !rSig) {
+      const _vbk = `${Math.round(art.vb_w || 0)}x${Math.round(art.vb_h || 0)}`;
       if (art.raf && art.iife && art.js_bytes >= 1500 && art.js_bytes <= 10500) {
         pos.push('AST_OPENAI_61_SOL_IIFE_RAF_SIGNATURE');
+      } else if (art.bytes < 25000 && !art.is_argon_procedural && !art.is_muse_envelope && art.has_lower_doctype && (art.smil >= 2 || art.keyframes >= 4) && art.js_bytes <= 5000) {
+        pos.push('AST_OPENAI_LUNA_LOWERCASE_DOCTYPE_SIGNATURE');
+      } else if (art.bytes < 25000 && !art.is_muse_envelope && (_vbk === '960x540' || _vbk === '960x600' || _vbk === '960x640' || _vbk === '1000x620') && art.js_bytes === 0 && art.smil >= 5 && art.comments <= 11) {
+        pos.push('AST_OPENAI_LUNA_960_PURE_SMIL_SIGNATURE');
       } else if (art.smil >= 14 && art.keyframes >= 5 && art.js_bytes === 0 && art.comments === 0 && art.bytes >= 16000) {
         pos.push('AST_OPENAI_56_SOL_ZERO_COMMENT_SMIL_KF_SIGNATURE');
       } else if (art.smil >= 3 && art.keyframes >= 5 && art.js_bytes === 0 && art.shorthand_grad_y && art.comments <= 5 && art.upper_hex === 0 && art.bytes >= 12000) {
@@ -1917,11 +1966,14 @@
       const zc = (c - p.mu[1]) / p.sig[1];
       const zcv = (cv - p.mu[2]) / p.sig[2];
       const zst = (st - p.mu[3]) / p.sig[3];
+      const ztDamped = Math.abs(zt) <= 2.4 ? zt : Math.sign(zt) * (2.4 + Math.log1p(Math.abs(zt) - 2.4));
       const rEff = (1 - lam) * p.rhoTc;
-      const d2Tc = (zt * zt - 2 * rEff * zt * zc + zc * zc) / Math.max(1e-6, 1 - rEff * rEff);
+      const detCorr = Math.max(1e-6, 1 - rEff * rEff);
+      const d2Tc = (ztDamped * ztDamped - 2 * rEff * ztDamped * zc + zc * zc) / detCorr;
       const d24d = +(d2Tc + 0.55 * zcv * zcv + 0.35 * zst * zst).toFixed(4);
+      const logDetHalf = Math.log(p.sig[0] * p.sig[1] * p.sig[2] * p.sig[3]) + 0.5 * Math.log(detCorr);
       dists[mid] = d24d;
-      logits[mid] = -0.5 * d24d;
+      logits[mid] = -0.5 * d24d - 0.35 * logDetHalf;
       if (logits[mid] > maxLg) maxLg = logits[mid];
     }
     let zSum = 0;
@@ -2607,7 +2659,7 @@
       if (/^(?:srv)?toolu_|^msg_01[1-9A-HJ-NP-Za-km-z]{18,}/i.test(tid)) return 'anthropic';
       if (/^call_[0-9]+_/i.test(tid)) return 'deepseek';
       if (/^call_[0-9a-f]{24}$/.test(tid)) return 'domestic-hex24';
-      if (/^(?:tc|fc)_[A-Za-z0-9_-]{16,}|^call_(?![0-9a-f]{24}$)(?![0-9]+_)[A-Za-z0-9_-]{18,}/i.test(tid)) return 'openai';
+      if (/^(?:fc|rs)_[A-Za-z0-9_-]{16,}|^call_(?![0-9a-f]{24}$)(?![0-9]+_)[A-Za-z0-9_-]{18,}/i.test(tid)) return 'openai';
     }
     return 'unknown';
   }
@@ -2862,6 +2914,317 @@
     return res;
   }
 
+
+  // ============================================================================
+  // V19 Core Upgrades:
+  //   1. scoreMultistepToolTransitionMarkov
+  //   2. scoreSpeculativeBurstStrideSpectrum
+  //   3. evaluateKalmanEffortRateTracker
+  //   4. classifyGptSampleV19
+  // ============================================================================
+  const V19_ENGINE_VERSION = '1.13.0-v19-markov-stride-kalman';
+
+  function _normalizeMarkovEventChain(eventChain = null, toolNames = null, rp = 0, hasToolWrite = false) {
+    const norm = [];
+    const rawList = Array.isArray(eventChain) ? eventChain : [];
+    for (const raw of rawList) {
+      const s = String(raw || '').trim().toUpperCase();
+      if (s === 'R' || s === 'REASON' || s === 'REASONING' || s === 'REASONING-START') norm.push('R');
+      else if (s === 'T' || s === 'TEXT' || s === 'PRETEXT' || s === 'TEXT-DELTA') norm.push('T');
+      else if (s === 'TR' || s === 'TOOLREAD' || s === 'READ_FILE' || s === 'READ_FILES' || s === 'SEARCH_FILES' || s === 'WEB_SEARCH' || s === 'FETCH_PAGE') norm.push('TR');
+      else if (s === 'TW' || s === 'TOOLWRITE' || s === 'WRITE_FILE' || s === 'EDIT_FILE' || s === 'PRESENT_FILE' || s === 'GENERATE_IMAGE') norm.push('TW');
+      else if (s === 'TX' || s === 'TOOLEXEC' || s === 'BASH' || s === 'RUN_COMMAND' || s === 'START_PROCESS') norm.push('TX');
+    }
+    if (norm.length === 0) {
+      const rpInt = Math.max(0, Math.floor(Number(rp || 0)));
+      for (let i = 0; i < Math.min(4, rpInt); i++) norm.push('R');
+      const tNames = Array.isArray(toolNames) ? toolNames : [];
+      for (const tn of tNames) {
+        const tl = String(tn || '').trim().toLowerCase();
+        if (!tl) continue;
+        if (/(?:read|search|fetch)/.test(tl)) norm.push('TR');
+        else if (/(?:write|edit|present|image)/.test(tl)) norm.push('TW');
+        else norm.push('TX');
+      }
+      if (hasToolWrite && !norm.includes('TW')) norm.push('TW');
+    }
+    return norm;
+  }
+
+  function scoreMultistepToolTransitionMarkov(eventChain = null, toolNames = null, stepCount = 1, rp = 0, rc = 0, hasToolWrite = false) {
+    const seq = _normalizeMarkovEventChain(eventChain, toolNames, rp, hasToolWrite);
+    if (seq.length < 2) {
+      return {
+        available: false,
+        reason: 'insufficient_markov_chain',
+        state_count: seq.length,
+        r_to_tool_prob: 0.0,
+        inter_tool_text_ratio: 0.0,
+        parallel_tool_fanout: 0.0,
+        llr_v19_markov: 0.0,
+        best_id: null
+      };
+    }
+
+    let rOutTotal = 0;
+    let rToToolOrR = 0;
+    const toolStates = seq.filter(s => s === 'TR' || s === 'TW' || s === 'TX');
+    let interToolT = 0;
+    for (let i = 0; i < seq.length - 1; i++) {
+      const curS = seq[i];
+      const nxtS = seq[i + 1];
+      if (curS === 'R') {
+        rOutTotal += 1;
+        if (nxtS === 'TR' || nxtS === 'TW' || nxtS === 'TX' || nxtS === 'R') {
+          rToToolOrR += 1;
+        }
+      }
+      if ((curS === 'TR' || curS === 'TW' || curS === 'TX') && nxtS === 'T') {
+        interToolT += 1;
+      }
+    }
+
+    const rToToolProb = rOutTotal > 0 ? +(rToToolOrR / Math.max(1, rOutTotal)).toFixed(4) : 0.0;
+    const interToolTextRatio = toolStates.length > 0 ? +(interToolT / Math.max(1, toolStates.length)).toFixed(4) : 0.0;
+    const steps = Math.max(1, Math.floor(Number(stepCount || 1)));
+    const parallelToolFanout = +(toolStates.length / steps).toFixed(4);
+
+    const rpInt = Math.max(0, Math.floor(Number(rp || 0)));
+    const rcInt = Math.max(0, Math.floor(Number(rc || 0)));
+    let llrV19 = 0.0;
+    let bestId = null;
+
+    if (rcInt > 0) {
+      llrV19 = -3.60;
+      bestId = 'non-openai/plaintext-chain';
+    } else if (rpInt >= 2 && rToToolProb >= 0.50 && toolStates.length >= 1) {
+      llrV19 = +Math.min(
+        2.45,
+        1.15 + 0.45 * rToToolProb + 0.18 * Math.min(4, rpInt) + 0.15 * Math.min(3.0, parallelToolFanout) - 0.25 * interToolTextRatio
+      ).toFixed(4);
+      bestId = 'openai/gpt-6.1-sol';
+    } else if (rpInt === 0 && rToToolProb === 0.0) {
+      llrV19 = -2.10;
+      bestId = 'openai/gpt-6-luna';
+    } else {
+      llrV19 = 0.35;
+      bestId = 'openai/gpt-5.6-sol';
+    }
+
+    return {
+      available: true,
+      state_sequence: seq.slice(0, 24),
+      state_count: seq.length,
+      r_to_tool_prob: rToToolProb,
+      inter_tool_text_ratio: interToolTextRatio,
+      parallel_tool_fanout: parallelToolFanout,
+      llr_v19_markov: +llrV19.toFixed(4),
+      best_id: bestId
+    };
+  }
+
+  function scoreSpeculativeBurstStrideSpectrum(deltaIntervals = null, chunkByteLengths = null, rp = 0, rc = 0) {
+    const ivs = Array.isArray(deltaIntervals)
+      ? deltaIntervals.map(Number).filter(x => Number.isFinite(x) && x >= 0.0 && x <= 15000.0)
+      : [];
+    const blens = Array.isArray(chunkByteLengths)
+      ? chunkByteLengths.map(Number).filter(x => Number.isFinite(x) && x > 0)
+      : [];
+    if (ivs.length < 4) {
+      return {
+        available: false,
+        reason: 'insufficient_intervals',
+        pulse_count: 0,
+        mean_pulse_stride: 1.0,
+        max_pulse_stride: 1,
+        pulse_byte_cv: 0.0,
+        sub_ms_burst_ratio: 0.0,
+        llr_v19_stride: 0.0,
+        best_id: null
+      };
+    }
+
+    const sortedIv = ivs.slice().sort((a, b) => a - b);
+    const medianIv = sortedIv[Math.floor(sortedIv.length / 2)];
+    const burstThrMs = +Math.max(1.2, Math.min(25.0, medianIv * 0.42)).toFixed(4);
+
+    const pulsesStride = [];
+    const pulsesBytes = [];
+    let curStride = 1;
+    let curBytes = blens.length > 0 ? blens[0] : 16.0;
+
+    for (let idx = 0; idx < ivs.length; idx++) {
+      const dt = ivs[idx];
+      const bVal = (idx + 1) < blens.length ? blens[idx + 1] : (blens.length > 0 ? blens[idx % blens.length] : 16.0);
+      if (dt <= burstThrMs) {
+        curStride += 1;
+        curBytes += bVal;
+      } else {
+        pulsesStride.push(curStride);
+        pulsesBytes.push(curBytes);
+        curStride = 1;
+        curBytes = bVal;
+      }
+    }
+    pulsesStride.push(curStride);
+    pulsesBytes.push(curBytes);
+
+    const pulseCount = pulsesStride.length;
+    const meanPulseStride = +(pulsesStride.reduce((a, b) => a + b, 0) / Math.max(1, pulseCount)).toFixed(4);
+    const maxPulseStride = pulsesStride.length > 0 ? Math.max(...pulsesStride) : 1;
+
+    let pulseByteCv = 0.0;
+    if (pulsesBytes.length >= 2) {
+      const meanPb = pulsesBytes.reduce((a, b) => a + b, 0) / pulsesBytes.length;
+      const varPb = pulsesBytes.reduce((acc, x) => acc + Math.pow(x - meanPb, 2), 0) / Math.max(1, pulsesBytes.length - 1);
+      pulseByteCv = +(Math.sqrt(Math.max(0.0, varPb)) / Math.max(1.0, meanPb)).toFixed(4);
+    }
+
+    const subBurstCnt = ivs.filter(dt => dt <= burstThrMs).length;
+    const subMsBurstRatio = +(subBurstCnt / ivs.length).toFixed(4);
+
+    const rpInt = Math.max(0, Math.floor(Number(rp || 0)));
+    const rcInt = Math.max(0, Math.floor(Number(rc || 0)));
+    let llrStride = 0.0;
+    let bestId = null;
+
+    if (rcInt > 0) {
+      llrStride = -3.20;
+      bestId = 'non-openai/plaintext-stride';
+    } else if ((meanPulseStride >= 1.35 || pulseByteCv >= 0.38) && rpInt >= 1) {
+      llrStride = +Math.min(
+        2.55,
+        0.95 + 0.45 * (meanPulseStride - 1.0) + 0.65 * pulseByteCv + 0.12 * Math.min(4, rpInt)
+      ).toFixed(4);
+      bestId = 'openai/gpt-6.1-sol';
+    } else if (meanPulseStride <= 1.15 && pulseByteCv < 0.22 && rpInt === 0) {
+      llrStride = -2.25;
+      bestId = 'openai/gpt-6-luna';
+    } else {
+      llrStride = 0.25;
+      bestId = 'openai/gpt-5.6-sol';
+    }
+
+    return {
+      available: true,
+      burst_thr_ms: burstThrMs,
+      pulse_count: pulseCount,
+      mean_pulse_stride: meanPulseStride,
+      max_pulse_stride: maxPulseStride,
+      pulse_byte_cv: pulseByteCv,
+      sub_ms_burst_ratio: subMsBurstRatio,
+      llr_v19_stride: +llrStride.toFixed(4),
+      best_id: bestId
+    };
+  }
+
+  function evaluateKalmanEffortRateTracker(prevState = null, currentTurn = null) {
+    const prev = (prevState && typeof prevState === 'object') ? prevState : {};
+    const cur = (currentTurn && typeof currentTurn === 'object') ? currentTurn : {};
+
+    const inpTok = Math.max(0.0, Number(cur.inputTokens || cur.I || prev.lastInputTokens || 1200.0));
+    const outTok = Math.max(0.0, Number(cur.outputTokens || cur.O || (Number(cur.textDeltaChars || 0) / 3.6)));
+    const durMs = Math.max(120.0, Number(cur.turnDurationMs || cur.thinkDurationMs || 1000.0));
+    const steps = Math.max(1, Math.floor(Number(cur.totalStepCount || cur.stepCount || 1)));
+    const routeSwitched = Boolean(cur.routeSwitched || prev.routeSwitched);
+
+    const prefillMs = +Math.min(durMs * 0.45, Math.max(0.0, inpTok * 0.045 * (1 + 0.35 * Math.max(0, steps - 1)))).toFixed(2);
+    const netGenMs = +Math.max(100.0, durMs - prefillMs).toFixed(2);
+    const netMsPerStep = +(netGenMs / steps).toFixed(2);
+    const ttftOnly = Math.max(0.0, Number(cur.ttftMs || cur.thinkDurationMs || 0));
+    const pureDecodeMs = (ttftOnly > 0 && durMs > ttftOnly + 120) ? Math.max(80.0, durMs - ttftOnly) : netGenMs;
+
+    const priorTps = Number(prev.posterior_tps || 68.0);
+    const priorVar = Number(prev.posterior_var || 24.0);
+    const obsTps = outTok > 0 ? +((outTok * 1000.0) / pureDecodeMs).toFixed(3) : priorTps;
+
+    const qVar = 4.0;
+    const rVar = 16.0;
+    const predVar = priorVar + qVar;
+    const kalmanGain = +(predVar / (predVar + rVar)).toFixed(4);
+    const posteriorTps = +(priorTps + kalmanGain * (obsTps - priorTps)).toFixed(3);
+    const posteriorVar = +((1.0 - kalmanGain) * predVar).toFixed(4);
+
+    let lockedEffort = String(
+      prev.initialEffort || cur.initialEffort || prev.inferredEffort || cur.inferredEffort || 'HIGH'
+    ).trim().toUpperCase();
+    if (!/^(LOW|MEDIUM|HIGH|XHIGH|MAX)$/.test(lockedEffort)) {
+      lockedEffort = 'HIGH';
+    }
+    const pinnedEffort = (!routeSwitched && /^(LOW|MEDIUM|HIGH|XHIGH|MAX)$/.test(lockedEffort))
+      ? lockedEffort
+      : (netMsPerStep >= 52000.0 ? 'MAX' : 'HIGH');
+
+    return {
+      available: true,
+      prefill_ms: prefillMs,
+      net_gen_ms: netGenMs,
+      net_ms_per_step: netMsPerStep,
+      obs_tps: obsTps,
+      posterior_tps: posteriorTps,
+      posterior_var: posteriorVar,
+      kalman_gain: kalmanGain,
+      pinned_effort: pinnedEffort,
+      route_switched: routeSwitched
+    };
+  }
+
+  function classifyGptSampleV19(sample) {
+    const s = (sample && typeof sample === 'object') ? sample : {};
+    const res = classifyGptSampleV18(s);
+    if (!res || typeof res !== 'object') return res;
+    res.v19_upgraded = true;
+    res.v19_engine = V19_ENGINE_VERSION;
+
+    const rpVal = Number(s.rp !== undefined && s.rp !== null ? s.rp : (s.nReason || s.reasoningStartCount || 0));
+    const rcVal = Number(s.rc !== undefined && s.rc !== null ? s.rc : (s.reasoningTextLength || 0));
+    const stepCnt = Math.max(1, Math.floor(Number(s.totalStepCount || s.stepCount || 1)));
+    const hasTw = Boolean(s.toolWriteBuf || s.toolStreamHtml || (Array.isArray(s.toolIds) && s.toolIds.length > 0));
+
+    const v19Markov = scoreMultistepToolTransitionMarkov(
+      s.eventChain,
+      s.toolNames,
+      stepCnt,
+      rpVal,
+      rcVal,
+      hasTw
+    );
+    res.v19_markov = v19Markov;
+
+    const ivs = Array.isArray(s.deltaIntervals) ? s.deltaIntervals : (Array.isArray(s.iatIntervalsMs) ? s.iatIntervalsMs : []);
+    const blens = Array.isArray(s.chunkByteLengths) ? s.chunkByteLengths : (Array.isArray(s.toolDeltaByteLengths) ? s.toolDeltaByteLengths : []);
+    const v19Stride = scoreSpeculativeBurstStrideSpectrum(ivs, blens, rpVal, rcVal);
+    res.v19_stride_spectrum = v19Stride;
+
+    const v19Kalman = evaluateKalmanEffortRateTracker(s.prevSessionEntry, s);
+    res.v19_kalman_tracker = v19Kalman;
+
+    const sprt = res.v16_wald_sprt ? Object.assign({}, res.v16_wald_sprt) : null;
+    if (sprt && (v19Markov.available || v19Stride.available)) {
+      const baseLlr = Number(sprt.llr || 0.0);
+      const mLlr = v19Markov.available ? Number(v19Markov.llr_v19_markov || 0.0) : 0.0;
+      const sLlr = v19Stride.available ? Number(v19Stride.llr_v19_stride || 0.0) : 0.0;
+      const v19Delta = +(0.24 * mLlr + 0.24 * sLlr).toFixed(4);
+      const coupledLlr = +(baseLlr + v19Delta).toFixed(4);
+      const upperA = Number(sprt.upperBoundaryA || 9.1902);
+      const lowerB = Number(sprt.lowerBoundaryB || -3.9119);
+      const crownShield = Boolean(sprt.crownShieldActive);
+      let coupledAction = sprt.action || 'CONTINUE_STREAMING';
+      if (coupledLlr >= upperA) {
+        coupledAction = 'LOCK_CROWN_IMMEDIATE';
+      } else if (coupledLlr <= lowerB && !crownShield) {
+        coupledAction = 'ABORT_NON_CROWN_IMMEDIATE';
+      }
+      sprt.llr_v19_delta = v19Delta;
+      sprt.llr = coupledLlr;
+      sprt.action = coupledAction;
+      sprt.posteriorCrown = +(1.0 / (1.0 + Math.exp(-Math.max(-20.0, Math.min(20.0, coupledLlr))))).toFixed(5);
+      res.v16_wald_sprt = sprt;
+    }
+
+    return res;
+  }
+
   function classifyGptSampleV13(sample) {
     return applyV13TrajectoryRefinement(classifyGptSample(sample), sample);
   }
@@ -2892,7 +3255,10 @@
     classifyGptSampleV16,
     classifyGptSampleV17,
     classifyGptSampleV18,
-    classify: classifyGptSampleV18,
+    classifyGptSampleV19,
+    scoreMultistepToolTransitionMarkov,
+    scoreSpeculativeBurstStrideSpectrum,
+    evaluateKalmanEffortRateTracker,
     scoreToolCallAstSchemaFingerprint,
     evaluatePreTextToolDeltaGate,
     evaluateLockedSessionFastPath,

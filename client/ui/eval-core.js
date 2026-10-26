@@ -10,7 +10,7 @@ const ModeState = {
   _inited: false,
 
   BATTLE_MODALITIES: ['video', 'image', 'search', 'webdev', 'chat', 'auto'],
-  DIRECT_MODALITIES: ['image', 'search', 'webdev', 'chat'],
+  DIRECT_MODALITIES: ['video', 'image', 'search', 'webdev', 'chat'],
 
   init() {
     if (this._inited) return this;
@@ -26,7 +26,7 @@ const ModeState = {
         }
       }
     } catch {}
-    if (this.mode === 'direct' && (this.modality === 'auto' || this.modality === 'video')) {
+    if (this.mode === 'direct' && this.modality === 'auto') {
       this.modality = 'chat';
     }
     this._ensureDirectModelValid();
@@ -36,13 +36,16 @@ const ModeState = {
   _ensureDirectModelValid() {
     try {
       if (typeof ModelCatalog === 'undefined') return;
-      const mod = (this.modality === 'auto' || this.modality === 'video') ? 'chat' : (this.modality || 'chat');
+      const mod = this.modality === 'auto' ? 'chat' : (this.modality || 'chat');
       const list = ModelCatalog.getModelsForModality(mod);
       if (!Array.isArray(list) || !list.length) return;
       const rawId = this.directModelId ? String(this.directModelId).trim() : '';
+      const mappedId = (rawId && typeof ModelCatalog.resolveModelUuid === 'function')
+        ? ModelCatalog.resolveModelUuid(rawId, mod)
+        : rawId;
       const rawTail = rawId.includes('/') ? rawId.split('/').pop() : rawId;
       const found = rawId
-        ? list.find(m => m.id === rawId || m.slug === rawId || m.name === rawId || m.name === rawTail || (Array.isArray(m.aliases) && (m.aliases.includes(rawId) || m.aliases.includes(rawTail))))
+        ? list.find(m => m.id === mappedId || m.id === rawId || m.slug === rawId || m.name === rawId || m.name === rawTail || (Array.isArray(m.aliases) && (m.aliases.includes(rawId) || m.aliases.includes(rawTail))))
         : null;
       const picked = found || list[0];
       if (picked) {
@@ -78,7 +81,7 @@ const ModeState = {
     const prevMode = this.mode;
     const prevMod = this.modality;
     this.mode = m;
-    if (this.mode === 'direct' && (this.modality === 'auto' || this.modality === 'video')) {
+    if (this.mode === 'direct' && this.modality === 'auto') {
       this.modality = 'chat';
     }
     if (this.mode === 'direct') {
@@ -100,7 +103,7 @@ const ModeState = {
 
   getModality() {
     if (!this._inited) this.init();
-    if (this.mode === 'direct' && (this.modality === 'auto' || this.modality === 'video')) {
+    if (this.mode === 'direct' && this.modality === 'auto') {
       return 'chat';
     }
     return this.modality || 'chat';
@@ -110,7 +113,7 @@ const ModeState = {
     if (!this._inited) this.init();
     let mod = String(nextModality || '').toLowerCase();
     if (!this.BATTLE_MODALITIES.includes(mod)) return this.snapshot();
-    if (this.mode === 'direct' && (mod === 'auto' || mod === 'video')) {
+    if (this.mode === 'direct' && mod === 'auto') {
       mod = 'chat';
     }
     const prev = this.modality;
@@ -403,34 +406,59 @@ const ModelCatalog = (() => {
     'video-to-video': 'video',
   };
 
+  // Retired or legacy model IDs mapped to active Arena Direct-selectable UUIDs
+  const RETIRED_MODEL_ID_MAP = {
+    '019b7b1f-fa1d-7d5c-96f9-4731f5ca5a0f': '01a0843d-e019-78b5-be43-ec2291edc2cf', // gpt-image-1.5 -> gpt-image-2.5-sunburst
+    '0197c947-98b0-7768-8696-c7a5f32d9c95': '019fbb94-0662-7830-808f-ee8dfe6098a2', // imagen-4.0-generate-preview -> gemini-3.1-flash-lite-image
+    '0196a1fa-682f-769b-9067-7ff3472e21f7': '019fde11-e7c8-7394-ac43-8fd3b37ba81c', // flux-1.1-pro-ultra -> lo-bah-png
+    '01995d54-9e77-7435-94d1-962091285872': '019f42b5-8c52-7793-9be8-de35eecf7ea9', // seedream-4.0 -> seedream-5.0-pro
+    '019cbfae-9988-799f-833f-d9ef5fb8b92e': '019c7820-5480-78b6-9fef-04c0d7004054', // old gemini-3.1-pro-preview -> active gemini-3.1-pro-preview
+    '019861f0-5a72-73bc-a3a5-fd84d8974239': '01a06df1-5f5b-7836-aa72-e17403ae8bb0', // veo-3 -> gemini-omni-1.1-flash
+    '0199dc4a-1e80-764c-89c6-7227cd5fd44c': '01f39601-03ed-4d66-8afb-5039c90b27ea', // sora-2 -> sora-2-pro
+    '0197e687-7707-7556-b7a9-247b148fa0a1': '019c59fa-6567-7c42-97af-f51b52ce47d5', // kling-2.1-master -> kling-v3.0-pro-text-to-video
+  };
+  const META_ROUTER_IDS = new Set([
+    '019e71e9-e732-7891-b507-569cedd6fb71', // router
+    '019b24bb-5caf-71c3-b854-37d0c7086f21', // Max
+  ]);
+
   const FALLBACK_MODELS = [
     // Real Arena UUID-keyed Direct-selectable models (from Arena SSR initialModels)
-    { id: '019ce973-84c9-7030-9f88-1ebbf2edeb14', slug: 'claude-opus-4-6', name: 'claude-opus-4-6', publicName: 'Claude Opus 4.6', displayName: 'Claude Opus 4.6', organization: 'Anthropic', provider: 'anthropic', modalities: ['chat', 'webdev', 'search'], rank: 1, rankByModality: { chat: 1, webdev: 1, search: 1 }, userSelectable: true },
-    { id: '019cbd0a-d2e9-7540-9651-8fb7bc7bc483', slug: 'claude-sonnet-4-6', name: 'claude-sonnet-4-6', publicName: 'Claude Sonnet 4.6', displayName: 'Claude Sonnet 4.6', organization: 'Anthropic', provider: 'anthropic', modalities: ['chat', 'webdev', 'search'], rank: 2, rankByModality: { chat: 2, webdev: 2, search: 2 }, userSelectable: true },
-    { id: '019d3995-9b7a-730d-b779-227ad61ecc9b', slug: 'gpt-5.4-high', name: 'gpt-5.4-high', publicName: 'GPT-5.4 High', displayName: 'GPT-5.4 High', organization: 'OpenAI', provider: 'openai', modalities: ['chat', 'webdev', 'search'], rank: 3, rankByModality: { chat: 3, webdev: 3, search: 3 }, userSelectable: true },
-    { id: '01a0681c-b561-76b6-b338-a44ff0cff460', slug: 'gemini-3.8-flash-high', name: 'gemini-3.8-flash-high', publicName: 'Gemini 3.8 Flash High', displayName: 'Gemini 3.8 Flash High', organization: 'Google', provider: 'google', modalities: ['chat', 'webdev', 'search'], rank: 9, rankByModality: { chat: 9 }, userSelectable: true },
-    { id: '019f19f2-41f1-7c6d-9891-48d02fd9952c', slug: 'claude-sonnet-5-high', name: 'claude-sonnet-5-high', publicName: 'Claude Sonnet 5 High', displayName: 'Claude Sonnet 5 High', organization: 'Anthropic', provider: 'anthropic', modalities: ['chat', 'webdev', 'search'], rank: 10, rankByModality: { chat: 58 }, userSelectable: true },
-    { id: '019e71ea-1e1d-740f-9c2d-dab5869ff108', slug: 'gpt-5.5-instant', name: 'gpt-5.5-instant', publicName: 'GPT-5.5 Instant', displayName: 'GPT-5.5 Instant', organization: 'OpenAI', provider: 'openai', modalities: ['chat', 'webdev', 'search'], rank: 14, rankByModality: { chat: 43 }, userSelectable: true },
-    { id: '019b82a4-f728-72bf-b563-bd8fd0fb9db6', slug: 'gpt-5.2-high', name: 'gpt-5.2-high', publicName: 'GPT-5.2 High', displayName: 'GPT-5.2 High', organization: 'OpenAI', provider: 'openai', modalities: ['chat', 'webdev', 'search'], rank: 15, rankByModality: { chat: 42, webdev: 17 }, userSelectable: true },
-    { id: '019cbfae-9988-799f-833f-d9ef5fb8b92e', slug: 'gemini-3.1-pro-preview', name: 'gemini-3.1-pro-preview', publicName: 'Gemini 3.1 Pro', displayName: 'Gemini 3.1 Pro', organization: 'Google', provider: 'google', modalities: ['chat', 'webdev', 'search'], rank: 16, rankByModality: { chat: 25, webdev: 9, search: 9 }, userSelectable: true },
-    { id: '019773f3-3a42-772b-b4f5-c2eeb5fb22d6', slug: 'gemini-2.5-pro', name: 'gemini-2.5-pro', publicName: 'Gemini 2.5 Pro', displayName: 'Gemini 2.5 Pro', organization: 'Google', provider: 'google', modalities: ['chat', 'webdev', 'search'], rank: 17, rankByModality: { chat: 59, webdev: 38, search: 22 }, userSelectable: true },
-    { id: '019ff69c-dae8-708a-ae20-1ce80775d94d', slug: 'grok-4.6-high', name: 'grok-4.6-high', publicName: 'Grok 4.6 High', displayName: 'Grok 4.6 High', organization: 'xAI', provider: 'xai', modalities: ['chat', 'webdev', 'search'], rank: 18, rankByModality: { chat: 70 }, userSelectable: true },
-    { id: '01982bb3-7f7a-75c6-86c8-334a0db9b245', slug: 'grok-4', name: 'grok-4', publicName: 'Grok 4', displayName: 'Grok 4', organization: 'xAI', provider: 'xai', modalities: ['chat', 'webdev', 'search'], rank: 19, rankByModality: { chat: 109, search: 18 }, userSelectable: true },
-    { id: '019fc887-69e7-7308-a353-36da657fc18e', slug: 'qwen3.8-max', name: 'qwen3.8-max', publicName: 'Qwen 3.8 Max', displayName: 'Qwen 3.8 Max', organization: 'Alibaba', provider: 'qwen', modalities: ['chat', 'webdev', 'search'], rank: 20, rankByModality: { webdev: 12, chat: 35 }, userSelectable: true },
-    { id: '019e128d-bc7d-744c-8854-67a38b15b3a1', slug: 'qwen3.7-max-preview', name: 'qwen3.7-max-preview', publicName: 'Qwen 3.7 Max Preview', displayName: 'Qwen 3.7 Max Preview', organization: 'Alibaba', provider: 'qwen', modalities: ['chat', 'webdev', 'search'], rank: 21, rankByModality: { chat: 41, webdev: 14 }, userSelectable: true },
-    { id: '01a14ae7-0d76-74af-80ac-33cf2b2322aa', slug: 'deepseek-v4.1-flash-max', name: 'deepseek-v4.1-flash-max', publicName: 'DeepSeek V4.1 Flash Max', displayName: 'DeepSeek V4.1 Flash Max', organization: 'DeepSeek', provider: 'deepseek', modalities: ['chat', 'webdev', 'search'], rank: 22, rankByModality: { webdev: 13, chat: 38 }, userSelectable: true },
-    { id: '019ebf6a-94d4-7649-b704-1dbbd5eb0942', slug: 'glm-5.2 (max)', name: 'glm-5.2 (max)', publicName: 'GLM 5.2 (Max)', displayName: 'GLM 5.2 (Max)', organization: 'Zhipu', provider: 'zhipu', modalities: ['chat', 'webdev', 'search'], rank: 23, rankByModality: { chat: 32, webdev: 6 }, userSelectable: true },
-    { id: '019b7b2f-fc57-7c65-b4ef-fd8db34f448e', slug: 'deepseek-v3.2', name: 'deepseek-v3.2', publicName: 'DeepSeek V3.2', displayName: 'DeepSeek V3.2', organization: 'DeepSeek', provider: 'deepseek', modalities: ['chat', 'webdev', 'search'], rank: 26, rankByModality: { chat: 77, webdev: 37 }, userSelectable: true },
-    { id: '01980d0b-8126-7f5b-a749-bd6ef7bc7f56', slug: 'qwen3-235b-a22b-instruct-2507', name: 'qwen3-235b-a22b-instruct-2507', publicName: 'Qwen3 235B A22B', displayName: 'Qwen3 235B A22B', organization: 'Alibaba', provider: 'qwen', modalities: ['chat', 'webdev', 'search'], rank: 27, rankByModality: { chat: 78, webdev: 45 }, userSelectable: true },
-    { id: '01999a31-f487-73a1-8e8f-2a5256f74a38', slug: 'glm-4.6', name: 'glm-4.6', publicName: 'GLM-4.6', displayName: 'GLM-4.6', organization: 'Zhipu', provider: 'zhipu', modalities: ['chat', 'webdev', 'search'], rank: 28, rankByModality: { chat: 86, webdev: 35 }, userSelectable: true },
-    { id: '019ca4eb-110d-7271-9040-811b08a19686', slug: 'kimi-k2.5', name: 'kimi-k2.5', publicName: 'Kimi K2.5', displayName: 'Kimi K2.5', organization: 'Moonshot', provider: 'moonshot', modalities: ['chat', 'webdev', 'search'], rank: 29, rankByModality: { chat: 44, webdev: 10 }, userSelectable: true },
-    { id: '019b7b1f-fa1d-7d5c-96f9-4731f5ca5a0f', slug: 'gpt-image-1.5', name: 'gpt-image-1.5', publicName: 'GPT Image 1.5', displayName: 'GPT Image 1.5', organization: 'OpenAI', provider: 'openai', modalities: ['image'], rank: 1, rankByModality: { image: 1 }, userSelectable: true },
-    { id: '0197c947-98b0-7768-8696-c7a5f32d9c95', slug: 'imagen-4.0-generate-preview', name: 'imagen-4.0-generate-preview', publicName: 'Imagen 4', displayName: 'Imagen 4', organization: 'Google', provider: 'google', modalities: ['image'], rank: 2, rankByModality: { image: 8 }, userSelectable: true },
-    { id: '0196a1fa-682f-769b-9067-7ff3472e21f7', slug: 'flux-1.1-pro-ultra', name: 'flux-1.1-pro-ultra', publicName: 'FLUX 1.1 Pro Ultra', displayName: 'FLUX 1.1 Pro Ultra', organization: 'Black Forest Labs', provider: 'bfl', modalities: ['image'], rank: 3, rankByModality: { image: 17 }, userSelectable: true },
-    { id: '01995d54-9e77-7435-94d1-962091285872', slug: 'seedream-4.0', name: 'seedream-4.0', publicName: 'Seedream 4.0', displayName: 'Seedream 4.0', organization: 'ByteDance', provider: 'bytedance', modalities: ['image'], rank: 4, rankByModality: { image: 7 }, userSelectable: true },
-    { id: '019861f0-5a72-73bc-a3a5-fd84d8974239', slug: 'veo-3', name: 'veo-3', publicName: 'Veo 3', displayName: 'Veo 3', organization: 'Google', provider: 'google', modalities: ['video'], rank: 1, rankByModality: { video: 12 }, userSelectable: true },
-    { id: '0199dc4a-1e80-764c-89c6-7227cd5fd44c', slug: 'sora-2', name: 'sora-2', publicName: 'Sora 2', displayName: 'Sora 2', organization: 'OpenAI', provider: 'openai', modalities: ['video'], rank: 2, rankByModality: { video: 5 }, userSelectable: true },
-    { id: '0197e687-7707-7556-b7a9-247b148fa0a1', slug: 'kling-2.1-master', name: 'kling-2.1-master', publicName: 'Kling 2.1 Master', displayName: 'Kling 2.1 Master', organization: 'Kuaishou', provider: 'kuaishou', modalities: ['video'], rank: 3, rankByModality: { video: 14 }, userSelectable: true },
+    { id: '019ce973-84c9-7030-9f88-1ebbf2edeb14', slug: 'claude-opus-4-6', name: 'claude-opus-4-6', publicName: 'Claude Opus 4.6', displayName: 'Claude Opus 4.6', organization: 'Anthropic', provider: 'anthropic', modalities: ['chat', 'webdev'], rank: 1, rankByModality: { chat: 4, webdev: 1 }, userSelectable: true },
+    { id: '019cbd0a-d2e9-7540-9651-8fb7bc7bc483', slug: 'claude-sonnet-4-6', name: 'claude-sonnet-4-6', publicName: 'Claude Sonnet 4.6', displayName: 'Claude Sonnet 4.6', organization: 'Anthropic', provider: 'anthropic', modalities: ['chat', 'webdev'], rank: 2, rankByModality: { chat: 18, webdev: 4 }, userSelectable: true },
+    { id: '019f19f2-41f1-7c6d-9891-48d02fd9952c', slug: 'claude-sonnet-5-high', name: 'claude-sonnet-5-high', publicName: 'Claude Sonnet 5 High', displayName: 'Claude Sonnet 5 High', organization: 'Anthropic', provider: 'anthropic', modalities: ['chat', 'webdev'], rank: 3, rankByModality: { chat: 58, webdev: 5 }, userSelectable: true },
+    { id: '019d3995-9b7a-730d-b779-227ad61ecc9b', slug: 'gpt-5.4-high', name: 'gpt-5.4-high', publicName: 'GPT-5.4 High', displayName: 'GPT-5.4 High', organization: 'OpenAI', provider: 'openai', modalities: ['chat', 'webdev'], rank: 4, rankByModality: { chat: 14, webdev: 7 }, userSelectable: true },
+    { id: '019e71ea-1e1d-740f-9c2d-dab5869ff108', slug: 'gpt-5.5-instant', name: 'gpt-5.5-instant', publicName: 'GPT-5.5 Instant', displayName: 'GPT-5.5 Instant', organization: 'OpenAI', provider: 'openai', modalities: ['chat', 'webdev'], rank: 5, rankByModality: { chat: 43, webdev: 8 }, userSelectable: true },
+    { id: '01a0681c-b561-76b6-b338-a44ff0cff460', slug: 'gemini-3.8-flash-high', name: 'gemini-3.8-flash-high', publicName: 'Gemini 3.8 Flash High', displayName: 'Gemini 3.8 Flash High', organization: 'Google', provider: 'google', modalities: ['chat', 'webdev'], rank: 6, rankByModality: { chat: 9, webdev: 3 }, userSelectable: true },
+    { id: '019c7820-5480-78b6-9fef-04c0d7004054', slug: 'gemini-3.1-pro-preview', name: 'gemini-3.1-pro-preview', publicName: 'Gemini 3.1 Pro Preview', displayName: 'Gemini 3.1 Pro Preview', organization: 'Google', provider: 'google', modalities: ['chat', 'webdev'], rank: 7, rankByModality: { chat: 7, webdev: 9 }, userSelectable: true },
+    { id: '019ff69c-dae8-708a-ae20-1ce80775d94d', slug: 'grok-4.6-high', name: 'grok-4.6-high', publicName: 'Grok 4.6 High', displayName: 'Grok 4.6 High', organization: 'xAI', provider: 'xai', modalities: ['chat', 'webdev'], rank: 8, rankByModality: { chat: 70, webdev: 15 }, userSelectable: true },
+    { id: '019ebf6a-94d4-7649-b704-1dbbd5eb0942', slug: 'glm-5.1', name: 'glm-5.1', publicName: 'GLM 5.1', displayName: 'GLM 5.1', organization: 'Zhipu', provider: 'zhipu', modalities: ['chat', 'webdev'], rank: 9, rankByModality: { chat: 32, webdev: 2 }, userSelectable: true },
+    { id: '019fc887-69e7-7308-a353-36da657fc18e', slug: 'paisley', name: 'paisley', publicName: 'Qwen 3.8 Max (Paisley)', displayName: 'Qwen 3.8 Max (Paisley)', organization: 'Alibaba', provider: 'qwen', modalities: ['chat', 'webdev'], rank: 10, rankByModality: { chat: 35, webdev: 12 }, userSelectable: true },
+    { id: '01a14ae7-0d76-74af-80ac-33cf2b2322aa', slug: 'deepseek-v4.1-flash-max', name: 'deepseek-v4.1-flash-max', publicName: 'DeepSeek V4.1 Flash Max', displayName: 'DeepSeek V4.1 Flash Max', organization: 'DeepSeek', provider: 'deepseek', modalities: ['chat', 'webdev'], rank: 11, rankByModality: { chat: 38, webdev: 13 }, userSelectable: true },
+    { id: '019e128d-bc7d-744c-8854-67a38b15b3a1', slug: 'qwen3.6-plus-preview', name: 'qwen3.6-plus-preview', publicName: 'Qwen 3.6 Plus Preview', displayName: 'Qwen 3.6 Plus Preview', organization: 'Alibaba', provider: 'qwen', modalities: ['chat', 'webdev'], rank: 12, rankByModality: { chat: 41, webdev: 14 }, userSelectable: true },
+    { id: '019ca4eb-110d-7271-9040-811b08a19686', slug: 'kimi-k2.5-thinking', name: 'kimi-k2.5-thinking', publicName: 'Kimi K2.5 Thinking', displayName: 'Kimi K2.5 Thinking', organization: 'Moonshot', provider: 'moonshot', modalities: ['chat', 'webdev'], rank: 13, rankByModality: { chat: 44, webdev: 10 }, userSelectable: true },
+    { id: '019b7b2f-fc57-7c65-b4ef-fd8db34f448e', slug: 'deepseek-v3.2', name: 'deepseek-v3.2', publicName: 'DeepSeek V3.2', displayName: 'DeepSeek V3.2', organization: 'DeepSeek', provider: 'deepseek', modalities: ['chat', 'webdev'], rank: 14, rankByModality: { chat: 77, webdev: 37 }, userSelectable: true },
+    // Search-dedicated models
+    { id: '019c6f55-70d6-7a9c-b89b-9a0db36a3582', slug: 'claude-sonnet-4-6-search', name: 'claude-sonnet-4-6-search', publicName: 'Claude Sonnet 4.6 Search', displayName: 'Claude Sonnet 4.6 Search', organization: 'Anthropic', provider: 'anthropic', modalities: ['search'], rank: 1, rankByModality: { search: 1 }, userSelectable: true },
+    { id: '019ce975-df80-76b0-be1d-5abfc2744a62', slug: 'claude-opus-4-6-search', name: 'claude-opus-4-6-search', publicName: 'Claude Opus 4.6 Search', displayName: 'Claude Opus 4.6 Search', organization: 'Anthropic', provider: 'anthropic', modalities: ['search'], rank: 2, rankByModality: { search: 2 }, userSelectable: true },
+    { id: '019f4e39-a888-7430-a6e7-ca2c33ec78f1', slug: 'grok-4.5-search', name: 'grok-4.5-search', publicName: 'Grok 4.5 Search', displayName: 'Grok 4.5 Search', organization: 'xAI', provider: 'xai', modalities: ['search'], rank: 3, rankByModality: { search: 4 }, userSelectable: true },
+    { id: '019b1448-f74a-72de-b25d-8666618f8c5a', slug: 'gpt-5.2-search', name: 'gpt-5.2-search', publicName: 'GPT-5.2 Search', displayName: 'GPT-5.2 Search', organization: 'OpenAI', provider: 'openai', modalities: ['search'], rank: 4, rankByModality: { search: 7 }, userSelectable: true },
+    { id: '019bda1f-3abc-783f-aac0-1ee102b247ba', slug: 'gemini-3-flash-grounding', name: 'gemini-3-flash-grounding', publicName: 'Gemini 3 Flash Grounding', displayName: 'Gemini 3 Flash Grounding', organization: 'Google', provider: 'google', modalities: ['search'], rank: 5, rankByModality: { search: 8 }, userSelectable: true },
+    // Image models (active Arena Direct & Battle image models)
+    { id: '01a0843d-e019-78b5-be43-ec2291edc2cf', slug: 'gpt-image-2.5-sunburst', name: 'gpt-image-2.5-sunburst', publicName: 'GPT Image 2.5 Sunburst', displayName: 'GPT Image 2.5 Sunburst', organization: 'OpenAI', provider: 'openai', modalities: ['image'], rank: 1, rankByModality: { image: 1 }, userSelectable: true },
+    { id: '019fde11-e7c8-7394-ac43-8fd3b37ba81c', slug: 'lo-bah-png', name: 'lo-bah-png', publicName: 'Lo-Bah PNG', displayName: 'Lo-Bah PNG', organization: 'Black Forest Labs', provider: 'bfl', modalities: ['image'], rank: 2, rankByModality: { image: 2 }, userSelectable: true },
+    { id: '019f42b5-8c52-7793-9be8-de35eecf7ea9', slug: 'seedream-5.0-pro', name: 'seedream-5.0-pro', publicName: 'Seedream 5.0 Pro', displayName: 'Seedream 5.0 Pro', organization: 'ByteDance', provider: 'bytedance', modalities: ['image'], rank: 3, rankByModality: { image: 3 }, userSelectable: true },
+    { id: '019fbb94-0662-7830-808f-ee8dfe6098a2', slug: 'gemini-3.1-flash-lite-image', name: 'gemini-3.1-flash-lite-image', publicName: 'Gemini 3.1 Flash Lite Image', displayName: 'Gemini 3.1 Flash Lite Image', organization: 'Google', provider: 'google', modalities: ['image'], rank: 4, rankByModality: { image: 4 }, userSelectable: true },
+    { id: '019c911e-a58d-775e-969f-00fb23ff34ab', slug: 'gemini-3.1-flash-image-preview', name: 'gemini-3.1-flash-image-preview', publicName: 'Gemini 3.1 Flash Image Preview', displayName: 'Gemini 3.1 Flash Image Preview', organization: 'Google', provider: 'google', modalities: ['image'], rank: 5, rankByModality: { image: 5 }, userSelectable: true },
+    { id: '019c70f6-8f8b-7121-83c9-5a8b0f0a47ef', slug: 'recraft-v4-pro', name: 'recraft-v4-pro', publicName: 'Recraft V4 Pro', displayName: 'Recraft V4 Pro', organization: 'Recraft', provider: 'recraft', modalities: ['image'], rank: 6, rankByModality: { image: 6 }, userSelectable: true },
+    { id: '019b3cd8-b107-7552-9146-93d9be7ac0f8', slug: 'flux-2-max', name: 'flux-2-max', publicName: 'FLUX.2 Max', displayName: 'FLUX.2 Max', organization: 'Black Forest Labs', provider: 'bfl', modalities: ['image'], rank: 7, rankByModality: { image: 7 }, userSelectable: true },
+    { id: '019e72a4-f3b8-76fa-bf07-d472ce347cb6', slug: 'grok-imagine-image-pro', name: 'grok-imagine-image-pro', publicName: 'Grok Imagine Image Pro', displayName: 'Grok Imagine Image Pro', organization: 'xAI', provider: 'xai', modalities: ['image'], rank: 8, rankByModality: { image: 8 }, userSelectable: true },
+    { id: '019d2614-149b-7b72-8941-bf0687556b49', slug: 'ideogram-v4', name: 'ideogram-v4', publicName: 'Ideogram V4', displayName: 'Ideogram V4', organization: 'Ideogram', provider: 'ideogram', modalities: ['image'], rank: 9, rankByModality: { image: 9 }, userSelectable: true },
+    // Video models (active Arena Direct & Battle video models)
+    { id: '01a06df1-5f5b-7836-aa72-e17403ae8bb0', slug: 'gemini-omni-1.1-flash', name: 'gemini-omni-1.1-flash', publicName: 'Gemini Omni 1.1 Flash', displayName: 'Gemini Omni 1.1 Flash', organization: 'Google', provider: 'google', modalities: ['video'], rank: 1, rankByModality: { video: 1 }, userSelectable: true },
+    { id: '01f39601-03ed-4d66-8afb-5039c90b27ea', slug: 'sora-2-pro', name: 'sora-2-pro', publicName: 'Sora 2 Pro', displayName: 'Sora 2 Pro', organization: 'OpenAI', provider: 'openai', modalities: ['video'], rank: 2, rankByModality: { video: 3 }, userSelectable: true },
+    { id: '019c59fa-6567-7c42-97af-f51b52ce47d5', slug: 'kling-v3.0-pro-text-to-video', name: 'kling-v3.0-pro-text-to-video', publicName: 'Kling V3.0 Pro', displayName: 'Kling V3.0 Pro', organization: 'Kuaishou', provider: 'kuaishou', modalities: ['video'], rank: 3, rankByModality: { video: 5 }, userSelectable: true },
+    { id: '019cb141-6b8b-7142-bf80-7500ef98ca09', slug: 'veo-3.1-fast-audio', name: 'veo-3.1-fast-audio', publicName: 'Veo 3.1 Fast Audio', displayName: 'Veo 3.1 Fast Audio', organization: 'Google', provider: 'google', modalities: ['video'], rank: 4, rankByModality: { video: 6 }, userSelectable: true },
     // Battle-only & Agent next-gen models (used for Battle reveal resolution & habit learning; non-UUIDs are excluded from Direct selection)
     { id: 'anthropic/claude-opus-5.6', name: 'claude-opus-5.6', publicName: 'Claude Opus 5.6', displayName: 'Claude Opus 5.6', organization: 'Anthropic', provider: 'anthropic', modalities: ['chat', 'webdev', 'search'], rank: 101, userSelectable: false },
     { id: 'anthropic/claude-opus-5.5', name: 'claude-opus-5.5', publicName: 'Claude Opus 5.5', displayName: 'Claude Opus 5.5', organization: 'Anthropic', provider: 'anthropic', modalities: ['chat', 'webdev', 'search'], rank: 102, userSelectable: false },
@@ -483,6 +511,7 @@ const ModelCatalog = (() => {
       if (!item || typeof item !== 'object') return;
       const id = String(item.id || item.modelId || item.name || '').trim();
       if (!id) return;
+      const isMetaRouter = META_ROUTER_IDS.has(id) || /^(router|max)$/i.test(String(item.publicName || item.name || ''));
       const existing = map.get(id) || {
         id,
         slug: item.slug || undefined,
@@ -495,25 +524,38 @@ const ModelCatalog = (() => {
         modalities: [],
         rank: Number.isFinite(Number(item.rank)) ? Number(item.rank) : (idx + 1),
         rankByModality: {},
-        userSelectable: item.userSelectable !== false && item.isSelectable !== false && item.isDeprecated !== true && item.deprecated !== true && item.status !== 'archived' && item.status !== 'disabled',
+        userSelectable: !isMetaRouter && item.userSelectable !== false && item.isSelectable !== false && item.isDeprecated !== true && item.deprecated !== true && item.status !== 'archived' && item.status !== 'disabled',
       };
+      if (isMetaRouter) existing.userSelectable = false;
+      const outCap = item.capabilities?.outputCapabilities;
+      if (outCap && typeof outCap === 'object') {
+        const hasSearchCap = Boolean(outCap.search);
+        const hasTextCap = Boolean(outCap.text);
+        const hasWebCap = Boolean(outCap.web || outCap.code || outCap.webdev);
+        const hasImgCap = Boolean(outCap.image);
+        const hasVidCap = Boolean(outCap.video);
+        if (hasSearchCap && !existing.modalities.includes('search')) existing.modalities.push('search');
+        if (hasTextCap && !hasSearchCap && !existing.modalities.includes('chat')) existing.modalities.push('chat');
+        if (hasWebCap && !hasSearchCap && !existing.modalities.includes('webdev')) existing.modalities.push('webdev');
+        if (hasImgCap && !existing.modalities.includes('image')) existing.modalities.push('image');
+        if (hasVidCap && !existing.modalities.includes('video')) existing.modalities.push('video');
+      }
       if (item.rankByModality && typeof item.rankByModality === 'object') {
         Object.assign(existing.rankByModality, item.rankByModality);
         for (const [rk, rv] of Object.entries(item.rankByModality)) {
           if (rv == null || !Number.isFinite(Number(rv))) continue;
           const mapped = ARENA_TO_MODALITY[String(rk).toLowerCase()] || null;
-          if (mapped && !existing.modalities.includes(mapped)) existing.modalities.push(mapped);
+          if (!mapped) continue;
+          if (outCap && typeof outCap === 'object') {
+            if (mapped === 'search' && !outCap.search) continue;
+            if ((mapped === 'chat' || mapped === 'webdev') && outCap.search && !outCap.text) continue;
+            if (mapped === 'image' && !outCap.image) continue;
+            if (mapped === 'video' && !outCap.video) continue;
+          }
+          if (!existing.modalities.includes(mapped)) existing.modalities.push(mapped);
         }
       }
-      const outCap = item.capabilities?.outputCapabilities;
-      if (outCap && typeof outCap === 'object') {
-        if (outCap.text && !existing.modalities.includes('chat')) existing.modalities.push('chat');
-        if ((outCap.code || outCap.webdev) && !existing.modalities.includes('webdev')) existing.modalities.push('webdev');
-        if ((outCap.search || outCap.webSearch) && !existing.modalities.includes('search')) existing.modalities.push('search');
-        if (outCap.image && !existing.modalities.includes('image')) existing.modalities.push('image');
-        if (outCap.video && !existing.modalities.includes('video')) existing.modalities.push('video');
-      }
-      if (Array.isArray(item.modalities)) {
+      if (Array.isArray(item.modalities) && (!outCap || existing.modalities.length === 0)) {
         for (const mm of item.modalities) {
           const mapped = ARENA_TO_MODALITY[mm] || mm;
           if (mapped && !existing.modalities.includes(mapped)) existing.modalities.push(mapped);
@@ -632,7 +674,16 @@ const ModelCatalog = (() => {
   function getModelsForModality(modality = ModeState.getModality()) {
     const mod = (modality === 'auto' || !modality) ? 'chat' : String(modality).toLowerCase();
     const filtered = models.filter(m => {
-      if (!m || m.userSelectable === false) return false;
+      if (!m || m.userSelectable === false || META_ROUTER_IDS.has(String(m.id || ''))) return false;
+      if (RETIRED_MODEL_ID_MAP[String(m.id || '')]) return false;
+      const outCap = m.capabilities?.outputCapabilities;
+      if (outCap && typeof outCap === 'object') {
+        if (mod === 'search') return Boolean(outCap.search);
+        if (mod === 'image') return Boolean(outCap.image);
+        if (mod === 'video') return Boolean(outCap.video);
+        if (mod === 'webdev') return Boolean((outCap.web || outCap.code || outCap.webdev || outCap.text) && !outCap.search);
+        if (mod === 'chat') return Boolean(outCap.text && !outCap.search);
+      }
       if (!Array.isArray(m.modalities) || !m.modalities.length) return mod === 'chat';
       return m.modalities.includes(mod);
     });
@@ -643,27 +694,33 @@ const ModelCatalog = (() => {
         ? filtered
         : FALLBACK_MODELS.filter(m => m.userSelectable !== false && (m.modalities || ['chat']).includes(mod));
     return [...list].sort((a, b) => {
-      const ra = a.rankByModality?.[mod] ?? a.rank ?? 999;
-      const rb = b.rankByModality?.[mod] ?? b.rank ?? 999;
+      const ra = a.rankByModality?.[mod] ?? (mod === 'webdev' ? a.rankByModality?.web : undefined) ?? a.rank ?? 999;
+      const rb = b.rankByModality?.[mod] ?? (mod === 'webdev' ? b.rankByModality?.web : undefined) ?? b.rank ?? 999;
       return ra - rb;
     });
   }
 
   function getModelById(id) {
     if (!id) return null;
-    const key = String(id).trim();
+    const rawKey = String(id).trim();
+    const key = RETIRED_MODEL_ID_MAP[rawKey] || rawKey;
     const tail = key.includes('/') ? key.split('/').pop() : key;
-    return byIdMap.get(key) || byIdMap.get(key.toLowerCase()) || byIdMap.get(tail) || byIdMap.get(tail.toLowerCase()) || null;
+    return byIdMap.get(key) || byIdMap.get(key.toLowerCase()) || byIdMap.get(rawKey) || byIdMap.get(tail) || byIdMap.get(tail.toLowerCase()) || null;
   }
 
   function resolveModelUuid(id, modality = 'chat') {
     const raw = String(id || '').trim();
-    if (UUID_RE.test(raw)) return raw;
-    const hit = getModelById(raw);
-    if (hit && UUID_RE.test(String(hit.id || ''))) return String(hit.id);
+    const mapped = RETIRED_MODEL_ID_MAP[raw] || raw;
     const list = getModelsForModality(modality);
+    if (UUID_RE.test(mapped) && !META_ROUTER_IDS.has(mapped)) {
+      if (!list.length || list.some(m => m.id === mapped)) return mapped;
+    }
+    const hit = getModelById(mapped);
+    if (hit && UUID_RE.test(String(hit.id || '')) && (!list.length || list.some(m => m.id === hit.id))) {
+      return String(hit.id);
+    }
     const fallback = list.find(m => UUID_RE.test(String(m?.id || '')));
-    return fallback ? String(fallback.id) : (raw || '019ce973-84c9-7030-9f88-1ebbf2edeb14');
+    return fallback ? String(fallback.id) : (mapped || '019ce973-84c9-7030-9f88-1ebbf2edeb14');
   }
 
   function resolveModelName(id, revealedModels = []) {
@@ -696,7 +753,11 @@ const EvalEngine = (() => {
   const VOTE_NEXT_ACTION = '6045a00021608b43c2ded349d9d98204449e22d4b0';
   const PREV_VOTE_NEXT_ACTION = '60c09be8dfaa9c507f73e0d2a17d7e887bbda2c815';
   const LEGACY_VOTE_NEXT_ACTION = '60353f7027df227e704beac966d87b6957fc086a39';
+  const GENERATE_UPLOAD_URL_ACTION = '708854254c0bcc55fe812aa73f44ae7432d7f486c5';
+  const GET_SIGNED_URL_ACTION = '600ab5aa2553a56ac3a9f5b60c24e9ca7512e14294';
   let cachedVoteActionId = VOTE_NEXT_ACTION;
+  const _signedUrlCache = new Map();
+  const _signedUrlInflight = new Map();
   try {
     if (typeof Store !== 'undefined' && Store.get) {
       const savedAct = Store.get('eval:voteActionId', '');
@@ -705,6 +766,163 @@ const EvalEngine = (() => {
       }
     }
   } catch {}
+
+  function extractR2StorageKey(urlOrKey) {
+    if (!urlOrKey || typeof urlOrKey !== 'string') return '';
+    const s = urlOrKey.trim();
+    if (!s || s.startsWith('data:') || s.startsWith('blob:')) return '';
+    if (!/^https?:\/\//i.test(s)) return s.replace(/^\/+/, '');
+    try {
+      const u = new URL(s);
+      if (!/r2\.cloudflarestorage\.com$/i.test(u.hostname)) return '';
+      const segs = u.pathname.split('/').filter(Boolean);
+      if (segs.length >= 2 && /^lmarena/i.test(segs[0])) {
+        return decodeURIComponent(segs.slice(1).join('/'));
+      }
+      if (segs.length >= 1) {
+        return decodeURIComponent(segs.join('/'));
+      }
+    } catch {}
+    return '';
+  }
+
+  function isR2UrlExpired(urlStr) {
+    if (!urlStr || typeof urlStr !== 'string') return false;
+    if (!/r2\.cloudflarestorage\.com/i.test(urlStr)) return false;
+    try {
+      const u = new URL(urlStr);
+      const amzDate = u.searchParams.get('X-Amz-Date');
+      const amzExpires = Number(u.searchParams.get('X-Amz-Expires') || '0');
+      if (!amzDate || !amzExpires) return false;
+      const m = /^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z$/.exec(amzDate);
+      if (!m) return false;
+      const issuedMs = Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6]);
+      const expiresMs = issuedMs + amzExpires * 1000;
+      return Date.now() >= (expiresMs - 60000);
+    } catch {
+      return false;
+    }
+  }
+
+  async function callNextServerAction(actionId, argsArray, pathUrl = '/text') {
+    const fetchFn = typeof rawFetch === 'function' ? rawFetch : fetch;
+    const headers = {
+      Accept: 'text/x-component',
+      'Content-Type': 'text/plain;charset=UTF-8',
+      'Next-Action': actionId,
+    };
+    if (cachedWebDeploymentId) {
+      headers['x-deployment-id'] = cachedWebDeploymentId;
+    }
+    const res = await fetchFn(pathUrl, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(argsArray),
+      credentials: 'same-origin',
+      cache: 'no-store',
+    });
+    if (!res.ok) return null;
+    const txt = await res.text();
+    const lines = txt.split('\n');
+    for (const line of lines) {
+      const idx = line.indexOf(':');
+      if (idx <= 0) continue;
+      const tag = line.slice(0, idx).trim();
+      const body = line.slice(idx + 1).trim();
+      if (tag === '1' && body.startsWith('{')) {
+        try { return JSON.parse(body); } catch {}
+      }
+    }
+    for (const line of lines) {
+      const idx = line.indexOf('{');
+      if (idx >= 0) {
+        try {
+          const parsed = JSON.parse(line.slice(idx));
+          if (parsed && typeof parsed === 'object' && ('success' in parsed || 'data' in parsed || 'url' in parsed)) {
+            return parsed;
+          }
+        } catch {}
+      }
+    }
+    return null;
+  }
+
+  async function refreshSignedAttachmentUrl(urlOrKey, opts = {}) {
+    const fallbackKey = typeof opts === 'string' ? opts : (opts?.key || '');
+    const sid = (opts && typeof opts === 'object') ? opts.sid : '';
+    const key = extractR2StorageKey(urlOrKey) || extractR2StorageKey(fallbackKey);
+    if (!key) return urlOrKey;
+    const cached = _signedUrlCache.get(key);
+    if (cached && !isR2UrlExpired(cached)) return cached;
+    if (_signedUrlInflight.has(key)) return _signedUrlInflight.get(key);
+    const task = (async () => {
+      try {
+        const resp = await callNextServerAction(GET_SIGNED_URL_ACTION, [key], sid ? `/c/${encodeURIComponent(sid)}` : '/text');
+        const newUrl = resp?.data?.url || resp?.url || '';
+        if (newUrl && /^https?:\/\//i.test(newUrl)) {
+          _signedUrlCache.set(key, newUrl);
+          return newUrl;
+        }
+      } catch {}
+      return urlOrKey;
+    })().finally(() => {
+      _signedUrlInflight.delete(key);
+    });
+    _signedUrlInflight.set(key, task);
+    return task;
+  }
+
+  async function uploadSingleEvaluationFile(fileItem) {
+    if (!fileItem) return null;
+    if (fileItem.url && /^https?:\/\//i.test(fileItem.url) && !fileItem.url.startsWith('blob:')) {
+      return {
+        name: fileItem.name || extractR2StorageKey(fileItem.url) || 'attachment',
+        contentType: fileItem.contentType || fileItem.type || 'application/octet-stream',
+        url: fileItem.url,
+      };
+    }
+    const rawFile = fileItem.raw || fileItem.file || (typeof Blob !== 'undefined' && fileItem instanceof Blob ? fileItem : null);
+    let blob = rawFile;
+    let fileName = fileItem.name || rawFile?.name || `upload-${Date.now()}.png`;
+    let mimeType = fileItem.type || fileItem.contentType || rawFile?.type || 'image/png';
+    if (!blob && typeof fileItem.dataUrl === 'string' && fileItem.dataUrl.startsWith('data:')) {
+      const m = /^data:([^;,]+)?(;base64)?,(.*)$/s.exec(fileItem.dataUrl);
+      if (m) {
+        mimeType = m[1] || mimeType;
+        const bstr = atob(m[3]);
+        const u8 = new Uint8Array(bstr.length);
+        for (let i = 0; i < bstr.length; i++) u8[i] = bstr.charCodeAt(i);
+        blob = new Blob([u8], { type: mimeType });
+      }
+    }
+    if (!blob) return null;
+    const upResp = await callNextServerAction(GENERATE_UPLOAD_URL_ACTION, [fileName, mimeType]);
+    const uploadUrl = upResp?.data?.uploadUrl || upResp?.uploadUrl || '';
+    const key = upResp?.data?.key || upResp?.key || '';
+    if (!uploadUrl || !key) throw new Error('获取评测附件上传地址失败');
+    const fetchFn = typeof rawFetch === 'function' ? rawFetch : fetch;
+    const putRes = await fetchFn(uploadUrl, {
+      method: 'PUT',
+      headers: { 'Content-Type': mimeType },
+      body: blob,
+    });
+    if (!putRes.ok) throw new Error(`上传评测附件失败 (HTTP ${putRes.status})`);
+    const signResp = await callNextServerAction(GET_SIGNED_URL_ACTION, [key]);
+    const signedUrl = signResp?.data?.url || signResp?.url || '';
+    if (!signedUrl) throw new Error('获取评测附件签名链接失败');
+    _signedUrlCache.set(key, signedUrl);
+    return {
+      name: key,
+      contentType: mimeType,
+      url: signedUrl,
+    };
+  }
+
+  async function uploadEvaluationAttachments(files) {
+    if (!Array.isArray(files) || !files.length) return [];
+    const results = await Promise.all(files.map(f => uploadSingleEvaluationFile(f).catch(() => null)));
+    return results.filter(Boolean);
+  }
 
   function genUuid() {
     if (typeof uuid7 === 'function') return uuid7();
@@ -942,8 +1160,16 @@ const EvalEngine = (() => {
     return state;
   }
 
-  function buildAssistantParts(m) {
+  function buildAssistantParts(m, legacyAttachments = null, legacyReasoning = '', legacyToolCalls = null) {
     const parts = [];
+    if (m && typeof m !== 'object') {
+      m = {
+        content: m,
+        experimental_attachments: Array.isArray(legacyAttachments) ? legacyAttachments : [],
+        reasoning: legacyReasoning || '',
+        toolCalls: legacyToolCalls || null,
+      };
+    }
     if (!m || typeof m !== 'object') return parts;
     const isPending = String(m.status || '').toLowerCase() === 'pending' || String(m.status || '').toLowerCase() === 'streaming';
     const hasStructuredTools = Array.isArray(m.content) && m.content.some(
@@ -1025,15 +1251,44 @@ const EvalEngine = (() => {
     }
     if (Array.isArray(m.experimental_attachments)) {
       for (const a of m.experimental_attachments) {
-        if (!a || !a.url) continue;
+        if (!a || (!a.url && !a.name)) continue;
+        const rawUrl = a.url || '';
         const ct = String(a.contentType || a.mimeType || '').toLowerCase();
-        const isVideo = ct.startsWith('video/') || /\.(mp4|webm|mov)(\?|$)/i.test(a.url);
-        parts.push({
-          type: isVideo ? 'video' : 'image',
-          url: a.url,
+        const isVideo = ct.startsWith('video/') || /\.(mp4|webm|mov)(\?|$)/i.test(rawUrl || a.name || '');
+        const key = extractR2StorageKey(rawUrl) || extractR2StorageKey(a.name || '');
+        const cachedSigned = key ? _signedUrlCache.get(key) : '';
+        const effectiveUrl = (cachedSigned && !isR2UrlExpired(cachedSigned)) ? cachedSigned : rawUrl;
+        const partType = isVideo ? 'video' : 'image';
+        const existingPart = parts.find(p => p && p.type === partType && (p.url === effectiveUrl || p.url === rawUrl || (key && p.r2Key === key)));
+        if (existingPart) {
+          if (effectiveUrl) existingPart.url = effectiveUrl;
+          if (key) existingPart.r2Key = key;
+          continue;
+        }
+        const partObj = {
+          type: partType,
+          url: effectiveUrl,
+          r2Key: key || '',
           contentType: a.contentType || a.mimeType || (isVideo ? 'video/mp4' : 'image/png'),
-          name: a.name || '',
-        });
+          name: a.name || key || '',
+        };
+        parts.push(partObj);
+        if (key && (!effectiveUrl || isR2UrlExpired(effectiveUrl))) {
+          void refreshSignedAttachmentUrl(rawUrl || key).then(freshUrl => {
+            if (freshUrl && freshUrl !== partObj.url) {
+              partObj.url = freshUrl;
+              a.url = freshUrl;
+              m.v = (m.v || 0) + 1;
+              try {
+                if (typeof Chats !== 'undefined' && Chats.values) {
+                  for (const c of Chats.values()) {
+                    if (c && Array.isArray(c.messages) && c.messages.includes(m)) c.emit?.();
+                  }
+                }
+              } catch {}
+            }
+          });
+        }
       }
     }
     if (Array.isArray(m.sources) && m.sources.length) {
@@ -1102,7 +1357,8 @@ const EvalEngine = (() => {
     if (sid) {
       const cachedEval = readLocalEvalCache(sid);
       if (cachedEval && typeof cachedEval === 'object' && (cachedEval.mode || Array.isArray(cachedEval.messages) || Array.isArray(cachedEval.maskedEvaluations))) {
-        const mMode = String(cachedEval.mode || '').toLowerCase() === 'direct' ? 'direct' : 'battle';
+        const rawCachedMode = String(cachedEval.mode || '').toLowerCase();
+        const mMode = (rawCachedMode === 'direct' || rawCachedMode === 'direct-battle' || rawCachedMode === 'side-by-side' || (cachedEval.modelAId && !cachedEval.modelBId && rawCachedMode !== 'battle')) ? 'direct' : 'battle';
         initEvalFields(chat, {
           evalMode: mMode,
           modality: cachedEval.modality || 'chat',
@@ -1526,8 +1782,8 @@ const EvalEngine = (() => {
         const hydratedMsgs = orderTurnMessages(localCached.messages).map(m => {
           if (!m || typeof m !== 'object') return m;
           const cp = { ...m, v: (m.v || 0) + 1 };
-          if (cp.role === 'assistant' && (!Array.isArray(cp.parts) || !cp.parts.length)) {
-            cp.parts = buildAssistantParts(cp.content || '', cp.experimental_attachments, cp.reasoning || '', cp.toolCalls || null);
+          if (cp.role === 'assistant') {
+            cp.parts = buildAssistantParts(cp);
           }
           return cp;
         });
@@ -1588,16 +1844,31 @@ const EvalEngine = (() => {
           if (!m || typeof m !== 'object') continue;
           if (m.role === 'user') {
             const uTxt = extractUserText(m.content ?? m.text ?? m.parts);
-            rawMapped.push({
+            const uAtts = Array.isArray(m.experimental_attachments) ? m.experimental_attachments : [];
+            const uObj = {
               id: m.id || genUuid(),
               role: 'user',
               text: uTxt,
               parts: [{ type: 'text', text: uTxt }],
               createdAt: m.createdAt || new Date().toISOString(),
-              experimental_attachments: Array.isArray(m.experimental_attachments) ? m.experimental_attachments : [],
+              experimental_attachments: uAtts,
               metadata: m.metadata || {},
               v: nextEvalVer,
-            });
+            };
+            for (const att of uAtts) {
+              if (!att || (!att.url && !att.name)) continue;
+              const r2k = extractR2StorageKey(att.url || '') || extractR2StorageKey(att.name || '');
+              if (r2k && (!att.url || isR2UrlExpired(att.url))) {
+                void refreshSignedAttachmentUrl(att.url || r2k, { sid: chat.sid }).then(freshUrl => {
+                  if (freshUrl && freshUrl !== att.url) {
+                    att.url = freshUrl;
+                    uObj.v = (uObj.v || 0) + 1;
+                    chat.emit?.();
+                  }
+                });
+              }
+            }
+            rawMapped.push(uObj);
           } else if (m.role === 'assistant') {
             const pos = m.participantPosition === 'b' ? 'b' : 'a';
             const mId = m.modelId || m.model || null;
@@ -1632,6 +1903,7 @@ const EvalEngine = (() => {
               failureReason: failReason,
               createdAt: m.createdAt || new Date().toISOString(),
               parts: builtParts,
+              experimental_attachments: Array.isArray(m.experimental_attachments) ? m.experimental_attachments : [],
               activeWorkflowRunId: m.activeWorkflowRunId || m.metadata?.workflowRunId || null,
               webdevTemplate: m.webdevTemplate || m.metadata?.webdevTemplate || null,
               ...(m.webdev ? { webdev: m.webdev } : {}),
@@ -2364,13 +2636,84 @@ const EvalEngine = (() => {
       targetMsg.metadata = targetMsg.metadata || {};
       targetMsg.metadata.timing = targetMsg.metadata.timing || { startedAt: tNow };
 
-      if (code === '0') {
+      const appendMediaPartToMsg = (msg, mediaType, rawUrlOrData, mimeType, extra = {}) => {
+        if (!msg || !rawUrlOrData) return false;
+        const mime = mimeType || (mediaType === 'video' ? 'video/mp4' : 'image/png');
+        const rawStr = String(rawUrlOrData).trim();
+        if (!rawStr) return false;
+        const url = (/^https?:\/\/|^data:|^blob:/i.test(rawStr))
+          ? rawStr
+          : `data:${mime};base64,${rawStr}`;
+        const key = extractR2StorageKey(url);
+        if (!Array.isArray(msg.experimental_attachments)) msg.experimental_attachments = [];
+        if (!msg.experimental_attachments.some(a => a && (a.url === url || (key && extractR2StorageKey(a.url) === key)))) {
+          msg.experimental_attachments.push({
+            url,
+            contentType: mime,
+            name: extra.name || key || (mediaType === 'video' ? 'generated-video.mp4' : 'generated-image.png'),
+          });
+        }
+        if (!Array.isArray(msg.parts)) msg.parts = [];
+        const existing = msg.parts.find(p => p && p.type === mediaType && (p.url === url || (key && p.r2Key === key)));
+        if (existing) {
+          existing.url = url;
+          existing.contentType = mime;
+          if (extra.thumbnailUrl) existing.thumbnailUrl = extra.thumbnailUrl;
+        } else {
+          msg.parts.push({
+            type: mediaType,
+            url,
+            r2Key: key || '',
+            contentType: mime,
+            ...(extra.thumbnailUrl ? { thumbnailUrl: extra.thumbnailUrl } : {}),
+            name: extra.name || key || '',
+          });
+        }
+        msg.genPhase = mediaType === 'video' ? '✓ 视频生成完毕' : '✓ 图像生成完毕';
+        chat.phase = msg.genPhase;
+        if (key && isR2UrlExpired(url)) {
+          void refreshSignedAttachmentUrl(url, { sid: chat.sid }).then(fresh => {
+            if (fresh && fresh !== url) {
+              for (const p of msg.parts || []) {
+                if (p && (p.url === url || p.r2Key === key)) p.url = fresh;
+              }
+              for (const a of msg.experimental_attachments || []) {
+                if (a && (a.url === url || extractR2StorageKey(a.url) === key)) a.url = fresh;
+              }
+              msg.v = (msg.v || 0) + 1;
+              chat.emit?.();
+            }
+          });
+        }
+        return true;
+      };
+
+      let forceImmediateEmit = false;
+      const curMod = chat.resolvedModality || chat.evalModality || chat.modality || 'chat';
+
+      if (code === 'f') {
+        targetMsg.status = 'streaming';
+        if (!targetMsg.genPhase) {
+          targetMsg.genPhase = curMod === 'image' ? '正在绘制图像…'
+            : curMod === 'video' ? '正在渲染视频…'
+            : curMod === 'search' ? '正在联网检索…'
+            : curMod === 'webdev' ? '正在构建应用…'
+            : '正在生成回复…';
+          chat.phase = targetMsg.genPhase;
+        }
+        targetMsg.v = (targetMsg.v || 0) + 1;
+        forceImmediateEmit = true;
+      } else if (code === '0') {
         const chunk = typeof val === 'string' ? val : String(val ?? '');
         if (!targetMsg.metadata.timing.firstTokenAt) targetMsg.metadata.timing.firstTokenAt = tNow;
         if (targetMsg.metadata.timing.reasoningStartedAt && !targetMsg.metadata.timing.reasoningCompletedAt) {
           targetMsg.metadata.timing.reasoningCompletedAt = tNow;
           targetMsg.metadata.timing.thinkingMs = tNow - targetMsg.metadata.timing.reasoningStartedAt;
         }
+        targetMsg.status = 'streaming';
+        targetMsg.genPhase = '正在输出回复…';
+        chat.phase = chat.evalMode === 'battle' ? '双模型盲测生成中…' : '直连模型回复输出中…';
+        targetMsg.content = (typeof targetMsg.content === 'string' ? targetMsg.content : '') + chunk;
         const tp = ensurePart(targetMsg, 'text');
         if (tp) tp.text = (tp.text || '') + chunk;
         if (chunk.length > 0) {
@@ -2387,6 +2730,10 @@ const EvalEngine = (() => {
         if (!targetMsg.metadata.timing.reasoningStartedAt) {
           targetMsg.metadata.timing.reasoningStartedAt = tNow;
         }
+        targetMsg.status = 'streaming';
+        targetMsg.genPhase = curMod === 'image' ? '正在构思画面与绘制…' : '正在深度思考…';
+        chat.phase = chat.evalMode === 'battle' ? '双模型深度思考中…' : targetMsg.genPhase;
+        targetMsg.reasoning = (typeof targetMsg.reasoning === 'string' ? targetMsg.reasoning : '') + chunk;
         const rp = ensurePart(targetMsg, 'reasoning');
         if (rp) rp.text = (rp.text || '') + chunk;
         if (chunk.length > 0) {
@@ -2397,12 +2744,31 @@ const EvalEngine = (() => {
           targetMsg.metadata._fmt = targetMsg._fmt;
         }
         targetMsg.v = (targetMsg.v || 0) + 1;
+      } else if (code === 'i') {
+        if (!targetMsg.metadata.timing.firstTokenAt) targetMsg.metadata.timing.firstTokenAt = tNow;
+        if (!targetMsg.metadata.timing.reasoningStartedAt) targetMsg.metadata.timing.reasoningStartedAt = tNow;
+        targetMsg.status = 'streaming';
+        targetMsg.genPhase = '正在深度思考…';
+        const rp = ensurePart(targetMsg, 'reasoning');
+        if (rp && !rp.text) rp.text = '';
+        targetMsg.v = (targetMsg.v || 0) + 1;
+      } else if (code === 'j') {
+        if (val && typeof val === 'object' && val.signature) {
+          targetMsg.metadata.reasoningSignature = val.signature;
+        }
       } else if (code === '9' && val && typeof val === 'object') {
+        targetMsg.status = 'streaming';
+        targetMsg.genPhase = `正在调用工具 ${val.toolName || ''}…`.trim();
         upsertToolCallPart(chat, targetMsg, val);
       } else if (code === 'a' && val && typeof val === 'object') {
         applyToolResultPart(chat, targetMsg, val);
       } else if (code === 'b' && val && typeof val === 'object') {
-        if (val.toolCallId && val.toolCallId !== 'citation-source' && val.toolName) {
+        targetMsg.status = 'streaming';
+        if (val.toolCallId === 'citation-source') {
+          targetMsg.genPhase = '正在联网检索引用来源…';
+          chat.phase = targetMsg.genPhase;
+        } else if (val.toolCallId && val.toolName) {
+          targetMsg.genPhase = `正在执行 ${val.toolName}…`;
           upsertToolCallPart(chat, targetMsg, { toolCallId: val.toolCallId, toolName: val.toolName, args: {} });
         }
       } else if (code === 'c' && val && typeof val === 'object') {
@@ -2416,6 +2782,8 @@ const EvalEngine = (() => {
                 targetMsg.parts.push(sp);
               }
               if (!sp.sources.some(s => s && s.url === parsedSrc.url)) sp.sources.push(parsedSrc);
+              if (!Array.isArray(targetMsg.sources)) targetMsg.sources = [];
+              if (!targetMsg.sources.some(s => s && s.url === parsedSrc.url)) targetMsg.sources.push(parsedSrc);
               targetMsg.v = (targetMsg.v || 0) + 1;
             }
           } catch {}
@@ -2442,35 +2810,52 @@ const EvalEngine = (() => {
         }
         const src = val.source || val;
         if (src && src.url && !sp.sources.some(s => s && s.url === src.url)) sp.sources.push(src);
+        if (!Array.isArray(targetMsg.sources)) targetMsg.sources = [];
+        if (src && src.url && !targetMsg.sources.some(s => s && s.url === src.url)) targetMsg.sources.push(src);
         targetMsg.v = (targetMsg.v || 0) + 1;
       } else if (code === '2' && Array.isArray(val)) {
         for (const item of val) {
           if (!item || typeof item !== 'object') continue;
-          if (item.type === 'image' && (item.image || item.url)) {
-            const url = item.url || (String(item.image).startsWith('data:') ? item.image : `data:${item.mimeType || 'image/png'};base64,${item.image}`);
-            targetMsg.parts.push({ type: 'image', url, contentType: item.mimeType || 'image/png' });
-          } else if (item.type === 'video' && item.url) {
-            targetMsg.parts.push({ type: 'video', url: item.url, thumbnailUrl: item.thumbnailUrl || null, contentType: item.mimeType || 'video/mp4' });
+          const imgPayload = item.data || item.image || item.url;
+          if (item.type === 'image' && imgPayload) {
+            if (appendMediaPartToMsg(targetMsg, 'image', imgPayload, item.mimeType || item.contentType || 'image/png', item)) {
+              forceImmediateEmit = true;
+            }
+          } else if (item.type === 'video' && (item.url || item.data || item.video)) {
+            if (appendMediaPartToMsg(targetMsg, 'video', item.url || item.data || item.video, item.mimeType || item.contentType || 'video/mp4', item)) {
+              forceImmediateEmit = true;
+            }
           } else if (item.type === 'sources' && Array.isArray(item.sources)) {
             targetMsg.parts.push({ type: 'sources', sources: item.sources });
           } else if (item.type === 'routed_model' && item.organization) {
             targetMsg.metadata.routedOrganization = item.organization;
+            targetMsg.routedModel = { organization: item.organization, ...(item.model ? { model: item.model } : {}) };
+          } else if (item.type === 'status' || item.type === 'progress' || item.type === 'heartbeat') {
+            if (item.message || item.status) {
+              targetMsg.genPhase = String(item.message || item.status);
+              chat.phase = targetMsg.genPhase;
+              forceImmediateEmit = true;
+            }
           } else if (item.type === 'webdev' && item.event) {
+            targetMsg.genPhase = item.event.type === 'preview-ready' ? '✓ 应用预览就绪' : '正在构建 WebDev 应用…';
             applyWebDevChunkEvent(chat, targetMsg, item.event);
             if (item.event.type === 'init') {
               void streamWebDevMessageSSE(chat, targetMsg, chat.ctl?.signal).catch(() => false);
             } else if (item.event.type === 'preview-ready') {
               finishedSlots.add(pos);
+              forceImmediateEmit = true;
             }
           }
         }
         targetMsg.v = (targetMsg.v || 0) + 1;
       } else if (code === 'k' && val && typeof val === 'object') {
         const mime = val.mimeType || val.contentType || 'image/png';
-        const url = val.url || (val.data ? `data:${mime};base64,${val.data}` : null);
-        if (url) {
+        const rawPayload = val.url || val.data || val.image || null;
+        if (rawPayload) {
           const isVideo = String(mime).startsWith('video/');
-          targetMsg.parts.push({ type: isVideo ? 'video' : 'image', url, contentType: mime });
+          if (appendMediaPartToMsg(targetMsg, isVideo ? 'video' : 'image', rawPayload, mime, val)) {
+            forceImmediateEmit = true;
+          }
           targetMsg.v = (targetMsg.v || 0) + 1;
         }
       } else if (code === 'e' || code === 'd') {
@@ -2483,6 +2868,7 @@ const EvalEngine = (() => {
           delete targetMsg._incomplete;
           targetMsg.status = 'failed';
           targetMsg.failed = true;
+          targetMsg.genPhase = '生成失败';
           targetMsg.failureReason = targetMsg.failureReason || val.message || val.error || '官方模型生成报错，请点击重试重新生成';
           if (targetMsg.webdev) {
             targetMsg.webdev.status = 'build-error';
@@ -2492,6 +2878,7 @@ const EvalEngine = (() => {
           if (code === 'd' && !hasActiveWf) {
             finishedSlots.add(pos);
             targetMsg.metadata.pending = false;
+            targetMsg.genPhase = '✓ 生成完毕';
           }
           if (targetMsg.status !== 'failed' && !hasActiveWf) {
             targetMsg.status = 'success';
@@ -2508,19 +2895,26 @@ const EvalEngine = (() => {
         targetMsg.metadata.timing.turnDurationMs = Math.max(0, tNow - (targetMsg.metadata.timing.startedAt || tNow));
         if (targetMsg._fmt) targetMsg.metadata._fmt = targetMsg._fmt;
         targetMsg.v = (targetMsg.v || 0) + 1;
+        forceImmediateEmit = true;
       } else if (code === '3') {
         finishedSlots.add(pos);
         targetMsg.metadata.pending = false;
         targetMsg.status = 'failed';
+        targetMsg.genPhase = '生成失败';
         targetMsg.failureReason = typeof val === 'string' ? val : (val?.message || val?.error || '生成失败');
         targetMsg.v = (targetMsg.v || 0) + 1;
+        forceImmediateEmit = true;
       }
 
       chat.lastActivity = tNow;
       chat.byteAt = tNow;
       chat.progAt = tNow;
       chat.respAt = chat.respAt || tNow;
-      chat.emitStreamSoon?.(24);
+      if (forceImmediateEmit) {
+        chat.emit?.();
+      } else {
+        chat.emitStreamSoon?.(24);
+      }
       if (typeof Bus !== 'undefined' && typeof Bus.emit === 'function') {
         try { Bus.emit('eval:stream', { sid: chat.sid, pos, chat }); } catch {}
       }
@@ -2554,11 +2948,39 @@ const EvalEngine = (() => {
       }
     }
 
+    const isMediaTurn = ['image', 'video'].includes(chat?.modality) || ['image', 'video'].includes(chat?.evalModality) || ['image', 'video'].includes(chat?.resolvedModality);
+    if (isMediaTurn && chat?.sid && !chat.ctl?.signal?.aborted) {
+      const needsMediaSync = [msgA, msgB].some(m => m && m.status !== 'failed' && !(m.parts || []).some(p => p && (p.type === 'image' || p.type === 'video')));
+      if (needsMediaSync) {
+        try {
+          chat.phase = '正在加载生成的媒体文件…';
+          chat.emit?.();
+          const freshData = await fetchEvalSessionData(chat.sid).catch(() => null);
+          const freshMsgs = extractMessagesFromData(freshData);
+          if (Array.isArray(freshMsgs) && freshMsgs.length) {
+            for (const m of [msgA, msgB]) {
+              if (!m) continue;
+              const srvM = freshMsgs.find(x => x && (x.id === m.id || (x.role === 'assistant' && (x.participantPosition || 'a') === (m.participantPosition || 'a'))));
+              if (srvM) {
+                if (Array.isArray(srvM.experimental_attachments) && srvM.experimental_attachments.length) {
+                  m.experimental_attachments = srvM.experimental_attachments;
+                }
+                const rebuilt = buildAssistantParts({ ...m, ...srvM, parts: m.parts });
+                if (rebuilt.length) m.parts = rebuilt;
+                m.genPhase = '✓ 生成完毕';
+                m.v = (m.v || 0) + 1;
+              }
+            }
+          }
+        } catch {}
+      }
+    }
+
     const endNow = Date.now();
     for (const [posKey, m] of [['a', msgA], ['b', msgB]]) {
       if (!m) continue;
       const slotFinished = finishedSlots.has(posKey);
-      const hasAnyOut = Boolean(String(m.content || '').trim() || String(m.reasoning || '').trim() || (Array.isArray(m.parts) && m.parts.length > 0));
+      const hasAnyOut = Boolean(String(m.content || '').trim() || String(m.reasoning || '').trim() || (Array.isArray(m.parts) && m.parts.length > 0) || (Array.isArray(m.experimental_attachments) && m.experimental_attachments.length > 0));
       const slotIncomplete = !slotFinished && !chat.ctl?.signal?.aborted && !hasAnyOut;
       if (slotIncomplete) {
         m._incomplete = true;
@@ -2619,23 +3041,34 @@ const EvalEngine = (() => {
     }
 
     let attachments = [];
-    if (Array.isArray(opts.files) && opts.files.length && typeof Uploads !== 'undefined') {
+    if (Array.isArray(opts.files) && opts.files.length) {
+      chat.phase = '正在上传评测附件…';
+      chat.emit();
       try {
-        if (typeof Uploads.wait === 'function') {
-          const uploaded = await Uploads.wait(opts.files);
-          if (Array.isArray(uploaded)) {
-            attachments = uploaded.map(u => ({
-              name: u.name || 'file',
-              contentType: u.contentType || u.type || 'application/octet-stream',
-              url: u.url || u.downloadUrl || '',
-            })).filter(x => x.url);
-          }
-        }
+        attachments = await uploadEvaluationAttachments(opts.files);
       } catch {}
+      if (!attachments.length && typeof Uploads !== 'undefined') {
+        try {
+          if (typeof Uploads.wait === 'function') {
+            const uploaded = await Uploads.wait(opts.files);
+            if (Array.isArray(uploaded)) {
+              attachments = uploaded.map(u => ({
+                name: u.name || 'file',
+                contentType: u.contentType || u.type || 'application/octet-stream',
+                url: u.url || u.downloadUrl || '',
+              })).filter(x => x.url);
+            }
+          }
+        } catch {}
+      }
     }
 
     const userMsg = opts.userMsg || chat.messages.findLast(m => m && m.role === 'user');
     const userMessageId = userMsg?.id || genUuid();
+    if (userMsg && attachments.length) {
+      userMsg.experimental_attachments = attachments;
+      userMsg.v = (userMsg.v || 0) + 1;
+    }
 
     const prevTurnAssts = [];
     if (!isFirst) {
@@ -2696,15 +3129,22 @@ const EvalEngine = (() => {
 
     const startNow = Date.now();
     chat._evalPollExhausted = false;
-    chat._evalPollExhausted = false;
     chat.status = 'streaming';
     chat.streaming = true;
     chat._evalStreaming = true;
+    if (!isBattle) chat.live = msgA;
     chat.connAt = startNow;
     chat.streamOpenAt = startNow;
     chat.byteAt = startNow;
     chat.progAt = startNow;
-    chat.phase = isBattle ? '双模型盲测生成中…' : '直连模型生成中…';
+    const modPhaseLabel = effectiveModality === 'image' ? '正在绘制图像…'
+      : effectiveModality === 'video' ? '正在渲染视频…'
+      : effectiveModality === 'search' ? '正在联网检索与生成…'
+      : effectiveModality === 'webdev' ? '正在构建 WebDev 应用…'
+      : (isBattle ? '双模型盲测生成中…' : '直连模型生成中…');
+    chat.phase = modPhaseLabel;
+    msgA.genPhase = modPhaseLabel;
+    if (msgB) msgB.genPhase = modPhaseLabel;
     const ctl = new AbortController();
     chat.ctl = ctl;
     chat.emit();
@@ -2747,9 +3187,10 @@ const EvalEngine = (() => {
         msgA.modelId = resolvedDirectModelId;
       }
 
+      const wireMode = isBattle ? 'battle' : 'direct-battle';
       const payload = {
         id: chat.sid,
-        mode: chat.evalMode,
+        mode: wireMode,
         modality: effectiveModality,
         userMessageId,
         modelAMessageId: msgAId,
@@ -3036,7 +3477,7 @@ const EvalEngine = (() => {
       }
       if (chat.live) chat.live = null;
       const tailA = opts.msgA || [...(chat.messages || [])].reverse().find(m => m && m.role === 'assistant');
-      const hasAnyContent = Boolean(tailA && (String(tailA.content || '').trim() || (Array.isArray(tailA.parts) && tailA.parts.some(p => p && (p.text || p.toolCallId)))));
+      const hasAnyContent = Boolean(tailA && (String(tailA.content || '').trim() || (Array.isArray(tailA.parts) && tailA.parts.some(p => p && (p.text || p.toolCallId || p.type === 'image' || p.type === 'video'))) || (Array.isArray(tailA.experimental_attachments) && tailA.experimental_attachments.length > 0)));
       chat._evalPollExhausted = true;
       chat._evalStreaming = false;
       chat._startupResuming = false;
@@ -3106,9 +3547,9 @@ const EvalEngine = (() => {
       const row = {
         id: sid,
         type: 'evaluation',
-        mode: evalMode,
+        mode: evalMode === 'direct' ? 'direct-battle' : evalMode,
         modality,
-        title: chat.title || (evalMode === 'battle' ? 'Battle 盲测对话' : 'Direct 直连对话'),
+        title: chat.title || (evalMode === 'battle' ? 'Battle 盲测对话' : (chat.directModelName || 'Direct 直连对话')),
         modelAId: chat.modelAId || undefined,
         modelBId: chat.modelBId || undefined,
         createdAt: ts,
@@ -4260,6 +4701,9 @@ const EvalEngine = (() => {
     regenerateTurn,
     parseStream,
     submitVote,
+    uploadEvaluationAttachments,
+    refreshSignedAttachmentUrl,
+    isR2UrlExpired,
     hookChatPrototype,
   };
 })();

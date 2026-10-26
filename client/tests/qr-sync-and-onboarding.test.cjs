@@ -175,3 +175,99 @@ test('QrSync.openModal("export") renders actual SVG QR code, summary, and copy r
   const qrSvgWrap = qrBox.children[0];
   assert.ok(qrSvgWrap.innerHTML.includes('<svg') && qrSvgWrap.innerHTML.includes('<path d="M'), 'QR SVG must render inside qrSvgWrap');
 });
+
+test('QrSync: 17 accounts + 9 nodes + 1 subscription fit into a single QR code without multi-page splitting and importAccounts has no duplicate QR buttons', async () => {
+  const vm = require('node:vm');
+  const { CompressionStream, DecompressionStream } = require('node:stream/web');
+  const coreSrc = fs.readFileSync(path.join(ROOT, 'ui/core.js'), 'utf8');
+  const accountsSrc = fs.readFileSync(path.join(ROOT, 'ui/accounts.js'), 'utf8');
+  const vlessSrc = fs.readFileSync(path.join(ROOT, 'ui/vless.js'), 'utf8');
+
+  // Verify importAccounts has only one QR sync button and no duplicate batchTokenRegister button inside pick
+  const impStart = accountsSrc.indexOf('importAccounts(prefill =');
+  const impEnd = accountsSrc.indexOf('go.onclick = async () =>', impStart);
+  const impSlice = accountsSrc.slice(impStart, impEnd);
+  assert.strictEqual((impSlice.match(/扫码导入电脑端二维码/g) || []).length, 2, 'only one QR button (title + aria-label) in importAccounts');
+  assert.ok(!impSlice.includes('批量令牌协议注册'), 'no duplicate batch token button in importAccounts toolbar');
+
+  const qStart = coreSrc.indexOf('const QrSync = (() => {');
+  const qRet = coreSrc.indexOf('return { encodeQR,', qStart);
+  const qEnd = coreSrc.indexOf('})();', qRet) + 5;
+  const accts17 = Array.from({ length: 17 }, (_, i) => ({
+    id: 'a' + (i + 1),
+    name: `user_${i + 1}@icloud.com`,
+    email: `user_${i + 1}@icloud.com`,
+    password: 'SharedPassword123!',
+    proxyIp: `138.68.64.${100 + i}:443`,
+    region: i % 2 === 0 ? 'DE' : 'US',
+    nodeId: 'n1',
+  }));
+  const nodes9 = Array.from({ length: 9 }, (_, i) => ({
+    id: 'n' + (i + 1),
+    name: `JP 电信优选[${40 + i}ms]`,
+    address: `172.64.229.${10 + i}`,
+    port: 2053,
+    uuid: '4f25158a-8767-4c69-8ab3-231b64610989',
+    security: 'tls',
+    type: 'ws',
+    host: '755-33w.pages.dev',
+    sni: '755-33w.pages.dev',
+    path: '/',
+  }));
+
+  const savedAccts = [];
+  const ctx = vm.createContext({
+    document: { createElementNS: () => ({ setAttribute: () => {}, appendChild: () => {} }) },
+    window: {},
+    Uint8Array, Uint8ClampedArray, Array, Object, String, Number, Boolean, Math, Date, RegExp, JSON, Error, Map, Set, Promise,
+    setTimeout, clearTimeout,
+    TextEncoder, TextDecoder, CompressionStream, DecompressionStream, Response,
+    btoa: s => Buffer.from(s, 'binary').toString('base64'),
+    atob: s => Buffer.from(s, 'base64').toString('binary'),
+    h: () => ({}), icon: () => ({}), toast: () => {},
+    Host: {
+      platform: 'desktop',
+      exportAccounts: async () => accts17,
+      listAccounts: async () => [],
+      saveAccount: async (a) => { savedAccts.push(a); return { ...a, id: a.id || ('id_' + savedAccts.length) }; },
+    },
+    Nodes: {
+      subs: [{ url: 'https://755-33w.pages.dev/sub?token=230206e4efdd7ccb9693f67878992abe' }],
+      list: nodes9,
+      pips: [],
+      load: async () => {},
+      loadSubs: async () => {},
+      loadPips: async () => {},
+      save: () => {},
+      saveSubs: () => {},
+      mk: x => ({ ...x, id: x.id || 'n1' }),
+      key: x => `${x.address}:${x.port}:${x.uuid}`,
+    },
+    Pool: { d: { node: 'n1' }, load: async () => {}, mutate: async () => {} },
+    UI: { host: { accounts: accts17, account: accts17[0] } },
+    Store: { get: () => null, set: () => {}, del: () => {} },
+  });
+  vm.runInContext([vlessSrc, coreSrc.slice(qStart, qEnd), 'this.QrSync = QrSync;'].join('\n'), ctx);
+
+  const bundle = await ctx.QrSync.buildSyncBundle();
+  assert.strictEqual(bundle.qrPages.length, 1, 'all 17 accounts must fit in 1 single QR code page');
+  assert.strictEqual(bundle.inlineLite.a.length, 17, 'all 17 accounts must be included in inlineLite');
+  const svg = ctx.QrSync.toSvg(bundle.qrPayload, 356);
+  assert.ok(svg.startsWith('<svg') && svg.includes('width="356"'));
+
+  const res = await ctx.QrSync.applySyncPayload(bundle.qrPayload);
+  assert.strictEqual(res.accountCount, 17, 'single QR code must import all 17 accounts');
+  assert.strictEqual(savedAccts.length, 17);
+  assert.strictEqual(savedAccts[0].email, 'user_1@icloud.com');
+  assert.strictEqual(savedAccts[16].email, 'user_17@icloud.com');
+
+  // Verify encrypted dictionary-dedup QR (brana-sync://e2/...) is even shorter and round-trips all 17 accounts
+  assert.ok(bundle.qrEncryptedPayload.startsWith('brana-sync://e2/'), 'encrypted compact QR uses e2 scheme');
+  assert.ok(bundle.qrEncryptedPayload.length < bundle.qrPayload.length, 'encrypted dictionary QR is shorter than JSON v2 QR');
+  savedAccts.length = 0;
+  const resEnc = await ctx.QrSync.applySyncPayload(bundle.qrEncryptedPayload);
+  assert.strictEqual(resEnc.accountCount, 17, 'encrypted compact QR must import all 17 accounts');
+  assert.strictEqual(savedAccts.length, 17);
+  assert.strictEqual(savedAccts[0].email, 'user_1@icloud.com');
+  assert.strictEqual(savedAccts[16].email, 'user_17@icloud.com');
+});

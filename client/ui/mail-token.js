@@ -246,9 +246,10 @@ const MailToken = (() => {
         throw Object.assign(Error('收件令牌失效：' + (parsed.error || '取码地址无效')), { mailFailed: true, tokenInvalid: true });
       }
       tok._seen = tok._seen instanceof Set ? tok._seen : new Set();
-      for (const lk of parsed.links || []) tok._seen.add(lk);
-      if (parsed.code) tok._seen.add('code:' + parsed.code);
-      return { bearer: '', api: 'url', url: u, at: Date.now(), ttl: 3600 * 1000 };
+      tok._initialLinks = Array.isArray(parsed.links) ? parsed.links : [];
+      tok._initialCode = parsed.code || '';
+      tok._initialSubject = parsed.subject || '';
+      return { bearer: '', api: 'url', url: u, at: Date.now(), ttl: 3600 * 1000, links: tok._initialLinks, code: tok._initialCode, subject: tok._initialSubject };
     }
     const body = new URLSearchParams({ client_id: tok.clientId, grant_type: 'refresh_token', refresh_token: tok.refreshToken }).toString();
     let j;
@@ -278,14 +279,25 @@ const MailToken = (() => {
   async function waitLink(tok, { since = Date.now() - 60e3, timeout = 120e3, pollMs = 3500, kind = '', exclude = null, log = () => {}, cancelled = () => false, onToken = () => {} } = {}) {
     const end = Date.now() + timeout;
     const seen = new Set([...(tok?._seen instanceof Set ? tok._seen : []), ...(exclude instanceof Set ? exclude : Array.isArray(exclude) ? exclude : [])]);
+    const waitCancelable = async ms => {
+      const until = Date.now() + Math.max(0, ms);
+      while (Date.now() < until) {
+        if (cancelled()) throw Object.assign(Error('已取消'), { cancelled: true, aborted: true });
+        await sleep(Math.min(180, until - Date.now()));
+      }
+      if (cancelled()) throw Object.assign(Error('已取消'), { cancelled: true, aborted: true });
+    };
     let a = null, n = 0;
     if (isUrl(tok)) {
       while (Date.now() < end) {
-        if (cancelled()) throw Error('已取消');
+        if (cancelled()) throw Object.assign(Error('已取消'), { cancelled: true, aborted: true });
         n++;
         const r = await pollUrlOnce(tok);
+        if (cancelled()) throw Object.assign(Error('已取消'), { cancelled: true, aborted: true });
         const freshLinks = (r.links || []).filter(lk => !seen.has(lk));
-        const pick = kind === 'reset' ? (freshLinks.find(lk => /reset|recovery|password/i.test(lk)) || '') : (freshLinks[0] || '');
+        const pick = kind === 'reset'
+          ? (freshLinks.find(lk => /reset|recovery|password/i.test(lk)) || (/reset|recovery|password|密码/i.test(r.subject || '') ? (freshLinks[0] || '') : ''))
+          : (freshLinks[0] || '');
         const freshCode = r.code && !seen.has('code:' + r.code) ? r.code : '';
         if (pick || freshCode) {
           if (pick) { seen.add(pick); (tok._seen ||= new Set()).add(pick); }
@@ -294,7 +306,7 @@ const MailToken = (() => {
           return { link: finalLink, code: freshCode, subject: r.subject || '验证邮件', at: Date.now() };
         }
         log('正在通过收件接口获取验证邮件…（第 ' + n + ' 次，' + Math.max(0, Math.round((end - Date.now()) / 1000)) + ' 秒后超时）');
-        await sleep(pollMs);
+        await waitCancelable(pollMs);
       }
       throw Object.assign(Error('等待验证邮件超时（收件接口正常但未收到新验证邮件，请稍后重试）'), { mailFailed: true, tokenInvalid: false });
     }

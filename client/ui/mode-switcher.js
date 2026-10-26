@@ -133,14 +133,17 @@ const MODALITY_META_MAP = {
     icon: 'modAuto',
   },
 };
-
 const DIRECT_FALLBACK_MODELS = [
-  { id: '019ce973-84c9-7030-9f88-1ebbf2edeb14', name: 'claude-opus-4-6', publicName: 'Claude Opus 4.6', displayName: 'Claude Opus 4.6', organization: 'Anthropic', provider: 'anthropic' },
-  { id: '019cbd0a-d2e9-7540-9651-8fb7bc7bc483', name: 'claude-sonnet-4-6', publicName: 'Claude Sonnet 4.6', displayName: 'Claude Sonnet 4.6', organization: 'Anthropic', provider: 'anthropic' },
-  { id: '019d3995-9b7a-730d-b779-227ad61ecc9b', name: 'gpt-5.4-high', publicName: 'GPT-5.4 High', displayName: 'GPT-5.4 High', organization: 'OpenAI', provider: 'openai' },
-  { id: '019cbfae-9988-799f-833f-d9ef5fb8b92e', name: 'gemini-3.1-pro-preview', publicName: 'Gemini 3.1 Pro', displayName: 'Gemini 3.1 Pro', organization: 'Google', provider: 'google' },
-  { id: '019b7b2f-fc57-7c65-b4ef-fd8db34f448e', name: 'deepseek-v3.2', publicName: 'DeepSeek V3.2', displayName: 'DeepSeek V3.2', organization: 'DeepSeek', provider: 'deepseek' },
-  { id: '01980d0b-8126-7f5b-a749-bd6ef7bc7f56', name: 'qwen3-235b-a22b-instruct-2507', publicName: 'Qwen3 235B A22B', displayName: 'Qwen3 235B A22B', organization: 'Alibaba', provider: 'qwen' },
+  { id: '01a0681c-b561-76b6-b338-a44ff0cff460', name: 'gemini-3.8-flash-high', publicName: 'Gemini 3.8 Flash High', displayName: 'Gemini 3.8 Flash High', organization: 'Google', provider: 'google', modalities: ['chat'] },
+  { id: '019c7820-5480-78b6-9fef-04c0d7004054', name: 'gemini-3.1-pro-preview', publicName: 'Gemini 3.1 Pro', displayName: 'Gemini 3.1 Pro', organization: 'Google', provider: 'google', modalities: ['chat', 'webdev', 'search'] },
+  { id: '019f90b1-c0ac-71ce-b295-487f261bf0f4', name: 'gemini-3.6-flash', publicName: 'Gemini 3.6 Flash', displayName: 'Gemini 3.6 Flash', organization: 'Google', provider: 'google', modalities: ['chat', 'webdev'] },
+  { id: '019ebf6a-94d4-7649-b704-1dbbd5eb0942', name: 'glm-5.1', publicName: 'GLM 5.1', displayName: 'GLM 5.1', organization: 'Zhipu', provider: 'zhipu', modalities: ['chat', 'webdev'] },
+  { id: '019e71ea-1e1d-740f-9c2d-dab5869ff108', name: 'gpt-5.5-instant', publicName: 'GPT-5.5 Instant', displayName: 'GPT-5.5 Instant', organization: 'OpenAI', provider: 'openai', modalities: ['chat', 'webdev', 'search'] },
+  { id: '019f19f2-41f1-7c6d-9891-48d02fd9952c', name: 'claude-sonnet-5', publicName: 'Claude Sonnet 5', displayName: 'Claude Sonnet 5', organization: 'Anthropic', provider: 'anthropic', modalities: ['chat', 'webdev', 'search'] },
+  { id: '019fc887-69e7-7308-a353-36da657fc18e', name: 'paisley', publicName: 'Paisley', displayName: 'Paisley', organization: 'Alibaba', provider: 'qwen', modalities: ['webdev', 'chat'] },
+  { id: '01a0843d-e019-78b5-be43-ec2291edc2cf', name: 'gpt-image-2.5-sunburst', publicName: 'GPT Image 2.5 Sunburst', displayName: 'GPT Image 2.5 Sunburst', organization: 'OpenAI', provider: 'openai', modalities: ['image'] },
+  { id: '019fde11-e7c8-7394-ac43-8fd3b37ba81c', name: 'lo-bah-png', publicName: 'Lo-Bah PNG', displayName: 'Lo-Bah PNG', organization: 'Black Forest Labs', provider: 'bfl', modalities: ['image'] },
+  { id: '019c6f55-70d6-7a9c-b89b-9a0db36a3582', name: 'claude-sonnet-4-6-search', publicName: 'Claude Sonnet 4.6 Search', displayName: 'Claude Sonnet 4.6 Search', organization: 'Anthropic', provider: 'anthropic', modalities: ['search'] },
 ];
 
 const ModeSwitcher = {

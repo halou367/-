@@ -46,18 +46,6 @@ const RouteConfirm = {
   // 同地区内故障恢复直接切换；一旦涉及跨地区（fromRegion !== toRegion），必须弹窗提示用户确认后才允许跨地区切换
   route(x){
     if(typeof document!=='undefined'&&document.querySelector('.lpick:not(.out)'))return Promise.resolve(true);
-    const fromReg=String(x?.from?.region||x?.from?.routeHome||x?.current?.loc||(typeof IP!=='undefined'&&IP.loc)||'').trim().toUpperCase();
-    const toReg=String(x?.result?.loc||x?.winner?.region||'').trim().toUpperCase();
-    if(fromReg&&toReg&&fromReg!==toReg){
-      return this.ask({
-        title:'检测到跨地区切换出口，是否允许？',
-        text:'当前地区 '+fromReg+' 暂无可用出口，即将切换到跨地区出口：'+(x?.label||toReg)+'（'+fromReg+' → '+toReg+'）。若需留在 '+fromReg+'，请点击「保持当前地区」。',
-        ok:'允许跨地区切换',
-        keep:'保持当前地区',
-        seconds:15,
-        defaultYes:false,
-      });
-    }
     if(x?.mode==='node'||x?.mode==='ip'||x?.reason==='latency'||x?.reason==='limited'||x?.reason==='error-switch')return Promise.resolve(true);
     return Promise.resolve(true);
   },
@@ -127,10 +115,11 @@ const StandbyPool = {
     this.prune(a.id, a.proxyIp, a.proxy);
     const pool = first?.pool || {}, at = now();
     const curReg = String(a.region || a.routeHome || '').trim().toUpperCase();
-    const isUsable = item => {
+    const allowCross = Boolean(first?.forceCrossRegion || a.routeMode === 'auto' || a.routeAuto || (typeof Pool !== 'undefined' && (Pool.d?.regAuto || Pool.d?.auto)));
+    const isUsable = (item, allowDiffReg = false) => {
       const pip = String(item?.candidate?.proxyIp || '').trim();
       const itemReg = String(item?.loc || item?.candidate?.region || item?.result?.loc || '').trim().toUpperCase();
-      if (curReg && itemReg && itemReg !== curReg) return false; // 跨地区候选不能绕过确认弹窗静默切换
+      if (!allowDiffReg && curReg && itemReg && itemReg !== curReg) return false;
       if (!pip) return false;
       const e = pool.ips?.[pip];
       if (e && (e.gone || e.cool > at || pool.ban?.[pip.toLowerCase()])) return false;
@@ -140,12 +129,15 @@ const StandbyPool = {
     };
     const primary = mode === 'ip' ? this.ips : this.nodes;
     const secondary = mode === 'ip' ? this.nodes : this.ips;
-    for (const q of [primary, secondary]) {
-      while (q.length) {
-        const item = q.shift();
-        if (isUsable(item)) {
-          if (typeof setTimeout === 'function') setTimeout(() => void this.replenish('consumed'), 150);
-          return item;
+    for (const allowDiffReg of (allowCross ? [false, true] : [false])) {
+      for (const q of [primary, secondary]) {
+        for (let i = 0; i < q.length; i++) {
+          const item = q[i];
+          if (isUsable(item, allowDiffReg)) {
+            q.splice(i, 1);
+            if (typeof setTimeout === 'function') setTimeout(() => void this.replenish('consumed'), 150);
+            return item;
+          }
         }
       }
     }
@@ -156,13 +148,14 @@ const StandbyPool = {
     if (typeof window !== 'undefined' && (window.__routeFixture || window.__fixture)) return;
     if (this.warming || typeof navigator !== 'undefined' && navigator.onLine === false) return;
     if ((typeof NodeRoutes !== 'undefined' && NodeRoutes.manual > 0) || (typeof Pool !== 'undefined' && Pool.switching?.size > 0)) return;
-    if (why !== 'gacha-start' && why !== 'consumed' && why !== 'post-switch' && now() - this.lastWarmAt < 180000) return;
+    const minWarmGap = (this.ips.length < 1) ? 30000 : 120000;
+    if (why !== 'gacha-start' && why !== 'consumed' && why !== 'post-switch' && why !== 'boot' && now() - this.lastWarmAt < minWarmGap) return;
     const a = typeof UI !== 'undefined' ? UI.host?.account : null;
     if (!a?.id || !AutoRoute.adapter || !AutoRoute.engine || (typeof RouteState !== 'undefined' && RouteState.locked(a))) return;
     if (typeof isVless === 'function' && !isVless(a.proxy)) return;
     this.prune(a.id, a.proxyIp, a.proxy);
-    const targetIps = why === 'gacha-start' ? 2 : 1;
-    if (this.ips.length >= targetIps && (this.nodes.length >= 1 || why !== 'gacha-start')) return;
+    const targetIps = 2;
+    if (this.ips.length >= targetIps && this.nodes.length >= 1) return;
     this.warming = true;
     this.lastWarmAt = now();
     try {
@@ -231,7 +224,7 @@ const StandbyPool = {
           if (this.ips.length > this.MAX_IPS) this.ips.length = this.MAX_IPS;
         }
       }
-      if (this.nodes.length < 1 && (first.nodes || []).length > 1 && (why === 'gacha-start' || this.ips.length < 1)) {
+      if (this.nodes.length < 1 && (first.nodes || []).length > 1) {
         const planNode = AutoRoute.engine.plan(first, 'node', now());
         const nodeCands = [];
         const haveProxies = new Set([first.account.proxy, ...this.nodes.map(x => x.candidate?.proxy)]);
@@ -302,14 +295,19 @@ const AutoRoute = {
   getLastGood(id=UI.host?.account?.id){try{return id?Store.get('lastGoodRoute:'+id,null):null;}catch{return null;}},
   async rollbackLastGood(a=UI.host?.account){const g=this.getLastGood(a?.id);if(!a?.id||!g?.proxy||!this.adapter)return {ok:false,error:'尚无已记录的上次连通配置'};const pr=await this.adapter.probe({proxy:g.proxy,proxyIp:g.proxyIp||'',nodeId:g.nodeId||'',region:g.region||'',kind:'manual'});if(!RoutePolicy.good(pr))return {ok:false,error:pr?.error||'上次配置当前未通过检测'};const res=await this.adapter.apply({id:a.id,expected:RoutePolicy.fields(a),expectedConfig:RouteState.signature(a),expectedMode:RouteState.mode(a),route:{proxy:g.proxy,proxyIp:g.proxyIp||'',nodeId:g.nodeId||'',region:g.region||pr.loc||'',routeHome:g.region||pr.loc||''},manual:true,mode:'node',ticket:pr.ticket});if(res?.account)Object.assign(a,res.account);Bus.emit('host');return {ok:!!res?.ok,route:g};},
   engine:null, adapter:null, busy:false, status:'尚未检测', lastChanged:0, manualLockUntil:0, streamFails:[], netErrorCount:0, netErrorTimes:[], initialized:false, needsOptimalUpgrade:false,
-  noteManualRoute(ms=600000){
+  noteManualRoute(ms=12000){
     const t=typeof now==='function'?now():Date.now();
-    this.manualLockUntil=Math.max(this.manualLockUntil||0,t+Math.max(60000,Number(ms)||600000));
+    const rawMs=Number(ms);
+    const a=typeof UI!=='undefined'?UI.host?.account:null;
+    const isAutoSub=Boolean(a?.routeMode==='auto'||a?.routeAuto||(typeof Pool!=='undefined'&&(Pool.d?.auto||Pool.d?.regAuto)));
+    const lockDur=rawMs<=0?0:(isAutoSub?Math.min(6000,Math.max(0,rawMs||6000)):Math.min(15000,Math.max(5000,rawMs||12000)));
+    this.manualLockUntil=lockDur<=0?0:(t+lockDur);
     this.failed=false;
+    this._errHits=[];
     this.netErrorCount=0;
     this.netErrorTimes=[];
-    if(this.engine)this.engine.next=Math.max(this.engine.next||0,t+60000);
-    try{StandbyPool.ips=[];StandbyPool.nodes=[];}catch{}
+    if(this.engine)this.engine.next=lockDur<=0?0:Math.min(this.engine.next||0,t+5000);
+    try{StandbyPool.ips=[];StandbyPool.nodes=[];if(typeof setTimeout==='function')setTimeout(()=>void StandbyPool.replenish('post-switch'),600);}catch{}
     try{if(typeof ReadLimit!=='undefined')ReadLimit.until=0;}catch{}
     try{if(typeof Quota!=='undefined'&&Quota.clear)Quota.clear(true);}catch{}
   },
@@ -333,7 +331,7 @@ const AutoRoute = {
       ...this.adapter,
       retryMs:200,
       fastCheck:true,
-      networkFirst:false,
+      networkFirst:true,
       batchSize:4,
       forceGlobalLowestLatency:()=>(this.netErrorCount||0)>2,
       banBadIp:(c,r)=>{if(c?.proxyIp&&typeof Pool!=='undefined'&&(r?.ip||r?.kind==='rate-limit'||Pool.isNodeConfirmedAlive?.(c.proxy)))void Pool.mutate(d=>{const e=d.ips?.[c.proxyIp];if(!e)return;e.fc=(e.fc||0)+1;if(r?.kind==='rate-limit')e.cool=Math.max(e.cool||0,now()+30*60000);else if((e.fc||0)>=3)Pool.banForever?.(d,c.proxyIp,r?.error||'节点正常但 ProxyIP 连续检测未通过 · 已永久拉黑');}).catch(()=>{});},
@@ -341,27 +339,58 @@ const AutoRoute = {
       read:async(target)=>{
         const res=await this.adapter.read(target);
         if(res?.account&&!RouteState.locked(res.account)){
+          if(res.account.nodeFailover===false&&this.adapter?.prefs){
+            try{await this.adapter.prefs(true);}catch{}
+          }
+          const regAuto=Boolean(typeof Pool!=='undefined'&&Pool.d?.regAuto);
           res.enabled=true;
-          res.account={...res.account,routeMode:res.account.routeMode==='node'?'node':'auto',routeAuto:res.account.routeMode!=='node',nodeFailover:true};
+          res.forceCrossRegion=Boolean(this._forceCrossRegion||regAuto||res.account.routeMode==='auto');
+          res.account={...res.account,routeMode:(res.account.routeMode==='node'&&!regAuto&&!this._forceCrossRegion)?'node':'auto',routeAuto:res.account.routeMode!=='node'||regAuto,nodeFailover:true};
         }
         return res;
       },
       apply:async(o)=>{
+        try{if(typeof Host!=='undefined'&&Host.shared&&typeof Pool!=='undefined'&&Pool.d)await Host.shared('pippool',Pool.d);}catch{}
         const raw=await this.adapter.read(o?.id);
         const realAcct=raw?.account||UI.host?.account;
+        if(realAcct&&realAcct.nodeFailover===false&&this.adapter?.prefs){
+          try{await this.adapter.prefs(true);}catch{}
+        }
+        const expected=realAcct?RoutePolicy.fields(realAcct):o.expected;
         const expectedConfig=realAcct?RouteState.signature(realAcct):o.expectedConfig;
         const expectedMode=realAcct?RouteState.mode(realAcct):o.expectedMode;
-        return this.adapter.apply({...o,expectedConfig,expectedMode,forceFailover:true});
+        return this.adapter.apply({...o,expected,expectedConfig,expectedMode,forceFailover:true});
       }
     };
     this.engine=new RoutePolicy.Engine({...engineAdapter,allowCrossRegionEscape:true,speed:n=>typeof NodeSpeed!=='undefined'?NodeSpeed.get(n.proxy):null,confirm:x=>this.noConfirm?true:RouteConfirm.route(x),cancelled:()=>!this.enabled()||manual()||(!this.forced&&this.reason==='network'&&NetHealth.proof>this.proof),progress:text=>{this.status=text;this.paint();Bus.emit('route-state');}});
     Bus.on('neterr',()=>this.request('network'));
     Bus.on('limited',why=>this.limited(why));
-    // 出口检测（WebView 里的 /cdn-cgi/trace）偶尔超时不代表线路坏了；通了则自动同步实际出口国家并预热第二 IP，绝不因为后台探测超时触发循环恢复
+    // 出口检测与 RTT 监控：连接正常且无验证时保持稳定不乱切，一旦确认超时立即触发平滑切换
     Bus.on('ip',()=>{
-      if(!IP.err&&IP.loc){this.adoptWorkingRegion(IP.loc);void StandbyPool.replenish('ip-ok');}
+      if(!IP.err&&IP.loc){
+        this._errHits=[];
+        this.adoptWorkingRegion(IP.loc);
+        void StandbyPool.replenish('ip-ok');
+        return;
+      }
+      if(IP.err&&(IP.failures||0)>=1){
+        const streaming=typeof Chats!=='undefined'&&[...Chats.values()].some(ch=>ch?.streaming&&ch?.byteAt&&now()-ch.byteAt<8000);
+        const recentDown=typeof Traffic!=='undefined'&&Traffic.lastDownAt&&now()-Traffic.lastDownAt<8000;
+        if(!streaming&&!recentDown&&!(typeof NetHealth!=='undefined'&&NetHealth.recent?.(10000))){
+          void this.onErrorSwitch({routeTimeout:true,net:true,message:String(IP.err||'出口探测超时')},'ip-timeout');
+        }
+      }
     });
-    Bus.on('rtt',()=>{});
+    Bus.on('rtt',()=>{
+      if(IP.rtt>0){this._errHits=[];return;}
+      if(IP.rtt<0&&(IP.rttFail||0)>=2&&!IP.quietFail?.()){
+        const streaming=typeof Chats!=='undefined'&&[...Chats.values()].some(ch=>ch?.streaming&&ch?.byteAt&&now()-ch.byteAt<8000);
+        const recentDown=typeof Traffic!=='undefined'&&Traffic.lastDownAt&&now()-Traffic.lastDownAt<8000;
+        if(!streaming&&!recentDown&&!(typeof NetHealth!=='undefined'&&NetHealth.recent?.(10000))){
+          void this.onErrorSwitch({routeTimeout:true,net:true,message:'RTT 连续超时'},'rtt-timeout');
+        }
+      }
+    });
     Bus.on('connection',()=>{if(NetHealth.recent()){this.failed=false;this._errHits=[];this.adoptWorkingRegion();}});
     addEventListener('online',()=>{if(!NetHealth.recent())void this.nodeAlive().then(ok=>{if(!ok)this.request('network');});});
     this.timer=setInterval(()=>{
@@ -418,7 +447,14 @@ const AutoRoute = {
     this.reason=reason;this.forced=force;this.proof=NetHealth.proof;
     this.pending=(async()=>{
       try{
-        const r=await this.engine.run(reason,force);
+        this._forceCrossRegion=false;
+        let r=await this.engine.run(reason,force);
+        if(!r?.ok&&!r?.declined&&!r?.disabled&&!r?.cancelled&&this.enabled()&&UI.host?.account?.id===owner){
+          this._forceCrossRegion=true;
+          this.engine.next=0;
+          r=await this.engine.run(reason,true);
+        }
+        this._forceCrossRegion=false;
         if(!this.enabled()||UI.host?.account?.id!==owner)return r;
         if(r.ok){
           this.status=r.changed?(r.standby?'已秒切热备线路：':'已切换：')+r.label+'，正在续接原对话':'当前线路服务检测通过';
@@ -487,28 +523,39 @@ const AutoRoute = {
   // 仅真实传输断连/超时才触发自动切换：429 / 404 / 401 / 403 或用户刚手动选定 IP 期间绝不自动把用户的可用 IP 切走；加严格防抖与冷却，绝不反复循环切换
   onErrorSwitch(err,where='api'){
     if(!this.enabled()||!RoutePolicy.shouldRotateOnError?.(err))return Promise.resolve({ok:false,skipped:true});
-    if(where==='ip-timeout'||where==='rtt-timeout'||where==='rtt')return Promise.resolve({ok:false,skipped:true});
     if((typeof NodeRoutes!=='undefined'&&NodeRoutes.manual>0)||(typeof RegionIP!=='undefined'&&RegionIP.busy))return Promise.resolve({ok:false,skipped:true});
     const st=Number(err?.status||err?.httpStatus||0);
-    if(st===429||st===404||st===401||st===403||st===500||err?.ipLimited||err?.rateLimitedLocally)return Promise.resolve({ok:false,skipped:true,status:st});
-    if(this.isManualLocked()&&where!=='manual')return Promise.resolve({ok:false,skipped:true,manualLocked:true});
+    const isQualityOrVerify=Boolean(err?.impureIp||err?.riskyIp||err?.captchaTriggered||err?.cfChallenge);
+    if(!isQualityOrVerify&&(st===429||st===404||st===401||st===403||st===500||err?.ipLimited||err?.rateLimitedLocally))return Promise.resolve({ok:false,skipped:true,status:st});
     const t=typeof now==='function'?now():Date.now();
-    if(this.busy||t-(this.lastChanged||0)<45000||t-(this._lastErrSwitchAt||0)<30000)return Promise.resolve({ok:false,cooldown:true});
+    const isUrgent=Boolean(isQualityOrVerify||where==='manual'||where==='pre-send'||where==='send-timeout'||where==='create-chat'||where==='gacha'||where==='captcha'||where==='impure'||where==='ip-timeout'||where==='rtt-timeout'||err?.routeTimeout);
+    if(!isUrgent&&this.isManualLocked())return Promise.resolve({ok:false,skipped:true,manualLocked:true});
+    if(where==='ip-timeout'||where==='rtt-timeout'||where==='rtt'){
+      const streaming=typeof Chats!=='undefined'&&[...Chats.values()].some(ch=>ch?.streaming&&ch?.byteAt&&t-ch.byteAt<8000);
+      const recentDown=typeof Traffic!=='undefined'&&Traffic.lastDownAt&&t-Traffic.lastDownAt<8000;
+      if(streaming||recentDown||(typeof NetHealth!=='undefined'&&NetHealth.recent?.(10000)))return Promise.resolve({ok:false,skipped:true,live:true});
+    }
+    const minChangeGap=isUrgent?5000:18000;
+    const minSwitchGap=isUrgent?4000:12000;
+    if(this.busy||t-(this.lastChanged||0)<minChangeGap||t-(this._lastErrSwitchAt||0)<minSwitchGap)return Promise.resolve({ok:false,cooldown:true});
     const a=typeof UI!=='undefined'?UI.host?.account:null;
-    const isLiveHealthy=Boolean((typeof NetHealth!=='undefined'&&NetHealth.recent?.(30000))||(typeof IP!=='undefined'&&IP.ip&&!IP.err&&(!IP.rttFail||IP.quietFail?.())&&t-(IP.at||0)<45000));
-    if(where!=='manual'&&where!=='pre-send'&&where!=='send-timeout'&&where!=='create-chat'&&where!=='gacha'){
+    const isLiveHealthy=Boolean(!isUrgent&&((typeof NetHealth!=='undefined'&&NetHealth.recent?.(15000))||(typeof IP!=='undefined'&&IP.ip&&!IP.err&&(!IP.rttFail||IP.quietFail?.())&&t-(IP.at||0)<25000)));
+    if(!isUrgent){
       this._errHits=(this._errHits||[]).filter(x=>t-x<60000);
       this._errHits.push(t);
-      const minHits=(a?.routeMode==='node'||isLiveHealthy)?3:2;
+      const minHits=isLiveHealthy?2:1;
       if(this._errHits.length<minHits)return Promise.resolve({ok:false,debounced:true});
     }
     this._lastErrSwitchAt=t;
     this.noteNetProblem();
+    try{this.coolCurrentIp(isQualityOrVerify?'风险/验证':(st===429?'429':'timeout'));}catch{}
     if(typeof ReadLimit!=='undefined')ReadLimit.until=0;
-    const reason=(a?.routeMode==='node'||isLiveHealthy)?'network':'error-switch';
-    this.status='检测到连接报错（'+(st||'超时/断连')+'），正在切换备用线路…';
+    const reason=(isQualityOrVerify||(/^vless:/i.test(a?.proxy||'')&&a?.proxyIp))?'error-switch':'network';
+    const label=err?.impureIp?'出口纯净度不足':err?.riskyIp?'出口高风险':(err?.captchaTriggered||err?.cfChallenge)?'触发人机验证':(st||'超时/断连');
+    this.status='检测到'+label+'，正在无感切换最优线路…';
+    if(this.engine)this.engine.next=0;
     Bus.emit('route-state');
-    return this.request(reason,false);
+    return this.request(reason,true);
   },
   unlimit(why){
     this.coolCurrentIp(why);

@@ -14,13 +14,112 @@
  *        node claude_standalone_classifier_v5.js --selftest
  */
 (function (root, factory) {
-  const api = factory();
-  if (root) root.ClaudeStandaloneClassifierV5 = api;
-  if (typeof module === 'object' && module.exports) module.exports = api;
+  if (typeof module === 'object' && module.exports) {
+    module.exports = factory();
+  } else {
+    root.ClaudeStandaloneClassifierV5 = factory();
+  }
 })(typeof globalThis !== 'undefined' ? globalThis : this, function () {
   'use strict';
 
-  const ENGINE_VERSION = '5.1.0-v11-terra-antibleed';
+  const ENGINE_VERSION = '5.4.0-v22-multilingual-orthogonal';
+
+  const V20_TW_HEX_RE = /#(?:0f172a|1e293b|334155|475569|64748b|94a3b8|cbd5e1|e2e8f0|f1f5f9|f8fafc|0ea5e9|38bdf8|7dd3fc|bae6fd|e0f2fe|0284c7|0369a1|075985|0c4a6e|f59e0b|fbbf24|fcd34d|fde047|fef08a|eab308|ca8a04|d97706|f97316|fb923c|fdba74|ef4444|dc2626|f87171|10b981|34d399|22c55e|4ade80|14b8a6|2dd4bf|6366f1|8b5cf6|ec4899|f43f5e|111827|1f2937|374151|4b5563|6b7280|9ca3af|d1d5db|e5e7eb|f3f4f6|f9fafb)\b/gi;
+
+  function evaluateMuseVsClaudeV20(rawHtml) {
+    const s = String(rawHtml || '');
+    const sl = s.toLowerCase();
+    let musePts = 0, claudePts = 0;
+    const museReasons = [], claudeReasons = [];
+
+    const mVb = s.match(/viewBox=["']\s*0\s+0\s+(\d+)\s+(\d+)\s*["']/i);
+    const vb = mVb ? (mVb[1] + 'x' + mVb[2]) : '';
+    const isMuseVb = /^900x(?:450|500|540|560|600|620|650)$/.test(vb) || vb === '1000x500' || vb === '1200x700';
+    if (isMuseVb) {
+      musePts += 52; museReasons.push('MUSE_VB_' + vb);
+    } else if (/^(?:800x520|800x550|800x560|960x600|760x520|820x560)$/.test(vb)) {
+      claudePts += 28; claudeReasons.push('CLAUDE_VB_' + vb);
+    }
+
+    const twMatches = sl.match(V20_TW_HEX_RE) || [];
+    const twUniq = new Set(twMatches.map(x => x.toLowerCase())).size;
+    if (twUniq >= 6) {
+      musePts += 60; museReasons.push('MUSE_TAILWIND_HEAVY(' + twUniq + ')');
+    } else if (twUniq >= 3) {
+      musePts += 42; museReasons.push('MUSE_TAILWIND_PALETTE(' + twUniq + ')');
+    }
+
+    const svgEnd = sl.lastIndexOf('</svg>');
+    const stylePos = sl.lastIndexOf('<style');
+    const postSvgStyle = (svgEnd > 0 && stylePos > svgEnd);
+    if (postSvgStyle) {
+      musePts += 58; museReasons.push('MUSE_STYLE_AFTER_SVG');
+    }
+
+    let zeroIndentSvg = /<svg\b[^>]*>\s*\r?\n<defs>\s*\r?\n<(?:linear|radial)Gradient/i.test(s);
+    if (!zeroIndentSvg) {
+      const mSvg = s.match(/<svg\b[^>]*>([\s\S]*?)<\/svg>/i);
+      if (mSvg) {
+        const svgLines = mSvg[1].split(/\r?\n/).filter(ln => ln.trim().startsWith('<'));
+        if (svgLines.length >= 15) {
+          const zCnt = svgLines.filter(ln => ln.startsWith('<')).length;
+          if (zCnt / svgLines.length >= 0.75) zeroIndentSvg = true;
+        }
+      }
+    }
+    if (zeroIndentSvg) {
+      musePts += 28; museReasons.push('MUSE_ZERO_INDENT_SVG');
+    }
+
+    const isHtml = sl.includes('<!doctype html') || sl.includes('<html');
+    const hasVp = sl.includes('name="viewport"') || sl.includes("name='viewport'");
+    const has100vw = (sl.includes('100vw') && sl.includes('100vh')) || sl.includes('width:96vw');
+    let hasEmptyOrShortTitle = false;
+    if (sl.includes('<title></title>') && hasVp) {
+      hasEmptyOrShortTitle = true;
+      musePts += 48; museReasons.push('MUSE_EMPTY_TITLE_TAG');
+    } else if (isHtml && !sl.includes('<title>') && hasVp && (zeroIndentSvg || has100vw)) {
+      hasEmptyOrShortTitle = true;
+      musePts += 45; museReasons.push('MUSE_NO_TITLE_ZERO_INDENT_VP');
+    } else if (/<title>\s*pelican\s+(?:on\s+)?bicycle(?:\s+ride)?\s*<\/title>/i.test(sl)) {
+      hasEmptyOrShortTitle = true;
+      musePts += 35; museReasons.push('MUSE_SHORT_TITLE');
+    } else if (/<title>\s*pelican\s+(?:riding|on)\s+a\s+bicycle[^<]*<\/title>/i.test(sl)) {
+      claudePts += 26; claudeReasons.push('CLAUDE_NATURAL_TITLE');
+    }
+
+    if (isHtml && !hasVp) {
+      claudePts += 38; claudeReasons.push('CLAUDE_NO_VIEWPORT_META');
+    }
+    if (s.includes('charset="utf-8"')) {
+      claudePts += 22; claudeReasons.push('CLAUDE_LOWERCASE_UTF8');
+    }
+    if (sl.includes('preserveaspectratio="xmidymid slice"') && hasVp && has100vw) {
+      musePts += 22; museReasons.push('MUSE_SLICE_100VW');
+    }
+
+    const pctGrads = (s.match(/<linearGradient\b[^>]*\b(?:x1|x2|y1|y2)=["'][0-9.]+%["']/g) || []).length;
+    if (pctGrads >= 2) {
+      claudePts += 32; claudeReasons.push('CLAUDE_PCT_LINEAR_GRAD(' + pctGrads + ')');
+    } else if (pctGrads === 1) {
+      claudePts += 18; claudeReasons.push('CLAUDE_PCT_LINEAR_GRAD_1');
+    }
+    if (/<!--[^>]*(?:═{4,}|━{4,}|\*{4,})/.test(s)) {
+      claudePts += 35; claudeReasons.push('CLAUDE_UNICODE_DIVIDER_COMMENT');
+    }
+
+    const net = musePts - claudePts;
+    const isNonClaudeMuseOrOpen = (net >= 28 && musePts >= 42);
+    const isStrictMuseExclusive = isNonClaudeMuseOrOpen && (
+      postSvgStyle
+      || (zeroIndentSvg && (isMuseVb || hasEmptyOrShortTitle || has100vw))
+      || (isMuseVb && (twUniq >= 3 || hasEmptyOrShortTitle || has100vw) && hasVp)
+    );
+    return {
+      net, musePts, claudePts, vb, twUniq, hasVp, zeroIndentSvg, postSvgStyle,
+      isNonClaudeMuseOrOpen, isStrictMuseExclusive, museReasons, claudeReasons
+    };
+  }
 
   function extractFirstSvgOrHtml(rawText) {
     if (!rawText) return '';
@@ -164,7 +263,7 @@
     if (replyText) allTexts.push(String(replyText));
     const joinedText = allTexts.join('\n');
     const hasOpenaiLatex = /\\\([\s\S]{1,160}?\\\)/.test(joinedText) || /\\\[[\s\S]{1,400}?\\\]/.test(joinedText);
-    const hasDollarMath = /\$\$?[^$\n]{1,160}\$\$?/.test(joinedText);
+    const _proseNoScript = joinedText.replace(/<script[\s\S]*?<\/script>/gi, '').replace(/\$\{[^}]*\}/g, ''); const hasDollarMath = /\$\$[^$\n]{1,160}\$\$|(?:^|[\s(（])\$(?!\s|\d|\{)[^$\n]{1,120}?(?<!\s)\$(?=[\s.,;:!?)）\u4e00-\u9fff]|$)/m.test(_proseNoScript.replace(/<svg[\s\S]*?<\/svg>/gi, ''));
 
     let toolVendor = null;
     if (toolIds.some(t => /^(?:srv)?toolu_|^msg_01/i.test(t))) toolVendor = 'anthropic';
@@ -267,13 +366,15 @@
     const vetoes = [];
     let score = 0;
 
+    const hasMuseSlate700Palette = /\bstroke=["']#334155["']/i.test(s) && /#(?:fde047|ffd54f|ffd93d|7dd3fc|e0f7fa|e0f2fe|dff3ff)/i.test(s);
+    if (hasMuseSlate700Palette) { vetoes.push('SVG32_MUSE_TAILWIND_SLATE700_PALETTE'); score -= 75; }
     if (widthBeforeViewbox) { vetoes.push('SVG32_WIDTH_BEFORE_VIEWBOX_NON_CLAUDE'); score -= 70; }
     if (skyRectHasRx) { vetoes.push('SVG32_ROUNDED_CARD_RX_NON_CLAUDE'); score -= 65; }
     if (hasCircleCanvas) { vetoes.push('SVG32_CIRCLE_BADGE_GEMINI'); score -= 65; }
     if (hasHeavyIconGWrapper) { vetoes.push('SVG32_HEAVY_STROKE_GROUP_ICON_WRAPPER'); score -= 65; }
     if ((rootFillNone || hasFillNoneGWrapper) && !hasFullSkyRect) { vetoes.push('SVG32_MONOCHROME_WIREFRAME_NO_SKY'); score -= 80; }
     if (!hasFilledWater && lineTags < 8) { vetoes.push('SVG32_NO_SOLID_WATER_LAYER'); score -= 55; }
-    if (upperShare >= 0.95 && (/L\s*32\s+32\s+L\s*0\s+32\s+Z/.test(s) || (spacedEndZ >= 4 && lineTags === 0)) && !rootHasStroke && !opus46DualSunBeige) {
+    if (upperShare >= 0.95 && (/L\s*32\s+32\s+L\s*0\s+32\s+Z/.test(s) || (spacedEndZ >= 4 && lineTags === 0)) && !rootHasStroke && !opus46DualSunBeige && !(lineTags >= 8 && !hasFullSkyRect)) {
       vetoes.push('SVG32_GOOGLE_OR_MUSE_SPACED_UPPER_CMD'); score -= 60;
     }
     if (upperShare >= 0.98 && bLen <= 840 && dJoined.length <= 255 && !tinyEye && !hasOpus5HvWater) {
@@ -397,36 +498,89 @@
     const vetoes = [];
     const reasons = [];
     const totalAnim = smil + cssKeyframes + (hasJsAnim ? 8 : 0);
-    if (totalAnim === 0) vetoes.push('FULL_PELICAN_ZERO_ANIMATION_STATIC');
-    if (bLen < 7200) vetoes.push(`FULL_PELICAN_LOW_BYTE_DENSITY(${bLen}B<7200B)`);
-    if (paths < 25 && jsBytes < 6000) vetoes.push(`FULL_PELICAN_SPARSE_PATHS(${paths}<25)`);
-    if (vbW > 0 && vbW < 560) vetoes.push(`FULL_PELICAN_TINY_VIEWBOX(${Math.round(vbW)}x${Math.round(vbH)})`);
-    if (openaiShorthandGrad) vetoes.push('FULL_PELICAN_OPENAI_GRADIENT_SHORTHAND');
+    const primShapes = (s.match(/<(?:circle|ellipse|polygon|polyline|rect)\b/gi) || []).length;
+    const totalShapes = paths + primShapes;
+    const mcV20 = evaluateMuseVsClaudeV20(s);
+    if (totalAnim === 0 && bLen < 5200) vetoes.push('FULL_PELICAN_ZERO_ANIMATION_STATIC');
+    if (bLen < 4200) vetoes.push(`FULL_PELICAN_LOW_BYTE_DENSITY(${bLen}B<4200B)`);
+    if (paths < 8 && totalShapes < 18 && jsBytes < 4000) vetoes.push(`FULL_PELICAN_SPARSE_SHAPES(paths=${paths},shapes=${totalShapes})`);
+    if (vbW > 0 && vbW < 500) vetoes.push(`FULL_PELICAN_TINY_VIEWBOX(${Math.round(vbW)}x${Math.round(vbH)})`);
+    const _getIdCnt = (jsCode.match(/getElementById\s*\(/g) || []).length;
+    const _createNsCnt = (jsCode.match(/createElementNS/g) || []).length;
+    const _hasLowerDoctype = s.indexOf('<!doctype html>') !== -1;
+    const _hasCssRoot = s.indexOf(':root') !== -1;
+    if (/max-width\s*:\s*900px/i.test(s) && /x1=["']0["']\s+y1=["']0["']\s+x2=["']0["']\s+y2=["']1["']/i.test(s) && !pctGrad) {
+      vetoes.push('FULL_PELICAN_MUSE_COMPACT_CSS_ENVELOPE');
+    }
+    if (/<title>\s*<\/title>/i.test(s)) {
+      vetoes.push('FULL_PELICAN_EMPTY_TITLE_NON_CLAUDE');
+    }
+    const _vbKey = vbW > 0 ? `${Math.round(vbW)}x${Math.round(vbH)}` : '';
+    if (_vbKey === '1000x450' || _vbKey === '500x500') {
+      vetoes.push(`FULL_PELICAN_NON_CLAUDE_VIEWBOX(vb=${_vbKey})`);
+    }
+    if (jsBytes === 0 && smil === 0 && cssKeyframes >= 12) {
+      vetoes.push(`FULL_PELICAN_GEMINI_HEAVY_PURE_CSS_KF(kf=${cssKeyframes})`);
+    }
+    if (/background-color\s*:\s*#87ceeb\b|#4facfe\b[\s\S]{0,60}#00f2fe\b/i.test(s)) {
+      vetoes.push('FULL_PELICAN_GEMINI_BGCOLOR_SKYBLUE');
+    }
+    if (/pedal-counter-spin/i.test(s) && /crank-spin-front/i.test(s)) {
+      vetoes.push('FULL_PELICAN_GEMINI_COUNTER_SPIN_KF');
+    }
+    if (bLen >= 25000 || _getIdCnt >= 18 || (_createNsCnt >= 4 && jsBytes >= 8500)) {
+      vetoes.push(`FULL_PELICAN_GEMINI_HEAVY_OR_DOM_ENGINE(b=${bLen},getId=${_getIdCnt},crNS=${_createNsCnt})`);
+    }
+    if (_hasCssRoot || _hasLowerDoctype) {
+      vetoes.push(`FULL_PELICAN_NON_CLAUDE_ROOT_OR_LOWER_DOCTYPE(root=${_hasCssRoot ? 1 : 0},dtLow=${_hasLowerDoctype ? 1 : 0})`);
+    }
+    if (_vbKey === '960x540' || _vbKey === '960x600' || _vbKey === '960x640' || _vbKey === '1000x560' || _vbKey === '1000x620' || _vbKey === '1100x650' || _vbKey === '1200x700' || _vbKey === '1200x800') {
+      vetoes.push(`FULL_PELICAN_OPENAI_LUNA_OR_SOL_CANVAS(vb=${_vbKey})`);
+    }
+    if (isHtmlDoc && nComments < 12 && !pctGrad && !hasBoxDivider) {
+      vetoes.push(`FULL_PELICAN_INSUFFICIENT_ANATOMICAL_COMMENTS(cmt=${nComments}<12)`);
+    }
+    const _isOpus5PureSmilExempt = isHtmlDoc && !mcV20.hasVp && jsBytes === 0 && smil >= 25 && nComments >= 20 && Math.round(vbW) === 800;
+    if (openaiShorthandGrad && !pctGrad && !hasBoxDivider && !_isOpus5PureSmilExempt) vetoes.push('FULL_PELICAN_OPENAI_GRADIENT_SHORTHAND');
     const _terraShY = /\bx2="0"\s+y2="1"|\by1="0"\s+y2="1"(?!\s*%)/.test(s);
     const _hxM = (s.match(/#[0-9a-fA-F]{6}\b/g) || []).slice(0, 64);
     const _upHx = _hxM.filter(h => /[A-F]/.test(h.slice(1)) && !/[a-f]/.test(h.slice(1))).length;
+    if (mcV20.isNonClaudeMuseOrOpen) {
+      vetoes.push(`V20_NON_CLAUDE_MUSE_OR_TAILWIND_STRUCTURAL(muse=${mcV20.musePts},claude=${mcV20.claudePts})`);
+    } else if (jsBytes === 0 && smil >= 22 && mcV20.hasVp && !pctGrad && !hasBoxDivider && (mcV20.twUniq >= 2 || mcV20.vbKey === '1000x600' || mcV20.musePts >= 42)) {
+      vetoes.push(`FULL_PELICAN_MUSE_HEAVY_PURE_SMIL(smil=${smil},js=0)`);
+    }
     if (jsBytes === 0 && smil >= 3 && cssKeyframes >= 5 && _terraShY && nComments <= 5 && _upHx === 0 && bLen >= 12000) {
       vetoes.push('FULL_PELICAN_OPENAI_56_TERRA_SHORTHAND_GUARD');
     }
-    if (!isHtmlDoc && nComments === 0) vetoes.push('FULL_PELICAN_RAW_SVG_ZERO_LAYER_COMMENTS');
+    if (!isHtmlDoc && nComments === 0 && !pctGrad) vetoes.push('FULL_PELICAN_RAW_SVG_ZERO_LAYER_COMMENTS');
 
     let score = 0;
     if (!vetoes.length) {
       score += 55;
-      reasons.push(`全尺寸动态鹈鹕门控通过 (${bLen}B, paths=${paths}, smil=${smil}, js=${jsBytes}B)`);
+      reasons.push(`全尺寸动态鹈鹕门控通过 (${bLen}B, paths=${paths}, shapes=${totalShapes}, smil=${smil}, js=${jsBytes}B)`);
       if (pctGrad) { score += 20; reasons.push('Anthropic百分比渐变坐标签名 (x1/y1=%)'); }
       if (hasBoxDivider) { score += 18; reasons.push('Anthropic框线分节注释签名 (═══)'); }
-      else if (nComments >= 8) { score += 10; reasons.push(`清晰解剖图层注释 (${nComments}处)`); }
+      else if (nComments >= 5) { score += 10; reasons.push(`清晰解剖图层注释 (${nComments}处)`); }
       if (hasMathIk) { score += 15; reasons.push('三角函数逆运动学骨骼驱动 (Math.atan2/acos)'); }
-      else if (smil >= 8 || cssKeyframes >= 3) { score += 10; reasons.push(`多通道连续动画编排 (SMIL=${smil})`); }
-      if (hasRoleAria && !pctGrad && !hasBoxDivider) score -= 18;
+      else if (smil >= 4 || cssKeyframes >= 2 || hasJsAnim) { score += 10; reasons.push(`多通道连续动画编排 (SMIL=${smil}, KF=${cssKeyframes})`); }
+      if (isHtmlDoc && !mcV20.hasVp) { score += 12; reasons.push('Anthropic无viewport精简文档头'); }
+      if (s.includes('charset="utf-8"')) { score += 8; reasons.push('Anthropic小写utf-8头签名'); }
+      if (hasRoleAria && !pctGrad && !hasBoxDivider && mcV20.claudePts < 28 && !(nComments >= 14 && hasMathIk && Math.round(vbW) === 800)) score -= 18;
     }
 
     const isClaudeFull = (score >= 65) && (vetoes.length === 0);
     const effort = (bLen >= 18000 || (hasMathIk && bLen >= 14000)) ? 'MAX' : (bLen >= 11500 ? 'HIGH' : 'MEDIUM');
-    const subModel = bLen >= 10500 ? 'anthropic/claude-opus-5.5' : 'anthropic/claude-sonnet-5.5';
-    const subLabel = `${subModel.includes('opus') ? 'Claude Opus 5.5' : 'Claude Sonnet 5.5'} (${effort === 'MAX' ? 'Max' : effort[0] + effort.slice(1).toLowerCase()})`;
-    const suspect = (openaiShorthandGrad || (!isHtmlDoc && nComments === 0 && smil >= 6)) ? 'openai/gpt-6.1-sol_or_gpt-6-luna' : '';
+    const subModel = (bLen < 7000 && !hasMathIk)
+      ? 'anthropic/claude-haiku-5.5'
+      : ((bLen >= 11200 || hasMathIk) ? 'anthropic/claude-opus-5.5' : 'anthropic/claude-sonnet-5.5');
+    const subName = subModel.includes('haiku') ? 'Claude Haiku 5.5' : (subModel.includes('opus') ? 'Claude Opus 5.5' : 'Claude Sonnet 5.5');
+    const subLabel = `${subName} (${effort === 'MAX' ? 'Max' : effort[0] + effort.slice(1).toLowerCase()})`;
+    const suspect = (mcV20.isStrictMuseExclusive || vetoes.some(v => v.includes('MUSE_')))
+      ? ((jsBytes === 0 && smil >= 16) ? 'meta/muse-wonder' : 'meta/muse-spark-1.3')
+      : (mcV20.isNonClaudeMuseOrOpen
+          ? 'non_claude/muse_or_open_html'
+          : ((openaiShorthandGrad || (!isHtmlDoc && nComments === 0 && smil >= 6)) ? 'openai/gpt-6.1-sol_or_gpt-6-luna' : ''));
 
     return {
       mode: 'full_pelican_html_svg',
@@ -572,7 +726,7 @@
       for (const v of (artifactRes.vetoes && artifactRes.vetoes.length ? artifactRes.vetoes : ['VETO_NON_CLAUDE_PELICAN_ARTIFACT'])) {
         if (!vetoReasons.includes(v)) vetoReasons.push(v);
       }
-      if (artifactRes.non_claude_suspect && !nonClaudeSuspect) nonClaudeSuspect = artifactRes.non_claude_suspect;
+      if (artifactRes.non_claude_suspect && (!nonClaudeSuspect || nonClaudeSuspect === 'non_anthropic_visible_cot')) nonClaudeSuspect = artifactRes.non_claude_suspect;
     }
 
     let score = 0;
@@ -608,7 +762,7 @@
         family: delegateToCarbon ? 'carbon_candidate' : 'non_claude',
         vendor: delegateToCarbon ? 'google' : (nonClaudeSuspect.includes('/') ? nonClaudeSuspect.split('/')[0] : 'non_anthropic'),
         model_id: nonClaudeSuspect || 'non_anthropic/rejected_by_claude_v5',
-        label: delegateToCarbon ? '移交 Gemini 4 Carbon 分类器' : `非 Claude (${nonClaudeSuspect || vetoReasons[0]})`,
+        label: delegateToCarbon ? '移交 Gemini 4 Carbon 分类器' : (nonClaudeSuspect === 'meta/muse-wonder' ? 'Muse Wonder' : (nonClaudeSuspect.startsWith('meta/') ? 'Muse Spark 1.3' : `非 Claude (${nonClaudeSuspect || vetoReasons[0]})`)),
         inferred_effort: effort,
         confidence: (wire.effectiveRc > 0 || delegateToCarbon || wire.maxTurnRpNoTools >= 6) ? 0.96 : 0.91,
         score: Math.min(-20, score - 80),
@@ -660,11 +814,40 @@
     return claudeVerdict;
   }
 
+  // CLI mode when executed directly via `node claude_standalone_classifier_v5.js`
+  if (typeof require === 'function' && typeof module === 'object' && require.main === module) {
+    const args = process.argv.slice(2);
+    if (args.includes('--selftest')) {
+      const yesSvg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" data-nonce="903a0afb478c"><rect width="32" height="32" fill="#ffe3b0"/><circle cx="24" cy="7" r="4" fill="#ff9b42" stroke="#8c4a1e" stroke-width="0.6"/><path d="M0 24h32v8H0z" fill="#6fb3c6"/><path d="M1 26h8M12 28h9M20 25h10M3 30h12" stroke="#2f6d80" stroke-width="0.7" fill="none" stroke-linecap="round"/><path d="M13 24c-4 0-6-3-6-6 0-4 3-7 7-7 4 0 6 3 6 6l4 1-4 2c-1 3-4 4-7 4z" fill="#fff6e6" stroke="#8c4a1e" stroke-width="0.8"/><circle cx="17" cy="14" r="0.9" fill="#2f6d80"/></svg>';
+      const noWireframe = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none" stroke="#155e75" stroke-width="1.5"><circle cx="24" cy="6" r="2.2" fill="#f59e0b"/><path d="M24 1.8v1.7"/></svg>';
+      const r1 = classifyClaudeSample({ svgText: yesSvg });
+      const r2 = classifyClaudeSample({ svgText: noWireframe });
+      const r3 = classifyClaudeSample({ svgText: yesSvg, rc: 8500 });
+      const r4 = classifyClaudeSample({ replyText: '令 \\(a=x+20\\)，\\[ab=820\\]', rp: 15, rc: 0 });
+      const okAll = r1.is_claude === true && r2.is_claude === false && r3.is_claude === false && r4.is_claude === false;
+      console.log(JSON.stringify({ ok: okAll, engine_version: ENGINE_VERSION, checks: [r1.is_claude, !r2.is_claude, !r3.is_claude, !r4.is_claude] }));
+      process.exit(okAll ? 0 : 2);
+    } else {
+      let raw = '';
+      process.stdin.setEncoding('utf8');
+      process.stdin.on('data', ch => { raw += ch; });
+      process.stdin.on('end', () => {
+        try {
+          const inp = JSON.parse(raw || '{}');
+          process.stdout.write(JSON.stringify(classifyClaudeSample(inp)));
+        } catch (err) {
+          process.stdout.write(JSON.stringify({ ok: false, error: String(err && err.message || err) }));
+        }
+      });
+    }
+  }
+
   return {
     ENGINE_VERSION,
     extractFirstSvgOrHtml,
     extractWireAndProseDna,
     analyzeSvg32MicroPelican,
+    evaluateMuseVsClaudeV20,
     analyzeFullPelicanSvgOrHtml,
     classifyClaudeSample,
     composeWithCarbon,

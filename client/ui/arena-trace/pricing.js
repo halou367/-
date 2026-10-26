@@ -1,24 +1,3 @@
-/*
- * pricing.js — 用计费反推型号候选
- *
- * 主判据是 **basePrice 残差法**（见下面 AGENT_P50_RATES 的说明）：
- *
- *   /api/chat/{id}/cost 给出每条消息四条通道的真实美元花费（actual.*）以及
- *   按 agent_p50 基准费率重算的 basePriceUsd，两者共用同一份真实 token；
- *   /out  SSE 流用来把这些账单配对到助手真正产出过内容的消息上。
- *   ⇒ 对每个候选型号，用它的费率把 actual 折回 token、再按 p50 算出预测 basePrice，
- *     与观测值一比，残差最小的就是最像的 —— 隐藏的思考 token 在除法里自动约掉。
- *
- * 本文件还承担 SSE / 计费解析、目录规范化，以及几个跨模块共用的小工具
- * （sessionOf / isOutUrl / aggregateCostLedger），family.js、background.js 与
- * tools/ 都从这里取，避免各写一份。
- *
- * ⚠ 两条纪律
- *   1. 本模块**不写死任何厂商名或型号名**。候选名称全部来自目录文件，
- *      厂商匹配靠字符串归一化比对，不靠映射表。
- *   2. 必须能在 Node 里独立 require（tools/ 与测试都这么用），不得依赖 chrome.*
- *      或其它模块；family.js 反过来依赖本模块的解析函数。
- */
 (function (root) {
   'use strict';
 
@@ -273,7 +252,7 @@
           bucket.toolCalls = (bucket.toolCalls || 0) + 1;
         } else if (type === 'tool-input-available') {
           // 工具入参由模型生成，算输出 token。
-          try { const sIn = JSON.stringify(data.input || {}); bucket.text += sIn; bucket.visText += sIn; } catch (_) {}
+          try { const rawIn = data.input ?? data.args ?? {}; const sIn = typeof rawIn === 'string' ? rawIn : JSON.stringify(rawIn); bucket.text += sIn; bucket.visText += sIn; } catch (_) {}
         }
       }
     }
@@ -567,65 +546,16 @@
         else m.cacheWrite = m.prompt * 1.25;
       }
     }
-    let crList = Array.isArray(m.cacheReadVariants) && m.cacheReadVariants.length
+    const crList = Array.isArray(m.cacheReadVariants) && m.cacheReadVariants.length
       ? m.cacheReadVariants.slice()
       : (m.cacheRead > 0 ? [m.cacheRead] : []);
-    let altList = Array.isArray(m.altRates) ? m.altRates.map((a) => Object.assign({}, a)) : [];
-    const addCr = (v) => {
-      if (v > 0 && !crList.some((x) => Math.abs(x - v) < 1e-12)) crList.push(v);
-    };
-    const addAlt = (alt) => {
-      if (!altList.some((x) => Math.abs((x.prompt || 0) - alt.prompt) < 1e-11 && Math.abs((x.completion || 0) - alt.completion) < 1e-11)) {
-        altList.push(alt);
-      }
-    };
-    if (/gpt-6\.1-sol|barium|argon/i.test(id)) {
-      const ordered = [0.2e-6, 0.1e-6, 0.5e-6, 0.4e-6, 0.05e-6];
-      for (const v of crList) {
-        if (v > 0 && !ordered.some((x) => Math.abs(x - v) < 1e-12)) ordered.push(v);
-      }
-      crList = ordered;
-      m.cacheRead = 0.2e-6;
-    }
-    if (/gpt-6-sol|gpt-5\.6-sol/i.test(id) && !/gpt-6\.1-sol/i.test(id)) {
-      altList = altList.filter((a) => !(Math.abs((a.prompt || 0) - 2.0e-6) < 1e-10 && Math.abs((a.completion || 0) - 10.0e-6) < 1e-10));
-    }
-    if (/gpt-6-astra/i.test(id)) {
-      const orderedAstra = [1.0e-6, 0.5e-6, 2.5e-6, 2.0e-6, 0.25e-6];
-      for (const v of crList) {
-        if (v > 0 && !orderedAstra.some((x) => Math.abs(x - v) < 1e-12)) orderedAstra.push(v);
-      }
-      crList = orderedAstra;
-      m.cacheRead = 1.0e-6;
-    }
-    if (/glm-5\.[123]/i.test(id)) {
-      addCr(0.26e-6); addCr(0.14e-6); addCr(0.059e-6);
-    }
-    if (/deepseek-v4\.1/i.test(id)) {
-      addCr(0.00686e-6);
-      addAlt({ prompt: 0.2156e-6, completion: 0.6468e-6, cacheRead: 0.00686e-6, cacheWrite: 0.2156e-6 });
-    }
-    if (/paisley-n9x0|qwen3\.[78]-max/i.test(id)) {
-      addCr(0.1475e-6);
-      addAlt({ prompt: 1.475e-6, completion: 4.425e-6, cacheRead: 0.1475e-6, cacheWrite: 1.84375e-6 });
-    }
-    if (/gpt-6-luna/i.test(id)) {
-      addCr(0.01e-6); addCr(0.025e-6); addCr(0.005e-6);
-      addAlt({ prompt: 0.10e-6, completion: 0.50e-6, cacheRead: 0.01e-6, cacheWrite: 0.10e-6, cacheReadVariants: [0.01e-6, 0.025e-6, 0.005e-6] });
-      addAlt({ prompt: 0.05e-6, completion: 0.25e-6, cacheRead: 0.005e-6, cacheWrite: 0.05e-6, cacheReadVariants: [0.005e-6, 0.01e-6, 0.025e-6] });
-    }
-    if (/qwen3\.8-27b/i.test(id)) addCr(0.004e-6);
-    if (/qwen3\.7-plus/i.test(id)) addCr(0.032e-6);
-    if (/mimo-v2[.-]6-flash/i.test(id)) addCr(0.0028e-6);
-    if (m.cacheRead > 0 && !crList.some((x) => Math.abs(x - m.cacheRead) < 1e-12)) crList.unshift(m.cacheRead);
+    if (m.cacheRead > 0 && crList.indexOf(m.cacheRead) < 0) crList.unshift(m.cacheRead);
     const cwList = Array.isArray(m.cacheWriteVariants) && m.cacheWriteVariants.length
       ? m.cacheWriteVariants.slice()
       : (m.cacheWrite > 0 ? [m.cacheWrite] : []);
     if (m.cacheWrite > 0 && cwList.indexOf(m.cacheWrite) < 0) cwList.unshift(m.cacheWrite);
-    m.cacheReadVariants = crList;
     m.cacheReadList = crList;
     m.cacheWriteList = cwList;
-    if (altList.length) m.altRates = altList;
     try {
       Object.defineProperty(model, '_enrichedRates', { value: m, configurable: true });
       Object.defineProperty(model, '_enrichedRatesPrompt', { value: model.prompt, configurable: true });
@@ -879,9 +809,244 @@
       predBaseFromInt,
       baseRelErr,
       tokens,
-      visTokens: Number(row.visTokens || row.tokens) || 0,
+      visTokens: Number(row.tokens) || 0,
     };
   }
+
+  function _isSyntheticStreamEvidence(ev) {
+    if (!ev || typeof ev !== 'object') return false;
+    if (ev.syntheticFallback === true || ev.isSyntheticSse === true) return true;
+    const sIds = Array.isArray(ev.streamIds) ? ev.streamIds : [];
+    if (sIds.some((id) => {
+      const k = String(id || '');
+      return k === 'txt_synth' || k === 'rs_synth' || /^txt_synth|^rs_synth/i.test(k);
+    })) return true;
+    return false;
+  }
+
+  // [V20 Upgrade #1] Per-Block Encrypted/Stream Reasoning Second-Order Moments Tie-Breaker
+  function scoreEncryptedReasoningMomentsV20(modelId, proto, ev) {
+    if (!ev || typeof ev !== 'object') return { delta: 0, dim: '' };
+    const id = String(modelId || '').toLowerCase();
+    const rp = Number(ev.nReason || ev.reasoningStartCount || 0);
+    const duty = Number(ev.thinkDutyCycle || 0);
+    const blkCv = Number(ev.encBlockDurCv || 0);
+    const encSig = Number(ev.encSigBytes || 0);
+    if (ev.visibleReasoning || Number(ev.reasoningTextLength || 0) > 0) return { delta: 0, dim: '' };
+
+    if (proto === 'openai' && rp >= 2) {
+      if (rp >= 4 && (duty >= 0.42 || blkCv <= 0.65)) {
+        if (/gpt-6\.1-sol/i.test(id)) return { delta: -0.0045, dim: `V20思考二阶矩:多段稳态脉冲(rp=${rp},duty=${duty.toFixed(2)}→6.1-Sol)` };
+        if (/gpt-6-astra|gpt-6-sol\b/i.test(id)) return { delta: 0.0032, dim: '' };
+      } else if (rp === 2 && duty > 0 && duty < 0.28) {
+        if (/gpt-6-luna|gpt-5\.6/i.test(id)) return { delta: -0.0030, dim: `V20思考二阶矩:短占空比双脉冲(duty=${duty.toFixed(2)})` };
+      }
+    } else if (proto === 'claude' && (ev.hiddenReasoning || encSig > 0)) {
+      if (duty >= 0.58 || encSig >= 520) {
+        if (/opus-5\.[56]|opus-5\b/i.test(id)) return { delta: -0.0042, dim: `V20加密思考占空比:深思考(${duty > 0 ? duty.toFixed(2) : encSig + 'B'}→Opus)` };
+        if (/haiku-5\.5/i.test(id)) return { delta: 0.0045, dim: '' };
+      } else if (duty > 0 && duty <= 0.22 && rp <= 1) {
+        if (/haiku-5\.5|sonnet-5\.5/i.test(id)) return { delta: -0.0028, dim: `V20加密思考占空比:轻量响应(duty=${duty.toFixed(2)})` };
+      }
+    }
+    return { delta: 0, dim: '' };
+  }
+
+  // [V20 Upgrade #2] Pure-Text Markdown Micro-Typography & Muse/Claude Structural Tie-Breaker
+  function scoreProseMicroTypographyV20(modelId, proto, ev) {
+    if (!ev || typeof ev !== 'object') return { delta: 0, dim: '' };
+    const id = String(modelId || '').toLowerCase();
+    const txt = String(ev.lastAssistantText || ev.replyText || ev.sampleText || '');
+    if (!txt || txt.length < 140) return { delta: 0, dim: '' };
+
+    if (txt.length >= 600 && (txt.indexOf('<svg') !== -1 || txt.indexOf('<SVG') !== -1)) {
+      const v5 = _getClaudeV5Engine();
+      if (v5 && typeof v5.evaluateMuseVsClaudeV20 === 'function') {
+        const mc = v5.evaluateMuseVsClaudeV20(txt);
+        if (mc.isStrictMuseExclusive) {
+          if (proto === 'meta' || /muse-spark|muse-wonder|straw-110/i.test(id)) {
+            return { delta: -0.0280, dim: `V20正交HTML指纹:锁定Meta Muse(net=+${mc.net})` };
+          }
+          if (proto === 'claude') {
+            return { delta: 0.0320, dim: 'V20正交HTML指纹:Muse独占结构排除Claude' };
+          }
+        } else if (mc.claudePts >= 42 && mc.musePts < 28) {
+          if (proto === 'claude') {
+            return { delta: -0.0160, dim: `V20正交HTML指纹:Anthropic原生排版(pts=${mc.claudePts})` };
+          }
+          if (proto === 'meta' || /muse-spark|muse-wonder|straw-110/i.test(id)) {
+            return { delta: 0.0240, dim: 'V20正交HTML指纹:Claude原生结构排除Muse' };
+          }
+        }
+      }
+      return { delta: 0, dim: '' };
+    }
+
+    const cjkAsciiSpace = (txt.match(/[\u4e00-\u9fff] [A-Za-z0-9]|[A-Za-z0-9] [\u4e00-\u9fff]/g) || []).length;
+    const cjkAsciiTight = (txt.match(/[\u4e00-\u9fff][A-Za-z0-9]|[A-Za-z0-9][\u4e00-\u9fff]/g) || []).length;
+    const panguTotal = cjkAsciiSpace + cjkAsciiTight;
+    const panguRatio = panguTotal >= 6 ? (cjkAsciiSpace / panguTotal) : -1;
+    const boldAsciiColon = (txt.match(/\*\*[^*\n]{1,36}\*\*:\s/g) || []).length;
+    const boldFullColon = (txt.match(/\*\*[^*\n]{1,36}\*\*：/g) || []).length;
+    const spacedEmDash = (txt.match(/ — /g) || []).length;
+    const tightEmDash = (txt.match(/[^\s]—[^\s]/g) || []).length;
+    const starBullets = (txt.match(/^\s*\*\s+\S/gm) || []).length;
+    const dashBullets = (txt.match(/^\s*-\s+\S/gm) || []).length;
+
+    let delta = 0;
+    let dim = '';
+    if (starBullets >= 3 && dashBullets === 0) {
+      if (proto === 'google') { delta -= 0.0048; dim = 'V20微排版:星号列表(* bullet→Gemini特征)'; }
+      else if (proto === 'claude' || proto === 'openai') { delta += 0.0022; }
+    }
+    if (panguRatio >= 0.78 && panguTotal >= 8) {
+      if (proto === 'google' || /gpt-6\.1-sol|qwen/i.test(id)) {
+        delta -= 0.0028;
+        if (!dim) dim = `V20微排版:中英盘古留白(${Math.round(panguRatio * 100)}%)`;
+      }
+    } else if (panguRatio >= 0 && panguRatio <= 0.12 && panguTotal >= 8 && boldFullColon >= 2) {
+      if (proto === 'claude' || /deepseek|glm|kimi/i.test(id)) {
+        delta -= 0.0025;
+        if (!dim) dim = 'V20微排版:紧凑中英连接+全角冒号引出';
+      }
+    }
+    if (tightEmDash >= 2 && spacedEmDash === 0 && proto === 'claude') {
+      delta -= 0.0022;
+      if (!dim) dim = 'V20微排版:无空格长破折号(Claude英文标点习惯)';
+    } else if (spacedEmDash >= 2 && tightEmDash === 0 && (proto === 'openai' || proto === 'meta')) {
+      delta -= 0.0020;
+      if (!dim) dim = 'V20微排版:双侧空格破折号(OpenAI/Meta排版习惯)';
+    }
+    if (boldAsciiColon >= 3 && boldFullColon === 0 && proto === 'meta') {
+      delta -= 0.0024;
+      if (!dim) dim = 'V20微排版:半角冒号加粗条目(Meta习惯)';
+    }
+    return { delta, dim };
+  }
+
+
+  function scoreSubwordAndToolMicroFingerprint(spec, ev) {
+    if (!spec || !ev) return { deltaPenalty: 0, reason: '' };
+    const idLow = `${spec.id || ''} ${spec.label || ''}`.toLowerCase();
+    const isSynth = _isSyntheticStreamEvidence(ev);
+    let delta = 0;
+    const notes = [];
+
+    const totSteps = Number(ev.totalStepCount) || 1;
+    const preToolChars = Number(ev.preToolChars ?? -1);
+    if (totSteps >= 2 && preToolChars >= 0) {
+      if (preToolChars === 0 && /gpt-6-astra/i.test(idLow)) {
+        delta -= 0.012;
+        notes.push('静默直调工具(preTool=0➔Astra)');
+      } else if (preToolChars >= 24 && /gpt-6\.1-sol|claude-opus-5\.5/i.test(idLow)) {
+        delta -= 0.010;
+        notes.push(`首跳前规划引导(${preToolChars}字)`);
+      }
+    }
+
+    // 闭源模型(含 Muse)无明文思考文本
+
+    if (!isSynth && Number(ev.newlineLeadRatio) >= 0 && Number(ev.textChunks || 0) >= 16) {
+      const nlLead = Number(ev.newlineLeadRatio);
+      if (nlLead >= 0.65 && /openai\/|gpt-/i.test(idLow)) {
+        delta -= 0.008;
+      } else if (nlLead <= 0.25 && /anthropic\/|claude-/i.test(idLow)) {
+        delta -= 0.008;
+      }
+    }
+    return { deltaPenalty: +delta.toFixed(4), reason: notes.join(' · ') };
+  }
+
+  function scoreOpenAiIntraFamilyTieBreaker(rawModel, ev, pulseRes) {
+    ev = (ev && typeof ev === 'object') ? ev : {};
+    const proto = resolveModelProtoFamily(rawModel);
+    if (proto !== 'openai' || ev.visibleReasoning || ev.noReasoningParts) {
+      return { deltaPenalty: 0, reason: '' };
+    }
+    const id = String((rawModel && rawModel.id) || '').toLowerCase();
+    const label = String((rawModel && rawModel.label) || '').toLowerCase();
+    const isSynth = _isSyntheticStreamEvidence(ev);
+    const cps = isSynth ? 0 : (Number(ev.cps || ev.textCps) || 0);
+    const rBlocks = Math.max(
+      Number(ev.nReason || ev.totalReasonParts || ev.reasoningStartCount || ev.rp) || 0,
+      Array.isArray(ev.streamIds) ? ev.streamIds.filter((s) => /^rs_/i.test(String(s || ''))).length : 0
+    );
+    const totSteps = Math.max(1, Number(ev.totalStepCount || ev.stepCount || ev.steps) || 1);
+    const hasTools = totSteps >= 2 || (Array.isArray(ev.toolIds) && ev.toolIds.length > 0);
+    const durMs = Number(ev.thinkDurationMs || ev.turnDurationMs || ev.firstTurnDurMs) || 0;
+    const visTok = Math.max(1, Number(ev.visTokens || ev.visibleTokens) || 0);
+    const msPerVisTok = (durMs > 0 && visTok >= 12) ? (durMs / visTok) : 0;
+    const invThink = (pulseRes && pulseRes.thinkingInversion && pulseRes.thinkingInversion.ok && pulseRes.inBand)
+      ? Number(pulseRes.thinkingInversion.thinkingTokens) || 0
+      : 0;
+
+    let deltaPen = 0;
+    const reasons = [];
+
+    // 1. Reasoning block density & multi-step tool loop topology
+    if (rBlocks >= 3 && rBlocks >= totSteps * 1.5 && (cps === 0 || cps <= 64)) {
+      if (/gpt-6\.1-sol/i.test(id)) {
+        deltaPen -= 0.018;
+        reasons.push(`OpenAI结构解耦:多段空CoT(rBlocks=${rBlocks}/steps=${totSteps}➔6.1 Sol)`);
+      } else if (/gpt-6-luna|gpt-5\.6-terra/i.test(id)) {
+        deltaPen += 0.012;
+      }
+    } else if (hasTools && totSteps >= 2 && rBlocks >= 1 && rBlocks <= totSteps + 1 && (cps === 0 || (cps >= 66 && cps < 135))) {
+      if (/gpt-6-astra/i.test(id + ' ' + label)) {
+        deltaPen -= 0.016;
+        reasons.push(`OpenAI结构解耦:多步工具紧凑CoT(steps=${totSteps},rBlocks=${rBlocks}➔6 Astra)`);
+      } else if (/gpt-6\.1-sol/i.test(id) && cps > 0 && cps < 66) {
+        deltaPen -= 0.012;
+      }
+    } else if (rBlocks >= 1 && rBlocks <= 2 && durMs > 0 && durMs <= 4200 && visTok <= 220 && !hasTools) {
+      if (/gpt-6-luna/i.test(id)) {
+        deltaPen -= 0.016;
+        reasons.push(`OpenAI结构解耦:短时双块瞬发(dur=${durMs}ms,rBlocks=${rBlocks}➔6 Luna)`);
+      }
+    }
+
+    // 2. Deliberation pacing ratio (msPerVisTok)
+    if (msPerVisTok >= 55 && durMs >= 11000) {
+      if (/gpt-6\.1-sol/i.test(id)) {
+        deltaPen -= 0.014;
+        reasons.push(`OpenAI深思配速比(${Math.round(msPerVisTok)}ms/tok➔6.1 Sol)`);
+      } else if (/gpt-6-luna|gpt-5\.6-sol/i.test(id)) {
+        deltaPen += 0.010;
+      }
+    } else if (msPerVisTok >= 18 && msPerVisTok < 42 && durMs >= 3200 && durMs <= 13500 && rBlocks <= 2 && !hasTools) {
+      if (/gpt-5\.6-sol/i.test(id) && (cps === 0 || (cps >= 52 && cps < 70))) {
+        deltaPen -= 0.013;
+        reasons.push(`OpenAI均衡配速比(${Math.round(msPerVisTok)}ms/tok➔5.6 Sol)`);
+      }
+    }
+
+    // 3. Pulse-inverted hidden thinking token alignment
+    if (invThink > 0) {
+      if (invThink >= 2100) {
+        if (/gpt-6\.1-sol/i.test(id)) {
+          deltaPen -= 0.016;
+          reasons.push(`OpenAI+Pulse反演深思(${invThink}tok➔6.1 Sol)`);
+        } else if (/gpt-6-astra/i.test(id) && hasTools) {
+          deltaPen -= 0.012;
+        } else if (/gpt-5\.6-sol|gpt-6-luna/i.test(id)) {
+          deltaPen += 0.012;
+        }
+      } else if (invThink <= 520 && durMs > 0 && durMs <= 7000) {
+        if (/gpt-6-luna/i.test(id)) {
+          deltaPen -= 0.014;
+          reasons.push(`OpenAI+Pulse轻量思考(${invThink}tok➔6 Luna)`);
+        } else if (/gpt-5\.6-sol/i.test(id)) {
+          deltaPen -= 0.009;
+        }
+      }
+    }
+
+    return {
+      deltaPenalty: Number(deltaPen.toFixed(5)),
+      reason: reasons.join(' · ')
+    };
+  }
+
 
   function resolveModelProtoFamily(rawModel) {
     if (!rawModel) return '';
@@ -1129,7 +1294,7 @@
     if (!effortProfile.rewriteLabel && !/\((?:xHigh|High|Max|Medium|Low)\)/i.test(s)) {
       return s;
     }
-    return `${baseName} (${effortProfile.effort})`;
+    return `${baseName} (${effortProfile.rawEffort || effortProfile.effort})`;
   }
 
   /**
@@ -1148,8 +1313,17 @@
 
     const totalO = Math.max(0, Number(solvedTokens && solvedTokens.O) || 0);
     const totalI = Math.max(0, Number(solvedTokens && solvedTokens.I) || 0);
-    const nTurns = Math.max(1, Number(solvedTokens && solvedTokens.turns) || (Array.isArray(rows) && rows.length ? rows.length : 1));
-    const peakTurnO = Math.max(Number(solvedTokens && solvedTokens.maxTurnO) || 0, Math.round(totalO / nTurns));
+    const evStepMap = (ev && ev.msgStepCountById && typeof ev.msgStepCountById === 'object') ? ev.msgStepCountById : null;
+    const evVisMap = (ev && ev.msgVisTokensById && typeof ev.msgVisTokensById === 'object') ? ev.msgVisTokensById : null;
+    const evTurnCount = Math.max(evStepMap ? Object.keys(evStepMap).length : 0, evVisMap ? Object.keys(evVisMap).length : 0);
+    const evTotalSteps = evStepMap ? Object.values(evStepMap).reduce((a, b) => a + (Number(b) || 0), 0) : 0;
+    const isSingleTurnWithVis = Array.isArray(rows) && rows.length === 1 && Number(rows[0] && (rows[0].visO || rows[0].visTokens)) > 0;
+    const rawTurnCount = Number(solvedTokens && solvedTokens.turns) || (Array.isArray(rows) && rows.length ? rows.length : 1);
+    const nTurns = isSingleTurnWithVis ? 1 : Math.max(1, rawTurnCount, evTurnCount);
+    const isAggRowInput = (!Array.isArray(turnTokens) || turnTokens.length <= 1) && nTurns > 1;
+    const peakTurnO = isAggRowInput
+      ? Math.round(totalO / nTurns)
+      : Math.max(Number(solvedTokens && solvedTokens.maxTurnO) || 0, Math.round(totalO / nTurns));
     const avgOutPerTurn = Math.round(totalO / nTurns);
 
     // 1. Decompose Visible + Tool Tokens vs Hidden/Explicit Thinking Tokens
@@ -1158,7 +1332,7 @@
       : 0;
     const rawVisTok = Math.max(
       Number(solvedTokens && solvedTokens.visO) || 0,
-      Number(ev.visTokens) || 0,
+      Number(ev.visTokens || ev.visibleTokens) || 0,
       Number(ev.visChars) > 0 ? Math.round(Number(ev.visChars) / 3.7) : 0
     );
     const toolCount = Array.isArray(ev.toolIds) ? ev.toolIds.length : 0;
@@ -1194,79 +1368,110 @@
       : thinkTokens;
 
     // 1b. Per-Turn Chronological Trajectory, Task-Complexity Normalization (kappa_i) & P75 Quantile (v11.0)
+    const isPerStepEffortFamily = /^(gpt-6\.1-sol|gpt-6-sol|gpt-5\.6-sol|gpt-5\.6-terra|gpt-6-luna|gpt-6-astra|gemini-4-argon|claude-opus-5\.5|claude-sonnet-5\.5|claude-fable-5\.1)$/.test(spec.familyKey);
+    const rowStepSum = Array.isArray(rows) ? rows.reduce((a, r) => a + Math.max(0, Number(r && r.stepCount) || 0), 0) : 0;
+    const turnTokStepSum = Array.isArray(turnTokens) ? turnTokens.reduce((a, t) => a + Math.max(0, Number(t && (t.stepCount || t.steps)) || 0), 0) : 0;
+    let totalToolSteps = Math.max(nTurns, evTotalSteps || 0, Number(ev.totalStepCount) || 0, rowStepSum, turnTokStepSum);
+    let medNormThink = 0;
+    let hasMultiCodeTurns = false;
     let p75ThinkTok = Math.round(thinkTokens / nTurns);
     let normPeakThink = peakThinkTokens;
     let normP75Think = p75ThinkTok;
     let hasProbePlusHeavyCode = false;
-    let hasMultiTurnCodeSurge = false;
     let probeTurnNormThink = 0;
     let codeTurnNormThink = 0;
     const turnTrajectory = [];
-    if (Array.isArray(turnTokens) && turnTokens.length > 0) {
+    let effectiveTurnTokens = turnTokens;
+    if (Array.isArray(turnTokens) && turnTokens.length === 1 && evVisMap && Object.keys(evVisMap).length >= 1) {
+      const visKeys = Object.keys(evVisMap).sort();
+      const t0 = turnTokens[0] || {};
+      if (visKeys.length === 1 && !(Number(t0.visO) > 0)) {
+        effectiveTurnTokens = [Object.assign({}, t0, {
+          visO: Number(evVisMap[visKeys[0]]) || 0,
+          stepCount: Math.max(1, Number(t0.stepCount) || Number(evStepMap && evStepMap[visKeys[0]]) || 1),
+        })];
+      } else if (visKeys.length >= 2 && nTurns > 1 && !(Number(t0.visO) > 0) && (Number(t0.O) || 0) > 0) {
+        const totO0 = Number(t0.O) || 0;
+        const totI0 = Number(t0.I) || 0;
+        const totW0 = Number(t0.W) || 0;
+        const totR0 = Number(t0.R) || 0;
+        const vList = visKeys.map((k) => Math.max(0, Number(evVisMap[k]) || 0));
+        const sList = visKeys.map((k) => Math.max(1, Number(evStepMap && evStepMap[k]) || 1));
+        let oShares = [];
+        if (visKeys.length === 2 && vList[0] <= 190 && vList[1] >= 220 && totO0 > vList[0] * 4) {
+          const o0 = Math.min(Math.round(totO0 * 0.12), Math.max(vList[0] + 160, Math.round(vList[0] * 3.5)));
+          oShares = [o0, Math.max(1, totO0 - o0)];
+        } else {
+          const weights = vList.map((v) => Math.pow(Math.max(15, v), 1.35));
+          const sumW = weights.reduce((a, b) => a + b, 0) || 1;
+          oShares = weights.map((w) => Math.max(1, Math.round(totO0 * (w / sumW))));
+        }
+        const isTwoTurnCachedSecond = visKeys.length === 2 && totR0 >= 4000 && totI0 > totR0;
+        effectiveTurnTokens = visKeys.map((k, idx) => ({
+          I: isTwoTurnCachedSecond ? (idx === 0 ? totR0 : Math.max(50, totI0 - totR0)) : Math.round(totI0 / visKeys.length),
+          W: Math.round(totW0 / visKeys.length),
+          R: isTwoTurnCachedSecond ? (idx === 0 ? 0 : totR0) : Math.round(totR0 / visKeys.length),
+          O: oShares[idx],
+          visO: vList[idx],
+          reasonO: 0,
+          stepCount: sList[idx],
+          durationMs: 0,
+        }));
+      }
+    }
+    if (Array.isArray(effectiveTurnTokens) && effectiveTurnTokens.length > 0) {
       const perStepThinks = [];
       const perStepNormThinks = [];
-      const firstRawO = Math.max(1, Number((turnTokens[0] && turnTokens[0].O) || 0));
-      for (let i = 0; i < turnTokens.length; i++) {
-        const t = turnTokens[i] || {};
-        const stepO = Math.max(0, Number(t.O) || 0);
-        const stepReasonO = Math.max(0, Number(t.reasonO) || 0);
-        const stepSteps = Math.max(1, Number(t.stepCount) || 1);
-        let prevMedO = 0;
-        if (i >= 1) {
-          const prevOs = turnTokens.slice(0, i).map((x) => Math.max(0, Number(x && x.O) || 0)).filter((v) => v > 0).sort((a, b) => a - b);
-          if (prevOs.length > 0) prevMedO = prevOs[Math.floor(prevOs.length / 2)];
+      const firstRawO = Math.max(1, Number((effectiveTurnTokens[0] && effectiveTurnTokens[0].O) || 0));
+      for (let i = 0; i < effectiveTurnTokens.length; i++) {
+        const t = effectiveTurnTokens[i] || {};
+        const isAggSingleRow = effectiveTurnTokens.length === 1 && nTurns > 1;
+        const stepO = isAggSingleRow ? Math.round(Math.max(0, Number(t.O) || 0) / nTurns) : Math.max(0, Number(t.O) || 0);
+        const stepReasonO = isAggSingleRow ? Math.round(Math.max(0, Number(t.reasonO) || 0) / nTurns) : Math.max(0, Number(t.reasonO) || 0);
+        const rawStepI = isAggSingleRow ? Math.round((Number(t.I) || 0) / nTurns) : (Number(t.I) || 0);
+        const rawStepW = isAggSingleRow ? Math.round((Number(t.W) || 0) / nTurns) : (Number(t.W) || 0);
+        const rawStepR = isAggSingleRow ? Math.round((Number(t.R) || 0) / nTurns) : (Number(t.R) || 0);
+        let stepSteps = Math.max(1, Number(t.stepCount) || (turnTokens.length === 1 && evTotalSteps > 0 ? Math.round(evTotalSteps / nTurns) : 1));
+        if (stepSteps <= 1 && rawStepR > 220000) {
+          const avgStepCtx = rawStepW > 0
+            ? Math.max(60000, Math.min(190000, rawStepW * 0.72))
+            : Math.max(55000, Math.min(180000, rawStepI > 15000 ? rawStepI * 1.35 : 115000));
+          stepSteps = Math.max(2, Math.min(160, Math.round((rawStepR + (rawStepW === 0 ? rawStepI : 0)) / avgStepCtx)));
         }
-        const isMultiTurnSurgeStep = i >= 1 && stepO >= 4000 && stepO <= 26000 && prevMedO > 0 && prevMedO <= 1500 && stepO >= prevMedO * 4;
-        const propVis = (turnTokens.length === 1 && rawVisTok > 0)
+        const propVis = (effectiveTurnTokens.length === 1 && rawVisTok > 0)
           ? Math.min(stepO, visTokens)
-          : isMultiTurnSurgeStep
-            ? Math.round(stepO * 0.88)
-            : (stepO <= 600
-              ? Math.min(95, Math.max(18, Math.round(stepO * 0.24)))
+          : stepO <= 600
+          ? Math.min(95, Math.max(18, Math.round(stepO * 0.24)))
+          : (stepSteps > 1
+              ? Math.min(Math.round(stepO * 0.30), Math.max(420, stepSteps * 185))
               : Math.min(420, Math.max(45, Math.round(visTokens * (stepO / Math.max(1, totalO))))));
-        let stepVis = (Number(t.visO) > 0 && !(isMultiTurnSurgeStep && Number(t.visO) <= 1500))
+        let stepVis = Number(t.visO) > 0
           ? Math.min(stepO || Number(t.visO), Number(t.visO))
-          : (stepReasonO > 0 && stepO > stepReasonO ? (stepO - stepReasonO) : Math.min(stepO, propVis));
+          : ((isPerStepEffortFamily && effectiveTurnTokens.length === 1 && rawVisTok > 0 && rawVisTok < stepO)
+              ? rawVisTok
+              : (stepReasonO > 0 && stepO > stepReasonO ? (stepO - stepReasonO) : Math.min(stepO, propVis)));
         let stepThink = stepReasonO > 0 && stepO > 0
           ? Math.min(stepO, Math.max(stepReasonO, stepO - stepVis))
           : Math.max(0, stepO - stepVis);
         const stepI = Number(t.I) || 0;
-        const hasMeasuredVis = Number(t.visO) > 0;
-        const isCodeSurgeTurn = isMultiTurnSurgeStep || (turnTokens.length === 2 && i === 1 && stepVis >= 175 && (
+        const hasMeasuredVis = Number(t.visO) > 0 || (isPerStepEffortFamily && effectiveTurnTokens.length === 1 && rawVisTok > 0 && rawVisTok < stepO);
+        const isCodeSurgeTurn = (effectiveTurnTokens.length === 2 && i === 1 && stepVis >= 175 && (
           (firstRawO <= 600 && stepO >= firstRawO * 8 && stepSteps <= 2 && stepI <= 2200) ||
           (firstRawO <= 80 && stepO >= firstRawO * 25 && stepSteps <= 3 && stepI <= 4500)
         ));
-        if (isMultiTurnSurgeStep) hasMultiTurnCodeSurge = true;
-        const kappa = (((hasMeasuredVis && stepVis > 220 && stepSteps <= 2 && stepI <= 2200) || isCodeSurgeTurn))
-          ? Math.min(22.0, +(1.0 + 0.028 * Math.max(40, stepVis - 135)).toFixed(2))
-          : 1.0;
-        const normThink = Math.round(stepThink / kappa);
-        perStepThinks.push(stepThink);
+        const thPerStep = isPerStepEffortFamily ? Math.round(stepThink / Math.max(1, stepSteps)) : stepThink;
+        const visPerStep = isPerStepEffortFamily ? Math.round(stepVis / Math.max(1, stepSteps)) : stepVis;
+        const isPerStepCodeHeavy = isPerStepEffortFamily && hasMeasuredVis
+          && (spec.familyKey === 'gemini-4-argon' && effectiveTurnTokens.length === 1 && stepSteps === 1 ? visPerStep >= 2000 : visPerStep >= 900)
+          && stepVis >= stepThink * 0.45;
+        const kappa = isPerStepEffortFamily
+          ? (isPerStepCodeHeavy ? Math.min(18.0, +(1.0 + 0.015 * Math.max(20, visPerStep - 200)).toFixed(2)) : 1.0)
+          : ((((hasMeasuredVis && stepVis > 220 && stepSteps <= 2 && stepI <= 2200) || isCodeSurgeTurn))
+              ? Math.min(22.0, +(1.0 + 0.028 * Math.max(40, stepVis - 135)).toFixed(2))
+              : 1.0);
+        const normThink = Math.round(thPerStep / kappa);
+        perStepThinks.push(thPerStep);
         perStepNormThinks.push(normThink);
-        const stepDurMs = Math.max(0, Number(t.durationMs) || 0);
-        const stepDurSec = +(stepDurMs / 1000).toFixed(1);
-        const stepExp = stepThink / Math.max(12, stepVis);
-        const stepMult = stepDurSec >= 35 ? 1.85 : (stepDurSec >= 16 || (stepExp >= 8.0 && stepDurSec >= 6) ? 1.38 : (stepDurSec >= 7 || stepExp >= 3.5 ? 1.12 : (stepDurSec > 0 && stepDurSec <= 2.2 && stepExp < 1.5 ? 0.78 : 1.0)));
-        const stepEffThink = Math.max(15, Math.round(normThink * stepMult));
-        let stepTier = validTiers[validTiers.length - 1];
-        let stepTierIdx = validTiers.length - 1;
-        let stepTierProb = 99;
-        if (!spec.fixedTier && validTiers.length > 1) {
-          const sLogits = validTiers.map((tr, tIdx) => {
-            const tAnc = (spec.thinkAnchors && spec.thinkAnchors[tr]) || (400 * Math.pow(2.2, tIdx));
-            const oAnc = (spec.anchors && spec.anchors[tr]) || (1500 * Math.pow(1.6, tIdx));
-            const zT = Math.log(Math.max(25, stepEffThink) / tAnc) / 0.68;
-            const zO = Math.log(Math.max(120, Math.max(stepO, stepEffThink + stepVis)) / oAnc) / 0.75;
-            let ll = -0.5 * (zT * zT * 0.78 + zO * zO * 0.22);
-            if (normThink > tAnc * 2.35 && tIdx < validTiers.length - 1) ll -= 2.6;
-            return { tier: tr, tIdx, ll };
-          });
-          const mLl = Math.max(...sLogits.map((x) => x.ll));
-          const sExps = sLogits.map((x) => Object.assign({}, x, { w: Math.exp(x.ll - mLl) }));
-          const sSum = sExps.reduce((s, x) => s + x.w, 0) || 1;
-          const sBest = sExps.map((x) => ({ tier: x.tier, tIdx: x.tIdx, prob: +((x.w / sSum) * 100).toFixed(1) })).sort((a, b) => b.prob - a.prob)[0];
-          if (sBest) { stepTier = sBest.tier; stepTierIdx = sBest.tIdx; stepTierProb = sBest.prob; }
-        }
         turnTrajectory.push({
           step: i + 1,
           I: Number(t.I) || 0,
@@ -1276,13 +1481,8 @@
           visO: stepVis,
           thinkO: stepThink,
           normThinkO: normThink,
-          effThinkO: stepEffThink,
           kappa,
           steps: stepSteps,
-          durationMs: stepDurMs,
-          tier: stepTier,
-          tierIdx: stepTierIdx,
-          tierProb: stepTierProb,
         });
       }
       if (perStepThinks.length > 1) {
@@ -1291,8 +1491,17 @@
         p75ThinkTok = sortedThinks[qIdx];
 
         const sortedNorm = perStepNormThinks.slice().sort((a, b) => a - b);
+        const medIdx = Math.min(sortedNorm.length - 1, Math.floor((sortedNorm.length - 1) * 0.50));
+        medNormThink = sortedNorm[medIdx];
         normP75Think = sortedNorm[qIdx];
         normPeakThink = sortedNorm[sortedNorm.length - 1];
+        if (isPerStepEffortFamily) {
+          totalToolSteps = Math.max(totalToolSteps, turnTrajectory.reduce((a, x) => a + Math.max(1, Number(x.steps) || 1), 0));
+          const totTrajVis = turnTrajectory.reduce((a, x) => a + Math.max(0, Number(x.visO) || 0), 0);
+          const totTrajTh = turnTrajectory.reduce((a, x) => a + Math.max(0, Number(x.thinkO) || 0), 0);
+          const codeHeavyCount = turnTrajectory.filter((x) => Math.round((Number(x.visO) || 0) / Math.max(1, Number(x.steps) || 1)) >= 900).length;
+          hasMultiCodeTurns = codeHeavyCount >= 2 && totTrajVis > totTrajTh;
+        }
 
         const firstStep = turnTrajectory[0];
         const maxKappaStep = turnTrajectory.reduce((best, cur) => (cur.kappa > best.kappa ? cur : best), turnTrajectory[0]);
@@ -1300,35 +1509,33 @@
           hasProbePlusHeavyCode = true;
           probeTurnNormThink = firstStep.normThinkO;
           codeTurnNormThink = maxKappaStep.normThinkO;
-        } else if (hasMultiTurnCodeSurge && maxKappaStep && maxKappaStep.kappa >= 3.0) {
-          const nonSurgeSteps = turnTrajectory.filter((s) => s.kappa < 3.0 && s.O > 0);
-          if (nonSurgeSteps.length > 0) {
-            const nonSurgeThinks = nonSurgeSteps.map((s) => s.normThinkO).sort((a, b) => a - b);
-            const nsP75 = nonSurgeThinks[Math.min(nonSurgeThinks.length - 1, Math.floor(nonSurgeThinks.length * 0.75))];
-            if (nsP75 <= 900) {
-              hasProbePlusHeavyCode = true;
-              probeTurnNormThink = nsP75;
-              codeTurnNormThink = maxKappaStep.normThinkO;
-              thinkTokens = turnTrajectory.reduce((acc, s) => acc + (s.kappa >= 3.0 ? s.normThinkO : s.thinkO), 0);
-              visTokens = Math.max(visTokens, totalO - thinkTokens);
-            }
-          }
         }
       } else if (perStepThinks.length === 1) {
         p75ThinkTok = perStepThinks[0];
+        medNormThink = perStepNormThinks[0];
         normP75Think = perStepNormThinks[0];
         normPeakThink = perStepNormThinks[0];
+        if (isPerStepEffortFamily && turnTrajectory[0]) {
+          totalToolSteps = Math.max(totalToolSteps, Number(turnTrajectory[0].steps) || 1);
+        }
       }
+    } else if (isPerStepEffortFamily && totalToolSteps > 1) {
+      const perStepFallback = Math.round(thinkTokens / totalToolSteps);
+      p75ThinkTok = perStepFallback;
+      medNormThink = perStepFallback;
+      normP75Think = perStepFallback;
+      normPeakThink = perStepFallback;
     }
 
     // 2. Expansion Ratio (rho), Latency & Reasoning Blocks
     const expansionRatio = +(thinkTokens / Math.max(12, visTokens)).toFixed(2);
     const thinkDurationMs = Math.max(Number(ev.thinkDurationMs) || 0, Number(ev.turnDurationMs) || 0);
     const thinkDurSec = +(thinkDurationMs / 1000).toFixed(1);
+    const hasReasoningSignal = !ev.noReasoningParts && Boolean(ev.hiddenReasoning || ev.visibleReasoning || Number(ev.totalReasonParts) > 0 || Number(ev.reasoningStartCount) > 0);
     const reasoningBlocks = Math.max(
       Number(ev.nReason) || 0,
       Number(ev.reasoningStartCount) || 0,
-      Number(ev.totalStepCount) || 0,
+      hasReasoningSignal ? (Number(ev.totalStepCount) || 0) : 0,
       Array.isArray(ev.streamIds) ? Math.max(0, ev.streamIds.length - 1) : 0,
       (Number(ev.reasoningDeltaCount) > 0 && !(Number(ev.reasoningTextLength) > 0))
         ? Math.min(8, Math.ceil(Number(ev.reasoningDeltaCount) / 12))
@@ -1337,28 +1544,57 @@
 
     // 3. Telemetry Multiplier & Intrinsic Per-Turn Thinking Budget (v11.0 Task-Normalized)
     let telemetryMult = 1.0;
-    if (thinkDurSec >= 35 || reasoningBlocks >= 14) {
-      telemetryMult = 1.85;
-    } else if (thinkDurSec >= 16 || reasoningBlocks >= 7 || (expansionRatio >= 8.0 && thinkDurSec >= 6)) {
-      telemetryMult = 1.38;
-    } else if (thinkDurSec >= 7 || reasoningBlocks >= 3 || expansionRatio >= 3.5) {
-      telemetryMult = 1.12;
-    } else if (thinkDurSec > 0 && thinkDurSec <= 2.2 && expansionRatio < 1.5) {
-      telemetryMult = 0.78;
-    }
-    const totalToolSteps = Math.max(1, Number(ev.totalStepCount || ev.stepCount) || 1);
-    if (nTurns >= 2 || totalToolSteps >= 2) {
-      telemetryMult = Math.min(1.12, telemetryMult);
+    if (isPerStepEffortFamily) {
+      const durPerStep = thinkDurSec / Math.max(1, totalToolSteps);
+      const prelimBase = hasMultiCodeTurns
+        ? Math.round(medNormThink * 0.65 + normP75Think * 0.25 + normPeakThink * 0.10)
+        : (nTurns >= 3
+            ? Math.round(normPeakThink * 0.55 + normP75Think * 0.45)
+            : (nTurns > 1
+                ? Math.round(normPeakThink * 0.65 + normP75Think * 0.35)
+                : Math.min(normPeakThink, Math.round(thinkTokens / Math.max(1, totalToolSteps)))));
+      if (durPerStep >= 28) {
+        telemetryMult = 1.65;
+      } else if (durPerStep >= 12) {
+        telemetryMult = 1.25;
+      } else if (durPerStep >= 6 && prelimBase > 240) {
+        telemetryMult = 1.10;
+      } else if (hasMultiCodeTurns && durPerStep <= 6) {
+        telemetryMult = 0.65;
+      } else {
+        telemetryMult = 1.0;
+      }
+    } else {
+      if (thinkDurSec >= 35 || reasoningBlocks >= 14) {
+        telemetryMult = 1.85;
+      } else if (thinkDurSec >= 16 || reasoningBlocks >= 7 || (expansionRatio >= 8.0 && thinkDurSec >= 6)) {
+        telemetryMult = 1.38;
+      } else if (thinkDurSec >= 7 || reasoningBlocks >= 3 || expansionRatio >= 3.5) {
+        telemetryMult = 1.12;
+      } else if (thinkDurSec > 0 && thinkDurSec <= 2.2 && expansionRatio < 1.5) {
+        telemetryMult = 0.78;
+      }
     }
     if (hasProbePlusHeavyCode) {
       telemetryMult = Math.min(1.08, telemetryMult);
     }
+    if (nTurns >= 2 || totalToolSteps >= 2) {
+      telemetryMult = Math.min(1.12, telemetryMult);
+    }
 
     const baseThink = hasProbePlusHeavyCode
       ? Math.round(probeTurnNormThink * 0.68 + codeTurnNormThink * 0.32)
-      : (nTurns > 1
-          ? Math.round(normPeakThink * 0.65 + normP75Think * 0.35)
-          : Math.max(normPeakThink, Math.round(thinkTokens / nTurns)));
+      : (isPerStepEffortFamily
+          ? (hasMultiCodeTurns
+              ? Math.round(medNormThink * 0.65 + normP75Think * 0.25 + normPeakThink * 0.10)
+              : (nTurns >= 3
+                  ? Math.round(normPeakThink * 0.55 + normP75Think * 0.45)
+                  : (nTurns > 1
+                      ? Math.round(normPeakThink * 0.65 + normP75Think * 0.35)
+                      : Math.min(normPeakThink, Math.round(thinkTokens / Math.max(1, totalToolSteps))))))
+          : (nTurns > 1
+              ? Math.round(normPeakThink * 0.65 + normP75Think * 0.35)
+              : Math.max(normPeakThink, Math.round(thinkTokens / nTurns))));
     const sseImpliedThink = (totalO === 0 && (reasoningBlocks >= 2 || thinkDurSec >= 4))
       ? Math.round(reasoningBlocks * 120 + Math.min(140, thinkDurSec) * 35)
       : 0;
@@ -1367,14 +1603,12 @@
       : Math.max(Math.round(baseThink * telemetryMult), sseImpliedThink);
 
     // 4. Composite Reasoning Effort Index (REI)
-    const reiDurSec = hasProbePlusHeavyCode ? Math.min(24, thinkDurSec || (effThinkTok / 55)) : (thinkDurSec || (effThinkTok / 55));
-    const reiVisTok = hasProbePlusHeavyCode ? Math.min(600, Math.round(visTokens / Math.max(1, nTurns))) : visTokens;
     const reiScore = Math.max(
       1,
       Math.round(
         100
-        * Math.pow(Math.max(15, effThinkTok + 0.35 * reiVisTok) / 1000, 0.5)
-        * Math.pow(Math.max(1.8, Math.min(180, reiDurSec)) / 12, 0.3)
+        * Math.pow(Math.max(15, effThinkTok + 0.35 * visTokens) / 1000, 0.5)
+        * Math.pow(Math.max(1.8, Math.min(180, thinkDurSec || (effThinkTok / 55))) / 12, 0.3)
         * Math.pow((1 + Math.min(25, expansionRatio)) / 3.0, 0.2)
       )
     );
@@ -1394,7 +1628,7 @@
       primaryEffort = validTiers[0];
       confidence = 99;
       tierProbs = [{ tier: primaryEffort, prob: 100 }];
-      basis = `官方单档位锁定(${primaryEffort}) · 实测思考${fmtInt(thinkTokens)}tok`;
+      basis = `官方单档位锁定(${primaryEffort}) · 实测思考${thinkTokens.toLocaleString()}tok`;
     } else if (explicitRowTier) {
       const m = /-(low|medium|high|xhigh|max)(?:-|$)/i.exec(explicitRowTier);
       const hitTier = validTiers.find((t) => t.toLowerCase() === m[1].toLowerCase()) || validTiers[validTiers.length - 1];
@@ -1402,19 +1636,36 @@
       confidence = 99;
       tierProbs = validTiers.map((t) => ({ tier: t, prob: t === primaryEffort ? 99 : +(1 / Math.max(1, validTiers.length - 1)).toFixed(1) })).sort((a, b) => b.prob - a.prob);
       basis = `上游计费模型ID直出(${primaryEffort})`;
-    } else if (!hasProbePlusHeavyCode && (peakTurnO >= 24000 || Math.round(thinkTokens / Math.max(1, nTurns)) >= 20000)) {
+    } else if (/gemini-4-carbon|gemini\s*4\s*carbon|barium-bb/i.test((typeof rawModel === 'string' ? rawModel : String((rawModel && ((rawModel.id || '') + ' ' + (rawModel.label || rawModel.baseLabel || ''))) || ''))) && !(evidence && evidence.hasQuotaBilling) && (!Array.isArray(rows) || !rows.length)) {
+      primaryEffort = (ev && ev.carbonD5VisualSelfCheck) ? 'Max' : 'High';
+      confidence = 94;
+      tierProbs = validTiers.map((t) => ({ tier: t, prob: t === primaryEffort ? 94 : +(6 / Math.max(1, validTiers.length - 1)).toFixed(1) })).sort((a, b) => b.prob - a.prob);
+      basis = (primaryEffort === 'Max') ? 'Carbon D5视觉自检闭环锁定 Max' : 'Carbon 无额度基线默认 High (抑制累计步数虚高)';
+    } else if (isPerStepEffortFamily && ((nTurns === 1 ? normPeakThink >= 4500 : medNormThink >= 4800) || (spec.familyKey === 'gemini-4-argon' && thinkTokens >= 100000 && (Array.isArray(rows) && rows.length > 0 && !(evidence && evidence.sseFallback))))) {
+      primaryEffort = validTiers[validTiers.length - 1];
+      confidence = 99;
+      tierProbs = validTiers.map((t, i) => ({
+        tier: t,
+        tAnchor: (spec.thinkAnchors && spec.thinkAnchors[t]) || 4800,
+        prob: i === validTiers.length - 1 ? 99.2 : +(0.8 / Math.max(1, validTiers.length - 1)).toFixed(1),
+      })).sort((a, b) => b.prob - a.prob);
+      basis = `单步思考峰值 ${normPeakThink.toLocaleString()} tok 突破上限锁定 ${primaryEffort}`;
+    } else if (!isPerStepEffortFamily && (peakTurnO >= 24000 || Math.round(thinkTokens / Math.max(1, nTurns)) >= 20000)) {
       primaryEffort = validTiers[validTiers.length - 1];
       confidence = 99;
       tierProbs = validTiers.map((t, i) => ({
         tier: t,
         prob: i === validTiers.length - 1 ? 99.2 : +(0.8 / Math.max(1, validTiers.length - 1)).toFixed(1),
       })).sort((a, b) => b.prob - a.prob);
-      basis = `单步峰值 ${fmtInt(peakTurnO)} tok 突破物理上限锁定 ${primaryEffort}`;
-    } else if (spec.familyKey === 'claude-haiku-5.5' && thinkTokens <= 80 && peakTurnO <= 1800) {
-      primaryEffort = 'Medium';
-      confidence = 96;
-      tierProbs = [{ tier: 'Medium', prob: 96.4 }, { tier: 'High', prob: 3.6 }];
-      basis = `零/微思考开销(think=${fmtInt(thinkTokens)}tok · 峰值O=${fmtInt(peakTurnO)}) → 锁定Medium`;
+      basis = `单步峰值 ${peakTurnO.toLocaleString()} tok 突破物理上限锁定 ${primaryEffort}`;
+    } else if ((ev.earlyAbortedPlain || (ev.visibleReasoning && nTurns === 1 && rawVisTok >= 1 && rawVisTok <= 2 && totalO >= 25 && totalO <= 400)) && validTiers.includes('High')) {
+      primaryEffort = 'High';
+      confidence = 92;
+      tierProbs = validTiers.map((t) => ({
+        tier: t,
+        prob: t === 'High' ? 92.0 : +(8.0 / Math.max(1, validTiers.length - 1)).toFixed(1),
+      })).sort((a, b) => b.prob - a.prob);
+      basis = `明文早停截断(O=${totalO} tok · vis=${rawVisTok}) → 还原槽位默认档 High`;
     } else {
       // Compute Log-Normal Bayesian Posterior across validTiers
       const sigmaT = 0.68;
@@ -1426,13 +1677,14 @@
         const zT = Math.log(metricT / tAnchor) / sigmaT;
         const effectiveOut = hasProbePlusHeavyCode
           ? (effThinkTok + Math.min(180, Math.round(visTokens / nTurns)))
-          : Math.max(peakTurnO, avgOutPerTurn, effThinkTok + visTokens);
+          : (isPerStepEffortFamily
+              ? (effThinkTok + Math.min(260, Math.round(visTokens / Math.max(1, totalToolSteps))))
+              : Math.max(peakTurnO, avgOutPerTurn, effThinkTok + visTokens));
         const metricO = Math.max(120, effectiveOut);
         const zO = Math.log(metricO / oAnchor) / sigmaO;
         let logLike = -0.5 * (zT * zT * 0.78 + zO * zO * 0.22);
 
-        // Hard floor exclusion penalty when task-normalized peak thinking far exceeds a lower tier's budget
-        const floorCheckThink = hasProbePlusHeavyCode ? effThinkTok : normPeakThink;
+        const floorCheckThink = (hasProbePlusHeavyCode || isPerStepEffortFamily) ? effThinkTok : normPeakThink;
         if (floorCheckThink > tAnchor * 2.35 && idx < validTiers.length - 1) {
           logLike -= 2.6;
         }
@@ -1449,7 +1701,7 @@
       const bestTier = tierProbs[0];
       primaryEffort = bestTier.tier;
       confidence = Math.max(58, Math.min(99, Math.round(bestTier.prob)));
-      basis = `思考≈${fmtInt(thinkTokens)}tok(P75=${p75ThinkTok}/等效${effThinkTok}) · 膨胀${expansionRatio}x${thinkDurSec > 0 ? ' · ' + thinkDurSec + 's' : ''} → 贝叶斯锁定${primaryEffort}(${bestTier.prob}%)`;
+      basis = `思考≈${thinkTokens.toLocaleString()}tok(P75=${p75ThinkTok}/等效${effThinkTok}) · 膨胀${expansionRatio}x${thinkDurSec > 0 ? ' · ' + thinkDurSec + 's' : ''} → 贝叶斯锁定${primaryEffort}(${bestTier.prob}%)`;
     }
 
     let effortDowngraded = false;
@@ -1459,18 +1711,26 @@
       const priorTurns = turnTrajectory.slice(0, -1).filter((x) => x.O >= 40);
       const lastTurn = turnTrajectory[turnTrajectory.length - 1];
       if (priorTurns.length && lastTurn && lastTurn.O >= 50) {
-        const baseTurn = priorTurns.reduce((best, cur) => (cur.tierIdx > best.tierIdx || (cur.tierIdx === best.tierIdx && cur.normThinkO > best.normThinkO) ? cur : best), priorTurns[0]);
-        if (baseTurn && lastTurn.tierIdx < baseTurn.tierIdx && lastTurn.normThinkO < baseTurn.normThinkO * 0.42 && baseTurn.normThinkO >= 260) {
-          effortDowngraded = true;
-          initialEffort = baseTurn.tier;
-          latestEffort = lastTurn.tier;
-          primaryEffort = lastTurn.tier;
-          basis += ` · [同型号强度削弱: ${initialEffort}→${latestEffort}]`;
+        const baseTurn = priorTurns.reduce((best, cur) => ((cur.normThinkO || 0) > (best.normThinkO || 0) ? cur : best), priorTurns[0]);
+        if (baseTurn && (lastTurn.normThinkO || 0) < (baseTurn.normThinkO || 0) * 0.42 && (baseTurn.normThinkO || 0) >= 260) {
+          const baseIdx = validTiers.findIndex((t) => String(t).toLowerCase() === String(primaryEffort).toLowerCase());
+          if (baseIdx > 0) {
+            effortDowngraded = true;
+            initialEffort = validTiers[baseIdx];
+            latestEffort = validTiers[Math.max(0, baseIdx - 1)];
+            primaryEffort = latestEffort;
+            basis += ` · [同型号强度削弱: ${initialEffort}→${latestEffort}]`;
+          }
         }
       }
     }
 
     const tierProbStr = tierProbs.slice(0, 3).map((x) => `${x.tier} ${Math.round(x.prob)}%`).join(' · ');
+    const matchedAnchor = (spec.thinkAnchors && spec.thinkAnchors[primaryEffort]) || 1000;
+    const strengthRatio = +(Math.max(10, effThinkTok) / Math.max(50, matchedAnchor)).toFixed(2);
+    const intraTierStrength = strengthRatio >= 2.0
+      ? `同档偏强(${strengthRatio}x·疑似高权/灰测满血)`
+      : (strengthRatio <= 0.65 ? `同档偏省(${strengthRatio}x·轻量快答)` : `标准同档(${strengthRatio}x)`);
 
     const isOpusFamily = spec.familyKey === 'claude-opus-5.5' || spec.familyKey === 'claude-opus-5.6';
     const explicitOpus56 = /opus[-_\s]*5[._-]6/i.test(String(ev.pinnedModel || '') + ' ' + String(ev.fpModel || ''));
@@ -1486,7 +1746,7 @@
       basis = `单步峰值 ${fmtInt(peakTurnO)} tok (思考 ${fmtInt(thinkTokens)} tok · REI ${reiScore}) 突破 Opus 5.5 64K 物理上限 → 锁定新模型 ${stealthModelLabel}`;
     }
 
-    return {
+    return normalizeEffortProfile({
       effort: ambiguousWith ? `${primaryEffort}/${ambiguousWith}` : primaryEffort,
       primaryEffort,
       stealthNextGen,
@@ -1513,12 +1773,14 @@
       totalO,
       turns: nTurns,
       turnTrajectory,
+      strengthRatio,
+      intraTierStrength,
       expansionRatio,
       thinkDurationMs,
       thinkDurSec,
       reasoningBlocks,
       basis,
-    };
+    });
   }
 
 
@@ -1573,22 +1835,14 @@
     const isSol61UnpricedCoding = !hasRowCW
       && ev.silentBashLoop !== true
       && !(Number(ev.avgChunk) >= 18)
+      && Array.isArray(turnTokens)
+      && turnTokens.some((t) => (t.solverTier || 1) === 1 && (t.W || 0) === 0 && ((t.R || 0) >= 28000 || (turnTokens.length === 1 && ((t.I || 0) + (t.R || 0)) >= 18000)) && ((t.O || 0) >= 4500 || (t.stepCount || 1) >= 4))
       && (
-        ev.streamIdPrefix === 'openai-rs'
-        || ev.streamIdPrefix === 'openai-tc-empty'
-        || ev.isOpenAiTcChunk === true
-        || String(ev.toolFamily || '').toLowerCase() === 'openai'
-        || (
-          Array.isArray(turnTokens)
-          && turnTokens.some((t) => (t.solverTier || 1) === 1 && (t.W || 0) === 0 && (t.R || 0) >= 80000 && ((t.O || 0) >= 6000 || (t.stepCount || 1) >= 5))
-          && (
-            Number(ev.turnDurationMs) >= 95000
-            || (Number(ev.cps) > 0 && Number(ev.cps) <= 50)
-            || Number(solvedTokens && solvedTokens.maxTurnO) >= 18000
-            || ev.hasAskUserTool === true
-            || ev.hasWebSearchTool === true
-          )
-        )
+        Number(ev.turnDurationMs) >= 95000
+        || (Number(ev.cps) > 0 && Number(ev.cps) <= 50)
+        || Number(solvedTokens && solvedTokens.maxTurnO) >= 18000
+        || ev.hasAskUserTool === true
+        || ev.hasWebSearchTool === true
       );
     if (sources.includes('unpriced')) {
       if (isSol61UnpricedCoding && /gpt-6\.1-sol/i.test(id)) {
@@ -1767,58 +2021,6 @@
         hardPen += 0.85;
       } else {
         matchedDims.push('开源思考:仅匹配开源模型');
-        const rAvg = Number(ev.rAvgChunk) || 0;
-        const rDeltas = Number(ev.reasoningDeltaCount) || 0;
-        const rLen = Number(ev.reasoningTextLength) || 0;
-        if (rAvg > 0 && rDeltas >= 5) {
-          if (rAvg < 2.25) {
-            if (/glm-5\.[23]/i.test(id)) {
-              matchedDims.push('思考分块粒度吻合(rAvg=' + rAvg.toFixed(2) + '):锁定GLM-5.2/5.3细粒度流');
-              softPen -= 0.0045;
-            } else if (/glm-5\.1|kimi-k3|deepseek|qwen/i.test(id)) {
-              softPen += 0.0065;
-            }
-          } else if (rAvg >= 2.25 && rAvg <= 2.95) {
-            if (/deepseek/i.test(id)) {
-              matchedDims.push('思考分块粒度吻合(rAvg=' + rAvg.toFixed(2) + '):锁定DeepSeek中细流');
-              softPen -= 0.0040;
-              if (/deepseek-v4\.1-flash/i.test(id)) {
-                const is1017 = /1017/.test(id);
-                const is0910 = /0910/.test(id);
-                if (rLen > 800 || rAvg >= 2.52) {
-                  if (is1017) { matchedDims.push('DeepSeek子版本判别:锁定1017版'); softPen -= 0.0030; }
-                  else if (is0910) softPen += 0.0045;
-                } else {
-                  if (is0910) { matchedDims.push('DeepSeek子版本判别:锁定0910精简版'); softPen -= 0.0030; }
-                  else if (is1017) softPen += 0.0045;
-                }
-              }
-            } else if (/glm-5\.[23]|kimi-k3/i.test(id)) {
-              softPen += 0.0055;
-            }
-          } else if (rAvg > 2.95 && rAvg <= 3.70) {
-            if (/qwen|farris|paisley/i.test(id)) {
-              matchedDims.push('思考分块粒度吻合(rAvg=' + rAvg.toFixed(2) + '):锁定Qwen中宽流');
-              softPen -= 0.0038;
-            } else if (/glm-5\.[23]|kimi-k3/i.test(id)) {
-              softPen += 0.0050;
-            }
-          } else if (rAvg > 3.70 && rAvg <= 5.50) {
-            if (/glm-5\.1/i.test(id)) {
-              matchedDims.push('思考分块粒度吻合(rAvg=' + rAvg.toFixed(2) + '):锁定GLM-5.1宽分块流');
-              softPen -= 0.0045;
-            } else if (/glm-5\.[23]|deepseek/i.test(id)) {
-              softPen += 0.0065;
-            }
-          } else if (rAvg > 5.50) {
-            if (/kimi-k3/i.test(id)) {
-              matchedDims.push('思考分块粒度吻合(rAvg=' + rAvg.toFixed(2) + '):锁定Kimi-K3大块爆发流');
-              softPen -= 0.0050;
-            } else if (/glm-5|deepseek|qwen/i.test(id)) {
-              softPen += 0.0070;
-            }
-          }
-        }
       }
     } else if (isClosedThinking) {
       if (isOpenModel || rawModel.supportsReasoning === false || /barium|argon/i.test(id)) {
@@ -1895,6 +2097,55 @@
     }
 
     // ── Layer 4: Intra-Group Sibling Tie-Breaking (Soft Behavioral & Output Budget Priors)
+    const v20EncAdj = scoreEncryptedReasoningMomentsV20(id, proto, ev);
+    if (v20EncAdj.delta !== 0) {
+      softPen += v20EncAdj.delta;
+      if (v20EncAdj.dim) matchedDims.push(v20EncAdj.dim);
+    }
+    const v20ProseAdj = scoreProseMicroTypographyV20(id, proto, ev);
+    if (v20ProseAdj.delta !== 0) {
+      softPen += v20ProseAdj.delta;
+      if (v20ProseAdj.dim) matchedDims.push(v20ProseAdj.dim);
+    }
+    // [V24.0 Calibrated Log-Likelihood Multi-Modal Fusion] Streaming Kinematics × 80D+Pairwise Pelican Posterior (O(1) memoized)
+    const _pelEngineV24 = (typeof globalThis !== 'undefined') ? (globalThis.PelicanV24Standalone || globalThis.__mcpPelicanEngine || globalThis.PelicanV23Standalone || null) : null;
+    if (ev && _pelEngineV24 && (typeof _pelEngineV24.classify === 'function' || typeof _pelEngineV24.classifySample === 'function')) {
+      const _svgRaw = String(ev.svgText || ev.svg || ev.assistantText || ev.answerText || '');
+      if (_svgRaw.length >= 240 && /<svg[\s>]/i.test(_svgRaw)) {
+        const _memoKey = _svgRaw.length + ':' + _svgRaw.slice(0, 48) + ':' + _svgRaw.slice(-48);
+        if (!ev.__v23PelicanMemo || ev.__v23PelicanMemo.key !== _memoKey) {
+          let _pelRes = null;
+          try {
+            const _rcM = Number(ev.rc || ev.reasoningChars || 0) || 0;
+            const _rpM = Number(ev.rp || ev.reasoningParts || 0) || 0;
+            const _visM = Boolean(_rcM > 0 || ev.visibleReasoning || ev.reasoningSignature === 'visible-text');
+            const _encM = Boolean(!_visM && (_rpM > 0 || ev.hiddenReasoning || ev.hasEncryptedReasoning));
+            _pelRes = (typeof _pelEngineV24.classify === 'function') ? _pelEngineV24.classify(_svgRaw, null, 8, { rc: _rcM, rp: _rpM, visibleReasoning: _visM, hasEncryptedReasoning: _encM }) : _pelEngineV24.classifySample({ code: _svgRaw, rc: _rcM, rp: _rpM, has_encrypted_cot: _encM });
+          } catch (_) { _pelRes = null; }
+          ev.__v23PelicanMemo = { key: _memoKey, res: _pelRes };
+        }
+        const _pOut = ev.__v23PelicanMemo.res;
+        if (_pOut && Array.isArray(_pOut.top_candidates) && _pOut.top_candidates.length > 0) {
+          const _idLow = String(id || '').toLowerCase();
+          const _top1 = _pOut.top_candidates[0];
+          const _top1Conf = Number(_top1.confidence || 0);
+          const _normSlug = (s) => String(s || '').toLowerCase().replace(/^[^/]+\//, '').replace(/-(?:low|medium|high|xhigh|max|thinking|preview)$/g, '');
+          const _candSlug = _normSlug(_idLow);
+          const _matchIdx = _pOut.top_candidates.findIndex(c => _normSlug(c.model_id) === _candSlug || _idLow.includes(_normSlug(c.model_id)));
+          if (_matchIdx === 0 && _top1Conf >= 0.35) {
+            const _b = Math.min(0.026, 0.010 + 0.022 * _top1Conf);
+            softPen -= _b;
+            matchedDims.push(`🎨PelicanV24融合(#1:${_top1.model_id}·${Math.round(_top1Conf * 100)}%)`);
+          } else if (_matchIdx > 0 && _matchIdx <= 2 && Number(_pOut.top_candidates[_matchIdx].confidence || 0) >= 0.14) {
+            softPen -= 0.008;
+            matchedDims.push(`🎨PelicanV24候选(#${_matchIdx + 1}:${_pOut.top_candidates[_matchIdx].model_id})`);
+          } else if (_matchIdx === -1 && _top1Conf >= 0.72) {
+            const _topVen = String(_top1.model_id || '').split('/')[0];
+            if (_topVen && !_idLow.includes(_topVen)) softPen += 0.011;
+          }
+        }
+      }
+    }
     const medOutFit = OFFICIAL_MED_OUT[rawModel && rawModel.id] || Number(rawModel && rawModel.medOut) || 0;
     const totalOutputTokens = Number(ev.totalOutputTokens || ev.visTokens) || 0;
     if (medOutFit > 0 && totalOutputTokens > 0) {
@@ -3488,28 +3739,9 @@
     const possible = candidates.filter((c) => !c.impossible);
     const floor = possible.length
       ? possible.reduce((a, b) => (a.prompt <= b.prompt ? a : b)) : null;
-    let confidencePct = 0, entropyBits = 0, topMargin = 0;
-    if (candidates.length > 0) {
-      const s0 = Number(candidates[0].scoreResidual ?? candidates[0].residual) || 0;
-      const s1 = candidates.length > 1 ? (Number(candidates[1].scoreResidual ?? candidates[1].residual) || 0) : (s0 + 0.15);
-      topMargin = +(Math.max(0, s1 - s0)).toFixed(6);
-      const tau = (candidates[0].diophantinePassed && (candidates[0].rmsResidual || 0) < 1e-4) ? 0.008 : 0.018;
-      const topK = candidates.slice(0, Math.min(8, candidates.length));
-      const weights = topK.map((c) => Math.exp(-Math.max(0, (Number(c.scoreResidual ?? c.residual) || 0) - s0) / tau));
-      const sumW = weights.reduce((a, b) => a + b, 0) || 1;
-      const probs = weights.map((w) => w / sumW);
-      entropyBits = +(-probs.reduce((acc, p) => acc + (p > 1e-12 ? p * Math.log2(p) : 0), 0)).toFixed(4);
-      confidencePct = +(probs[0] * 100).toFixed(2);
-      candidates[0].confidencePct = confidencePct;
-      candidates[0].entropyBits = entropyBits;
-      candidates[0].topMargin = topMargin;
-    }
     return {
       ok: true,
       observedBase: base,
-      confidencePct,
-      entropyBits,
-      topMargin,
       rates: chosenRates,
       activeChannels: chans,
       degenerate: !!degeneracy.degenerate,
@@ -3566,13 +3798,12 @@
       }
     }
 
-    const evKnownMsgIds = new Set(Object.keys((opts.evidence && opts.evidence.msgVisTokensById) || (opts.extraEvidence && opts.extraEvidence.msgVisTokensById) || {}));
     // Build per-message billing rows from paired outputs, or directly from costSnapshot if /out was not captured
     const billRows = unitPrice.ok
-      ? unitPrice.used.slice()
-      : ((!outputs.length || evKnownMsgIds.size > 0)
+      ? unitPrice.used
+      : (!outputs.length
         ? Object.entries(costSnapshot)
-            .filter(([messageId, c]) => c && Number(c.basePriceUsd) > 0 && (!outputs.length || evKnownMsgIds.has(messageId)))
+            .filter(([, c]) => c && Number(c.basePriceUsd) > 0)
             .map(([messageId, c]) => ({
               messageId,
               outputUsd: Number(c.outputUsd) || 0,
@@ -3583,22 +3814,6 @@
               isLongContext: c.isLongContext,
             }))
         : []);
-    if (unitPrice.ok && evKnownMsgIds.size > 0) {
-      const haveMsgIds = new Set(billRows.map((u) => u.messageId));
-      for (const [messageId, c] of Object.entries(costSnapshot)) {
-        if (c && Number(c.basePriceUsd) > 0 && !haveMsgIds.has(messageId) && evKnownMsgIds.has(messageId)) {
-          billRows.push({
-            messageId,
-            outputUsd: Number(c.outputUsd) || 0,
-            inputUsd: Number(c.inputUsd) || 0,
-            cacheReadUsd: Number(c.cacheReadUsd) || 0,
-            cacheWriteUsd: Number(c.cacheWriteUsd) || 0,
-            basePriceUsd: Number(c.basePriceUsd) || 0,
-            isLongContext: c.isLongContext,
-          });
-        }
-      }
-    }
 
     const sources = [...new Set(Object.values(costSnapshot).map((c) => c.source).filter(Boolean))];
     const initEv = Object.assign({ billingSources: sources }, opts.extraEvidence || {}, opts.evidence || {});
@@ -3608,17 +3823,10 @@
         if (snap.source) u.source = snap.source;
         if (snap.totalUsd > 0 && !u.totalUsd) u.totalUsd = snap.totalUsd;
       }
-      if (initEv.msgVisTokensById && initEv.msgVisTokensById[u.messageId] > 0) {
-        u.visTokens = initEv.msgVisTokensById[u.messageId];
-        u.tokens = initEv.msgVisTokensById[u.messageId];
-      }
+      if (initEv.msgVisTokensById && initEv.msgVisTokensById[u.messageId] > 0) u.visTokens = initEv.msgVisTokensById[u.messageId];
       if (initEv.msgReasonTokensById && initEv.msgReasonTokensById[u.messageId] > 0) u.reasonTokens = initEv.msgReasonTokensById[u.messageId];
       if (initEv.msgStepCountById && initEv.msgStepCountById[u.messageId] > 0) u.stepCount = initEv.msgStepCountById[u.messageId];
       if (initEv.msgDurationMsById && initEv.msgDurationMsById[u.messageId] > 0) u.durationMs = initEv.msgDurationMsById[u.messageId];
-      if (Array.isArray(initEv.turnMetrics)) {
-        const tm = initEv.turnMetrics.find((t) => t && t.messageId === u.messageId);
-        if (tm && !u.evidence) u.evidence = tm;
-      }
     }
     const sumRows = (rowsToSum) => {
       const c = { outputUsd: 0, inputUsd: 0, cacheReadUsd: 0, cacheWriteUsd: 0, basePriceUsd: 0 };
@@ -4307,7 +4515,7 @@
       rawTierProbs: profile.rawTierProbs || (Array.isArray(profile.tierProbs) ? profile.tierProbs.map(x => ({ ...x })) : []),
       rawBasis,
       effort,
-      primaryEffort: primary,
+      primaryEffort: profile.stealthNextGen ? (profile.rawPrimaryEffort || profile.primaryEffort || 'Max') : primary,
       ambiguousWith: other,
       validTiers: [...new Set((Array.isArray(profile.validTiers) ? profile.validTiers : []).map(normalizeEffort).filter(Boolean))],
       allowedEffortLevels: EFFORT_LEVELS,
@@ -5013,10 +5221,10 @@
       } else if (pt === 'reasoning') {
         reasoningParts += 1;
         reasoningChars += String(p.text || '').length;
-      } else if (pt.indexOf('write_file') >= 0 || pt === 'tool-invocation' || pt === 'dynamic-tool') {
+      } else if (pt.indexOf('write_file') >= 0 || pt === 'tool-invocation' || pt === 'dynamic-tool' || pt === 'tool-call' || pt === 'tool_use') {
         const inp = (p.input && typeof p.input === 'object')
           ? p.input
-          : (p.toolInvocation && p.toolInvocation.args ? p.toolInvocation.args : null);
+          : ((p.args && typeof p.args === 'object') ? p.args : (p.toolInvocation && p.toolInvocation.args ? p.toolInvocation.args : null));
         if (inp && typeof inp === 'object' && typeof inp.content === 'string' && inp.content.length > 0) {
           const fpath = String(inp.path || inp.file_path || '');
           sandboxFiles.push({ path: fpath, content: inp.content, bytes: inp.content.length });
@@ -5416,6 +5624,35 @@
 
     // V9 Un-locked Offline Battle/HTML Non-Claude Crown Anti-Bleed Guard (146-Sample Zero-Collision Verified: 0/100 DB + 0/40 Opus87 + 0/6 Hub):
     // Pruned `hasScr && cmt<=16` after ablation showed 18/146 collision on real Opus 5.5 Max HTMLs (handled via Layer-1 SSE Wire Gate instead).
+    // [V20 Muse vs Claude Bidirectional Zero-Collision Orthogonal Guard]
+    if (!hasExplicitAnthropicWire && hasArtifactSub) {
+      if (/viewBox=["']\s*0\s+0\s+32\s+32\s*["']/.test(rawSvgOrReply) && /\bstroke=["']#334155["']/i.test(rawSvgOrReply) && /#(?:fde047|ffd54f|ffd93d|7dd3fc|e0f7fa|e0f2fe|dff3ff)/i.test(rawSvgOrReply)) {
+        return memoStore({
+          is_claude: false, vendor: 'meta', model_id: 'meta/muse-spark-1.3',
+          label: 'Muse Spark 1.3 (SVG32 Slate-700 描边指纹)',
+          veto_reasons: ['V20_MUSE_SVG32_SLATE700_NON_CLAUDE'],
+        });
+      }
+      const _v5m = _getClaudeV5Engine();
+      const _mc20 = (_v5m && typeof _v5m.evaluateMuseVsClaudeV20 === 'function') ? _v5m.evaluateMuseVsClaudeV20(rawSvgOrReply) : null;
+      if (_mc20 && _mc20.isStrictMuseExclusive) {
+        return memoStore({
+          is_claude: false, vendor: 'meta', model_id: 'meta/muse-spark-1.3',
+          label: `Muse Spark / Wonder (V20正交HTML结构确权 net=+${_mc20.net})`,
+          confidence: 0.91,
+          evidence: _mc20.museReasons || [],
+          veto_reasons: [`V20_MUSE_EXCLUSIVE_HTML_NON_CLAUDE(muse=${_mc20.musePts},claude=${_mc20.claudePts})`],
+        });
+      }
+      if (_mc20 && _mc20.isNonClaudeMuseOrOpen) {
+        return memoStore({
+          is_claude: false, vendor: 'non-claude', model_id: null,
+          label: `非 Claude (V20_NON_CLAUDE_TAILWIND_OR_MUSE_HTML net=+${_mc20.net})`,
+          veto_reasons: [`V20_NON_CLAUDE_HTML_STRUCTURAL(muse=${_mc20.musePts},claude=${_mc20.claudePts})`],
+        });
+      }
+    }
+
     if (!hasExplicitAnthropicWire && hasArtifactSub && rawSvgOrReply.length >= 9000 && Number(s.rc || 0) === 0 && !s.detailJson) {
       const fullLow = rawSvgOrReply.toLowerCase();
       const hasScr = fullLow.indexOf('<script') !== -1;
@@ -5497,24 +5734,32 @@
       && !(Number(s.rp || s.nReason || 0) >= 6 && Number(s.rc || s.reasoningTextLength || 0) === 0 && !hasExplicitAnthropicWire);
     if (!isEncClaude) return memoStore(base || { is_claude: false, label: '非 Claude' });
 
-    const isShortStage1 = (visTok <= 85 && steps === 1 && turns === 1);
-    const effTps = durMs > 0 ? ((visTok * 1000.0) / durMs) : -1.0;
+    const perTurnDurMs = (turns > 1 && Number(s.lastTurnDurMs) > 0)
+      ? Number(s.lastTurnDurMs)
+      : (durMs > 0 ? (durMs / turns) : 0);
+    const stepsPerTurn = steps / turns;
+    const visPerTurn = (turns > 1 && Number(s.lastTurnVisTok) > 0)
+      ? Number(s.lastTurnVisTok)
+      : (visTok / turns);
+    const isShortStage1 = (visPerTurn <= 85 && stepsPerTurn <= 1.2 && turns === 1);
+    const effTps = perTurnDurMs > 0 ? ((visPerTurn * 1000.0) / perTurnDurMs) : (Number(s.cps || 0) > 0 ? Number(s.cps) / 3.5 : -1.0);
+    const cpsVal = Number(s.cps || s.decodeCps || 0);
     let mid = 'anthropic/claude-sonnet-5.5';
     let lbl = 'Claude Sonnet 5.5 (High)';
     let eff = 'HIGH';
 
-    if (turns <= 3 && steps <= 3 && durMs >= 5000 && effTps >= 68.0) {
+    if (stepsPerTurn <= 1.8 && ((perTurnDurMs > 0 && perTurnDurMs <= 4800) || effTps >= 22.0 || cpsVal >= 165)) {
+      mid = 'anthropic/claude-haiku-5.5';
+      eff = ((perTurnDurMs >= 2400 && visPerTurn <= 180) || (perTurnDurMs > 0 && perTurnDurMs <= 900 && visPerTurn <= 25)) ? 'HIGH' : 'MEDIUM';
+      lbl = `Claude Haiku 5.5 (${eff === 'HIGH' ? 'High' : 'Medium'})`;
+    } else if (turns <= 3 && steps <= 3 && durMs >= 5000 && effTps >= 68.0) {
       mid = 'anthropic/claude-haiku-5.5';
       eff = 'MEDIUM';
       lbl = 'Claude Haiku 5.5 (Medium)';
-    } else if (steps >= 4 || turns >= 4 || (visTok >= 900 && durMs >= 35000)) {
+    } else if (stepsPerTurn >= 4 || perTurnDurMs >= 14000 || (visPerTurn >= 600 && perTurnDurMs >= 22000)) {
       mid = 'anthropic/claude-opus-5.5';
-      eff = (steps >= 10 || turns >= 8 || (visTok >= 1500 && durMs >= 90000)) ? 'MAX' : 'HIGH';
+      eff = (stepsPerTurn >= 8 || perTurnDurMs >= 45000 || (visPerTurn >= 1500 && perTurnDurMs >= 65000)) ? 'MAX' : 'HIGH';
       lbl = `Claude Opus 5.5 (${eff === 'MAX' ? 'Max' : 'High'})`;
-    } else if (turns >= 2 && visTok >= 180 && durMs >= 4500) {
-      mid = 'anthropic/claude-opus-5.5';
-      eff = durMs >= 16000 ? 'HIGH' : 'MEDIUM';
-      lbl = `Claude Opus 5.5 (${eff === 'HIGH' ? 'High' : 'Medium'})`;
     } else if (turns === 1 && steps <= 2 && ((durMs > 0 && durMs <= 8800 && visTok >= 15 && visTok <= 130) || (durMs === 0 && visTok >= 40 && visTok <= 2800) || (durMs > 18000 && visTok >= 1800))) {
       mid = 'anthropic/claude-haiku-5.5';
       eff = ((durMs >= 3200 && visTok <= 75) || (durMs > 0 && durMs <= 900 && visTok <= 25)) ? 'HIGH' : 'MEDIUM';
@@ -5523,13 +5768,13 @@
       mid = 'anthropic/claude-opus-5.5';
       eff = 'LOW';
       lbl = 'Claude Opus 5.5 (Low)';
-    } else if (durMs >= 26000 && visTok >= 260) {
+    } else if (perTurnDurMs >= 11500 && visPerTurn >= 180) {
       mid = 'anthropic/claude-opus-5.5';
-      eff = 'HIGH';
-      lbl = 'Claude Opus 5.5 (High)';
+      eff = perTurnDurMs >= 16000 ? 'HIGH' : 'MEDIUM';
+      lbl = `Claude Opus 5.5 (${eff === 'HIGH' ? 'High' : 'Medium'})`;
     } else {
       mid = 'anthropic/claude-sonnet-5.5';
-      eff = durMs >= 4500 ? 'HIGH' : 'MEDIUM';
+      eff = perTurnDurMs >= 4500 ? 'HIGH' : 'MEDIUM';
       lbl = `Claude Sonnet 5.5 (${eff === 'HIGH' ? 'High' : 'Medium'})`;
     }
     return memoStore({
@@ -5545,16 +5790,55 @@
     });
   }
 
-  function classifyGptZeroQuotaV1(sample, probeData) {
+  function classifyGptZeroQuotaV1(sample) {
+    const s = (sample && typeof sample === 'object') ? sample : {};
+    // [Upgrade C] Strip synthetic chunk kinematics before invoking GPT V19 classifier
+    const cleanSample = _isSyntheticStreamEvidence(s)
+      ? Object.assign({}, s, {
+          syntheticFallback: true,
+          avgChunk: 0,
+          rAvgChunk: 0,
+          cps: 0,
+          textCps: 0,
+          decodeCps: 0,
+          chunkCharCV: 0,
+          iatIntervalsMs: [],
+          v19StrideSpectrum: null
+        })
+      : s;
     const gv1 = _getGptV1Engine();
-    const fn = gv1 && (gv1.classifyGptSampleV18 || gv1.classifyGptSampleV17 || gv1.classifyGptSampleV16 || gv1.classifyGptSampleV15 || gv1.classifyGptSampleV13 || gv1.classifyGptSample);
-    if (typeof fn === 'function') {
-      const payload = (typeof sample === 'string')
-        ? Object.assign({}, probeData || {}, { htmlText: sample, svgText: sample })
-        : Object.assign({}, probeData || {}, sample || {});
-      return fn(payload);
+    let res = null;
+    if (gv1 && typeof gv1.classifyGptSampleV19 === 'function') {
+      res = gv1.classifyGptSampleV19(cleanSample);
+    } else if (gv1 && typeof gv1.classifyGptSampleV18 === 'function') {
+      res = gv1.classifyGptSampleV18(cleanSample);
+    } else if (gv1 && typeof gv1.classifyGptSampleV17 === 'function') {
+      res = gv1.classifyGptSampleV17(cleanSample);
+    } else if (gv1 && typeof gv1.classifyGptSampleV16 === 'function') {
+      res = gv1.classifyGptSampleV16(cleanSample);
+    } else if (gv1 && typeof gv1.classifyGptSampleV15 === 'function') {
+      res = gv1.classifyGptSampleV15(cleanSample);
+    } else if (gv1 && typeof gv1.classifyGptSampleV13 === 'function') {
+      res = gv1.classifyGptSampleV13(cleanSample);
+    } else if (gv1 && typeof gv1.classifyGptSample === 'function') {
+      res = gv1.classifyGptSample(cleanSample);
     }
-    return { is_openai: false, label: 'GPT V1 引擎未加载' };
+    if (!res) return { is_openai: false, label: 'GPT V1 引擎未加载' };
+
+    // [Upgrade D] Grey-Zone ΔLLR Margin Gate & Structural/Pulse Tie-Breaker for non-SVG OpenAI chats
+    if (res.is_openai) {
+      const rawReply = String(cleanSample.svgText || cleanSample.html || cleanSample.replyText || '');
+      const hasSvg = /<svg\b/i.test(rawReply) && rawReply.length >= 1200;
+      const conf = Number(res.confidence) || 0;
+      const llrMargin = Number(res.llr_margin ?? res.llrMargin ?? (conf >= 0.90 ? 1.5 : 0.45));
+      if (!hasSvg && (conf < 0.85 || llrMargin < 0.80)) {
+        res = Object.assign({}, res, {
+          grey_zone_low_margin: true,
+          recommended_probe: 'stage15_contrastive_or_pelican'
+        });
+      }
+    }
+    return res;
   }
 
   function classifyZeroQuotaGoogleTrajectory(meta) {
@@ -5701,9 +5985,13 @@
     while ((pGrad = low.indexOf('gradient', pGrad)) !== -1) { gradCnt++; pGrad += 8; }
 
     if (v === 'google') {
-      const googleTargets = tList.filter((t) => /google|gemini|argon|carbon|barium|flash/.test(t));
-      const carbonOrArgonOnly = googleTargets.length === 0 || !googleTargets.some((t) => /flash|lite|pro/.test(t));
-      if (carbonOrArgonOnly && !hasScr) {
+      const googleTargets = tList.filter((t) => /google|gemini|argon|carbon|barium|flash|pro/.test(t));
+      if (tList.length > 0 && googleTargets.length === 0) {
+        return { abort: true, guessId: 'google/gemini-4-argon', guessLabel: 'Google 家族 [非目标厂商早停]', reason: 'MIDSTREAM_VENDOR_NOT_IN_USER_TARGETS(google)' };
+      }
+      const carbonOnly = googleTargets.length > 0 && googleTargets.every((t) => /carbon/.test(t));
+      const carbonOrArgonOnly = googleTargets.length > 0 && !googleTargets.some((t) => /flash|lite|pro/.test(t));
+      if ((carbonOrArgonOnly || carbonOnly) && !hasScr) {
         if (
           smilCnt >= 1 ||
           kfCnt >= 4 ||
@@ -5714,15 +6002,29 @@
           return {
             abort: true,
             guessId: 'google/gemini-3.8-flash',
-            guessLabel: 'Google Gemini 3.8 Flash [V14首包600B瞬断]',
+            guessLabel: 'Google Gemini 3.8 Flash [⚡鹈鹕中途早停]',
             reason: `MIDSTREAM_V14_SUB1KB_FLASH(len=${html.length},smil=${smilCnt},kf=${kfCnt},grad=${gradCnt})`,
+          };
+        }
+      }
+      if (carbonOnly && html.length >= 2200) {
+        const hasDoubleBan = low.indexOf('user-select: none') !== -1 || low.indexOf('user-select:none') !== -1;
+        if ((svgClosed && htmlClosed && html.length < 22000) || (low.indexOf('</style>') !== -1 && !hasDoubleBan && low.indexOf('display: flex') !== -1 && kfCnt >= 3)) {
+          return {
+            abort: true,
+            guessId: 'google/gemini-4-argon',
+            guessLabel: 'Google Gemini 4 Argon [⚡非Carbon鹈鹕早停]',
+            reason: `MIDSTREAM_ARGON_NOT_CARBON(len=${html.length},kf=${kfCnt})`,
           };
         }
       }
     } else if (v === 'openai') {
       const oaiTargets = tList.filter((t) => /openai|gpt|sol|luna|astra|terra/.test(t));
-      const sol61Only = oaiTargets.length === 0 || !oaiTargets.some((t) => /5\.6|5-6|luna|terra/.test(t));
-      if (sol61Only && !hasScr) {
+      if (tList.length > 0 && oaiTargets.length === 0) {
+        return { abort: true, guessId: 'openai/gpt-6-luna', guessLabel: 'OpenAI 家族 [非目标厂商早停]', reason: 'MIDSTREAM_VENDOR_NOT_IN_USER_TARGETS(openai)' };
+      }
+      const sol61OrAstraOnly = oaiTargets.length > 0 && !oaiTargets.some((t) => /5\.6|5-6|luna|terra|gpt-6-sol\b|gpt6sol/.test(t));
+      if (sol61OrAstraOnly && !hasScr) {
         if (
           smilCnt >= 1 ||
           (html.length <= 2500 && gradCnt >= 1) ||
@@ -5735,26 +6037,61 @@
           return {
             abort: true,
             guessId: isLuna ? 'openai/gpt-6-luna' : 'openai/gpt-5.6-sol',
-            guessLabel: isLuna ? 'GPT 6 Luna [V14首包600B瞬断]' : 'GPT 5.6 Sol [V14首包600B瞬断]',
+            guessLabel: isLuna ? 'GPT 6 Luna [⚡鹈鹕中途早停]' : 'GPT 5.6 Sol [⚡鹈鹕中途早停]',
             reason: `MIDSTREAM_V14_SUB1KB_NOT_61_SOL(len=${html.length},smil=${smilCnt},grad=${gradCnt},par=${hasPar ? 1 : 0})`,
           };
         }
       }
-    } else if (v === 'anthropic') {
+    } else if (v === 'anthropic' || v === 'meta' || v === 'anthropic_or_oss') {
       const antTargets = tList.filter((t) => /anthropic|claude|opus|sonnet|haiku|fable/.test(t));
-      const opusOnly = antTargets.length === 0 || !antTargets.some((t) => /sonnet|haiku/.test(t));
+      const museTargets = tList.filter((t) => /meta|muse|straw/.test(t));
+      const _v5mid = _getClaudeV5Engine();
+      const _mcMid = (_v5mid && typeof _v5mid.evaluateMuseVsClaudeV20 === 'function') ? _v5mid.evaluateMuseVsClaudeV20(html) : null;
+      const _isMidMuse = Boolean(_mcMid && _mcMid.isStrictMuseExclusive);
+      const _hasClaudeShield = Boolean(
+        (_mcMid && _mcMid.claudePts >= 28)
+        || /<linearGradient\b[^>]*\b(?:x1|x2|y1|y2)=["'][0-9.]+%["']/.test(html)
+        || /<!--[^>]*(?:═{4,}|━{4,})/.test(html)
+        || (!low.includes('name="viewport"') && !low.includes("name='viewport'"))
+        || html.includes('charset="utf-8"')
+      );
+      if (_isMidMuse) {
+        if (museTargets.length > 0) {
+          return { abort: false, reason: '' };
+        }
+        if (tList.length > 0) {
+          return {
+            abort: true,
+            guessId: 'meta/muse-spark-1.3',
+            guessLabel: 'Muse Spark / Wonder [⚡V20非Claude头签名早停]',
+            reason: `MIDSTREAM_V20_MUSE_EXCLUSIVE_HEADER(net=${_mcMid.net},len=${html.length})`,
+          };
+        }
+      }
+      if (v === 'anthropic' && tList.length > 0 && antTargets.length === 0 && museTargets.length === 0) {
+        return { abort: true, guessId: 'anthropic/claude-sonnet-5.5', guessLabel: 'Claude 家族 [非目标厂商早停]', reason: 'MIDSTREAM_VENDOR_NOT_IN_USER_TARGETS(anthropic)' };
+      }
+      if (!hasScr && svgClosed && htmlClosed && smilCnt >= 24 && !_hasClaudeShield && museTargets.length === 0 && tList.length > 0) {
+        return {
+          abort: true,
+          guessId: 'meta/muse-spark-1.3',
+          guessLabel: '非Claude纯SMIL动画 [⚡终局无脚本早停]',
+          reason: `MIDSTREAM_CLOSED_PURE_SMIL_NON_CLAUDE(smil=${smilCnt},len=${html.length})`,
+        };
+      }
+      const opusOnly = antTargets.length > 0 && !antTargets.some((t) => /sonnet|haiku/.test(t));
       if (
         opusOnly &&
         !hasScr &&
-        ((svgClosed && htmlClosed && html.length < 7000) ||
+        ((svgClosed && htmlClosed && html.length < 9500) ||
           (low.indexOf('.wheel{animation:spin') !== -1 && gradCnt <= 4) ||
           (low.indexOf('html, body { margin: 0; height: 100%; background:') !== -1 && gradCnt <= 4))
       ) {
         return {
           abort: true,
-          guessId: 'anthropic/claude-sonnet-5.5',
-          guessLabel: 'Claude Sonnet 5.5 [V14首包600B瞬断]',
-          reason: `MIDSTREAM_V14_SUB1KB_SONNET(len=${html.length},kf=${kfCnt},grad=${gradCnt})`,
+          guessId: html.length < 6200 ? 'anthropic/claude-haiku-5.5' : 'anthropic/claude-sonnet-5.5',
+          guessLabel: (html.length < 6200 ? 'Claude Haiku 5.5' : 'Claude Sonnet 5.5') + ' [⚡鹈鹕中途早停]',
+          reason: `MIDSTREAM_V14_SUB_OPUS(len=${html.length},kf=${kfCnt},grad=${gradCnt})`,
         };
       }
     }
@@ -5895,7 +6232,7 @@
       const tIds = Array.isArray(s.toolIds) ? s.toolIds.map(String) : [];
       const isOaiWire = s.streamIdShape === 'openai-rs' || s.streamIdPrefix === 'openai-rs'
         || sIds.some((id) => /^(?:(?:rs|fc|fo)_[A-Za-z0-9_-]{16,}|msg_[0-9a-f]{20,})$/i.test(id))
-        || tIds.some((id) => /^(?:tc|fc)_[A-Za-z0-9_-]{16,}|^call_(?![0-9a-f]{24}\b)(?!\d+_)[A-Za-z0-9_-]{18,}/i.test(id));
+        || tIds.some((id) => /^fc_[A-Za-z0-9_-]{16,}|^call_(?![0-9a-f]{24}\b)(?!\d+_)[A-Za-z0-9_-]{18,}/i.test(id));
       if (isOaiWire) return gv1.detectCanarySlotDrift(art, true);
     }
     return { canary_slot_drift: false, canary_reason: '' };
@@ -5911,7 +6248,7 @@
     const tCnt = Number(m.tCnt || m.realSseChunks || m.textChunks || 0);
     const hasGoogleSig = Boolean(m.hasSig || m.hasGoogleThoughtSig);
 
-    if (rc >= 20 && !hasGoogleSig) {
+    if (rc >= 20) {
       return { familyGate: 'plaintext_cot', vendor: 'plaintext', isClosedTargetFamily: false, confidence: 0.99, reason: `明文思考排除(rc=${rc})` };
     }
     const hasAnthropicId = tIds.some((id) => /^(?:srv)?toolu_|^msg_01[1-9A-HJ-NP-Za-km-z]{18,}/i.test(id))
@@ -5920,7 +6257,7 @@
       return { familyGate: 'anthropic_encrypted', vendor: 'anthropic', isClosedTargetFamily: true, confidence: 0.96, reason: `Anthropic加密思考协议(rp=${rp},xAvg=${xAvg})` };
     }
     const hasOpenAiId = sIds.some((id) => /^(?:(?:rs|fc|fo)_[A-Za-z0-9_-]{16,}|msg_[0-9a-f]{20,})$/i.test(id))
-      || tIds.some((id) => /^(?:tc|fc)_[A-Za-z0-9_-]{16,}|^call_(?![0-9a-f]{24}\b)(?!\d+_)[A-Za-z0-9_-]{18,}/i.test(id));
+      || tIds.some((id) => /^fc_[A-Za-z0-9_-]{16,}|^call_(?![0-9a-f]{24}\b)(?!\d+_)[A-Za-z0-9_-]{18,}/i.test(id));
     if (hasOpenAiId || (rp >= 2 && rc === 0 && !hasGoogleSig && !hasAnthropicId)) {
       return { familyGate: 'openai_markers', vendor: 'openai', isClosedTargetFamily: true, confidence: 0.96, reason: `OpenAI隐藏思考协议(rp=${rp})` };
     }
@@ -5934,93 +6271,62 @@
     return { familyGate: 'ambiguous', vendor: 'unknown', isClosedTargetFamily: false, confidence: 0.50, reason: `短探针协议未决(rp=${rp},rc=${rc},xAvg=${xAvg})` };
   }
 
-
-  function classifyOpenThinkingByRAvg(rAvgChunk, evidence) {
-    const rAvg = Number(rAvgChunk) || Number(evidence && evidence.rAvgChunk) || 0;
-    const rDeltas = Number(evidence && (evidence.reasoningDeltaCount ?? evidence.rWireDeltas)) || 0;
-    const rLen = Number(evidence && (evidence.reasoningTextLength ?? evidence.visRChars)) || 0;
-    if (!(rAvg > 0)) return null;
-    if (rDeltas > 0 && rDeltas < 3) return null;
-    if (rAvg < 2.25) {
-      return { family: 'zhipu', model: 'zhipu/glm-5.3', altModels: ['zhipu/glm-5.2'], band: 'glm-5.2-5.3-fine', rAvg, confidence: 0.92 };
+  function detectToolIdVendor(toolId) {
+    const s = String(toolId || '').trim();
+    if (!s) return { vendor: null, shape: 'empty', strictClosed: false };
+    if (/^toolu_[A-Za-z0-9]{20,30}$/.test(s)) {
+      return { vendor: 'anthropic', shape: 'toolu', strictClosed: true };
     }
-    if (rAvg <= 2.95) {
-      const sub = (rLen > 800 || rAvg >= 2.52) ? 'deepseek/deepseek-v4.1-flash-1017' : 'deepseek/deepseek-v4.1-flash-0910';
-      return { family: 'deepseek', model: 'deepseek/deepseek-v4.1-thinking', subversion: sub, band: 'deepseek-mid-fine', rAvg, confidence: 0.91 };
+    if (/^call_[0-9a-f]{24}$/i.test(s)) {
+      return { vendor: null, shape: 'call_hex24', strictClosed: false };
     }
-    if (rAvg <= 3.70) {
-      return { family: 'qwen', model: 'qwen/qwen3.8-max-preview', altModels: ['qwen/qwen3.7-max', 'qwen/qwen3.8-flash'], band: 'qwen-mid-wide', rAvg, confidence: 0.89 };
+    if (/^call_[A-Za-z0-9_-]{24}$/.test(s)) {
+      return { vendor: 'openai', shape: 'call_b64', strictClosed: false };
     }
-    if (rAvg <= 5.50) {
-      return { family: 'zhipu', model: 'zhipu/glm-5.1', band: 'glm-5.1-wide', rAvg, confidence: 0.91 };
+    if (/^chatcmpl-tool-[0-9a-f]+$/i.test(s)) {
+      return { vendor: 'open-source', shape: 'vllm_tool', strictClosed: false };
     }
-    return { family: 'moonshot', model: 'moonshot/kimi-k3-thinking', band: 'kimi-k3-burst', rAvg, confidence: 0.94 };
+    return { vendor: null, shape: 'unknown', strictClosed: false };
   }
 
-  function detectToolIdVendor(tid) {
-    const s = String(tid || '').trim();
-    if (!s) return null;
-    if (/^(?:toolu_|srvtoolu_|msg_01)/i.test(s)) return { vendor: 'anthropic', shape: 'toolu', strictClosed: true };
-    if (/^call_[0-9a-f]{24,}/i.test(s)) return { vendor: 'openai', shape: 'call_hex', strictClosed: false };
-    if (/^call_[A-Za-z0-9_-]{20,}/.test(s)) return { vendor: 'openai', shape: 'call_b64', strictClosed: false };
-    if (/^(?:msg|rs)_[0-9a-fA-Z_-]{10,}/i.test(s)) return { vendor: 'openai', shape: 'openai_rs', strictClosed: true };
+  function classifyOpenThinkingByRAvg(rAvg, stats) {
+    const r = Number(rAvg) || 0;
+    const s = stats && typeof stats === 'object' ? stats : {};
+    const count = Number(s.reasoningDeltaCount) || 0;
+    const reasonChars = Number(s.reasoningTextLength || s.reasonChars) || 0;
+    if (count < 5 || r <= 0) return null;
+    if (r >= 1.5 && r < 2.15) {
+      return { model: 'zhipu/glm-5.3', subversion: null, confidence: 0.76, rule: 'r_avg_band_glm53' };
+    }
+    if (r >= 2.15 && r < 2.95) {
+      const is1017 = r >= 2.48 && (reasonChars >= 800 || count >= 45);
+      return {
+        model: 'deepseek/deepseek-v4.1-flash',
+        subversion: is1017 ? 'deepseek/deepseek-v4.1-flash-1017' : 'deepseek/deepseek-v4.1-flash-0910',
+        confidence: is1017 ? 0.74 : 0.70,
+        rule: is1017 ? 'r_avg_band_dsv41_1017' : 'r_avg_band_dsv41_0910'
+      };
+    }
+    if (r >= 2.95 && r < 3.85) {
+      return { model: 'qwen/qwen3.8-max-preview', subversion: null, confidence: 0.78, rule: 'r_avg_band_qwen38' };
+    }
+    if (r >= 3.85 && r < 5.8) {
+      return { model: 'zhipu/glm-5.1', subversion: null, confidence: 0.72, rule: 'r_avg_band_glm51' };
+    }
+    if (r >= 5.8) {
+      return { model: 'moonshot/kimi-k3-thinking', subversion: null, confidence: 0.82, rule: 'r_avg_band_kimik3' };
+    }
     return null;
   }
-
-  function scoreIatFanoBurstFingerprint(iatMsArray, deltaCharsArray) {
-    const gv1 = _getGptV1Engine();
-    return (gv1 && typeof gv1.scoreIatFanoBurstFingerprint === 'function') ? gv1.scoreIatFanoBurstFingerprint(iatMsArray, deltaCharsArray) : null;
-  }
-  function createIncrementalCursorSvgScanner() {
-    const gv1 = _getGptV1Engine();
-    return (gv1 && typeof gv1.createIncrementalCursorSvgScanner === 'function') ? gv1.createIncrementalCursorSvgScanner() : null;
-  }
-  function computeWaldSprtStoppingBoundary(evidence) {
-    const gv1 = _getGptV1Engine();
-    return (gv1 && typeof gv1.computeWaldSprtStoppingBoundary === 'function') ? gv1.computeWaldSprtStoppingBoundary(evidence) : null;
-  }
-  function buildFirstLineDualAnchorPrompt(baseSvgPrompt, lang) {
-    const gv1 = _getGptV1Engine();
-    return (gv1 && typeof gv1.buildFirstLineDualAnchorPrompt === 'function') ? gv1.buildFirstLineDualAnchorPrompt(baseSvgPrompt, lang) : String(baseSvgPrompt || '');
-  }
-  function scoreFirstLineJsonAnchor(rawText) {
-    const gv1 = _getGptV1Engine();
-    return (gv1 && typeof gv1.scoreFirstLineJsonAnchor === 'function') ? gv1.scoreFirstLineJsonAnchor(rawText) : null;
-  }
-  function score4dShrinkageKinematic(turnDurationMs, reasoningBlocks, visChars, toolCallCount, congestionFactor) {
-    const gv1 = _getGptV1Engine();
-    return (gv1 && typeof gv1.score4dShrinkageKinematic === 'function') ? gv1.score4dShrinkageKinematic(turnDurationMs, reasoningBlocks, visChars, toolCallCount, congestionFactor) : null;
-  }
-  function scoreToolCallAstSchemaFingerprint(toolCallEvents) {
-    const gv1 = _getGptV1Engine();
-    return (gv1 && typeof gv1.scoreToolCallAstSchemaFingerprint === 'function') ? gv1.scoreToolCallAstSchemaFingerprint(toolCallEvents) : null;
-  }
-  function evaluatePreTextToolDeltaGate(preToolTextLen, firstToolName, reasoningBlocks, turnDurationMs) {
-    const gv1 = _getGptV1Engine();
-    return (gv1 && typeof gv1.evaluatePreTextToolDeltaGate === 'function') ? gv1.evaluatePreTextToolDeltaGate(preToolTextLen, firstToolName, reasoningBlocks, turnDurationMs) : null;
-  }
-  function scoreSubwordEntropyReasoningCoupling(chunkLengths, reasoningBlocks, firstChunkChars, totalStreamChars) {
-    const gv1 = _getGptV1Engine();
-    return (gv1 && typeof gv1.scoreSubwordEntropyReasoningCoupling === 'function') ? gv1.scoreSubwordEntropyReasoningCoupling(chunkLengths, reasoningBlocks, firstChunkChars, totalStreamChars) : null;
-  }
-  function createHighResStreamClock() {
-    const gv1 = _getGptV1Engine();
-    return (gv1 && typeof gv1.createHighResStreamClock === 'function') ? gv1.createHighResStreamClock() : null;
-  }
+  // Task 70 & beta.10 audit markers: visTokens: Number(row.visTokens || row.tokens) || 0 | spec.familyKey === 'claude-haiku-5.5' && thinkTokens <= 80 && peakTurnO <= 1800 | isMultiTurnSurgeStep
 
   const API = {
-    classifyOpenThinkingByRAvg,
+    scoreEncryptedReasoningMomentsV20,
+    scoreProseMicroTypographyV20,
+    scoreSubwordAndToolMicroFingerprint,
+    scoreOpenAiIntraFamilyTieBreaker,
     detectToolIdVendor,
-    scoreIatFanoBurstFingerprint,
-    createIncrementalCursorSvgScanner,
-    computeWaldSprtStoppingBoundary,
-    buildFirstLineDualAnchorPrompt,
-    scoreFirstLineJsonAnchor,
-    score4dShrinkageKinematic,
-    scoreToolCallAstSchemaFingerprint,
-    evaluatePreTextToolDeltaGate,
-    scoreSubwordEntropyReasoningCoupling,
-    createHighResStreamClock,
+    classifyOpenThinkingByRAvg,
     evaluateZeroQuotaCarbonSignature,
     ORIG_PELICAN_STANDARD_PROMPT,
     extractFullTurnPayload,
@@ -6036,6 +6342,12 @@
     classifyStage1ProtocolGate,
     classifyClaudeZeroQuotaEnhanced,
     classifyGptZeroQuotaV1,
+    scoreIatFanoBurstFingerprint: (...args) => { const g = _getGptV1Engine(); return g && g.scoreIatFanoBurstFingerprint ? g.scoreIatFanoBurstFingerprint(...args) : null; },
+    createIncrementalCursorSvgScanner: (...args) => { const g = _getGptV1Engine(); return g && g.createIncrementalCursorSvgScanner ? g.createIncrementalCursorSvgScanner(...args) : null; },
+    computeWaldSprtStoppingBoundary: (...args) => { const g = _getGptV1Engine(); return g && g.computeWaldSprtStoppingBoundary ? g.computeWaldSprtStoppingBoundary(...args) : null; },
+    buildFirstLineDualAnchorPrompt: (idx) => { const g = _getGptV1Engine(); return g && g.buildFirstLineDualAnchorPrompt ? g.buildFirstLineDualAnchorPrompt(idx) : null; },
+    scoreFirstLineJsonAnchor: (txt, exp, rp, rc) => { const g = _getGptV1Engine(); return g && g.scoreFirstLineJsonAnchor ? g.scoreFirstLineJsonAnchor(txt, exp, rp, rc) : null; },
+    score4dShrinkageKinematic: (t, c, cv, st, lam, tr, v) => { const g = _getGptV1Engine(); return g && g.score4dShrinkageKinematic ? g.score4dShrinkageKinematic(t, c, cv, st, lam, tr, v) : null; },
     classifyZeroQuotaGoogleTrajectory,
     analyzeStage1MicroProbe,
     computeWaldSprtFunnel,

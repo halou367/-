@@ -37,7 +37,7 @@ function createSharedStorage({root,open}){
    if(!state.replicas||typeof state.replicas!=='object'||Array.isArray(state.replicas))throw Error('扩展存储数据无效或过大');
    for(const [acctId,rep] of Object.entries(state.replicas)){
     if(rep===true)put(state.replicas,acctId,copy(state.data));
-    else{trimCaptures(rep);object(rep);}
+    else{if(rep&&typeof rep==='object'&&rep.ati_captures===true&&Array.isArray(state.data?.ati_captures))put(rep,'ati_captures',copy(state.data.ati_captures));trimCaptures(rep);object(rep);}
    }
   }catch(e){if(e.code!=='ENOENT')throw Error('共享扩展存储无法读取，原文件已保留');state={version:1,initialized:false,data:{},replicas:{},source:''};}
   const g={id,file,state,peers:new Map(),error:''};groups.set(id,g);return g;
@@ -47,7 +47,16 @@ function createSharedStorage({root,open}){
   const compactReplicas={};
   for(const [id,rep] of Object.entries(g.state.replicas)){
    trimCaptures(rep);
-   put(compactReplicas,id,equal(rep,g.state.data)?true:rep);
+   if(!g.peers.has(id)&&rep&&typeof rep==='object'&&Object.hasOwn(g.state.data,'ati_captures')&&Object.hasOwn(rep,'ati_captures')){
+    put(rep,'ati_captures',g.state.data.ati_captures);
+   }
+   if(rep===g.state.data||equal(rep,g.state.data)){
+    put(compactReplicas,id,true);
+   }else if(rep&&typeof rep==='object'&&Array.isArray(rep.ati_captures)&&Array.isArray(g.state.data?.ati_captures)&&(rep.ati_captures===g.state.data.ati_captures||equal(rep.ati_captures,g.state.data.ati_captures))){
+    put(compactReplicas,id,{...rep,ati_captures:true});
+   }else{
+    put(compactReplicas,id,rep);
+   }
   }
   await atomic(g.file,{...g.state,replicas:compactReplicas});
  }
@@ -74,7 +83,7 @@ function createSharedStorage({root,open}){
     const snapshot=trimCaptures(object(await p.read()));
     if(Object.hasOwn(g.state.replicas,id)){
      // Recover native writes that survived a crash before the shared snapshot was committed.
-     const changes=delta(g.state.replicas[id],snapshot);if(Object.keys(changes).length){g.state.data=trimCaptures(merge(g.state.data,changes));g.state.initialized=true;}
+     const changes=delta(g.state.replicas[id],snapshot);if(Object.hasOwn(changes,'ati_captures')&&Array.isArray(g.state.data?.ati_captures)&&g.state.data.ati_captures.length>=(Array.isArray(snapshot?.ati_captures)?snapshot.ati_captures.length:0))delete changes.ati_captures;if(Object.keys(changes).length){g.state.data=trimCaptures(merge(g.state.data,changes));g.state.initialized=true;}
     }else if(Object.keys(snapshot).length){
      // Preserve each legacy account verbatim before choosing the first nonempty canonical store.
      const backup=path.join(root,ext.id,'migration-backups',id+'.json');

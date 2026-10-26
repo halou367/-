@@ -1085,18 +1085,24 @@ class HttpError extends Error {
 
 // ── QrSync: 电脑端 ⇄ 手机端 节点订阅与账号配置二维码同步 & 首次无缓存引导 ──
 const QrSync = (() => {
-  const CAP_L = [0,17,32,53,78,106,134,154,192,230,271,321,367,425,458,520,586,644,718,792,858,929,1003,1091,1171,1273,1367];
+  const ONBOARD_DONE_KEY = 'qr_onboard_done';
+  const ib = (ic, tip, fn) => h('button', { type: 'button', class: 'ib', title: tip, 'aria-label': tip, onclick: fn }, icon(ic));
+  const CAP_L = [0,17,32,53,78,106,134,154,192,230,271,321,367,425,458,520,586,644,718,792,858,929,1003,1091,1171,1273,1367,1465,1528,1628,1732,1840,1952,2068,2188,2303,2431,2563,2699,2809,2953];
   const EC_L = [
     null,[19,7,1,19,0,0],[34,10,1,34,0,0],[55,15,1,55,0,0],[80,20,1,80,0,0],[108,26,1,108,0,0],
     [136,18,2,68,0,0],[156,20,2,78,0,0],[194,24,2,97,0,0],[232,30,2,116,0,0],[274,18,2,68,2,69],
     [324,20,4,81,0,0],[370,24,2,92,2,93],[428,26,4,107,0,0],[461,30,3,115,1,116],[523,22,5,87,1,88],
     [589,24,5,98,1,99],[647,28,1,107,5,108],[721,30,5,120,1,121],[795,28,3,113,4,114],[861,28,3,107,5,108],
-    [932,28,4,116,4,117],[1006,28,2,111,7,112],[1094,30,4,121,5,122],[1174,30,6,117,4,118],[1276,26,8,106,4,107],[1370,28,10,114,2,115]
+    [932,28,4,116,4,117],[1006,28,2,111,7,112],[1094,30,4,121,5,122],[1174,30,6,117,4,118],[1276,26,8,106,4,107],[1370,28,10,114,2,115],
+    [1468,30,8,122,4,123],[1531,30,3,117,10,118],[1631,30,7,116,7,117],[1735,30,5,115,10,116],[1843,30,13,115,3,116],[1955,30,17,115,0,0],[2071,30,17,115,1,116],[2191,30,13,115,6,116],
+    [2306,30,12,121,7,122],[2434,30,6,121,14,122],[2566,30,17,122,4,123],[2702,30,4,122,18,123],[2812,30,20,117,4,118],[2956,30,19,118,6,119]
   ];
   const ALIGN = [
     null,[],[6,18],[6,22],[6,26],[6,30],[6,34],[6,22,38],[6,24,42],[6,26,46],[6,28,50],
     [6,30,54],[6,32,58],[6,34,62],[6,26,46,66],[6,26,48,70],[6,26,50,74],[6,30,54,78],[6,30,56,82],[6,30,58,86],[6,34,62,90],
-    [6,28,50,72,94],[6,26,50,74,98],[6,30,54,78,102],[6,28,54,80,106],[6,32,58,84,110],[6,30,58,86,114]
+    [6,28,50,72,94],[6,26,50,74,98],[6,30,54,78,102],[6,28,54,80,106],[6,32,58,84,110],[6,30,58,86,114],
+    [6,34,62,90,118],[6,26,50,74,98,122],[6,30,54,78,102,126],[6,26,52,78,104,130],[6,30,56,82,108,134],[6,34,60,86,112,138],[6,30,58,86,114,142],[6,34,62,90,118,146],
+    [6,30,54,78,102,126,150],[6,24,50,76,102,128,154],[6,28,54,80,106,132,158],[6,32,58,84,110,136,162],[6,26,54,82,110,138,166],[6,30,58,86,114,142,170]
   ];
   const GF_EXP = new Uint8Array(512), GF_LOG = new Uint8Array(256);
   (() => {
@@ -1123,8 +1129,8 @@ const QrSync = (() => {
   function encodeQR(text) {
     const bytes = new TextEncoder().encode(String(text || ''));
     let ver = 1;
-    while (ver <= 26 && CAP_L[ver] < bytes.length) ver++;
-    if (ver > 26) throw new Error('数据超出单张二维码容量');
+    while (ver <= 40 && CAP_L[ver] < bytes.length) ver++;
+    if (ver > 40) throw new Error('数据超出单张二维码容量');
     const [totalData, ecPerBlock, g1Blocks, g1Codewords, g2Blocks, g2Codewords] = EC_L[ver];
     const bits = [];
     const pushBits = (val, len) => { for (let i = len - 1; i >= 0; i--) bits.push((val >>> i) & 1); };
@@ -1211,21 +1217,136 @@ const QrSync = (() => {
     for (let i = 8; i < 15; i++) setMod(size - 15 + i, 8, ((fBits >>> i) & 1) === 1);
     return { size, grid };
   }
-  function toSvg(text, pxSize = 228) {
+  function buildQrPathData(text) {
     const { size, grid } = encodeQR(text);
-    const pad = 3, total = size + pad * 2;
+    const pad = 4, total = size + pad * 2;
     let d = '';
     for (let r = 0; r < size; r++) {
-      for (let c = 0; c < size; c++) {
-        if (grid[r][c]) d += `M${c + pad},${r + pad}h1v1h-1z`;
+      let c = 0;
+      while (c < size) {
+        if (!grid[r][c]) { c++; continue; }
+        let w = 1;
+        while (c + w < size && grid[r][c + w]) w++;
+        d += `M${c + pad},${r + pad}h${w}v1h-${w}z`;
+        c += w;
       }
     }
-    return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${total} ${total}" width="${pxSize}" height="${pxSize}" shape-rendering="crispEdges" style="background:#fff;border-radius:12px;display:block;margin:0 auto;box-shadow:0 4px 16px rgba(0,0,0,.18)"><path d="${d}" fill="#111"/></svg>`;
+    return { size, total, d };
+  }
+  const snapQrPx = (pxSize, total) => {
+    const raw = Number(pxSize) || 360;
+    if (!total || total <= 0) return raw;
+    return Math.max(total * 3, Math.round(raw / total) * total);
+  };
+  function toSvg(text, pxSize = 356) {
+    const { total, d } = buildQrPathData(text);
+    const disp = Math.max(120, Math.round(Number(pxSize) || 356));
+    return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${total} ${total}" data-qr-total="${total}" width="${disp}" height="${disp}" shape-rendering="crispEdges" style="background:#fff;border-radius:12px;display:block;margin:0 auto;box-shadow:0 4px 16px rgba(0,0,0,.18)"><path d="${d}" fill="#000"/></svg>`;
+  }
+  function toSvgEl(text, pxSize = 360) {
+    const { total, d } = buildQrPathData(text);
+    const disp = snapQrPx(pxSize, total);
+    const ns = 'http://www.w3.org/2000/svg';
+    const svg = document.createElementNS(ns, 'svg');
+    svg.setAttribute('xmlns', ns);
+    svg.setAttribute('viewBox', `0 0 ${total} ${total}`);
+    svg.setAttribute('data-qr-total', String(total));
+    svg.setAttribute('width', String(disp));
+    svg.setAttribute('height', String(disp));
+    svg.setAttribute('shape-rendering', 'crispEdges');
+    svg.setAttribute('style', 'background:#fff;border-radius:12px;display:block;margin:0 auto;box-shadow:0 4px 16px rgba(0,0,0,.18)');
+    const p = document.createElementNS(ns, 'path');
+    p.setAttribute('d', d);
+    p.setAttribute('fill', '#000');
+    svg.appendChild(p);
+    return svg;
+  }
+  function gfInv(a) { return a === 0 ? 0 : GF_EXP[255 - GF_LOG[a]]; }
+  function rsCorrectBlock(dataBlk, ecBlk, ecLen) {
+    if (!ecBlk || ecBlk.length !== ecLen) return dataBlk;
+    const rem = rsEncode(dataBlk, ecLen);
+    let diffCnt = 0;
+    for (let i = 0; i < ecLen; i++) if (rem[i] !== ecBlk[i]) diffCnt++;
+    if (diffCnt === 0) return dataBlk;
+    const n = dataBlk.length + ecLen;
+    const msg = new Uint8Array(n);
+    msg.set(dataBlk, 0);
+    msg.set(ecBlk, dataBlk.length);
+    const syn = new Uint8Array(ecLen);
+    let hasErr = false;
+    for (let i = 0; i < ecLen; i++) {
+      let s = 0;
+      const r = GF_EXP[i];
+      for (let j = 0; j < n; j++) s = gfMul(s, r) ^ msg[j];
+      syn[i] = s;
+      if (s !== 0) hasErr = true;
+    }
+    if (!hasErr) return dataBlk;
+    let C = new Uint8Array([1]), B = new Uint8Array([1]);
+    let L = 0, m = 1, b = 1;
+    for (let nIdx = 0; nIdx < ecLen; nIdx++) {
+      let d = syn[nIdx];
+      for (let i = 1; i <= L; i++) d ^= gfMul(C[i] || 0, syn[nIdx - i]);
+      if (d === 0) {
+        m++;
+      } else {
+        const T = new Uint8Array(Math.max(C.length, B.length + m));
+        T.set(C);
+        const factor = gfMul(d, gfInv(b));
+        for (let i = 0; i < B.length; i++) T[i + m] ^= gfMul(factor, B[i]);
+        if (2 * L <= nIdx) {
+          L = nIdx + 1 - L;
+          B = C;
+          b = d;
+          m = 1;
+        } else {
+          m++;
+        }
+        C = T;
+      }
+    }
+    if (L > (ecLen >> 1)) return dataBlk;
+    const errPos = [];
+    for (let i = 0; i < n; i++) {
+      let sum = 0;
+      const xInv = GF_EXP[(255 - i) % 255];
+      let xPow = 1;
+      for (let j = 0; j <= L; j++) {
+        sum ^= gfMul(C[j] || 0, xPow);
+        xPow = gfMul(xPow, xInv);
+      }
+      if (sum === 0) errPos.push(n - 1 - i);
+    }
+    if (errPos.length !== L) return dataBlk;
+    const omega = new Uint8Array(ecLen);
+    for (let i = 0; i < ecLen; i++) {
+      for (let j = 0; j <= L; j++) {
+        if (i + j < ecLen) omega[i + j] ^= gfMul(syn[i], C[j] || 0);
+      }
+    }
+    for (const pos of errPos) {
+      const k = n - 1 - pos;
+      const xInv = GF_EXP[(255 - k) % 255];
+      let num = 0, xPow = 1;
+      for (let i = 0; i < ecLen; i++) {
+        num ^= gfMul(omega[i], xPow);
+        xPow = gfMul(xPow, xInv);
+      }
+      let den = 0, xInv2 = gfMul(xInv, xInv), dPow = 1;
+      for (let i = 1; i <= L; i += 2) {
+        den ^= gfMul(C[i] || 0, dPow);
+        dPow = gfMul(dPow, xInv2);
+      }
+      if (den === 0) return dataBlk;
+      const errMag = gfMul(gfMul(GF_EXP[k % 255], num), gfInv(den));
+      if (pos >= 0 && pos < dataBlk.length) dataBlk[pos] ^= errMag;
+    }
+    return dataBlk;
   }
   function decodeQRMatrix(grid) {
     const size = grid.length;
     const ver = Math.round((size - 17) / 4);
-    if (ver < 1 || ver > 26 || ver * 4 + 17 !== size) return null;
+    if (ver < 1 || ver > 40 || ver * 4 + 17 !== size) return null;
     const isFunc = Array.from({ length: size }, () => new Uint8Array(size));
     const mark = (r, c) => { if (r >= 0 && r < size && c >= 0 && c < size) isFunc[r][c] = 1; };
     const finder = (r0, c0) => { for (let dy = -1; dy <= 7; dy++) for (let dx = -1; dx <= 7; dx++) mark(r0 + dy, c0 + dx); };
@@ -1244,15 +1365,18 @@ const QrSync = (() => {
         mark(b, a); mark(a, b);
       }
     }
-    let fBits = 0;
-    for (let i = 0; i <= 5; i++) if (grid[i][8]) fBits |= (1 << i);
-    if (grid[7][8]) fBits |= (1 << 6);
-    if (grid[8][8]) fBits |= (1 << 7);
-    if (grid[8][7]) fBits |= (1 << 8);
-    for (let i = 9; i < 15; i++) if (grid[8][14 - i]) fBits |= (1 << i);
-    const fmt = (fBits ^ 0x5412) >>> 10;
-    const mask = fmt & 7;
-    const maskFn = [
+    let fBits1 = 0, fBits2 = 0;
+    for (let i = 0; i <= 5; i++) if (grid[i][8]) fBits1 |= (1 << i);
+    if (grid[7][8]) fBits1 |= (1 << 6);
+    if (grid[8][8]) fBits1 |= (1 << 7);
+    if (grid[8][7]) fBits1 |= (1 << 8);
+    for (let i = 9; i < 15; i++) if (grid[8][14 - i]) fBits1 |= (1 << i);
+    for (let i = 0; i < 8; i++) if (grid[8][size - 1 - i]) fBits2 |= (1 << i);
+    for (let i = 8; i < 15; i++) if (grid[size - 15 + i][8]) fBits2 |= (1 << i);
+    const mask1 = ((fBits1 ^ 0x5412) >>> 10) & 7;
+    const mask2 = ((fBits2 ^ 0x5412) >>> 10) & 7;
+    const masksToTry = mask1 === mask2 ? [mask1, 0] : [mask1, mask2, 0];
+    const maskFns = [
       (r, c) => ((r + c) & 1) === 0,
       (r) => (r & 1) === 0,
       (_, c) => c % 3 === 0,
@@ -1261,52 +1385,70 @@ const QrSync = (() => {
       (r, c) => ((r * c) & 1) + ((r * c) % 3) === 0,
       (r, c) => ((((r * c) & 1) + ((r * c) % 3)) & 1) === 0,
       (r, c) => ((((r + c) & 1) + ((r * c) % 3)) & 1) === 0,
-    ][mask] || ((r, c) => ((r + c) & 1) === 0);
-    const bits = [];
-    let up = true;
-    for (let right = size - 1; right >= 1; right -= 2) {
-      if (right === 6) right = 5;
-      for (let v = 0; v < size; v++) {
-        const r = up ? size - 1 - v : v;
-        for (let j = 0; j < 2; j++) {
-          const c = right - j;
-          if (!isFunc[r][c]) {
-            let b = Boolean(grid[r][c]);
-            if (maskFn(r, c)) b = !b;
-            bits.push(b ? 1 : 0);
+    ];
+    for (const mask of [...new Set(masksToTry)]) {
+      const maskFn = maskFns[mask] || maskFns[0];
+      const bits = [];
+      let up = true;
+      for (let right = size - 1; right >= 1; right -= 2) {
+        if (right === 6) right = 5;
+        for (let v = 0; v < size; v++) {
+          const r = up ? size - 1 - v : v;
+          for (let j = 0; j < 2; j++) {
+            const c = right - j;
+            if (!isFunc[r][c]) {
+              let b = Boolean(grid[r][c]);
+              if (maskFn(r, c)) b = !b;
+              bits.push(b ? 1 : 0);
+            }
           }
         }
+        up = !up;
       }
-      up = !up;
-    }
-    const cws = [];
-    for (let i = 0; i + 7 < bits.length; i += 8) {
-      let v = 0; for (let b = 0; b < 8; b++) v = (v << 1) | bits[i + b];
-      cws.push(v);
-    }
-    const [totalData, , g1Blocks, g1Codewords, g2Blocks, g2Codewords] = EC_L[ver];
-    const blocks = Array.from({ length: g1Blocks + g2Blocks }, (_, i) => new Uint8Array(i < g1Blocks ? g1Codewords : g2Codewords));
-    const maxCw = Math.max(g1Codewords, g2Codewords);
-    let idx = 0;
-    for (let i = 0; i < maxCw; i++) {
-      for (let b = 0; b < blocks.length; b++) {
-        if (i < blocks[b].length && idx < cws.length) blocks[b][i] = cws[idx++];
+      const cws = [];
+      for (let i = 0; i + 7 < bits.length; i += 8) {
+        let v = 0; for (let b = 0; b < 8; b++) v = (v << 1) | bits[i + b];
+        cws.push(v);
       }
+      const [totalData, ecPerBlock, g1Blocks, g1Codewords, g2Blocks, g2Codewords] = EC_L[ver];
+      const numBlocks = g1Blocks + g2Blocks;
+      const blocks = Array.from({ length: numBlocks }, (_, i) => new Uint8Array(i < g1Blocks ? g1Codewords : g2Codewords));
+      const ecBlocks = Array.from({ length: numBlocks }, () => new Uint8Array(ecPerBlock));
+      const maxCw = Math.max(g1Codewords, g2Codewords);
+      let idx = 0;
+      for (let i = 0; i < maxCw; i++) {
+        for (let b = 0; b < numBlocks; b++) {
+          if (i < blocks[b].length && idx < cws.length) blocks[b][i] = cws[idx++];
+        }
+      }
+      for (let i = 0; i < ecPerBlock; i++) {
+        for (let b = 0; b < numBlocks; b++) {
+          if (idx < cws.length) ecBlocks[b][i] = cws[idx++];
+        }
+      }
+      const dataBytes = new Uint8Array(totalData);
+      let off = 0;
+      for (let b = 0; b < numBlocks; b++) {
+        const corrected = rsCorrectBlock(blocks[b], ecBlocks[b], ecPerBlock);
+        dataBytes.set(corrected, off);
+        off += corrected.length;
+      }
+      const dBits = [];
+      for (const b of dataBytes) for (let i = 7; i >= 0; i--) dBits.push((b >>> i) & 1);
+      const readBits = (p, len) => { let v = 0; for (let i = 0; i < len; i++) v = (v << 1) | (dBits[p + i] || 0); return v; };
+      const mode = readBits(0, 4);
+      if (mode !== 0b0100) continue;
+      const lenBits = ver < 10 ? 8 : 16;
+      const byteLen = readBits(4, lenBits);
+      if (byteLen <= 0 || 4 + lenBits + byteLen * 8 > dBits.length) continue;
+      const out = new Uint8Array(byteLen);
+      for (let i = 0; i < byteLen; i++) out[i] = readBits(4 + lenBits + i * 8, 8);
+      try {
+        const txt = new TextDecoder('utf-8', { fatal: false }).decode(out);
+        if (txt) return txt;
+      } catch {}
     }
-    const dataBytes = new Uint8Array(totalData);
-    let off = 0;
-    for (const blk of blocks) { dataBytes.set(blk, off); off += blk.length; }
-    const dBits = [];
-    for (const b of dataBytes) for (let i = 7; i >= 0; i--) dBits.push((b >>> i) & 1);
-    const readBits = (p, len) => { let v = 0; for (let i = 0; i < len; i++) v = (v << 1) | (dBits[p + i] || 0); return v; };
-    const mode = readBits(0, 4);
-    if (mode !== 0b0100) return null;
-    const lenBits = ver < 10 ? 8 : 16;
-    const byteLen = readBits(4, lenBits);
-    if (byteLen <= 0 || 4 + lenBits + byteLen * 8 > dBits.length) return null;
-    const out = new Uint8Array(byteLen);
-    for (let i = 0; i < byteLen; i++) out[i] = readBits(4 + lenBits + i * 8, 8);
-    return new TextDecoder().decode(out);
+    return null;
   }
   async function decodeFromImageData(imgData) {
     const { data, width, height } = imgData;
@@ -1314,48 +1456,178 @@ const QrSync = (() => {
       const i = (Math.min(height - 1, Math.max(0, Math.round(y))) * width + Math.min(width - 1, Math.max(0, Math.round(x)))) * 4;
       return data[i] * 0.299 + data[i + 1] * 0.587 + data[i + 2] * 0.114;
     };
-    let sMinX = 0, sMinY = 0, sMaxX = width - 1, sMaxY = height - 1;
-    const cornerLum = (lum(0, 0) + lum(width - 1, 0) + lum(0, height - 1) + lum(width - 1, height - 1)) / 4;
-    if (cornerLum < 128) {
-      let wMinX = width, wMinY = height, wMaxX = 0, wMaxY = 0;
-      for (let y = 0; y < height; y += 2) {
-        for (let x = 0; x < width; x += 2) {
-          if (lum(x, y) > 200) {
-            if (x < wMinX) wMinX = x;
-            if (y < wMinY) wMinY = y;
-            if (x > wMaxX) wMaxX = x;
-            if (y > wMaxY) wMaxY = y;
+    const isValid = txt => Boolean(txt && (txt.includes('brana-sync') || /^B[12]:/.test(txt) || txt.startsWith('ARENA-ACCOUNTS-V1:') || txt.startsWith('http') || txt.startsWith('{') || /^vless:\/\//i.test(txt)));
+    const checkRatio = (s0, s1, s2, s3, s4) => {
+      const total = s0 + s1 + s2 + s3 + s4;
+      if (total < 7 || s0 === 0 || s1 === 0 || s2 === 0 || s3 === 0 || s4 === 0) return false;
+      const u = total / 7, maxVar = u * 0.65;
+      return Math.abs(u - s0) < maxVar && Math.abs(u - s1) < maxVar && Math.abs(3 * u - s2) < 3 * maxVar && Math.abs(u - s3) < maxVar && Math.abs(u - s4) < maxVar;
+    };
+    const findFinderCenters = thr => {
+      const centers = [];
+      const yStep = Math.max(1, Math.floor(height / 180));
+      for (let y = 2; y < height - 2; y += yStep) {
+        let s = [0, 0, 0, 0, 0], st = 0, seenWhite = false;
+        for (let x = 0; x < width; x++) {
+          const dark = lum(x, y) < thr;
+          if (!dark) seenWhite = true;
+          if (!seenWhite) continue;
+          if (dark) {
+            if ((st & 1) === 1) st++;
+            s[st]++;
+          } else {
+            if ((st & 1) === 1) {
+              s[st]++;
+            } else if (st === 4) {
+              if (checkRatio(s[0], s[1], s[2], s[3], s[4])) {
+                const hSpan = s[0] + s[1] + s[2] + s[3] + s[4];
+                const cx = x - s[4] - s[3] - s[2] * 0.5;
+                const maxV = Math.ceil(hSpan * 1.2);
+                const cxi = Math.round(cx);
+                let u2 = 0, u1 = 0, u0 = 0, d2 = 0, d1 = 0, d0 = 0;
+                let vy = y;
+                while (vy >= 0 && lum(cxi, vy) < thr && u2 <= maxV) { u2++; vy--; }
+                while (vy >= 0 && lum(cxi, vy) >= thr && u1 <= maxV) { u1++; vy--; }
+                while (vy >= 0 && lum(cxi, vy) < thr && u0 <= maxV) { u0++; vy--; }
+                let dy = y + 1;
+                while (dy < height && lum(cxi, dy) < thr && d2 <= maxV) { d2++; dy++; }
+                while (dy < height && lum(cxi, dy) >= thr && d1 <= maxV) { d1++; dy++; }
+                while (dy < height && lum(cxi, dy) < thr && d0 <= maxV) { d0++; dy++; }
+                const vMid = u2 + d2;
+                if (checkRatio(u0, u1, vMid, d1, d0)) {
+                  const vSpan = u0 + u1 + vMid + d1 + d0;
+                  if (Math.abs(hSpan - vSpan) <= Math.max(hSpan, vSpan) * 0.45) {
+                    const cy = dy - d0 - d1 - vMid * 0.5;
+                    const mod = (hSpan + vSpan) / 14;
+                    const ex = centers.find(c => Math.hypot(c.x - cx, c.y - cy) < mod * 3.5);
+                    if (ex) {
+                      ex.x = (ex.x * ex.w + cx) / (ex.w + 1);
+                      ex.y = (ex.y * ex.w + cy) / (ex.w + 1);
+                      ex.mod = (ex.mod * ex.w + mod) / (ex.w + 1);
+                      ex.w++;
+                    } else {
+                      centers.push({ x: cx, y: cy, mod, w: 1 });
+                    }
+                  }
+                }
+              }
+              s = [s[2], s[3], s[4], 1, 0];
+              st = 3;
+            } else {
+              st++;
+              s[st]++;
+            }
           }
         }
       }
-      if (wMaxX - wMinX > 32 && wMaxY - wMinY > 32) {
-        sMinX = wMinX + 2; sMinY = wMinY + 2; sMaxX = wMaxX - 2; sMaxY = wMaxY - 2;
-      }
-    }
-    let minX = sMaxX, minY = sMaxY, maxX = sMinX, maxY = sMinY;
-    for (let y = sMinY; y <= sMaxY; y += 1) {
-      for (let x = sMinX; x <= sMaxX; x += 1) {
-        if (lum(x, y) < 128) {
-          if (x < minX) minX = x;
-          if (y < minY) minY = y;
-          if (x > maxX) maxX = x;
-          if (y > maxY) maxY = y;
+      return centers.sort((a, b) => b.w - a.w).slice(0, 8);
+    };
+    for (const thr of [128, 155, 102, 178]) {
+      const cands = findFinderCenters(thr);
+      if (cands.length >= 3) {
+        for (let i = 0; i < cands.length; i++) {
+          for (let j = i + 1; j < cands.length; j++) {
+            for (let k = j + 1; k < cands.length; k++) {
+              const pts = [cands[i], cands[j], cands[k]];
+              const d01 = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+              const d12 = Math.hypot(pts[1].x - pts[2].x, pts[1].y - pts[2].y);
+              const d02 = Math.hypot(pts[0].x - pts[2].x, pts[0].y - pts[2].y);
+              let tl, pA, pB;
+              if (d12 >= d01 && d12 >= d02) { tl = pts[0]; pA = pts[1]; pB = pts[2]; }
+              else if (d02 >= d01 && d02 >= d12) { tl = pts[1]; pA = pts[0]; pB = pts[2]; }
+              else { tl = pts[2]; pA = pts[0]; pB = pts[1]; }
+              const sideA = Math.hypot(pA.x - tl.x, pA.y - tl.y);
+              const sideB = Math.hypot(pB.x - tl.x, pB.y - tl.y);
+              if (sideA < 14 || sideB < 14 || Math.abs(sideA - sideB) > Math.max(sideA, sideB) * 0.28) continue;
+              const cross = (pA.x - tl.x) * (pB.y - tl.y) - (pA.y - tl.y) * (pB.x - tl.x);
+              const tr = cross > 0 ? pA : pB;
+              const bl = cross > 0 ? pB : pA;
+              const avgMod = (tl.mod + tr.mod + bl.mod) / 3;
+              const estDim = Math.round(((sideA + sideB) * 0.5) / Math.max(0.8, avgMod)) + 7;
+              const estVer = Math.max(1, Math.min(40, Math.round((estDim - 17) / 4)));
+              for (let dv = 0; dv <= 3; dv++) {
+                for (const sgn of (dv === 0 ? [0] : [-1, 1])) {
+                  const ver = estVer + dv * sgn;
+                  if (ver < 1 || ver > 40) continue;
+                  const sz = ver * 4 + 17, span = sz - 7;
+                  const ux = (tr.x - tl.x) / span, uy = (tr.y - tl.y) / span;
+                  const vx = (bl.x - tl.x) / span, vy = (bl.y - tl.y) / span;
+                  const grid = Array.from({ length: sz }, (_, r) => {
+                    const row = new Uint8Array(sz);
+                    for (let c = 0; c < sz; c++) {
+                      const px = tl.x + (c - 3) * ux + (r - 3) * vx;
+                      const py = tl.y + (c - 3) * uy + (r - 3) * vy;
+                      const sLum = (lum(px, py) * 2 + lum(px - ux * 0.15, py - uy * 0.15) + lum(px + ux * 0.15, py + uy * 0.15) + lum(px - vx * 0.15, py - vy * 0.15) + lum(px + vx * 0.15, py + vy * 0.15)) / 6;
+                      row[c] = sLum < thr ? 1 : 0;
+                    }
+                    return row;
+                  });
+                  if (grid[0][0] && grid[0][6] && grid[6][0] && grid[3][3] && !grid[1][1]) {
+                    const txt = decodeQRMatrix(grid);
+                    if (isValid(txt)) return txt;
+                  }
+                }
+              }
+            }
+          }
         }
       }
     }
-    if (maxX <= minX + 16 || maxY <= minY + 16) return null;
-    const qrW = maxX - minX + 1, qrH = maxY - minY + 1;
-    for (let ver = 1; ver <= 26; ver++) {
-      const sz = ver * 4 + 17;
-      const stepX = qrW / sz, stepY = qrH / sz;
-      const grid = Array.from({ length: sz }, (_, r) => {
-        const row = new Uint8Array(sz);
-        for (let c = 0; c < sz; c++) row[c] = lum(minX + (c + 0.5) * stepX, minY + (r + 0.5) * stepY) < 135 ? 1 : 0;
-        return row;
-      });
-      if (grid[0][0] && grid[0][6] && grid[6][0] && grid[3][3] && !grid[1][1]) {
-        const txt = decodeQRMatrix(grid);
-        if (txt && (txt.includes('brana-sync') || txt.startsWith('http') || txt.startsWith('{') || /^vless:\/\//i.test(txt))) return txt;
+    const regions = [];
+    let bMinY = height, bMaxY = 0, bMinX = width, bMaxX = 0;
+    for (let y = 0; y < height; y += 2) {
+      let cnt = 0;
+      for (let x = 0; x < width; x += 2) if (lum(x, y) > 200) cnt++;
+      if (cnt > (width >> 1) * 0.20) { if (y < bMinY) bMinY = y; if (y > bMaxY) bMaxY = y; }
+    }
+    if (bMaxY > bMinY + 32) {
+      for (let x = 0; x < width; x += 2) {
+        let cnt = 0;
+        for (let y = bMinY; y <= bMaxY; y += 2) if (lum(x, y) > 200) cnt++;
+        if (cnt > ((bMaxY - bMinY) >> 1) * 0.20) { if (x < bMinX) bMinX = x; if (x > bMaxX) bMaxX = x; }
+      }
+      if (bMaxX > bMinX + 32) regions.push([bMinX + 3, bMinY + 3, bMaxX - 3, bMaxY - 3]);
+    }
+    let wMinX = width, wMinY = height, wMaxX = 0, wMaxY = 0, wHits = 0;
+    for (let y = 0; y < height; y += 2) {
+      for (let x = 0; x < width; x += 2) {
+        if (lum(x, y) > 190) { wHits++; if (x < wMinX) wMinX = x; if (y < wMinY) wMinY = y; if (x > wMaxX) wMaxX = x; if (y > wMaxY) wMaxY = y; }
+      }
+    }
+    if (wHits > 80 && wMaxX - wMinX > 32 && wMaxY - wMinY > 32) regions.push([wMinX + 2, wMinY + 2, wMaxX - 2, wMaxY - 2]);
+    regions.push([0, 0, width - 1, height - 1]);
+    if (width > 120 && height > 120) {
+      regions.push([Math.round(width * 0.12), Math.round(height * 0.12), Math.round(width * 0.88), Math.round(height * 0.88)]);
+      regions.push([Math.round(width * 0.22), Math.round(height * 0.22), Math.round(width * 0.78), Math.round(height * 0.78)]);
+    }
+    for (const [sMinX, sMinY, sMaxX, sMaxY] of regions) {
+      let minL = 255, maxL = 0;
+      for (let y = sMinY; y <= sMaxY; y += 2) for (let x = sMinX; x <= sMaxX; x += 2) { const v = lum(x, y); if (v < minL) minL = v; if (v > maxL) maxL = v; }
+      const midT = (minL + maxL) * 0.5;
+      for (const thr of [midT, 132, midT * 0.9, midT * 1.1]) {
+        let minX = sMaxX, minY = sMaxY, maxX = sMinX, maxY = sMinY;
+        for (let y = sMinY; y <= sMaxY; y += 1) for (let x = sMinX; x <= sMaxX; x += 1) {
+          if (lum(x, y) < thr) { if (x < minX) minX = x; if (y < minY) minY = y; if (x > maxX) maxX = x; if (y > maxY) maxY = y; }
+        }
+        if (maxX <= minX + 16 || maxY <= minY + 16) continue;
+        const qrW = maxX - minX + 1, qrH = maxY - minY + 1;
+        if (Math.abs(qrW - qrH) > Math.max(qrW, qrH) * 0.35) continue;
+        for (let ver = 1; ver <= 40; ver++) {
+          const sz = ver * 4 + 17, stepX = qrW / sz, stepY = qrH / sz;
+          const grid = Array.from({ length: sz }, (_, r) => {
+            const row = new Uint8Array(sz);
+            for (let c = 0; c < sz; c++) {
+              const px = minX + (c + 0.5) * stepX, py = minY + (r + 0.5) * stepY;
+              const sLum = (lum(px, py) * 2 + lum(px - stepX * 0.15, py) + lum(px + stepX * 0.15, py) + lum(px, py - stepY * 0.15) + lum(px, py + stepY * 0.15)) / 6;
+              row[c] = sLum < thr ? 1 : 0;
+            }
+            return row;
+          });
+          if (grid[0][0] && grid[0][6] && grid[6][0] && grid[3][3] && !grid[1][1]) {
+            const txt = decodeQRMatrix(grid);
+            if (isValid(txt)) return txt;
+          }
+        }
       }
     }
     return null;
@@ -1375,14 +1647,25 @@ const QrSync = (() => {
       const url = URL.createObjectURL(file);
       img.onload = async () => {
         URL.revokeObjectURL(url);
-        const cv = document.createElement('canvas');
-        const scale = Math.min(1, 900 / Math.max(img.width || 1, img.height || 1));
-        cv.width = Math.max(64, Math.round(img.width * scale));
-        cv.height = Math.max(64, Math.round(img.height * scale));
-        const ctx = cv.getContext('2d');
-        ctx.drawImage(img, 0, 0, cv.width, cv.height);
-        const res = await decodeFromImageData(ctx.getImageData(0, 0, cv.width, cv.height)).catch(() => null);
-        resolve(res);
+        for (const maxDim of [960, 1440, 640]) {
+          try {
+            const cv = document.createElement('canvas');
+            const scale = maxDim / Math.max(img.width || 1, img.height || 1);
+            cv.width = Math.max(64, Math.round(img.width * scale));
+            cv.height = Math.max(64, Math.round(img.height * scale));
+            const ctx = cv.getContext('2d');
+            if (ctx) ctx.imageSmoothingEnabled = false;
+            ctx.drawImage(img, 0, 0, cv.width, cv.height);
+            const imgData = ctx.getImageData(0, 0, cv.width, cv.height);
+            if (typeof window !== 'undefined' && typeof window.jsQR === 'function') {
+              const hit = window.jsQR(imgData.data, imgData.width, imgData.height);
+              if (hit?.data) { resolve(hit.data); return; }
+            }
+            const res = await decodeFromImageData(imgData).catch(() => null);
+            if (res) { resolve(res); return; }
+          } catch {}
+        }
+        resolve(null);
       };
       img.onerror = () => { URL.revokeObjectURL(url); resolve(null); };
       img.src = url;
@@ -1409,24 +1692,148 @@ const QrSync = (() => {
     return bytes;
   };
   const fromB64Url = str => JSON.parse(new TextDecoder().decode(b64UrlToBytes(str)));
+  const withQuickTimeout = (p, ms = 1200) => {
+    let syncFired = false;
+    const timerP = new Promise(resolve => {
+      let isSync = true;
+      setTimeout(() => {
+        if (isSync) syncFired = true;
+        else resolve(null);
+      }, ms);
+      isSync = false;
+    });
+    return syncFired ? Promise.resolve(p) : Promise.race([Promise.resolve(p), timerP]);
+  };
   const compressToB64Url = async obj => {
     const rawBytes = new TextEncoder().encode(JSON.stringify(obj));
     if (typeof CompressionStream === 'function') {
       try {
         const cs = new CompressionStream('deflate-raw');
         const writer = cs.writable.getWriter();
-        writer.write(rawBytes);
-        writer.close();
-        const buf = await new Response(cs.readable).arrayBuffer();
-        const comp = new Uint8Array(buf);
-        if (comp.length && comp.length < rawBytes.length) return { ver: 'v2', b64: bytesToB64Url(comp) };
+        void writer.write(rawBytes);
+        void writer.close();
+        const buf = await withQuickTimeout(new Response(cs.readable).arrayBuffer(), 500);
+        if (buf) {
+          const comp = new Uint8Array(buf);
+          if (comp.length && comp.length < rawBytes.length) return { ver: 'v2', b64: bytesToB64Url(comp) };
+        }
       } catch {}
     }
     return { ver: 'v1', b64: bytesToB64Url(rawBytes) };
   };
+  // ── 电脑端 ⇄ 手机端 轻量对称流加密与字典压缩 (Simple Stream Cipher + Dictionary Deduplication) ──
+  const qrSimpleXor = (bytes, salt16 = 0x5aa5) => {
+    const out = new Uint8Array(bytes.length);
+    let st = (0xdc428791 ^ (salt16 & 0xffff)) >>> 0;
+    for (let i = 0; i < bytes.length; i++) {
+      st = (Math.imul(st ^ 0x9e3779b9, 0x01000193) + i) >>> 0;
+      out[i] = bytes[i] ^ ((st >>> 16) & 0xff) ^ (st & 0xff);
+    }
+    return out;
+  };
+  const encryptSyncBytes = rawBytes => {
+    let csum = 0x5a;
+    for (let i = 0; i < rawBytes.length; i++) csum = ((csum * 33) ^ rawBytes[i]) & 0xffff;
+    if (!csum) csum = 0x5aa5;
+    const xored = qrSimpleXor(rawBytes, csum);
+    const out = new Uint8Array(xored.length + 2);
+    out[0] = (csum >>> 8) & 0xff;
+    out[1] = csum & 0xff;
+    out.set(xored, 2);
+    return bytesToB64Url(out);
+  };
+  const decryptSyncBytes = b64Str => {
+    const raw = b64UrlToBytes(b64Str);
+    if (raw.length < 3) return null;
+    const csum = ((raw[0] << 8) | raw[1]) & 0xffff;
+    return qrSimpleXor(raw.subarray(2), csum);
+  };
+  const deflateBytes = async rawBytes => {
+    if (typeof CompressionStream === 'function') {
+      try {
+        const cs = new CompressionStream('deflate-raw');
+        const writer = cs.writable.getWriter();
+        void writer.write(rawBytes);
+        void writer.close();
+        const buf = await withQuickTimeout(new Response(cs.readable).arrayBuffer(), 500);
+        if (buf) {
+          const comp = new Uint8Array(buf);
+          if (comp.length && comp.length < rawBytes.length) return comp;
+        }
+      } catch {}
+    }
+    return null;
+  };
+  const inflateBytes = async compBytes => {
+    if (typeof DecompressionStream === 'function') {
+      const ds = new DecompressionStream('deflate-raw');
+      const writer = ds.writable.getWriter();
+      writer.write(compBytes);
+      writer.close();
+      const buf = await new Response(ds.readable).arrayBuffer();
+      return new Uint8Array(buf);
+    }
+    return compBytes;
+  };
+  const packEncryptedCompactQr = async (subUrls, vlessLinks, compactAccts) => {
+    const groups = {};
+    for (const a of (compactAccts || [])) {
+      const em = String(a?.e || '').trim();
+      if (!em && !a?.n) continue;
+      const [user, dom = 'icloud.com'] = em ? em.split('@') : [a.n, ''];
+      const k = dom + '\t' + String(a?.p || '');
+      (groups[k] = groups[k] || []).push(user + ((compactAccts.length <= 6 && a?.ip) ? '|' + String(a.ip).replace(/:443$/, '') : ''));
+    }
+    const lines = [
+      (subUrls || []).slice(0, 2).join(','),
+      (vlessLinks || []).slice(0, 2).join(','),
+      ...Object.entries(groups).map(([k, users]) => k + '\t' + users.join(',')),
+    ].join('\n');
+    const rawBytes = new TextEncoder().encode(lines);
+    const comp = await deflateBytes(rawBytes);
+    const payload = comp || rawBytes;
+    const tag = comp ? 'brana-sync://e2/' : 'brana-sync://e0/';
+    return tag + encryptSyncBytes(payload);
+  };
+  const unpackEncryptedCompactQr = async (cipherB64, compressed = true) => {
+    const dec = decryptSyncBytes(cipherB64);
+    if (!dec) return null;
+    const raw = compressed ? await inflateBytes(dec) : dec;
+    const text = new TextDecoder().decode(raw);
+    const lines = text.split('\n');
+    const s = (lines[0] || '').split(',').map(x => x.trim()).filter(Boolean);
+    const l = (lines[1] || '').split(',').map(x => x.trim()).filter(Boolean);
+    const a = [];
+    for (let i = 2; i < lines.length; i++) {
+      const parts = lines[i].split('\t');
+      if (parts.length < 3) continue;
+      const dom = parts[0], pw = parts[1], users = parts.slice(2).join('\t').split(',');
+      for (const u of users) {
+        if (!u) continue;
+        const [localPart, ip = ''] = u.split('|');
+        const e = dom ? (localPart + '@' + dom) : localPart;
+        a.push({ e, p: pw, ...(ip ? { ip } : {}) });
+      }
+    }
+    return { v: 2, s, l, a };
+  };
   const decodeSyncToken = async rawStr => {
     const s = String(rawStr || '').trim();
     if (s.startsWith('{')) return JSON.parse(s);
+    if (/^ARENA-ACCOUNTS-V1:/i.test(s)) { const obj = JSON.parse(new TextDecoder().decode(b64UrlToBytes(s.replace(/^ARENA-ACCOUNTS-V1:/i, '').trim()))); return { v: 1, accounts: (obj.accounts || []).map(a => ({ name: a.name || a.email || '', remark: a.remark || '', email: a.email || '', password: a.pw || a.password || '', proxy: a.proxy || '', proxyIp: a.proxyIp || '', region: a.region || '', nodeId: a.nodeId || '' })) }; }
+    if (/^(?:brana-sync:\/\/e1\/|B1:)/i.test(s)) {
+      const b64 = s.replace(/^(?:brana-sync:\/\/e1\/|B1:)/i, '');
+      const dec = decryptSyncBytes(b64);
+      if (dec) {
+        const srvInfo = JSON.parse(new TextDecoder().decode(dec));
+        return { __lanShort: true, ...srvInfo };
+      }
+    }
+    if (/^(?:brana-sync:\/\/e[02]\/|B2:)/i.test(s)) {
+      const isCompressed = !/^brana-sync:\/\/e0\//i.test(s);
+      const b64 = s.replace(/^(?:brana-sync:\/\/e[02]\/|B2:)/i, '');
+      return await unpackEncryptedCompactQr(b64, isCompressed);
+    }
     if (/^brana-sync:\/\/v2\//i.test(s)) {
       const bytes = b64UrlToBytes(s.replace(/^brana-sync:\/\/v2\//i, ''));
       if (typeof DecompressionStream === 'function') {
@@ -1442,12 +1849,12 @@ const QrSync = (() => {
     return cleaned.startsWith('{') ? JSON.parse(cleaned) : fromB64Url(cleaned);
   };
   async function buildSyncBundle() {
-    try { if (typeof Nodes !== 'undefined') await Nodes.load?.(); } catch {}
-    try { if (typeof Nodes !== 'undefined') await Nodes.loadSubs?.(); } catch {}
-    try { if (typeof Nodes !== 'undefined') await Nodes.loadPips?.(); } catch {}
-    try { if (typeof Pool !== 'undefined' && !Pool.d) await Pool.load?.(); } catch {}
+    try { if (typeof Nodes !== 'undefined' && (!Array.isArray(Nodes.list) || !Nodes.list.length)) await withQuickTimeout(Nodes.load?.(), 1000); } catch {}
+    try { if (typeof Nodes !== 'undefined' && (!Array.isArray(Nodes.subs) || !Nodes.subs.length)) await withQuickTimeout(Nodes.loadSubs?.(), 1000); } catch {}
+    try { if (typeof Nodes !== 'undefined' && (!Array.isArray(Nodes.pips) || !Nodes.pips.length)) await withQuickTimeout(Nodes.loadPips?.(), 1000); } catch {}
+    try { if (typeof Pool !== 'undefined' && !Pool.d) await withQuickTimeout(Pool.load?.(), 1000); } catch {}
     let exp = null;
-    try { if (typeof Host !== 'undefined' && typeof Host.exportAccounts === 'function') exp = await Host.exportAccounts(); } catch {}
+    try { if (typeof Host !== 'undefined' && typeof Host.exportAccounts === 'function') exp = await withQuickTimeout(Host.exportAccounts(), 1500); } catch {}
     const subs = (typeof Nodes !== 'undefined' && Array.isArray(Nodes.subs)) ? Nodes.subs : (exp?.shared?.subs || []);
     const list = (typeof Nodes !== 'undefined' && Array.isArray(Nodes.list)) ? Nodes.list : (exp?.shared?.nodes || []);
     const pips = (typeof Nodes !== 'undefined' && Array.isArray(Nodes.pips)) ? Nodes.pips : (exp?.shared?.pips || []);
@@ -1488,10 +1895,18 @@ const QrSync = (() => {
     const pipStrings = pips.map(x => typeof x === 'string' ? x : (x?.ip ? (x.ip + (x.port && +x.port !== 443 ? ':' + x.port : '')) : (x?.address ? (x.address + (x.port && +x.port !== 443 ? ':' + x.port : '')) : ''))).filter(Boolean);
     const subUrls = subs.map(s => s?.url || s).filter(Boolean);
     const compactAccts = slimAccts.map(a => {
-      const o = { n: a.name, e: a.email, p: a.password, ip: a.proxyIp, r: a.region };
-      if (a.remark && a.remark !== a.name) o.rm = a.remark;
-      if (a.li >= 0) o.li = a.li;
-      else if (a.proxy) o.px = a.proxy;
+      const o = {};
+      const em = String(a.email || '').trim();
+      const nm = String(a.name || '').trim();
+      if (em) o.e = em;
+      if (nm && nm !== em && nm !== em.split('@')[0] && !/^账号\s*\d*$/.test(nm)) o.n = nm;
+      else if (!em && nm) o.n = nm;
+      if (a.password) o.p = a.password;
+      if (a.proxyIp) o.ip = String(a.proxyIp).replace(/:443$/, '');
+      if (a.region) o.r = a.region;
+      if (a.remark && a.remark !== nm && a.remark !== em) o.rm = a.remark;
+      if (a.li > 0) o.li = a.li;
+      else if (a.li < 0 && a.proxy) o.px = a.proxy;
       return o;
     });
     const fullBundle = {
@@ -1508,29 +1923,53 @@ const QrSync = (() => {
       activeVless,
       accounts: slimAccts,
     };
-    const minLinks = Math.max(1, ...compactAccts.map(a => (a.li != null ? a.li + 1 : 1)));
-    let qrPayload = '';
-    let inlineLite = null;
-    const budgets = [
-      [Math.min(allLinks.length, 24), Math.min(pipStrings.length, 24), Math.min(subUrls.length, 8), compactAccts.length],
-      [Math.min(allLinks.length, 12), Math.min(pipStrings.length, 12), Math.min(subUrls.length, 5), compactAccts.length],
-      [Math.min(allLinks.length, Math.max(minLinks, 6)), Math.min(pipStrings.length, 8), Math.min(subUrls.length, 4), compactAccts.length],
-      [Math.min(allLinks.length, Math.max(minLinks, 3)), Math.min(pipStrings.length, 4), Math.min(subUrls.length, 2), Math.min(compactAccts.length, 8)],
-      [Math.min(allLinks.length, 1), Math.min(pipStrings.length, 2), Math.min(subUrls.length, 1), Math.min(compactAccts.length, 4)],
-    ];
-    for (const [nL, nP, nS, nA] of budgets) {
-      inlineLite = {
-        v: 2,
-        s: subUrls.slice(0, nS),
-        l: allLinks.slice(0, nL),
-        p: pipStrings.slice(0, nP),
-        a: compactAccts.slice(0, nA),
-      };
-      const packed = await compressToB64Url(inlineLite);
-      const candidate = 'brana-sync://' + packed.ver + '/' + packed.b64;
-      qrPayload = candidate;
-      if (candidate.length <= 1300) break;
-    }
+    const slimVlessForQr = lnk => {
+      let s = String(lnk || '').trim();
+      const hIdx = s.indexOf('#');
+      if (hIdx > 0) s = s.slice(0, hIdx);
+      if (compactAccts.length > 4) {
+        s = s
+          .replace(/([?&])encryption=none(&|$)/gi, '$1')
+          .replace(/([?&])fp=chrome(&|$)/gi, '$1')
+          .replace(/([?&])path=%2F(&|$)/gi, '$1')
+          .replace(/([?&])ech=[^&]*(&|$)/gi, '$1')
+          .replace(/[?&]+$/g, '')
+          .replace(/\?&/g, '?')
+          .replace(/&&+/g, '&');
+        const mHost = /[?&]host=([^&]+)/i.exec(s);
+        const mSni = /[?&]sni=([^&]+)/i.exec(s);
+        if (mHost && mSni && mHost[1] === mSni[1]) {
+          s = s.replace(/([?&])sni=[^&]*(&|$)/i, '$1').replace(/[?&]+$/g, '').replace(/\?&/g, '?').replace(/&&+/g, '&');
+        }
+      }
+      return s;
+    };
+    const sortedForQr = [...compactAccts].sort((a, b) => String(a.p || '').localeCompare(String(b.p || '')));
+    const qrSlimAccts = compactAccts.length > 6
+      ? sortedForQr.map(x => ({ e: x.e, p: x.p, ...(x.n ? { n: x.n } : {}) }))
+      : sortedForQr;
+    const inlineLite = {
+      v: 2,
+      s: subUrls.slice(0, 1),
+      l: allLinks.slice(0, 1).map(slimVlessForQr),
+      a: qrSlimAccts,
+    };
+    const packed = await compressToB64Url(inlineLite);
+    const qrPayload = 'brana-sync://' + packed.ver + '/' + packed.b64;
+    let qrEncryptedPayload = qrPayload;
+    try {
+      qrEncryptedPayload = await packEncryptedCompactQr(subUrls.slice(0, 1), allLinks.slice(0, 1).map(slimVlessForQr), sortedForQr);
+    } catch {}
+    let qrShortPayload = '';
+    try {
+      if (typeof Host !== 'undefined' && typeof Host.shared === 'function') {
+        const srv = await withQuickTimeout(Host.shared('__qrSyncServe', fullBundle), 800);
+        if (srv?.ok && srv.port && srv.token) {
+          const shortObj = { p: srv.port, t: srv.token, ips: (srv.ips || [srv.ip]).filter(Boolean).slice(0, 3) };
+          qrShortPayload = 'brana-sync://e1/' + encryptSyncBytes(new TextEncoder().encode(JSON.stringify(shortObj)));
+        }
+      }
+    } catch {}
     const fullPacked = await compressToB64Url({
       v: 2,
       s: subUrls,
@@ -1539,7 +1978,9 @@ const QrSync = (() => {
       a: compactAccts,
     });
     const fullTokenStr = 'brana-sync://' + fullPacked.ver + '/' + fullPacked.b64;
-    return { fullBundle, inlineLite, qrPayload, fullTokenStr };
+    const qrPages = [qrPayload];
+    const summary = { subs: subUrls.length, nodes: allLinks.length, accounts: slimAccts.length, currentEmail: slimAccts[0]?.email || '' };
+    return { fullBundle, inlineLite, qrPayload, qrEncryptedPayload, qrShortPayload, qrPages, fullTokenStr, uri: qrPayload, summary };
   }
   async function applySyncPayload(rawInput, onProgress) {
     const step = msg => { try { onProgress?.(msg); } catch {} };
@@ -1573,13 +2014,46 @@ const QrSync = (() => {
       }
       return { ok: true, mode: 'vless', subCount: Nodes.subs?.length || 0, nodeCount: Nodes.list?.length || added, accountCount: 0 };
     }
+    const fetchSyncHttpJson = async url => {
+      try {
+        if (typeof Host !== 'undefined' && typeof Host.fetchText === 'function') {
+          const r = await withQuickTimeout(Host.fetchText(url), 3500);
+          const bodyStr = typeof r === 'string' ? r : (r?.body || r?.text || '');
+          if (bodyStr && bodyStr.trim().startsWith('{')) return JSON.parse(bodyStr);
+        }
+      } catch {}
+      const ctrl = typeof AbortController === 'function' ? new AbortController() : null;
+      const tid = ctrl ? setTimeout(() => ctrl.abort(), 3500) : null;
+      try {
+        const resp = await fetch(url, ctrl ? { signal: ctrl.signal } : undefined);
+        if (resp.ok) return await resp.json();
+      } finally {
+        if (tid) clearTimeout(tid);
+      }
+      return null;
+    };
+    if (/^https?:\/\/[^/]+\/brana-sync\//i.test(text)) {
+      step('正在通过加密局域网通道拉取全量配置…');
+      const remoteData = await fetchSyncHttpJson(text);
+      if (!remoteData || typeof remoteData !== 'object') throw new Error('局域网同步连接超时，请确认手机与电脑处于同一 Wi-Fi 或切换「精简一码」');
+      text = JSON.stringify(remoteData);
+    }
     if (/^https?:\/\//i.test(text) && !text.includes('#brana=')) {
-      step('正在保存节点订阅地址…');
-      if (typeof Nodes !== 'undefined' && Array.isArray(Nodes.subs)) {
-        if (!Nodes.subs.some(s => s?.url === text)) {
+      step('正在保存并拉取节点订阅地址…');
+      if (typeof Nodes !== 'undefined') {
+        if (typeof Nodes.addSub === 'function') {
+          try { await withQuickTimeout(Nodes.addSub(text), 3500); } catch {}
+        }
+        if (Array.isArray(Nodes.subs) && !Nodes.subs.some(s => s?.url === text)) {
           Nodes.subs.push({ url: text, at: Date.now(), n: Nodes.list?.length || 0, error: '' });
           try { Nodes.saveSubs?.(); } catch {}
         }
+        const firstSubNode = Nodes.list?.[0];
+        if (firstSubNode && typeof Pool !== 'undefined' && typeof Pool.mutate === 'function') {
+          try { await Pool.mutate(d => { if (!d.node) d.node = firstSubNode.id; }); } catch {}
+          try { void Pool.pushG?.(); } catch {}
+        }
+        try { void Nodes.syncAndroid?.(); } catch {}
       }
       return { ok: true, mode: 'sub', subCount: Nodes.subs?.length || 1, nodeCount: Nodes.list?.length || 0, accountCount: 0 };
     }
@@ -1590,6 +2064,17 @@ const QrSync = (() => {
     }
     let data = null;
     try { data = await decodeSyncToken(text); } catch {}
+    if (data?.__lanShort && data.p && data.t && Array.isArray(data.ips)) {
+      step('正在通过局域网加密短码握手拉取全量配置…');
+      const candidates = data.ips.map(ip => `http://${ip}:${data.p}/brana-sync/${data.t}`);
+      let fetched = null;
+      try {
+        const results = await Promise.all(candidates.map(u => fetchSyncHttpJson(u).catch(() => null)));
+        fetched = results.find(x => x && typeof x === 'object') || null;
+      } catch {}
+      if (!fetched) throw new Error('局域网短码连接未响应，请确保手机与电脑在同一 Wi-Fi，或在电脑端切换为「精简一码」');
+      data = fetched;
+    }
     if (!data || typeof data !== 'object') throw new Error('无法识别该二维码或同步口令');
     step('正在本地写入节点、订阅与 ProxyIP 数据（纯离线零网络请求）…');
     const subUrls = Array.isArray(data.subs) ? data.subs.map(s => s?.url || s).filter(Boolean) : (Array.isArray(data.s) ? data.s.filter(Boolean) : []);
@@ -1612,6 +2097,7 @@ const QrSync = (() => {
     }
     if (typeof Nodes !== 'undefined' && (vlessLinks.length || rawNodes.length)) {
       try { Nodes.save?.(); } catch {}
+      try { void Nodes.syncAndroid?.(); } catch {}
     }
     if (subUrls.length && typeof Nodes !== 'undefined' && Array.isArray(Nodes.subs)) {
       let subChanged = false;
@@ -1628,6 +2114,7 @@ const QrSync = (() => {
       const pipLines = rawPips.map(x => typeof x === 'string' ? x : (x?.ip ? (x.ip + (x.port && +x.port !== 443 ? ':' + x.port : '')) : (x?.address ? (x.address + (x.port && +x.port !== 443 ? ':' + x.port : '')) : ''))).filter(Boolean);
       if (pipLines.length) {
         try { Nodes.addPips(pipLines.join('\n')); } catch {}
+        try { void Pool?.pushG?.(); } catch {}
       }
     }
     const chosenNode = resolvedNodesByLinkIdx[0] || (data.activeNodeId && Nodes?.get?.(data.activeNodeId)) || Nodes?.list?.[0] || null;
@@ -1664,8 +2151,12 @@ const QrSync = (() => {
           ''
         ).trim();
         const nodeId = boundNode?.id || chosenNodeId || '';
-        const loc = (email && localList.find(x => String(x?.email || '').trim().toLowerCase() === email.toLowerCase())) ||
+        let loc = (email && localList.find(x => String(x?.email || '').trim().toLowerCase() === email.toLowerCase())) ||
           (!email && localList.find(x => String(x?.name || '').trim() === name && !x?.email)) || null;
+        if (!loc && importedAccts === 0) {
+          const emptyCur = localList.find(x => x && !x.email && !x.hasPw && (x.id === UI?.host?.account?.id || localList.length === 1));
+          if (emptyCur) loc = emptyCur;
+        }
         let pip = String(a.proxyIp || '').trim();
         const pipLower = pip.toLowerCase();
         if (pipLower && usedPips.has(pipLower) && (!loc || String(loc.proxyIp || '').trim().toLowerCase() !== pipLower)) {
@@ -1684,291 +2175,447 @@ const QrSync = (() => {
           deferProxy: !loc?.id,
         };
         try {
-          await Host.saveAccount(payload);
+          const isCur = Boolean((loc?.id && loc.id === UI?.host?.account?.id) || (importedAccts === 0 && (!UI?.host?.account?.email || UI?.host?.account?.email === email)));
+          const saved = await Host.saveAccount({ ...payload, deferProxy: !isCur });
+          const mergedAcct = { ...(UI?.host?.account || {}), ...(saved?.account || payload), ...(payload.password ? { hasPw: true } : {}) };
+          if (isCur && UI?.host) {
+            UI.host.account = mergedAcct;
+            try {
+              const draft = UI.authDraft?.(mergedAcct);
+              if (draft) {
+                if (email) draft.email = email;
+                if (payload.password) draft.password = String(payload.password);
+              }
+            } catch {}
+          }
           if (pipLower) usedPips.add(pipLower);
           importedAccts++;
         } catch {}
       }
     }
+    if (subUrls.length && typeof Nodes !== 'undefined' && typeof Nodes.refreshAllSubs === 'function') {
+      try { void Nodes.refreshAllSubs(); } catch {}
+    }
+    try { void Pool?.pushG?.(); } catch {}
+    try { void Nodes?.syncAndroid?.(); } catch {}
+    try { void IP?.poll?.(); } catch {}
+    try { const refreshed = await Host.listAccounts?.(true); if (Array.isArray(refreshed) && UI?.host) UI.host.accounts = refreshed; if (typeof LaunchPick !== 'undefined') LaunchPick.cache = null; } catch {}
+    const sCnt = Nodes.subs?.length || subUrls.length, nCnt = Nodes.list?.length || 0, aCnt = importedAccts || accts.length, firstEm = accts.find(a => a.email)?.email || '';
     return {
-      ok: true,
-      mode: 'sync',
-      subCount: Nodes.subs?.length || subUrls.length,
-      nodeCount: Nodes.list?.length || 0,
-      accountCount: importedAccts || accts.length,
-      firstEmail: accts.find(a => a.email)?.email || '',
-      firstPassword: accts.find(a => a.password)?.password || '',
+      ok: true, mode: 'sync', kind: 'bundle',
+      subCount: sCnt, subs: sCnt, nodeCount: nCnt, nodes: nCnt,
+      accountCount: aCnt, accounts: aCnt, count: aCnt || nCnt || sCnt || 1,
+      firstEmail: firstEm, email: firstEm, firstPassword: accts.find(a => a.password)?.password || '',
     };
   }
-  function isFirstTimeNoCache() {
-    if (window.__fixture || window.__routeFixture) return false;
-    try { if (localStorage.getItem('anc:onboard:done') === '1') return false; } catch {}
-    const a = UI?.host?.account;
-    const isFixtureAcct = Boolean(a?.email && /^acct-[a-z0-9-]+@example\.com$/i.test(String(a.email)));
-    const hasAcct = Boolean(!isFixtureAcct && (a?.email || a?.hasPw || a?.hasPassword));
-    const hasNodes = Boolean((typeof Nodes !== 'undefined' && ((Nodes.list && Nodes.list.length > 0) || (Nodes.subs && Nodes.subs.length > 0))) || a?.nodeId);
-    const hasHist = Boolean(typeof History !== 'undefined' && Array.isArray(History.items) && History.items.length > 0);
-    return !hasAcct && !hasNodes && !hasHist;
-  }
-  function markOnboardingDone() {
-    try { localStorage.setItem('anc:onboard:done', '1'); } catch {}
-  }
-  function openModal(initialTab = 'export', onImported = null) {
-    document.querySelector('.qrsync-ov')?.remove();
-    const isMobile = Host?.platform === 'android' || document.body.classList.contains('m');
-    let curTab = initialTab === 'import' ? 'import' : (initialTab === 'export' ? 'export' : (isMobile ? 'import' : 'export'));
-    let camStream = null, camTimer = 0;
-    const stopCam = () => {
-      clearInterval(camTimer); camTimer = 0;
-      if (camStream) { try { for (const t of camStream.getTracks()) t.stop(); } catch {} camStream = null; }
-    };
-    const close = () => { stopCam(); ov.remove(); };
-    const body = h('div', { style: 'padding:14px 16px;display:flex;flex-direction:column;gap:12px' });
-    const tabExport = h('button', {
-      type: 'button',
-      class: 'btn' + (curTab === 'export' ? ' pri' : ''),
-      style: 'flex:1;justify-content:center;white-space:nowrap',
-      onclick: () => { curTab = 'export'; stopCam(); renderTab(); },
-    }, icon('link'), h('span', null, '导出二维码（电脑→手机）'));
-    const tabImport = h('button', {
-      type: 'button',
-      class: 'btn' + (curTab === 'import' ? ' pri' : ''),
-      style: 'flex:1;justify-content:center;white-space:nowrap',
-      onclick: () => { curTab = 'import'; renderTab(); },
-    }, icon('refresh'), h('span', null, '扫码 / 订阅导入'));
-    const ov = h('div', {
-      class: 'm-ov open qrsync-ov',
-      style: 'position:fixed;inset:0;z-index:10000;display:flex;align-items:center;justify-content:center;padding:16px;background:rgba(0,0,0,.62);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px)',
-      onclick: e => { if (e.target === ov) close(); },
-    }, h('div', { class: 'm-box', style: 'width:min(460px,94vw);max-height:90vh;overflow:auto;background:var(--bg1,#181920);color:var(--fg,#f3f4f6);border:1px solid var(--bd,rgba(255,255,255,.12));border-radius:14px;box-shadow:0 20px 60px rgba(0,0,0,.55)' },
-      h('div', { class: 'm-hd', style: 'display:flex;align-items:center;justify-content:space-between;padding:14px 16px 10px;border-bottom:1px solid var(--bd,rgba(255,255,255,.08))' },
-        h('b', { style: 'display:flex;align-items:center;gap:6px;white-space:nowrap;font-size:14.5px' }, icon('qr'), '节点订阅与账号扫码互联'),
-        h('button', { class: 'ib ibtn', type: 'button', title: '关闭', onclick: close }, icon('x'))
-      ),
-      h('div', { style: 'display:flex;gap:8px;padding:10px 16px 0' }, tabExport, tabImport),
-      body
-    ));
-    async function renderTab() {
-      tabExport.className = 'btn' + (curTab === 'export' ? ' pri' : '');
-      tabImport.className = 'btn' + (curTab === 'import' ? ' pri' : '');
-      body.replaceChildren();
-      if (curTab === 'export') {
-        const loading = h('div', { class: 'dim', style: 'text-align:center;padding:24px 0' }, '正在生成同步二维码…');
-        body.append(loading);
-        try {
-          const { fullBundle, qrPayload, fullTokenStr } = await buildSyncBundle();
-          const qrBox = h('div', { style: 'padding:12px;background:var(--bg2);border:1px solid var(--bd);border-radius:12px;text-align:center' });
-          qrBox.innerHTML = toSvg(qrPayload, 224);
-          const statLine = h('div', { style: 'font-size:12px;color:var(--fg2);text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis' },
-            `包含：节点订阅 ${fullBundle.subs.length} 个 · 节点 ${fullBundle.nodes.length} 个 · ProxyIP ${fullBundle.pips.length} 个 · 账号 ${fullBundle.accounts.length} 个`
-          );
-          const tipLine = h('div', { class: 'dim', style: 'font-size:11.5px;line-height:1.5;text-align:center' },
-            '数据已直接压缩编码在二维码内（纯离线零网络请求），手机客户端打开「扫码导入」直接扫码即可完成节点与账号配置'
-          );
-          const copyBtn = h('button', {
-            type: 'button',
-            class: 'btn pri',
-            style: 'width:100%;justify-content:center',
-            onclick: async () => {
-              try {
-                await navigator.clipboard.writeText(fullTokenStr);
-                toast('已复制完整同步口令（含全部节点订阅与账号），可在手机端直接粘贴导入', 'ok');
-              } catch {
-                toast('复制失败，请手动复制', 'bad');
-              }
-            },
-          }, icon('copy'), h('span', null, '复制完整同步口令（跨网通用）'));
-          body.replaceChildren(qrBox, statLine, tipLine, copyBtn);
-        } catch (err) {
-          body.replaceChildren(h('div', { class: 'gate-err show' }, '生成二维码失败：' + (err?.message || err)));
+  function hasNodeConfigured(a = UI?.host?.account) {
+    if (typeof Nodes !== 'undefined') {
+      try {
+        if (!Array.isArray(Nodes.list) || !Array.isArray(Nodes.subs)) {
+          Nodes.load?.();
+          Nodes.loadSubs?.();
         }
-      } else {
-        const msgEl = h('div', { class: 'dim', style: 'font-size:12px' }, '扫描电脑端二维码，或直接粘贴同步口令 / 节点订阅地址（https://...）：');
-        const camWrap = h('div', { style: 'display:none;position:relative;border-radius:10px;overflow:hidden;background:#000;aspect-ratio:4/3;max-height:220px' });
-        const videoEl = h('video', { playsinline: '', muted: '', style: 'width:100%;height:100%;object-fit:cover' });
-        camWrap.append(videoEl);
-        const inp = h('textarea', {
-          class: 'inp',
-          rows: 3,
-          placeholder: '在此粘贴电脑端同步口令（brana-sync://...）或节点订阅链接（https://... / vless://...）',
-          style: 'width:100%;font-family:var(--mono);font-size:12px;resize:vertical',
-        });
-        const statusEl = h('div', { style: 'font-size:12px;min-height:18px;color:var(--fg2)' });
-        const doImport = async (rawVal) => {
-          const val = String(rawVal ?? inp.value ?? '').trim();
-          if (!val) { statusEl.textContent = '请先扫码或输入同步口令/订阅链接'; statusEl.style.color = 'var(--bad)'; return; }
-          statusEl.style.color = 'var(--fg2)';
-          try {
-            const res = await applySyncPayload(val, s => { statusEl.textContent = s; });
-            markOnboardingDone();
-            toast(`导入成功：订阅 ${res.subCount} 个 · 节点 ${res.nodeCount} 个${res.accountCount ? ' · 账号 ' + res.accountCount + ' 个' : ''}`, 'ok');
-            close();
-            if (typeof onImported === 'function') onImported(res);
-            else { try { UI.renderListSoon?.(); UI.renderTabs?.(); Bar.paint?.(); } catch {} }
-          } catch (err) {
-            statusEl.style.color = 'var(--bad)';
-            statusEl.textContent = err?.message || String(err);
+      } catch {}
+    }
+    const hasNodes = Boolean(typeof Nodes !== 'undefined' && ((Array.isArray(Nodes.list) && Nodes.list.length > 0) || (Array.isArray(Nodes.subs) && Nodes.subs.length > 0)));
+    const hasAcctNode = Boolean(a && (a.nodeId || /^vless:\/\//i.test(String(a.proxy || '').trim())));
+    return hasNodes || hasAcctNode;
+  }
+
+  function isFirstTimeNoCache(a = UI?.host?.account) {
+    try {
+      if (typeof window !== 'undefined' && (window.__fixture || window.__routeFixture || window.__capFetch)) return false;
+      if (a && /^acct-[a-z0-9-]+@example\.com$/i.test(String(a.email || ''))) return false;
+    } catch {}
+    const isMobile = Host.platform === 'android' || (typeof isMob === 'function' && isMob());
+    if (isMobile && (!a || (!a.email && !a.hasPw)) && !(Array.isArray(UI?.host?.accounts) && UI.host.accounts.some(x => x?.email || x?.hasPw))) {
+      return true;
+    }
+    return !hasNodeConfigured(a);
+  }
+
+  function markOnboardingDone() {
+    Store.set(ONBOARD_DONE_KEY, 1);
+  }
+
+  function openModal(initialTab, onComplete) {
+    document.querySelectorAll('.m-ov.qrsync-ov').forEach(el => el.remove());
+    const isMobile = Host.platform === 'android' || (typeof isMob === 'function' && isMob());
+    let curTab = initialTab === 'import' ? 'import' : (initialTab === 'export' ? 'export' : (isMobile ? 'import' : 'export'));
+    if (isMobile) curTab = 'import';
+    let streamCleanup = null;
+    let resizeObs = null;
+    const close = () => {
+      if (streamCleanup) { try { streamCleanup(); } catch {} streamCleanup = null; }
+      if (resizeObs) { try { resizeObs.disconnect(); } catch {} resizeObs = null; }
+      ov.remove();
+    };
+    const body = h('div', { class: 'm-b', style: 'display:flex;flex-direction:column;flex:1;min-height:0;gap:10px;padding:12px 14px;color:#a6a29a' });
+    const headerTools = h('div', { style: 'display:flex;align-items:center;gap:5px;color:#a6a29a' });
+    const titleSpan = h('span', { style: 'font-weight:700;font-size:14px;color:#a6a29a;user-select:none' }, curTab === 'export' ? '二维码导出' : '扫码导入');
+
+    async function renderExport() {
+      headerTools.replaceChildren(ib('x', '关闭', close));
+      body.replaceChildren(h('div', { style: 'text-align:center;padding:24px;color:#9c9890' }, '正在生成加密同步二维码…'));
+      const { qrPayload, qrEncryptedPayload, qrShortPayload, fullTokenStr, summary } = await buildSyncBundle();
+      let qrMode = 'compat'; // 'compat' | 'enc' | 'short'
+      let targetPx = 372;
+      let isManualResize = false;
+
+      const getActiveUri = () => {
+        if (qrMode === 'short' && qrShortPayload) return qrShortPayload;
+        if (qrMode === 'enc' && qrEncryptedPayload) return qrEncryptedPayload;
+        return qrPayload;
+      };
+
+      const zoomLabel = h('span', { style: 'font-size:11px;font-family:var(--mono,monospace);color:#9c9890;min-width:38px;text-align:center;user-select:none' }, '100%');
+      const mkZoomBtn = (txt, title, fn) => h('button', {
+        class: 'btn xs',
+        title,
+        style: 'padding:2px 7px;font-size:11px;height:22px;border-radius:6px;background:#252422;color:#a6a29a;border:1px solid #383632;cursor:pointer',
+        onclick: fn,
+      }, txt);
+
+      const applyScale = (newPx, resizeBox = true) => {
+        targetPx = Math.max(220, Math.min(820, Math.round(newPx)));
+        const pct = Math.round((targetPx / 372) * 100);
+        zoomLabel.textContent = pct + '%';
+        const boxEl = ov?.querySelector?.('.m-box');
+        if (resizeBox && boxEl && boxEl.style) {
+          isManualResize = true;
+          boxEl.style.width = Math.min(Math.round(window.innerWidth * 0.96), targetPx + 74) + 'px';
+          boxEl.style.height = 'auto';
+          setTimeout(() => { isManualResize = false; }, 60);
+        }
+        paintQrPage();
+      };
+
+      headerTools.replaceChildren(
+        mkZoomBtn('−', '缩小二维码', () => applyScale(targetPx - 56, true)),
+        zoomLabel,
+        mkZoomBtn('+', '放大二维码', () => applyScale(targetPx + 56, true)),
+        mkZoomBtn('100%', '标准尺寸', () => applyScale(372, true)),
+        mkZoomBtn('全屏', '最大化二维码方便远距离扫码', () => applyScale(Math.min(window.innerWidth, window.innerHeight) - 180, true)),
+        ib('x', '关闭', close)
+      );
+
+      const modeBar = h('div', { style: 'display:flex;gap:6px;justify-content:center;flex-wrap:wrap' });
+      const modeHint = h('div', { style: 'font-size:11px;color:#8e8a82;text-align:center;line-height:1.35' }, '');
+      const modeDefs = [
+        { id: 'compat', label: '🔒 精简一码 (免更新秒扫)', desc: '全量离线一码 · 兼容已装手机端直接扫码（滚轮或拖拽窗口右下角可自由缩放）' },
+        { id: 'enc', label: '🛡️ 离线字典加密码', desc: '电脑⇄手机对称流加密 + 同域字典去重 · 模块更少更清晰（需新版手机端）' },
+        ...(qrShortPayload ? [{ id: 'short', label: '⚡ 极简短码 (33×33)', desc: '电脑⇄手机局域网加密短码握手 · 超大颗粒一秒识别（需同一 Wi-Fi 及新版手机端）' }] : []),
+      ];
+      const rebuildModeBar = () => {
+        modeBar.replaceChildren(...modeDefs.map(m => h('button', {
+          class: 'btn xs',
+          style: `padding:4px 9px;font-size:11px;border-radius:7px;cursor:pointer;border:1px solid ${qrMode === m.id ? '#2f9e5b' : '#35332f'};background:${qrMode === m.id ? 'rgba(47,158,91,0.16)' : '#22211f'};color:${qrMode === m.id ? '#6fd496' : '#9c9890'};font-weight:${qrMode === m.id ? '600' : '400'}`,
+          onclick: () => { qrMode = m.id; rebuildModeBar(); paintQrPage(); },
+        }, m.label)));
+        const curDef = modeDefs.find(m => m.id === qrMode) || modeDefs[0];
+        modeHint.textContent = curDef.desc;
+      };
+
+      const qrSvgWrap = h('div', {
+        title: '滚轮可自由缩放 · 点击切换放大 · 拖拽窗口右下角可自由拉伸',
+        style: 'display:flex;align-items:center;justify-content:center;min-height:240px;padding:12px;background:#fff;border-radius:14px;cursor:zoom-in;box-shadow:0 6px 24px rgba(0,0,0,0.28);transition:padding 0.1s ease',
+        onclick: () => applyScale(targetPx < 440 ? 496 : (targetPx < 560 ? 612 : 372), true),
+        onwheel: e => {
+          e.preventDefault();
+          const delta = e.deltaY < 0 ? 42 : -42;
+          applyScale(targetPx + delta, true);
+        },
+      });
+
+      const paintQrPage = () => {
+        const curUri = getActiveUri();
+        try {
+          qrSvgWrap.innerHTML = toSvg(curUri, 248);
+          if (typeof document !== 'undefined' && document.createElementNS && !qrSvgWrap.querySelector?.('svg')) {
+            qrSvgWrap.replaceChildren(toSvgEl(curUri, targetPx));
           }
-        };
-        const fileInp = h('input', {
-          type: 'file',
-          accept: 'image/*',
-          style: 'display:none',
-          onchange: async e => {
-            const f = e.target.files?.[0];
-            if (!f) return;
-            statusEl.textContent = '正在识别二维码图片…';
-            const decoded = await decodeFromFile(f);
-            if (!decoded) {
-              statusEl.style.color = 'var(--bad)';
-              statusEl.textContent = '未能从图片中识别出二维码，请尝试使用摄像头扫码或粘贴同步口令';
-              return;
+          const svgNode = qrSvgWrap.querySelector?.('svg');
+          if (svgNode) {
+            const mTot = /data-qr-total="(\d+)"/.exec(qrSvgWrap.innerHTML || '');
+            const totalMods = Number(svgNode.getAttribute?.('data-qr-total') || mTot?.[1]) || 89;
+            const snapped = snapQrPx(targetPx, totalMods);
+            svgNode.setAttribute?.('width', String(snapped));
+            svgNode.setAttribute?.('height', String(snapped));
+            if (svgNode.style) {
+              svgNode.style.width = snapped + 'px';
+              svgNode.style.height = snapped + 'px';
+              svgNode.style.boxShadow = 'none';
             }
-            inp.value = decoded;
-            await doImport(decoded);
-          },
+          }
+        } catch {
+          try { qrSvgWrap.replaceChildren(toSvgEl(curUri, targetPx)); }
+          catch { qrSvgWrap.replaceChildren(h('div', { style: 'padding:18px;color:var(--warn,#c47a0a);text-align:center;font-size:12px' }, '请使用下方复制按钮复制同步码')); }
+        }
+      };
+
+      rebuildModeBar();
+      paintQrPage();
+
+      const statusLine = h('div', { style: 'font-size:12px;color:#3ca866;text-align:center;font-weight:600' },
+        `${summary.accounts} 个账号 · ${summary.nodes} 个节点 · ${summary.subs} 个订阅`);
+      const qrBox = h('div', {
+        style: 'display:flex;flex-direction:column;flex:1;align-items:center;justify-content:center;gap:8px;padding:12px;background:#181715;border:1px solid #302e2a;border-radius:10px;min-height:0',
+      },
+        qrSvgWrap,
+        modeDefs.length > 1 ? modeBar : null,
+        statusLine,
+        modeHint
+      );
+      const copyVal = fullTokenStr || qrPayload;
+      const copyRow = h('div', { style: 'display:flex;gap:8px;align-items:center;color:#9c9890' },
+        h('input', { class: 'inp', readonly: true, value: copyVal, style: 'flex:1;font-family:var(--mono,monospace);font-size:11px;padding:6px 8px;border-radius:8px;border:1px solid #3b3935;background:#181715;color:#9c9890', onclick: e => e.target.select() }),
+        ib('copy', '复制同步码', async () => {
+          try {
+            if (typeof copyText === 'function') copyText(copyVal);
+            else { await navigator.clipboard.writeText(copyVal); toast('已复制同步码'); }
+          } catch { toast('复制失败，请手动全选复制', 'err'); }
+        })
+      );
+      const resizeGrip = h('div', {
+        title: '按住拖拽可自由缩放窗口与二维码大小',
+        style: 'position:absolute;right:3px;bottom:3px;width:18px;height:18px;cursor:nwse-resize;display:flex;align-items:flex-end;justify-content:flex-end;color:#78746c;font-size:11px;line-height:1;user-select:none;padding:2px',
+        onmousedown: e => {
+          e.preventDefault();
+          e.stopPropagation();
+          const boxEl = ov?.querySelector?.('.m-box');
+          if (!boxEl) return;
+          const startX = e.clientX;
+          const startY = e.clientY;
+          const startW = boxEl.offsetWidth || 456;
+          const startH = boxEl.offsetHeight || 540;
+          const onMove = ev => {
+            const dw = ev.clientX - startX;
+            const dh = ev.clientY - startY;
+            const nextSide = Math.max(220, Math.min(820, Math.max(startW + dw - 74, startH + dh - 170)));
+            applyScale(nextSide, true);
+          };
+          const onUp = () => {
+            window.removeEventListener('mousemove', onMove);
+            window.removeEventListener('mouseup', onUp);
+          };
+          window.addEventListener('mousemove', onMove);
+          window.addEventListener('mouseup', onUp);
+        },
+      }, '◢');
+      body.replaceChildren(qrBox, copyRow, resizeGrip);
+
+      const boxEl = ov?.querySelector?.('.m-box');
+      if (boxEl && typeof ResizeObserver === 'function') {
+        if (resizeObs) { try { resizeObs.disconnect(); } catch {} }
+        resizeObs = new ResizeObserver(entries => {
+          if (isManualResize) return;
+          const cr = entries[0]?.contentRect;
+          if (!cr) return;
+          const avail = Math.max(220, Math.min(820, Math.min(cr.width - 70, cr.height - 165)));
+          if (Math.abs(avail - targetPx) > 18) {
+            targetPx = avail;
+            zoomLabel.textContent = Math.round((targetPx / 372) * 100) + '%';
+            paintQrPage();
+          }
         });
-        const scanCamBtn = h('button', {
-          type: 'button',
-          class: 'btn',
-          style: 'flex:1;justify-content:center;white-space:nowrap',
-          onclick: async () => {
-            if (camStream) { stopCam(); camWrap.style.display = 'none'; return; }
-            try {
-              camStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' }, audio: false });
-              videoEl.srcObject = camStream;
-              await videoEl.play();
-              camWrap.style.display = 'block';
-              statusEl.textContent = '请将摄像头对准电脑端二维码…';
-              const cv = document.createElement('canvas');
-              camTimer = setInterval(async () => {
-                if (!videoEl.videoWidth) return;
-                if (typeof BarcodeDetector !== 'undefined') {
-                  try {
-                    const det = new BarcodeDetector({ formats: ['qr_code'] });
-                    const codes = await det.detect(videoEl);
-                    if (codes?.[0]?.rawValue) { stopCam(); camWrap.style.display = 'none'; inp.value = codes[0].rawValue; await doImport(codes[0].rawValue); return; }
-                  } catch {}
-                }
-                cv.width = videoEl.videoWidth; cv.height = videoEl.videoHeight;
-                const ctx = cv.getContext('2d');
-                ctx.drawImage(videoEl, 0, 0);
-                const txt = await decodeFromImageData(ctx.getImageData(0, 0, cv.width, cv.height)).catch(() => null);
-                if (txt) { stopCam(); camWrap.style.display = 'none'; inp.value = txt; await doImport(txt); }
-              }, 350);
-            } catch {
-              fileInp.click();
-            }
-          },
-        }, icon('eye'), h('span', null, '摄像头扫码'));
-        const pickImgBtn = h('button', {
-          type: 'button',
-          class: 'btn',
-          style: 'flex:1;justify-content:center;white-space:nowrap',
-          onclick: () => fileInp.click(),
-        }, icon('upload'), h('span', null, '相册识别二维码'));
-        const pasteBtn = h('button', {
-          type: 'button',
-          class: 'btn',
-          style: 'flex:1;justify-content:center;white-space:nowrap',
-          onclick: async () => {
-            try {
-              const t = await navigator.clipboard.readText();
-              if (t) { inp.value = t.trim(); await doImport(t.trim()); }
-            } catch { inp.focus(); }
-          },
-        }, icon('copy'), h('span', null, '粘贴剪贴板'));
-        const confirmBtn = h('button', {
-          type: 'button',
-          class: 'btn pri',
-          style: 'width:100%;justify-content:center',
-          onclick: () => doImport(),
-        }, icon('check'), h('span', null, '立即导入配置并生效'));
-        body.replaceChildren(
-          msgEl,
-          h('div', { style: 'display:flex;gap:6px;flex-wrap:wrap' }, scanCamBtn, pickImgBtn, pasteBtn, fileInp),
-          camWrap,
-          inp,
-          statusEl,
-          confirmBtn
-        );
+        resizeObs.observe(boxEl);
       }
     }
+
+    function renderImport() {
+      if (streamCleanup) { try { streamCleanup(); } catch {} streamCleanup = null; }
+      const statusEl = h('div', { style: 'font-size:12px;color:var(--fg2,#b9b6af);min-height:18px;text-align:center' }, '请将摄像头对准电脑端二维码，或点右上角图标选择二维码图片');
+      const videoWrap = h('div', { style: 'display:none;flex-direction:column;align-items:center;gap:8px;padding:8px;background:#000;border-radius:10px;overflow:hidden' });
+      const videoEl = h('video', { autoplay: true, playsinline: true, muted: true, style: 'width:100%;max-width:280px;border-radius:8px;background:#111' });
+      videoWrap.append(videoEl);
+
+      const handleDecoded = async (text) => {
+        if (!text) return;
+        if (streamCleanup) { try { streamCleanup(); } catch {} streamCleanup = null; }
+        statusEl.style.color = 'var(--acc,#ecebe8)';
+        statusEl.textContent = '正在解析并导入配置…';
+        try {
+          const res = await applySyncPayload(text, msg => { statusEl.textContent = msg; });
+          markOnboardingDone();
+          statusEl.style.color = 'var(--ok,#2f9e5b)';
+          const desc = `同步完成：${res.accountCount || 0} 个账号 · ${res.nodeCount || 0} 个节点`;
+          statusEl.textContent = '✓ ' + desc;
+          toast(desc);
+          setTimeout(() => {
+            close();
+            if (typeof onComplete === 'function') onComplete(res);
+            else { try { UI?.loginGate?.(); } catch {} }
+          }, 280);
+        } catch (err) {
+          statusEl.style.color = 'var(--bad,#d9453f)';
+          statusEl.textContent = '导入失败：' + (err?.message || err);
+        }
+      };
+
+      const camFileInp = h('input', {
+        type: 'file', accept: 'image/*', capture: 'environment', style: 'display:none',
+        onchange: async e => {
+          const f = e.target.files?.[0]; e.target.value = ''; if (!f) return;
+          statusEl.style.color = 'var(--acc,#ecebe8)'; statusEl.textContent = '正在识别二维码…';
+          const decoded = await decodeFromFile(f);
+          if (decoded) await handleDecoded(decoded);
+          else { statusEl.style.color = 'var(--bad,#d9453f)'; statusEl.textContent = '未识别到二维码，请对准电脑端二维码重拍'; }
+        },
+      });
+      const fileInp = h('input', {
+        type: 'file', accept: 'image/*', style: 'display:none',
+        onchange: async e => {
+          const f = e.target.files?.[0]; e.target.value = ''; if (!f) return;
+          statusEl.style.color = 'var(--acc,#ecebe8)'; statusEl.textContent = '正在识别二维码图片…';
+          const decoded = await decodeFromFile(f);
+          if (decoded) await handleDecoded(decoded);
+          else { statusEl.style.color = 'var(--bad,#d9453f)'; statusEl.textContent = '未能从图片中识别出二维码'; }
+        },
+      });
+
+      const startCameraScan = async () => {
+        if (!navigator.mediaDevices?.getUserMedia) { camFileInp.click(); return; }
+        try {
+          if (streamCleanup) { try { streamCleanup(); } catch {} streamCleanup = null; }
+          const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' }, width: { ideal: 720 }, height: { ideal: 720 } }, audio: false });
+          videoEl.srcObject = stream;
+          try { await videoEl.play?.(); } catch {}
+          videoWrap.style.display = 'flex';
+          statusEl.style.color = 'var(--acc,#ecebe8)';
+          statusEl.textContent = '请将电脑端二维码对准取景框…';
+          let stopped = false;
+          const detector = typeof BarcodeDetector !== 'undefined' ? new BarcodeDetector({ formats: ['qr_code'] }) : null;
+          const cv = document.createElement('canvas');
+          const ctx = cv.getContext('2d', { willReadFrequently: true });
+          const timer = setInterval(async () => {
+            if (stopped || !videoEl.videoWidth) return;
+            try {
+              if (detector) {
+                const codes = await detector.detect(videoEl).catch(() => null);
+                if (codes && codes.length && codes[0].rawValue) { stopped = true; await handleDecoded(codes[0].rawValue); return; }
+              }
+              cv.width = videoEl.videoWidth; cv.height = videoEl.videoHeight;
+              ctx.drawImage(videoEl, 0, 0);
+              const img = ctx.getImageData(0, 0, cv.width, cv.height);
+              if (typeof window.jsQR === 'function') {
+                const hit = window.jsQR(img.data, img.width, img.height);
+                if (hit?.data) { stopped = true; await handleDecoded(hit.data); return; }
+              }
+              const decoded = await decodeFromImageData(img);
+              if (decoded) { stopped = true; await handleDecoded(decoded); }
+            } catch {}
+          }, 220);
+          streamCleanup = () => {
+            stopped = true; clearInterval(timer);
+            try { stream.getTracks().forEach(t => t.stop()); } catch {}
+            videoWrap.style.display = 'none';
+          };
+        } catch {
+          statusEl.style.color = 'var(--warn,#c47a0a)';
+          statusEl.textContent = '点右上角相机或相册图标拍照/选图识别二维码';
+        }
+      };
+
+      headerTools.replaceChildren(
+        ib('camera', '摄像头扫码', startCameraScan),
+        ib('upload', '从相册选择二维码图片', () => fileInp.click()),
+        ib('x', '关闭', close)
+      );
+
+      const pasteInp = h('input', {
+        class: 'inp', type: 'text', placeholder: '或粘贴同步码 / 订阅链接…',
+        style: 'flex:1;font-family:var(--mono,monospace);font-size:11px;padding:6px 8px;border-radius:8px;border:1px solid var(--bd2,#45423d);background:var(--bg2,#191817);color:var(--fg,#ecebe8)',
+        onkeydown: e => { if (e.key === 'Enter') { e.preventDefault(); void handleDecoded(pasteInp.value); } },
+      });
+      const pasteRow = h('div', { style: 'display:flex;gap:8px;align-items:center' }, pasteInp, ib('check', '立即导入', () => handleDecoded(pasteInp.value)));
+      body.replaceChildren(videoWrap, statusEl, pasteRow, fileInp, camFileInp);
+      setTimeout(() => { void startCameraScan(); }, 60);
+    }
+
+    const ov = h('div', {
+      class: 'm-ov open qrsync-ov',
+      style: 'position:fixed;inset:0;z-index:10000;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,0.62);padding:16px',
+      onclick: e => { if (e.target === ov) close(); },
+    },
+      h('div', { class: 'm-box', style: 'position:relative;display:flex;flex-direction:column;width:452px;min-width:340px;min-height:420px;max-width:96vw;max-height:96vh;resize:both;overflow:auto;background:var(--bg,#1f1e1c);color:#a6a29a;border:1px solid var(--bd,#33312d);border-radius:14px;box-shadow:0 16px 48px rgba(0,0,0,0.45)' },
+        h('div', { class: 'm-h', style: 'display:flex;align-items:center;justify-content:space-between;padding:12px 16px;border-bottom:1px solid var(--bd,#33312d)' }, titleSpan, headerTools),
+        body
+      )
+    );
     document.body.append(ov);
-    void renderTab();
+    if (curTab === 'export') void renderExport();
+    else renderImport();
+    return ov;
   }
+
   function renderFirstTimeOnboarding(v, a, reason, goStep2) {
     v.replaceChildren();
-    const errEl = h('div', { class: 'gate-err' });
-    const showMsg = (m, ok = false) => {
-      errEl.textContent = m || '';
-      errEl.classList.toggle('show', !!m);
-      errEl.style.color = ok ? 'var(--ok, #22c55e)' : '';
-    };
-    const subInp = h('input', {
-      class: 'inp',
-      placeholder: '节点订阅地址 https://... 或 vless:// 节点链接或同步口令',
-      style: 'width:100%;font-size:13px',
-    });
-    const subBtn = h('button', {
-      type: 'button',
-      class: 'btn pri',
-      style: 'width:100%;justify-content:center;margin-top:8px',
-      onclick: async () => {
-        const val = subInp.value.trim();
-        if (!val) { showMsg('请先输入节点订阅地址或点击上方扫码导入'); return; }
-        subBtn.disabled = true;
-        showMsg('正在拉取节点订阅并配置网络环境…', true);
-        try {
-          const res = await applySyncPayload(val, s => showMsg(s, true));
-          markOnboardingDone();
-          toast(`网络节点已就绪（共 ${res.nodeCount} 个节点），请继续登录账号`, 'ok');
-          goStep2(res);
-        } catch (err) {
-          showMsg(err?.message || String(err));
-          subBtn.disabled = false;
+    const isMobile = Host.platform === 'android' || (typeof isMob === 'function' && isMob());
+    const errEl = h('div', { class: 'lerr', style: 'min-height:20px;margin:6px 0;color:var(--fg2,#b9b6af);text-align:center' }, reason || '');
+    if (isMobile) {
+      const scanBtn = h('button', {
+        type: 'button', class: 'ib mobile-onboard-qr-btn', title: '扫描电脑端二维码', 'aria-label': '扫描电脑端二维码',
+        style: 'width:76px;height:76px;margin:10px auto;border-radius:20px;border:1px solid var(--bd,#33312d);background:var(--bg2,#191817);color:var(--acc,#ecebe8);display:flex;align-items:center;justify-content:center;box-shadow:0 8px 24px rgba(0,0,0,0.28)',
+        onclick: () => openModal('import', res => { markOnboardingDone(); goStep2(res); }),
+      }, icon('qr'));
+      v.append(h('div', { class: 'lwrap' },
+        h('div', { class: 'lcard', style: 'max-width:420px;text-align:center' },
+          h('div', { class: 'llogo' }, 'A'),
+          h('div', { class: 'ltitle' }, '扫描电脑端二维码'),
+          h('div', { class: 'lsub' }, '打开电脑端「导出账号合集」点击右上角二维码图标，手机直接扫码即可一键导入节点与账号'),
+          scanBtn,
+          errEl
+        )
+      ));
+      return;
+    }
+    const subInp = h('input', { class: 'inp', type: 'text', placeholder: '请粘贴 EdgeTunnel 订阅地址 (https://...) 或 vless:// 节点链接', style: 'width:100%' });
+    const doImportAndNext = async (raw) => {
+      const val = String(raw ?? subInp.value ?? '').trim();
+      if (!val) {
+        if (hasNodeConfigured(a)) { markOnboardingDone(); goStep2(null); return; }
+        errEl.style.color = 'var(--er)';
+        errEl.textContent = '请先填写 EdgeTunnel 订阅地址，配置好节点后才能登录或注册账号';
+        subInp.focus();
+        return;
+      }
+      errEl.style.color = 'var(--ac)';
+      errEl.textContent = '正在拉取并配置 EdgeTunnel 订阅节点…';
+      try {
+        const res = await applySyncPayload(val, m => { errEl.textContent = m; });
+        if (!hasNodeConfigured(a) && !(res && (res.email || res.firstEmail || res.accounts > 0 || res.accountCount > 0))) {
+          throw new Error('未能从该地址获取到可用节点，请检查 EdgeTunnel 订阅地址是否正确');
         }
-      },
-    }, icon('check'), h('span', null, '导入节点订阅并进入下一步（登录账号）'));
-    const qrBtn = h('button', {
-      type: 'button',
-      class: 'btn pri',
-      style: 'width:100%;justify-content:center;padding:11px 14px;font-weight:600',
-      onclick: () => openModal('import', res => {
         markOnboardingDone();
-        goStep2(res);
-      }),
-    }, icon('link'), h('span', null, '扫码导入电脑端配置（账号 + 节点订阅一键同步）'));
-    const card = h('div', { class: 'gate' },
-      h('div', { class: 'gate-card', style: 'max-width:440px' },
-        h('div', { class: 'gate-top', style: 'justify-content:space-between' },
-          h('span', { class: 'badge ok', style: 'font-size:11.5px;padding:3px 8px;white-space:nowrap' }, '第 1 步 / 共 2 步 · 网络与配置导入'),
-          h('button', {
-            type: 'button',
-            class: 'gate-close',
-            style: 'width:auto;padding:0 8px;font-size:12px;white-space:nowrap',
-            onclick: () => { markOnboardingDone(); goStep2(null); },
-          }, '跳过，直接登录 ➔')
-        ),
-        h('div', { class: 'gate-logo' }, icon('shield')),
-        h('div', { class: 'gate-t' }, '首先配置网络节点或扫码同步'),
-        h('div', { class: 'gate-sub' }, '首次启动请先扫描电脑端二维码同步账号与节点信息，或导入节点订阅地址保障网络畅通，随后再登录账号。'),
+        errEl.style.color = 'var(--ok)';
+        errEl.textContent = '✓ EdgeTunnel 节点配置已完成，正在进入账号登录/注册…';
+        setTimeout(() => goStep2(res), 280);
+      } catch (e) {
+        errEl.style.color = 'var(--er)';
+        errEl.textContent = String(e?.message || e || 'EdgeTunnel 订阅配置失败，请检查地址后重试');
+      }
+    };
+    subInp.onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); void doImportAndNext(); } };
+    const subBtn = h('button', { type: 'button', class: 'btn p lbtn', style: 'width:100%;height:40px;font-weight:700', onclick: () => void doImportAndNext() }, icon('globe'), h('span', null, '配置 EdgeTunnel 订阅并继续（登录 / 注册）'));
+    const card = h('div', { class: 'lwrap' },
+      h('div', { class: 'lcard', style: 'max-width:460px' },
+        h('div', { class: 'llogo' }, 'A'),
+        h('div', { class: 'ltitle' }, '请先配置 EdgeTunnel 订阅地址'),
+        h('div', { class: 'lsub' }, '当前账号尚未配置节点。请先填写 EdgeTunnel 订阅地址完成节点配置，配置好后才能登录或注册账号'),
         errEl,
         h('div', { style: 'width:100%;display:flex;flex-direction:column;gap:10px;margin-top:6px' },
-          qrBtn,
-          h('div', { class: 'gate-or' }, h('span', null, '或导入节点订阅保障网络可用')),
           subInp,
           subBtn,
           h('div', { style: 'display:flex;gap:8px;justify-content:center;margin-top:4px;flex-wrap:wrap' },
-            h('button', { type: 'button', class: 'btn', onclick: () => Nodes.openModal() }, icon(' globe'), h('span', null, '节点订阅管理')),
-            h('button', { type: 'button', class: 'btn', onclick: () => Pool.openModal() }, icon('shield'), h('span', null, 'ProxyIP 池')),
-            h('button', { type: 'button', class: 'btn', onclick: () => { markOnboardingDone(); goStep2(null); } }, h('span', null, '下一步：登录账号 ➔'))
+            h('button', { type: 'button', class: 'btn', onclick: () => Nodes.openModal() }, icon('globe'), h('span', null, '节点订阅管理')),
+            h('button', { type: 'button', class: 'btn', onclick: () => Pool.openModal() }, icon('shield'), h('span', null, 'ProxyIP 池'))
           )
         )
       )
     );
     v.append(card);
+    setTimeout(() => { try { subInp.focus(); } catch {} }, 40);
   }
-  return { encodeQR, toSvg, decodeFromFile, buildSyncBundle, applySyncPayload, isFirstTimeNoCache, markOnboardingDone, openModal, renderFirstTimeOnboarding };
+  return { encodeQR, toSvg, decodeFromImageData, decodeFromFile, buildSyncBundle, applySyncPayload, hasNodeConfigured, isFirstTimeNoCache, markOnboardingDone, openModal, renderFirstTimeOnboarding };
 })();
 if (typeof window !== 'undefined') window.QrSync = QrSync;

@@ -935,6 +935,34 @@ Object.assign(UI, {
         back.remove(); Host.openAccount(a.id);
       } catch (e) { msg.textContent = cleanErr(e); msg.className = 'lmsg bad'; msg.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); gGo.disabled = false; go.disabled = false; delete back.dataset.busy; }
     } }, gIcon(), gLab);
+    let singleAbortCtl = null;
+    let activeSingleAcctId = '';
+    let activeSingleProvisional = false;
+    const cancelSingleBtn = h('button', {
+      type: 'button',
+      class: 'btn ghost cancel-reg',
+      hidden: true,
+      title: '立即中断当前正在执行的注册/验证任务',
+      onclick: async () => {
+        try { singleAbortCtl?.abort(); } catch {}
+        if (typeof Host.cancelTokenRegistration === 'function') {
+          try { await Host.cancelTokenRegistration(activeSingleAcctId || undefined); } catch {}
+        }
+        if (activeSingleProvisional && activeSingleAcctId && typeof Host.removeAccount === 'function') {
+          const rmId = activeSingleAcctId;
+          activeSingleAcctId = '';
+          activeSingleProvisional = false;
+          await Host.removeAccount(rmId).catch(() => {});
+          try { await Nodes.refreshAccts(); } catch {}
+          if (typeof LaunchPick !== 'undefined') { LaunchPick.cache = null; LaunchPick.cacheAt = 0; }
+        }
+        cancelSingleBtn.hidden = true;
+        reg.disabled = go.disabled = gGo.disabled = web.disabled = false;
+        delete back.dataset.busy;
+        msg.textContent = '已取消当前操作';
+        msg.className = 'lmsg';
+      },
+    }, '取消');
     // 注册新账号：按上面选的节点 / ProxyIP 先建好账号，切到它自己的窗口（独立指纹环境 + 该账号出口）里打开注册页，邮箱已填好
     const reg = h('button', { type: 'button', hidden: true, title: '用这里选的节点、ProxyIP 和该账号自己的指纹环境注册新的 Brana 账号（填邮箱即可，密码在注册邮件链接里设置）', onclick: async () => {
       if (reg.disabled) return;
@@ -958,23 +986,69 @@ Object.assign(UI, {
       const em = email.value.trim();
       if (!EMAIL_RE.test(em)) { msg.textContent = '注册：请先填写要注册的邮箱'; msg.className = 'lmsg bad'; email.focus(); return; }
       if (!tok && pf.err()) { msg.textContent = pf.err(); msg.className = 'lmsg bad'; return; }
+      const myCtl = new AbortController();
+      singleAbortCtl = myCtl;
+      activeSingleAcctId = '';
+      activeSingleProvisional = false;
+      cancelSingleBtn.hidden = false;
       reg.disabled = go.disabled = gGo.disabled = true; back.dataset.busy = '1'; msg.className = 'lmsg'; msg.textContent = '正在新建账号…';
+      let a = null;
+      let isProvisionalTokAcct = false;
+      const prevStepHook = typeof window !== 'undefined' ? window.__onTokenRegStep : null;
+      if (typeof window !== 'undefined') {
+        window.__onTokenRegStep = m => {
+          try { prevStepHook?.(m); } catch {}
+          if (myCtl.signal.aborted || !back.isConnected) return;
+          if (m?.tokenRegStep && (!activeSingleAcctId || !m.id || m.id === activeSingleAcctId)) {
+            msg.textContent = m.tokenRegStep;
+          }
+        };
+      }
+      const checkSingleCancelled = () => {
+        if (myCtl.signal.aborted || !back.isConnected) {
+          throw Object.assign(new Error('已取消当前操作'), { cancelled: true, aborted: true });
+        }
+      };
       try {
         if (tok) {
           // 先确认令牌能用（微软会轮换刷新令牌，用新的那个保存）
           msg.textContent = '正在验证邮箱令牌…';
           await MailToken.access(tok);
+          checkSingleCancelled();
         }
-        let a = null;
         if (tok) {
           const allAccts = (await Host.listAccounts(true).catch(() => [])) || [];
+          checkSingleCancelled();
           const existingAcct = allAccts.find(x => x && String(x.email || '').toLowerCase() === em.toLowerCase());
+          isProvisionalTokAcct = !existingAcct?.status?.loggedIn;
+          activeSingleProvisional = isProvisionalTokAcct;
           let ipAlloc = null;
           const isExplicitDirectOrProxy = pf.routeMode ? (pf.routeMode === 'direct' || pf.routeMode === 'proxy') : (pf.mode === 'direct' || pf.mode === 'local');
-          if (!isExplicitDirectOrProxy && typeof Pool !== 'undefined' && typeof Pool.acquireForRegistration === 'function') {
-            msg.textContent = '正在分配 30 分钟内未使用的独立 ProxyIP…';
-            ipAlloc = await Pool.acquireForRegistration(existingAcct, { log: t => { msg.textContent = t; } }).catch(e => ({ ok: false, error: cleanErr(e) }));
+          const userPickedPip = String(pf.proxyIp || '').trim();
+          const userPipCooldown = (userPickedPip && typeof Pool !== 'undefined' && typeof Pool.regIpCooldownRemainingMs === 'function')
+            ? Pool.regIpCooldownRemainingMs(userPickedPip)
+            : 0;
+          if (!isExplicitDirectOrProxy && userPickedPip && userPipCooldown <= 0 && (pf.proxy || pf.nodeId)) {
+            let userNodeLink = String(pf.proxy || '').trim();
+            if (!userNodeLink && pf.nodeId && typeof Nodes !== 'undefined') {
+              const pickedNode = (Array.isArray(Nodes.list) ? Nodes.list : []).find(n => n && n.id === pf.nodeId);
+              if (pickedNode && typeof Vless !== 'undefined' && Vless.toLink) userNodeLink = Vless.toLink(pickedNode);
+            }
+            if (userNodeLink) {
+              ipAlloc = {
+                ok: true,
+                proxy: userNodeLink,
+                nodeId: pf.nodeId || '',
+                proxyIp: userPickedPip,
+                region: pf.region || existingAcct?.region || 'US',
+              };
+            }
           }
+          if (!ipAlloc && !isExplicitDirectOrProxy && typeof Pool !== 'undefined' && typeof Pool.acquireForRegistration === 'function') {
+            msg.textContent = '正在分配 30 分钟内未使用的独立 ProxyIP…';
+            ipAlloc = await Pool.acquireForRegistration(existingAcct, { log: t => { if (!myCtl.signal.aborted) msg.textContent = t; } }).catch(e => ({ ok: false, error: cleanErr(e) }));
+          }
+          checkSingleCancelled();
           const usedFpSigs = new Set(allAccts.map(x => x?.fp ? [x.fp.screen, x.fp.cores, x.fp.mem, x.fp.gpu, x.fp.canvasSalt].join('|') : '').filter(Boolean));
           const fp = existingAcct?.fp || (typeof BatchTokenReg !== 'undefined' && BatchTokenReg.uniqueFp ? await BatchTokenReg.uniqueFp(usedFpSigs) : undefined);
           let fallbackProxy = ipAlloc?.proxy || pf.proxy || (existingAcct?.proxy && String(existingAcct.proxy).trim() ? existingAcct.proxy : '') || '';
@@ -988,6 +1062,7 @@ Object.assign(UI, {
                 name: existingAcct?.name && !/^账号 ?\d*$/.test(existingAcct.name) ? existingAcct.name : em,
                 email: em,
                 ...(fp ? { fp } : {}),
+                ...(isProvisionalTokAcct ? { provisionalReg: true } : {}),
               });
               if (savedViaPf?.id && savedViaPf.proxy) a = savedViaPf;
             } catch {}
@@ -1025,15 +1100,18 @@ Object.assign(UI, {
               nodeId: fallbackNodeId,
               region: fallbackRegion,
               ...(fp ? { fp } : {}),
+              ...(isProvisionalTokAcct ? { provisionalReg: true } : {}),
             });
           }
         } else {
           a = await saveConnection({ name: em, email: em });   // 未验证的密码不直接存进账号：先加密暂存（regpw），验证后「设置密码」成功才存
         }
+        if (a?.id) activeSingleAcctId = a.id;
+        checkSingleCancelled();
         if (pw.inp.value || tok?.pw) await Promise.resolve(Host.shared('regpw@' + a?.id, { email: em, pw: pw.inp.value || tok.pw, src: 'client' })).catch(() => {});
         if (!a?.id || a.error) throw new Error(a?.error || '保存失败');
         if (!tok && pf.mode === 'region' && pf.region) {
-          const q = await Pool.acquire(a, pf.region, { prefer: pf.proxyIp, log: t => { msg.textContent = t; } });
+          const q = await Pool.acquire(a, pf.region, { prefer: pf.proxyIp, log: t => { if (!myCtl.signal.aborted) msg.textContent = t; } });
           if (!q.ok) throw new Error(regionLabel(pf.region) + '：' + q.error);
         }
         if (tok && await MailToken.save(a.id, tok) !== true) throw new Error('邮箱令牌没有保存成功，请更新客户端后重试');
@@ -1048,32 +1126,66 @@ Object.assign(UI, {
             } catch {}
           }
           let pr = null;
-          for (let attempt = 0; attempt < 3; attempt++) {
+          const singleUsedIps = new Set(a.proxyIp ? [a.proxyIp, String(a.proxyIp).toLowerCase()] : []);
+          let singleProxySwitches = 0;
+          for (let attempt = 0; attempt < 7; attempt++) {
+            checkSingleCancelled();
             msg.textContent = attempt === 0
               ? '正在执行纯协议令牌注册（预热 → 纯协议 reCAPTCHA → 收件验证 → 设置固定密码）…'
-              : '正在继续执行纯协议令牌验证与设置固定密码…';
-            pr = await regFn.call(Host, a.id, {
-              email: em,
-              tokenLine: tokInp.value,
-              password: tok.pw,
-              token: tok,
-              tok,
-            }).catch(e => ({ error: cleanErr(e), mailFailed: !!e?.mailFailed, tokenInvalid: !!e?.tokenInvalid, cooldownWaitSec: e?.cooldownWaitSec || 0 }));
+              : '正在继续执行纯协议令牌验证与设置固定密码（当前出口 ' + (a.proxyIp || '自动') + '）…';
+            pr = await Promise.race([
+              regFn.call(Host, a.id, {
+                email: em,
+                tokenLine: tokInp.value,
+                password: tok.pw,
+                token: tok,
+                tok,
+              }).catch(e => ({ error: cleanErr(e), cancelled: !!(e?.cancelled || e?.aborted), mailFailed: !!e?.mailFailed, tokenInvalid: !!e?.tokenInvalid, proxyFailed: !!e?.proxyFailed, cooldownWaitSec: e?.cooldownWaitSec || 0 })),
+              new Promise((_, rej) => myCtl.signal.addEventListener('abort', () => rej(Object.assign(new Error('已取消当前操作'), { cancelled: true, aborted: true })), { once: true })),
+            ]);
+            checkSingleCancelled();
+            if (pr?.cancelled) throw Object.assign(new Error('已取消当前操作'), { cancelled: true, aborted: true });
+            if (pr?.ok) break;
+            const errStr = String(pr?.error || '');
             const waitSec = Number(pr?.cooldownWaitSec) || (() => {
-              const m = /after\s+(\d+)\s*seconds?|等待\s*(\d+)\s*秒/i.exec(String(pr?.error || ''));
+              const m = /after\s+(\d+)\s*seconds?|等待\s*(\d+)\s*秒/i.exec(errStr);
               return m ? Math.min(75, Math.max(1, Number(m[1] || m[2]))) + 2 : 0;
             })();
-            if (!pr?.ok && waitSec > 0 && attempt < 2) {
+            if (waitSec > 0 && attempt < 6) {
               for (let rem = waitSec; rem > 0; rem--) {
-                if (!back.isConnected) return;
+                checkSingleCancelled();
                 msg.textContent = '官方发信安全冷却中（' + rem + 's），冷却后自动继续注册与设密…';
                 await new Promise(r => setTimeout(r, 1000));
               }
               continue;
             }
+            const isProxyErr = Boolean(pr?.proxyFailed || /ERR_PROXY|ERR_SOCKS|ERR_TUNNEL|ERR_CONNECTION|ERR_TIMED_OUT|ERR_SSL|AUTH_PROXY_FAILED|AUTH_REQUEST_UNCONFIRMED|无法连通|代理|网络异常或超时|连接失败|超时|xray/i.test(errStr));
+            if (isProxyErr && a.proxyIp && typeof Pool !== 'undefined' && typeof Pool.markRegIpFailed === 'function') {
+              await Pool.markRegIpFailed(a.proxyIp, errStr).catch(() => {});
+            }
+            if (!pr?.tokenInvalid && (isProxyErr ? singleProxySwitches < 5 : attempt < 2) && !isExplicitDirectOrProxy && typeof Pool !== 'undefined' && typeof Pool.acquireForRegistration === 'function') {
+              singleProxySwitches++;
+              msg.textContent = '当前 ProxyIP (' + (a.proxyIp || '出口') + ') 不可用（' + errStr.slice(0, 42) + '），正在自动切换可用 ProxyIP（第 ' + singleProxySwitches + ' 次）…';
+              const nextAlloc = await Pool.acquireForRegistration(a, { exclude: singleUsedIps, log: t => { if (!myCtl.signal.aborted) msg.textContent = t; } }).catch(() => null);
+              if (nextAlloc?.ok && nextAlloc.proxyIp) {
+                singleUsedIps.add(nextAlloc.proxyIp);
+                singleUsedIps.add(String(nextAlloc.proxyIp).toLowerCase());
+                const updated = await Host.saveAccount({
+                  ...a,
+                  proxy: nextAlloc.proxy || a.proxy || '',
+                  proxyIp: nextAlloc.proxyIp,
+                  nodeId: nextAlloc.nodeId || a.nodeId || '',
+                  region: nextAlloc.region || a.region || 'US',
+                }).catch(() => null);
+                if (updated?.id) a = updated;
+                continue;
+              }
+            }
             break;
           }
           if (pr && pr.ok) {
+            activeSingleProvisional = false;
+            cancelSingleBtn.hidden = true;
             try {
               const btrSt = typeof BatchTokenReg !== 'undefined' ? BatchTokenReg.loadState() : null;
               if (btrSt) {
@@ -1092,6 +1204,7 @@ Object.assign(UI, {
         }
         const accepted = await Host.shared('signup@' + a.id, { email: em, at: now() });
         if (accepted !== true) throw new Error(accepted?.error || '注册任务没有保存，未打开新窗口；请重试或更新客户端');
+        cancelSingleBtn.hidden = true;
         msg.textContent = '已新建，正在该账号窗口打开注册…'; msg.className = 'lmsg ok';
         setTimeout(async () => {
           if (!back.isConnected) return;
@@ -1105,7 +1218,28 @@ Object.assign(UI, {
             reg.disabled = go.disabled = gGo.disabled = false; delete back.dataset.busy;
           }
         }, 300);
-      } catch (e) { msg.textContent = cleanErr(e); msg.className = 'lmsg bad'; reg.disabled = go.disabled = gGo.disabled = false; delete back.dataset.busy; }
+      } catch (e) {
+        if (tok && isProvisionalTokAcct && a?.id && typeof Host.removeAccount === 'function') {
+          activeSingleAcctId = '';
+          activeSingleProvisional = false;
+          await Host.removeAccount(a.id).catch(() => {});
+          try { await Nodes.refreshAccts(); } catch {}
+          if (typeof LaunchPick !== 'undefined') { LaunchPick.cache = null; LaunchPick.cacheAt = 0; }
+        }
+        cancelSingleBtn.hidden = true;
+        if (e?.cancelled || e?.aborted || myCtl.signal.aborted) {
+          msg.textContent = '已取消当前操作';
+          msg.className = 'lmsg';
+        } else {
+          msg.textContent = cleanErr(e);
+          msg.className = 'lmsg bad';
+        }
+        reg.disabled = go.disabled = gGo.disabled = false;
+        delete back.dataset.busy;
+      } finally {
+        if (typeof window !== 'undefined' && window.__onTokenRegStep) window.__onTokenRegStep = prevStepHook;
+        if (singleAbortCtl === myCtl) singleAbortCtl = null;
+      }
     } }, '注册新账号');
     // 网页注册：按上面选的节点 / ProxyIP 建好账号，切到它自己的窗口（独立指纹 + 该账号出口）后直接打开 Brana 官网，顶部有地址栏浏览条；注册、收信、点验证链接全部自己在网页里手动完成
     const web = h('button', { type: 'button', class: 'btn ghost webreg', style: { marginRight: 'auto' }, hidden: true, title: '新建账号后，在它自己的窗口（独立指纹 / 该账号出口 / WebRTC 保护）里直接打开 Brana 官网，顶部有地址栏，注册和收信验证都自己手动操作', onclick: async () => {
@@ -1171,10 +1305,24 @@ Object.assign(UI, {
       emailRow, h('div', { class: 'frow' }, pwLab, h('div', { class: 'frow-c' }, pw.el)), fx.el,
       pf.testedRoute ? pf.block() : frow('连接', pf.block({ test, res: ipRes })), devLine, msg,
       gOr, gGo),
-      K(web, imp, go), 'small auth-add');
+      K(web, imp, cancelSingleBtn, go), 'small auth-add');
     if (devLine) { const dv = setInterval(() => { if (!devLine.isConnected) { clearInterval(dv); return; } devPaint(); }, 1000); }
-    // 取消 → 右上角 X
-    { const hd = back.querySelector('.modal-h'), head = h('div', { class: 'rip-head' }), x = h('button', { type: 'button', class: 'rip-x', title: '关闭', 'aria-label': '关闭', onclick: () => { if (!back.dataset.busy) back.remove(); } }, icon('x')); hd.replaceWith(head); head.append(hd, x); }
+    // 取消 → 右上角 X（即使正在注册也支持一键中断并关闭弹窗，绝不卡死）
+    {
+      const hd = back.querySelector('.modal-h'), head = h('div', { class: 'rip-head' }), x = h('button', {
+        type: 'button',
+        class: 'rip-x',
+        title: '关闭（如正在注册将自动取消）',
+        'aria-label': '关闭',
+        onclick: () => {
+          if (back.dataset.busy) {
+            try { cancelSingleBtn.click(); } catch {}
+          }
+          back.remove();
+        },
+      }, icon('x'));
+      hd.replaceWith(head); head.append(hd, x);
+    }
     setMode(mode);
     const needEdgeTunnelGuard = () => !(typeof window !== 'undefined' && (window.__fixture || window.__routeFixture || window.__capFetch)) && typeof QrSync !== 'undefined' && typeof QrSync.hasNodeConfigured === 'function' && !QrSync.hasNodeConfigured() && !pf.nodeId && !/^vless:\/\//i.test(String(pf.proxy || '').trim());
     if (needEdgeTunnelGuard()) {
@@ -1388,8 +1536,8 @@ Object.assign(UI, {
 
   // ----- 导入账号 -----
   importAccounts(prefill = '') {
-    const ta = h('textarea', { class: 'packbox', rows: 7, placeholder: '粘贴「导出账号合集」的内容，或每行一个：\nname@example.com 密码\nname2@example.com----密码----socks5://127.0.0.1:7892' }, prefill);
-    const skip = h('input', { type: 'checkbox', checked: true }), dproxy = h('input', { placeholder: '没有代理的账号使用（可选）' });
+    const ta = h('textarea', { class: 'packbox', rows: 5, placeholder: '粘贴同步码 (brana-sync://...)、账号合集 (ARENA-ACCOUNTS-V1) 或每行一个：\nname@example.com 密码 [可选代理]' }, prefill);
+    const skip = h('input', { type: 'checkbox', checked: true }), dproxy = h('input', { placeholder: '默认代理（可选）', style: 'flex:1;min-width:140px' });
     const out = h('div', { class: 'irows' });
     const go = h('button', { class: 'btn' }, Host.platform === 'desktop' ? '导入并登录' : '导入');
     // 从文件导入（导出的合集 / txt / csv）、从剪贴板粘贴
@@ -1401,32 +1549,41 @@ Object.assign(UI, {
     } });
     const openQrImport = () => {
       if (typeof QrSync !== 'undefined' && QrSync.openModal) {
-        QrSync.openModal('import', async () => {
+        QrSync.openModal('import', async (syncRes) => {
           try { back.remove(); } catch {}
           try {
+            const a = this.host?.account || {};
+            const draft = this.authDraft?.(a);
+            if (syncRes?.firstEmail && !a.email) a.email = syncRes.firstEmail;
+            if (draft) {
+              if (syncRes?.firstEmail && !draft.email) draft.email = syncRes.firstEmail;
+              if (syncRes?.firstPassword && !draft.password) draft.password = syncRes.firstPassword;
+            }
             if (typeof LaunchPick !== 'undefined' && document.querySelector('.lpick')) {
               LaunchPick.cache = null;
               document.querySelectorAll('.lpick').forEach(el => el.remove());
               void LaunchPick.show();
             } else {
               this.loginGate?.();
+              if ((Host.platform === 'android' || (typeof isMob === 'function' && isMob())) && syncRes?.firstEmail && syncRes?.firstPassword) {
+                setTimeout(() => { try { document.querySelector('#view form button[type="submit"]')?.click(); } catch {} }, 120);
+              }
             }
           } catch {}
         });
       }
     };
-    const pick = h('div', { class: 'lrow' },
-      h('button', { class: 'ib import-qr-sync-btn', type: 'button', title: '扫码导入电脑端二维码', 'aria-label': '扫码导入电脑端二维码', onclick: openQrImport }, icon('qr')),
-      h('button', { class: 'btn ghost sm', type: 'button', onclick: () => fin.click() }, icon('file'), '从文件导入'),
-      h('button', { class: 'btn ghost sm', type: 'button', title: '切换到一行一个号批量令牌协议注册', onclick: () => { back.remove(); this.batchTokenRegister(ta.value); } }, icon('key'), '批量令牌协议注册'),
+    const pick = h('div', { class: 'lrow', style: 'display:flex;align-items:center;gap:6px;margin-bottom:6px' },
+      h('button', { class: 'btn ghost sm', type: 'button', onclick: () => fin.click() }, icon('file'), '选择文件'),
       h('button', { class: 'btn ghost sm', type: 'button', onclick: async () => { try { const t = (await navigator.clipboard.readText()).trim(); if (!t) { toast('剪贴板是空的', 'err'); return; } ta.value = ta.value.trim() ? ta.value.trim() + '\n' + t : t; } catch { toast('无法读取剪贴板，请长按输入框粘贴', 'err'); ta.focus(); } } }, icon('copy'), '粘贴'),
-      h('span', { class: 'grow' }), h('span', { class: 'dim', style: { fontSize: '12px' } }, '支持二维码 / 账号合集 / txt'), fin);
+      h('span', { class: 'grow' }),
+      h('span', { class: 'dim', style: { fontSize: '11px' } }, '支持二维码 / 同步码 / 合集 / 文本'), fin);
     const importHdr = h('div', { style: 'display:flex;align-items:center;justify-content:space-between;width:100%' },
       h('span', {}, '导入账号'),
-      h('button', { type: 'button', class: 'ib', title: '扫码导入电脑端二维码', 'aria-label': '扫码导入电脑端二维码', onclick: openQrImport }, icon('qr'))
+      h('button', { class: 'ib import-qr-sync-btn', type: 'button', title: '扫码导入电脑端二维码', 'aria-label': '扫码导入电脑端二维码', onclick: openQrImport }, icon('qr'))
     );
-    const back = modal(importHdr, K(h('p', { class: 'muted' }, '支持右上角二维码扫码同步，或粘贴导出的账号合集（ARENA-ACCOUNTS-V1）、每行「邮箱 密码 [代理]」。同邮箱的账号会合并更新。'), pick, ta,
-      h('div', { class: 'lrow' }, h('label', { class: 'lrem' }, skip, '跳过已存在且已登录的账号'), dproxy), out),
+    const back = modal(importHdr, K(pick, ta,
+      h('div', { class: 'lrow', style: 'display:flex;align-items:center;gap:10px;margin-top:6px' }, h('label', { class: 'lrem', style: 'white-space:nowrap' }, skip, '跳过已登录同邮箱账号'), dproxy), out),
       K(h('button', { class: 'btn ghost', onclick: () => back.remove() }, '关闭'), go), 'small');
     go.onclick = async () => {
       const rawTrim = ta.value.trim();
@@ -1552,7 +1709,7 @@ const BatchTokenReg = {
     const raw = Store.get(this.STORE_KEY, null);
     this.state = {
       pending: Array.isArray(raw?.pending) ? raw.pending.map(x => ({ ...x, status: x.status === 'running' ? 'queued' : (x.status || 'queued') })) : [],
-      failed: Array.isArray(raw?.failed) ? raw.failed : [],
+      failed: Array.isArray(raw?.failed) ? raw.failed.map(x => (x && x.tokenInvalid && /收不到验证邮件|等待验证邮件超时|超时|缺少账号代理上下文/i.test(String(x.reason || ''))) ? { ...x, tokenInvalid: false } : x) : [],
       succeeded: Array.isArray(raw?.succeeded) ? raw.succeeded.slice(-200) : [],
     };
     return this.state;
@@ -1720,6 +1877,7 @@ const BatchTokenReg = {
     this.paint();
 
     try {
+      await this.cleanupFailedAccounts();
       const accts = (await Host.listAccounts(true).catch(() => [])) || [];
       const byEmail = new Map(accts.map(a => [String(a.email || '').toLowerCase(), a]));
       const usedFpSigs = new Set(accts.map(a => a.fp ? [a.fp.screen, a.fp.cores, a.fp.mem, a.fp.gpu, a.fp.canvasSalt].join('|') : '').filter(Boolean));
@@ -1749,13 +1907,21 @@ const BatchTokenReg = {
           await MailToken.access(tok);
         } catch (tokErr) {
           if (isAborted()) { nextItem.status = 'queued'; nextItem.step = '已暂停'; this.saveState(); break; }
+          const preAcct = byEmail.get(nextItem.email.toLowerCase());
+          if (preAcct?.id && !preAcct?.status?.loggedIn && (Number(preAcct?.status?.stats?.total) || 0) === 0 && typeof Host.removeAccount === 'function') {
+            await Host.removeAccount(preAcct.id).catch(() => {});
+            byEmail.delete(nextItem.email.toLowerCase());
+            try { await Nodes.refreshAccts(); } catch {}
+            if (typeof LaunchPick !== 'undefined') { LaunchPick.cache = null; LaunchPick.cacheAt = 0; }
+          }
+          nextItem.acctId = '';
           const idx = st.pending.indexOf(nextItem);
           if (idx >= 0) st.pending.splice(idx, 1);
           st.failed.unshift({
             id: nextItem.id,
             email: nextItem.email,
             raw: nextItem.raw,
-            acctId: nextItem.acctId || '',
+            acctId: '',
             reason: '令牌失效（收件接口无法访问）：' + cleanErr(tokErr),
             failedAt: now(),
             tokenInvalid: true,
@@ -1770,6 +1936,10 @@ const BatchTokenReg = {
 
         // 2. 分配 30 分钟内未用于注册的独立 ProxyIP
         const existingAcct = byEmail.get(nextItem.email.toLowerCase());
+        if (existingAcct?.proxyIp && !existingAcct?.status?.loggedIn) {
+          sessionUsedIps.add(existingAcct.proxyIp);
+          sessionUsedIps.add(String(existingAcct.proxyIp).toLowerCase());
+        }
         nextItem.step = '正在分配 30 分钟内未使用的独立 ProxyIP…';
         this.saveState();
 
@@ -1802,14 +1972,21 @@ const BatchTokenReg = {
             this.ensureTimer();
             break;
           }
-          // 节点或线路分配出错（非单纯 IP 冷却）-> 归入注册失败列表，避免无限重复冷却
+          // 节点或线路分配出错（非单纯 IP 冷却）-> 自动删除未登录临时卡片并归入注册失败列表
+          if (existingAcct?.id && !existingAcct?.status?.loggedIn && (Number(existingAcct?.status?.stats?.total) || 0) === 0 && typeof Host.removeAccount === 'function') {
+            await Host.removeAccount(existingAcct.id).catch(() => {});
+            byEmail.delete(nextItem.email.toLowerCase());
+            try { await Nodes.refreshAccts(); } catch {}
+            if (typeof LaunchPick !== 'undefined') { LaunchPick.cache = null; LaunchPick.cacheAt = 0; }
+          }
+          nextItem.acctId = '';
           const idx = st.pending.indexOf(nextItem);
           if (idx >= 0) st.pending.splice(idx, 1);
           st.failed.unshift({
             id: nextItem.id,
             email: nextItem.email,
             raw: nextItem.raw,
-            acctId: nextItem.acctId || existingAcct?.id || '',
+            acctId: '',
             reason: ipAlloc?.error || '未找到可用 ProxyIP，请检查节点或 ProxyIP 池',
             failedAt: now(),
             tokenInvalid: false,
@@ -1831,9 +2008,26 @@ const BatchTokenReg = {
         this.saveState();
         const fp = await this.uniqueFp(usedFpSigs);
         const targetPw = nextItem.password || fxPw;
+        const isProvisionalAcct = !existingAcct?.status?.loggedIn;
+        let savedAcct = null;
+        const cleanupProvisional = async () => {
+          const rmId = savedAcct?.id || (isProvisionalAcct ? existingAcct?.id : '') || '';
+          if (isProvisionalAcct && rmId && typeof Host.removeAccount === 'function') {
+            await Host.removeAccount(rmId).catch(() => {});
+            byEmail.delete(tok.email.toLowerCase());
+            nextItem.acctId = '';
+            try { await Nodes.refreshAccts(); } catch {}
+            if (typeof LaunchPick !== 'undefined') {
+              LaunchPick.cache = null;
+              LaunchPick.cacheAt = 0;
+              const lp = typeof document !== 'undefined' ? document.querySelector('.lpick:not(.out)') : null;
+              if (lp) { lp.remove(); void LaunchPick.show({ back: true }); }
+            }
+          }
+        };
 
         try {
-          const savedAcct = await Host.saveAccount({
+          savedAcct = await Host.saveAccount({
             id: existingAcct?.id,
             name: existingAcct?.name && !/^账号 ?\d*$/.test(existingAcct.name) ? existingAcct.name : tok.email,
             email: tok.email,
@@ -1843,6 +2037,7 @@ const BatchTokenReg = {
             nodeId: ipAlloc.nodeId || existingAcct?.nodeId || '',
             region: ipAlloc.region || existingAcct?.region || 'US',
             fp,
+            ...(isProvisionalAcct ? { provisionalReg: true } : {}),
           });
           if (!savedAcct?.id || savedAcct.error) throw new Error(savedAcct?.error || '保存账号失败');
           nextItem.acctId = savedAcct.id;
@@ -1851,6 +2046,7 @@ const BatchTokenReg = {
           void Promise.resolve(Host.shared('regpw@' + savedAcct.id, { email: tok.email, pw: targetPw, src: 'batch' })).catch(() => {});
 
           if (isAborted() || !st.pending.includes(nextItem)) {
+            await cleanupProvisional();
             if (st.pending.includes(nextItem)) { nextItem.status = 'queued'; nextItem.step = '已暂停'; this.saveState(); }
             break;
           }
@@ -1879,18 +2075,36 @@ const BatchTokenReg = {
 
           let regRes = null;
           if (typeof Host.registerTokenAccount === 'function') {
-            for (let regTry = 0; regTry < 3; regTry++) {
+            let proxySwitchCount = 0;
+            let nonProxyRetryCount = 0;
+            const prevBatchStepHook = typeof window !== 'undefined' ? window.__onTokenRegStep : null;
+            if (typeof window !== 'undefined') {
+              window.__onTokenRegStep = m => {
+                try { prevBatchStepHook?.(m); } catch {}
+                if (isAborted() || !st.pending.includes(nextItem)) return;
+                if (m?.tokenRegStep && (!m.id || m.id === savedAcct.id)) {
+                  nextItem.step = m.tokenRegStep;
+                  this.paint();
+                }
+              };
+            }
+            try {
+            for (let regTry = 0; regTry < 8; regTry++) {
               await clearStaleProvisionalCookies(savedAcct.id);
               regRes = await Promise.race([
                 Host.registerTokenAccount(savedAcct.id, {
                   tokenLine: nextItem.raw,
                   password: targetPw,
-                  mailTimeoutMs: regTry > 0 ? 180000 : 120000,
-                  pollMs: regTry > 0 ? 42000 : 3500,
+                  mailTimeoutMs: nonProxyRetryCount > 0 ? 150000 : 120000,
+                  pollMs: 3000,
                 }),
-                new Promise((_, rej) => ctl.signal.addEventListener('abort', () => rej(Object.assign(new Error('已暂停或取消'), { aborted: true })), { once: true })),
+                new Promise((_, rej) => ctl.signal.addEventListener('abort', () => {
+                  try { Host.cancelTokenRegistration?.(savedAcct.id); } catch {}
+                  rej(Object.assign(new Error('已暂停或取消'), { aborted: true }));
+                }, { once: true })),
               ]);
               if (isAborted() || !st.pending.includes(nextItem)) break;
+              if (regRes?.ok) break;
               const errStr = String(regRes?.error || '');
               if (errStr && /尚未确认登录会话|AUTH_SESSION_MISSING/i.test(errStr) && typeof Host.signInAccount === 'function') {
                 nextItem.step = '已设置密码，正在完成协议会话登录确认…';
@@ -1903,7 +2117,8 @@ const BatchTokenReg = {
                 }
               }
               const cdMatch = errStr && /after\s+(\d+)\s*seconds?|等待\s*(\d+)\s*秒/i.exec(errStr);
-              if (cdMatch && regTry < 2) {
+              if (cdMatch && nonProxyRetryCount < 2) {
+                nonProxyRetryCount++;
                 const waitSec = Math.min(75, Math.max(2, Number(cdMatch[1] || cdMatch[2]) + 2));
                 for (let rem = waitSec; rem > 0; rem--) {
                   if (isAborted() || !st.pending.includes(nextItem)) break;
@@ -1916,29 +2131,76 @@ const BatchTokenReg = {
                 this.saveState();
                 continue;
               }
+              const isHardTokErr = Boolean(regRes?.tokenInvalid || /收件令牌失效|取码地址无效|令牌无效|令牌已过期|imap_authentication_rejected|authenticationfailed|invalid_api_key|invalid_credentials/i.test(errStr));
+              const isProxyErr = Boolean(regRes?.proxyFailed || /ERR_PROXY|ERR_SOCKS|ERR_TUNNEL|ERR_CONNECTION|ERR_TIMED_OUT|ERR_SSL|AUTH_PROXY_FAILED|AUTH_REQUEST_UNCONFIRMED|无法连通|代理|网络异常或超时|连接失败|超时|xray/i.test(errStr));
+              if (isProxyErr && (savedAcct.proxyIp || nextItem.proxyIp) && typeof Pool !== 'undefined' && typeof Pool.markRegIpFailed === 'function') {
+                await Pool.markRegIpFailed(savedAcct.proxyIp || nextItem.proxyIp, errStr).catch(() => {});
+              }
+              const canSwitch = !isHardTokErr && (isProxyErr ? proxySwitchCount < 6 : nonProxyRetryCount < 2);
+              if (errStr && canSwitch && typeof Pool !== 'undefined' && typeof Pool.acquireForRegistration === 'function') {
+                if (isProxyErr) proxySwitchCount++; else nonProxyRetryCount++;
+                const badPip = savedAcct.proxyIp || nextItem.proxyIp || '当前出口';
+                nextItem.step = 'ProxyIP (' + badPip + ') 不可用（' + errStr.slice(0, 38) + '），正在自动换用可用 ProxyIP（第 ' + (proxySwitchCount || nonProxyRetryCount) + ' 次）…';
+                this.saveState();
+                const nextAlloc = await Pool.acquireForRegistration(savedAcct, {
+                  exclude: sessionUsedIps,
+                  log: sLog => { if (!isAborted()) { nextItem.step = sLog; this.paint(); } },
+                }).catch(() => null);
+                if (nextAlloc?.ok && nextAlloc.proxyIp) {
+                  sessionUsedIps.add(nextAlloc.proxyIp);
+                  sessionUsedIps.add(String(nextAlloc.proxyIp).toLowerCase());
+                  if (nextAlloc.ip) sessionUsedIps.add(String(nextAlloc.ip).toLowerCase());
+                  nextItem.proxyIp = nextAlloc.proxyIp;
+                  savedAcct.proxyIp = nextAlloc.proxyIp;
+                  await Host.saveAccount({
+                    id: savedAcct.id,
+                    name: savedAcct.name,
+                    email: tok.email,
+                    password: targetPw,
+                    proxy: nextAlloc.proxy || savedAcct.proxy || '',
+                    proxyIp: nextAlloc.proxyIp,
+                    nodeId: nextAlloc.nodeId || savedAcct.nodeId || '',
+                    region: nextAlloc.region || savedAcct.region || 'US',
+                    fp,
+                    ...(isProvisionalAcct ? { provisionalReg: true } : {}),
+                  }).catch(() => null);
+                  nextItem.step = '已切换至可用 ProxyIP (' + nextAlloc.proxyIp + ')，正在继续纯协议注册…';
+                  this.saveState();
+                  continue;
+                }
+              }
               break;
+            }
+            } finally {
+              if (typeof window !== 'undefined' && window.__onTokenRegStep) window.__onTokenRegStep = prevBatchStepHook;
             }
           } else {
             throw Object.assign(new Error('当前环境需要宿主协议注册通道'), { routeRetry: false });
           }
 
           if (isAborted() || !st.pending.includes(nextItem)) {
+            await cleanupProvisional();
             if (st.pending.includes(nextItem)) { nextItem.status = 'queued'; nextItem.step = '已暂停'; this.saveState(); }
             break;
           }
 
           if (regRes?.error) {
-            const isMailFail = !!(regRes.mailFailed || regRes.tokenInvalid || /令牌|收件|邮件|取码|验证码|超时|invalid_api_key|not_found|401|403|404/i.test(regRes.error));
-            throw Object.assign(new Error(regRes.error), { mailFailed: isMailFail, tokenInvalid: isMailFail });
+            const isTokInvalid = Boolean(regRes.tokenInvalid || /收件令牌失效|取码地址无效|令牌无效|令牌已过期|imap_authentication_rejected|authenticationfailed|invalid_api_key|invalid_credentials/i.test(regRes.error));
+            throw Object.assign(new Error(regRes.error), { mailFailed: !!regRes.mailFailed, tokenInvalid: isTokInvalid });
           }
 
           // 5. 注册成功：移出待注册列表，记入成功列表，并立即刷新登录卡片
+          if (savedAcct.provisionalReg) {
+            const promoted = await Host.saveAccount({ id: savedAcct.id, provisionalReg: false }).catch(() => null);
+            if (promoted?.id) savedAcct = promoted;
+          }
+          byEmail.set(tok.email.toLowerCase(), { ...savedAcct, provisionalReg: false, status: { ...(savedAcct.status || {}), loggedIn: true } });
           const idx = st.pending.indexOf(nextItem);
           if (idx >= 0) st.pending.splice(idx, 1);
           st.succeeded.unshift({
             id: savedAcct.id,
             email: regRes?.email || tok.email,
-            proxyIp: pip,
+            proxyIp: savedAcct.proxyIp || pip,
             ip: regRes?.ip || ipAlloc.ip || '',
             loc: regRes?.loc || ipAlloc.region || '',
             at: now(),
@@ -1949,11 +2211,12 @@ const BatchTokenReg = {
           if (typeof LaunchPick !== 'undefined') {
             LaunchPick.cache = null;
             LaunchPick.cacheAt = 0;
-            const lp = document.querySelector('.lpick:not(.out)');
+            const lp = typeof document !== 'undefined' ? document.querySelector('.lpick:not(.out)') : null;
             if (lp) { lp.remove(); void LaunchPick.show({ back: true }); }
           }
           toast('✓ 已协议注册并加入登录卡片：' + (regRes?.email || tok.email));
         } catch (regErr) {
+          await cleanupProvisional();
           if (regErr?.aborted || isAborted()) {
             if (st.pending.includes(nextItem)) {
               nextItem.status = 'queued';
@@ -1964,15 +2227,15 @@ const BatchTokenReg = {
             break;
           }
           const errMsg = cleanErr(regErr);
-          const isMailErr = !!(regErr?.mailFailed || regErr?.tokenInvalid || /令牌|收件|邮件|取码|验证码|超时|invalid_api_key|not_found|401|403|404/i.test(errMsg));
-          // 注册出错不再无限进入冷却循环，统一移入「注册失败列表」，由用户一键重试、移除或删除
+          const isMailErr = Boolean(regErr?.tokenInvalid || /收件令牌失效|取码地址无效|令牌无效|令牌已过期|imap_authentication_rejected|authenticationfailed|invalid_api_key|invalid_credentials/i.test(errMsg));
+          // 注册出错不再添加或保留异常卡片，自动删除临时账号后记入「注册失败列表」供一键重试
           const idx = st.pending.indexOf(nextItem);
           if (idx >= 0) st.pending.splice(idx, 1);
           st.failed.unshift({
             id: nextItem.id,
             email: nextItem.email,
             raw: nextItem.raw,
-            acctId: nextItem.acctId || '',
+            acctId: '',
             reason: errMsg,
             failedAt: now(),
             tokenInvalid: isMailErr,
@@ -1990,6 +2253,7 @@ const BatchTokenReg = {
   pause() {
     this.paused = true;
     try { this.abortCtl?.abort(); } catch {}
+    try { Host.cancelTokenRegistration?.(); } catch {}
     if (this.timer) { clearInterval(this.timer); this.timer = 0; }
     const st = this.loadState();
     for (const it of st.pending) {
@@ -2006,6 +2270,7 @@ const BatchTokenReg = {
   cancelAll() {
     this.paused = true;
     try { this.abortCtl?.abort(); } catch {}
+    try { Host.cancelTokenRegistration?.(); } catch {}
     if (this.timer) { clearInterval(this.timer); this.timer = 0; }
     const st = this.loadState();
     for (const it of st.pending) {
@@ -2025,31 +2290,67 @@ const BatchTokenReg = {
     if (idx >= 0) arr.splice(idx, 1);
     if (isRun) {
       try { this.abortCtl?.abort(); } catch {}
+      try { Host.cancelTokenRegistration?.(item?.acctId || undefined); } catch {}
     }
     this.saveState();
   },
 
+  async cleanupFailedAccounts(extraItems = []) {
+    if (typeof Host?.listAccounts !== 'function' || typeof Host?.removeAccount !== 'function') return 0;
+    try {
+      const st = this.loadState();
+      const targetIds = new Set();
+      const targetEmails = new Set();
+      for (const it of [...(st.failed || []), ...(st.pending || []), ...(extraItems || [])]) {
+        if (!it) continue;
+        if (it.acctId) targetIds.add(String(it.acctId));
+        if (it.email) targetEmails.add(String(it.email).trim().toLowerCase());
+      }
+      const all = (await Host.listAccounts('all').catch(() => null)) || (await Host.listAccounts(true).catch(() => [])) || [];
+      const curId = typeof UI !== 'undefined' ? UI.host?.account?.id : '';
+      let removedCount = 0;
+      for (const a of all) {
+        if (!a?.id || a.id === curId || a.status?.loggedIn) continue;
+        if ((Number(a.status?.stats?.total) || 0) > 0) continue;
+        const em = String(a.email || '').trim().toLowerCase();
+        if (a.provisionalReg || targetIds.has(a.id) || (em && targetEmails.has(em))) {
+          const ok = await Host.removeAccount(a.id).catch(() => false);
+          if (ok) removedCount++;
+        }
+      }
+      let stateChanged = false;
+      for (const fItem of (st.failed || [])) {
+        if (fItem?.acctId) { fItem.acctId = ''; stateChanged = true; }
+      }
+      if (stateChanged) this.saveState();
+      if (removedCount > 0) {
+        try { await Nodes.refreshAccts(); } catch {}
+        if (typeof LaunchPick !== 'undefined') {
+          LaunchPick.cache = null;
+          LaunchPick.cacheAt = 0;
+          const lp = typeof document !== 'undefined' ? document.querySelector('.lpick:not(.out)') : null;
+          if (lp) { lp.remove(); void LaunchPick.show({ back: true }); }
+        }
+      }
+      return removedCount;
+    } catch {
+      return 0;
+    }
+  },
+
   async deleteItem(listName, item) {
     this.removeItem(listName, item);
-    try {
-      let acctId = item?.acctId || '';
-      if (!acctId && item?.email && typeof Host.listAccounts === 'function') {
-        const accts = (await Host.listAccounts(true).catch(() => [])) || [];
-        const found = accts.find(a => String(a.email || '').toLowerCase() === String(item.email || '').toLowerCase());
-        if (found?.id) acctId = found.id;
-      }
-      if (acctId && typeof Host.removeAccount === 'function') {
-        await Host.removeAccount(acctId).catch(() => {});
-        try { await Nodes.refreshAccts(); } catch {}
-        if (typeof LaunchPick !== 'undefined') { LaunchPick.cache = null; LaunchPick.cacheAt = 0; }
-      }
-    } catch {}
+    await this.cleanupFailedAccounts([item]);
   },
 };
+if (typeof window !== 'undefined' && !window.__fixture && !window.__routeFixture) {
+  setTimeout(() => { try { void BatchTokenReg.cleanupFailedAccounts(); } catch {} }, 1200);
+}
 
 Object.assign(UI, {
   async batchTokenRegister(prefill = '', presetPw = '') {
     const st = BatchTokenReg.loadState();
+    void BatchTokenReg.cleanupFailedAccounts();
     const fxLoaded = await FixedPw.load();
     const initPw = presetPw || fxLoaded.pw || '';
 
@@ -2127,9 +2428,9 @@ Object.assign(UI, {
           const { added, bad } = BatchTokenReg.enqueueText(ta.value);
           ta.value = '';
           if (added || bad) toast(`已加入待注册列表 ${added} 个${bad ? '，格式错误归入失败列表 ' + bad + ' 个' : ''}`);
-        } else if (!st.pending.length && st.failed.some(x => x.raw && !x.tokenInvalid)) {
-          const retryable = st.failed.filter(x => x.raw && !x.tokenInvalid);
-          st.failed = st.failed.filter(x => !x.raw || x.tokenInvalid);
+        } else if (!st.pending.length && st.failed.some(x => x.raw)) {
+          const retryable = st.failed.filter(x => x.raw);
+          st.failed = st.failed.filter(x => !x.raw);
           for (const fItem of retryable) {
             st.pending.push({
               id: fItem.id || ('btr_' + Date.now().toString(36)),

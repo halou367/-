@@ -592,7 +592,7 @@ function createApply({find,owner,validate,apply,persist,publicAccount,now=Date.n
       validate(a,o.route,o,event);
       for(const k of ['proxy','proxyIp','nodeId','region'])a[k]=String(o.route[k]||'');
       const targetMode=manual?o.mode:(o.forceFailover&&/^vless:/i.test(String(o.route?.proxy||''))&&(beforeMode==='direct'||beforeMode==='proxy')?(State.MODES.includes(o.mode)?o.mode:'node'):beforeMode);
-      Object.assign(a,manual&&o.preservePolicy===true?{routeMode:beforeMode,routeAuto:old.routeAuto!==false,nodeFailover:old.nodeFailover===true}:State.prefs(targetMode));
+      Object.assign(a,manual&&o.preservePolicy===true?{routeMode:beforeMode,routeAuto:old.routeAuto!==false,nodeFailover:old.nodeFailover!==false}:State.prefs(targetMode));
       a.routeHome=String(o.route.routeHome||o.route.region||old.routeHome||old.region||'');a.routeAt=now();a.tunErr=candidate.tunErr||'';
       try{persist();}catch(e){for(const k of Object.keys(old))if(old[k]===undefined)delete a[k];else a[k]=old[k];throw e;}
       return {ok:true,account:publicAccount(a)};

@@ -318,9 +318,39 @@ const Titles = {
     const isDirectSess = Boolean(
       cObj?.evalMode === 'direct' ||
       e?.mode === 'direct' ||
+      e?.mode === 'direct-battle' ||
+      e?.mode === 'side-by-side' ||
       mi0?.directMode ||
       (e?.type === 'evaluation' && typeof ModeState !== 'undefined' && typeof ModeState.inferEntryMode === 'function' && ModeState.inferEntryMode(e) === 'direct')
     );
+    if (isDirectSess) {
+      const rawD = (e && (e.localTitle || e.title)) || cObj?.localTitle || cObj?.title || fallback || '';
+      const spD = splitNote(rawD);
+      const noteD = (sid ? Notes.get(sid) : '') || rMeta0?.note || gp?.note || spD.note;
+      const dModelId = cObj?.modelAId || e?.modelAId || '';
+      const resolvedCatName = (dModelId && typeof ModelCatalog !== 'undefined' && typeof ModelCatalog.resolveModelName === 'function')
+        ? ModelCatalog.resolveModelName(dModelId, cObj?.revealedModels)
+        : '';
+      const validCatName = (resolvedCatName && !/^[0-9a-f]{8}-[0-9a-f]{4}-/i.test(resolvedCatName)) ? resolvedCatName : '';
+      const miDirectName = (mi0?.name && !/^(未识别|未知型号|待定)$/.test(String(mi0.name).trim()) && !/\s+vs\s+/i.test(String(mi0.name))) ? String(mi0.name).trim() : '';
+      const curDirectMeta = (typeof ModeState !== 'undefined' && typeof ModeState.getDirectModel === 'function') ? ModeState.getDirectModel() : null;
+      const fallbackDirectName = (typeof ModeState !== 'undefined' && typeof ModeState.getMode === 'function' && ModeState.getMode() === 'direct' && curDirectMeta)
+        ? String(curDirectMeta.displayName || curDirectMeta.publicName || curDirectMeta.name || '').trim()
+        : '';
+      const dModelName = String(cObj?.directModelName || validCatName || miDirectName || fallbackDirectName || 'Direct 直连模型').trim();
+      const vidD = Brand.of(dModelName) || Brand.of(e?.modelAOrganization || '') || '';
+      return saveView({
+        vid: vidD,
+        model: dModelName,
+        note: noteD,
+        time: spD.time,
+        title: rawD || dModelName,
+        plain: dModelName,
+        gold: false,
+        isBattle: false,
+        isDirect: true,
+      });
+    }
     const isBattleSess = !isDirectSess && Boolean(cObj?.evalMode === 'battle' || (e?.type === 'evaluation' && (e?.mode === 'battle' || (!e?.mode && (e?.modelBId || !e?.modelAId)))));
     if (isBattleSess) {
       if (sid && typeof Models !== 'undefined' && Models.all && Models.all[sid] && !Models.all[sid].battleRevealed && !Models.all[sid].directMode) {

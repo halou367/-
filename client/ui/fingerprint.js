@@ -221,10 +221,10 @@ const Fingerprint = (() => {
         const hasCompatId = all.some(i => /^(?:txt|reasoning)-\d+$/i.test(i) || /^[0-9a-z]{9}$/.test(i));
         if (!hasCompatId) {
           if (all.some(i => /^(?:msg|rs)_[0-9a-f]{16,}/i.test(i)) || (rs.some(i => /^tc_[A-Za-z0-9_-]{10,}$/.test(i)) && (Number(f.rChars) || 0) === 0)) return true;
-          if (all.every(i => /^\d+$/.test(i)) && ((Number(f.rChars) || 0) === 0 || /^\s*\*\*[^\n*]{2,80}\*\*/.test(String(f.rHead || '')))) return true;
+          if (all.every(i => /^\d+$/.test(i)) && (Number(f.rChars) || 0) === 0) return true;
         }
       }
-      if (/^\s*\*\*[^\n*]{2,80}\*\*/.test(String(f.rHead || '')) && !ids.some(x => /^(?:txt|reasoning)-\d+$/i.test(String(x?.[1] ?? '')))) return true;
+      
     }
     if (chat.sid && typeof Models !== 'undefined' && typeof Pricing !== 'undefined' && Pricing.isClosedSourceModel) {
       const m = Models.get(chat.sid);

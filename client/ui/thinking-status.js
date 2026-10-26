@@ -38,8 +38,7 @@ const ThinkingStatus = (() => {
     if (current && current.role === 'assistant') {
       const cParts = Array.isArray(current.parts) ? current.parts : [];
       const visParts = cParts.filter(p => p?.type === 'reasoning' && visible(p));
-      const isGemBold = visParts.length > 0 && visParts.every(p => /^\s*\*\*[^\n*]{2,80}\*\*/.test(String(p.text || ''))) && cParts.every(p => !p?.id || /^\d+$/.test(String(p.id)));
-      const hasExplicitOpenMsg = Boolean(current.metadata?.openThinkStopped || hasOpenTools(current) || (visParts.length > 0 && !isGemBold && !hasClosedTools(current)));
+      const hasExplicitOpenMsg = Boolean(current.metadata?.openThinkStopped || hasOpenTools(current) || (visParts.length > 0 && !hasClosedTools(current)));
       if (hasExplicitOpenMsg) return saveAcc({ type: 'open', certain: true });
     }
     const matches=current?.id?turns.filter(t=>(t.records||[]).some(r=>r.messageId===current.id)):[];
@@ -128,8 +127,7 @@ const ThinkingStatus = (() => {
           }
         }
       }
-      const isGemSummaryTurn = mHasVisible && mAllGemBold && mAllNumIds && !hasOpenTools(m) && !m?.metadata?.openThinkStopped;
-      if (isGemSummaryTurn) mHasVisible = false;
+      // 闭源模型无明文思考：凡 mHasVisible 为真即为开源思考
       if (!mHasVisible && (mHasHidden || hasClosedTools(m))) {
         sawClosed = true;
       }
@@ -157,8 +155,7 @@ const ThinkingStatus = (() => {
     if ((Number(f?.rChars) || 0) > 0 && !closedByApi && !sawClosed && !chat.thinkStopped && !asstMsgs.some(isStoppedMsg)) {
       const ids = Array.isArray(f?.ids) ? f.ids.map(x => String(x?.[1] ?? '')).filter(Boolean) : [];
       const isClosedFmt = (f?.toolIds || []).some(i => /^toolu_/i.test(String(i || ''))) ||
-        ids.some(i => /^(?:msg|rs)_[0-9a-fA-Z_-]{10,}/i.test(i)) ||
-        (ids.length > 0 && ids.every(i => /^\d+$/.test(i)) && /^\s*\*\*[^\n*]{2,80}\*\*/.test(String(f?.rHead || '')));
+        ids.some(i => /^(?:msg|rs)_[0-9a-fA-Z_-]{10,}/i.test(i));
       if (!isClosedFmt) {
         try {
           if (chat.sid && !chat._closedLockedModel && !chat._openSourceMarked && !chat._openSourceMarking && typeof BillingProbe !== 'undefined' && typeof BillingProbe.markAsOpenSourceModel === 'function') {

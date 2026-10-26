@@ -336,11 +336,11 @@
       ...(typeof Models !== 'undefined' && Models.all ? Object.keys(Models.all) : []),
     ]);
     const syncOneSid = (otherSid) => {
-      if (!otherSid || otherSid === excludeSid) return false;
+      if (!otherSid || otherSid === excludeSid || isEvalSession(otherSid)) return false;
       const otherChat = (typeof Chats !== 'undefined' && Chats.get(otherSid)) || { sid: otherSid, messages: [] };
-      if (otherChat?.busy) return false;
+      if (otherChat?.busy || otherChat?.isEvaluation || otherChat?.evalMode === 'battle' || otherChat?.evalMode === 'direct') return false;
       const om = typeof Models !== 'undefined' ? Models.get(otherSid) : null;
-      if (om?.userCorrected || om?.routed) return false;
+      if (om?.userCorrected || om?.routed || om?.directMode || om?.battleRevealed) return false;
       let changed = false;
       try {
         const prevCanon = (typeof Strength !== 'undefined' && Strength.canon ? Strength.canon(om?.name || '') : String(om?.name || '')).replace(/[?？]+$/, '').toLowerCase();
