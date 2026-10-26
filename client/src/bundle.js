@@ -49,7 +49,7 @@ function build(uiDir, version, opt = {}) {
             return 'let _ikaleRaw = ' + JSON.stringify(minJson) + ', _ikaleParsed = null;\nconst _getIkale = () => { if (!_ikaleParsed) { _ikaleParsed = JSON.parse(_ikaleRaw); _ikaleRaw = ""; } return _ikaleParsed; };\nconst IkaleBank = new Proxy({}, { get(_, k) { return _getIkale()[k]; }, ownKeys() { return Reflect.ownKeys(_getIkale()); }, getOwnPropertyDescriptor(_, k) { return Object.getOwnPropertyDescriptor(_getIkale(), k); }, has(_, k) { return k in _getIkale(); } });\n';
           }
         }
-        if (fname === 'habit-builtin-bank.js' && raw.includes('const BUILTIN_HABIT_BANK =')) {
+        if (fname === 'habit-builtin-bank.js' && /(?:const|let|var)\s+BUILTIN_HABIT_BANK\s*=/.test(raw)) {
           if (opt?.slimDesktopBundle) {
             return 'let _hbParsed = null, _hbTimer = 0;\nconst _getHb = () => { clearTimeout(_hbTimer); if (!_hbParsed) { let r = (typeof window !== "undefined" && window.BranaHost?.staticBankSync) ? window.BranaHost.staticBankSync("habit") : "{}"; if (typeof r === "string") r = r.replace(/;\\s*(?:if\\s*\\(\\s*typeof\\s+(?:module|window|globalThis)\\b[\\s\\S]*|module\\.exports[\\s\\S]*)$/, ""); _hbParsed = JSON.parse(r || "{}"); } _hbTimer = setTimeout(() => { _hbParsed = null; }, 3500); return _hbParsed; };\nconst BUILTIN_HABIT_BANK = new Proxy({}, { get(_, k) { if (k === "__releaseSamples") return () => { _hbParsed = null; }; return _getHb()[k]; }, ownKeys() { return Reflect.ownKeys(_getHb()); }, getOwnPropertyDescriptor(_, k) { return Object.getOwnPropertyDescriptor(_getHb(), k); }, has(_, k) { return k in _getHb(); } });\nif (typeof globalThis !== "undefined") globalThis.BUILTIN_HABIT_BANK = BUILTIN_HABIT_BANK;\n';
           }

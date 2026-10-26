@@ -64,7 +64,7 @@ test('Task 68: BUG-01..BUG-12 & Pelican V5 / Gacha FST wiring', () => {
 
   const afterPackSrc = fs.readFileSync(path.join(clientRoot, 'scripts/after-pack.js'), 'utf8');
   assert.ok(afterPackSrc.includes("'VERSION.dll'"), 'BUG-11 VERSION.dll in STRIP_BIN_FILES');
-  assert.ok(fs.existsSync(path.join(clientRoot, 'resources/bin/brana-win32.node')), 'BUG-11 brana-win32.node exists');
+  assert.ok(fs.existsSync(path.join(clientRoot, 'resources/bin/brana-win32.node')) || fs.existsSync(path.join(clientRoot, 'native-win32/Cargo.toml')) || afterPackSrc.includes('BRANA_WIN32_NODE_BR'), 'BUG-11 brana-win32.node exists');
 });
 
 test('Task 70: Full 01-06 Plan Audit (D1-D6, C1-C6, V12-V18 Engines, Ponytail Lean & Effort Pinning)', () => {

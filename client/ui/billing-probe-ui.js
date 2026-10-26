@@ -4143,9 +4143,21 @@ const ChatHabitFingerprint = (() => {
       : allMsgs.filter(m => m && m.role === 'assistant' && m.status !== 'failed' && !m.failed && m.status !== 'pending' && m.status !== 'streaming' && !m.metadata?.pending && !m._incomplete).slice(-3);
     const nonFailedAsst = allMsgs.filter(m => m && m.role === 'assistant' && m.status !== 'failed' && !m.failed);
     const settledAsst = nonFailedAsst.filter(m => m.status !== 'pending' && m.status !== 'streaming' && !m.metadata?.pending && !m._incomplete);
-    const fromIncompleteTurn = Boolean(compMsgs.length === 0 && settledAsst.length === 0 && nonFailedAsst.length > 0);
-    const rawAsstPool = compMsgs.length ? compMsgs : (settledAsst.length ? settledAsst : ((chat?.busy || allowIncomplete) ? nonFailedAsst : []));
-    let asstMsgs = rawAsstPool.slice(-3);
+    const liveTail = (chat?.busy || allowIncomplete) ? nonFailedAsst.at(-1) : null;
+    const hasSubstantiveLiveTail = Boolean(liveTail && !compMsgs.includes(liveTail) && (
+      (Array.isArray(liveTail.tools) && liveTail.tools.length > 0) ||
+      (Array.isArray(liveTail.parts) && liveTail.parts.some(p => p && (p.toolCallId || p.type === 'dynamic-tool' || (typeof p.type === 'string' && p.type.startsWith('tool-')) || (p.type === 'text' && String(p.text || '').length >= 20))))
+    ));
+    const fromIncompleteTurn = Boolean((compMsgs.length === 0 && settledAsst.length === 0 && nonFailedAsst.length > 0) || hasSubstantiveLiveTail);
+    const basePool = compMsgs.length ? compMsgs : (settledAsst.length ? settledAsst : ((chat?.busy || allowIncomplete) ? nonFailedAsst : []));
+    const rawAsstPool = (hasSubstantiveLiveTail && !basePool.includes(liveTail)) ? [...basePool, liveTail] : basePool;
+    const MICRO_PROBE_RE = /35[～~-]45\s*行以内|45\s*行以内|50\s*行以内|微缩面板|32[×x]32\s*\S*微组件|动态\s*SVG\s*状态徽章|动态内联\s*SVG\s*(?:几何图标|指示器|徽标)/i;
+    const lastUserObj = allMsgs.filter(m => m && m.role === 'user').at(-1);
+    const lastUserRawTxt = String(lastUserObj?.text || (Array.isArray(lastUserObj?.parts) ? lastUserObj.parts.map(p => p?.text || '').join(' ') : '') || '');
+    const isLatestTurnMicroProbe = Boolean(MICRO_PROBE_RE.test(lastUserRawTxt));
+    let asstMsgs = (preferLatestTurn && (chat?._isMicroProbe || isLatestTurnMicroProbe) && rawAsstPool.length >= 1)
+      ? rawAsstPool.slice(-1)
+      : rawAsstPool.slice(-3);
     if (!preferLatestTurn && !opts?.forRoutePostSlice && !chat?._forRoutePostSlice && rawAsstPool.length >= 2) {
       let lastHtmlCodingIdx = -1;
       for (let i = 0; i < rawAsstPool.length; i++) {
@@ -4217,6 +4229,9 @@ const ChatHabitFingerprint = (() => {
     let codeOmissionCount = 0, codeDefensiveCount = 0;
     let searchSourcesCount = 0, citationCount = 0, mediaImgCount = 0, mediaVideoCount = 0;
     let bashReadFiles = 0, bashEditFiles = 0, bashSearchOps = 0, bashTestRuns = 0, bashBuildRuns = 0, editAddedLines = 0, editDeletedLines = 0;
+    let bashWcCombined = 0, bashWcSeparate = 0, bashWcLsLh = 0, bashGrepSvgTags = 0, bashGrepPipeWc = 0;
+    let bashHomePath = 0, bashPwdLsLa = 0, bashPy2Heredoc = 0, bashPy3EofHeredoc = 0, bashPy3InlineC = 0;
+    let bashNodeColonPrefix = 0, bashSedUnquoted = 0, bashStatPrintf = 0, bashCwdParam = 0;
     const turnRichnessArr = [];
     const recentUserMsgs = allMsgs.filter(m => m && m.role === 'user').slice(-3);
     const firstUserMsg = recentUserMsgs[0] || allMsgs.find(m => m && m.role === 'user');
@@ -4225,7 +4240,7 @@ const ChatHabitFingerprint = (() => {
     const promptConstraintHits = (recentUserTextAll.match(/必须|不要|严格|完整|详细|对比|证明|推导|步步|架构|并发|边界|优化|must|strictly|complete|comprehensive|edge case|architecture|step-by-step|benchmark/gi) || []).length;
     const promptCodeHits = (recentUserTextAll.match(/```|<html|function\b|def\s+\w+|SELECT\s+|class\s+\w+/gi) || []).length;
     const promptEntropy = Math.max(0.28, Math.min(1.0, 0.30 + Math.min(0.42, recentUserTextAll.length / 1800) + Math.min(0.18, promptConstraintHits * 0.045) + Math.min(0.10, promptCodeHits * 0.05)));
-    const isMicroProbePrompt = Boolean(chat?._isMicroProbe || chat?.gacha?.mode === 'habit' || modelEntry?.habitFeatures?.meta?.isMicroProbeChat || /35[～~-]45\s*行以内|50\s*行以内|微缩面板|动态\s*SVG\s*状态徽章|动态内联\s*SVG\s*(?:几何图标|指示器|徽标)/i.test(firstUserTxt));
+    const isMicroProbePrompt = Boolean(chat?._isMicroProbe || chat?.gacha?.mode === 'habit' || modelEntry?.habitFeatures?.meta?.isMicroProbeChat || isLatestTurnMicroProbe || MICRO_PROBE_RE.test(firstUserTxt));
 
     const scanCodeRigor = (src) => {
       if (!src) return;
@@ -4292,7 +4307,11 @@ const ChatHabitFingerprint = (() => {
       const m = asstMsgs[_mIdx];
       curTurnIdx = _mIdx;
       const isLastAsstTurn = _mIdx === asstMsgs.length - 1;
-      const parts = Array.isArray(m?.parts) ? m.parts : [];
+      const rawParts = Array.isArray(m?.parts) ? m.parts : [];
+      const hasToolInRawParts = rawParts.some(p => p && (p.toolCallId || p.type === 'dynamic-tool' || (typeof p.type === 'string' && p.type.startsWith('tool-') && p.type !== 'tool-result')));
+      const parts = (!hasToolInRawParts && Array.isArray(m?.tools) && m.tools.length > 0)
+        ? [...rawParts, ...m.tools.map(tc => ({ type: 'tool-' + (tc?.name || tc?.toolName || 'unknown'), toolName: tc?.name || tc?.toolName, toolCallId: tc?.id || tc?.toolCallId, input: tc?.input || tc?.args || {} }))]
+        : rawParts;
       let turnHasTool = false, seenToolInTurn = false, preTextInTurn = false;
       let curStepTools = 0, turnPreChars = 0, pendingBetweenChars = 0;
       let turnHidR = 0, turnVisR = 0, turnWrite = 0, turnEdit = 0, turnCodeBash = 0, turnInlineHtmlChars = 0, turnTextChars = 0;
@@ -4368,6 +4387,20 @@ const ChatHabitFingerprint = (() => {
             if (/&&/.test(cmd)) chainAnd++;
             if (/\b(?:rg|grep|sed|awk)\b/.test(cmd)) rgSed++;
             if (/\bgit\s+/.test(cmd)) gitCmd++;
+            if (/\bwc\s+-(?:lc|cl|lwc|cwl)\b/.test(cmd)) bashWcCombined++;
+            if (/\bwc\s+-(?:l\s+-[cw]|c\s+-l)\b/.test(cmd)) bashWcSeparate++;
+            if (/\bwc\b[^&\n]*&&\s*ls\s+-(?:lh|la|l)\b|\bls\s+-(?:lh|la|l)\b[^&\n]*&&\s*wc\b/.test(cmd)) bashWcLsLh++;
+            if (/\bgrep\s+-(?:c\s+-E|cE|Ec|Eo|E)\s+['"]?<\(?[a-z|]+/i.test(cmd) || /\bgrep\b[^\n]*<\(?(?:circle|polygon|rect|line|ellipse|path|svg|style|keyframes|animate)/i.test(cmd)) bashGrepSvgTags++;
+            if (/\bgrep\s+-(?:Eo|oE|o)\b[^\n]*\|\s*wc\s+-l\b/.test(cmd)) bashGrepPipeWc++;
+            if (/\/home\/user\/\S+/.test(cmd)) bashHomePath++;
+            if (/\bpwd\s*&&\s*ls\s+-la\b/.test(cmd)) bashPwdLsLa++;
+            if (/\bpython\s+-\s*<<\s*['"]?(?:PY|EOF)\b|\bPYTHONDONTWRITEBYTECODE=1\b/.test(cmd)) bashPy2Heredoc++;
+            if (/\bpython3\s+-\s*<<\s*['"]?(?:EOF|PY)\b/.test(cmd)) bashPy3EofHeredoc++;
+            if (/\bpython3\s+-c\s+["']/.test(cmd)) bashPy3InlineC++;
+            if (/\bnode\s+-e\b[\s\S]*?\brequire\(\s*['"]node:|\bprintf\s+['"]\\n---/.test(cmd)) bashNodeColonPrefix++;
+            if (/\bsed\s+-n\s+\d+,\d+p\b/.test(cmd)) bashSedUnquoted++;
+            if (/\bstat\s+-c\b|\bwc\s+-[clw]+\s*<\s*\S+/.test(cmd)) bashStatPrintf++;
+            if (inp.cwd || inp.timeout || inp.description) bashCwdParam++;
             if (typeof CmdTranslate !== 'undefined' && CmdTranslate.describe) {
               try {
                 const cd = CmdTranslate.describe(cmd, inp.cwd || '');
@@ -4631,7 +4664,8 @@ const ChatHabitFingerprint = (() => {
       (hidR === 0 && msgFmtRWireDeltas === 0 && msgFmtTidCount === 0 && turns === 1 && write === 1 && totalTools === 1 && writtenChars >= 35000 && prefersReducedMotion >= 1 && boxComment === 0) ||
       (msgFmtRWireDeltas === 0 && msgFmtTidCount > 0 && msgFmtTidCount <= 6 && msgFmtTidAvg >= 1800 && hidR >= 2) ||
       (hidR >= 2 && (msgFmtAvgChunk >= 15.0 || (prefersReducedMotion >= 1 && boxComment === 0 && claudeWarmPalette === 0 && edit === 0 && read === 0))) ||
-      (htmlSvgMatch?.best?.vendorId && htmlSvgMatch.best.vendorId !== 'anthropic' && Number(htmlSvgMatch.best.ruleScore) >= 0.45)
+      (htmlSvgMatch?.best?.vendorId && htmlSvgMatch.best.vendorId !== 'anthropic' && Number(htmlSvgMatch.best.ruleScore) >= 0.45) ||
+      (bashGrepPipeWc > 0 || ((bashWcSeparate > 0 || bashPy2Heredoc > 0 || bashNodeColonPrefix > 0) && bashWcCombined === 0 && bashPy3EofHeredoc === 0))
     );
     const isLiveClaudeFmt = !isEvalChat && hasLiveMsgFmt && visR === 0 && !isLiveOpenAiFmt && !isLiveGeminiFmt && !isLiveNonClaudeFmt && ((msgFmtTN >= 15 && msgFmtAvgChunk >= 4.0 && msgFmtAvgChunk <= 25.0) || (msgFmtTN >= 6 && msgFmtAvgChunk >= 4.0 && msgFmtAvgChunk <= 25.0 && hidR > 0) || (msgFmtTidCount > 0 && msgFmtTidCount <= 8 && !(msgFmtTN >= 3 && msgFmtAvgChunk >= 28.0))) && sandboxLink === 0 && lowerDoctype === 0 && colorSchemeCss === 0;
     if (isLiveGeminiFmt) {
@@ -4895,6 +4929,26 @@ const ChatHabitFingerprint = (() => {
     }
     if (edit + read >= 3) habitTags.push(`Read/Edit精准改写(${read}/${edit}次)`);
     if (parallelSteps > 0) habitTags.push(`并行工具步(${parallelSteps}步)`);
+    if (bash > 0) {
+      const bashSubTags = [];
+      if (bashGrepPipeWc > 0) bashSubTags.push('grep -Eo管道统计·Muse特征');
+      if (bashWcCombined > 0) bashSubTags.push('wc -lc合并参数·Claude/Argon特征');
+      else if (bashWcSeparate > 0 && bashGrepPipeWc === 0) bashSubTags.push('wc -l -c分离参数·OpenAI/Argon特征');
+      if (bashWcLsLh > 0) bashSubTags.push('wc&&ls -lh链式核验');
+      if (bashGrepPipeWc === 0 && bashGrepSvgTags > 0) bashSubTags.push('grep正则统计SVG标签');
+      if (bashPwdLsLa > 0) bashSubTags.push('pwd&&ls -la探路·Gemini特征');
+      else if (bashHomePath > 0) bashSubTags.push('/home/user绝对路径');
+      if (bashPy2Heredoc > 0) bashSubTags.push("python - <<'PY'·OpenAI特征");
+      else if (bashPy3EofHeredoc > 0) bashSubTags.push("python3 - <<'EOF'·Claude特征");
+      else if (bashPy3InlineC > 0) bashSubTags.push('python3 -c内联脚本');
+      if (bashNodeColonPrefix > 0) bashSubTags.push('node:fs内联脚本·OpenAI特征');
+      if (bashSedUnquoted > 0) bashSubTags.push('sed -n裸区间读取');
+      if (bashStatPrintf > 0) bashSubTags.push('stat/重定向字节核验·Claude特征');
+      if (bashCwdParam > 0) bashSubTags.push('显式cwd/timeout参数');
+      if (bashSubTags.length > 0) {
+        habitTags.unshift(`🐚 Bash指纹(${bashSubTags.slice(0, 2).join(' · ')})`);
+      }
+    }
     if (pyHeredoc > 0) habitTags.push(`Python Heredoc(${pyHeredoc}次)`);
     if (catHeredoc > 0) habitTags.push(`Cat Heredoc(${catHeredoc}次)`);
     if (chainAnd >= 2) habitTags.push(`Bash && 链式(${chainAnd}次)`);
@@ -5022,6 +5076,20 @@ const ChatHabitFingerprint = (() => {
       bashSearchOps,
       bashTestRuns,
       bashBuildRuns,
+      bashWcCombined,
+      bashWcSeparate,
+      bashWcLsLh,
+      bashGrepSvgTags,
+      bashGrepPipeWc,
+      bashHomePath,
+      bashPwdLsLa,
+      bashPy2Heredoc,
+      bashPy3EofHeredoc,
+      bashPy3InlineC,
+      bashNodeColonPrefix,
+      bashSedUnquoted,
+      bashStatPrintf,
+      bashCwdParam,
       editAddedLines,
       editDeletedLines,
       multiTurnPersistence: Math.round(multiTurnPersistence * 1000) / 1000,
@@ -5261,6 +5329,20 @@ const ChatHabitFingerprint = (() => {
       bashSearchOps: feat.bashSearchOps || 0,
       bashTestRuns: feat.bashTestRuns || 0,
       bashBuildRuns: feat.bashBuildRuns || 0,
+      ...(feat.bashWcCombined ? { bashWcCombined: feat.bashWcCombined } : {}),
+      ...(feat.bashWcSeparate ? { bashWcSeparate: feat.bashWcSeparate } : {}),
+      ...(feat.bashWcLsLh ? { bashWcLsLh: feat.bashWcLsLh } : {}),
+      ...(feat.bashGrepSvgTags ? { bashGrepSvgTags: feat.bashGrepSvgTags } : {}),
+      ...(feat.bashGrepPipeWc ? { bashGrepPipeWc: feat.bashGrepPipeWc } : {}),
+      ...(feat.bashHomePath ? { bashHomePath: feat.bashHomePath } : {}),
+      ...(feat.bashPwdLsLa ? { bashPwdLsLa: feat.bashPwdLsLa } : {}),
+      ...(feat.bashPy2Heredoc ? { bashPy2Heredoc: feat.bashPy2Heredoc } : {}),
+      ...(feat.bashPy3EofHeredoc ? { bashPy3EofHeredoc: feat.bashPy3EofHeredoc } : {}),
+      ...(feat.bashPy3InlineC ? { bashPy3InlineC: feat.bashPy3InlineC } : {}),
+      ...(feat.bashNodeColonPrefix ? { bashNodeColonPrefix: feat.bashNodeColonPrefix } : {}),
+      ...(feat.bashSedUnquoted ? { bashSedUnquoted: feat.bashSedUnquoted } : {}),
+      ...(feat.bashStatPrintf ? { bashStatPrintf: feat.bashStatPrintf } : {}),
+      ...(feat.bashCwdParam ? { bashCwdParam: feat.bashCwdParam } : {}),
       editAddedLines: feat.editAddedLines || 0,
       editDeletedLines: feat.editDeletedLines || 0,
       multiTurnPersistence: feat.multiTurnPersistence ?? 0.78,
@@ -5388,6 +5470,13 @@ const ChatHabitFingerprint = (() => {
       addD(feat.bashEditFiles || 0, meta.bashEditFiles || 0, 4.0, 1.3);
       addD(feat.bashSearchOps || 0, meta.bashSearchOps || 0, 5.0, 1.1);
       addD(feat.bashTestRuns || 0, meta.bashTestRuns || 0, 3.0, 1.2);
+    }
+    if ((feat.bash || 0) > 0 && (meta.bash || 0) > 0) {
+      for (const bk of ['bashWcCombined', 'bashWcSeparate', 'bashWcLsLh', 'bashGrepSvgTags', 'bashGrepPipeWc', 'bashHomePath', 'bashPwdLsLa', 'bashPy2Heredoc', 'bashPy3EofHeredoc', 'bashPy3InlineC', 'bashNodeColonPrefix', 'bashSedUnquoted', 'bashStatPrintf', 'bashCwdParam']) {
+        if (meta[bk] !== undefined) {
+          addD((feat[bk] || 0) > 0 ? 1 : 0, (meta[bk] || 0) > 0 ? 1 : 0, 1.0, 1.8);
+        }
+      }
     }
     if ((feat.edit || 0) > 0 && (meta.edit || 0) > 0 && (meta.editAddedLines !== undefined || meta.editDeletedLines !== undefined)) {
       addD(feat.editAddedLines || 0, meta.editAddedLines || 0, 120.0, 1.1);
@@ -5592,9 +5681,14 @@ const ChatHabitFingerprint = (() => {
       (feat.turns === 1 && feat.totalTools === 1 && feat.bash === 0 && feat.write === 0 && feat.edit === 0 && feat.askUser === 0 && ((feat.avgTurnDurMs >= 33000 && feat.meanChars >= 800) || ((feat.search || 0) === 1 && feat.meanChars >= 2000))) ||
       (feat.totalTools === 0 && feat.meanChars >= 330 && (feat.avgTurnDurMs >= 15000 || (feat.turns >= 2 && (feat.memoAvgChunk || 0) >= 20 && (feat.memoAvgChunk || 0) <= 80) || (feat.turns === 1 && (feat.avgTurnDurMs || 0) === 0 && (feat.htmlMaxLen || 0) >= 14000 && (feat.evalModality === 'chat' || (feat.htmlSvgMatch?.best?.canon === 'gemini-4-argon-max' && (feat.htmlSvgMatch?.best?.ruleScore || 0) >= 0.70)))))
     );
+    const isPureBashTurn = Boolean((feat.bash || 0) >= 1 && (feat.write || 0) === 0 && (feat.edit || 0) === 0);
+    const hasOpenAiBashSig = Boolean(!feat.isGeminiCoding && !feat.isOpenThink && (feat.bashGrepPipeWc || 0) === 0 && ((feat.bashWcSeparate || 0) > 0 || (feat.bashPy2Heredoc || 0) > 0 || (feat.bashNodeColonPrefix || 0) > 0) && (feat.bashWcCombined || 0) === 0 && (feat.bashPy3EofHeredoc || 0) === 0);
+    const hasMuseBashSig = Boolean(!feat.isGeminiCoding && !feat.isOpenThink && ((feat.bashGrepPipeWc || 0) > 0 || (isPureBashTurn && (feat.bashWcLsLh || 0) > 0 && (feat.bashWcSeparate || 0) === 0 && (feat.bashWcCombined || 0) === 0 && feat.hidR === 1 && (feat.preToolTextChars || 0) >= 15 && (feat.preToolTextChars || 0) <= 65)));
+    const hasAnthropicBashSig = Boolean(!feat.isGeminiCoding && !feat.isOpenThink && !hasMuseBashSig && !hasOpenAiBashSig && ((feat.bashWcCombined || 0) > 0 || (feat.bashPy3EofHeredoc || 0) > 0 || (feat.bashStatPrintf || 0) > 0 || (feat.bashSedUnquoted || 0) > 0));
     const isKnownArgon = !CONFIRMED_GEMINI_FLASH_SIDS.has(sid) && (
       KNOWN_ARGON_SIDS.has(sid) ||
       Boolean(isArgonBehavior) ||
+      (feat.isGeminiCoding && isPureBashTurn && (feat.bashPwdLsLa || 0) === 0 && ((feat.bashWcCombined || 0) > 0 || (feat.bashWcSeparate || 0) > 0 || (feat.bashPy3InlineC || 0) > 0)) ||
       (Boolean(feat.isMicroProbeChat) && feat.turns === 1 && feat.write === 1 && feat.bash === 1 && (feat.inlineHtmlEcho || 0) === 0 && (feat.geminiPyHelper || 0) === 0 && (feat.memoAvgChunk || 0) >= 35 && (feat.memoAvgChunk || 0) <= 160 && (feat.avgTurnDurMs >= 26000 || (feat.writtenChars >= 3200 && cpsEarly > 0 && cpsEarly < 175))) ||
       bank.some(b => b && b.sid === sid && (b.userConfirmed || b.importedFromDiag) && /argon|barium/i.test(String(b.id || b.model || '')))
     );
@@ -5655,6 +5749,7 @@ const ChatHabitFingerprint = (() => {
     const isMuseSpark13Max = Boolean(
       !feat.isGeminiCoding && !feat.isOpenThink && !isMuseSpark12Max && !isMuseSpark13High && !isMuseSpark13Low && (
         hasHtmlMuse13Rule ||
+        hasMuseBashSig ||
         (Boolean(feat.isMicroProbeChat) && feat.turns === 1 && feat.write === 1 && feat.bash === 1 && (feat.sandboxLink || 0) === 0 && ((feat.preToolTextChars >= 55 && feat.hidR >= 2 && feat.hidR <= 4 && (feat.claudeWarmPalette || 0) === 0 && (cpsEarly < 165)) || (feat.hidR === 1 && (feat.prefersReducedMotion || 0) >= 1 && avgChunk >= 11.5 && avgChunk <= 13.5 && (feat.writtenChars || 0) <= 1500))) ||
         (feat.turns === 1 && feat.write === 1 && feat.totalTools === 1 && (feat.bash || 0) === 0 && (feat.writtenChars || 0) >= 35000 && (feat.writtenChars || 0) < 44500 && (feat.cps || 0) >= 240 && (feat.cps || 0) < 500 && (feat.prefersReducedMotion || 0) >= 1 && (feat.ariaLabelledby || 0) >= 1 && (feat.boxComment || 0) === 0 && (feat.claudeWarmPalette || 0) === 0) ||
         (feat.turns === 2 && feat.write === 1 && feat.bash === 0 && (feat.genImg || 0) === 0 && feat.hidR >= 4 && feat.hidR <= 6 && feat.maxRInTurn === 3 && (feat.preToolTextChars || 0) >= 70 && (feat.writtenChars || 0) <= 26000 && ((avgChunk >= 10.5 && avgChunk <= 29.0) || (avgChunk === 0 && (feat.cps || 0) >= 120)) && (feat.emDash || 0) >= 2) ||
@@ -5744,6 +5839,7 @@ const ChatHabitFingerprint = (() => {
         isClaudeBattleSpecific ||
         isFable51CodingCore ||
         hasHtmlFable51Early ||
+        hasAnthropicBashSig ||
         feat.wireFam === 'anthropic' ||
         (feat.knownCwTok || 0) > 0 ||
         HAIKU_55_MEDIUM_SIDS.has(sid) ||
@@ -5768,6 +5864,7 @@ const ChatHabitFingerprint = (() => {
     const hasStrongOpenAiSig = Boolean(
       !isNonBig3Profile && !feat.isGeminiCoding && !hasAnthropicSig && (
         hasOpenAiIntentMarkers ||
+        hasOpenAiBashSig ||
         isLunaHigh1TurnCoding ||
         isSol61XHighSingleWrite ||
         isDefiniteOpenAiChunkStream ||
@@ -5879,7 +5976,8 @@ const ChatHabitFingerprint = (() => {
         const isArgonMaxProfile = !isArgonLowProfile && !isArgonMediumProfile && !isArgonBaseProfile && !KNOWN_ARGON_SIDS.has(sid) && (
           (feat.turns === 1 && feat.totalTools === 0 && (feat.htmlMaxLen || 0) >= 46000 && (feat.htmlMaxLen || 0) <= 53000 && (feat.emDash || 0) >= 1) ||
           (feat.turns === 1 && feat.totalTools === 0 && durMs === 0 && feat.htmlSvgMatch?.best?.canon === 'gemini-4-argon-max' && (feat.htmlSvgMatch?.best?.ruleScore || 0) >= 0.70) ||
-          (feat.write >= 2 && feat.bash >= 1 && feat.bash <= 2 && (feat.edit || 0) === 0 && (feat.search || 0) === 0 && (feat.parallelSteps || 0) >= 2)
+          (feat.write >= 2 && feat.bash >= 1 && feat.bash <= 2 && (feat.edit || 0) === 0 && (feat.search || 0) === 0 && (feat.parallelSteps || 0) >= 2) ||
+          (isPureBashTurn && (feat.bashWcSeparate || 0) > 0 && (feat.bashPwdLsLa || 0) === 0)
         );
         const isFlash37MediumProfile = !feat.isFlash38LowIdentity && feat.totalTools === 0 && feat.turns === 1 && feat.meanChars >= 80 && feat.meanChars <= 460 && (durMs === 0 || durMs < 20000);
         const isFlash38MediumProfile = !isFlash37MediumProfile && !feat.isFlash38LowIdentity && feat.edit === 0 && (
@@ -5890,6 +5988,7 @@ const ChatHabitFingerprint = (() => {
         );
         const isArgonHighProfile = (isKnownArgon || isEvalAnalyze) && !isArgonLowProfile && !isArgonMediumProfile && !isArgonBaseProfile && !isArgonMaxProfile && !isFlash37MediumProfile && !isFlash38MediumProfile && !isFlash38HighBattleEdit && (
           KNOWN_ARGON_SIDS.has(sid) ||
+          (isPureBashTurn && ((feat.bashWcCombined || 0) > 0 || (feat.bashPy3InlineC || 0) > 0)) ||
           feat.edit >= 1 ||
           feat.read >= 12 ||
           (feat.turns === 3 && feat.bash >= 15 && feat.bash <= 25 && (feat.search || 0) <= 5 && feat.write <= 1 && (feat.writtenChars || 0) < 35000 && feat.edit === 0) ||
@@ -6011,12 +6110,14 @@ const ChatHabitFingerprint = (() => {
           (feat.turns === 2 && feat.hidR === 3 && feat.maxRInTurn === 2 && feat.totalTools === 2 && feat.write === 1 && feat.bash === 0 && (feat.writtenChars || 0) === 0 && (feat.meanChars || 0) === 4500 && durMs === 0 && cps === 0)
         );
         const isSol61Medium = !isTerraMax && !isTerraMedium && !isTerraLow && !isAstraMax && !isAstraHigh && !isMidAstra && !isLunaLowProfile && !isSol61Low && (
-          (isMicroProbe && feat.turns === 1 && feat.write === 1 && feat.bash === 1 && (feat.sandboxLink || 0) === 0 && ((feat.hidR === 0 && cps >= 58 && cps < 82 && durMs >= 24000 && durMs < 40000) || (feat.hidR === 2 && (feat.svgSmilNoScript || 0) >= 1 && cps >= 90 && cps <= 112 && avgChunk >= 2.2 && avgChunk <= 3.2 && durMs >= 16000 && durMs < 24000))) ||
+          (isPureBashTurn && (feat.bashWcSeparate || 0) > 0 && (feat.bashWcLsLh || 0) > 0) ||
+          (isMicroProbe && feat.turns === 1 && feat.write === 1 && feat.bash === 1 && (feat.sandboxLink || 0) === 0 && (((feat.bashWcSeparate || 0) > 0 && (feat.bashWcLsLh || 0) > 0) || (feat.hidR === 0 && cps >= 58 && cps < 82 && durMs >= 24000 && durMs < 40000) || (feat.hidR === 2 && (feat.svgSmilNoScript || 0) >= 1 && cps >= 90 && cps <= 112 && avgChunk >= 2.2 && avgChunk <= 3.2 && durMs >= 16000 && durMs < 24000))) ||
           (feat.turns === 2 && feat.write === 2 && feat.bash === 1 && (feat.edit || 0) === 0 && feat.hidR === 4 && feat.maxRInTurn === 2 && (feat.svgSmilNoScript || 0) >= 1 && (feat.sandboxLink || 0) === 0 && cps >= 90 && cps <= 112 && feat.writtenChars >= 10000 && feat.writtenChars < 11000) ||
           (feat.turns === 2 && feat.write === 2 && feat.bash === 1 && (feat.edit || 0) === 1 && feat.hidR === 1 && cps >= 60 && cps < 80 && feat.writtenChars >= 10000 && feat.writtenChars < 11500)
         );
         const isSol6High = !isTerraMax && !isTerraMedium && !isTerraLow && !isAstraMax && !isAstraHigh && !isMidAstra && !isLunaLowProfile && !isSol61Low && !isSol61Medium && !(feat.turns === 3 && feat.hidR === 21 && feat.bash === 6 && (feat.read || 0) === 2) && (
-          (isMicroProbe && feat.turns === 1 && feat.write === 1 && feat.bash === 1 && (feat.sandboxLink || 0) >= 1 && (feat.svgSmilNoScript || 0) === 0 && feat.hidR >= 1 && feat.hidR <= 5 && avgChunk > 0 && avgChunk <= 2.1 && cps >= 75 && cps < 105) ||
+          (isPureBashTurn && (feat.bashWcSeparate || 0) > 0 && (feat.bashGrepSvgTags || 0) > 0) ||
+          (isMicroProbe && feat.turns === 1 && feat.write === 1 && feat.bash === 1 && (((feat.bashWcSeparate || 0) > 0 && (feat.bashGrepSvgTags || 0) > 0 && (feat.svgSmilNoScript || 0) === 0 && feat.hidR <= 5) || ((feat.sandboxLink || 0) >= 1 && (feat.svgSmilNoScript || 0) === 0 && feat.hidR >= 1 && feat.hidR <= 5 && avgChunk > 0 && avgChunk <= 2.1 && cps >= 75 && cps < 105))) ||
           (feat.turns === 2 && feat.bash === 3 && feat.write === 2 && (feat.edit || 0) === 0 && feat.hidR >= 10 && cps >= 70 && cps < 100 && feat.writtenChars < 12000) ||
           (feat.turns === 2 && feat.bash === 1 && feat.write === 1 && (feat.edit || 0) === 0 && feat.hidR === 3 && (feat.catHeredoc || 0) >= 1 && (feat.sandboxLink || 0) >= 1 && cps >= 85 && cps < 105 && feat.writtenChars >= 5500 && feat.writtenChars < 7500)
         );
@@ -6027,7 +6128,7 @@ const ChatHabitFingerprint = (() => {
           (feat.turns === 2 && feat.write === 2 && feat.bash === 1 && (feat.edit || 0) === 0 && durMs > 0 && durMs < 42000 && feat.writtenChars < 8000 && feat.hidR >= 8 && feat.hidR <= 15) ||
           (feat.turns <= 2 && feat.bash === 2 && feat.write === 0 && (feat.edit || 0) === 0 && feat.hidR === 4 && durMs > 0 && durMs < 20000) ||
           (feat.write >= 3 && feat.bash === 1 && (feat.edit || 0) === 0 && (feat.lowerDoctype || 0) >= 3 && feat.writtenChars < 15000);
-        const isLunaMaxBurst = !isTerraMax && !isTerraMedium && !isTerraLow && !isAstraMax && !isAstraHigh && !isMidAstra && !isLunaLowProfile && !isSol61Low && !isSol61Medium && !isSol6High && !isMultiTurnLightLunaMed && !isFastLunaStream && !isShortLuna2TurnHigh && (
+        const isLunaMaxBurst = !isTerraMax && !isTerraMedium && !isTerraLow && !isAstraMax && !isAstraHigh && !isMidAstra && !isLunaLowProfile && !isSol61Low && !isSol61Medium && !isSol6High && !isMultiTurnLightLunaMed && !isFastLunaStream && !isShortLuna2TurnHigh && !(isPureBashTurn && (feat.bashPy2Heredoc || 0) > 0) && (
           (feat.maxRInTurn >= 4 && feat.hidR >= feat.totalTools + feat.turns + 3 && (feat.askIdHasUnderscore === 0 || (feat.maxRInTurn >= 15 && (feat.writtenChars || 0) < 18000)) && !(feat.bash >= 5 && feat.writtenChars >= 30000) && !(feat.sandboxLink > 0 && (feat.writtenChars || 0) >= 28000) && !(feat.turns === 2 && feat.write === 1 && feat.bash === 2 && feat.writtenChars >= 9000 && feat.writtenChars < 13000) && !(feat.turns === 2 && feat.write === 1 && feat.askUser === 1 && feat.hidR >= 40 && (feat.writtenChars || 0) >= 18000) && !(feat.turns === 2 && feat.write === 1 && feat.bash === 0 && feat.askUser === 1 && (feat.sandboxLink || 0) >= 1 && feat.hidR >= 12 && feat.hidR <= 18) && !(feat.turns === 2 && feat.write === 2 && feat.bash === 2 && (feat.edit || 0) >= 2 && feat.hidR >= 45) && !(feat.turns === 2 && feat.write === 2 && feat.bash === 1 && (feat.sandboxLink || 0) >= 1 && feat.hidR >= 45 && (feat.svgSmilNoScript || 0) >= 1 && cps > 0 && cps < 40) && !(feat.turns <= 2 && feat.write === 1 && feat.bash === 0 && feat.writtenChars === 0 && feat.hidR >= 10 && feat.hidR <= 30) && !(feat.turns === 3 && feat.write === 1 && feat.bash === 0 && feat.askUser === 0 && feat.hidR >= 12 && cps >= 120) && (feat.memoDeltaCount === 0 || feat.memoDeltaCount < 40 || (feat.maxRInTurn >= 15 && (feat.preToolTextChars || 0) === 0 && (cps >= 60 || (feat.maxRInTurn >= 30 && ((feat.svgSmilNoScript || 0) === 0 || feat.turns === 3)))))) ||
           (feat.turns <= 2 && feat.write === 1 && feat.bash <= 1 && (feat.edit || 0) === 0 && (feat.hidR === 3 || feat.hidR === 6) && avgChunk > 0 && avgChunk <= 2.6 && feat.writtenChars === 0) ||
           (isMicroProbe && feat.turns === 1 && feat.write === 1 && feat.bash === 1 && (feat.sandboxLink || 0) === 0 && ((feat.hidR === 1 && avgChunk >= 2.55 && avgChunk <= 2.9 && ((cps >= 114 && cps < 125 && durMs < 9000) || (cps >= 85 && cps < 96 && durMs >= 18500 && durMs < 23000))) || (feat.hidR >= 4 && cps >= 43 && cps < 55 && avgChunk <= 1.8 && durMs >= 50000))) ||
@@ -6051,6 +6152,7 @@ const ChatHabitFingerprint = (() => {
         );
         const is2TurnCodingProbe = (feat.turns <= 2 && feat.write === 1 && feat.bash === 1 && feat.hidR === 1 && feat.writtenChars >= 4000 && feat.writtenChars < 6000) || (feat.turns <= 3 && feat.write >= 2 && feat.bash <= 3 && (feat.parallelSteps || 0) === 0 && feat.sandboxLink === 0 && feat.genImg === 0 && feat.askIdHasUnderscore === 0 && (feat.writtenChars || 0) < 25000 && !(feat.turns === 2 && feat.write === 2 && feat.bash === 2 && feat.hidR === 0 && (feat.inlineHtmlEcho || 0) >= 1 && feat.writtenChars >= 19000));
         const isDeep61Sol = sid === '01a14ce5-b4b6-7962-9f20-c3cbc66c1a54' || (!isTerraMax && !isTerraMedium && !isTerraLow && !isAstraMax && !isAstraHigh && !isMidAstra && !isLunaLowProfile && !isSol61Low && !isSol61Medium && !isSol6High && !isShortLuna2TurnHigh && !isLunaMaxBurst && !isXHigh61Sol && !isFastLunaStream && !is2TurnCodingProbe && !isMultiTurnLightLunaMed && !(feat.turns === 2 && feat.write === 2 && feat.bash === 2 && (feat.edit || 0) >= 2 && feat.hidR >= 45) && !(feat.turns === 3 && feat.hidR === 21 && feat.bash === 6 && (feat.read || 0) === 2) && (
+          (isPureBashTurn && (feat.bashPy2Heredoc || 0) > 0 && feat.hidR >= 10 && (durMs === 0 || durMs >= 35000)) ||
           (isMicroProbe && feat.turns === 1 && feat.write === 1 && feat.bash === 1 && feat.hidR >= 12 && (feat.sandboxLink || 0) >= 1 && (feat.svgSmilNoScript || 0) >= 1 && cps > 0 && cps < 42) ||
           (feat.turns === 2 && feat.write === 2 && feat.bash === 1 && (feat.edit || 0) === 0 && (feat.sandboxLink || 0) >= 1 && feat.hidR >= 45 && (feat.svgSmilNoScript || 0) >= 1 && cps > 0 && cps < 40 && feat.writtenChars >= 12000 && feat.writtenChars < 15000) ||
           (feat.parallelSteps >= 1 && (feat.edit >= 1 || feat.bash >= 2 || (isMicroProbe && feat.write >= 1 && feat.bash >= 1 && durMs >= 25000 && (cps === 0 || cps < 115)))) ||
@@ -6095,9 +6197,10 @@ const ChatHabitFingerprint = (() => {
           (feat.turns === 2 && feat.write === 2 && feat.bash === 1 && (feat.edit || 0) >= 2 && feat.hidR >= 8 && cps >= 115 && cps < 140) ||
           (feat.turns <= 2 && feat.write === 1 && feat.bash === 1 && (feat.edit || 0) === 0 && feat.hidR === 1 && (((feat.genImg || 0) >= 1 && (feat.ariaLabelledby || 0) === 0) || (cps >= 120 && cps < 127 && (feat.ariaLabelledby || 0) === 0)) && feat.writtenChars >= 4000 && feat.writtenChars < 5000)
         );
-        const isLunaHighBurst = !isTerraMax && !isTerraMedium && !isTerraLow && !isAstraMax && !isAstraHigh && !isMidAstra && !isLunaLowProfile && !isSol61Low && !isSol61Medium && (!isSol6High || isLunaHigh1TurnCoding) && !isLunaMaxBurst && !isXHigh61Sol && !isDeep61Sol && !isSol56Max && !isSol56Low && !isSol56Medium && !isMid56Sol && !isSol6Medium && !isFastLunaStream && !feat.isLunaFastTag && !(feat.hasSys6603Tag && (feat.tagReiTier === 'medium' || feat.tagReiTier === 'high')) && (
+        const isLunaHighBurst = !isTerraMax && !isTerraMedium && !isTerraLow && !isAstraMax && !isAstraHigh && !isMidAstra && !isLunaLowProfile && !isSol61Low && !isSol61Medium && (!isSol6High || isLunaHigh1TurnCoding) && !isLunaMaxBurst && !isXHigh61Sol && !isDeep61Sol && !isSol56Max && !isSol56Low && !isSol56Medium && !isMid56Sol && !isSol6Medium && !isFastLunaStream && !feat.isLunaFastTag && !(feat.hasSys6603Tag && (feat.tagReiTier === 'medium' || feat.tagReiTier === 'high')) && !(isPureBashTurn && (feat.bashPy2Heredoc || 0) > 0) && (
           isLunaHigh1TurnCoding ||
           isShortLuna2TurnHigh ||
+          (isPureBashTurn && ((feat.bashNodeColonPrefix || 0) > 0 || ((feat.bashWcSeparate || 0) > 0 && (feat.bashWcLsLh || 0) === 0 && (feat.bashGrepSvgTags || 0) === 0 && feat.hidR >= 1 && feat.hidR <= 3 && (durMs === 0 || durMs < 20000)))) ||
           (onlyAskUser && feat.turns === 1 && feat.hidR === 1 && feat.meanChars === 0 && ((feat.askFormatOpt || 0) === 0 || durMs > 0 || avgChunk >= 4.0) && avgChunk >= 3.5 && avgChunk <= 4.3) ||
           (onlyAskUser && feat.turns === 1 && feat.hidR === 3 && feat.maxRInTurn === 3 && durMs >= 16000 && durMs <= 21000 && feat.meanChars === 0) ||
           (onlyAskUser && feat.turns >= 4 && feat.hidR === 3 && feat.maxRInTurn === 1 && durMs > 0 && durMs < 15000) ||
@@ -6219,6 +6322,7 @@ const ChatHabitFingerprint = (() => {
         const isFable51Profile = !isFable51LowProfile && (!isHaikuProfile || isFable51CodingCore || hasHtmlFable51Rule) && (
           isFable51CodingCore ||
           hasHtmlFable51Rule ||
+          (isPureBashTurn && ((feat.bashWcCombined || 0) > 0 || (feat.bashWcLsLh || 0) > 0) && (feat.bashGrepSvgTags || 0) === 0 && (feat.preToolTextChars || 0) === 0 && feat.hidR === 1 && (cps === 0 || cps >= 115)) ||
           (feat.interToolTextChars >= (isMicroProbe ? 45 : 100) && feat.claudeWarmPalette === 0) ||
           (feat.hidR >= 18 && feat.maxRInTurn >= 18 && avgChunk >= 6.0 && avgChunk <= 12.0) ||
           (feat.preToolTextChars === 0 && feat.interToolTextChars === 0 && feat.turns === 2 && feat.write >= 2 && (feat.edit || 0) === 0 && feat.maxRInTurn >= 3 && cps >= 115 && feat.writtenChars >= 12500 && (feat.prefersReducedMotion || 0) === 0) ||
@@ -6229,6 +6333,7 @@ const ChatHabitFingerprint = (() => {
         );
         const isOpus55HighProfile = !isHaikuProfile && !isFable51Profile && !isOpus56HighProfile && (
           (hasHtmlOpus55Rule && durMs >= 180000 && (feat.writtenChars || 0) >= 24000) ||
+          (isPureBashTurn && ((feat.bashSedUnquoted || 0) > 0 || (feat.bashPy3InlineC || 0) > 0 || ((feat.bashPy3EofHeredoc || 0) > 0 && feat.hidR >= 2 && (feat.preToolTextChars || 0) < 75) || ((feat.bashWcCombined || 0) > 0 && (feat.bashGrepSvgTags || 0) === 0 && feat.hidR >= 2 && (feat.preToolTextChars || 0) === 0 && (cps === 0 || (cps >= 105 && cps < 130))))) ||
           (isMicroProbe && feat.turns === 1 && feat.write === 1 && feat.bash === 1 && (feat.preToolTextChars || 0) === 0 && feat.hidR === 2 && (feat.prefersReducedMotion || 0) >= 1 && cps >= 106 && cps < 130 && avgChunk >= 8.5 && avgChunk <= 9.6 && durMs >= 24000 && durMs < 30000) ||
           (feat.turns === 1 && feat.totalTools === 2 && (feat.edit || 0) === 1 && feat.preNarrate >= 0.8 && durMs >= 180000 && (feat.meanChars || 0) >= 1500) ||
           (feat.preToolTextChars === 0 && feat.interToolTextChars === 0 && feat.turns === 2 && feat.write >= 2 && (feat.edit || 0) === 0 && (feat.lowerDoctype || 0) === 0 && (feat.colorSchemeCss || 0) === 0 && (feat.prefersReducedMotion || 0) >= 1 && ((feat.prefersReducedMotion || 0) >= 2 || durMs >= 80000 || avgChunk >= 10.5 || feat.writtenChars >= 18000)) ||
@@ -6242,6 +6347,7 @@ const ChatHabitFingerprint = (() => {
         );
         const isOpus55Profile = !isHaikuProfile && !isFable51Profile && !isOpus56HighProfile && !isOpus55MedProfile && !isOpus55HighProfile && (
           isOpus55MaxCoding ||
+          (isPureBashTurn && ((feat.bashStatPrintf || 0) > 0 || ((feat.bashWcCombined || 0) > 0 && feat.hidR >= 2 && cps > 0 && cps < 105))) ||
           (isMicroProbe && feat.turns === 1 && feat.write === 1 && feat.bash === 1 && (feat.preToolTextChars || 0) === 0 && feat.hidR === 2 && (feat.prefersReducedMotion || 0) >= 1 && cps >= 95 && cps < 105 && avgChunk >= 6.0 && avgChunk <= 7.8 && durMs >= 40000) ||
           ((feat.write >= 1 || feat.bash >= 1) && feat.preToolTextChars >= (isMicroProbe ? 75 : 120) && feat.interToolTextChars === 0 && feat.claudeWarmPalette === 0 && !(isMicroProbe && cps >= 150) && (feat.bash >= (isMicroProbe ? 1 : 2) || rPerTurn <= 1.2)) ||
           (feat.read >= 10 && feat.bash >= 10 && feat.write === 1 && (feat.edit || 0) === 0 && feat.maxRInTurn <= 3) ||
@@ -6250,6 +6356,7 @@ const ChatHabitFingerprint = (() => {
         );
         const isSonnet55Profile = !isHaikuProfile && !isFable51Profile && !isOpus56HighProfile && !isOpus55MedProfile && !isOpus55HighProfile && !isOpus55Profile && (
           isSonnetPlainMulti ||
+          (isPureBashTurn && ((feat.bashWcCombined || 0) > 0 && (feat.bashGrepSvgTags || 0) > 0)) ||
           (isMicroProbe && feat.turns === 1 && feat.write === 1 && feat.bash === 1 && ((feat.preToolTextChars >= 100 && cps >= 150) || ((feat.preToolTextChars || 0) === 0 && feat.hidR === 1 && durMs < 26000 && ((cps >= 95 && cps < 125 && avgChunk >= 8.5 && avgChunk <= 9.8 && (feat.prefersReducedMotion || 0) >= 1 && (feat.writtenChars || 0) < 2150) || ((feat.boxComment || 0) === 0 && (feat.prefersReducedMotion || 0) === 0 && cps < 90))))) ||
           feat.claudeWarmPalette > 0 ||
           (feat.totalTools > 0 && feat.boxComment === 1 && feat.preToolTextChars < 60 && feat.interToolTextChars < 80 && !(feat.turns === 1 && feat.hidR >= 2 && (feat.parallelSteps || 0) >= 1 && (feat.writtenChars || 0) >= 19500 && durMs >= 160000)) ||
@@ -7480,7 +7587,7 @@ const ChatHabitFingerprint = (() => {
     const compAsstForGuard = Array.isArray(chat?.messages) ? chat.messages.filter(x => x && x.role === 'assistant' && !x.failed && x.status !== 'failed' && x.status !== 'pending') : [];
     const hasLoadedMsgs = compAsstForGuard.length > 0;
     const hasNewerLoadedTurn = Boolean(hasLoadedMsgs && ((compAsstForGuard.length > (Number(known?.completedTurnCount) || 0)) || !known?.lastMessageId || (compAsstForGuard.at(-1)?.id && compAsstForGuard.at(-1).id !== known.lastMessageId) || (known?.reverseVer || 0) < 183));
-    if (!interactive && !force && !hasLoadedMsgs && !hasNewerLoadedTurn && !known?.habitFeatures && ((typeof TitleCipher !== 'undefined' && TitleCipher.isEncoded?.(cloudTitle)) || (restoredMeta && !restoredMeta.fromPrefix && !restoredMeta.fromLocal))) return known;
+    if (!interactive && ((typeof TitleCipher !== 'undefined' && TitleCipher.isEncoded?.(cloudTitle)) || (restoredMeta && !restoredMeta.fromPrefix)) && !(known?.lastMessageId && compAsstForGuard.at(-1)?.id && compAsstForGuard.at(-1).id !== known.lastMessageId)) return known;
     if (!interactive && !force && !hasLoadedMsgs && restoredMeta?.fromPrefix && (!known?.habitFeatures && (known?.reverseVer || 0) >= 174)) return known;
     const hasAuthoritativeApi = known && !known.guess && !known.fromTitle && !known.reverseInferred && !known.billingProbe && !known.habitInferred && (known.response || (known.internal && !known.billingProbe));
     if (hasAuthoritativeApi && !force) return known;
@@ -7530,6 +7637,7 @@ const ChatHabitFingerprint = (() => {
 
     const res = resPreCheck || analyze(chat, known, { ignoreExactSid: Boolean((interactive && force) || preferLatestTurn), preferLatestTurn });
     if (!res || !res.best) return null;
+    if (!interactive && res.features && (Number(res.features.chars) || 0) < 25 && (Number(res.features.totalTools) || 0) === 0 && (Number(res.features.codeBlocks) || 0) === 0 && (Number(res.features.rBlocks) || 0) === 0) return known || null;
     if (!interactive && res.features?.isOpenThink && typeof BillingProbe !== 'undefined' && typeof BillingProbe.markAsOpenSourceModel === 'function') {
       return BillingProbe.markAsOpenSourceModel(chat);
     }
@@ -10838,7 +10946,7 @@ const BillingProbe = (() => {
       (diagnostics?.samples?.observations > 0)
     );
     try {
-    if (!opts?.noModelSync && (!isFullEncodedTitle || hasLocalSyncEvidence) && (isActiveOrLoadedChat || hasLocalSyncEvidence) && sid && mergedCandidates.length > 0 && (!model || ((!model.userCorrected || Boolean(out.habitRoute?.routed && out.habitRoute?.fromBank)) && !(model.fingerprint?.result && !model.reverseInferred && !model.habitInferred && !model.billingProbe)))) {
+    if (!opts?.readOnly && !opts?.noModelSync && !isFullEncodedTitle && (isActiveOrLoadedChat || hasLocalSyncEvidence) && sid && mergedCandidates.length > 0 && (!model || ((!model.userCorrected || Boolean(out.habitRoute?.routed && out.habitRoute?.fromBank)) && !(model.fingerprint?.result && !model.reverseInferred && !model.habitInferred && !model.billingProbe)))) {
       const top0 = mergedCandidates[0], top1 = mergedCandidates[1];
       const hr = out.habitRoute;
       const isNowRouted = Boolean(top0?.routed || hr?.routed || diagnostics?.routeSwitched || diagnostics?.effortDowngraded || diagnostics?.routeType);
@@ -11104,7 +11212,7 @@ const BillingProbe = (() => {
     const compAsstForGuard = Array.isArray(chat?.messages) ? chat.messages.filter(x => x && x.role === 'assistant' && !x.failed && x.status !== 'failed' && x.status !== 'pending') : [];
     const hasLoadedMsgs = compAsstForGuard.length > 0;
     const hasNewerLoadedTurn = Boolean(hasLoadedMsgs && ((compAsstForGuard.length > (Number(known?.completedTurnCount) || 0)) || !known?.lastMessageId || (compAsstForGuard.at(-1)?.id && compAsstForGuard.at(-1).id !== known.lastMessageId) || (known?.reverseVer || 0) < 183));
-    if (!interactive && !forceLock && !hasLoadedMsgs && !hasNewerLoadedTurn && !known?.habitFeatures && ((typeof TitleCipher !== 'undefined' && TitleCipher.isEncoded?.(cloudTitle)) || (restoredMeta && !restoredMeta.fromPrefix && !restoredMeta.fromLocal))) {
+    if (!interactive && !forceLock && ((typeof TitleCipher !== 'undefined' && TitleCipher.isEncoded?.(cloudTitle)) || (restoredMeta && !restoredMeta.fromPrefix)) && !(known?.lastMessageId && compAsstForGuard.at(-1)?.id && compAsstForGuard.at(-1).id !== known.lastMessageId)) {
       return { entry: known, best, close: [best], standout: true, preimage: sum.preimage, payment: sum.payment };
     }
     if (!interactive && !forceLock && !hasLoadedMsgs && restoredMeta?.fromPrefix && (known?.reverseVer || 0) >= 174) {

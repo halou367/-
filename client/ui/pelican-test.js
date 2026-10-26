@@ -3,10 +3,11 @@
 // 第一段正文一出现时如果已经看到真实的思考（思考块 / 静默 ≥ 5 秒）就停止生成，不浪费额度；思考时长 = 服务器接单 → 第一个输出之间的静默时间。
 // 没看到思考（agent 模型直接写文件）就让回复写完，用「总耗时 − 出字时间」估算（标「估算」）。分数记进这条对话的推理分账本（Strength.settle）。
 const PelicanTest = (() => {
-  const active = new WeakMap(), KEY = 'pelican';
+  const active = new WeakMap(), microActive = new WeakMap(), KEY = 'pelican';
   const all = () => { const d = Store.get(KEY, {}); return d && typeof d === 'object' ? d : {}; };
   const result = sid => all()[sid] || null;
   const isRunning = chat => active.has(chat);
+  const isMicroRunning = chat => microActive.has(chat);
   function drop(sids) { const d = all(); let n = 0; for (const k of sids) if (k in d) { delete d[k]; n++; } if (n) Store.set(KEY, d); return n; }
   function remember(sid, row) {
     const d = all(); delete d[sid]; d[sid] = row; const ks = Object.keys(d);
@@ -34,16 +35,17 @@ const PelicanTest = (() => {
     return n;
   }
   const aborted = () => Object.assign(Error('已取消'), { name: 'AbortError' });
-  async function start(chat) {
+  async function start(chat, opts = {}) {
     if (active.has(chat)) { active.get(chat).abort(); return; }
     if (!chat?.sid) { toast('请先打开需要测试的对话', 'err'); return; }
-    if (chat.busy || chat.gacha || chat.queue?.length || chat.fpLocked || (typeof Fingerprint !== 'undefined' && Fingerprint.isRunning(chat))) { toast('请等待当前回复或任务结束', 'err'); return; }
+    const alreadySent = Boolean(opts?.alreadySent);
+    if ((!alreadySent && chat.busy) || chat.gacha || chat.queue?.length || chat.fpLocked || (typeof Fingerprint !== 'undefined' && Fingerprint.isRunning(chat))) { toast('请等待当前回复或任务结束', 'err'); return; }
     const ctl = new AbortController(), sid = chat.sid; active.set(chat, ctl);
     const say = t => { chat.probeProgress = t; try { chat.emit(); } catch {} };
-    say('鹈鹕测试：发送中…');
+    if (!alreadySent) say('鹈鹕测试：发送中…');
     try {
-      const before = chat.fmt;
-      await chat.send(GachaPrompts.svg());
+      const before = alreadySent ? null : chat.fmt;
+      if (!alreadySent) await chat.send(GachaPrompts.svg());
       say('鹈鹕测试：等待思考结束…');
       /* 第一段输出出现 = 思考结束。已经看到真实的思考（思考块 / 静默 ≥ THINK_MIN 秒）就像以前一样立刻停止，省额度；
          没看到（agent 模型常常直接调用写文件工具，静默只有一两秒）就让这一轮跑完，再用回复时间和内容估算 */
@@ -151,6 +153,126 @@ const PelicanTest = (() => {
     } finally { active.delete(chat); chat.probeProgress = ''; try { chat.emit(); } catch {} }
   }
 
+  async function startMicro(chat, customPrompt = '', opts = {}) {
+    if (microActive.has(chat)) {
+      microActive.get(chat).abort();
+      if (chat?.busy && typeof chat.stop === 'function') { try { await chat.stop(); } catch {} }
+      return null;
+    }
+    if (!chat?.sid) { toast('请先打开需要测试的对话', 'err'); return null; }
+    const alreadySent = Boolean(opts?.alreadySent);
+    if ((!alreadySent && chat.busy) || chat.gacha || chat.queue?.length || chat.fpLocked || (typeof Fingerprint !== 'undefined' && Fingerprint.isRunning(chat))) {
+      toast('请等待当前回复或任务结束', 'err');
+      return null;
+    }
+    const ctl = new AbortController(), sid = chat.sid;
+    microActive.set(chat, ctl);
+    const prevMi = typeof Models !== 'undefined' ? Models.get(sid) : null;
+    const prevModel = (prevMi && !prevMi.guess && prevMi.name) ? ((typeof Strength !== 'undefined' && Strength.canon) ? Strength.canon(prevMi.name) : String(prevMi.name)) : '';
+    chat._isMicroProbe = true;
+    chat._preferLatestTurn = true;
+    const say = t => { chat.probeProgress = t; try { chat.emit(); } catch {} };
+    try {
+      if (!alreadySent) {
+        say('微缩探针：发送探针指令中…');
+        const pText = customPrompt || ((typeof GachaPrompts !== 'undefined' && typeof GachaPrompts.habit === 'function')
+          ? GachaPrompts.habit()
+          : '请在工作区创建并保存一个自包含的单文件 `.html` 卡片，内联一个极简 2D 动态 SVG 状态徽章，全文控制在 35～45 行以内，随后执行一条终端自检命令同时核对行数、字节数与 SVG 图元数量，并用中文分 2～3 条加粗要点总结你的设计与动效实现，不要调用提问工具。');
+        await chat.send(pText, []);
+      }
+      say('微缩探针：等待模型思考与创建微组件…');
+      let seenWrite = false, seenBash = false;
+      for (let i = 0; i < 1800; i++) {
+        if (ctl.signal.aborted) throw aborted();
+        const liveMsg = chat.live || (Array.isArray(chat.messages) ? chat.messages.filter(m => m && m.role === 'assistant').at(-1) : null);
+        const parts = Array.isArray(liveMsg?.parts) ? liveMsg.parts : [];
+        let hasWriteNow = false, hasBashNow = false;
+        for (const p of parts) {
+          if (!p) continue;
+          const tn = String(p.toolName || (typeof p.type === 'string' && p.type.startsWith('tool-') ? p.type.slice(5) : '') || '').toLowerCase();
+          if (tn === 'write_file' && p.input) hasWriteNow = true;
+          if ((tn === 'bash' || tn === 'execute_command') && p.input?.command) hasBashNow = true;
+        }
+        if (hasWriteNow && !seenWrite) {
+          seenWrite = true;
+          say('微缩探针：已捕获 SVG 微组件代码，等待 Bash 终端自检…');
+          try {
+            if (typeof ChatHabitFingerprint !== 'undefined' && typeof ChatHabitFingerprint.identifyAndApply === 'function') {
+              ChatHabitFingerprint.identifyAndApply(chat, { force: true, preferLatestTurn: true });
+            }
+          } catch {}
+        }
+        if (hasBashNow && !seenBash) {
+          seenBash = true;
+          say('微缩探针：已捕获 Bash 自检命令，正在实时锁定型号…');
+          try {
+            if (typeof ChatHabitFingerprint !== 'undefined' && typeof ChatHabitFingerprint.identifyAndApply === 'function') {
+              ChatHabitFingerprint.identifyAndApply(chat, { force: true, preferLatestTurn: true });
+            }
+          } catch {}
+        }
+        if (!chat.busy && i > 4) break;
+        await sleep(250);
+      }
+      if (!ctl.signal.aborted && !chat.busy) {
+        say('微缩探针：正在综合 Bash 指纹、SVG 结构与账单锁定型号…');
+        await sleep(250);
+        try { if (typeof Fmt !== 'undefined' && Fmt.fromReplay) await Fmt.fromReplay(chat); } catch {}
+        try {
+          if (typeof ChatHabitFingerprint !== 'undefined' && typeof ChatHabitFingerprint.identifyAndApply === 'function') {
+            ChatHabitFingerprint.identifyAndApply(chat, { force: true, preferLatestTurn: true });
+          } else if (typeof BillingProbe !== 'undefined' && typeof BillingProbe.habit?.identifyAndApply === 'function') {
+            BillingProbe.habit.identifyAndApply(chat, { force: true, preferLatestTurn: true });
+          }
+        } catch {}
+        if (typeof BillingProbe !== 'undefined' && typeof BillingProbe.refresh === 'function') {
+          try {
+            await Promise.race([BillingProbe.refresh(chat, { force: true }), sleep(2400)]);
+            if (typeof ChatHabitFingerprint !== 'undefined' && typeof ChatHabitFingerprint.identifyAndApply === 'function') {
+              ChatHabitFingerprint.identifyAndApply(chat, { force: true, preferLatestTurn: true });
+            } else if (typeof BillingProbe.habit?.identifyAndApply === 'function') {
+              BillingProbe.habit.identifyAndApply(chat, { force: true, preferLatestTurn: true });
+            }
+            if (typeof BillingProbe.applyReverseIdentity === 'function') {
+              BillingProbe.applyReverseIdentity(chat, { interactive: false, force: true, preferLatestTurn: true });
+            }
+          } catch {}
+        }
+        const latestMi = typeof Models !== 'undefined' ? Models.get(sid) : null;
+        const latestName = (latestMi && !latestMi.guess && latestMi.name) ? Strength.canon(latestMi.name) : '';
+        if (prevModel && latestName && Strength.canon(prevModel) !== Strength.canon(latestName)) {
+          chat.routed = true;
+          chat.routeFrom = prevModel;
+          chat.routeTo = latestName;
+          try {
+            const curM = Models.get(sid) || {};
+            Models.put(sid, { ...curM, name: latestName, guess: false, routed: true, routeFrom: prevModel, routeTo: latestName, routeType: 'model' });
+            Bus.emit('model', chat, Models.get(sid));
+          } catch {}
+          toast('检测到模型路由切换：' + prevModel + ' → ' + latestName, 'warn');
+        }
+        try { if (typeof PelicanShots !== 'undefined' && PelicanShots.auto) await PelicanShots.auto(sid, chat); } catch {}
+        const finalMi = typeof Models !== 'undefined' ? Models.get(sid) : null;
+        const finalName = (finalMi && finalMi.name) ? (finalMi.rawLabel || Strength.canon(finalMi.name)) : '未识别';
+        const bashTag = (finalMi?.habitTags || []).find(t => /Bash指纹/.test(t)) || '';
+        const scoreVal = finalMi?.reverseScore ?? finalMi?.habitScore ?? null;
+        const scoreTxt = scoreVal != null ? (' · 推理分 ' + Math.round(scoreVal)) : '';
+        toast('微缩探针完成 · ' + finalName + scoreTxt + (bashTag ? ' · ' + bashTag : ''));
+        return { ok: true, name: finalName, score: scoreVal, bashTag, routed: Boolean(chat.routed) };
+      }
+      return null;
+    } catch (e) {
+      if (chat.busy && typeof chat.stop === 'function') { try { await chat.stop(); } catch {} }
+      toast(e?.name === 'AbortError' ? '微缩探针测试已停止' : '微缩探针测试失败：' + describe(e), e?.name === 'AbortError' ? undefined : 'err');
+      return null;
+    } finally {
+      microActive.delete(chat);
+      chat.probeProgress = '';
+      delete chat._preferLatestTurn;
+      try { chat.emit(); UI?.renderTabs?.(); UI?.renderListSoon?.(); Dock?.soon?.(); } catch {}
+    }
+  }
+
   let _activeMenuPop = null;
   let _activeMenuBtn = null;
   let _menuGlobalBound = false;
@@ -204,12 +326,18 @@ const PelicanTest = (() => {
     const chat = opts.chat || (tab?.sid && typeof Chats !== 'undefined' ? Chats.get(tab.sid) : null);
     const curMode = opts.mode || (chat?.isEvaluation ? (chat.evalMode || 'battle') : (typeof ModeState !== 'undefined' && ModeState.getMode ? ModeState.getMode() : 'agent'));
 
+    const normKind = String(kind || 'pelican').toLowerCase();
+    const isMicroKind = normKind === 'habit' || normKind === 'micro' || normKind === 'probe';
+    if (chat && isMicroKind && (isMicroRunning(chat) || (chat._isMicroProbe && chat.busy))) {
+      await startMicro(chat);
+      return null;
+    }
     if (chat && isRunning(chat)) {
       await start(chat);
       return null;
     }
     if (chat && chat.busy) {
-      if (chat.isEvaluation && typeof chat.stop === 'function') {
+      if ((chat.isEvaluation || chat._isMicroProbe) && typeof chat.stop === 'function') {
         await chat.stop();
         return null;
       }
@@ -217,9 +345,11 @@ const PelicanTest = (() => {
       return null;
     }
 
-    const normKind = String(kind || 'pelican').toLowerCase();
     if ((normKind === 'pelican' || normKind === 'svg') && chat && chat.sid && !chat.isEvaluation) {
       return start(chat);
+    }
+    if (isMicroKind && chat && chat.sid && !chat.isEvaluation) {
+      return startMicro(chat);
     }
 
     let prompt = '';
@@ -367,5 +497,5 @@ const PelicanTest = (() => {
     return null;
   }
 
-  return { start, isRunning, result, of: result, all, merge, drop, openMenu, closeMenu, runQuickTest, classifyHtmlSvg };
+  return { start, startMicro, isRunning, isMicroRunning, result, of: result, all, merge, drop, openMenu, closeMenu, runQuickTest, classifyHtmlSvg };
 })();

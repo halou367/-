@@ -38,6 +38,10 @@ Push-Location $ClientDir
 try {
   $electronExe = Resolve-Path 'node_modules/electron/dist/electron.exe' -ErrorAction SilentlyContinue
   if (-not $electronExe) {
+    $toolsExe = Join-Path (Split-Path -Parent $RepoRoot) 'tools/electron-44.7.2/electron.exe'
+    if (Test-Path $toolsExe) { $electronExe = $toolsExe }
+  }
+  if (-not $electronExe) {
     $unpackedExe = Join-Path $ClientDir 'release/win-unpacked/Brana AI.exe'
     if (Test-Path $unpackedExe) { $electronExe = $unpackedExe }
   }
@@ -61,6 +65,9 @@ try {
   }
 
   if (-not $SkipBrowserChecks) {
+    if (-not $env:NODE_PATH -and (Test-Path 'G:\项目文件\arenawebapi\Arena-Web-Manager\node_modules')) {
+      $env:NODE_PATH = 'G:\项目文件\arenawebapi\Arena-Web-Manager\node_modules'
+    }
     $browserScripts = @(
       'scripts/check-connection-browser.cjs',
       'scripts/check-auth-browser.cjs',

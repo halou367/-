@@ -12,17 +12,17 @@ const SID = '019a0010-0000-7000-8000-0000000000b1';
     await p.addStyleTag({ content: '*{transition:none!important;animation:none!important}' });
     await p.clock.runFor(3000);
     const nav = []; p.on('framenavigated', fr => { if (fr === p.mainFrame()) nav.push(fr.url()); });
-    const base = await p.evaluate(() => ({ layer: document.getElementById('__anc_layer')?.dataset.theme, site: getComputedStyle(document.querySelector('.site-btn')).borderRadius, pe: getComputedStyle(document.getElementById('__anc_layer')).pointerEvents }));
+    const base = await p.evaluate(() => { const l = document.getElementById('__anc_layer'), w = document.querySelector('#__anc_webfoot')?.shadowRoot?.querySelector('.anc-h'); return { layer: (l || w)?.dataset.theme, site: getComputedStyle(document.querySelector('.site-btn')).borderRadius, pe: l ? getComputedStyle(l).pointerEvents : 'none' }; });
     assert.equal(base.layer, dark ? 'dark' : 'light', 'layer follows browser colours');
     assert.equal(base.pe, 'none', 'layer itself does not block the site');
-    const want = { '.bmeter': '.bdonut', '.ipit': '.region-ip-back', '.lpbtn': '.lppop', '.fp-library-btn': '.fp-library-back' };
+    const want = { '.ipit': '.region-ip-back', '.lpbtn': '.lppop', '.fp-library-btn': '.modal-back' };
     for (const [btn, pop] of Object.entries(want)) {
       await p.locator('#__anc_webfoot #bar ' + btn).first().click(); await p.clock.runFor(800);
       const r = await p.evaluate(sel => { const e = document.querySelector('#__anc_layer ' + sel); return e ? { pos: getComputedStyle(e).position, vis: e.getBoundingClientRect().width > 0 } : null; }, pop);
       assert.ok(r && r.vis && r.pos === 'fixed', btn + ' opens ' + pop + ' as a floating window in the page ' + JSON.stringify(r));
       await p.evaluate(() => { for (const x of [...document.getElementById('__anc_layer').children]) if (x.id !== 'anc-toasts') x.remove(); });
     }
-    assert.match(await p.locator('#__anc_webfoot #bar .ipit').innerText(), /ProxyIP|SSTP/, 'exit type shown in the bar');
+    assert.match(await p.locator('#__anc_webfoot #bar .ipit').getAttribute('data-nettip'), /ProxyIP|SSTP/, 'exit type shown in the bar');
     assert.deepEqual(nav, [], 'never navigates back to the client');
     assert.equal(p.url(), 'https://arena.ai/agent/' + SID);
     assert.equal(await p.evaluate(() => getComputedStyle(document.querySelector('.site-btn')).borderRadius), base.site, 'site styles untouched');

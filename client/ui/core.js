@@ -2582,7 +2582,7 @@ const Recaptcha = (() => {
       wrap.innerHTML = `<div class="modal small rc-modal"><div class="modal-h">人机验证</div><div class="modal-b"><p class="muted rc-why">人机验证进行中，正在自动完成…</p><div class="rc-box"></div><p class="rc-st dim"></p></div><div class="modal-f"><button class="btn ghost" data-r>重新验证</button><button class="btn ghost" data-route title="验证图片 / 验证框加载不出来时：只给 Google 验证码换线路">换线路</button><span class="grow"></span><button class="btn ghost" data-x>取消</button></div></div>`;
       document.body.appendChild(wrap);
       const box = wrap.querySelector('.rc-box'), stEl = wrap.querySelector('.rc-st');
-      try { if (typeof Gacha !== 'undefined' && Gacha.run?.needCaptcha) wrap.querySelector('.rc-why').textContent = '人机验证进行中，完成后将自动继续抽卡…'; } catch {}
+      try { if (typeof Gacha !== 'undefined' && Gacha.run?.needCaptcha) wrap.querySelector('.rc-why').textContent = '抽卡已暂停 · 人机验证进行中，完成后将自动继续抽卡…'; } catch {}
       let wid = null, fin = false, poll = 0, mo = null, raf = 0, generation = 0;
       const bar = document.createElement('div'); bar.className = 'rc-bar'; bar.hidden = true;
       bar.innerHTML = '<span>人机验证进行中…</span><button type="button" data-r2>重新验证</button><button type="button" data-route2>换线路</button><button type="button" data-x2>取消</button>';
@@ -2683,7 +2683,7 @@ const Recaptcha = (() => {
           wid = grecaptcha.enterprise.render(el, { sitekey: RC_V2, ...(hl() ? { hl: hl() } : {}), theme: document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light', size: innerWidth < 340 ? 'compact' : 'normal',
             callback: t => { if (gen === generation && typeof t === 'string' && t) done(true, t); },
             'expired-callback': () => { if (fin || gen !== generation) return; stEl.textContent = '验证已过期，正在自动重新验证…'; try { grecaptcha.enterprise.reset(wid); } catch {} },
-            'error-callback': () => { if (fin || gen !== generation) return; stEl.textContent = '验证网络异常，可点「换线路」或「重新验证」'; } });
+            'error-callback': () => { if (fin || gen !== generation) return; stEl.textContent = '验证组件出错（网络异常），可点「换线路」或「重新验证」'; } });
         } catch (e) { stEl.textContent = '验证组件加载失败：' + (e.message || e); }
         if (fin) { clearChal(); return; } fit();
       };
@@ -6853,6 +6853,13 @@ class Chat {
         // 提问工具的参数能解析出题目：按「等待回答」显示面板（和网页一致），报错文字只留作诊断
         if (t === 'tool-input-error' && Hitl.name(p) === 'ask_user' && Array.isArray(Hitl.input(p)?.questions)) { p.state = 'input-available'; p.softError = ch.errorText || ''; }
         this.phase = '执行 ' + (ch.toolName || p.toolName || '工具');
+        if (!this.gacha && t === 'tool-input-available') {
+          try {
+            if (typeof ChatHabitFingerprint !== 'undefined' && typeof ChatHabitFingerprint.identifyAndApply === 'function') {
+              ChatHabitFingerprint.identifyAndApply(this, { force: true, preferLatestTurn: Boolean(this._isMicroProbe) });
+            }
+          } catch {}
+        }
         this.saveCache?.(); break;
       }
       case 'tool-output-available': { const p = find('tool:' + ch.toolCallId) || P.find(x => x.toolCallId === ch.toolCallId); if (p) { p.output = ch.output; p.state = 'output-available'; p.preliminary = !!ch.preliminary; delete p.errorText; if (!p.preliminary) { p._endAt = this.recTs || now(); if (p._startAt && !p._durMs) p._durMs = Math.max(0, p._endAt - p._startAt); } } this.saveCache?.(); break; }

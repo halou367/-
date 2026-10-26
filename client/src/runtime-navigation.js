@@ -35,7 +35,7 @@ function loadURLAlive(wc, url, timeout = 45000, { forceReload = false } = {}) {
       return /ERR_EMPTY_RESPONSE|ERR_NETWORK_CHANGED|ERR_SOCKET_NOT_CONNECTED|ERR_CONNECTION_RESET|ERR_CONNECTION_CLOSED|ERR_HTTP2_PROTOCOL_ERROR|ERR_TIMED_OUT|ERR_TUNNEL_CONNECTION_FAILED/i.test(c);
     };
     try {
-      if(forceReload&&wc.getURL?.()===url&&typeof wc.reloadIgnoringCache==='function'){wc.once('did-finish-load',loaded);wc.on('did-fail-load',failed);wc.reloadIgnoringCache();}
+      if((forceReload||String(url||'').includes('#'))&&wc.getURL?.()===url&&typeof wc.reloadIgnoringCache==='function'){wc.once('did-finish-load',loaded);wc.on('did-fail-load',failed);wc.reloadIgnoringCache();}
       else Promise.resolve(wc.loadURL(url)).then(() => finish(), err => {
         err = normNavErr(err);
         if (!settled && !wc.isDestroyed() && isTransientNetErr(err)) {

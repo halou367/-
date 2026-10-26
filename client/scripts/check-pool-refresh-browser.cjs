@@ -30,10 +30,10 @@ async function run(){
    assert.deepEqual(await f.page.evaluate(()=>[...new Set(__poolLive.resolves)]),['proxyip.jp.example.net'],'opening selected JP only resolves JP');
    assert.equal(await f.page.locator('.pip-work progress').getAttribute('aria-label'),'ProxyIP 检测进度');
    const first=await f.page.evaluate(()=>{const k=__poolLive.requests[0].pips[0];__poolLive.emit(0,k);return k;});
+   if(await f.page.locator('.pip-list').isHidden())await f.page.locator('.pip-cur').click();
    await advance(f,k=>!!document.querySelector('.pip-row[data-k="'+k+'"]'),first);
    assert.match(await f.page.locator('.pip-work').textContent(),/已检 1\/49/);
    assert.equal(await f.page.evaluate(()=>__poolLive.requests.every(x=>!x.cancelled)),true);
-   if(await f.page.locator('.pip-list').isHidden())await f.page.locator('.pip-cur').click();
    await f.page.locator('.pip-row[data-k="'+first+'"]').click();
    assert.equal(await f.page.locator('.t-ok').isEnabled(),true,'a good early result is selectable while other IPs are still testing');
    assert.equal(await f.page.evaluate(()=>__routeFixture.writes.length),0,'selection and background probing never apply a route');

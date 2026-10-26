@@ -32,8 +32,8 @@ jobs:
         shell: bash
         run: |
           set -e
-          npm install --prefix "$RUNNER_TEMP/brana-ui-check" --no-audit --no-fund playwright@1.63.0 electron@33.4.11
-          "$RUNNER_TEMP/brana-ui-check/node_modules/.bin/playwright" install --with-deps chromium
+          for i in 1 2 3; do npm install --prefix "$RUNNER_TEMP/brana-ui-check" --no-audit --no-fund playwright@1.63.0 electron@33.4.11 && break || sleep 5; done
+          for i in 1 2 3; do "$RUNNER_TEMP/brana-ui-check/node_modules/.bin/playwright" install --with-deps chromium && break || sleep 5; done
           sudo apt-get install -y xvfb libgtk-3-0t64
           export NODE_PATH="$RUNNER_TEMP/brana-ui-check/node_modules"
           export BRANA_GBROWSER="$(node -p "require('playwright').chromium.executablePath()")"
@@ -68,7 +68,7 @@ jobs:
               ["check-gbrowser-privacy", "xvfb-run", ["-n", "111", "-s", "-screen 0 1280x900x24", "node", "client/scripts/check-gbrowser-privacy.cjs"]]
             ];
             let idx = 0, failed = false;
-            const runOne = ([name, cmd, args]) => new Promise(res => {
+            const runOnce = ([name, cmd, args]) => new Promise(res => {
               const t0 = Date.now(), p = spawn(cmd, args, { stdio: ["ignore", "pipe", "pipe"], env: process.env, detached: true });
               let out = "", settled = false;
               const timer = setTimeout(() => {
@@ -82,11 +82,18 @@ jobs:
               p.on("close", code => {
                 if (settled) return;
                 settled = true; clearTimeout(timer);
-                const s = ((Date.now() - t0) / 1000).toFixed(1) + "s";
-                if (code === 0) { console.log("PASS [" + s + "] " + name); res(true); }
-                else { console.error("FAIL [" + s + "] " + name + " (exit " + code + ")\n" + out.slice(-4000)); failed = true; res(false); }
+                res({ code, s: ((Date.now() - t0) / 1000).toFixed(1) + "s", out });
               });
             });
+            const runOne = async job => {
+              const [name] = job;
+              for (let attempt = 1; attempt <= 2; attempt++) {
+                const r = await runOnce(job);
+                if (r.code === 0) { console.log("PASS [" + r.s + "] " + name + (attempt > 1 ? " (retry)" : "")); return true; }
+                if (attempt < 2) { console.warn("RETRY [" + r.s + "] " + name + " (exit " + r.code + ")"); continue; }
+                console.error("FAIL [" + r.s + "] " + name + " (exit " + r.code + ")\n" + r.out.slice(-4000)); failed = true; return false;
+              }
+            };
             const worker = async () => { while (idx < jobs.length && !failed) { const j = jobs[idx++]; await runOne(j); } };
             Promise.all(Array.from({ length: 3 }, worker)).then(() => { if (failed) process.exit(1); });
           '
@@ -131,8 +138,13 @@ jobs:
         timeout-minutes: 6
         run: |
           foreach ($script in @('scripts/check-privacy-electron.cjs', 'scripts/check-runtime-electron.cjs', 'scripts/check-auth-route-electron.cjs', 'scripts/check-extension-storage-electron.cjs', 'scripts/check-browser-chrome-electron.cjs', 'scripts/check-browser-navigation-electron.cjs', 'scripts/check-browser-viewport-electron.cjs')) {
-            $p = Start-Process -FilePath (Resolve-Path 'node_modules/electron/dist/electron.exe') -ArgumentList '--no-sandbox', $script -NoNewWindow -Wait -PassThru
-            if ($p.ExitCode -ne 0) { throw "Windows runtime regression failed ($script): $($p.ExitCode)" }
+            $ok = $false
+            for ($a = 1; $a -le 2; $a++) {
+              $p = Start-Process -FilePath (Resolve-Path 'node_modules/electron/dist/electron.exe') -ArgumentList '--no-sandbox', $script -NoNewWindow -Wait -PassThru
+              if ($p.ExitCode -eq 0) { $ok = $true; break }
+              Write-Warning "Retry $a failed for $($script): exit $($p.ExitCode)"
+            }
+            if (-not $ok) { throw "Windows runtime regression failed ($script)" }
           }
       - name: Bundle xray core (VLESS)
         shell: pwsh

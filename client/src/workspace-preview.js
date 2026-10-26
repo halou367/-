@@ -3,7 +3,7 @@ const crypto = require('node:crypto');
 const Policy = require('../ui/workspace-path');
 // WebRTC/STUN bypass URL request interception and do not require media permission.
 // Install this in every frame before any untrusted script, never through a host preload.
-const LOCKDOWN = "(()=>{for(const n of Object.getOwnPropertyNames(globalThis)){if(/^(?:webkit|moz)?RTC/.test(n)){try{Object.defineProperty(globalThis,n,{value:undefined,writable:false,configurable:false});}catch{throw Error('Cannot isolate real-time network capability');}}}})();";
+const LOCKDOWN = "(()=>{for(const n of Object.getOwnPropertyNames(globalThis)){if(/^(?:webkit|moz)?RTC/.test(n)){try{Object.defineProperty(globalThis,n,{value:undefined,writable:false,configurable:false});}catch{throw Error('Cannot isolate real-time network capability');}}}for(const w of ['Worker','SharedWorker']){if(typeof globalThis[w]==='function'){try{Object.defineProperty(globalThis,w,{value:function(){throw new DOMException('Worker denied','SecurityError');},writable:false,configurable:false});}catch{}}}})();";
 const VALID_ID = /^[a-zA-Z0-9-]{1,80}$/;
 const errorResponse = (code, text = 'Workspace preview request denied') => new Response(text, { status: code, headers: { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' } });
 

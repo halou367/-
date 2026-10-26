@@ -5030,7 +5030,7 @@ const UI = {
   },
   renderProbeTestBtn(tab, chat, mode) {
     const curMode = mode || (chat?.isEvaluation ? (chat.evalMode || 'battle') : (typeof ModeState !== 'undefined' && typeof ModeState.getMode === 'function' ? ModeState.getMode() : 'agent'));
-    const isProbeRun = Boolean(chat && chat._isMicroProbe && chat.busy);
+    const isProbeRun = Boolean(chat && ((typeof PelicanTest !== 'undefined' && PelicanTest.isMicroRunning?.(chat)) || (chat._isMicroProbe && chat.busy)));
     return h('button', {
       type: 'button',
       class: 'ib probebtn' + (isProbeRun ? ' run' : ''),
@@ -5088,6 +5088,9 @@ const UI = {
       if ((kind === 'pelican' || kind === 'svg') && !chat.isEvaluation && typeof PelicanTest !== 'undefined' && typeof PelicanTest.start === 'function') {
         return PelicanTest.start(chat);
       }
+      if ((kind === 'habit' || kind === 'micro' || kind === 'probe') && !chat.isEvaluation && typeof PelicanTest !== 'undefined' && typeof PelicanTest.startMicro === 'function') {
+        return PelicanTest.startMicro(chat, text);
+      }
       await chat.send(text, []);
       return { ok: true, kind, prompt: text, chat };
     }
@@ -5097,8 +5100,18 @@ const UI = {
     await this.startNew(tab, text, ta, null, []);
     const created = (tab?.sid && typeof Chats !== 'undefined') ? Chats.get(tab.sid) : null;
     if (created) {
-      if (kind === 'habit' || kind === 'micro' || kind === 'probe') created._isMicroProbe = true;
-      if (kind === 'pelican' || kind === 'svg') created._isPelicanTest = true;
+      if (kind === 'habit' || kind === 'micro' || kind === 'probe') {
+        created._isMicroProbe = true;
+        if (!created.isEvaluation && typeof PelicanTest !== 'undefined' && typeof PelicanTest.startMicro === 'function') {
+          void PelicanTest.startMicro(created, text, { alreadySent: true });
+        }
+      }
+      if (kind === 'pelican' || kind === 'svg') {
+        created._isPelicanTest = true;
+        if (!created.isEvaluation && typeof PelicanTest !== 'undefined' && typeof PelicanTest.start === 'function') {
+          void PelicanTest.start(created, { alreadySent: true });
+        }
+      }
     }
     return { ok: true, kind, prompt: text, chat: created };
   },

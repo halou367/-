@@ -105,22 +105,9 @@
 !macroend
 
 !macro customInstall
-  CreateShortCut "$newStartMenuLink" "$appExe" "" "$appExe" 0 "" "" "${APP_DESCRIPTION}"
-  ClearErrors
-  WinShell::SetLnkAUMI "$newStartMenuLink" "${APP_ID}"
-  ${ifNot} ${isNoDesktopShortcut}
-    CreateShortCut "$newDesktopLink" "$appExe" "" "$appExe" 0 "" "" "${APP_DESCRIPTION}"
-    ClearErrors
-    WinShell::SetLnkAUMI "$newDesktopLink" "${APP_ID}"
-  ${endif}
   ${if} $installMode == "all"
     SetShellVarContext current
     Delete "$SMPROGRAMS\${SHORTCUT_NAME}.lnk"
-    ${ifNot} ${isNoDesktopShortcut}
-      CreateShortCut "$DESKTOP\${SHORTCUT_NAME}.lnk" "$appExe" "" "$appExe" 0 "" "" "${APP_DESCRIPTION}"
-      ClearErrors
-      WinShell::SetLnkAUMI "$DESKTOP\${SHORTCUT_NAME}.lnk" "${APP_ID}"
-    ${endif}
     SetShellVarContext all
   ${endif}
   StrCpy $launchLink "$appExe"
