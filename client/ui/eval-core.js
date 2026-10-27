@@ -1255,10 +1255,11 @@ const EvalEngine = (() => {
         const rawUrl = a.url || '';
         const ct = String(a.contentType || a.mimeType || '').toLowerCase();
         const isVideo = ct.startsWith('video/') || /\.(mp4|webm|mov)(\?|$)/i.test(rawUrl || a.name || '');
+        const isAudio = ct.startsWith('audio/') || /\.(mp3|wav|ogg|m4a|aac|flac|opus)(\?|$)/i.test(rawUrl || a.name || '');
         const key = extractR2StorageKey(rawUrl) || extractR2StorageKey(a.name || '');
         const cachedSigned = key ? _signedUrlCache.get(key) : '';
         const effectiveUrl = (cachedSigned && !isR2UrlExpired(cachedSigned)) ? cachedSigned : rawUrl;
-        const partType = isVideo ? 'video' : 'image';
+        const partType = isVideo ? 'video' : isAudio ? 'audio' : 'image';
         const existingPart = parts.find(p => p && p.type === partType && (p.url === effectiveUrl || p.url === rawUrl || (key && p.r2Key === key)));
         if (existingPart) {
           if (effectiveUrl) existingPart.url = effectiveUrl;
@@ -2638,7 +2639,7 @@ const EvalEngine = (() => {
 
       const appendMediaPartToMsg = (msg, mediaType, rawUrlOrData, mimeType, extra = {}) => {
         if (!msg || !rawUrlOrData) return false;
-        const mime = mimeType || (mediaType === 'video' ? 'video/mp4' : 'image/png');
+        const mime = mimeType || (mediaType === 'video' ? 'video/mp4' : mediaType === 'audio' ? 'audio/wav' : 'image/png');
         const rawStr = String(rawUrlOrData).trim();
         if (!rawStr) return false;
         const url = (/^https?:\/\/|^data:|^blob:/i.test(rawStr))
@@ -2650,7 +2651,7 @@ const EvalEngine = (() => {
           msg.experimental_attachments.push({
             url,
             contentType: mime,
-            name: extra.name || key || (mediaType === 'video' ? 'generated-video.mp4' : 'generated-image.png'),
+            name: extra.name || key || (mediaType === 'video' ? 'generated-video.mp4' : mediaType === 'audio' ? 'generated-audio.wav' : 'generated-image.png'),
           });
         }
         if (!Array.isArray(msg.parts)) msg.parts = [];
@@ -2669,7 +2670,7 @@ const EvalEngine = (() => {
             name: extra.name || key || '',
           });
         }
-        msg.genPhase = mediaType === 'video' ? '✓ 视频生成完毕' : '✓ 图像生成完毕';
+        msg.genPhase = mediaType === 'video' ? '✓ 视频生成完毕' : mediaType === 'audio' ? '✓ 音频生成完毕' : '✓ 图像生成完毕';
         chat.phase = msg.genPhase;
         if (key && isR2UrlExpired(url)) {
           void refreshSignedAttachmentUrl(url, { sid: chat.sid }).then(fresh => {
@@ -2825,6 +2826,10 @@ const EvalEngine = (() => {
             if (appendMediaPartToMsg(targetMsg, 'video', item.url || item.data || item.video, item.mimeType || item.contentType || 'video/mp4', item)) {
               forceImmediateEmit = true;
             }
+          } else if (item.type === 'audio' && (item.url || item.data || item.audio)) {
+            if (appendMediaPartToMsg(targetMsg, 'audio', item.url || item.data || item.audio, item.mimeType || item.contentType || 'audio/wav', item)) {
+              forceImmediateEmit = true;
+            }
           } else if (item.type === 'sources' && Array.isArray(item.sources)) {
             targetMsg.parts.push({ type: 'sources', sources: item.sources });
           } else if (item.type === 'routed_model' && item.organization) {
@@ -2849,11 +2854,14 @@ const EvalEngine = (() => {
         }
         targetMsg.v = (targetMsg.v || 0) + 1;
       } else if (code === 'k' && val && typeof val === 'object') {
-        const mime = val.mimeType || val.contentType || 'image/png';
-        const rawPayload = val.url || val.data || val.image || null;
+        const mediaHint = String(val.type || val.mediaType || '').toLowerCase();
+        const mime = val.mimeType || val.contentType || (val.video || mediaHint.startsWith('video') ? 'video/mp4' : val.audio || mediaHint.startsWith('audio') ? 'audio/wav' : 'image/png');
+        const rawPayload = val.url || val.data || val.image || val.video || val.audio || null;
         if (rawPayload) {
           const isVideo = String(mime).startsWith('video/');
-          if (appendMediaPartToMsg(targetMsg, isVideo ? 'video' : 'image', rawPayload, mime, val)) {
+          const isAudio = String(mime).startsWith('audio/');
+          const mediaType = isVideo ? 'video' : isAudio ? 'audio' : 'image';
+          if (appendMediaPartToMsg(targetMsg, mediaType, rawPayload, mime, val)) {
             forceImmediateEmit = true;
           }
           targetMsg.v = (targetMsg.v || 0) + 1;

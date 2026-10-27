@@ -648,13 +648,13 @@ const userAtts = m => {
   if (m._prev?.length) return m._prev.map(a => ({ name: a.name, type: a.type, src: a.url, a }));
   const ups = (m.metadata?.uploads || []).map(u => { const hs = Uploads.hashOfKey(u.key) || u.hash || hashOfUrl(u.url); return { name: u.filename, type: u.mediaType, hs, src: hs && /^image\//.test(u.mediaType || '') ? Uploads.webPath(hs) : null }; });
   const expAtts = (Array.isArray(m.experimental_attachments) ? m.experimental_attachments : []).filter(a => a && a.url).map(a => {
-    const ct = a.contentType || (/\.(png|jpe?g|webp|gif|svg)(\?|$)/i.test(a.url) ? 'image/png' : 'application/octet-stream');
+    const ct = a.contentType || (/\.(png|jpe?g|webp|gif|svg)(\?|$)/i.test(a.url) ? 'image/png' : /\.(mp4|webm|mov|m4v)(\?|$)/i.test(a.url) ? 'video/mp4' : /\.(mp3|wav|ogg|m4a|aac|flac|opus)(\?|$)/i.test(String(a.url || a.name || '')) ? 'audio/mpeg' : 'application/octet-stream');
     const shortName = String(a.name || '').split('/').pop() || 'image';
     return { name: shortName, r2Key: a.name || '', type: ct, hs: a.name || a.url, src: /^image\//i.test(ct) ? a.url : null };
   });
   const used = new Set();
-  const files = (m.parts || []).filter(p => p && (p.type === 'file' || p.type === 'image' || p.type === 'video')).map(p => {
-    const ct = p.mediaType || p.contentType || (p.type === 'image' ? 'image/png' : p.type === 'video' ? 'video/mp4' : '');
+  const files = (m.parts || []).filter(p => p && (p.type === 'file' || p.type === 'image' || p.type === 'video' || p.type === 'audio')).map(p => {
+    const ct = p.mediaType || p.contentType || (p.type === 'image' ? 'image/png' : p.type === 'video' ? 'video/mp4' : p.type === 'audio' ? 'audio/mpeg' : '');
     const rawName = p.filename || p.name || 'file';
     const shortName = String(rawName).split('/').pop() || rawName;
     return { name: shortName, r2Key: p.name || '', type: ct, hs: hashOfUrl(p.url) || p.name || p.url, src: /^image\//i.test(ct) && /^(https?:|\/|data:|blob:)/.test(p.url || '') ? p.url : null };
@@ -3144,6 +3144,11 @@ const R = {
       if (typeof EvalView !== 'undefined' && typeof EvalView.renderSourcesPart === 'function') return EvalView.renderSourcesPart(p.sources);
       return h('div', { class: 'eval-sources' }, ...p.sources.filter(Boolean).slice(0, 12).map(s => h('a', { class: 'src', href: s.url || '#', target: '_blank' }, s.title || s.url)));
     }
+    if (p.type === 'audio' || (p.type === 'file' && /^audio\//i.test(p.mediaType || p.contentType || ''))) {
+      const u = p.url || p.audio || p.src || '';
+      if (!u) return null;
+      return R.media('audio:' + u, () => h('audio', { class: 'file-audio', controls: true, preload: 'metadata', src: u, title: p.filename || p.name || 'Audio', style: { maxWidth: '100%' } }));
+    }
     if (p.type === 'image' || p.type === 'video' || (p.type === 'file' && /^(image|video)\//i.test(p.mediaType || p.contentType || ''))) {
       if (typeof EvalView !== 'undefined' && typeof EvalView.renderMediaPart === 'function') {
         return EvalView.renderMediaPart(p);
@@ -3317,13 +3322,14 @@ const R = {
       if (n) segs.push(n);
     });
     flush();
-    if (Array.isArray(m.experimental_attachments) && m.experimental_attachments.length && !(m.parts || []).some(p => p && (p.type === 'image' || p.type === 'video'))) {
+    if (Array.isArray(m.experimental_attachments) && m.experimental_attachments.length && !(m.parts || []).some(p => p && (p.type === 'image' || p.type === 'video' || p.type === 'audio'))) {
       m.experimental_attachments.forEach((att, ai) => {
         if (!att || !att.url) return;
+        const attCt = att.contentType || (/\.(mp4|webm|mov|m4v)(\?|$)/i.test(String(att.url || att.name || '')) ? 'video/mp4' : /\.(mp3|wav|ogg|m4a|aac|flac|opus)(\?|$)/i.test(String(att.url || att.name || '')) ? 'audio/mpeg' : 'image/png');
         const mp = {
-          type: /^video\//i.test(att.contentType || '') ? 'video' : 'image',
+          type: /^audio\//i.test(attCt) ? 'audio' : /^video\//i.test(attCt) ? 'video' : 'image',
           url: att.url,
-          contentType: att.contentType || 'image/png',
+          contentType: attCt,
           name: att.name || '',
         };
         const n = Seg.use(mid, 'ea:' + ai, mp.type + ':' + mp.url, () => R.part(mp, { live }));

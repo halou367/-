@@ -519,7 +519,6 @@ const Host = (() => {
   // 纯浏览器调试模式
   return { platform: 'web', info: async () => ({ platform: 'web', account: { id: 'web', name: '浏览器', proxy: '' }, version: VERSION }), listAccounts: async () => [], saveAccount: async () => null, removeAccount: async () => null, openAccount: async () => null, login: async () => { location.href = '/'; }, back: async () => { location.href = '/robots.txt'; }, logout: async () => null, setTitle: async t => { document.title = t; }, openExternal: async u => window.open(u, '_blank'), testIp: async () => null, getCred: async () => null, noteAccount: async () => null, shared: async () => null, exportAccounts: async () => [], signInAccount: async () => ({ deferred: true }), setCookies: async () => null };
 })();
-try { if (typeof window !== 'undefined' && !window.BranaHost) window.BranaHost = Host; } catch {}
 
 // ---------- 本地存储（按账号分区天然隔离）----------
 const _storeRawCache = new Map();
@@ -8795,7 +8794,7 @@ function isIncompleteAssistantMsg(m) {
     if (!p) continue;
     if (p.type === 'text' && typeof p.text === 'string') text += p.text;
     else if (p.type === 'reasoning' || p.type === 'step-start') hasReasonOrStep = true;
-    else if (p.type === 'image' || p.type === 'video' || p.type === 'file' || p.type === 'sources' || String(p.type || '').startsWith('source-')) hasMediaOrOut = true;
+    else if (p.type === 'image' || p.type === 'video' || p.type === 'audio' || p.type === 'file' || p.type === 'sources' || String(p.type || '').startsWith('source-')) hasMediaOrOut = true;
     else if (p.toolCallId || String(p.type || '').startsWith('tool-') || p.type === 'dynamic-tool') {
       hasTool = true;
       if (p.state === 'output-available' && p.output && typeof p.output === 'object' && p.output.status === 'running') return true;
@@ -8816,13 +8815,13 @@ function isPhantomFinishStub(m) {
   if (m.metadata?.pending || m.metadata?.aborted || m.metadata?.openThinkStopped || m.metadata?.error || m.metadata?.feedback?.interruption === 'stop') return false;
   if ((Array.isArray(m.experimental_attachments) && m.experimental_attachments.length) || m.webdev?.files?.length || m.webdev?.previewUrl) return false;
   const parts = Array.isArray(m.parts) ? m.parts : [];
-  return !parts.some(p => p && p.type !== 'step-start' && !String(p.type || '').startsWith('data-') && (p.type === 'image' || p.type === 'video' || p.type === 'file' || p.type === 'sources' || String(p.type || '').startsWith('source-') || (p.type !== 'reasoning' && p.type !== 'text') || String(p.text || '').trim().length > 0));
+  return !parts.some(p => p && p.type !== 'step-start' && !String(p.type || '').startsWith('data-') && (p.type === 'image' || p.type === 'video' || p.type === 'audio' || p.type === 'file' || p.type === 'sources' || String(p.type || '').startsWith('source-') || (p.type !== 'reasoning' && p.type !== 'text') || String(p.text || '').trim().length > 0));
 }
 function hasSubstantiveAssistantWork(m) {
   if (!m || m.role !== 'assistant') return false;
   if ((Array.isArray(m.experimental_attachments) && m.experimental_attachments.length) || m.webdev?.files?.length || m.webdev?.previewUrl) return true;
   const parts = Array.isArray(m.parts) ? m.parts : [];
-  if (parts.some(p => p && (p.type === 'image' || p.type === 'video' || p.type === 'file' || p.type === 'sources') && (p.url || (Array.isArray(p.sources) && p.sources.length)))) return true;
+  if (parts.some(p => p && (p.type === 'image' || p.type === 'video' || p.type === 'audio' || p.type === 'file' || p.type === 'sources') && (p.url || (Array.isArray(p.sources) && p.sources.length)))) return true;
   if (parts.some(p => p && p.type === 'text' && String(p.text || '').trim().length > 0)) return true;
   if (parts.some(p => p && (p.toolCallId || String(p.type || '').startsWith('tool-') || p.type === 'dynamic-tool') && p.state === 'output-available' && p.output?.status !== 'aborted' && p.output?.status !== 'error')) return true;
   if (m.metadata?.pending && parts.some(p => p && (p.toolCallId || String(p.type || '').startsWith('tool-') || p.type === 'dynamic-tool') && /^(input-streaming|input-available|approval-requested)$/.test(p.state || ''))) return true;
@@ -8848,6 +8847,7 @@ function isDeadAssistantMsg(m) {
     p.type === 'dynamic-tool' ||
     p.type === 'image' ||
     p.type === 'video' ||
+    p.type === 'audio' ||
     p.type === 'file' ||
     p.type === 'sources' ||
     String(p.type || '').startsWith('source-')

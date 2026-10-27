@@ -1673,7 +1673,6 @@ ready: () => typeof A.ready === 'function' ? call('ready') : Promise.resolve(nul
 }
 return { platform: 'web', info: async () => ({ platform: 'web', account: { id: 'web', name: '浏览器', proxy: '' }, version: VERSION }), listAccounts: async () => [], saveAccount: async () => null, removeAccount: async () => null, openAccount: async () => null, login: async () => { location.href = '/'; }, back: async () => { location.href = '/robots.txt'; }, logout: async () => null, setTitle: async t => { document.title = t; }, openExternal: async u => window.open(u, '_blank'), testIp: async () => null, getCred: async () => null, noteAccount: async () => null, shared: async () => null, exportAccounts: async () => [], signInAccount: async () => ({ deferred: true }), setCookies: async () => null };
 })();
-try { if (typeof window !== 'undefined' && !window.BranaHost) window.BranaHost = Host; } catch {}
 const _storeRawCache = new Map();
 const _storeReadOnlyKeys = new Set(['prefs', 'proto:schema', 'gacha:settings']);
 try {
@@ -9651,7 +9650,7 @@ for (const p of parts) {
 if (!p) continue;
 if (p.type === 'text' && typeof p.text === 'string') text += p.text;
 else if (p.type === 'reasoning' || p.type === 'step-start') hasReasonOrStep = true;
-else if (p.type === 'image' || p.type === 'video' || p.type === 'file' || p.type === 'sources' || String(p.type || '').startsWith('source-')) hasMediaOrOut = true;
+else if (p.type === 'image' || p.type === 'video' || p.type === 'audio' || p.type === 'file' || p.type === 'sources' || String(p.type || '').startsWith('source-')) hasMediaOrOut = true;
 else if (p.toolCallId || String(p.type || '').startsWith('tool-') || p.type === 'dynamic-tool') {
 hasTool = true;
 if (p.state === 'output-available' && p.output && typeof p.output === 'object' && p.output.status === 'running') return true;
@@ -9672,13 +9671,13 @@ function isPhantomFinishStub(m) {
   if (m.metadata?.pending || m.metadata?.aborted || m.metadata?.openThinkStopped || m.metadata?.error || m.metadata?.feedback?.interruption === 'stop') return false;
   if ((Array.isArray(m.experimental_attachments) && m.experimental_attachments.length) || m.webdev?.files?.length || m.webdev?.previewUrl) return false;
   const parts = Array.isArray(m.parts) ? m.parts : [];
-  return !parts.some(p => p && p.type !== 'step-start' && !String(p.type || '').startsWith('data-') && (p.type === 'image' || p.type === 'video' || p.type === 'file' || p.type === 'sources' || String(p.type || '').startsWith('source-') || (p.type !== 'reasoning' && p.type !== 'text') || String(p.text || '').trim().length > 0));
+  return !parts.some(p => p && p.type !== 'step-start' && !String(p.type || '').startsWith('data-') && (p.type === 'image' || p.type === 'video' || p.type === 'audio' || p.type === 'file' || p.type === 'sources' || String(p.type || '').startsWith('source-') || (p.type !== 'reasoning' && p.type !== 'text') || String(p.text || '').trim().length > 0));
 }
 function hasSubstantiveAssistantWork(m) {
   if (!m || m.role !== 'assistant') return false;
   if ((Array.isArray(m.experimental_attachments) && m.experimental_attachments.length) || m.webdev?.files?.length || m.webdev?.previewUrl) return true;
   const parts = Array.isArray(m.parts) ? m.parts : [];
-  if (parts.some(p => p && (p.type === 'image' || p.type === 'video' || p.type === 'file' || p.type === 'sources') && (p.url || (Array.isArray(p.sources) && p.sources.length)))) return true;
+  if (parts.some(p => p && (p.type === 'image' || p.type === 'video' || p.type === 'audio' || p.type === 'file' || p.type === 'sources') && (p.url || (Array.isArray(p.sources) && p.sources.length)))) return true;
   if (parts.some(p => p && p.type === 'text' && String(p.text || '').trim().length > 0)) return true;
   if (parts.some(p => p && (p.toolCallId || String(p.type || '').startsWith('tool-') || p.type === 'dynamic-tool') && p.state === 'output-available' && p.output?.status !== 'aborted' && p.output?.status !== 'error')) return true;
   if (m.metadata?.pending && parts.some(p => p && (p.toolCallId || String(p.type || '').startsWith('tool-') || p.type === 'dynamic-tool') && /^(input-streaming|input-available|approval-requested)$/.test(p.state || ''))) return true;
@@ -9704,6 +9703,7 @@ function isDeadAssistantMsg(m) {
     p.type === 'dynamic-tool' ||
     p.type === 'image' ||
     p.type === 'video' ||
+    p.type === 'audio' ||
     p.type === 'file' ||
     p.type === 'sources' ||
     String(p.type || '').startsWith('source-')
@@ -13114,10 +13114,11 @@ if (!a || (!a.url && !a.name)) continue;
 const rawUrl = a.url || '';
 const ct = String(a.contentType || a.mimeType || '').toLowerCase();
 const isVideo = ct.startsWith('video/') || /\.(mp4|webm|mov)(\?|$)/i.test(rawUrl || a.name || '');
+const isAudio = ct.startsWith('audio/') || /\.(mp3|wav|ogg|m4a|aac|flac|opus)(\?|$)/i.test(rawUrl || a.name || '');
 const key = extractR2StorageKey(rawUrl) || extractR2StorageKey(a.name || '');
 const cachedSigned = key ? _signedUrlCache.get(key) : '';
 const effectiveUrl = (cachedSigned && !isR2UrlExpired(cachedSigned)) ? cachedSigned : rawUrl;
-const partType = isVideo ? 'video' : 'image';
+const partType = isVideo ? 'video' : isAudio ? 'audio' : 'image';
 const existingPart = parts.find(p => p && p.type === partType && (p.url === effectiveUrl || p.url === rawUrl || (key && p.r2Key === key)));
 if (existingPart) {
 if (effectiveUrl) existingPart.url = effectiveUrl;
@@ -14457,7 +14458,7 @@ targetMsg.metadata = targetMsg.metadata || {};
 targetMsg.metadata.timing = targetMsg.metadata.timing || { startedAt: tNow };
 const appendMediaPartToMsg = (msg, mediaType, rawUrlOrData, mimeType, extra = {}) => {
 if (!msg || !rawUrlOrData) return false;
-const mime = mimeType || (mediaType === 'video' ? 'video/mp4' : 'image/png');
+const mime = mimeType || (mediaType === 'video' ? 'video/mp4' : mediaType === 'audio' ? 'audio/wav' : 'image/png');
 const rawStr = String(rawUrlOrData).trim();
 if (!rawStr) return false;
 const url = (/^https?:\/\/|^data:|^blob:/i.test(rawStr))
@@ -14469,7 +14470,7 @@ if (!msg.experimental_attachments.some(a => a && (a.url === url || (key && extra
 msg.experimental_attachments.push({
 url,
 contentType: mime,
-name: extra.name || key || (mediaType === 'video' ? 'generated-video.mp4' : 'generated-image.png'),
+name: extra.name || key || (mediaType === 'video' ? 'generated-video.mp4' : mediaType === 'audio' ? 'generated-audio.wav' : 'generated-image.png'),
 });
 }
 if (!Array.isArray(msg.parts)) msg.parts = [];
@@ -14488,7 +14489,7 @@ contentType: mime,
 name: extra.name || key || '',
 });
 }
-msg.genPhase = mediaType === 'video' ? '✓ 视频生成完毕' : '✓ 图像生成完毕';
+msg.genPhase = mediaType === 'video' ? '✓ 视频生成完毕' : mediaType === 'audio' ? '✓ 音频生成完毕' : '✓ 图像生成完毕';
 chat.phase = msg.genPhase;
 if (key && isR2UrlExpired(url)) {
 void refreshSignedAttachmentUrl(url, { sid: chat.sid }).then(fresh => {
@@ -14642,6 +14643,10 @@ forceImmediateEmit = true;
 if (appendMediaPartToMsg(targetMsg, 'video', item.url || item.data || item.video, item.mimeType || item.contentType || 'video/mp4', item)) {
 forceImmediateEmit = true;
 }
+} else if (item.type === 'audio' && (item.url || item.data || item.audio)) {
+if (appendMediaPartToMsg(targetMsg, 'audio', item.url || item.data || item.audio, item.mimeType || item.contentType || 'audio/wav', item)) {
+forceImmediateEmit = true;
+}
 } else if (item.type === 'sources' && Array.isArray(item.sources)) {
 targetMsg.parts.push({ type: 'sources', sources: item.sources });
 } else if (item.type === 'routed_model' && item.organization) {
@@ -14666,11 +14671,14 @@ forceImmediateEmit = true;
 }
 targetMsg.v = (targetMsg.v || 0) + 1;
 } else if (code === 'k' && val && typeof val === 'object') {
-const mime = val.mimeType || val.contentType || 'image/png';
-const rawPayload = val.url || val.data || val.image || null;
+const mediaHint = String(val.type || val.mediaType || '').toLowerCase();
+const mime = val.mimeType || val.contentType || (val.video || mediaHint.startsWith('video') ? 'video/mp4' : val.audio || mediaHint.startsWith('audio') ? 'audio/wav' : 'image/png');
+const rawPayload = val.url || val.data || val.image || val.video || val.audio || null;
 if (rawPayload) {
 const isVideo = String(mime).startsWith('video/');
-if (appendMediaPartToMsg(targetMsg, isVideo ? 'video' : 'image', rawPayload, mime, val)) {
+const isAudio = String(mime).startsWith('audio/');
+const mediaType = isVideo ? 'video' : isAudio ? 'audio' : 'image';
+if (appendMediaPartToMsg(targetMsg, mediaType, rawPayload, mime, val)) {
 forceImmediateEmit = true;
 }
 targetMsg.v = (targetMsg.v || 0) + 1;
@@ -25550,13 +25558,13 @@ const userAtts = m => {
 if (m._prev?.length) return m._prev.map(a => ({ name: a.name, type: a.type, src: a.url, a }));
 const ups = (m.metadata?.uploads || []).map(u => { const hs = Uploads.hashOfKey(u.key) || u.hash || hashOfUrl(u.url); return { name: u.filename, type: u.mediaType, hs, src: hs && /^image\//.test(u.mediaType || '') ? Uploads.webPath(hs) : null }; });
 const expAtts = (Array.isArray(m.experimental_attachments) ? m.experimental_attachments : []).filter(a => a && a.url).map(a => {
-const ct = a.contentType || (/\.(png|jpe?g|webp|gif|svg)(\?|$)/i.test(a.url) ? 'image/png' : 'application/octet-stream');
+const ct = a.contentType || (/\.(png|jpe?g|webp|gif|svg)(\?|$)/i.test(a.url) ? 'image/png' : /\.(mp4|webm|mov|m4v)(\?|$)/i.test(a.url) ? 'video/mp4' : /\.(mp3|wav|ogg|m4a|aac|flac|opus)(\?|$)/i.test(String(a.url || a.name || '')) ? 'audio/mpeg' : 'application/octet-stream');
 const shortName = String(a.name || '').split('/').pop() || 'image';
 return { name: shortName, r2Key: a.name || '', type: ct, hs: a.name || a.url, src: /^image\//i.test(ct) ? a.url : null };
 });
 const used = new Set();
-const files = (m.parts || []).filter(p => p && (p.type === 'file' || p.type === 'image' || p.type === 'video')).map(p => {
-const ct = p.mediaType || p.contentType || (p.type === 'image' ? 'image/png' : p.type === 'video' ? 'video/mp4' : '');
+const files = (m.parts || []).filter(p => p && (p.type === 'file' || p.type === 'image' || p.type === 'video' || p.type === 'audio')).map(p => {
+const ct = p.mediaType || p.contentType || (p.type === 'image' ? 'image/png' : p.type === 'video' ? 'video/mp4' : p.type === 'audio' ? 'audio/mpeg' : '');
 const rawName = p.filename || p.name || 'file';
 const shortName = String(rawName).split('/').pop() || rawName;
 return { name: shortName, r2Key: p.name || '', type: ct, hs: hashOfUrl(p.url) || p.name || p.url, src: /^image\//i.test(ct) && /^(https?:|\/|data:|blob:)/.test(p.url || '') ? p.url : null };
@@ -27993,6 +28001,11 @@ const openFence = /(`{3,}|~{3,})[ \t]*(html?|svg|xml)?[ \t]*\r?\n([\s\S]{100,})$
       if (typeof EvalView !== 'undefined' && typeof EvalView.renderSourcesPart === 'function') return EvalView.renderSourcesPart(p.sources);
       return h('div', { class: 'eval-sources' }, ...p.sources.filter(Boolean).slice(0, 12).map(s => h('a', { class: 'src', href: s.url || '#', target: '_blank' }, s.title || s.url)));
     }
+    if (p.type === 'audio' || (p.type === 'file' && /^audio\//i.test(p.mediaType || p.contentType || ''))) {
+      const u = p.url || p.audio || p.src || '';
+      if (!u) return null;
+      return R.media('audio:' + u, () => h('audio', { class: 'file-audio', controls: true, preload: 'metadata', src: u, title: p.filename || p.name || 'Audio', style: { maxWidth: '100%' } }));
+    }
     if (p.type === 'image' || p.type === 'video' || (p.type === 'file' && /^(image|video)\//i.test(p.mediaType || p.contentType || ''))) {
       if (typeof EvalView !== 'undefined' && typeof EvalView.renderMediaPart === 'function') {
         return EvalView.renderMediaPart(p);
@@ -28166,13 +28179,14 @@ const openFence = /(`{3,}|~{3,})[ \t]*(html?|svg|xml)?[ \t]*\r?\n([\s\S]{100,})$
       if (n) segs.push(n);
     });
     flush();
-    if (Array.isArray(m.experimental_attachments) && m.experimental_attachments.length && !(m.parts || []).some(p => p && (p.type === 'image' || p.type === 'video'))) {
+    if (Array.isArray(m.experimental_attachments) && m.experimental_attachments.length && !(m.parts || []).some(p => p && (p.type === 'image' || p.type === 'video' || p.type === 'audio'))) {
       m.experimental_attachments.forEach((att, ai) => {
         if (!att || !att.url) return;
+        const attCt = att.contentType || (/\.(mp4|webm|mov|m4v)(\?|$)/i.test(String(att.url || att.name || '')) ? 'video/mp4' : /\.(mp3|wav|ogg|m4a|aac|flac|opus)(\?|$)/i.test(String(att.url || att.name || '')) ? 'audio/mpeg' : 'image/png');
         const mp = {
-          type: /^video\//i.test(att.contentType || '') ? 'video' : 'image',
+          type: /^audio\//i.test(attCt) ? 'audio' : /^video\//i.test(attCt) ? 'video' : 'image',
           url: att.url,
-          contentType: att.contentType || 'image/png',
+          contentType: attCt,
           name: att.name || '',
         };
         const n = Seg.use(mid, 'ea:' + ai, mp.type + ':' + mp.url, () => R.part(mp, { live }));

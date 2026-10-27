@@ -8,17 +8,8 @@ function genApiKey() {
   return 'sk-brana-' + crypto.randomBytes(12).toString('hex');
 }
 
-function inferVendorProtocol(modelId, fam) {
-  const m = String(modelId || '').toLowerCase();
-  const f = String(fam || '').toLowerCase();
-  if (!m && !f) return 'arena';
-  if (f === 'anthropic' || m.includes('claude') || m.includes('opus') || m.includes('sonnet') || m.includes('haiku') || m.includes('fable')) {
-    return 'anthropic';
-  }
-  if (f === 'google' || m.includes('gemini') || m.includes('gemma')) {
-    return 'gemini';
-  }
-  return 'openai';
+function inferVendorProtocol() {
+  return 'arena';
 }
 
 function canonicalModelSlug(rawName, rawInternal, fam) {
