@@ -77,3 +77,37 @@ test('installer.nsh & main.js enforce completely silent update/install without p
   assert.ok(wf.includes('npx --no-install electron-builder --win nsis --x64 --publish never'));
   assert.ok(wf.includes("Get-WinEvent -FilterHashtable @{LogName='Application'; ID=1000,1001"));
 });
+
+test('v2.0.1: multi-drive overwrite, mobile update multi-route fallback, and mobile/desktop auto-captcha', () => {
+  const root = path.resolve(__dirname, '..');
+  const nsh = fs.readFileSync(path.join(root, 'scripts', 'installer.nsh'), 'utf8');
+  const ps1 = fs.readFileSync(path.join(root, 'scripts', 'close-installed-app.ps1'), 'utf8');
+  const main = fs.readFileSync(path.join(root, 'src', 'main.js'), 'utf8');
+  const java = fs.readFileSync(path.join(root, 'android', 'app', 'src', 'main', 'java', 'ai', 'arena', 'client', 'MainActivity.java'), 'utf8');
+  const cap = fs.readFileSync(path.join(root, 'ui', 'captcha-solver.js'), 'utf8');
+  const bundleScript = fs.readFileSync(path.join(root, 'scripts', 'bundle.js'), 'utf8');
+
+  // 1. Required desktop modules exist
+  assert.ok(fs.existsSync(path.join(root, 'src', 'extension-test-identity.js')));
+  assert.ok(fs.existsSync(path.join(root, 'src', 'api-multimodal.js')));
+
+  // 2. Multi-drive + multi-appId overwrite protection
+  assert.ok(nsh.includes('45b79f8b-4a8e-52f8-9c6d-619f5b15654e'));
+  assert.ok(nsh.includes('D:\\Program Files\\Brana AI'));
+  assert.ok(ps1.includes("'BranaAI*'"));
+  assert.ok(main.includes('function syncSiblingInstallDirs()'));
+
+  // 3. Mobile update multi-route fallback (ProxyIP strip, shared_nodes, mirrors, Range resume)
+  assert.ok(java.includes('String stripProxyIpFromXout(String raw)'));
+  assert.ok(java.includes('JSONObject nodeToXout(JSONObject n)'));
+  assert.ok(java.includes('xoutCands'));
+  assert.ok(java.includes('Range", "bytes=" + resumeFrom + "-"'));
+
+  // 4. Mobile & desktop auto-captcha
+  assert.ok(bundleScript.includes("'captcha-solver.js'"));
+  assert.ok(java.includes('readAsset("captcha-solver.js")'));
+  assert.ok(java.includes('solveCaptchaAudioStart'));
+  assert.ok(cap.includes('solveCaptchaAudioStart'));
+  assert.ok(cap.includes('MutationObserver'));
+  assert.ok(main.includes('Promise.any(jobs)'));
+});

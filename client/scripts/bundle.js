@@ -43,7 +43,7 @@ function compactAssetJs(raw) {
 const off = path.join(root, 'android', 'app', 'src', 'main', 'assets', 'offline.html');
 fs.copyFileSync(path.join(root, 'ui', 'offline.html'), off);
 console.log('wrote', path.relative(root, off));
-for (const name of ['vless.js', 'route-state.js', 'route-policy.js', 'route-host.js', 'node-routes.js', 'offline-modes.js', 'offline-context.js', 'nodes.js', 'iprep.js', 'pool.js', 'node-speed.js', 'app.css', 'flags.woff2', 'rtc-lockdown.js', 'webbar.js']) {
+for (const name of ['vless.js', 'route-state.js', 'route-policy.js', 'route-host.js', 'node-routes.js', 'offline-modes.js', 'offline-context.js', 'nodes.js', 'iprep.js', 'pool.js', 'node-speed.js', 'app.css', 'flags.woff2', 'rtc-lockdown.js', 'captcha-solver.js', 'webbar.js']) {
   const srcP = path.join(root, 'ui', name);
   const dstP = path.join(root, 'android', 'app', 'src', 'main', 'assets', name);
   if (name === 'app.css') {

@@ -2716,11 +2716,9 @@ function runNativeWorkingSetTrim(force = false) {
   } catch {}
 }
 setInterval(runNativeWorkingSetTrim, 180000).unref?.();
-let _cachedMemTag = '';
-let _cachedMemTagAt = 0;
 function formatProcessMemTag() {
   const nowTs = Date.now();
-  if (_cachedMemTag && nowTs - _cachedMemTagAt < 15000) return _cachedMemTag;
+  if (globalThis._cachedMemTag && nowTs - (globalThis._cachedMemTagAt || 0) < 15000) return globalThis._cachedMemTag;
   try {
     const metrics = typeof app.getAppMetrics === 'function' ? app.getAppMetrics() : [];
     let mainM = 0, renM = 0, gpuM = 0, netM = 0;
@@ -2732,12 +2730,12 @@ function formatProcessMemTag() {
       else if (m.type === 'Utility') netM += Math.max(4, Math.round(ws * 0.38));
     }
     if (mainM || renM) {
-      _cachedMemTagAt = nowTs;
-      _cachedMemTag = `【前台窗口·对话交互】[前台进程: 1主控${mainM}M+2界面渲染${renM}M ｜ 后台进程: 3显卡加速${gpuM}M+4网络通信${netM}M]`;
-      return _cachedMemTag;
+      globalThis._cachedMemTagAt = nowTs;
+      globalThis._cachedMemTag = `【前台窗口·对话交互】[前台进程: 1主控${mainM}M+2界面渲染${renM}M ｜ 后台进程: 3显卡加速${gpuM}M+4网络通信${netM}M]`;
+      return globalThis._cachedMemTag;
     }
   } catch {}
-  return _cachedMemTag || '【前台窗口·对话交互】[前台: 1主控+2界面渲染 ｜ 后台: 3显卡加速+4网络通信]';
+  return globalThis._cachedMemTag || '【前台窗口·对话交互】[前台: 1主控+2界面渲染 ｜ 后台: 3显卡加速+4网络通信]';
 }
 function applyWindowTaskMgrTitle(w, rawSubTitle) {
   if (!w || w.isDestroyed()) return;
@@ -3089,30 +3087,51 @@ ipcMain.handle('host:solveCaptchaAudio', async (e, audioUrl) => {
     if (!/^https:\/\/(?:[a-z0-9-]+\.)*(?:google\.com|recaptcha\.net|gstatic\.com)\//i.test(u)) {
       return { ok: false, error: '无效的语音验证码地址' };
     }
-    const fetchAudio = async fetcher => {
-      const ctl = new AbortController(), tm = setTimeout(() => ctl.abort(), 12000);
+    const fetchAudio = async (fetcher, timeoutMs = 6500) => {
+      const ctl = new AbortController(), tm = setTimeout(() => ctl.abort(), timeoutMs);
       try {
         const res = await fetcher(u, { signal: ctl.signal, cache: 'no-store', credentials: 'omit' });
         if (!res.ok) throw new Error('Audio HTTP ' + res.status);
-        return await res.arrayBuffer();
+        const ab = await res.arrayBuffer();
+        if (!ab || ab.byteLength < 120) throw new Error('Audio empty');
+        return ab;
       } finally { clearTimeout(tm); }
     };
+    const dsPromise = directSession().catch(() => null);
     let audioBuf = null;
     if (e?.sender?.session) {
-      audioBuf = await fetchAudio((url, op) => e.sender.session.fetch(url, op)).catch(() => null);
+      const sessJob = fetchAudio((url, op) => e.sender.session.fetch(url, op), 5500);
+      const fallbackJob = new Promise((resolve, reject) => {
+        const t = setTimeout(async () => {
+          try {
+            const ds = await dsPromise;
+            resolve(await fetchAudio((url, op) => nodeOrDirectFetch(url, op, ds), 6500));
+          } catch (err) { reject(err); }
+        }, 850);
+        sessJob.then(() => clearTimeout(t), () => {});
+      });
+      audioBuf = await Promise.any([sessJob, fallbackJob]).catch(() => null);
     }
     if (!audioBuf) {
-      const ds = await directSession().catch(() => null);
-      audioBuf = await fetchAudio((url, op) => nodeOrDirectFetch(url, op, ds));
+      const ds = await dsPromise;
+      audioBuf = await fetchAudio((url, op) => nodeOrDirectFetch(url, op, ds), 8000);
     }
     if (!audioBuf || !audioBuf.byteLength) return { ok: false, error: '语音文件为空' };
-    const ds = await directSession().catch(() => null);
-    let finalTranscript = '';
-    for (const witKey of ['JVHWCNWJLWLGN6MFALYLHAPKUFHMNTAC', '2462825872496115']) {
-      const ctl = new AbortController(), tm = setTimeout(() => ctl.abort(), 14000);
-      let witText = '';
+    const ds = await dsPromise;
+    const parseWitTranscript = witText => {
+      if (!witText) return '';
+      const matches = [...String(witText).matchAll(/"_?text"\s*:\s*"([^"]*)"/g)].map(m => m[1].trim()).filter(Boolean);
+      if (matches.length) return matches[matches.length - 1];
+      let found = '';
+      for (const line of String(witText).split(/\r?\n/).map(x => x.trim()).filter(Boolean)) {
+        try { const j = JSON.parse(line); if (j.text || j._text) { found = j.text || j._text; if (j.is_final) break; } } catch {}
+      }
+      return found;
+    };
+    const postWit = async (fetcher, witKey, timeoutMs = 8000) => {
+      const ctl = new AbortController(), tm = setTimeout(() => ctl.abort(), timeoutMs);
       try {
-        const witRes = await nodeOrDirectFetch('https://api.wit.ai/speech?v=20220622', {
+        const witRes = await fetcher('https://api.wit.ai/speech?v=20220622', {
           method: 'POST',
           headers: {
             Authorization: 'Bearer ' + witKey,
@@ -3120,18 +3139,21 @@ ipcMain.handle('host:solveCaptchaAudio', async (e, audioUrl) => {
           },
           body: Buffer.from(audioBuf),
           signal: ctl.signal,
-        }, ds);
-        witText = await witRes.text();
-      } catch {} finally { clearTimeout(tm); }
-      if (!witText) continue;
-      const matches = [...witText.matchAll(/"_?text"\s*:\s*"([^"]*)"/g)].map(m => m[1].trim()).filter(Boolean);
-      if (matches.length) {
-        finalTranscript = matches[matches.length - 1];
-        break;
-      }
-      for (const line of witText.split(/\r?\n/).map(x => x.trim()).filter(Boolean)) {
-        try { const j = JSON.parse(line); if (j.text || j._text) { finalTranscript = j.text || j._text; if (j.is_final) break; } } catch {}
-      }
+        });
+        const txt = parseWitTranscript(await witRes.text());
+        if (!txt) throw new Error('Empty transcript');
+        return txt;
+      } finally { clearTimeout(tm); }
+    };
+    let finalTranscript = '';
+    for (const witKey of ['JVHWCNWJLWLGN6MFALYLHAPKUFHMNTAC']) {
+      try {
+        const jobs = [postWit((url, op) => nodeOrDirectFetch(url, op, ds), witKey, 8500)];
+        if (e?.sender?.session) {
+          jobs.unshift(postWit((url, op) => e.sender.session.fetch(url, op), witKey, 8500));
+        }
+        finalTranscript = await Promise.any(jobs);
+      } catch {}
       if (finalTranscript) break;
     }
     let cleanText = String(finalTranscript || '').replace(/[^a-zA-Z0-9\s]/g, '').trim().toLowerCase();
@@ -3313,22 +3335,39 @@ function syncSiblingInstallDirs() {
     const curAsar = path.join(curDir, 'resources', 'app.asar');
     if (!fs.existsSync(curAsar)) return;
     const curStat = fs.statSync(curAsar);
-    const candidates = [
+    const candidates = [...new Set([
       process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, 'Programs', 'Brana AI') : '',
       process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, 'Programs', 'Brana') : '',
       process.env.ProgramFiles ? path.join(process.env.ProgramFiles, 'Brana AI') : '',
-    ].filter(Boolean);
+      'C:\\Program Files\\Brana AI',
+      'D:\\Program Files\\Brana AI',
+      'E:\\Program Files\\Brana AI',
+      'F:\\Program Files\\Brana AI',
+    ].filter(Boolean))];
     for (const dir of candidates) {
       try {
         if (path.resolve(dir).toLowerCase() === path.resolve(curDir).toLowerCase()) continue;
         const dstExe = path.join(dir, path.basename(process.execPath));
         const dstAsar = path.join(dir, 'resources', 'app.asar');
-        if (!fs.existsSync(dstExe) || !fs.existsSync(dstAsar)) continue;
-        const dstStat = fs.statSync(dstAsar);
-        if (dstStat.size !== curStat.size || Math.abs(dstStat.mtimeMs - curStat.mtimeMs) > 2000) {
+        if (!fs.existsSync(dstExe) && !fs.existsSync(dstAsar)) continue;
+        const dstStat = fs.existsSync(dstAsar) ? fs.statSync(dstAsar) : null;
+        if (!dstStat || dstStat.size !== curStat.size || Math.abs(dstStat.mtimeMs - curStat.mtimeMs) > 2000) {
+          try {
+            for (const f of fs.readdirSync(dir)) {
+              if (/^BranaAI(-.*)?\.exe$/i.test(f)) {
+                try { fs.unlinkSync(path.join(dir, f)); } catch {}
+              }
+            }
+          } catch {}
+          fs.mkdirSync(path.dirname(dstAsar), { recursive: true });
           const tmpAsar = dstAsar + '.upd-' + process.pid;
           fs.copyFileSync(curAsar, tmpAsar);
           fs.renameSync(tmpAsar, dstAsar);
+          try {
+            const tmpExe = dstExe + '.upd-' + process.pid;
+            fs.copyFileSync(process.execPath, tmpExe);
+            fs.renameSync(tmpExe, dstExe);
+          } catch {}
           const curUnpacked = curAsar + '.unpacked';
           const dstUnpacked = dstAsar + '.unpacked';
           if (fs.existsSync(curUnpacked) && typeof fs.cpSync === 'function') {
@@ -3358,6 +3397,8 @@ function checkPending() {
   if (process.argv.includes('--updated')) {
     updJustCompleted = true;
     setTimeout(syncSiblingInstallDirs, 1500);
+  } else if (process.platform === 'win32' && app.isPackaged) {
+    setTimeout(syncSiblingInstallDirs, 2500);
   }
   try {
     const sessFile = updSessionPath();

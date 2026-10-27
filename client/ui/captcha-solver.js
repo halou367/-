@@ -43,10 +43,18 @@
         const clientX = Math.round(rect.left + (rect.width ? rect.width * (0.35 + Math.random() * 0.3) : 10));
         const clientY = Math.round(rect.top + (rect.height ? rect.height * (0.35 + Math.random() * 0.3) : 10));
         const opts = { view: window, bubbles: true, cancelable: true, clientX, clientY, button: 0, buttons: 1 };
+        if (typeof PointerEvent === 'function') {
+          for (const pt of ['pointerover', 'pointerenter', 'pointermove', 'pointerdown']) {
+            try { el.dispatchEvent(new PointerEvent(pt, { ...opts, pointerId: 1, pointerType: 'mouse', isPrimary: true })); } catch {}
+          }
+        }
         for (const t of ['mouseover', 'mouseenter', 'mousemove', 'mousedown']) {
           el.dispatchEvent(new MouseEvent(t, opts));
         }
         try { el.focus?.(); } catch {}
+        if (typeof PointerEvent === 'function') {
+          try { el.dispatchEvent(new PointerEvent('pointerup', { ...opts, pointerId: 1, pointerType: 'mouse', isPrimary: true, buttons: 0 })); } catch {}
+        }
         el.dispatchEvent(new MouseEvent('mouseup', opts));
         if (directFocusClick) {
           el.click();
@@ -91,10 +99,31 @@
           try { inputEl.dispatchEvent(new Event('input', { bubbles: true })); } catch {}
         }
         try { inputEl.dispatchEvent(new KeyboardEvent('keyup', kOpts)); } catch {}
-        await sleep(rand(28, 62));
+        await sleep(rand(6, 15));
       }
       try { inputEl.dispatchEvent(new Event('change', { bubbles: true })); } catch {}
       return true;
+    }
+
+    async function solveViaAndroidBridge(audioUrl) {
+      const A = window.BranaAndroid;
+      if (!A || typeof A.solveCaptchaAudioStart !== 'function' || typeof A.probeGet !== 'function') return null;
+      try {
+        const id = A.solveCaptchaAudioStart(String(audioUrl || ''));
+        if (!id) return null;
+        for (let i = 0; i < 160; i++) {
+          await sleep(i < 10 ? 45 : 75);
+          const raw = A.probeGet(id);
+          if (raw) {
+            const parsed = JSON.parse(raw);
+            if (parsed && parsed.ok && parsed.text) return parsed;
+            return parsed || { ok: false, error: 'Android bridge returned empty' };
+          }
+        }
+      } catch (e) {
+        return { ok: false, error: String(e?.message || e) };
+      }
+      return { ok: false, error: 'Android bridge timeout' };
     }
 
     function cleanLegacyOverlays() {
@@ -217,6 +246,9 @@
           try {
             if (window.BranaHost && typeof window.BranaHost.solveCaptchaAudio === 'function') {
               res = await window.BranaHost.solveCaptchaAudio(d.audioUrl);
+            } else {
+              const aRes = await solveViaAndroidBridge(d.audioUrl);
+              if (aRes) res = aRes;
             }
           } catch (err) {
             res = { ok: false, error: String(err?.message || err) };
@@ -244,7 +276,7 @@
           const frames = document.querySelectorAll('iframe[src*="recaptcha"][src*="bframe"]');
           for (const f of frames) {
             const r = f.getBoundingClientRect();
-            if (r.width >= 140 && r.height >= 140 && r.top > -80 && r.left > -80) {
+            if (r.width >= 60 && r.height >= 60 && r.top > -120 && r.left > -120) {
               const st = window.getComputedStyle(f);
               if (st.display !== 'none' && st.visibility !== 'hidden' && Number(st.opacity) > 0.1) {
                 f.contentWindow?.postMessage({ __af_bframe_vis: true, __mcp: true, type: 'mcp-bframe-visibility', visible: true, gachaRunning: true }, '*');
@@ -252,7 +284,7 @@
             }
           }
         } catch {}
-      }, 650);
+      }, 280);
     }
 
     if (isAnchor) {
@@ -260,7 +292,7 @@
       let clickAt = 0;
       let solvedReported = false;
       const tickAnchor = () => {
-        if (window.innerWidth < 30 || window.innerHeight < 20) return;
+        if (window.innerWidth < 24 || window.innerHeight < 16) return;
         const anchor = document.querySelector('#recaptcha-anchor');
         if (!anchor) return;
         const checked = anchor.getAttribute('aria-checked') === 'true' || anchor.classList.contains('recaptcha-checkbox-checked');
@@ -272,7 +304,7 @@
           return;
         }
         const isLoading = anchor.classList.contains('recaptcha-checkbox-loading');
-        if (!isLoading && (!clicked || Date.now() - clickAt > 4800)) {
+        if (!isLoading && (!clicked || Date.now() - clickAt > 2800)) {
           const border = document.querySelector('.recaptcha-checkbox-border') || anchor;
           if (!isVisible(border)) return;
           clicked = true;
@@ -281,11 +313,15 @@
           setTimeout(() => {
             if (anchor.getAttribute('aria-checked') === 'true') return;
             humanClick(border, false);
-          }, rand(180, 340));
+          }, rand(35, 80));
         }
       };
-      setInterval(tickAnchor, 450);
-      setTimeout(tickAnchor, 200);
+      setInterval(tickAnchor, 160);
+      setTimeout(tickAnchor, 40);
+      try {
+        const mo = new MutationObserver(() => tickAnchor());
+        mo.observe(document.documentElement || document, { childList: true, subtree: true, attributes: true, attributeFilter: ['class', 'aria-checked', 'style'] });
+      } catch {}
     }
 
     if (isBframe) {
@@ -333,6 +369,8 @@
       };
 
       const askTopSolveAudio = async audioUrl => {
+        const directBridge = await solveViaAndroidBridge(audioUrl);
+        if (directBridge && directBridge.ok && directBridge.text) return directBridge;
         const hostRes = await new Promise(resolve => {
           const reqId = 'af_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 7);
           const tm = setTimeout(() => {
@@ -340,7 +378,7 @@
               pendingRpc.delete(reqId);
               resolve({ ok: false, error: 'timeout' });
             }
-          }, 12000);
+          }, 9500);
           pendingRpc.set(reqId, res => { clearTimeout(tm); resolve(res); });
           try {
             window.top.postMessage({ __af_captcha_rpc: 'AF_SOLVE_AUDIO_CAPTCHA', reqId, audioUrl }, '*');
@@ -387,9 +425,9 @@
       let attempts = 0;
 
       const isChallengeReady = () => {
-        if (window.innerWidth < 140 || window.innerHeight < 140) return false;
+        if (window.innerWidth < 60 || window.innerHeight < 60) return false;
         if (Date.now() < parentConfirmedVisUntil) return true;
-        const activeChallengeEl = document.querySelector('#rc-imageselect, .rc-imageselect-payload, #audio-response, .rc-audiochallenge-play-button, .rc-doscaptcha-header-text');
+        const activeChallengeEl = document.querySelector('#rc-imageselect, .rc-imageselect-payload, #audio-response, .rc-audiochallenge-play-button, .rc-doscaptcha-header-text, #recaptcha-audio-button');
         return isVisible(activeChallengeEl);
       };
 
@@ -414,7 +452,7 @@
 
         if (audioInput && verifyBtn && reloadBtn && audioInput.disabled && verifyBtn.disabled && reloadBtn.disabled) {
           if (!disabledStuckSince) disabledStuckSince = Date.now();
-          else if (Date.now() - disabledStuckSince > 2800) {
+          else if (Date.now() - disabledStuckSince > 2200) {
             disabledStuckSince = 0;
             updateBframeBar('验证已过期，正在自动重置…', 'running');
             reportStatus('验证已过期，正在自动重置…', 'running');
@@ -428,11 +466,11 @@
         solving = true;
         try {
           if (audioBtn && isVisible(audioBtn) && (!audioInput || !isVisible(audioInput))) {
-            if (Date.now() - lastAudioBtnClickAt >= 2800) {
+            if (Date.now() - lastAudioBtnClickAt >= 1500) {
               lastAudioBtnClickAt = Date.now();
               updateBframeBar('人机验证进行中 · 正在切换语音验证…', 'running');
               reportStatus('人机验证进行中 · 正在切换语音验证…', 'running');
-              await sleep(rand(220, 420));
+              await sleep(rand(40, 90));
               humanClick(audioBtn, true);
             }
             return;
@@ -445,10 +483,10 @@
 
           if (src === lastAudioUrl) {
             const multiErr = document.querySelector('.rc-audiochallenge-error-message');
-            if (multiErr && isVisible(multiErr) && (multiErr.textContent || '').trim() && reloadBtn && isVisible(reloadBtn) && Date.now() - lastReloadClickAt >= 3200) {
+            if (multiErr && isVisible(multiErr) && (multiErr.textContent || '').trim() && reloadBtn && isVisible(reloadBtn) && Date.now() - lastReloadClickAt >= 1800) {
               lastReloadClickAt = Date.now();
               updateBframeBar('人机验证进行中 · 正在刷新语音…', 'running');
-              await sleep(rand(280, 500));
+              await sleep(rand(80, 160));
               humanClick(reloadBtn, true);
             }
             return;
@@ -459,6 +497,7 @@
           updateBframeBar('人机验证进行中 · 正在识别语音…', 'running');
           reportStatus('人机验证进行中 · 正在识别语音…', 'running');
 
+          const solvePromise = askTopSolveAudio(src);
           try {
             const playBtn = document.querySelector('.rc-audiochallenge-play-button button, button[aria-labelledby*="audio-instructions"]');
             if (playBtn && isVisible(playBtn)) humanClick(playBtn, true);
@@ -470,13 +509,12 @@
             }
           } catch {}
 
-          await sleep(rand(220, 420));
-          const res = await askTopSolveAudio(src);
+          const res = await solvePromise;
           if (res && res.ok && res.text) {
             updateBframeBar('人机验证进行中 · 正在提交验证…', 'running');
             reportStatus('人机验证进行中 · 正在提交验证…', 'running');
             await humanTypeClosureSafe(audioInput, res.text);
-            await sleep(rand(220, 420));
+            await sleep(rand(45, 95));
             if (verifyBtn && isVisible(verifyBtn)) {
               verifyBtn.disabled = false;
               verifyBtn.removeAttribute('disabled');
@@ -488,11 +526,11 @@
           } else {
             updateBframeBar('人机验证进行中 · 正在重试语音识别…', 'running');
             reportStatus('人机验证进行中 · 正在重试语音识别…', 'running');
-            if (reloadBtn && isVisible(reloadBtn) && Date.now() - lastReloadClickAt >= 3000) {
+            if (reloadBtn && isVisible(reloadBtn) && Date.now() - lastReloadClickAt >= 1800) {
               lastReloadClickAt = Date.now();
               reloadBtn.disabled = false;
               reloadBtn.classList.remove('rc-button-disabled');
-              await sleep(rand(320, 580));
+              await sleep(rand(100, 220));
               humanClick(reloadBtn, true);
             }
           }
@@ -501,25 +539,33 @@
         }
       };
 
-      setInterval(stepBframe, 550);
-      setTimeout(stepBframe, 250);
+      setInterval(stepBframe, 180);
+      setTimeout(stepBframe, 50);
+      try {
+        const mo = new MutationObserver(() => stepBframe());
+        mo.observe(document.documentElement || document, { childList: true, subtree: true, attributes: true, attributeFilter: ['src', 'href', 'class', 'style', 'disabled'] });
+      } catch {}
     }
 
     if (isTurnstile) {
       let lastCfClickAt = 0;
       const tickTurnstile = () => {
-        if (Date.now() - lastCfClickAt < 3800) return;
+        if (Date.now() - lastCfClickAt < 2200) return;
         const box = document.querySelector('input[type="checkbox"], .cb-lb input, .ctp-checkbox-label input, label.cb-lb, .ctp-checkbox-label, #challenge-stage input, .cb-i');
         if (box && isVisible(box) && !box.checked) {
           lastCfClickAt = Date.now();
           reportStatus('人机验证进行中…', 'running');
           setTimeout(() => {
             humanClick(box, false);
-          }, rand(220, 450));
+          }, rand(45, 95));
         }
       };
-      setInterval(tickTurnstile, 550);
-      setTimeout(tickTurnstile, 250);
+      setInterval(tickTurnstile, 180);
+      setTimeout(tickTurnstile, 50);
+      try {
+        const mo = new MutationObserver(() => tickTurnstile());
+        mo.observe(document.documentElement || document, { childList: true, subtree: true });
+      } catch {}
     }
   } catch {}
 })();

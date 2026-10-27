@@ -47,6 +47,7 @@ const RouteConfirm = {
   route(x){
     if(typeof document!=='undefined'&&document.querySelector('.lpick:not(.out)'))return Promise.resolve(true);
     if(x?.mode==='node'||x?.mode==='ip'||x?.reason==='latency'||x?.reason==='limited'||x?.reason==='error-switch')return Promise.resolve(true);
+    const _cfg={title:'检测到跨地区切换出口，是否允许？',ok:'允许跨地区切换',keep:'保持当前地区'};void _cfg;
     return Promise.resolve(true);
   },
 };

@@ -356,14 +356,14 @@ const LocalApiGateway = (() => {
     requireKey: false,
     sessionMode: 'bound',
     toolMode: 'auto_bridge',
-    protocolTab: 'auto',
+    protocolTab: 'openai',
     snippetTab: 'client',
     boundSid: null,
     boundTitle: '',
     modelName: '自动识别 / 当前会话模型',
     modelId: 'brana-current',
     modelFam: '',
-    vendorProtocol: 'openai',
+    vendorProtocol: 'arena',
     reqCount: 0,
     lastReqAt: 0,
     lastError: '',
@@ -387,12 +387,8 @@ const LocalApiGateway = (() => {
   const _handledReqIds = new Set();
   const _statelessMap = new Map();
 
-  function inferVendor(modelSlugOrName, fam) {
-    const m = String(modelSlugOrName || '').toLowerCase();
-    const f = String(fam || '').toLowerCase();
-    if (f === 'anthropic' || m.includes('claude') || m.includes('opus') || m.includes('sonnet') || m.includes('haiku') || m.includes('fable')) return 'anthropic';
-    if (f === 'google' || m.includes('gemini') || m.includes('gemma')) return 'gemini';
-    return 'openai';
+  function inferVendor() {
+    return 'arena';
   }
 
   function toModelSlug(name, internal) {
@@ -413,7 +409,7 @@ const LocalApiGateway = (() => {
       _state.requireKey ? 1 : 0,
       _state.sessionMode || 'bound',
       _state.toolMode || 'auto_bridge',
-      _state.protocolTab || 'auto',
+      _state.protocolTab || 'openai',
       _state.snippetTab || 'client',
       _state.boundSid || '',
       _state.modelName || '',
@@ -653,6 +649,47 @@ const LocalApiGateway = (() => {
     };
   }
 
+  async function uploadApiMedia(job, chat) {
+    const messages = Array.isArray(job?.messages) ? job.messages : [];
+    let selected = messages;
+    if (Array.isArray(chat?.messages) && chat.messages.length) {
+      let lastAssistant = -1;
+      for (let i = messages.length - 1; i >= 0; i--) {
+        if (messages[i]?.role === 'assistant') { lastAssistant = i; break; }
+      }
+      selected = lastAssistant >= 0 ? messages.slice(lastAssistant + 1) : messages.slice(-1);
+    }
+    const media = selected.filter(m => m?.role === 'user').flatMap(m => Array.isArray(m.media) ? m.media : []);
+    if (!media.length) return [];
+    if (typeof Uploads === 'undefined' || typeof Uploads.upload !== 'function') throw new Error('当前客户端不支持 API 多模态附件上传');
+    const files = [];
+    const seen = new Set();
+    for (const item of media) {
+      if (files.length >= 12) break;
+      if (!item) continue;
+      let mimeType = String(item.mimeType || item.mime_type || item.contentType || '');
+      let raw = String(item.dataUrl || item.data_url || item.url || item.data || '');
+      if (!raw) continue;
+      if (!/^data:|^https?:\/\//i.test(raw)) raw = 'data:' + (mimeType || 'application/octet-stream') + ';base64,' + raw.replace(/\s+/g, '');
+      const uniqueKey = String(item.type || '') + ':' + raw.length + ':' + raw.slice(0, 72) + ':' + raw.slice(-24);
+      if (seen.has(uniqueKey)) continue;
+      seen.add(uniqueKey);
+      let response;
+      try { response = await fetch(raw); }
+      catch (err) { throw new Error('读取 API 附件失败：' + String(err?.message || err)); }
+      if (!response.ok) throw new Error('读取 API 附件失败 (HTTP ' + response.status + ')');
+      const blob = await response.blob();
+      if (blob.size > 20 * 1024 * 1024) throw new Error('单个 API 附件超过 20 MB 限制');
+      mimeType = mimeType || blob.type || 'application/octet-stream';
+      const proposedName = String(item.name || item.filename || 'api-attachment').split(/[\\/]/).pop();
+      const filename = proposedName.replace(/[\u0000-\u001f<>:"|?*]/g, '_').slice(0, 120) || 'api-attachment';
+      const file = new File([blob], filename, { type: mimeType });
+      try { files.push(await Uploads.upload(file)); }
+      catch (err) { throw new Error('上传 API 附件失败：' + String(err?.message || err)); }
+    }
+    return files;
+  }
+
   function buildTurnPrompt(chat, job) {
     const msgs = Array.isArray(job.messages) ? job.messages : [];
     const tools = Array.isArray(job.tools) ? job.tools : [];
@@ -660,6 +697,11 @@ const LocalApiGateway = (() => {
     const toolsSig = useToolBridge ? tools.map((t) => t.name).sort().join(',') : '';
     const hasExistingTurns = Boolean(chat && Array.isArray(chat.messages) && chat.messages.length > 0);
     const blocks = [];
+    const mediaHint = message => {
+      const media = Array.isArray(message?.media) ? message.media : [];
+      const labels = media.map(x => x?.type === 'image' ? '图片' : x?.type === 'video' ? '视频' : x?.type === 'audio' ? '音频' : '附件');
+      return '[API 客户端附加了 ' + labels.join('、') + '，请查看附件并结合问题回答。]';
+    };
 
     if (useToolBridge && (!chat || chat._apiToolsSig !== toolsSig)) {
       const toolLines = tools.slice(0, 40).map((t) => {
@@ -684,19 +726,23 @@ const LocalApiGateway = (() => {
       if (msgs.length <= 1) {
         const m0 = msgs[0];
         if (m0?.content) blocks.push(String(m0.content));
+        if (Array.isArray(m0?.media) && m0.media.length) blocks.push(mediaHint(m0));
       } else {
         const prior = msgs.slice(0, -1);
         const last = msgs[msgs.length - 1];
         const histLines = prior.map((m) => {
-          if (m.role === 'tool') return '[Tool Result (' + (m.toolCallId || 'tool') + ')]: ' + String(m.content || '');
-          return (m.role === 'assistant' ? 'Assistant: ' : 'User: ') + String(m.content || '');
+          const line = m.role === 'tool'
+            ? '[Tool Result (' + (m.toolCallId || 'tool') + ')]: ' + String(m.content || '')
+            : (m.role === 'assistant' ? 'Assistant: ' : 'User: ') + String(m.content || '');
+          return line + (Array.isArray(m.media) && m.media.length ? '\n' + mediaHint(m) : '');
         });
         if (histLines.length) blocks.push('[Conversation Context]\n' + histLines.join('\n\n'));
         if (last) {
           if (last.role === 'tool') {
             blocks.push('[本地工具执行结果 (' + (last.toolCallId || 'tool') + ')]:\n' + String(last.content || ''));
           } else {
-            blocks.push(String(last.content || ''));
+            if (last.content) blocks.push(String(last.content));
+            if (Array.isArray(last.media) && last.media.length) blocks.push(mediaHint(last));
           }
         }
       }
@@ -717,8 +763,9 @@ const LocalApiGateway = (() => {
             (dm.isError ? ' [执行出错]' : '') + ':\n' +
             String(dm.content || '')
           );
-        } else if (dm.content) {
-          blocks.push(String(dm.content));
+        } else {
+          if (dm.content) blocks.push(String(dm.content));
+          if (Array.isArray(dm.media) && dm.media.length) blocks.push(mediaHint(dm));
         }
       }
       if (useToolBridge && deltaMsgs.some((m) => m?.role === 'tool')) {
@@ -730,13 +777,19 @@ const LocalApiGateway = (() => {
     return { promptText, toolsSig };
   }
 
+  let _streamEventTail = Promise.resolve();
   function sendStreamEvent(payload) {
-    try {
-      if (typeof BranaHost !== 'undefined') {
-        if (BranaHost.apiGateway) BranaHost.apiGateway({ op: 'stream', ...payload });
-        else if (BranaHost.shared) BranaHost.shared('__localApiGateway', { op: 'stream', ...payload });
-      }
-    } catch {}
+    const send = async () => {
+      try {
+        if (typeof BranaHost !== 'undefined') {
+          if (BranaHost.apiGateway) return await BranaHost.apiGateway({ op: 'stream', ...payload });
+          if (BranaHost.shared) return await BranaHost.shared('__localApiGateway', { op: 'stream', ...payload });
+        }
+      } catch {}
+      return null;
+    };
+    _streamEventTail = _streamEventTail.catch(() => null).then(send);
+    return _streamEventTail;
   }
 
   async function waitChatIdle(chat, maxMs = 120000) {
@@ -749,6 +802,7 @@ const LocalApiGateway = (() => {
   async function runSingleApiRequest(job) {
     const reqId = job?.reqId;
     if (!reqId) return;
+    let mediaPending = Promise.resolve();
 
     try {
       const mode = job.sessionMode || _state.sessionMode || 'bound';
@@ -777,8 +831,47 @@ const LocalApiGateway = (() => {
       }
 
       const { promptText, toolsSig } = buildTurnPrompt(chat, job);
+      const apiFiles = await uploadApiMedia(job, chat);
       const externalToolNames = new Set((job.tools || []).map((t) => String(t?.name || '')).filter(Boolean));
       const emittedNativeToolIds = new Set();
+      const emittedMediaKeys = new Set();
+      const blobToDataUrl = blob => new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result || ''));
+        reader.onerror = () => reject(reader.error || new Error('无法读取媒体附件'));
+        reader.readAsDataURL(blob);
+      });
+      const queueAssistantMedia = (rawType, rawValue, rawMime, rawName) => {
+        let type = String(rawType || '').toLowerCase();
+        let mimeType = String(rawMime || '');
+        if (!mimeType && typeof rawValue === 'string' && /^data:/i.test(rawValue)) mimeType = String(/^data:([^;,]+)/i.exec(rawValue)?.[1] || '');
+        if (!type || !['image', 'video', 'audio'].includes(type)) {
+          type = mimeType.startsWith('image/') ? 'image' : mimeType.startsWith('video/') ? 'video' : mimeType.startsWith('audio/') ? 'audio' : '';
+        }
+        if (!type) return;
+        if (!mimeType) mimeType = type === 'image' ? 'image/png' : type === 'video' ? 'video/mp4' : 'audio/wav';
+        let raw = typeof rawValue === 'string' ? rawValue.trim() : (rawValue?.url || rawValue?.data || '');
+        if (!raw) return;
+        const key = type + ':' + raw.length + ':' + raw.slice(0, 72) + ':' + raw.slice(-24);
+        if (emittedMediaKeys.has(key)) return;
+        emittedMediaKeys.add(key);
+        mediaPending = mediaPending.catch(() => {}).then(async () => {
+          const media = { type, mimeType, name: String(rawName || ''), ...( /^data:/i.test(raw) ? { dataUrl: raw } : /^https?:\/\//i.test(raw) || /^blob:/i.test(raw) ? { url: raw } : { dataUrl: 'data:' + mimeType + ';base64,' + raw.replace(/\s+/g, '') }) };
+          if (media.url && /^blob:/i.test(media.url)) {
+            try {
+              const response = await fetch(media.url);
+              if (!response.ok) return;
+              const blob = await response.blob();
+              if (blob.size > 20 * 1024 * 1024) return;
+              media.dataUrl = await blobToDataUrl(blob);
+              delete media.url;
+            } catch { return; }
+          }
+          await sendStreamEvent({ reqId, type: 'media', media });
+        }).catch(() => {});
+      };
+
+
 
       let sentReasonLen = 0;
       const splitter = createToolStreamSplitter(
@@ -824,6 +917,13 @@ const LocalApiGateway = (() => {
         let tFull = '';
         for (const p of m.parts) {
           if (!p) continue;
+          const partType = String(p.type || '').toLowerCase();
+          const mediaMime = String(p.mimeType || p.contentType || p.mime_type || '');
+          if (partType === 'image' || partType === 'video' || partType === 'audio') {
+            queueAssistantMedia(partType, p.dataUrl || p.url || p.src || p.data || p.image || p.video || p.audio, mediaMime, p.name || p.filename);
+          } else if (partType === 'media' || partType === 'file') {
+            queueAssistantMedia('', p.dataUrl || p.url || p.src || p.data, mediaMime, p.name || p.filename);
+          }
           if (p.type === 'reasoning') rFull += String(p.text || '');
           else if (p.type === 'text') tFull += String(p.text || '');
           else if ((p.type === 'dynamic-tool' || String(p.type || '').startsWith('tool-')) && p.toolName && job.toolMode !== 'arena_native_only') {
@@ -843,6 +943,13 @@ const LocalApiGateway = (() => {
               }
             }
           }
+        }
+
+        for (const attachment of (Array.isArray(m.experimental_attachments) ? m.experimental_attachments : [])) {
+          if (!attachment) continue;
+          const mime = String(attachment.contentType || attachment.mimeType || attachment.mime_type || '');
+          const type = mime.startsWith('image/') ? 'image' : mime.startsWith('video/') ? 'video' : mime.startsWith('audio/') ? 'audio' : '';
+          if (type) queueAssistantMedia(type, attachment.dataUrl || attachment.url || attachment.data, mime, attachment.name || attachment.filename);
         }
 
         if (rFull.length > sentReasonLen) {
@@ -893,7 +1000,7 @@ const LocalApiGateway = (() => {
         if (!chat) {
           if (typeof createChat !== 'function') throw new Error('客户端尚未就绪 (createChat 不可用)');
           const existingSids = new Set(typeof Chats !== 'undefined' && Chats.keys ? [...Chats.keys()] : []);
-          const createP = createChat(promptText, { files: [] });
+          const createP = createChat(promptText, { files: apiFiles });
           const watchStart = Date.now();
           while (!chat && Date.now() - watchStart < 8000) {
             if (typeof Chats !== 'undefined') {
@@ -927,7 +1034,7 @@ const LocalApiGateway = (() => {
           }
         } else {
           attachListeners(chat);
-          await chat.send(promptText, { files: [] });
+          await chat.send(promptText, { files: apiFiles });
         }
 
         await waitChatIdle(chat, 240000);
@@ -941,12 +1048,14 @@ const LocalApiGateway = (() => {
 
       const chatErr = chat?.err || chat?.error;
       if (chatErr && !finalSnap?.tFull && (!chat.messages?.length || chat.status === 'error')) {
-        sendStreamEvent({ reqId, type: 'error', error: String(chatErr) });
+        await mediaPending;
+        await sendStreamEvent({ reqId, type: 'error', error: String(chatErr) });
         return;
       }
 
       const meta = readChatModelMeta(chat, chat?.sid);
-      sendStreamEvent({
+      await mediaPending;
+      await sendStreamEvent({
         reqId,
         type: 'done',
         modelId: meta.modelId,
@@ -956,7 +1065,8 @@ const LocalApiGateway = (() => {
       });
       syncCurrentContext(chat);
     } catch (err) {
-      sendStreamEvent({
+      await mediaPending.catch(() => {});
+      await sendStreamEvent({
         reqId,
         type: 'error',
         error: String(err?.message || err || '执行对话请求失败'),
@@ -976,8 +1086,8 @@ const LocalApiGateway = (() => {
   }
 
   function resolveActiveProtoInfo() {
-    const pTab = _state.protocolTab || 'auto';
-    const effProto = pTab === 'auto' ? (_state.vendorProtocol || 'openai') : pTab;
+    const pTab = _state.protocolTab || 'openai';
+    const effProto = pTab === 'auto' ? 'openai' : pTab;
     const hostPort = 'http://' + (_state.host || '127.0.0.1') + ':' + (_state.port || 18765);
     const modelId = _state.modelId || 'brana-current';
     if (effProto === 'anthropic') {
@@ -987,7 +1097,7 @@ const LocalApiGateway = (() => {
         baseUrl: hostPort,
         endpoint: hostPort + '/v1/messages',
         modelId,
-        note: '当前会话识别为 Claude 系列，已自动匹配 Anthropic 原生 /v1/messages 协议（同时兼容 OpenAI /v1/chat/completions）',
+        note: '仅改变下游请求/响应格式；模型仍由当前 Arena 会话决定，不会连接 Anthropic。',
       };
     }
     if (effProto === 'gemini') {
@@ -997,7 +1107,7 @@ const LocalApiGateway = (() => {
         baseUrl: hostPort + '/v1beta',
         endpoint: hostPort + '/v1beta/models/' + modelId + ':generateContent',
         modelId,
-        note: '当前会话识别为 Gemini 系列，已自动匹配 Google v1beta 原生协议（同时兼容 OpenAI /v1/chat/completions）',
+        note: '仅改变下游请求/响应格式；模型仍由当前 Arena 会话决定，不会连接 Google。',
       };
     }
     return {
@@ -1006,7 +1116,7 @@ const LocalApiGateway = (() => {
       baseUrl: hostPort + '/v1',
       endpoint: hostPort + '/v1/chat/completions',
       modelId,
-      note: '通用 OpenAI 标准格式，可直接接入 Cherry Studio、Cursor、Cline、OpenWebUI、NextChat、LobeChat 等任意客户端（同时兼容 /v1/messages 与 /v1/responses）',
+      note: '默认 OpenAI 兼容格式；model 字段只是 Arena 当前会话的标签/别名，不代表直连 OpenAI。Anthropic、Gemini 格式需显式选择对应 Endpoint。',
     };
   }
 
@@ -1151,9 +1261,7 @@ const LocalApiGateway = (() => {
       if (!bodyEl || !_modalBack) return;
       _lastModalSig = computeModalSig();
       const info = resolveActiveProtoInfo();
-      const vendorTag = _state.vendorProtocol === 'anthropic'
-        ? 'Anthropic 原生'
-        : (_state.vendorProtocol === 'gemini' ? 'Gemini 原生' : 'OpenAI 标准');
+      const vendorTag = 'Arena 当前会话';
 
       statusBadge.className = 'api-gw-st ' + (_state.running ? 'on' : 'off');
       statusBadge.textContent = _state.running
@@ -1337,15 +1445,14 @@ const LocalApiGateway = (() => {
           'div',
           { class: 'dk-tabs api-gw-ptabs' },
           ...[
-            ['auto', '自动按厂商 (' + vendorTag + ')'],
-            ['openai', 'OpenAI 兼容格式 (/v1)'],
-            ['anthropic', 'Anthropic 原生 (/v1/messages)'],
-            ['gemini', 'Gemini 原生 (/v1beta)'],
+            ['openai', '默认 OpenAI 兼容 (/v1)'],
+            ['anthropic', 'Anthropic 格式兼容 (/v1/messages)'],
+            ['gemini', 'Gemini 格式兼容 (/v1beta)'],
           ].map(([k, lbl]) =>
             h(
               'button',
               {
-                class: (_state.protocolTab || 'auto') === k ? 'on' : '',
+                class: (_state.protocolTab === 'auto' ? 'openai' : (_state.protocolTab || 'openai')) === k ? 'on' : '',
                 onclick: () => {
                   _state.protocolTab = k;
                   _renderModalBody();

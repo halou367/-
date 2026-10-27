@@ -501,12 +501,25 @@ const Host = (() => {
         gachaAccount: (id, cmd) => call('gachaAccount', id, cmd),
         onCmd: fn => { window.__ancCmd = m => { try { fn(m); } catch (e) { console.warn(e); } }; },
       } : {}),
+      solveCaptchaAudio: typeof A.solveCaptchaAudioStart === 'function' ? async audioUrl => {
+        let id;
+        try { id = A.solveCaptchaAudioStart(String(audioUrl || '')); if (!id) return { ok: false, error: 'NO_JOB' }; }
+        catch (e) { return { ok: false, error: String(e?.message || e) }; }
+        for (let i = 0; i < 160; i++) {
+          await sleep(i < 10 ? 45 : 75);
+          let r;
+          try { r = A.probeGet(id); } catch (e) { return { ok: false, error: String(e?.message || e) }; }
+          if (r) { try { return JSON.parse(r); } catch { return { ok: false, error: 'PARSE_ERROR' }; } }
+        }
+        return { ok: false, error: 'TIMEOUT' };
+      } : null,
       ready: () => typeof A.ready === 'function' ? call('ready') : Promise.resolve(null),
     };
   }
   // 纯浏览器调试模式
   return { platform: 'web', info: async () => ({ platform: 'web', account: { id: 'web', name: '浏览器', proxy: '' }, version: VERSION }), listAccounts: async () => [], saveAccount: async () => null, removeAccount: async () => null, openAccount: async () => null, login: async () => { location.href = '/'; }, back: async () => { location.href = '/robots.txt'; }, logout: async () => null, setTitle: async t => { document.title = t; }, openExternal: async u => window.open(u, '_blank'), testIp: async () => null, getCred: async () => null, noteAccount: async () => null, shared: async () => null, exportAccounts: async () => [], signInAccount: async () => ({ deferred: true }), setCookies: async () => null };
 })();
+try { if (typeof window !== 'undefined' && !window.BranaHost) window.BranaHost = Host; } catch {}
 
 // ---------- 本地存储（按账号分区天然隔离）----------
 const _storeRawCache = new Map();
@@ -3314,7 +3327,7 @@ const Recaptcha = (() => {
       wrap.querySelector('[data-r]').onclick = restart;
       render();
       // 兜底：回调没触发但已经拿到令牌 → 直接继续
-      if (!fin) poll = setInterval(() => { if (fin) return; try { const t = wid != null && grecaptcha.enterprise.getResponse(wid); if (t) done(true, t); } catch {} if (!wrap.isConnected) done(false); }, 600);
+      if (!fin) poll = setInterval(() => { if (fin) return; try { const t = wid != null && grecaptcha.enterprise.getResponse(wid); if (t) done(true, t); } catch {} if (!wrap.isConnected) done(false); }, 200);
     })).finally(() => { v2Open = null; v2Cancel = null; });
   }
   const v2Close = () => { try { v2Cancel?.(); } catch {} };

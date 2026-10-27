@@ -34,14 +34,21 @@ function Get-InstalledProcesses {
     # Bypass third-party PowerShell modules (such as ProcessEx\ProcessEx.psm1) that hijack Get-CimInstance and fail on spaces in 'Brana AI.exe'.
     $localFn = Get-Item -LiteralPath 'Function:\Get-CimInstance' -ErrorAction SilentlyContinue
     $escapedExe = $ExeName.Replace("'", "''")
+    $isBranaMain = ($ExeName -ieq 'Brana AI.exe')
+    $cimFilter = if ($isBranaMain) {
+        "Name='$escapedExe' OR Name='xray.exe' OR Name='win-mem-trim.exe' OR Name='Uninstall Brana AI.exe' OR Name LIKE 'BranaAI%.exe'"
+    } else {
+        "Name='$escapedExe' OR Name='xray.exe'"
+    }
     $procItems = if ($localFn -and [string]::IsNullOrEmpty($localFn.ModuleName)) {
         @(Get-CimInstance Win32_Process)
     } else {
         try {
-            @(CimCmdlets\Get-CimInstance -ClassName Win32_Process -Filter "Name='$escapedExe' OR Name='xray.exe'" -ErrorAction Stop)
+            @(CimCmdlets\Get-CimInstance -ClassName Win32_Process -Filter $cimFilter -ErrorAction Stop)
         } catch {
             $baseName = [IO.Path]::GetFileNameWithoutExtension($ExeName)
-            @(Microsoft.PowerShell.Management\Get-Process -Name @($baseName, 'xray') -ErrorAction SilentlyContinue | ForEach-Object {
+            $procNames = if ($isBranaMain) { @($baseName, 'BranaAI*', 'xray', 'win-mem-trim', 'Uninstall Brana AI') } else { @($baseName, 'xray') }
+            @(Microsoft.PowerShell.Management\Get-Process -Name $procNames -ErrorAction SilentlyContinue | ForEach-Object {
                 $pPath = $null
                 try { $pPath = $_.Path } catch {}
                 [pscustomobject]@{
@@ -53,7 +60,8 @@ function Get-InstalledProcesses {
         }
     }
     foreach ($item in $procItems) {
-        if ($item.Name -ine $ExeName -and $item.Name -ine 'xray.exe') { continue }
+        $isAux = ($item.Name -ieq 'xray.exe') -or ($isBranaMain -and ($item.Name -ieq 'win-mem-trim.exe' -or $item.Name -ieq 'Uninstall Brana AI.exe' -or $item.Name -ilike 'BranaAI*.exe'))
+        if ($item.Name -ine $ExeName -and -not $isAux) { continue }
         $execPath = $item.ExecutablePath
         if (-not $execPath) {
             try {
@@ -63,7 +71,7 @@ function Get-InstalledProcesses {
             } catch {}
         }
         if (-not $execPath) {
-            if ($IgnoreUnreadable -or $item.Name -ieq 'xray.exe') { continue }
+            if ($IgnoreUnreadable -or $isAux) { continue }
             # A protected matching process may own locked files; never claim success.
             throw "Cannot read the path of process $($item.ProcessId) ($($item.Name)). Try running setup as administrator."
         }
@@ -71,7 +79,7 @@ function Get-InstalledProcesses {
         foreach ($root in $Roots) {
             $main = [IO.Path]::Combine($root, $ExeName)
             if ($path.Equals($main, [StringComparison]::OrdinalIgnoreCase) -or
-                ($item.Name -ieq 'xray.exe' -and $path.StartsWith($root + '\', [StringComparison]::OrdinalIgnoreCase))) {
+                ($isAux -and $path.StartsWith($root + '\', [StringComparison]::OrdinalIgnoreCase))) {
                 $item
                 break
             }
@@ -173,7 +181,9 @@ function Repair-UninstallRegistry {
     } catch {}
     $regPaths = @(
         'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\2288686e-dfd2-53b4-b834-afc0293af524',
-        'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\2288686e-dfd2-53b4-b834-afc0293af524'
+        'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\2288686e-dfd2-53b4-b834-afc0293af524',
+        'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\45b79f8b-4a8e-52f8-9c6d-619f5b15654e',
+        'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\45b79f8b-4a8e-52f8-9c6d-619f5b15654e'
     )
     foreach ($rp in $regPaths) {
         try {
@@ -218,7 +228,10 @@ if ($MyInvocation.InvocationName -ne '.') {
             foreach ($extra in @($env:ANC_DIR,
                 (Join-Path $env:LOCALAPPDATA 'Programs\Brana AI'),
                 (Join-Path $env:LOCALAPPDATA 'Programs\Brana'),
-                (Join-Path $env:ProgramFiles 'Brana AI'))) {
+                (Join-Path $env:ProgramFiles 'Brana AI'),
+                'C:\Program Files\Brana AI',
+                'D:\Program Files\Brana AI',
+                'E:\Program Files\Brana AI')) {
                 if (-not [string]::IsNullOrWhiteSpace($extra) -and (Test-Path -LiteralPath $extra)) {
                     $dirList += $extra
                 }

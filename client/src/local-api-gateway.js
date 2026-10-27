@@ -1,6 +1,8 @@
 'use strict';
 const http = require('http');
 const crypto = require('crypto');
+const ApiMultimodal = require('./api-multimodal');
+const MAX_API_BODY_BYTES = 60 * 1024 * 1024;
 
 function genApiKey() {
   return 'sk-brana-' + crypto.randomBytes(12).toString('hex');
@@ -9,6 +11,7 @@ function genApiKey() {
 function inferVendorProtocol(modelId, fam) {
   const m = String(modelId || '').toLowerCase();
   const f = String(fam || '').toLowerCase();
+  if (!m && !f) return 'arena';
   if (f === 'anthropic' || m.includes('claude') || m.includes('opus') || m.includes('sonnet') || m.includes('haiku') || m.includes('fable')) {
     return 'anthropic';
   }
@@ -34,196 +37,17 @@ function parseJsonSafe(str, fallback = null) {
   try { return JSON.parse(str); } catch { return fallback; }
 }
 
-function normalizeIncomingRequest(req, urlObj, body, state) {
-  const pathname = String(urlObj.pathname || '/').replace(/\/+$/, '') || '/';
-  const headers = req.headers || {};
-  let protocol = 'openai';
-
-  const gemMatch = pathname.match(/\/models\/([^/:]+):(streamGenerateContent|generateContent)$/i);
-  if (gemMatch) {
-    protocol = 'gemini';
-  } else if (/\/(?:v1\/)?messages$/i.test(pathname) || headers['anthropic-version']) {
-    protocol = 'anthropic';
-  } else if (/\/(?:v1\/)?responses$/i.test(pathname)) {
-    protocol = 'openai-responses';
-  } else if (/\/(?:v1\/)?auto$/i.test(pathname)) {
-    if (Array.isArray(body?.contents)) protocol = 'gemini';
-    else if (headers['anthropic-version'] || (body?.max_tokens && Array.isArray(body?.messages) && inferVendorProtocol(body?.model || state.modelId, state.modelFam) === 'anthropic')) {
-      protocol = 'anthropic';
-    } else if (body?.input !== undefined && !Array.isArray(body?.messages)) {
-      protocol = 'openai-responses';
-    } else {
-      protocol = 'openai';
-    }
-  }
-
-  const model = String(body?.model || (gemMatch ? decodeURIComponent(gemMatch[1]) : '') || state.modelId || 'brana-current').trim();
-  let stream = Boolean(body?.stream);
-  if (protocol === 'gemini' && gemMatch) {
-    stream = /^streamGenerateContent$/i.test(gemMatch[2]) || urlObj.searchParams.get('alt') === 'sse' || Boolean(body?.stream);
-  }
-
-  let systemText = '';
-  const messages = [];
-  const tools = [];
-
-  if (protocol === 'anthropic') {
-    if (typeof body?.system === 'string') systemText = body.system.trim();
-    else if (Array.isArray(body?.system)) {
-      systemText = body.system.map((x) => (typeof x === 'string' ? x : String(x?.text || ''))).filter(Boolean).join('\n\n').trim();
-    }
-    for (const m of (Array.isArray(body?.messages) ? body.messages : [])) {
-      if (!m || !m.role) continue;
-      const role = m.role === 'assistant' ? 'assistant' : 'user';
-      if (typeof m.content === 'string') {
-        messages.push({ role, content: m.content });
-      } else if (Array.isArray(m.content)) {
-        const textParts = [], toolCalls = [], toolResults = [], images = [];
-        for (const blk of m.content) {
-          if (!blk) continue;
-          if (blk.type === 'text' && blk.text) textParts.push(String(blk.text));
-          else if (blk.type === 'tool_use') {
-            toolCalls.push({
-              id: String(blk.id || ('toolu_' + crypto.randomBytes(6).toString('hex'))),
-              name: String(blk.name || 'tool'),
-              arguments: typeof blk.input === 'string' ? blk.input : JSON.stringify(blk.input || {}),
-            });
-          } else if (blk.type === 'tool_result') {
-            const resContent = typeof blk.content === 'string'
-              ? blk.content
-              : Array.isArray(blk.content)
-                ? blk.content.map((c) => (typeof c === 'string' ? c : String(c?.text || JSON.stringify(c)))).join('\n')
-                : JSON.stringify(blk.content ?? '');
-            toolResults.push({ toolCallId: String(blk.tool_use_id || ''), isError: Boolean(blk.is_error), content: resContent });
-          } else if (blk.type === 'image' && blk.source?.data) {
-            images.push({
-              mime: String(blk.source.media_type || 'image/png'),
-              dataUrl: 'data:' + (blk.source.media_type || 'image/png') + ';base64,' + blk.source.data,
-            });
-          }
-        }
-        for (const tr of toolResults) messages.push({ role: 'tool', toolCallId: tr.toolCallId, isError: tr.isError, content: tr.content });
-        if (textParts.length || toolCalls.length || images.length) messages.push({ role, content: textParts.join('\n'), toolCalls, images });
-      }
-    }
-    for (const t of (Array.isArray(body?.tools) ? body.tools : [])) {
-      if (!t || !t.name) continue;
-      tools.push({ name: String(t.name), description: String(t.description || ''), parameters: t.input_schema || t.parameters || { type: 'object', properties: {} } });
-    }
-  } else if (protocol === 'gemini') {
-    const sysInst = body?.systemInstruction || body?.system_instruction;
-    if (sysInst) {
-      const parts = Array.isArray(sysInst.parts) ? sysInst.parts : [sysInst];
-      systemText = parts.map((p) => String(p?.text || '')).filter(Boolean).join('\n\n').trim();
-    }
-    for (const c of (Array.isArray(body?.contents) ? body.contents : [])) {
-      if (!c) continue;
-      const role = c.role === 'model' || c.role === 'assistant' ? 'assistant' : 'user';
-      const parts = Array.isArray(c.parts) ? c.parts : [];
-      const textParts = [], toolCalls = [];
-      for (const p of parts) {
-        if (!p) continue;
-        if (typeof p.text === 'string' && !p.thought) textParts.push(p.text);
-        else if (p.functionCall) {
-          toolCalls.push({
-            id: 'call_' + crypto.randomBytes(6).toString('hex'),
-            name: String(p.functionCall.name || 'tool'),
-            arguments: JSON.stringify(p.functionCall.args || {}),
-          });
-        } else if (p.functionResponse) {
-          messages.push({
-            role: 'tool',
-            toolCallId: String(p.functionResponse.name || 'tool'),
-            content: typeof p.functionResponse.response === 'string' ? p.functionResponse.response : JSON.stringify(p.functionResponse.response || {}),
-          });
-        }
-      }
-      if (textParts.length || toolCalls.length) messages.push({ role, content: textParts.join('\n'), toolCalls });
-    }
-    for (const tg of (Array.isArray(body?.tools) ? body.tools : [])) {
-      const decls = Array.isArray(tg?.functionDeclarations) ? tg.functionDeclarations : (tg?.name ? [tg] : []);
-      for (const d of decls) {
-        if (!d || !d.name) continue;
-        tools.push({ name: String(d.name), description: String(d.description || ''), parameters: d.parameters || { type: 'object', properties: {} } });
-      }
-    }
-  } else if (protocol === 'openai-responses') {
-    if (typeof body?.instructions === 'string') systemText = body.instructions.trim();
-    const inp = body?.input;
-    if (typeof inp === 'string') messages.push({ role: 'user', content: inp });
-    else if (Array.isArray(inp)) {
-      for (const item of inp) {
-        if (!item) continue;
-        if (item.type === 'function_call_output') {
-          messages.push({ role: 'tool', toolCallId: String(item.call_id || ''), content: typeof item.output === 'string' ? item.output : JSON.stringify(item.output ?? '') });
-          continue;
-        }
-        const role = item.role === 'assistant' ? 'assistant' : (item.role === 'system' || item.role === 'developer' ? 'system' : 'user');
-        let text = '';
-        if (typeof item.content === 'string') text = item.content;
-        else if (Array.isArray(item.content)) text = item.content.map((c) => String(c?.text || c?.input_text || c?.output_text || '')).filter(Boolean).join('\n');
-        if (role === 'system') systemText = (systemText ? systemText + '\n\n' : '') + text;
-        else if (text) messages.push({ role, content: text });
-      }
-    }
-    for (const t of (Array.isArray(body?.tools) ? body.tools : [])) {
-      const fn = t?.function || t;
-      if (!fn || !fn.name) continue;
-      tools.push({ name: String(fn.name), description: String(fn.description || ''), parameters: fn.parameters || { type: 'object', properties: {} } });
-    }
-  } else {
-    const sysParts = [];
-    for (const m of (Array.isArray(body?.messages) ? body.messages : [])) {
-      if (!m || !m.role) continue;
-      let text = '';
-      const images = [];
-      if (typeof m.content === 'string') text = m.content;
-      else if (Array.isArray(m.content)) {
-        const tArr = [];
-        for (const c of m.content) {
-          if (!c) continue;
-          if (typeof c === 'string') tArr.push(c);
-          else if (c.type === 'text' && c.text) tArr.push(String(c.text));
-          else if (c.type === 'image_url' && c.image_url?.url) images.push({ dataUrl: String(c.image_url.url) });
-        }
-        text = tArr.join('\n');
-      }
-      if (m.role === 'system' || m.role === 'developer') {
-        if (text.trim()) sysParts.push(text.trim());
-      } else if (m.role === 'tool' || m.role === 'function') {
-        messages.push({ role: 'tool', toolCallId: String(m.tool_call_id || m.name || 'tool'), content: text });
-      } else {
-        const toolCalls = Array.isArray(m.tool_calls)
-          ? m.tool_calls.map((tc) => ({
-              id: String(tc?.id || ('call_' + crypto.randomBytes(6).toString('hex'))),
-              name: String(tc?.function?.name || tc?.name || 'tool'),
-              arguments: typeof tc?.function?.arguments === 'string' ? tc?.function?.arguments : JSON.stringify(tc?.function?.arguments || {}),
-            }))
-          : [];
-        messages.push({ role: m.role === 'assistant' ? 'assistant' : 'user', content: text, toolCalls, images });
-      }
-    }
-    if (!messages.length && typeof body?.prompt === 'string') messages.push({ role: 'user', content: body.prompt });
-    systemText = sysParts.join('\n\n');
-    const rawTools = Array.isArray(body?.tools) ? body.tools : (Array.isArray(body?.functions) ? body.functions : []);
-    for (const t of rawTools) {
-      const fn = t?.function || t;
-      if (!fn || !fn.name) continue;
-      tools.push({ name: String(fn.name), description: String(fn.description || ''), parameters: fn.parameters || fn.input_schema || { type: 'object', properties: {} } });
-    }
-  }
-
-  return { protocol, model, stream, systemText, messages, tools, gemAltSse: urlObj.searchParams.get('alt') === 'sse' };
-}
+const normalizeIncomingRequest = ApiMultimodal.normalizeIncomingRequest;
 
 function setCorsHeaders(res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-api-key, anthropic-version, anthropic-beta, x-goog-api-key, OpenAI-Beta, X-Requested-With');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-api-key, anthropic-version, anthropic-beta, x-goog-api-key, OpenAI-Beta, X-Requested-With, Range');
+  res.setHeader('Access-Control-Expose-Headers', 'Content-Length, Content-Range, Accept-Ranges, Content-Type');
   res.setHeader('Cache-Control', 'no-cache, no-transform');
 }
 
-function createResponseAdapter(res, normReq, state) {
+function createResponseAdapter(res, normReq, state, mediaStore) {
   const { protocol, stream } = normReq;
   const createdSec = Math.floor(Date.now() / 1000);
   const msgId = 'chatcmpl_brana_' + crypto.randomBytes(8).toString('hex');
@@ -236,6 +60,7 @@ function createResponseAdapter(res, normReq, state) {
   let fullReasoning = '';
   let fullText = '';
   const toolCalls = [];
+  const outputMedia = [];
 
   let anthStarted = false;
   let anthCurBlockType = null;
@@ -349,6 +174,63 @@ function createResponseAdapter(res, normReq, state) {
       }
     },
 
+    async onMedia(raw = {}) {
+      if (finished || !raw) return;
+      const dataUrlValue = raw.dataUrl || raw.data_url || '';
+      let type = String(raw.type || '').toLowerCase().replace(/_url$/, '');
+      let mimeType = String(raw.mimeType || raw.mime_type || raw.contentType || raw.content_type || '');
+      if (!mimeType && dataUrlValue) mimeType = String(/^data:([^;,]+)/i.exec(String(dataUrlValue))?.[1] || '');
+      if (!mimeType) mimeType = type === 'image' ? 'image/png' : type === 'video' ? 'video/mp4' : type === 'audio' ? 'audio/wav' : 'application/octet-stream';
+      if (!['image', 'video', 'audio', 'file'].includes(type)) type = ApiMultimodal.mediaTypeForMime(mimeType, 'file');
+      if (mimeType === 'application/octet-stream' && type !== 'file') mimeType = type === 'image' ? 'image/png' : type === 'video' ? 'video/mp4' : 'audio/wav';
+      const rawData = raw.data || raw.base64 || '';
+      let dataUrl = String(dataUrlValue || '');
+      if (!dataUrl && rawData) {
+        const dataString = String(rawData);
+        dataUrl = /^data:/i.test(dataString) ? dataString : 'data:' + mimeType + ';base64,' + dataString.replace(/\s+/g, '');
+      }
+      const media = {
+        type,
+        mimeType,
+        name: String(raw.name || raw.filename || raw.fileName || ''),
+        dataUrl,
+        url: String(raw.url || raw.fileUri || raw.file_uri || ''),
+      };
+      if (!media.dataUrl && /^data:/i.test(media.url)) { media.dataUrl = media.url; media.url = ''; }
+      if (!media.dataUrl && media.url) {
+        const wrapper = { messages: [{ role: 'user', content: '', toolCalls: [], media: [media] }] };
+        try {
+          await ApiMultimodal.hydrateIncomingMedia(wrapper);
+          const hydrated = wrapper.messages[0].media[0];
+          media.dataUrl = hydrated.dataUrl || '';
+          media.mimeType = hydrated.mimeType || media.mimeType;
+          media.url = '';
+        } catch { return; }
+      }
+      if (!media.dataUrl) return;
+      if (finished || res.writableEnded) return;
+      const apiUrl = mediaStore ? mediaStore.add(media) : media.url;
+      const item = { ...media, apiUrl: apiUrl || '' };
+      outputMedia.push(item);
+      const markdown = ApiMultimodal.appendMediaMarkdown('', [item]);
+      if (markdown) this.onText(markdown + '\n\n');
+      if (!stream) return;
+      ensureStreamHeaders();
+      if (protocol === 'openai') {
+        const chunk = {
+          id: msgId,
+          object: 'chat.completion.chunk',
+          created: createdSec,
+          model: resolvedModel,
+          choices: [{ index: 0, delta: { media: [ApiMultimodal.mediaPublicShape(item)] }, finish_reason: null }],
+        };
+        res.write('data: ' + JSON.stringify(chunk) + '\n\n');
+      } else if (protocol === 'gemini') {
+        const part = ApiMultimodal.geminiMediaPart(item);
+        if (part) res.write('data: ' + JSON.stringify({ candidates: [{ content: { role: 'model', parts: [part] }, index: 0 }], modelVersion: resolvedModel }) + '\n\n');
+      }
+    },
+
     onToolCall(tc) {
       if (finished || !tc || !tc.name) return;
       const callId = String(tc.id || ((protocol === 'anthropic' ? 'toolu_' : 'call_') + crypto.randomBytes(6).toString('hex')));
@@ -404,6 +286,9 @@ function createResponseAdapter(res, normReq, state) {
       const inTok = Number(meta.inputTokens) || Math.max(16, Math.ceil(JSON.stringify(normReq.messages || []).length / 3.5));
       const outTok = Number(meta.outputTokens) || Math.max(8, Math.ceil((fullText.length + fullReasoning.length) / 3.5));
       const hasTools = toolCalls.length > 0;
+      const mediaMeta = outputMedia.map(ApiMultimodal.mediaPublicShape);
+      const gemMedia = outputMedia.map(ApiMultimodal.geminiMediaPart).filter(Boolean);
+      const responsesMedia = outputMedia.map(ApiMultimodal.responsesOutputMedia).filter(Boolean);
 
       if (stream) {
         ensureStreamHeaders();
@@ -416,6 +301,7 @@ function createResponseAdapter(res, normReq, state) {
             choices: [{ index: 0, delta: {}, finish_reason: hasTools ? 'tool_calls' : 'stop' }],
             usage: { prompt_tokens: inTok, completion_tokens: outTok, total_tokens: inTok + outTok },
           };
+          if (mediaMeta.length) endChunk.media = mediaMeta;
           res.write('data: ' + JSON.stringify(endChunk) + '\n\ndata: [DONE]\n\n');
         } else if (protocol === 'openai-responses') {
           const finalResp = {
@@ -430,7 +316,7 @@ function createResponseAdapter(res, normReq, state) {
               id: msgId,
               status: 'completed',
               role: 'assistant',
-              content: [{ type: 'output_text', text: fullText, annotations: [] }],
+              content: [{ type: 'output_text', text: fullText, annotations: [] }, ...responsesMedia],
             }],
             usage: { input_tokens: inTok, output_tokens: outTok, total_tokens: inTok + outTok },
           };
@@ -474,6 +360,7 @@ function createResponseAdapter(res, normReq, state) {
           role: 'assistant',
           model: resolvedModel,
           content,
+          media: mediaMeta,
           stop_reason: hasTools ? 'tool_use' : 'end_turn',
           stop_sequence: null,
           usage: { input_tokens: inTok, output_tokens: outTok },
@@ -482,6 +369,7 @@ function createResponseAdapter(res, normReq, state) {
         const parts = [];
         if (fullReasoning) parts.push({ text: fullReasoning, thought: true });
         if (fullText || !hasTools) parts.push({ text: fullText });
+        for (const media of gemMedia) parts.push(media);
         for (const tc of toolCalls) {
           parts.push({ functionCall: { name: tc.name, args: parseJsonSafe(tc.arguments, {}) || {} } });
         }
@@ -503,7 +391,7 @@ function createResponseAdapter(res, normReq, state) {
             id: msgId,
             status: 'completed',
             role: 'assistant',
-            content: [{ type: 'output_text', text: fullText, annotations: [] }],
+            content: [{ type: 'output_text', text: fullText, annotations: [] }, ...responsesMedia],
           }],
           usage: { input_tokens: inTok, output_tokens: outTok, total_tokens: inTok + outTok },
         }));
@@ -513,6 +401,7 @@ function createResponseAdapter(res, normReq, state) {
           msgObj.reasoning_content = fullReasoning;
           msgObj.reasoning = fullReasoning;
         }
+        if (mediaMeta.length) msgObj.media = mediaMeta;
         if (hasTools) {
           msgObj.tool_calls = toolCalls.map((tc) => ({
             id: tc.id,
@@ -560,13 +449,13 @@ function createLocalApiGateway(options = {}) {
     requireKey: false,
     sessionMode: 'bound',
     toolMode: 'auto_bridge',
-    protocolPref: 'auto',
+    protocolPref: 'openai',
     boundSid: null,
     boundTitle: '',
     modelName: '自动识别 / 当前会话模型',
     modelId: 'brana-current',
     modelFam: '',
-    vendorProtocol: 'openai',
+    vendorProtocol: 'arena',
     reqCount: 0,
     lastReqAt: 0,
     lastError: '',
@@ -577,6 +466,7 @@ function createLocalApiGateway(options = {}) {
   let activeWebContents = null;
   let reqSeq = 0;
   const inflight = new Map();
+  const mediaStore = ApiMultimodal.createMediaStore(state);
 
   const pushLog = (entry) => {
     state.logs.unshift({ id: ++reqSeq, at: Date.now(), ...entry });
@@ -613,14 +503,9 @@ function createLocalApiGateway(options = {}) {
       list.push({ id, object: 'model', created: nowSec, owned_by: ownedBy || 'brana-local-gateway', display_name: displayName || id });
     };
     if (state.modelId && state.modelId !== 'brana-current') {
-      addModel(state.modelId, state.modelFam || 'brana-identified', state.modelName || state.modelId);
+      addModel(state.modelId, 'arena-session', state.modelName || state.modelId);
     }
-    addModel('brana-current', 'brana-gateway', 'Brana 当前绑定对话模型 (' + (state.modelName || '自动跟随') + ')');
-    addModel('claude-opus-5.6-max', 'anthropic', 'Claude Opus 5.6 (Max)');
-    addModel('claude-sonnet-5.5-high', 'anthropic', 'Claude Sonnet 5.5 (High)');
-    addModel('gpt-6.1-sol-xhigh', 'openai', 'GPT-6.1 Sol (xHigh)');
-    addModel('gemini-4-argon-high', 'google', 'Gemini 4 Argon (High)');
-    addModel('muse-spark-1.3-max', 'meta', 'Muse Spark 1.3 (Max)');
+    addModel('brana-current', 'arena-session', 'Brana 当前 Arena 会话模型 (' + (state.modelName || '自动跟随') + ')');
     return list;
   };
 
@@ -634,6 +519,57 @@ function createLocalApiGateway(options = {}) {
 
     const urlObj = new URL(req.url || '/', 'http://' + (req.headers.host || '127.0.0.1'));
     const pathname = urlObj.pathname.replace(/\/+$/, '') || '/';
+
+    const mediaMatch = pathname.match(/^\/v1\/media\/([a-f0-9]{32})$/i);
+    if ((req.method === 'GET' || req.method === 'HEAD') && mediaMatch) {
+      const media = mediaStore.get(mediaMatch[1].toLowerCase());
+      if (!media) {
+        res.writeHead(404, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({ error: { message: 'Media not found or expired', type: 'invalid_request_error' } }));
+        return;
+      }
+      const size = media.buffer.length;
+      const filename = String(media.name || 'media.bin').replace(/[\"\r\n]/g, '_');
+      res.setHeader('Content-Type', media.mimeType);
+      res.setHeader('X-Content-Type-Options', 'nosniff');
+      res.setHeader('Content-Disposition', 'inline; filename="' + filename + '"');
+      res.setHeader('Cache-Control', 'private, max-age=1800');
+      res.setHeader('Accept-Ranges', 'bytes');
+      let start = 0;
+      let end = size - 1;
+      let status = 200;
+      const rangeHeader = String(req.headers.range || '');
+      if (rangeHeader) {
+        const range = /^bytes=(\d*)-(\d*)$/.exec(rangeHeader);
+        if (!range || !size) {
+          res.writeHead(416, { 'Content-Range': 'bytes */' + size });
+          res.end();
+          return;
+        }
+        if (!range[1]) {
+          const suffix = Number(range[2]);
+          if (!suffix) {
+            res.writeHead(416, { 'Content-Range': 'bytes */' + size });
+            res.end();
+            return;
+          }
+          start = Math.max(0, size - suffix);
+        } else start = Number(range[1]);
+        end = range[2] ? Math.min(size - 1, Number(range[2])) : size - 1;
+        if (start >= size || start > end) {
+          res.writeHead(416, { 'Content-Range': 'bytes */' + size });
+          res.end();
+          return;
+        }
+        status = 206;
+        res.setHeader('Content-Range', 'bytes ' + start + '-' + end + '/' + size);
+      }
+      res.setHeader('Content-Length', String(Math.max(0, end - start + 1)));
+      res.writeHead(status);
+      if (req.method === 'HEAD') res.end();
+      else res.end(media.buffer.subarray(start, end + 1));
+      return;
+    }
 
     if (req.method === 'GET' && (pathname === '/' || pathname === '/health' || pathname === '/v1/health')) {
       res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
@@ -686,23 +622,46 @@ function createLocalApiGateway(options = {}) {
       return;
     }
 
+    const declaredBodyLength = Number(req.headers['content-length'] || 0);
+    if (declaredBodyLength > MAX_API_BODY_BYTES) {
+      res.writeHead(413, { 'Content-Type': 'application/json; charset=utf-8' });
+      res.end(JSON.stringify({ error: { message: 'Request body exceeds the 60 MB gateway limit', type: 'invalid_request_error', code: '413' } }));
+      req.resume();
+      return;
+    }
     const chunks = [];
     let totalBytes = 0;
+    let bodyTooLarge = false;
     req.on('data', (chunk) => {
       totalBytes += chunk.length;
-      if (totalBytes <= 25 * 1024 * 1024) chunks.push(chunk);
+      if (totalBytes <= MAX_API_BODY_BYTES) chunks.push(chunk);
+      else bodyTooLarge = true;
     });
     req.on('end', async () => {
+      if (bodyTooLarge || totalBytes > MAX_API_BODY_BYTES) {
+        res.writeHead(413, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({ error: { message: 'Request body exceeds the 60 MB gateway limit', type: 'invalid_request_error', code: '413' } }));
+        return;
+      }
       const rawBody = Buffer.concat(chunks).toString('utf8');
-      const body = parseJsonSafe(rawBody, {});
-      if (!body || typeof body !== 'object') {
+      const body = parseJsonSafe(rawBody, null);
+      if (!body || typeof body !== 'object' || Array.isArray(body)) {
         res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
         res.end(JSON.stringify({ error: { message: 'Invalid JSON request body', type: 'invalid_request_error' } }));
         return;
       }
 
-      const normReq = normalizeIncomingRequest(req, urlObj, body, state);
-      const adapter = createResponseAdapter(res, normReq, state);
+      let normReq;
+      try {
+        normReq = normalizeIncomingRequest(req, urlObj, body, state);
+        await ApiMultimodal.hydrateIncomingMedia(normReq);
+      } catch (err) {
+        const code = Number(err?.status) || 400;
+        res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({ error: { message: String(err?.message || 'Invalid multimodal request'), type: 'invalid_request_error', code: String(code) } }));
+        return;
+      }
+      const adapter = createResponseAdapter(res, normReq, state, mediaStore);
       const wc = resolveTargetWebContents();
       if (!wc) {
         adapter.onError('未找到活跃的 Brana AI 聊天窗口，请保持客户端窗口打开。', 503);
@@ -838,7 +797,7 @@ function createLocalApiGateway(options = {}) {
     if (patch.boundTitle !== undefined) state.boundTitle = String(patch.boundTitle || '');
     if (patch.sessionMode && ['bound', 'stateless'].includes(patch.sessionMode)) state.sessionMode = patch.sessionMode;
     if (patch.toolMode && ['auto_bridge', 'client_tools_only', 'arena_native_only'].includes(patch.toolMode)) state.toolMode = patch.toolMode;
-    if (patch.protocolPref && ['auto', 'openai', 'anthropic', 'gemini'].includes(patch.protocolPref)) state.protocolPref = patch.protocolPref;
+    if (patch.protocolPref && ['auto', 'openai', 'anthropic', 'gemini'].includes(patch.protocolPref)) state.protocolPref = patch.protocolPref === 'auto' ? 'openai' : patch.protocolPref;
     if (typeof patch.requireKey === 'boolean') state.requireKey = patch.requireKey;
     if (typeof patch.apiKey === 'string' && patch.apiKey.trim()) state.apiKey = patch.apiKey.trim();
     if (patch.regenKey) state.apiKey = genApiKey();
@@ -849,12 +808,12 @@ function createLocalApiGateway(options = {}) {
       state.modelName = mName || '自动识别 / 当前会话模型';
       state.modelId = mSlug;
       state.modelFam = mFam;
-      state.vendorProtocol = inferVendorProtocol(mSlug + ' ' + mName, mFam);
+      state.vendorProtocol = 'arena';
     }
     return getPublicState();
   };
 
-  const handleStreamEvent = (payload = {}) => {
+  const handleStreamEvent = async (payload = {}) => {
     const { reqId, type } = payload;
     if (!reqId || !inflight.has(reqId)) return { ok: false };
     const item = inflight.get(reqId);
@@ -865,6 +824,9 @@ function createLocalApiGateway(options = {}) {
       adapter.onText(String(payload.delta || ''));
     } else if (type === 'tool_call') {
       adapter.onToolCall(payload.call || {});
+    } else if (type === 'media' || type === 'image' || type === 'video' || type === 'audio') {
+      const mediaItems = Array.isArray(payload.media) ? payload.media : [payload.media || (type === 'media' ? {} : { ...payload, type })];
+      for (const media of mediaItems) await adapter.onMedia(media);
     } else if (type === 'done') {
       clearTimeout(timeoutTimer);
       inflight.delete(reqId);

@@ -11,6 +11,7 @@ const RoutePolicy = (() => {
     if (e.ipLimited || e.routeTimeout || e.net || e.impureIp || e.riskyIp || e.captchaTriggered || e.cfChallenge) return true;
     const st = Number(e.status || e.httpStatus || 0);
     if ([408, 429, 500, 502, 503, 504, 520, 521, 522, 523, 524].includes(st)) return true;
+    if (!e.responseFormat && [401, 403, 404].includes(st)) return true;
     if (st === 403 && /recaptcha|人机|验证|challenge|cloudflare/i.test(String(e.body || e.message || ''))) return true;
     return transportError(e);
   };

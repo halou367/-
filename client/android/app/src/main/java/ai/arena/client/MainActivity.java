@@ -466,11 +466,109 @@ public class MainActivity extends Activity {
         if (curTun != null && curTun.sig.equals(xout) && alive(curTun.proc)) return curTun.port;
         stopTun(); curTun = startTun(xout, "cur"); return curTun.port;
     }
+    final Object subTunLock = new Object();
+    Tun subTun = null;
+    int ensureSubTun(String xout) throws Exception {
+        synchronized (subTunLock) {
+            if (subTun != null && xout.equals(subTun.sig) && alive(subTun.proc) && subTun.port > 0) return subTun.port;
+            if (subTun != null) { try { subTun.proc.destroy(); } catch (Exception ignored) {} subTun = null; }
+            subTun = startTun(xout, "sub-shared");
+            return subTun.port;
+        }
+    }
     static boolean isVless(String s) { return s != null && s.trim().toLowerCase().startsWith("vless://"); }
 
+    String stripProxyIpFromXout(String raw) {
+        if (raw == null || raw.isEmpty()) return "";
+        return raw.replaceAll("(?i)/proxyip=[^\"&?\\s/]+", "/")
+                  .replaceAll("(?i)[?&]proxyip=[^\"&?\\s]+", "")
+                  .replaceAll("\"path\"\\s*:\\s*\"\"", "\"path\":\"/\"");
+    }
+    JSONObject nodeToXout(JSONObject n) {
+        if (n == null) return null;
+        try {
+            if (!n.optString("xout", "").isEmpty()) return new JSONObject(stripProxyIpFromXout(n.optString("xout")));
+            String addr = n.optString("address", "").trim();
+            int port = n.optInt("port", 0);
+            String uuid = n.optString("uuid", "").trim();
+            if (addr.isEmpty() || port <= 0 || uuid.isEmpty()) return null;
+            String net = n.optString("type", "tcp").trim(); if (net.isEmpty()) net = "tcp";
+            String sec = n.optString("security", "none").trim(); if (sec.isEmpty()) sec = "none";
+            String sni = n.optString("sni", "").trim();
+            String host = n.optString("host", "").trim();
+            String fp = n.optString("fp", "").trim();
+            String alpn = n.optString("alpn", "").trim();
+            String ech = n.optString("ech", "").trim();
+            String path = n.optString("path", "/").trim(); if (path.isEmpty()) path = "/";
+            path = path.replaceAll("(?i)/proxyip=[^\"&?\\s/]+", "/").replaceAll("(?i)[?&]proxyip=[^\"&?\\s]+", "");
+            if (path.isEmpty()) path = "/";
+            JSONObject ss = new JSONObject().put("network", net).put("security", "reality".equals(sec) ? "reality" : ("tls".equals(sec) ? "tls" : "none"));
+            if ("tls".equals(sec)) {
+                JSONObject tls = new JSONObject().put("serverName", !sni.isEmpty() ? sni : (!host.isEmpty() ? host : addr)).put("allowInsecure", false);
+                if (!fp.isEmpty()) tls.put("fingerprint", fp);
+                if (!alpn.isEmpty()) {
+                    JSONArray aa = new JSONArray();
+                    for (String p : alpn.split(",")) if (!p.trim().isEmpty()) aa.put(p.trim());
+                    if (aa.length() > 0) tls.put("alpn", aa);
+                }
+                if (!ech.isEmpty() && !"none".equals(ech)) tls.put("echConfigList", ech);
+                ss.put("tlsSettings", tls);
+            } else if ("reality".equals(sec)) {
+                ss.put("realitySettings", new JSONObject()
+                    .put("serverName", !sni.isEmpty() ? sni : addr)
+                    .put("fingerprint", !fp.isEmpty() ? fp : "chrome")
+                    .put("publicKey", n.optString("pbk", ""))
+                    .put("shortId", n.optString("sid", ""))
+                    .put("spiderX", n.optString("spx", "/")));
+            }
+            if ("ws".equals(net)) {
+                JSONObject headers = new JSONObject();
+                if (!host.isEmpty()) headers.put("Host", host);
+                ss.put("wsSettings", new JSONObject().put("path", path).put("headers", headers));
+            } else if ("grpc".equals(net)) {
+                ss.put("grpcSettings", new JSONObject().put("serviceName", n.optString("path", "")).put("multiMode", false));
+            } else if ("httpupgrade".equals(net)) {
+                ss.put("httpupgradeSettings", new JSONObject().put("path", path).put("host", host));
+            } else if ("xhttp".equals(net) || "splithttp".equals(net)) {
+                ss.put("xhttpSettings", new JSONObject().put("path", path).put("host", host));
+            }
+            JSONObject user = new JSONObject().put("id", uuid).put("encryption", "none");
+            if (!n.optString("flow", "").isEmpty()) user.put("flow", n.optString("flow"));
+            JSONObject vnext = new JSONObject().put("address", addr).put("port", port).put("users", new JSONArray().put(user));
+            return new JSONObject().put("tag", "proxy").put("protocol", "vless")
+                .put("settings", new JSONObject().put("vnext", new JSONArray().put(vnext)))
+                .put("streamSettings", ss);
+        } catch (Exception e) { return null; }
+    }
     // 全局 VLESS 节点（代理设置里选的）：{link, xout, name}；账号没设代理时默认走它（没有全局节点才用 127.0.0.1:7890）
     JSONObject gnode() {
-        try { JSONObject g = new JSONObject(sp.getString("shared_gnode", "null")); return isVless(g.optString("link")) && !g.optString("xout").isEmpty() ? g : null; } catch (Exception e) { return null; }
+        try {
+            JSONObject g = new JSONObject(sp.getString("shared_gnode", "null"));
+            if (isVless(g.optString("link")) && !g.optString("xout").isEmpty()) {
+                return new JSONObject(g.toString()).put("xout", stripProxyIpFromXout(g.optString("xout")));
+            }
+        } catch (Exception ignored) {}
+        try {
+            JSONArray list = new JSONArray(sp.getString("shared_nodes", "[]"));
+            String pickId = "";
+            try { pickId = new JSONObject(sp.getString("shared_pippool", "{}")).optString("node", ""); } catch (Exception ignored) {}
+            JSONObject chosen = null;
+            for (int i = 0; i < list.length(); i++) {
+                JSONObject it = list.optJSONObject(i);
+                if (it == null) continue;
+                if (!pickId.isEmpty() && pickId.equals(it.optString("id"))) { chosen = it; break; }
+                if (chosen == null) chosen = it;
+            }
+            if (chosen != null) {
+                JSONObject xo = nodeToXout(chosen);
+                if (xo != null) {
+                    String link = chosen.optString("link", "");
+                    if (link.isEmpty()) link = "vless://" + chosen.optString("uuid") + "@" + chosen.optString("address") + ":" + chosen.optInt("port", 443);
+                    return new JSONObject().put("link", link).put("xout", xo.toString()).put("name", chosen.optString("name", "VLESS 节点"));
+                }
+            }
+        } catch (Exception ignored) {}
+        return null;
     }
     JSONObject eff(JSONObject a) {
         try {
@@ -1032,6 +1130,8 @@ public class MainActivity extends Activity {
             try {
                 String guard = readAsset("rtc-lockdown.js"); if (guard.isEmpty()) throw new Exception("缺少隐私脚本");
                 WebViewCompat.addDocumentStartJavaScript(w, guard, Collections.singleton("*"));
+                String capSolver = readAsset("captcha-solver.js");
+                if (!capSolver.isEmpty()) WebViewCompat.addDocumentStartJavaScript(w, capSolver, Collections.singleton("*"));
                 WebViewCompat.addDocumentStartJavaScript(w, bundle, Collections.singleton("https://arena.ai"));
                 protectedWebs.add(w);
             } catch (Exception e) { s.setJavaScriptEnabled(false); toast("隐私保护加载失败：禁止外网，请更新客户端 / WebView"); }
@@ -2110,16 +2210,6 @@ public class MainActivity extends Activity {
         // 邮箱令牌取件：只给微软的令牌 / 邮件接口带 Bearer（走本账号线路）
         @JavascriptInterface public String fetchAuthStart(final String url, final String bearer) { final String id = newId(); probeJobs.put(id, ""); Thread t = new Thread(() -> probeJobs.put(id, fetchSync(url, null, null, false, bearer))); t.setDaemon(true); t.start(); return id; }
         String fetchSync(String url, String body, String type, boolean direct) { return fetchSync(url, body, type, direct, null); }
-        final Object subTunLock = new Object();
-        Tun subTun = null;
-        int ensureSubTun(String xout) throws Exception {
-            synchronized (subTunLock) {
-                if (subTun != null && xout.equals(subTun.sig) && alive(subTun.proc) && subTun.port > 0) return subTun.port;
-                if (subTun != null) { try { subTun.proc.destroy(); } catch (Exception ignored) {} subTun = null; }
-                subTun = startTun(xout, "sub-shared");
-                return subTun.port;
-            }
-        }
         String fetchSync(String url, String body, String type, boolean direct, String bearer) {
             HttpURLConnection c = null; Tun nativeTun = null; String nativeTag = null;
             try {
@@ -2212,9 +2302,23 @@ public class MainActivity extends Activity {
                         java.util.List<java.net.Proxy> candProxies = new java.util.ArrayList<>();
                         if (!direct) {
                             try {
+                                JSONObject acctF = find(acctId);
+                                if (acctF == null && curId != null && !curId.isEmpty()) acctF = find(curId);
+                                if (acctF != null) {
+                                    JSONObject obF = outboundOf(routeSupport != null ? routeSupport.outboundAccount(acctF) : acctF);
+                                    if (obF != null && !"blackhole".equals(obF.optString("protocol"))) {
+                                        String cleanOb = stripProxyIpFromXout(obF.toString());
+                                        if (!cleanOb.isEmpty()) {
+                                            int cPort = ensureSubTun(cleanOb);
+                                            candProxies.add(new java.net.Proxy(java.net.Proxy.Type.HTTP, new InetSocketAddress("127.0.0.1", cPort)));
+                                        }
+                                    }
+                                }
+                            } catch (Exception ignored) {}
+                            try {
                                 JSONObject g = gnode();
                                 if (g != null && !g.optString("xout").isEmpty()) {
-                                    int gPort = ensureSubTun(g.optString("xout"));
+                                    int gPort = ensureSubTun(stripProxyIpFromXout(g.optString("xout")));
                                     candProxies.add(new java.net.Proxy(java.net.Proxy.Type.HTTP, new InetSocketAddress("127.0.0.1", gPort)));
                                 }
                             } catch (Exception ignored) {}
@@ -2341,6 +2445,122 @@ public class MainActivity extends Activity {
                 }
                 return bootstrapDns(host).toString();
             } catch (Exception e) { return "[]"; }
+        }
+        @JavascriptInterface public String solveCaptchaAudioStart(final String audioUrl) { final String id = newId(); probeJobs.put(id, ""); Thread t = new Thread(() -> probeJobs.put(id, solveCaptchaAudioSync(audioUrl))); t.setDaemon(true); t.start(); return id; }
+        String solveCaptchaAudioSync(String audioUrl) {
+            try {
+                String u = audioUrl == null ? "" : audioUrl.trim();
+                if (!u.matches("(?i)^https://(?:[a-z0-9-]+\\.)*(?:google\\.com|recaptcha\\.net|gstatic\\.com)/.*")) {
+                    return new JSONObject().put("ok", false).put("error", "无效的语音验证码地址").toString();
+                }
+                java.util.List<java.net.Proxy> pxs = new java.util.ArrayList<>();
+                try {
+                    JSONObject capOb = capOutbound();
+                    if (capOb != null) {
+                        if ("freedom".equals(capOb.optString("protocol"))) pxs.add(java.net.Proxy.NO_PROXY);
+                        else {
+                            int cp = ensureSubTun(capOb.toString());
+                            pxs.add(new java.net.Proxy(java.net.Proxy.Type.HTTP, new InetSocketAddress("127.0.0.1", cp)));
+                        }
+                    }
+                } catch (Exception ignored) {}
+                if (curTun != null && alive(curTun.proc) && curTun.port > 0) {
+                    pxs.add(new java.net.Proxy(java.net.Proxy.Type.HTTP, new InetSocketAddress("127.0.0.1", curTun.port)));
+                }
+                try {
+                    JSONObject a = find(acctId);
+                    if (a == null && curId != null && !curId.isEmpty()) a = find(curId);
+                    if (a != null && !isDirect(eff(a).optString("proxy"))) {
+                        JSONObject ob = outboundOf(routeSupport != null ? routeSupport.outboundAccount(a) : a);
+                        if (ob != null && !"blackhole".equals(ob.optString("protocol"))) {
+                            int p1 = ensureSubTun(ob.toString());
+                            pxs.add(new java.net.Proxy(java.net.Proxy.Type.HTTP, new InetSocketAddress("127.0.0.1", p1)));
+                            String cleanOb = stripProxyIpFromXout(ob.toString());
+                            if (!cleanOb.isEmpty() && !cleanOb.equals(ob.toString())) {
+                                int p2 = ensureSubTun(cleanOb);
+                                pxs.add(new java.net.Proxy(java.net.Proxy.Type.HTTP, new InetSocketAddress("127.0.0.1", p2)));
+                            }
+                        }
+                    }
+                } catch (Exception ignored) {}
+                try {
+                    JSONObject g = gnode();
+                    if (g != null && !g.optString("xout").isEmpty()) {
+                        int gp = ensureSubTun(stripProxyIpFromXout(g.optString("xout")));
+                        pxs.add(new java.net.Proxy(java.net.Proxy.Type.HTTP, new InetSocketAddress("127.0.0.1", gp)));
+                    }
+                } catch (Exception ignored) {}
+                pxs.add(java.net.Proxy.NO_PROXY);
+
+                byte[] audioBytes = null;
+                for (java.net.Proxy px : pxs) {
+                    HttpURLConnection c = null;
+                    try {
+                        c = (HttpURLConnection) new URL(u).openConnection(px);
+                        c.setConnectTimeout(5500);
+                        c.setReadTimeout(7500);
+                        c.setInstanceFollowRedirects(true);
+                        c.setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android 14; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36");
+                        c.setRequestProperty("Accept", "audio/mpeg,audio/*;q=0.9,*/*;q=0.8");
+                        c.setRequestProperty("Referer", "https://www.google.com/");
+                        if (c.getResponseCode() == 200) {
+                            java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream();
+                            try (InputStream in = c.getInputStream()) {
+                                byte[] buf = new byte[8192]; int n;
+                                while ((n = in.read(buf)) > 0) {
+                                    bos.write(buf, 0, n);
+                                    if (bos.size() > 2097152) break;
+                                }
+                            }
+                            if (bos.size() >= 120) { audioBytes = bos.toByteArray(); break; }
+                        }
+                    } catch (Exception ignored) {
+                    } finally {
+                        if (c != null) try { c.disconnect(); } catch (Exception ignored) {}
+                    }
+                }
+                if (audioBytes == null || audioBytes.length == 0) {
+                    return new JSONObject().put("ok", false).put("error", "语音文件下载失败").toString();
+                }
+
+                String finalTranscript = "";
+                for (java.net.Proxy px : pxs) {
+                    HttpURLConnection wc = null;
+                    try {
+                        wc = (HttpURLConnection) new URL("https://api.wit.ai/speech?v=20220622").openConnection(px);
+                        wc.setConnectTimeout(6000);
+                        wc.setReadTimeout(8500);
+                        wc.setRequestMethod("POST");
+                        wc.setDoOutput(true);
+                        wc.setFixedLengthStreamingMode(audioBytes.length);
+                        wc.setRequestProperty("Authorization", "Bearer JVHWCNWJLWLGN6MFALYLHAPKUFHMNTAC");
+                        wc.setRequestProperty("Content-Type", "audio/mpeg3");
+                        try (java.io.OutputStream os = wc.getOutputStream()) { os.write(audioBytes); }
+                        if (wc.getResponseCode() == 200) {
+                            StringBuilder sb = new StringBuilder();
+                            try (BufferedReader br = new BufferedReader(new InputStreamReader(wc.getInputStream(), StandardCharsets.UTF_8))) {
+                                char[] cbuf = new char[4096]; int n;
+                                while ((n = br.read(cbuf)) > 0 && sb.length() < 65536) sb.append(cbuf, 0, n);
+                            }
+                            String witText = sb.toString();
+                            java.util.regex.Matcher m = java.util.regex.Pattern.compile("\"_?text\"\\s*:\\s*\"([^\"]*)\"").matcher(witText);
+                            while (m.find()) {
+                                String cand = m.group(1).trim();
+                                if (!cand.isEmpty()) finalTranscript = cand;
+                            }
+                            if (!finalTranscript.isEmpty()) break;
+                        }
+                    } catch (Exception ignored) {
+                    } finally {
+                        if (wc != null) try { wc.disconnect(); } catch (Exception ignored) {}
+                    }
+                }
+                String cleanText = finalTranscript.replaceAll("[^a-zA-Z0-9\\s]", " ").replaceAll("\\s+", " ").trim().toLowerCase(java.util.Locale.ROOT);
+                if (cleanText.isEmpty()) return new JSONObject().put("ok", false).put("error", "未能从语音中识别出文本").toString();
+                return new JSONObject().put("ok", true).put("text", cleanText).toString();
+            } catch (Exception e) {
+                try { return new JSONObject().put("ok", false).put("error", String.valueOf(e.getMessage())).toString(); } catch (Exception x) { return "{\"ok\":false}"; }
+            }
         }
         @JavascriptInterface public String probeStart(final String json) { final String id = newId(); probeJobs.put(id, ""); Thread t = new Thread(() -> probeJobs.put(id, probeSync(json))); t.setDaemon(true); t.start(); return id; }
         @JavascriptInterface public String probeGet(String id) { String r = id == null ? null : probeJobs.get(id); if (r == null) return "{\"error\":\"检测任务不存在\"}"; if (r.isEmpty()) return ""; probeJobs.remove(id); return r; }
@@ -2651,51 +2871,146 @@ public class MainActivity extends Activity {
                 if (account != null) account = new JSONObject(account.toString());
             }
             if (account == null) throw new Exception("账号已关闭，未直连下载");
+            if (part.exists()) part.delete();
+            updSet("phase", "down"); updSet("got", 0); updSet("speed", 0);
+            if (size > 0) updSet("total", size);
             List<java.net.Proxy> routes = new ArrayList<>();
+            java.util.Set<String> xoutCands = new java.util.LinkedHashSet<>();
             if (isDirect(eff(account).optString("proxy"))) routes.add(java.net.Proxy.NO_PROXY);
             else {
                 if (curTun != null && alive(curTun.proc) && curTun.port > 0) {
                     routes.add(new java.net.Proxy(java.net.Proxy.Type.HTTP, new InetSocketAddress("127.0.0.1", curTun.port)));
-                } else {
-                    try {
-                        nativeTag = "update-" + newId(); nativeTun = startTun(outboundOf(account).toString(), nativeTag);
-                        routes.add(new java.net.Proxy(java.net.Proxy.Type.HTTP, new InetSocketAddress("127.0.0.1", nativeTun.port)));
-                    } catch (Exception ignored) {}
                 }
-                java.net.Proxy directFallback = java.net.Proxy.NO_PROXY;
-                routes.add(directFallback);
+                try {
+                    JSONObject ob1 = outboundOf(routeSupport != null ? routeSupport.outboundAccount(account) : account);
+                    if (ob1 != null && !"blackhole".equals(ob1.optString("protocol"))) {
+                        String raw1 = ob1.toString();
+                        xoutCands.add(raw1);
+                        String clean1 = stripProxyIpFromXout(raw1);
+                        if (!clean1.isEmpty()) xoutCands.add(clean1);
+                    }
+                } catch (Exception ignored) {}
+                try {
+                    JSONObject g = gnode();
+                    if (g != null && !g.optString("xout").isEmpty()) {
+                        xoutCands.add(stripProxyIpFromXout(g.optString("xout")));
+                    }
+                } catch (Exception ignored) {}
+                try {
+                    JSONArray sharedNodes = new JSONArray(sp.getString("shared_nodes", "[]"));
+                    for (int ni = 0; ni < Math.min(sharedNodes.length(), 6); ni++) {
+                        JSONObject nx = nodeToXout(sharedNodes.optJSONObject(ni));
+                        if (nx != null) xoutCands.add(nx.toString());
+                    }
+                } catch (Exception ignored) {}
+                synchronized (acctLock) {
+                    for (int ai = 0; ai < Math.min(accounts.length(), 6); ai++) {
+                        try {
+                            JSONObject cand = accounts.optJSONObject(ai);
+                            if (cand == null || isDirect(eff(cand).optString("proxy"))) continue;
+                            JSONObject obc = outboundOf(routeSupport != null ? routeSupport.outboundAccount(cand) : cand);
+                            if (obc != null && !"blackhole".equals(obc.optString("protocol"))) {
+                                String cleanC = stripProxyIpFromXout(obc.toString());
+                                if (!cleanC.isEmpty()) xoutCands.add(cleanC);
+                                xoutCands.add(obc.toString());
+                            }
+                        } catch (Exception ignored) {}
+                    }
+                }
             }
+            java.util.List<String> baseUrls = new java.util.ArrayList<>();
+            java.util.List<String> mirrorUrls = new java.util.ArrayList<>();
             for (int i = 0; us != null && i < us.length(); i++) {
-                String url = us.optString(i); if (!url.startsWith("https://")) continue;
-                for (java.net.Proxy jp : routes) {
+                String u0 = us.optString(i, "").trim();
+                if (!u0.startsWith("https://")) continue;
+                if (!baseUrls.contains(u0)) baseUrls.add(u0);
+                if (u0.startsWith("https://github.com/") && u0.contains("/releases/download/")) {
+                    for (String pfx : new String[]{"https://ghfast.top/", "https://gh-proxy.com/", "https://ghp.ci/"}) {
+                        String mu = pfx + u0;
+                        if (!mirrorUrls.contains(mu)) mirrorUrls.add(mu);
+                    }
+                }
+            }
+            java.util.List<String> planSpecs = new java.util.ArrayList<>();
+            for (int ri = 0; ri < routes.size(); ri++) planSpecs.add("ROUTE:" + ri);
+            for (String xo : xoutCands) planSpecs.add("XOUT:" + xo);
+            planSpecs.add("DIRECT");
+
+            for (String spec : planSpecs) {
+                java.net.Proxy jp = null;
+                boolean isDirectRoute = "DIRECT".equals(spec);
+                try {
+                    if (isDirectRoute) {
+                        jp = java.net.Proxy.NO_PROXY;
+                    } else if (spec.startsWith("ROUTE:")) {
+                        jp = routes.get(Integer.parseInt(spec.substring(6)));
+                        if (jp == java.net.Proxy.NO_PROXY) isDirectRoute = true;
+                    } else if (spec.startsWith("XOUT:")) {
+                        int sPort = ensureSubTun(spec.substring(5));
+                        jp = new java.net.Proxy(java.net.Proxy.Type.HTTP, new InetSocketAddress("127.0.0.1", sPort));
+                    }
+                } catch (Exception e) {
+                    err = String.valueOf(e.getMessage());
+                    continue;
+                }
+                if (jp == null) continue;
+                java.util.List<String> tryUrls = new java.util.ArrayList<>();
+                if (isDirectRoute) {
+                    for (String u0 : baseUrls) if (!u0.startsWith("https://github.com/")) tryUrls.add(u0);
+                    for (String mu : mirrorUrls) if (!tryUrls.contains(mu)) tryUrls.add(mu);
+                    for (String u0 : baseUrls) if (!tryUrls.contains(u0)) tryUrls.add(u0);
+                } else {
+                    tryUrls.addAll(baseUrls);
+                    for (String mu : mirrorUrls) if (!tryUrls.contains(mu)) tryUrls.add(mu);
+                }
+                for (String url : tryUrls) {
                     HttpURLConnection c = null;
                     try {
-                        if (part.exists()) part.delete();
-                        updSet("phase", "down"); updSet("got", 0); updSet("speed", 0);
+                        updSet("phase", "down"); updSet("speed", 0);
+                        long resumeFrom = (part.exists() && part.length() > 0 && (size <= 0 || part.length() < size)) ? part.length() : 0L;
+                        if (resumeFrom > 0) updSet("got", resumeFrom);
                         c = (HttpURLConnection) new URL(url).openConnection(jp);
-                        c.setConnectTimeout(15000); c.setReadTimeout(30000); c.setInstanceFollowRedirects(true);
+                        c.setConnectTimeout(8000); c.setReadTimeout(12000); c.setInstanceFollowRedirects(true);
                         c.setRequestProperty("User-Agent", "BranaAi/" + BuildConfigVersion());
-                        int code = c.getResponseCode(); if (code != 200) throw new Exception("HTTP " + code);
-                        long len = c.getContentLengthLong(); updSet("total", len > 0 ? len : size);
-                        java.security.MessageDigest md = java.security.MessageDigest.getInstance("SHA-256");
-                        long got = 0;
-                        try (InputStream in = c.getInputStream(); java.io.FileOutputStream out = new java.io.FileOutputStream(part)) {
-                            byte[] buf = new byte[65536]; int n; long last = 0; long spTime = System.currentTimeMillis(); long spBytes = 0; long curSpd = 0;
+                        if (resumeFrom > 0) c.setRequestProperty("Range", "bytes=" + resumeFrom + "-");
+                        int code = c.getResponseCode();
+                        boolean appendMode = (resumeFrom > 0 && code == 206);
+                        if (code != 200 && !appendMode) {
+                            if (code == 416 && part.exists()) part.delete();
+                            throw new Exception("HTTP " + code);
+                        }
+                        long len = c.getContentLengthLong();
+                        long totalExpected = appendMode ? (len > 0 ? resumeFrom + len : size) : (len > 0 ? len : size);
+                        if (totalExpected > 0) updSet("total", totalExpected);
+                        long got = appendMode ? resumeFrom : 0L;
+                        try (InputStream in = c.getInputStream(); java.io.FileOutputStream out = new java.io.FileOutputStream(part, appendMode)) {
+                            byte[] buf = new byte[65536]; int n; long last = got; long spTime = System.currentTimeMillis(); long spBytes = got; long curSpd = 0;
                             while ((n = in.read(buf)) > 0) {
-                                out.write(buf, 0, n); md.update(buf, 0, n); got += n;
+                                out.write(buf, 0, n); got += n;
                                 long nowMs = System.currentTimeMillis(), dtMs = nowMs - spTime;
                                 if (dtMs >= 350) {
                                     long inst = (got - spBytes) * 1000L / Math.max(1L, dtMs);
                                     curSpd = curSpd > 0 ? (curSpd * 6L + inst * 4L) / 10L : inst;
                                     updSet("speed", curSpd); spTime = nowMs; spBytes = got;
                                 }
-                                if (got - last > 131072) { last = got; updSet("got", got); }
+                                if (got - last > 65536) { last = got; updSet("got", got); }
                             }
                         }
                         updSet("got", got); updSet("phase", "verify");
-                        if (size > 0 && got != size) throw new Exception("文件大小不对（" + got + " / " + size + "）");
+                        if (size > 0 && got != size) {
+                            if (got > size) part.delete();
+                            throw new Exception("文件大小不对（" + got + " / " + size + "）");
+                        }
+                        java.security.MessageDigest md = java.security.MessageDigest.getInstance("SHA-256");
+                        try (InputStream vin = new java.io.FileInputStream(part)) {
+                            byte[] vbuf = new byte[65536]; int vn;
+                            while ((vn = vin.read(vbuf)) > 0) md.update(vbuf, 0, vn);
+                        }
                         StringBuilder hx = new StringBuilder(); for (byte b : md.digest()) hx.append(String.format("%02x", b));
-                        if (!sha.isEmpty() && !sha.equals(hx.toString())) throw new Exception("sha256 校验失败");
+                        if (!sha.isEmpty() && !sha.equals(hx.toString())) {
+                            part.delete();
+                            throw new Exception("sha256 校验失败");
+                        }
                         if (f.exists()) f.delete();
                         if (!part.renameTo(f)) {
                             try (InputStream in2 = new java.io.FileInputStream(part); java.io.FileOutputStream out2 = new java.io.FileOutputStream(f)) {
@@ -2707,7 +3022,7 @@ public class MainActivity extends Activity {
                         updSet("phase", "ready");
                         ui.post(this::installApk);
                         return;
-                    } catch (Exception e) { try { if (part.exists()) part.delete(); } catch (Exception ignored) {} err = String.valueOf(e.getMessage()); }
+                    } catch (Exception e) { err = String.valueOf(e.getMessage()); }
                     finally { if (c != null) c.disconnect(); }
                 }
             }

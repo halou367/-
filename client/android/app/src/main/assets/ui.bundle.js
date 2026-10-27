@@ -230,6 +230,7 @@ if (!e || e.authLocked || e.rateLimitedLocally) return false;
 if (e.ipLimited || e.routeTimeout || e.net || e.impureIp || e.riskyIp || e.captchaTriggered || e.cfChallenge) return true;
 const st = Number(e.status || e.httpStatus || 0);
 if ([408, 429, 500, 502, 503, 504, 520, 521, 522, 523, 524].includes(st)) return true;
+if (!e.responseFormat && [401, 403, 404].includes(st)) return true;
 if (st === 403 && /recaptcha|人机|验证|challenge|cloudflare/i.test(String(e.body || e.message || ''))) return true;
 return transportError(e);
 };
@@ -1171,7 +1172,7 @@ target.append(box);
 },
 };
 // ---- core.js ----
-const VERSION = '2.0.0';
+const VERSION = '2.0.1';
 const ORIGIN = 'https://arena.ai';
 const RC_V3 = '6LeTGMcsAAAAALuIlkVwIxaAuZA8VledA6d3Nnb0';
 const RC_V2 = '6Le3_cYsAAAAAGwWOK2RLDgNI15Bh8C0yLBOL1yL';
@@ -1655,11 +1656,24 @@ setCookies: (id, list) => call('setCookies', id, list),
 gachaAccount: (id, cmd) => call('gachaAccount', id, cmd),
 onCmd: fn => { window.__ancCmd = m => { try { fn(m); } catch (e) { console.warn(e); } }; },
 } : {}),
+solveCaptchaAudio: typeof A.solveCaptchaAudioStart === 'function' ? async audioUrl => {
+let id;
+try { id = A.solveCaptchaAudioStart(String(audioUrl || '')); if (!id) return { ok: false, error: 'NO_JOB' }; }
+catch (e) { return { ok: false, error: String(e?.message || e) }; }
+for (let i = 0; i < 160; i++) {
+await sleep(i < 10 ? 45 : 75);
+let r;
+try { r = A.probeGet(id); } catch (e) { return { ok: false, error: String(e?.message || e) }; }
+if (r) { try { return JSON.parse(r); } catch { return { ok: false, error: 'PARSE_ERROR' }; } }
+}
+return { ok: false, error: 'TIMEOUT' };
+} : null,
 ready: () => typeof A.ready === 'function' ? call('ready') : Promise.resolve(null),
 };
 }
 return { platform: 'web', info: async () => ({ platform: 'web', account: { id: 'web', name: '浏览器', proxy: '' }, version: VERSION }), listAccounts: async () => [], saveAccount: async () => null, removeAccount: async () => null, openAccount: async () => null, login: async () => { location.href = '/'; }, back: async () => { location.href = '/robots.txt'; }, logout: async () => null, setTitle: async t => { document.title = t; }, openExternal: async u => window.open(u, '_blank'), testIp: async () => null, getCred: async () => null, noteAccount: async () => null, shared: async () => null, exportAccounts: async () => [], signInAccount: async () => ({ deferred: true }), setCookies: async () => null };
 })();
+try { if (typeof window !== 'undefined' && !window.BranaHost) window.BranaHost = Host; } catch {}
 const _storeRawCache = new Map();
 const _storeReadOnlyKeys = new Set(['prefs', 'proto:schema', 'gacha:settings']);
 try {
@@ -4360,7 +4374,7 @@ const reroute = async () => { if (fin) return; if (await CapRoute.offer().catch(
 wrap.querySelector('[data-route]').onclick = reroute; bar.querySelector('[data-route2]').onclick = reroute;
 wrap.querySelector('[data-r]').onclick = restart;
 render();
-if (!fin) poll = setInterval(() => { if (fin) return; try { const t = wid != null && grecaptcha.enterprise.getResponse(wid); if (t) done(true, t); } catch {} if (!wrap.isConnected) done(false); }, 600);
+if (!fin) poll = setInterval(() => { if (fin) return; try { const t = wid != null && grecaptcha.enterprise.getResponse(wid); if (t) done(true, t); } catch {} if (!wrap.isConnected) done(false); }, 200);
 })).finally(() => { v2Open = null; v2Cancel = null; });
 }
 const v2Close = () => { try { v2Cancel?.(); } catch {} };
@@ -23014,7 +23028,7 @@ if (all.length > 0) {
 const hasCompatId = all.some(i => /^(?:txt|reasoning)-\d+$/i.test(i) || /^[0-9a-z]{9}$/.test(i));
 if (!hasCompatId) {
 if (all.some(i => /^(?:msg|rs)_[0-9a-f]{16,}/i.test(i)) || (rs.some(i => /^tc_[A-Za-z0-9_-]{10,}$/.test(i)) && (Number(f.rChars) || 0) === 0)) return true;
-if (all.every(i => /^\d+$/.test(i)) && (Number(f.rChars) || 0) === 0) return true;
+if (all.every(i => /^\d+$/.test(i)) && ((Number(f.rChars) || 0) === 0 || /^\s*\*\*[^\n*]{2,80}\*\*/.test(String(f.rHead || '')))) return true;
 }
 }
 }
@@ -23059,7 +23073,7 @@ count:0,result:null,conflict:false,error:flag.detail,suffix:'',reasoning:{score:
 warning:'本轮跳过，不截取样本，不用于指纹或推理分校准；可见思考不是开源身份证明。'
 }};
 const final=known?.name&&!known.guess?{...known,fingerprint:entry.fingerprint}:entry;
-Models.set(chat.sid,final);chat.probeNumbers=[];Bus.emit('model',chat,final);chat.emit();return final;
+Models.set(chat.sid,final);chat.probeNumbers=[];Bus.emit('model',chat,final);chat.emit?.();return final;
 }
 async function waitCompatDecision(chat, signal) {
 const until=now()+600000;
@@ -57592,6 +57606,7 @@ const fenceMatches = txt.match(/^```/gm);
   }
 
 
+  const isOpenWebSearch = feat => Boolean((feat?.search || 0) > 0 || (feat?.searchSourcesCount || 0) > 0 || feat?.evalModality === 'search');
   function isEvalSession(sidOrChat, hEntry = null) {
     const c = (typeof sidOrChat === 'object' && sidOrChat) ? sidOrChat : (sidOrChat && typeof Chats !== 'undefined' ? Chats.get(sidOrChat) : null);
     if (c && (c.isEvaluation || c.evalMode === 'battle' || c.evalMode === 'direct' || c._isVirtualBattleSide)) return true;
@@ -77097,7 +77112,7 @@ const saved=await selector({...io,cancelled:stale}).apply(data.account,candidate
 Object.assign(a,saved);current=Policy.fields(saved);changed=false;if(P&&State.isNode(saved)&&saved.nodeId){if(P.d)P.d.node=saved.nodeId;if(!UI.host?.routeDraft)void P.setNode(saved.nodeId).catch(()=>{});}UI.host=await Host.info();UI.renderAcct?.();
 try{if(P?.mutate)void P.mutate(d=>{d.auto=Boolean(wanted==='auto'||selPip===AUTO);d.regAuto=Boolean(wanted==='auto'||regAuto);}).catch(()=>{});}catch{}
 const isAutoPick=Boolean(wanted==='auto'||regAuto||selPip===AUTO||selNode===AUTO);
-if(typeof AutoRoute!=='undefined'){AutoRoute.noteManualRoute?.(isAutoPick?5000:12000);if(AutoRoute.engine)AutoRoute.engine.next=Math.min(AutoRoute.engine.next||0,Date.now()+5000);AutoRoute.failed=false;}
+if(typeof AutoRoute!=='undefined'){AutoRoute.noteManualRoute?.(isAutoPick?(wanted==='auto'?15000:600000):12000);if(AutoRoute.engine)AutoRoute.engine.next=Math.min(AutoRoute.engine.next||0,Date.now()+5000);AutoRoute.failed=false;}
 try{if(saved?.id&&(saved.proxy||saved.proxyIp))Store.set('lastGoodRoute:'+saved.id,{id:saved.id,proxy:saved.proxy||'',proxyIp:saved.proxyIp||'',nodeId:saved.nodeId||'',region:saved.region||'',at:now()});}catch{}options.onApplied?.(saved);
 setTimeout(()=>Store.del('auth-route-draft'),2000);
 const effective=State.isNode(saved)?'节点 '+(nodes.find(n=>n.id===saved.nodeId)?.name||saved.nodeId||''):isDirectP(saved.proxy)?'直连':'本机代理 '+maskProxy(saved.proxy);
@@ -77795,6 +77810,7 @@ return Promise.resolve(false);
 route(x){
 if(typeof document!=='undefined'&&document.querySelector('.lpick:not(.out)'))return Promise.resolve(true);
 if(x?.mode==='node'||x?.mode==='ip'||x?.reason==='latency'||x?.reason==='limited'||x?.reason==='error-switch')return Promise.resolve(true);
+const _cfg={title:'检测到跨地区切换出口，是否允许？',ok:'允许跨地区切换',keep:'保持当前地区'};void _cfg;
 return Promise.resolve(true);
 },
 };
@@ -78723,14 +78739,14 @@ apiKey: '',
 requireKey: false,
 sessionMode: 'bound',
 toolMode: 'auto_bridge',
-protocolTab: 'auto',
+protocolTab: 'openai',
 snippetTab: 'client',
 boundSid: null,
 boundTitle: '',
 modelName: '自动识别 / 当前会话模型',
 modelId: 'brana-current',
 modelFam: '',
-vendorProtocol: 'openai',
+vendorProtocol: 'arena',
 reqCount: 0,
 lastReqAt: 0,
 lastError: '',
@@ -78752,12 +78768,8 @@ let _pendingModalRender = false;
 let _reqChain = Promise.resolve();
 const _handledReqIds = new Set();
 const _statelessMap = new Map();
-function inferVendor(modelSlugOrName, fam) {
-const m = String(modelSlugOrName || '').toLowerCase();
-const f = String(fam || '').toLowerCase();
-if (f === 'anthropic' || m.includes('claude') || m.includes('opus') || m.includes('sonnet') || m.includes('haiku') || m.includes('fable')) return 'anthropic';
-if (f === 'google' || m.includes('gemini') || m.includes('gemma')) return 'gemini';
-return 'openai';
+function inferVendor() {
+return 'arena';
 }
 function toModelSlug(name, internal) {
 const raw = String(internal && internal !== 'auto' && internal !== 'default' ? internal : (name || '')).trim();
@@ -78776,7 +78788,7 @@ _state.apiKey || '',
 _state.requireKey ? 1 : 0,
 _state.sessionMode || 'bound',
 _state.toolMode || 'auto_bridge',
-_state.protocolTab || 'auto',
+_state.protocolTab || 'openai',
 _state.snippetTab || 'client',
 _state.boundSid || '',
 _state.modelName || '',
@@ -79006,6 +79018,46 @@ processedLen = str.length;
 },
 };
 }
+async function uploadApiMedia(job, chat) {
+const messages = Array.isArray(job?.messages) ? job.messages : [];
+let selected = messages;
+if (Array.isArray(chat?.messages) && chat.messages.length) {
+let lastAssistant = -1;
+for (let i = messages.length - 1; i >= 0; i--) {
+if (messages[i]?.role === 'assistant') { lastAssistant = i; break; }
+}
+selected = lastAssistant >= 0 ? messages.slice(lastAssistant + 1) : messages.slice(-1);
+}
+const media = selected.filter(m => m?.role === 'user').flatMap(m => Array.isArray(m.media) ? m.media : []);
+if (!media.length) return [];
+if (typeof Uploads === 'undefined' || typeof Uploads.upload !== 'function') throw new Error('当前客户端不支持 API 多模态附件上传');
+const files = [];
+const seen = new Set();
+for (const item of media) {
+if (files.length >= 12) break;
+if (!item) continue;
+let mimeType = String(item.mimeType || item.mime_type || item.contentType || '');
+let raw = String(item.dataUrl || item.data_url || item.url || item.data || '');
+if (!raw) continue;
+if (!/^data:|^https?:\/\//i.test(raw)) raw = 'data:' + (mimeType || 'application/octet-stream') + ';base64,' + raw.replace(/\s+/g, '');
+const uniqueKey = String(item.type || '') + ':' + raw.length + ':' + raw.slice(0, 72) + ':' + raw.slice(-24);
+if (seen.has(uniqueKey)) continue;
+seen.add(uniqueKey);
+let response;
+try { response = await fetch(raw); }
+catch (err) { throw new Error('读取 API 附件失败：' + String(err?.message || err)); }
+if (!response.ok) throw new Error('读取 API 附件失败 (HTTP ' + response.status + ')');
+const blob = await response.blob();
+if (blob.size > 20 * 1024 * 1024) throw new Error('单个 API 附件超过 20 MB 限制');
+mimeType = mimeType || blob.type || 'application/octet-stream';
+const proposedName = String(item.name || item.filename || 'api-attachment').split(/[\\/]/).pop();
+const filename = proposedName.replace(/[\u0000-\u001f<>:"|?*]/g, '_').slice(0, 120) || 'api-attachment';
+const file = new File([blob], filename, { type: mimeType });
+try { files.push(await Uploads.upload(file)); }
+catch (err) { throw new Error('上传 API 附件失败：' + String(err?.message || err)); }
+}
+return files;
+}
 function buildTurnPrompt(chat, job) {
 const msgs = Array.isArray(job.messages) ? job.messages : [];
 const tools = Array.isArray(job.tools) ? job.tools : [];
@@ -79013,6 +79065,11 @@ const useToolBridge = tools.length > 0 && job.toolMode !== 'arena_native_only';
 const toolsSig = useToolBridge ? tools.map((t) => t.name).sort().join(',') : '';
 const hasExistingTurns = Boolean(chat && Array.isArray(chat.messages) && chat.messages.length > 0);
 const blocks = [];
+const mediaHint = message => {
+const media = Array.isArray(message?.media) ? message.media : [];
+const labels = media.map(x => x?.type === 'image' ? '图片' : x?.type === 'video' ? '视频' : x?.type === 'audio' ? '音频' : '附件');
+return '[API 客户端附加了 ' + labels.join('、') + '，请查看附件并结合问题回答。]';
+};
 if (useToolBridge && (!chat || chat._apiToolsSig !== toolsSig)) {
 const toolLines = tools.slice(0, 40).map((t) => {
 const desc = String(t.description || '').replace(/\s+/g, ' ').slice(0, 200);
@@ -79035,19 +79092,23 @@ blocks.push('[System Instruction]\n' + String(job.systemText).trim());
 if (msgs.length <= 1) {
 const m0 = msgs[0];
 if (m0?.content) blocks.push(String(m0.content));
+if (Array.isArray(m0?.media) && m0.media.length) blocks.push(mediaHint(m0));
 } else {
 const prior = msgs.slice(0, -1);
 const last = msgs[msgs.length - 1];
 const histLines = prior.map((m) => {
-if (m.role === 'tool') return '[Tool Result (' + (m.toolCallId || 'tool') + ')]: ' + String(m.content || '');
-return (m.role === 'assistant' ? 'Assistant: ' : 'User: ') + String(m.content || '');
+const line = m.role === 'tool'
+? '[Tool Result (' + (m.toolCallId || 'tool') + ')]: ' + String(m.content || '')
+: (m.role === 'assistant' ? 'Assistant: ' : 'User: ') + String(m.content || '');
+return line + (Array.isArray(m.media) && m.media.length ? '\n' + mediaHint(m) : '');
 });
 if (histLines.length) blocks.push('[Conversation Context]\n' + histLines.join('\n\n'));
 if (last) {
 if (last.role === 'tool') {
 blocks.push('[本地工具执行结果 (' + (last.toolCallId || 'tool') + ')]:\n' + String(last.content || ''));
 } else {
-blocks.push(String(last.content || ''));
+if (last.content) blocks.push(String(last.content));
+if (Array.isArray(last.media) && last.media.length) blocks.push(mediaHint(last));
 }
 }
 }
@@ -79068,8 +79129,9 @@ blocks.push(
 (dm.isError ? ' [执行出错]' : '') + ':\n' +
 String(dm.content || '')
 );
-} else if (dm.content) {
-blocks.push(String(dm.content));
+} else {
+if (dm.content) blocks.push(String(dm.content));
+if (Array.isArray(dm.media) && dm.media.length) blocks.push(mediaHint(dm));
 }
 }
 if (useToolBridge && deltaMsgs.some((m) => m?.role === 'tool')) {
@@ -79079,13 +79141,19 @@ blocks.push('（如需继续调用外部工具，请继续输出 <brana_tool_cal
 const promptText = blocks.filter(Boolean).join('\n\n').trim() || '继续';
 return { promptText, toolsSig };
 }
+let _streamEventTail = Promise.resolve();
 function sendStreamEvent(payload) {
+const send = async () => {
 try {
 if (typeof BranaHost !== 'undefined') {
-if (BranaHost.apiGateway) BranaHost.apiGateway({ op: 'stream', ...payload });
-else if (BranaHost.shared) BranaHost.shared('__localApiGateway', { op: 'stream', ...payload });
+if (BranaHost.apiGateway) return await BranaHost.apiGateway({ op: 'stream', ...payload });
+if (BranaHost.shared) return await BranaHost.shared('__localApiGateway', { op: 'stream', ...payload });
 }
 } catch {}
+return null;
+};
+_streamEventTail = _streamEventTail.catch(() => null).then(send);
+return _streamEventTail;
 }
 async function waitChatIdle(chat, maxMs = 120000) {
 const t0 = Date.now();
@@ -79096,6 +79164,7 @@ await new Promise((r) => setTimeout(r, 80));
 async function runSingleApiRequest(job) {
 const reqId = job?.reqId;
 if (!reqId) return;
+let mediaPending = Promise.resolve();
 try {
 const mode = job.sessionMode || _state.sessionMode || 'bound';
 let targetSid = null;
@@ -79119,8 +79188,45 @@ if (chat) {
 await waitChatIdle(chat, 180000);
 }
 const { promptText, toolsSig } = buildTurnPrompt(chat, job);
+const apiFiles = await uploadApiMedia(job, chat);
 const externalToolNames = new Set((job.tools || []).map((t) => String(t?.name || '')).filter(Boolean));
 const emittedNativeToolIds = new Set();
+const emittedMediaKeys = new Set();
+const blobToDataUrl = blob => new Promise((resolve, reject) => {
+const reader = new FileReader();
+reader.onload = () => resolve(String(reader.result || ''));
+reader.onerror = () => reject(reader.error || new Error('无法读取媒体附件'));
+reader.readAsDataURL(blob);
+});
+const queueAssistantMedia = (rawType, rawValue, rawMime, rawName) => {
+let type = String(rawType || '').toLowerCase();
+let mimeType = String(rawMime || '');
+if (!mimeType && typeof rawValue === 'string' && /^data:/i.test(rawValue)) mimeType = String(/^data:([^;,]+)/i.exec(rawValue)?.[1] || '');
+if (!type || !['image', 'video', 'audio'].includes(type)) {
+type = mimeType.startsWith('image/') ? 'image' : mimeType.startsWith('video/') ? 'video' : mimeType.startsWith('audio/') ? 'audio' : '';
+}
+if (!type) return;
+if (!mimeType) mimeType = type === 'image' ? 'image/png' : type === 'video' ? 'video/mp4' : 'audio/wav';
+let raw = typeof rawValue === 'string' ? rawValue.trim() : (rawValue?.url || rawValue?.data || '');
+if (!raw) return;
+const key = type + ':' + raw.length + ':' + raw.slice(0, 72) + ':' + raw.slice(-24);
+if (emittedMediaKeys.has(key)) return;
+emittedMediaKeys.add(key);
+mediaPending = mediaPending.catch(() => {}).then(async () => {
+const media = { type, mimeType, name: String(rawName || ''), ...( /^data:/i.test(raw) ? { dataUrl: raw } : /^https?:\/\//i.test(raw) || /^blob:/i.test(raw) ? { url: raw } : { dataUrl: 'data:' + mimeType + ';base64,' + raw.replace(/\s+/g, '') }) };
+if (media.url && /^blob:/i.test(media.url)) {
+try {
+const response = await fetch(media.url);
+if (!response.ok) return;
+const blob = await response.blob();
+if (blob.size > 20 * 1024 * 1024) return;
+media.dataUrl = await blobToDataUrl(blob);
+delete media.url;
+} catch { return; }
+}
+await sendStreamEvent({ reqId, type: 'media', media });
+}).catch(() => {});
+};
 let sentReasonLen = 0;
 const splitter = createToolStreamSplitter(
 (textDelta) => {
@@ -79162,6 +79268,13 @@ let rFull = '';
 let tFull = '';
 for (const p of m.parts) {
 if (!p) continue;
+const partType = String(p.type || '').toLowerCase();
+const mediaMime = String(p.mimeType || p.contentType || p.mime_type || '');
+if (partType === 'image' || partType === 'video' || partType === 'audio') {
+queueAssistantMedia(partType, p.dataUrl || p.url || p.src || p.data || p.image || p.video || p.audio, mediaMime, p.name || p.filename);
+} else if (partType === 'media' || partType === 'file') {
+queueAssistantMedia('', p.dataUrl || p.url || p.src || p.data, mediaMime, p.name || p.filename);
+}
 if (p.type === 'reasoning') rFull += String(p.text || '');
 else if (p.type === 'text') tFull += String(p.text || '');
 else if ((p.type === 'dynamic-tool' || String(p.type || '').startsWith('tool-')) && p.toolName && job.toolMode !== 'arena_native_only') {
@@ -79181,6 +79294,12 @@ arguments: typeof p.input === 'string' ? p.input : JSON.stringify(p.input || {})
 }
 }
 }
+}
+for (const attachment of (Array.isArray(m.experimental_attachments) ? m.experimental_attachments : [])) {
+if (!attachment) continue;
+const mime = String(attachment.contentType || attachment.mimeType || attachment.mime_type || '');
+const type = mime.startsWith('image/') ? 'image' : mime.startsWith('video/') ? 'video' : mime.startsWith('audio/') ? 'audio' : '';
+if (type) queueAssistantMedia(type, attachment.dataUrl || attachment.url || attachment.data, mime, attachment.name || attachment.filename);
 }
 if (rFull.length > sentReasonLen) {
 const rDelta = rFull.slice(sentReasonLen);
@@ -79227,7 +79346,7 @@ try {
 if (!chat) {
 if (typeof createChat !== 'function') throw new Error('客户端尚未就绪 (createChat 不可用)');
 const existingSids = new Set(typeof Chats !== 'undefined' && Chats.keys ? [...Chats.keys()] : []);
-const createP = createChat(promptText, { files: [] });
+const createP = createChat(promptText, { files: apiFiles });
 const watchStart = Date.now();
 while (!chat && Date.now() - watchStart < 8000) {
 if (typeof Chats !== 'undefined') {
@@ -79261,7 +79380,7 @@ try { UI?.renderList?.(); UI?.renderTabs?.(); UI?.showTab?.(); } catch {}
 }
 } else {
 attachListeners(chat);
-await chat.send(promptText, { files: [] });
+await chat.send(promptText, { files: apiFiles });
 }
 await waitChatIdle(chat, 240000);
 finalSnap = inspectActiveTurn(chat);
@@ -79273,11 +79392,13 @@ cleanupListeners();
 }
 const chatErr = chat?.err || chat?.error;
 if (chatErr && !finalSnap?.tFull && (!chat.messages?.length || chat.status === 'error')) {
-sendStreamEvent({ reqId, type: 'error', error: String(chatErr) });
+await mediaPending;
+await sendStreamEvent({ reqId, type: 'error', error: String(chatErr) });
 return;
 }
 const meta = readChatModelMeta(chat, chat?.sid);
-sendStreamEvent({
+await mediaPending;
+await sendStreamEvent({
 reqId,
 type: 'done',
 modelId: meta.modelId,
@@ -79287,7 +79408,8 @@ modelFam: meta.modelFam,
 });
 syncCurrentContext(chat);
 } catch (err) {
-sendStreamEvent({
+await mediaPending.catch(() => {});
+await sendStreamEvent({
 reqId,
 type: 'error',
 error: String(err?.message || err || '执行对话请求失败'),
@@ -79305,8 +79427,8 @@ if (first) _handledReqIds.delete(first);
 _reqChain = _reqChain.then(() => runSingleApiRequest(job)).catch(() => {});
 }
 function resolveActiveProtoInfo() {
-const pTab = _state.protocolTab || 'auto';
-const effProto = pTab === 'auto' ? (_state.vendorProtocol || 'openai') : pTab;
+const pTab = _state.protocolTab || 'openai';
+const effProto = pTab === 'auto' ? 'openai' : pTab;
 const hostPort = 'http://' + (_state.host || '127.0.0.1') + ':' + (_state.port || 18765);
 const modelId = _state.modelId || 'brana-current';
 if (effProto === 'anthropic') {
@@ -79316,7 +79438,7 @@ protoLabel: 'Anthropic 原生协议 (Messages API)',
 baseUrl: hostPort,
 endpoint: hostPort + '/v1/messages',
 modelId,
-note: '当前会话识别为 Claude 系列，已自动匹配 Anthropic 原生 /v1/messages 协议（同时兼容 OpenAI /v1/chat/completions）',
+note: '仅改变下游请求/响应格式；模型仍由当前 Arena 会话决定，不会连接 Anthropic。',
 };
 }
 if (effProto === 'gemini') {
@@ -79326,7 +79448,7 @@ protoLabel: 'Google Gemini 原生协议 (v1beta)',
 baseUrl: hostPort + '/v1beta',
 endpoint: hostPort + '/v1beta/models/' + modelId + ':generateContent',
 modelId,
-note: '当前会话识别为 Gemini 系列，已自动匹配 Google v1beta 原生协议（同时兼容 OpenAI /v1/chat/completions）',
+note: '仅改变下游请求/响应格式；模型仍由当前 Arena 会话决定，不会连接 Google。',
 };
 }
 return {
@@ -79335,7 +79457,7 @@ protoLabel: 'OpenAI 标准兼容协议 (/v1)',
 baseUrl: hostPort + '/v1',
 endpoint: hostPort + '/v1/chat/completions',
 modelId,
-note: '通用 OpenAI 标准格式，可直接接入 Cherry Studio、Cursor、Cline、OpenWebUI、NextChat、LobeChat 等任意客户端（同时兼容 /v1/messages 与 /v1/responses）',
+note: '默认 OpenAI 兼容格式；model 字段只是 Arena 当前会话的标签/别名，不代表直连 OpenAI。Anthropic、Gemini 格式需显式选择对应 Endpoint。',
 };
 }
 function buildSnippetText(info) {
@@ -79471,9 +79593,7 @@ _renderModalBody = () => {
 if (!bodyEl || !_modalBack) return;
 _lastModalSig = computeModalSig();
 const info = resolveActiveProtoInfo();
-const vendorTag = _state.vendorProtocol === 'anthropic'
-? 'Anthropic 原生'
-: (_state.vendorProtocol === 'gemini' ? 'Gemini 原生' : 'OpenAI 标准');
+const vendorTag = 'Arena 当前会话';
 statusBadge.className = 'api-gw-st ' + (_state.running ? 'on' : 'off');
 statusBadge.textContent = _state.running
 ? ('运行中 · 127.0.0.1:' + _state.port)
@@ -79650,15 +79770,14 @@ h(
 'div',
 { class: 'dk-tabs api-gw-ptabs' },
 ...[
-['auto', '自动按厂商 (' + vendorTag + ')'],
-['openai', 'OpenAI 兼容格式 (/v1)'],
-['anthropic', 'Anthropic 原生 (/v1/messages)'],
-['gemini', 'Gemini 原生 (/v1beta)'],
+['openai', '默认 OpenAI 兼容 (/v1)'],
+['anthropic', 'Anthropic 格式兼容 (/v1/messages)'],
+['gemini', 'Gemini 格式兼容 (/v1beta)'],
 ].map(([k, lbl]) =>
 h(
 'button',
 {
-class: (_state.protocolTab || 'auto') === k ? 'on' : '',
+class: (_state.protocolTab === 'auto' ? 'openai' : (_state.protocolTab || 'openai')) === k ? 'on' : '',
 onclick: () => {
 _state.protocolTab = k;
 _renderModalBody();

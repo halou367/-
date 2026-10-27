@@ -705,7 +705,7 @@ const NodeRoutes = (() => {
           Object.assign(a,saved);current=Policy.fields(saved);changed=false;if(P&&State.isNode(saved)&&saved.nodeId){if(P.d)P.d.node=saved.nodeId;if(!UI.host?.routeDraft)void P.setNode(saved.nodeId).catch(()=>{});}UI.host=await Host.info();UI.renderAcct?.();
           try{if(P?.mutate)void P.mutate(d=>{d.auto=Boolean(wanted==='auto'||selPip===AUTO);d.regAuto=Boolean(wanted==='auto'||regAuto);}).catch(()=>{});}catch{}
           const isAutoPick=Boolean(wanted==='auto'||regAuto||selPip===AUTO||selNode===AUTO);
-          if(typeof AutoRoute!=='undefined'){AutoRoute.noteManualRoute?.(isAutoPick?5000:12000);if(AutoRoute.engine)AutoRoute.engine.next=Math.min(AutoRoute.engine.next||0,Date.now()+5000);AutoRoute.failed=false;}
+          if(typeof AutoRoute!=='undefined'){AutoRoute.noteManualRoute?.(isAutoPick?(wanted==='auto'?15000:600000):12000);if(AutoRoute.engine)AutoRoute.engine.next=Math.min(AutoRoute.engine.next||0,Date.now()+5000);AutoRoute.failed=false;}
           try{if(saved?.id&&(saved.proxy||saved.proxyIp))Store.set('lastGoodRoute:'+saved.id,{id:saved.id,proxy:saved.proxy||'',proxyIp:saved.proxyIp||'',nodeId:saved.nodeId||'',region:saved.region||'',at:now()});}catch{}options.onApplied?.(saved);
           setTimeout(()=>Store.del('auth-route-draft'),2000);
           const effective=State.isNode(saved)?'节点 '+(nodes.find(n=>n.id===saved.nodeId)?.name||saved.nodeId||''):isDirectP(saved.proxy)?'直连':'本机代理 '+maskProxy(saved.proxy);

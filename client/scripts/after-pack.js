@@ -6,7 +6,7 @@ let embedIcon = () => {}; try { embedIcon = require('./win-pe-icon').embedIcon |
 
 const KEEP_LOCALES = new Set(['zh-CN.pak', 'en-US.pak']);
 const STRIP_FILES = ['LICENSES.chromium.html', 'LICENSE.electron.txt'];
-const STRIP_BIN_FILES = ['geoip.dat', 'geosite.dat', 'wintun.dll', 'VERSION.dll', 'VERSION.pdb', 'VERSION.dll.lib', 'VERSION.dll.exp'];
+const STRIP_BIN_FILES = ['geoip.dat', 'geosite.dat', 'wintun.dll', 'dxcompiler.dll', 'dxil.dll', 'VERSION.dll', 'VERSION.pdb', 'VERSION.dll.lib', 'VERSION.dll.exp'];
 const KEEP_ASAR_UI = new Set([
   'auth-flow.js', 'net-policy.js', 'mail-token.js', 'route-state.js', 'webbar.js',
   'bookmarks.html', 'bookmarks.css', 'bookmarks.js', 'region-environments.json', 'rtc-lockdown.js', 'captcha-solver.js', 'extensions.html', 'extensions.css', 'extensions.js',

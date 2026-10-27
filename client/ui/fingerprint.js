@@ -221,7 +221,7 @@ const Fingerprint = (() => {
         const hasCompatId = all.some(i => /^(?:txt|reasoning)-\d+$/i.test(i) || /^[0-9a-z]{9}$/.test(i));
         if (!hasCompatId) {
           if (all.some(i => /^(?:msg|rs)_[0-9a-f]{16,}/i.test(i)) || (rs.some(i => /^tc_[A-Za-z0-9_-]{10,}$/.test(i)) && (Number(f.rChars) || 0) === 0)) return true;
-          if (all.every(i => /^\d+$/.test(i)) && (Number(f.rChars) || 0) === 0) return true;
+          if (all.every(i => /^\d+$/.test(i)) && ((Number(f.rChars) || 0) === 0 || /^\s*\*\*[^\n*]{2,80}\*\*/.test(String(f.rHead || '')))) return true;
         }
       }
       
@@ -268,7 +268,7 @@ const Fingerprint = (() => {
       warning:'本轮跳过，不截取样本，不用于指纹或推理分校准；可见思考不是开源身份证明。'
     }};
     const final=known?.name&&!known.guess?{...known,fingerprint:entry.fingerprint}:entry;
-    Models.set(chat.sid,final);chat.probeNumbers=[];Bus.emit('model',chat,final);chat.emit();return final;
+    Models.set(chat.sid,final);chat.probeNumbers=[];Bus.emit('model',chat,final);chat.emit?.();return final;
   }
   async function waitCompatDecision(chat, signal) {
     const until=now()+600000;
