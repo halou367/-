@@ -1455,7 +1455,7 @@ extensionTabs = require('./extension-tabs').createExtensionTabs({
   applyProxy:(a)=>applyProxy(a),privacyInit:wc=>uaMeta(wc),loadURL:loadURLAlive,
   registerTab:(id,wc,w)=>extensionCompat.registerTab(id,wc,w),
   reportError:(id,extensionId,error)=>{extensionCompat.reportError(id,extensionId,error);runtimeLog('extension-tab-failed',{kind:error?.name});},
-  windowOptions:a=>({width:1200,height:820,minWidth:720,minHeight:480,title:APP_TITLE+' · '+(acctDisplayName(a)||a.name||'账号')+' · 扩展页面',icon:ICON,backgroundColor:themeBg(),autoHideMenuBar:true,titleBarStyle:process.platform==='darwin'?'hiddenInset':'hidden',...(process.platform==='darwin'?{trafficLightPosition:{x:14,y:13},roundedCorners:true}:{titleBarOverlay:themeOverlay()}),webPreferences:{preload:resolvePreloadPath('preload.js'),backgroundThrottling:false,spellcheck:false}}),
+  windowOptions:a=>({width:1200,height:820,minWidth:720,minHeight:480,title:APP_TITLE+' · '+(acctDisplayName(a)||a.name||'账号')+' · 扩展页面',icon:ICON,backgroundColor:themeBg(),autoHideMenuBar:true,titleBarStyle:process.platform==='darwin'?'hiddenInset':'hidden',...(process.platform==='darwin'?{trafficLightPosition:{x:14,y:13},roundedCorners:true}:{titleBarOverlay:themeOverlay()}),webPreferences:{preload:(typeof resolvePreloadPath === 'function' ? resolvePreloadPath('preload.js') : path.join(__dirname, 'preload.js')),backgroundThrottling:false,spellcheck:false}}),
   decorate:(w,wc)=>{
     keepRound(w,10);keepViewport(w);
     wc.on('page-favicon-updated',(_e,urls)=>{wc.__bookmarkFavicons={page:wc.getURL(),urls};});
@@ -1547,7 +1547,7 @@ async function openAccount(id, opt = {}) {
     // 不要系统白色标题栏：内容铺满窗口，标签栏当拖动区；Windows / Linux 右上角保留系统按钮并跟随主题色
     titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'hidden',
     ...(process.platform === 'darwin' ? { trafficLightPosition: { x: 14, y: 13 }, roundedCorners: true } : { titleBarOverlay: themeOverlay() }),
-    webPreferences: { partition: partOf(a.id), preload: resolvePreloadPath('preload.js'), nodeIntegrationInSubFrames: false, contextIsolation: true, sandbox: !process.env.BRANA_NO_SANDBOX, backgroundThrottling: false, spellcheck: false, additionalArguments: [hidden ? '--brana-bg-renderer' : '--brana-fg-renderer'] },
+    webPreferences: { partition: partOf(a.id), preload: (typeof resolvePreloadPath === 'function' ? resolvePreloadPath('preload.js') : path.join(__dirname, 'preload.js')), nodeIntegrationInSubFrames: false, contextIsolation: true, sandbox: !process.env.BRANA_NO_SANDBOX, backgroundThrottling: false, spellcheck: false, additionalArguments: [hidden ? '--brana-bg-renderer' : '--brana-fg-renderer'] },
   });
   if (!hidden && opt.closeOthers && typeof bgWorkMap !== 'undefined' && typeof destroyWindow === 'function') {
     for (const [oldId, oldW] of [...wins.entries()]) {
@@ -2011,7 +2011,7 @@ function openManager() {
     width: 1100, height: 780, minWidth: 760, minHeight: 480, title: 'Brana AI · 账号管理', show: false, icon: ICON, backgroundColor: themeBg(), autoHideMenuBar: true,
     titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'hidden',
     ...(process.platform === 'darwin' ? { trafficLightPosition: { x: 14, y: 13 }, roundedCorners: true } : { titleBarOverlay: themeOverlay() }),
-    webPreferences: { partition: part, preload: resolvePreloadPath('preload.js'), contextIsolation: true, sandbox: !process.env.BRANA_NO_SANDBOX, spellcheck: false },
+    webPreferences: { partition: part, preload: (typeof resolvePreloadPath === 'function' ? resolvePreloadPath('preload.js') : path.join(__dirname, 'preload.js')), contextIsolation: true, sandbox: !process.env.BRANA_NO_SANDBOX, spellcheck: false },
   });
   keepRound(mgr, 10);
   const w = mgr, wc = w.webContents;
@@ -2699,7 +2699,7 @@ async function showExtensionPopup(owner, url) {
   try { await popup.loadURL('about:blank'); await uaMeta(wc); if(owner.isDestroyed()||owner.session.__routeBlocked)throw Error('账号线路尚未就绪'); await popup.loadURL(url);popup.show();popup.focus(); }
   catch(error){close();throw error;}
 }
-const browserNavigation=require('./browser-navigation').setupBrowserNavigation({BrowserWindow,ipcMain,dialog,path,preload:resolvePreloadPath('preload.js'),offline:OFFLINE,clientURL:UI_URL,arena:LOGIN_URL,owners:browserRouteOwners,accountFor:winAcct,navigate:navigateBrowser,isApplying:id=>applyRoute.busy.has(id)});
+const browserNavigation=require('./browser-navigation').setupBrowserNavigation({BrowserWindow,ipcMain,dialog,path,preload:(typeof resolvePreloadPath === 'function' ? resolvePreloadPath('preload.js') : path.join(__dirname, 'preload.js')),offline:OFFLINE,clientURL:UI_URL,arena:LOGIN_URL,owners:browserRouteOwners,accountFor:winAcct,navigate:navigateBrowser,isApplying:id=>applyRoute.busy.has(id)});
 require('./bookmarks-window').setupBookmarks({BrowserWindow,ipcMain,screen,store:require('./browser-bookmarks').createBookmarks(path.join(app.getPath('userData'),'bookmarks.json')),accountFor:winAcct,navigate:navigateAccount});
 require('./extensions-window').setupExtensions({BrowserWindow,ipcMain,dialog,store:extensionStore,accountFor:winAcct,navigate:navigateAccount,icon:ICON,showPopup:showExtensionPopup,activateAction:(owner,id)=>{const a=winAcct(owner);if(!a)throw Error('账号已关闭');return extensionCompat.activate(a.id,id,owner);}});
 ipcMain.handle('host:logout', async e => {
