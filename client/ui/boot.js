@@ -604,7 +604,8 @@ async function init() {
       const cmCold = Store.get('me:u', null);
       History.warm('fast');
       try { if (typeof RunningTracker !== 'undefined') RunningTracker.prewarmTrackedChats(); } catch {}
-      const hasColdCache = Boolean((cmCold && cmCold.id && !/@example\.invalid$/i.test(String(cmCold.email || ''))) || (History.items && History.items.length > 0));
+      const coldBanned = Boolean(UI.host?.account?.ban || (cmCold && cmCold.id === UI.host?.account?.id && cmCold.banned === true));
+      const hasColdCache = Boolean(!coldBanned && ((cmCold && cmCold.id && !/@example\.invalid$/i.test(String(cmCold.email || ''))) || (History.items && History.items.length > 0)));
       if (hasColdCache) {
         UI.me = (cmCold && cmCold.id) ? cmCold : { id: 'local', email: '' };
         Tabs.list = Tabs.list.filter(t => t && t.key);
@@ -809,7 +810,10 @@ async function init() {
     return;
   }
   try { UI.setBootStep?.('正在连接 arena.ai 核对登录状态…', (UI.host?.account?.email || '') + (UI.host?.account?.proxyIp ? ' · ' + UI.host.account.proxyIp : '')); } catch {}
-  const check = await SessionGate.check({ early });
+  const check = await Promise.race([
+    SessionGate.check({ early }),
+    ...(early && !window.__fixture && !window.__routeFixture ? [new Promise(r => setTimeout(() => r({ state: 'offline', reason: 'timeout' }), 6000))] : []),
+  ]);
   if (check.browse || window.__BRANA_BROWSE_MODE) {
     if (!UI.authed) UI.enterBrowseMode('已进入查阅模式（免登录浏览本地缓存对话）');
     return;
@@ -834,12 +838,17 @@ async function init() {
     needShell = (!early || !!window.__fixture || !!window.__routeFixture);
     const cred = await Host.getCred().catch(() => null);
     if (cred?.email && cred?.password) {
-      if (!early || window.__fixture || window.__routeFixture) $('#view').replaceChildren(h('div', { class: 'gate' }, h('div', { class: 'lform' }, h('div', { class: 'hero-t' }, '正在登录…'), h('div', { class: 'lsub' }, cred.email + ' · ' + (isDirectP(UI.host.account?.proxy) ? '直连' : '代理 ' + maskProxy(UI.host.account?.proxy))), h('i', { class: 'spin' }))));
+      if (!early || window.__fixture || window.__routeFixture) {
+        $('#view').replaceChildren(h('div', { class: 'gate' }, h('div', { class: 'lform' }, h('div', { class: 'hero-t' }, '正在登录…'), h('div', { class: 'lsub' }, cred.email + ' · ' + (isDirectP(UI.host.account?.proxy) ? '直连' : '代理 ' + maskProxy(UI.host.account?.proxy))), h('i', { class: 'spin' }))));
+        UI.shown();
+      }
+      let signInTries = 0;
+      const maxSignInRetries = (window.__fixture || window.__routeFixture) ? 99 : 1;
       for (;;) {
         try { UI.me = checkedUser(await Auth.signIn(cred.email, cred.password)); connOk(); break; }
         catch (e) {
           // Read retries may recover automatically; an unconfirmed authentication POST is never replayed.
-          if (e.net && await connWait(describe(e), e.slow) !== 'gate') continue;
+          if (++signInTries <= maxSignInRetries && e.net && await connWait(describe(e), e.slow) !== 'gate') continue;
           connOk();
           try { Host.noteAccount?.({ loggedIn: false })?.catch?.(() => {}); } catch {}
           if (early && !window.__fixture && !window.__routeFixture) { UI.enterBrowseMode('自动登录暂未完成（' + describe(e) + '）· 已保留本地缓存对话'); return; }
@@ -1046,12 +1055,12 @@ function boot() {
   addEventListener('dragover', e => { if ([...(e.dataTransfer?.types || [])].includes('Files')) e.preventDefault(); });
   addEventListener('drop', e => { if ([...(e.dataTransfer?.types || [])].includes('Files')) e.preventDefault(); });
   if (location.pathname !== '/robots.txt') { if (Host.platform !== 'web') overlay(); return; }
-  const start = () => { UI.build(); Mob.bind();
+  const start = () => { UI.build(); Mob.bind(); window.__arenaNextClientLoaded = true;
     // 全面屏：安卓外壳给出状态栏 / 导航栏高度（页面画到屏幕边缘，自己留白）
     try { const A = window.BranaAndroid; if (A?.insets) { const [t, b] = JSON.parse(A.insets()); const st = document.documentElement.style; st.setProperty('--sa-top', t + 'px'); st.setProperty('--sa-bottom', b + 'px'); } } catch {}
     // 从选账号页进入的新页面：一开始就盖上进度层，并马上让外壳切过来（用进度层代替「正在切换」转圈）
     if (Host.platform === 'android' && Host.takeEnter?.()) { EnterFlow.go(); requestAnimationFrame(() => requestAnimationFrame(() => UI.shown())); }
-    setTimeout(() => { try { window.BranaHost?.ready?.()?.catch?.(() => {}); } catch {} }, 320); init().catch(e => { console.error(e); try { UI.setBootStep?.('初始化遇到问题：' + (e?.message || e), '可点击下方按钮切换节点、进入离线查阅或重新加载', true); } catch {} toast('初始化失败：' + e.message, 'err'); UI.shown(); }); setTimeout(() => UI.shown(), 8000); };
+    setTimeout(() => { try { window.BranaHost?.ready?.()?.catch?.(() => {}); } catch {} }, 320); init().catch(e => { console.error(e); try { UI.setBootStep?.('初始化遇到问题：' + (e?.message || e), '可点击下方按钮切换节点、进入离线查阅或重新加载', true); } catch {} toast('初始化失败：' + e.message, 'err'); UI.shown(); }); setTimeout(() => UI.shown(), 3500); };
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start, { once: true }); else start();
 }
 boot();

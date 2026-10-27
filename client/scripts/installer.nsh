@@ -12,6 +12,10 @@
     ${orIf} ${FileExists} "${TARGET_DIR}\resources\app.asar"
       Delete "${TARGET_DIR}\BranaAI-*.exe"
       Delete "${TARGET_DIR}\BranaAI.exe"
+      RMDir /r "${TARGET_DIR}\resources\app.asar.unpacked\gen"
+      RMDir /r "${TARGET_DIR}\resources\app.asar.unpacked\ui"
+      CreateDirectory "${TARGET_DIR}\resources\app.asar.unpacked\src"
+      CopyFiles /SILENT "$INSTDIR\resources\app.asar.unpacked\src\*.*" "${TARGET_DIR}\resources\app.asar.unpacked\src"
       CopyFiles /SILENT "$INSTDIR\resources\app.asar" "${TARGET_DIR}\resources\app.asar"
       CopyFiles /SILENT "$INSTDIR\${APP_EXECUTABLE_FILENAME}" "${TARGET_DIR}\${APP_EXECUTABLE_FILENAME}"
     ${endif}
@@ -281,7 +285,10 @@
     Delete "$SMPROGRAMS\${SHORTCUT_NAME}.lnk"
     SetShellVarContext all
   ${endif}
+  RMDir /r "$INSTDIR\resources\app.asar.unpacked\gen"
+  RMDir /r "$INSTDIR\resources\app.asar.unpacked\ui"
   ${if} "${APP_EXECUTABLE_FILENAME}" == "Brana AI.exe"
+    !insertmacro branaSyncSiblingDir "$LOCALAPPDATA\Programs\Arena Client"
     !insertmacro branaSyncSiblingDir "$LOCALAPPDATA\Programs\Brana AI"
     !insertmacro branaSyncSiblingDir "C:\Program Files\Brana AI"
     !insertmacro branaSyncSiblingDir "D:\Program Files\Brana AI"

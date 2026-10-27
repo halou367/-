@@ -143,9 +143,180 @@ final class RouteSupport {
             if(in!=null){java.io.BufferedReader r=new java.io.BufferedReader(new java.io.InputStreamReader(in,java.nio.charset.StandardCharsets.UTF_8));String l;while((l=r.readLine())!=null&&sb.length()<20000)sb.append(l).append('\n');}
             return new String[]{String.valueOf(code),sb.toString()};}finally{c.disconnect();}
     }
+    static final Object IPPURE_LOCK = new Object();
+    static volatile String ippureXk = "";
+    static volatile long ippureXt = 0L, ippureLt = 0L, ippureLastT = 0L;
+    static String hmacSha256Hex(String key, String data) throws Exception {
+        javax.crypto.Mac mac = javax.crypto.Mac.getInstance("HmacSHA256");
+        mac.init(new javax.crypto.spec.SecretKeySpec(key.getBytes(StandardCharsets.UTF_8), "HmacSHA256"));
+        byte[] raw = mac.doFinal(data.getBytes(StandardCharsets.UTF_8));
+        StringBuilder sb = new StringBuilder(raw.length * 2);
+        for (byte b : raw) sb.append(String.format(java.util.Locale.ROOT, "%02x", b & 0xff));
+        return sb.toString();
+    }
+    static boolean updateIppureHeaders(HttpURLConnection c) {
+        String xk = c.getHeaderField("x-k");
+        String xtStr = c.getHeaderField("x-t");
+        if (xk == null || xk.isEmpty()) {
+            java.util.Map<String, java.util.List<String>> map = c.getHeaderFields();
+            if (map != null) {
+                for (java.util.Map.Entry<String, java.util.List<String>> e : map.entrySet()) {
+                    if (e.getKey() != null && e.getValue() != null && !e.getValue().isEmpty()) {
+                        if ("x-k".equalsIgnoreCase(e.getKey())) xk = e.getValue().get(0);
+                        else if ("x-t".equalsIgnoreCase(e.getKey())) xtStr = e.getValue().get(0);
+                    }
+                }
+            }
+        }
+        if (xk != null && !xk.trim().isEmpty()) {
+            synchronized (IPPURE_LOCK) {
+                ippureXk = xk.trim();
+                try {
+                    long xt = Long.parseLong(xtStr != null ? xtStr.trim() : "");
+                    ippureXt = xt;
+                    ippureLt = System.currentTimeMillis();
+                    if (xt > ippureLastT) ippureLastT = xt;
+                } catch (Exception ignored) {}
+            }
+            return true;
+        }
+        return false;
+    }
+    static String fetchIppureSigned(String host, String path, int tmo) {
+        for (int attempt = 0; attempt < 3; attempt++) {
+            HttpURLConnection c = null;
+            try {
+                if (ippureXk.isEmpty() || System.currentTimeMillis() - ippureLt > 45000L) {
+                    synchronized (IPPURE_LOCK) {
+                        if (ippureXk.isEmpty() || System.currentTimeMillis() - ippureLt > 45000L) {
+                            HttpURLConnection hc = (HttpURLConnection) new URL("https://" + host + path).openConnection(java.net.Proxy.NO_PROXY);
+                            try {
+                                hc.setConnectTimeout(tmo); hc.setReadTimeout(tmo); hc.setUseCaches(false); hc.setInstanceFollowRedirects(false);
+                                hc.setRequestProperty("Origin", "https://ippure.com");
+                                hc.setRequestProperty("Referer", "https://ippure.com/");
+                                hc.setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android 14; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36");
+                                hc.getResponseCode();
+                                updateIppureHeaders(hc);
+                            } finally { hc.disconnect(); }
+                        }
+                    }
+                }
+                String xk; long t;
+                synchronized (IPPURE_LOCK) {
+                    xk = ippureXk;
+                    if (xk == null || xk.isEmpty()) return null;
+                    long now = System.currentTimeMillis();
+                    long rawT = now - (ippureLt > 0 ? ippureLt : now) + (ippureXt > 0 ? ippureXt : now);
+                    t = Math.max(Math.max(ippureLastT, ippureXt) + 1L, rawT);
+                    ippureLastT = t;
+                }
+                String sig = hmacSha256Hex(xk, "GET-https://" + host + path + "--" + t);
+                c = (HttpURLConnection) new URL("https://" + host + path).openConnection(java.net.Proxy.NO_PROXY);
+                c.setConnectTimeout(tmo); c.setReadTimeout(tmo); c.setUseCaches(false); c.setInstanceFollowRedirects(false);
+                c.setRequestProperty("Origin", "https://ippure.com");
+                c.setRequestProperty("Referer", "https://ippure.com/");
+                c.setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android 14; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36");
+                c.setRequestProperty("Accept", "application/json, text/plain, */*");
+                c.setRequestProperty("x-k", xk);
+                c.setRequestProperty("x-t", t + "-" + sig);
+                int code = c.getResponseCode();
+                if (updateIppureHeaders(c)) continue;
+                if (code == 200) {
+                    InputStream in = c.getInputStream();
+                    if (in != null) {
+                        java.io.BufferedReader r = new java.io.BufferedReader(new java.io.InputStreamReader(in, StandardCharsets.UTF_8));
+                        StringBuilder sb = new StringBuilder(); String l;
+                        while ((l = r.readLine()) != null && sb.length() < 24576) sb.append(l);
+                        return sb.toString();
+                    }
+                }
+                return null;
+            } catch (Exception ignored) {
+                return null;
+            } finally {
+                if (c != null) try { c.disconnect(); } catch (Exception ignored) {}
+            }
+        }
+        return null;
+    }
+    static JSONObject queryIppureSigned(String qIp, int tmo) {
+        try {
+            final String encIp = java.net.URLEncoder.encode(qIp, "UTF-8");
+            final String[] resArr = new String[2];
+            Thread tb = new Thread(() -> {
+                String s = fetchIppureSigned("api.123169.xyz", "/api/info/ip-basic/" + encIp, tmo);
+                if (s == null) s = fetchIppureSigned("api.ippure.com", "/api/info/ip-basic/" + encIp, tmo);
+                resArr[0] = s;
+            });
+            Thread tr = new Thread(() -> {
+                String s = fetchIppureSigned("api.123169.xyz", "/api/info/ip-risk/" + encIp, tmo);
+                if (s == null) s = fetchIppureSigned("api.ippure.com", "/api/info/ip-risk/" + encIp, tmo);
+                resArr[1] = s;
+            });
+            tb.start(); tr.start();
+            tb.join(tmo + 600L); tr.join(tmo + 600L);
+            JSONObject bData = null, rData = null;
+            if (resArr[0] != null) {
+                JSONObject bj = new JSONObject(resArr[0]);
+                if (bj.optInt("code", -1) == 0) bData = bj.optJSONObject("data");
+            }
+            if (resArr[1] != null) {
+                JSONObject rj = new JSONObject(resArr[1]);
+                if (rj.optInt("code", -1) == 0) rData = rj.optJSONObject("data");
+            }
+            if (bData == null && rData == null) return null;
+            String ip = bData != null ? bData.optString("ip", qIp) : qIp;
+            JSONObject asnObj = bData != null ? bData.optJSONObject("asn") : null;
+            String org = asnObj != null ? asnObj.optString("organization", "") : "";
+            if (org.length() > 40) org = org.substring(0, 40);
+            String typeStr = bData != null ? bData.optString("type", asnObj != null ? asnObj.optString("type", "") : "").toLowerCase(java.util.Locale.US) : "";
+            boolean hasResField = bData != null && (bData.has("is_residential") || (asnObj != null && asnObj.has("is_residential")));
+            boolean isResField = bData != null && (bData.has("is_residential") ? bData.optBoolean("is_residential") : (asnObj != null && asnObj.optBoolean("is_residential")));
+            boolean dc = !typeStr.isEmpty() ? typeStr.matches(".*(hosting|datacenter|cloud|vpn|proxy).*")
+                : ((!isResField && org.toLowerCase(java.util.Locale.US).matches(".*(akile|baxet|dromatics|cloudflare|oracle|amazon|aws|google|microsoft|azure|linode|akamai|vultr|digitalocean|hetzner|ovh|choopa|datacamp|contabo|zenlayer|cogent|hurricane|leaseweb|scaleway|netcup|gcore|kamatera|upcloud|racknerd|hosting|datacenter|data center|cloud|vps|server).*")));
+            boolean res = hasResField ? (isResField && !dc) : (!dc && org.toLowerCase(java.util.Locale.US).matches(".*(telecom|communications|broadband|cable|mobile|ntt|kddi|softbank|korea telecom|sk broadband|lg uplus|hinet|chunghwa|singtel|starhub|vodafone|deutsche telekom|comcast|verizon|charter|at&t|bt|orange|free sas|sfr|bell|rogers|telus).*"));
+            JSONObject traits = bData != null ? bData.optJSONObject("traits") : null;
+            boolean bc = traits != null && traits.optBoolean("is_broadcast");
+            if (rData != null && rData.has("risk_score") && !rData.isNull("risk_score")) {
+                int fs = Math.max(0, Math.min(100, rData.getInt("risk_score")));
+                JSONArray tags = rData.optJSONArray("risk_tags");
+                if (tags != null) {
+                    for (int i = 0; i < tags.length(); i++) {
+                        String tg = tags.optString(i, "").toLowerCase(java.util.Locale.US);
+                        if (tg.matches(".*(vpn|proxy|tor|dch|hosting|datacenter|bot|abuse).*")) dc = true;
+                    }
+                }
+                return new JSONObject().put("fs", fs).put("ip", ip).put("res", res).put("bc", bc).put("dc", dc).put("org", org).put("real", 1).put("via", "ippure");
+            }
+            int basicFs = res ? 10 : (dc ? 28 : 18);
+            return new JSONObject().put("fs", basicFs).put("ip", ip).put("res", res).put("bc", bc).put("dc", dc).put("org", org).put("basicOnly", 1);
+        } catch (Exception e) {
+            return null;
+        }
+    }
     static void purity(java.net.Proxy proxy,JSONObject o){
+        final String knownIp = o != null ? o.optString("ip", "").trim() : "";
         final JSONObject[] got=new JSONObject[2];
-        Thread a=new Thread(()->{try{String[] r=fetchVia(proxy,"https://my.ippure.com/v1/info",4500);if("200".equals(r[0])){JSONObject j=new JSONObject(r[1]);String ip=j.optString("ip","");boolean hasReal=j.has("fraudScore")&&!j.isNull("fraudScore");if(hasReal||ip.contains(":")){int fs=hasReal?Math.max(0,Math.min(100,j.getInt("fraudScore"))):((j.optBoolean("isResidential")&&!j.optBoolean("isDataCenter")&&!j.optBoolean("isBroadcast"))?10:18);JSONObject pu=new JSONObject().put("fs",fs).put("ip",ip).put("res",j.optBoolean("isResidential")).put("bc",j.optBoolean("isBroadcast")).put("dc",j.optBoolean("isDataCenter")).put("org",j.optString("asOrganization",""));if(hasReal){pu.put("real",1);pu.put("via","ippure");}got[0]=pu;}}}catch(Exception ignored){}});
+        Thread a=new Thread(()->{try{
+            if(!knownIp.isEmpty()){
+                JSONObject signed = queryIppureSigned(knownIp, 3600);
+                if(signed!=null&&signed.optInt("real",0)==1){got[0]=signed;return;}
+            }
+            String[] r=fetchVia(proxy,"https://my.ippure.com/v1/info",4500);
+            if("200".equals(r[0])){
+                JSONObject j=new JSONObject(r[1]);
+                String ip=j.optString("ip","");
+                boolean hasReal=j.has("fraudScore")&&!j.isNull("fraudScore");
+                if(hasReal){
+                    int fs=Math.max(0,Math.min(100,j.getInt("fraudScore")));
+                    JSONObject pu=new JSONObject().put("fs",fs).put("ip",ip).put("res",j.optBoolean("isResidential")).put("bc",j.optBoolean("isBroadcast")).put("dc",j.optBoolean("isDataCenter")).put("org",j.optString("asOrganization","")).put("real",1);pu.put("via","ippure");
+                    got[0]=pu;
+                } else if(!ip.isEmpty()){
+                    JSONObject signed = queryIppureSigned(ip, 3200);
+                    if(signed!=null) got[0]=signed;
+                }
+            }
+        }catch(Exception ignored){}});
         Thread b=new Thread(()->{try{String[] r=fetchVia(proxy,"http://ip-api.com/json/?fields=status,query,isp,org,as,mobile,proxy,hosting",4500);if("200".equals(r[0])){JSONObject j=new JSONObject(r[1]);if("success".equals(j.optString("status")))got[1]=new JSONObject().put("ip",j.optString("query","")).put("h",j.optBoolean("hosting")).put("px",j.optBoolean("proxy")).put("m",j.optBoolean("mobile")).put("isp",j.optString("isp",j.optString("org",""))).put("as",j.optString("as","").split(" ")[0]);}}catch(Exception ignored){}});
         a.start();b.start();try{a.join(6000);b.join(6000);}catch(InterruptedException ignored){}
         try{if(got[0]!=null)o.put("pure",got[0]);if(got[1]!=null)o.put("ipa",got[1]);}catch(Exception ignored){}
@@ -153,7 +324,8 @@ final class RouteSupport {
     static void purityDirect(String targetIp,JSONObject o){
         if(targetIp==null||targetIp.trim().isEmpty())return;
         final String qIp=targetIp.trim().replaceAll("^\\[|\\]$","");
-        final JSONObject[] got=new JSONObject[2];
+        final JSONObject[] got=new JSONObject[3];
+        Thread s=new Thread(()->{try{got[2]=queryIppureSigned(qIp,3600);}catch(Exception ignored){}});
         Thread a=new Thread(()->{try{
             String[] r=fetchVia(java.net.Proxy.NO_PROXY,"https://proxycheck.io/v2/"+java.net.URLEncoder.encode(qIp,"UTF-8")+"?vpn=1&asn=1&risk=1",3200);
             if("200".equals(r[0])){
@@ -162,16 +334,18 @@ final class RouteSupport {
                     int risk=Math.max(0,Math.min(100,x.optInt("risk",0)));
                     String xType=x.optString("type","").toLowerCase(java.util.Locale.US);
                     boolean explicitBad=xType.matches(".*(tor|compromised|malware|botnet).*");
-                    boolean isProxy=explicitBad||("yes".equalsIgnoreCase(x.optString("proxy",""))&&risk>=75);
-                    JSONObject dev=x.optJSONObject("devices");int subnetCnt=dev!=null?dev.optInt("subnet",0):0;
+                    boolean isProxy=explicitBad||"yes".equalsIgnoreCase(x.optString("proxy",""));
                     String org=x.optString("provider",x.optString("organisation",""));
                     boolean dc=xType.matches(".*(hosting|datacenter|cloud|vpn|proxy).*");
                     boolean res=!dc&&!isProxy&&xType.matches(".*(residential|wireless).*");
                     int ipHash=0;for(int i=0;i<qIp.length();i++)ipHash=((ipHash<<5)-ipHash+qIp.charAt(i));int dcSpread=Math.abs(ipHash)%7;
                     int fs;
-                    if(isProxy||risk>=75)fs=Math.max(55,risk);
-                    else fs=res?(6+(Math.abs(ipHash)%4)):(dc?(11+dcSpread):(9+(Math.abs(ipHash)%5)));
-                    got[0]=new JSONObject().put("fs",fs).put("ip",qIp).put("res",res).put("bc",false).put("dc",dc||isProxy).put("org",org).put("real",1).put("via","ippure");
+                    if(explicitBad||risk>=75)fs=Math.max(55,risk);
+                    else if(isProxy)fs=Math.max(38,risk);
+                    else fs=res?Math.max(8,risk):(dc?Math.max(26+dcSpread,risk):Math.max(18+(Math.abs(ipHash)%5),risk));
+                    JSONObject pu=new JSONObject().put("fs",fs).put("ip",qIp).put("res",res).put("bc",false).put("dc",dc||isProxy).put("org",org).put("via","proxycheck");
+                    if(explicitBad||risk>=50)pu.put("real",1);else pu.put("basicOnly",1);
+                    got[0]=pu;
                 }
             }
         }catch(Exception ignored){}});
@@ -186,19 +360,18 @@ final class RouteSupport {
                 }
             }
         }catch(Exception ignored){}});
-        a.start();b.start();try{a.join(3500);b.join(3500);}catch(InterruptedException ignored){}
+        s.start();a.start();b.start();try{s.join(4200);a.join(3500);b.join(3500);}catch(InterruptedException ignored){}
         try{
             if(got[1]!=null)o.put("ipa",got[1]);
-            if(got[0]!=null){o.put("pure",got[0]);}
+            if(got[2]!=null&&got[2].optInt("real",0)==1){o.put("pure",got[2]);}
+            else if(got[0]!=null&&got[0].optInt("real",0)==1){o.put("pure",got[0]);}
+            else if(got[2]!=null){o.put("pure",got[2]);}
+            else if(got[0]!=null){o.put("pure",got[0]);}
             else if(got[1]!=null){
                 boolean h=got[1].optBoolean("h"),px=got[1].optBoolean("px");
                 String isp=got[1].optString("isp","");
-                int ipHash=0;for(int i=0;i<qIp.length();i++)ipHash=((ipHash<<5)-ipHash+qIp.charAt(i));int dcSpread=Math.abs(ipHash)%7;
-                int fs=(h||px)?(11+dcSpread):(8+(Math.abs(ipHash)%5));
-                o.put("pure",new JSONObject().put("fs",fs).put("ip",got[1].optString("ip",qIp)).put("res",!h&&!px).put("bc",false).put("dc",h||px).put("org",isp).put("real",1).put("via","ippure"));
-            } else {
-                int ipHash=0;for(int i=0;i<qIp.length();i++)ipHash=((ipHash<<5)-ipHash+qIp.charAt(i));int dcSpread=Math.abs(ipHash)%7;
-                o.put("pure",new JSONObject().put("fs",11+dcSpread).put("ip",qIp).put("res",false).put("bc",false).put("dc",true).put("org","").put("real",1).put("via","ippure"));
+                int fs=(h||px)?28:18;
+                o.put("pure",new JSONObject().put("fs",fs).put("ip",got[1].optString("ip",qIp)).put("res",!h&&!px).put("bc",false).put("dc",h||px).put("org",isp).put("basicOnly",1));
             }
         }catch(Exception ignored){}
     }

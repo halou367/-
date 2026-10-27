@@ -157,7 +157,26 @@ function slimAppAsar(appOutDir) {
         }
         return;
       }
-      if (node.unpacked) return;
+      if (node.unpacked) {
+        const unpackedPath = path.join(appOutDir, 'resources', 'app.asar.unpacked', ...relPath.split('/'));
+        if (fs.existsSync(unpackedPath)) {
+          delete node.unpacked;
+          const fileBuf = fs.readFileSync(unpackedPath);
+          node.offset = String(curOffset);
+          node.size = fileBuf.length;
+          const hashHex = crypto.createHash('sha256').update(fileBuf).digest('hex');
+          const blockSize = 4 * 1024 * 1024;
+          const blocks = [];
+          for (let pos = 0; pos < fileBuf.length; pos += blockSize) {
+            blocks.push(crypto.createHash('sha256').update(fileBuf.subarray(pos, Math.min(fileBuf.length, pos + blockSize))).digest('hex'));
+          }
+          if (blocks.length === 0) blocks.push(crypto.createHash('sha256').update(Buffer.alloc(0)).digest('hex'));
+          node.integrity = { algorithm: 'SHA256', hash: hashHex, blockSize, blocks };
+          chunks.push(fileBuf);
+          curOffset += fileBuf.length;
+        }
+        return;
+      }
       const origOff = Number(node.offset || 0);
       const origSize = Number(node.size || 0);
       let fileBuf = rawAsar.subarray(dataOffsetBase + origOff, dataOffsetBase + origOff + origSize);

@@ -35,7 +35,18 @@ const RoutePolicy = (() => {
     const nextRep = { ...old };
     let changed = false;
     if (Number.isFinite(fs)) {
-      nextRep.pu = { ...(old.pu || {}), fs, res: !!r?.pure?.res, bc: !!r?.pure?.bc, dc: !!r?.pure?.dc };
+      nextRep.pu = {
+        ...(old.pu || {}),
+        fs,
+        res: !!r?.pure?.res,
+        bc: !!r?.pure?.bc,
+        dc: !!r?.pure?.dc,
+        ...(r?.pure?.org ? { org: String(r.pure.org).slice(0, 40) } : {}),
+        ...(r?.pure?.real ? { real: 1 } : {}),
+        ...(r?.pure?.via ? { via: String(r.pure.via).slice(0, 20) } : {}),
+        ...(r?.pure?.basicOnly ? { basicOnly: 1 } : {}),
+      };
+      if (r?.pure?.real && !r?.pure?.basicOnly) delete nextRep.pu.basicOnly;
       changed = true;
     }
     if (r?.ipa && typeof r.ipa === 'object') {
@@ -84,12 +95,13 @@ const RoutePolicy = (() => {
     } : (rEg || rHost || {});
     const q = pool.rq?.[egIp] || (hIp ? pool.rq?.[hIp] : null);
     const hasPu = Boolean(p.pu && Number.isFinite(+p.pu.fs));
-    const isCloudIsp = /\b(?:akile|akilecloud|dromatics|akamai|linode|digitalocean|vultr|constant company|choopa|hetzner|ovh|oracle|amazon|aws|google cloud|microsoft|azure|cloudflare|alibaba|aliyun|tencent|aceville|\bace\b|6 collyer quay|huawei|contabo|fornex|ionos|kagoya|webhorizon|cyberverse|brainoza|eurohoster|virterion|kaopu|light\s*node|scaleway|leaseweb|m247|datacamp|cdn77|zenlayer|dmit|veesp|trabia|baxet|waicore|trunk networks|hostkey|timeweb|racknerd|hostpapa|alphavps|livi hosting|terratransit|rocketcloud|datawave|yeahtech|yeah\s*tech|ipxo|sondercloud|netcup|a2b|gcore|ufovps|packethub|psychz|sharktech|quadranet|colocrossing|frantech|buyvm|worldstream|cherry\s*servers|latitude|equinix|kamatera|upcloud|hosting|hoster|datacenter|data\s*center|server|vps|cloud|colocation|dedicated)\b/i.test((p.isp || '') + ' ' + (p.pu?.org || ''));
+    const isCloudIsp = /\b(?:iomart|perfecto|ft systems|routerhosting|sculk|gtelcom|nuxtcloud|a100 row|snowd|first server|xorek|virtuasys|akile|akilecloud|dromatics|akamai|linode|digitalocean|vultr|constant company|choopa|hetzner|ovh|oracle|amazon|aws|google cloud|microsoft|azure|cloudflare|alibaba|aliyun|tencent|aceville|\bace\b|6 collyer quay|huawei|contabo|fornex|ionos|kagoya|webhorizon|cyberverse|brainoza|eurohoster|virterion|kaopu|light\s*node|scaleway|leaseweb|m247|datacamp|cdn77|zenlayer|dmit|veesp|trabia|baxet|waicore|trunk networks|hostkey|timeweb|racknerd|hostpapa|alphavps|livi hosting|terratransit|rocketcloud|datawave|yeahtech|yeah\s*tech|ipxo|sondercloud|netcup|a2b|gcore|ufovps|packethub|psychz|sharktech|quadranet|colocrossing|frantech|buyvm|worldstream|cherry\s*servers|latitude|equinix|kamatera|upcloud|hosting|hoster|datacenter|data\s*center|server|vps|cloud|colocation|dedicated)\b/i.test((p.isp || '') + ' ' + (p.pu?.org || ''));
     const isHosting = Boolean(p.h || p.pu?.dc || isCloudIsp);
-    const hasCleanPu = Boolean(hasPu && ((p.pu.via === 'ippure' && +p.pu.fs <= 24 && !p.pu.bc) || (+p.pu.fs < 20 && p.pu.res === true && !p.pu.dc && !p.pu.bc && !isHosting && !p.pp && (+p.r || 0) < 33)));
+    const hasCleanPu = Boolean(hasPu && ((p.pu.via === 'ippure' && +p.pu.fs <= 24 && !p.pu.bc && !p.px && !p.pp && (+p.r || 0) < 33) || (+p.pu.fs < 20 && p.pu.res === true && !p.pu.dc && !p.pu.bc && !isHosting && !p.pp && (+p.r || 0) < 33)));
     let score = 100, known = false;
     if (p.a) { known = true; if (p.px && !hasCleanPu) { score -= 35; if (isHosting) score -= 15; } if (isHosting && !hasCleanPu) score -= 8; }
     if (p.c) { known = true; const risk = Math.max(0, Math.min(100, +p.r || 0)); if (risk > 33) { const pen = Math.round((risk - 33) * .9); score -= hasCleanPu && risk <= 75 ? Math.min(10, pen) : pen; } if (!(hasCleanPu && risk <= 75)) { if (p.pp && /tor|compromised|socks|http|inference|proxy/i.test(p.pt || '')) score -= 25; else if (p.pp) score -= 20; } }
+    if ((e?.impureUntil || 0) > at || (p.impureUntil || 0) > at) return { ok: false, score: 45, rank: 0, isRes: false };
     if ((egIp.includes(':') || isHosting || p.px) && !hasPu && !p.c) { known = false; score = Math.min(score, 68); }
     if ((egIp.includes(':') || isHosting || p.px) && !hasPu && p.c && (+p.r || 0) < 50 && !p.pp) { known = false; score = Math.min(score, 68); }
     if (hasPu) {

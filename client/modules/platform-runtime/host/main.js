@@ -162,24 +162,35 @@ function healBannedAccountProxyIps() {
   const pool = DB.shared?.pippool;
   if (!pool || typeof pool !== 'object') return false;
   const ips = pool.ips || {}, ban = pool.ban || {}, rep = pool.rep || {};
+  const nowMs = Date.now();
   const isBadPip = k => {
     const raw = String(k || '').trim();
     if (!raw) return false;
     const host = raw.replace(/^\[|\]$/g, '').split(':')[0];
     if (TOXIC_MAIN_IPS.has(host) || ban[raw.toLowerCase()] || ban[host.toLowerCase()]) return true;
     const e = ips[raw] || ips[host];
-    if (e && (e.banned || e.gone)) return true;
+    if (e && (e.banned || e.gone || (e.impureUntil && e.impureUntil > nowMs))) return true;
     const eg = String(e?.eg || host).trim();
     if (eg && TOXIC_MAIN_IPS.has(eg)) return true;
     const r = (eg && rep[eg]) || rep[host];
-    if (r?.pu && Number.isFinite(+r.pu.fs) && +r.pu.fs >= 50) return true;
+    if (r?.impureUntil && r.impureUntil > nowMs) return true;
+    if (r?.pu && Number.isFinite(+r.pu.fs) && +r.pu.fs > 24) return true;
     return false;
   };
   const used = new Set(DB.accounts.map(a => String(a?.proxyIp || '').trim()).filter(Boolean));
   let changed = false;
   for (const a of DB.accounts) {
-    if (!a || !a.proxyIp || RouteState.locked(a)) continue;
-    if (!isBadPip(a.proxyIp)) continue;
+    if (!a) continue;
+    const isFixtureAcct = /@example\.invalid$/i.test(String(a.email || '')) || /^(?:https?:\/\/|socks5:\/\/)?127\.0\.0\.1:(?:1|9|10)\b/i.test(String(a.proxy || ''));
+    if (!isFixtureAcct && (a.status?.loggedIn === false || (a.routeAuth?.expires && a.routeAuth.expires <= nowMs))) {
+      if (a.routeAuth || a.authLocked) {
+        delete a.routeAuth;
+        delete a.authLocked;
+        changed = true;
+      }
+    }
+    if (!a.proxyIp || RouteState.locked(a)) continue;
+    if (!isBadPip(a.proxyIp) && a.status?.loggedIn !== false) continue;
     used.delete(String(a.proxyIp).trim());
     const cc = String(a.region || a.routeHome || '').trim().toUpperCase();
     const cands = Object.entries(ips).filter(([k, e]) => {
@@ -274,6 +285,16 @@ function compactPipPool(pool) {
   if (Array.isArray(out.rep) && out.rep.length > 240) {
     out.rep = out.rep.slice(-240);
   } else if (out.rep && typeof out.rep === 'object' && !Array.isArray(out.rep)) {
+    if (!out.unpoisonV202 && Object.keys(out.rep).length >= 20) {
+      out.unpoisonV202 = 1;
+      for (const rv of Object.values(out.rep)) {
+        if (!rv || typeof rv !== 'object') continue;
+        delete rv.a;
+        if (rv.pu && !rv.pu.res && (!rv.pu.dc || [10, 11, 12, 13, 14, 15, 16, 22, 23, 24, 25, 26, 27].includes(+rv.pu.fs))) {
+          delete rv.pu;
+        }
+      }
+    }
     const keptHosts = new Set();
     for (const k of Object.keys(out.ips || {})) {
       keptHosts.add(k);
@@ -575,6 +596,7 @@ function loadDB() {
     }
     if (DB.shared.pippool && typeof DB.shared.pippool === 'object') {
       DB.shared.pippool = compactPipPool(DB.shared.pippool);
+      if (healBannedAccountProxyIps()) ch = true;
       fs.mkdirSync(path.dirname(pf), { recursive: true });
       const rawPool = JSON.stringify(DB.shared.pippool);
       _lastPipPoolPayload = rawPool;
@@ -917,7 +939,7 @@ async function applyProxy(a, {force=false,deferReload=false}={}) {
           await loadURLAlive(wc, 'about:blank');
           try {
             const bootHtml = buildBootLoaderHtml(snapshot, '正在启动安全代理隧道与隐私保护…');
-            void wc.executeJavaScript(`try{document.open();document.write(${JSON.stringify(bootHtml)});document.close();}catch{}`).catch(() => {});
+            await wc.executeJavaScript(`try{document.open();document.write(${JSON.stringify(bootHtml)});document.close();}catch{}`).catch(() => {});
           } catch {}
         }
         check(); await uaMeta(wc); check();
@@ -933,6 +955,9 @@ async function applyProxy(a, {force=false,deferReload=false}={}) {
         const isClientShell = Boolean(wc.__clientShell || /^https:\/\/arena\.ai\/robots\.txt\b/i.test(curUrl) || /^file:/i.test(curUrl));
         if (isClientShell) {
           wc.__privacyNeedsReload = false;
+          if (curUrl === 'about:blank' && wc.__clientShell && typeof wc.__navigate === 'function') {
+            setTimeout(() => { if (!wc.isDestroyed() && wc.getURL() === 'about:blank' && !ses.__routeApplying) void wc.__navigate(UI_URL); }, 80);
+          }
         } else {
           wc.__privacyNeedsReload = wc.__privacyNeedsReload || changed;
           if(!deferReload&&wc.__privacyNeedsReload&&/^https?:/.test(curUrl))setTimeout(()=>{if(!wc.isDestroyed()&&epoch===ses.__routeEpoch&&!ses.__routeBlocked){wc.__privacyNeedsReload=false;wc.reload();}},50);
@@ -1405,13 +1430,32 @@ function setBootStage(wc, stageText, subText = '', isErr = false) {
 const wins = new Map(); // accountId -> BrowserWindow
 const extensionPopupOwners = new WeakMap(), extensionPopups = new WeakMap(), browserRouteOwners = new Map();
 function winAcct(wc) { wc = browserRouteOwners.get(wc)?.owner || extensionPopupOwners.get(wc) || wc; for (const [id, w] of wins) if (!w.isDestroyed() && w.webContents === wc) return acct(id); return null; }
+function resolvePreloadPath(name = 'preload.js') {
+  const p = path.join(__dirname, name);
+  try {
+    const u = p.replace(/app\.asar([\\/])/i, 'app.asar.unpacked$1');
+    if (u !== p && fs.existsSync(u)) return u;
+  } catch {}
+  return p;
+}
+try {
+  const unpackedRoot = __dirname.replace(/app\.asar([\\/]).*$/i, 'app.asar.unpacked');
+  if (unpackedRoot && unpackedRoot !== __dirname && fs.existsSync(unpackedRoot)) {
+    for (const staleSub of ['gen', 'ui']) {
+      const staleDir = path.join(unpackedRoot, staleSub);
+      if (fs.existsSync(staleDir) && typeof fs.rmSync === 'function') {
+        try { fs.rmSync(staleDir, { recursive: true, force: true }); } catch {}
+      }
+    }
+  }
+} catch {}
 extensionTabs = require('./extension-tabs').createExtensionTabs({
   BrowserWindow,ownerFor:id=>wins.get(id),accountFor:id=>acct(id),
   attachOwner:(wc,owner)=>extensionPopupOwners.set(wc,owner),detachOwner:wc=>extensionPopupOwners.delete(wc),
   applyProxy:(a)=>applyProxy(a),privacyInit:wc=>uaMeta(wc),loadURL:loadURLAlive,
   registerTab:(id,wc,w)=>extensionCompat.registerTab(id,wc,w),
   reportError:(id,extensionId,error)=>{extensionCompat.reportError(id,extensionId,error);runtimeLog('extension-tab-failed',{kind:error?.name});},
-  windowOptions:a=>({width:1200,height:820,minWidth:720,minHeight:480,title:APP_TITLE+' · '+(acctDisplayName(a)||a.name||'账号')+' · 扩展页面',icon:ICON,backgroundColor:themeBg(),autoHideMenuBar:true,titleBarStyle:process.platform==='darwin'?'hiddenInset':'hidden',...(process.platform==='darwin'?{trafficLightPosition:{x:14,y:13},roundedCorners:true}:{titleBarOverlay:themeOverlay()}),webPreferences:{preload:path.join(__dirname,'preload.js'),backgroundThrottling:false,spellcheck:false}}),
+  windowOptions:a=>({width:1200,height:820,minWidth:720,minHeight:480,title:APP_TITLE+' · '+(acctDisplayName(a)||a.name||'账号')+' · 扩展页面',icon:ICON,backgroundColor:themeBg(),autoHideMenuBar:true,titleBarStyle:process.platform==='darwin'?'hiddenInset':'hidden',...(process.platform==='darwin'?{trafficLightPosition:{x:14,y:13},roundedCorners:true}:{titleBarOverlay:themeOverlay()}),webPreferences:{preload:resolvePreloadPath('preload.js'),backgroundThrottling:false,spellcheck:false}}),
   decorate:(w,wc)=>{
     keepRound(w,10);keepViewport(w);
     wc.on('page-favicon-updated',(_e,urls)=>{wc.__bookmarkFavicons={page:wc.getURL(),urls};});
@@ -1503,7 +1547,7 @@ async function openAccount(id, opt = {}) {
     // 不要系统白色标题栏：内容铺满窗口，标签栏当拖动区；Windows / Linux 右上角保留系统按钮并跟随主题色
     titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'hidden',
     ...(process.platform === 'darwin' ? { trafficLightPosition: { x: 14, y: 13 }, roundedCorners: true } : { titleBarOverlay: themeOverlay() }),
-    webPreferences: { partition: partOf(a.id), preload: path.join(__dirname, 'preload.js'), nodeIntegrationInSubFrames: false, contextIsolation: true, sandbox: !process.env.BRANA_NO_SANDBOX, backgroundThrottling: false, spellcheck: false, additionalArguments: [hidden ? '--brana-bg-renderer' : '--brana-fg-renderer'] },
+    webPreferences: { partition: partOf(a.id), preload: resolvePreloadPath('preload.js'), nodeIntegrationInSubFrames: false, contextIsolation: true, sandbox: !process.env.BRANA_NO_SANDBOX, backgroundThrottling: false, spellcheck: false, additionalArguments: [hidden ? '--brana-bg-renderer' : '--brana-fg-renderer'] },
   });
   if (!hidden && opt.closeOthers && typeof bgWorkMap !== 'undefined' && typeof destroyWindow === 'function') {
     for (const [oldId, oldW] of [...wins.entries()]) {
@@ -1653,7 +1697,26 @@ async function openAccount(id, opt = {}) {
     const u = wc.getURL();
     // 客户端界面（robots.txt）马上注入；浏览器模式的官网页面等官网自己先加载完（did-finish-load，最多等 2.5 秒）再注入 3.6MB 的客户端脚本，
     // 完整功能延后；轻量顶部栏与底部占位由 preload 在页面创建时挂载，dom-ready 仅兜底。
-    if (u.startsWith(UI_URL)) { wc.__clientShell = true; if (typeof setBootStage === 'function') setBootStage(wc, '正在初始化客户端核心脚本…'); wc.executeJavaScript('Boolean(window.__arenaNextClientLoaded)').then(ok => (ok || wc.isDestroyed()) ? null : wc.executeJavaScript(typeof getBundle === 'function' ? getBundle() : BUNDLE)).catch(e => { console.error('inject', e); appendRendererLog(`[INJECT-ERR] ${e?.stack || e}\n`); if (typeof setBootStage === 'function') setBootStage(wc, '客户端界面脚本加载异常', String(e?.message || e), true); }); }
+    if (u.startsWith(UI_URL)) {
+      wc.__clientShell = true;
+      if (typeof setBootStage === 'function') setBootStage(wc, '正在初始化客户端核心脚本…');
+      const injectClientBundle = () => wc.executeJavaScript('Boolean(window.__arenaNextClientLoaded && document.getElementById("app"))')
+        .then(ok => (ok || wc.isDestroyed()) ? null : wc.executeJavaScript(typeof getBundle === 'function' ? getBundle() : BUNDLE))
+        .catch(e => { console.error('inject', e); appendRendererLog(`[INJECT-ERR] ${e?.stack || e}\n`); if (typeof setBootStage === 'function') setBootStage(wc, '客户端界面脚本加载异常', String(e?.message || e), true); });
+      void injectClientBundle();
+      setTimeout(() => {
+        if (wc.isDestroyed() || !wc.getURL().startsWith(UI_URL)) return;
+        wc.executeJavaScript('Boolean(document.getElementById("anc-boot-loader") && !document.getElementById("app"))')
+          .then(stuck => {
+            if (!stuck || wc.isDestroyed()) return;
+            return wc.executeJavaScript('try{window.__ANC_BOOTED=false;window.__arenaNextClientLoaded=false;}catch{}').then(() => injectClientBundle());
+          }).catch(() => {});
+      }, 3800);
+      setTimeout(() => {
+        if (wc.isDestroyed() || !wc.getURL().startsWith(UI_URL)) return;
+        wc.executeJavaScript(`(()=>{try{const l=document.getElementById("anc-boot-loader");if(!l)return "";const st=l.getAttribute("data-stage")||"";if(st!=='ready'&&st!=='browse'){if(typeof UI!=="undefined"&&typeof UI.enterBrowseMode==="function"){UI.enterBrowseMode("初始化超时，已进入查阅模式");return "recovered";}l.remove();return "removed";}return "";}catch{return "";}})()`).catch(() => {});
+      }, 12000);
+    }
     else if (u.startsWith('https://arena.ai/')) {
       const seq = wc.__injSeq = (wc.__injSeq || 0) + 1; let fired = false;
       const go = () => { if (fired || wc.isDestroyed() || wc.__injSeq !== seq) return; fired = true; clearTimeout(t); wc.off('did-finish-load', go); if (wc.getURL().startsWith('https://arena.ai/') && !wc.getURL().startsWith(UI_URL)) wc.executeJavaScript(typeof getBundle === "function" ? getBundle() : BUNDLE).catch(e => console.error('inject', e)); };
@@ -1725,9 +1788,21 @@ async function openAccount(id, opt = {}) {
         DB.open = rem;
       } else if (!w.__hidden) {
         const batch = w.constructor.__closeBatch;
-        DB.open = (batch && Date.now() - batch.at <= 800 && Array.isArray(batch.openBefore) && batch.openBefore.length > 1)
+        const nextOpen = (batch && Date.now() - batch.at <= 800 && Array.isArray(batch.openBefore) && batch.openBefore.length > 1)
           ? batch.openBefore
           : [id];
+        const cur = DB.last || id;
+        if (cur === a.id && a.ban) {
+          const alt = (DB.accounts || []).find(x => x && x.id !== a.id && !x.ban && !x.banned && x.status?.loggedIn !== false);
+          if (alt) DB.last = alt.id;
+        }
+        if (nextOpen.length === 1 && (a.ban || a.banned || a.status?.ban)) {
+          const alt = (DB.accounts || []).find(x => x && x.id !== a.id && !x.ban && !x.banned && x.status?.loggedIn !== false);
+          DB.open = alt ? [alt.id] : nextOpen;
+          if (alt) DB.last = alt.id;
+        } else {
+          DB.open = nextOpen;
+        }
       }
       saveDB();
       // 最后一个可见窗口关掉：后台抽卡的隐藏窗口一起关，程序退出（不留看不见的进程）
@@ -1936,7 +2011,7 @@ function openManager() {
     width: 1100, height: 780, minWidth: 760, minHeight: 480, title: 'Brana AI · 账号管理', show: false, icon: ICON, backgroundColor: themeBg(), autoHideMenuBar: true,
     titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'hidden',
     ...(process.platform === 'darwin' ? { trafficLightPosition: { x: 14, y: 13 }, roundedCorners: true } : { titleBarOverlay: themeOverlay() }),
-    webPreferences: { partition: part, preload: path.join(__dirname, 'preload.js'), contextIsolation: true, sandbox: !process.env.BRANA_NO_SANDBOX, spellcheck: false },
+    webPreferences: { partition: part, preload: resolvePreloadPath('preload.js'), contextIsolation: true, sandbox: !process.env.BRANA_NO_SANDBOX, spellcheck: false },
   });
   keepRound(mgr, 10);
   const w = mgr, wc = w.webContents;
@@ -2624,7 +2699,7 @@ async function showExtensionPopup(owner, url) {
   try { await popup.loadURL('about:blank'); await uaMeta(wc); if(owner.isDestroyed()||owner.session.__routeBlocked)throw Error('账号线路尚未就绪'); await popup.loadURL(url);popup.show();popup.focus(); }
   catch(error){close();throw error;}
 }
-const browserNavigation=require('./browser-navigation').setupBrowserNavigation({BrowserWindow,ipcMain,dialog,path,preload:path.join(__dirname,'preload.js'),offline:OFFLINE,clientURL:UI_URL,arena:LOGIN_URL,owners:browserRouteOwners,accountFor:winAcct,navigate:navigateBrowser,isApplying:id=>applyRoute.busy.has(id)});
+const browserNavigation=require('./browser-navigation').setupBrowserNavigation({BrowserWindow,ipcMain,dialog,path,preload:resolvePreloadPath('preload.js'),offline:OFFLINE,clientURL:UI_URL,arena:LOGIN_URL,owners:browserRouteOwners,accountFor:winAcct,navigate:navigateBrowser,isApplying:id=>applyRoute.busy.has(id)});
 require('./bookmarks-window').setupBookmarks({BrowserWindow,ipcMain,screen,store:require('./browser-bookmarks').createBookmarks(path.join(app.getPath('userData'),'bookmarks.json')),accountFor:winAcct,navigate:navigateAccount});
 require('./extensions-window').setupExtensions({BrowserWindow,ipcMain,dialog,store:extensionStore,accountFor:winAcct,navigate:navigateAccount,icon:ICON,showPopup:showExtensionPopup,activateAction:(owner,id)=>{const a=winAcct(owner);if(!a)throw Error('账号已关闭');return extensionCompat.activate(a.id,id,owner);}});
 ipcMain.handle('host:logout', async e => {
@@ -2716,11 +2791,9 @@ function runNativeWorkingSetTrim(force = false) {
   } catch {}
 }
 setInterval(runNativeWorkingSetTrim, 180000).unref?.();
-let _cachedMemTag = '';
-let _cachedMemTagAt = 0;
 function formatProcessMemTag() {
   const nowTs = Date.now();
-  if (_cachedMemTag && nowTs - _cachedMemTagAt < 15000) return _cachedMemTag;
+  if (globalThis._cachedMemTag && nowTs - (globalThis._cachedMemTagAt || 0) < 15000) return globalThis._cachedMemTag;
   try {
     const metrics = typeof app.getAppMetrics === 'function' ? app.getAppMetrics() : [];
     let mainM = 0, renM = 0, gpuM = 0, netM = 0;
@@ -2732,12 +2805,12 @@ function formatProcessMemTag() {
       else if (m.type === 'Utility') netM += Math.max(4, Math.round(ws * 0.38));
     }
     if (mainM || renM) {
-      _cachedMemTagAt = nowTs;
-      _cachedMemTag = `【前台窗口·对话交互】[前台进程: 1主控${mainM}M+2界面渲染${renM}M ｜ 后台进程: 3显卡加速${gpuM}M+4网络通信${netM}M]`;
-      return _cachedMemTag;
+      globalThis._cachedMemTagAt = nowTs;
+      globalThis._cachedMemTag = `【前台窗口·对话交互】[前台进程: 1主控${mainM}M+2界面渲染${renM}M ｜ 后台进程: 3显卡加速${gpuM}M+4网络通信${netM}M]`;
+      return globalThis._cachedMemTag;
     }
   } catch {}
-  return _cachedMemTag || '【前台窗口·对话交互】[前台: 1主控+2界面渲染 ｜ 后台: 3显卡加速+4网络通信]';
+  return globalThis._cachedMemTag || '【前台窗口·对话交互】[前台: 1主控+2界面渲染 ｜ 后台: 3显卡加速+4网络通信]';
 }
 function applyWindowTaskMgrTitle(w, rawSubTitle) {
   if (!w || w.isDestroyed()) return;
@@ -3089,30 +3162,51 @@ ipcMain.handle('host:solveCaptchaAudio', async (e, audioUrl) => {
     if (!/^https:\/\/(?:[a-z0-9-]+\.)*(?:google\.com|recaptcha\.net|gstatic\.com)\//i.test(u)) {
       return { ok: false, error: '无效的语音验证码地址' };
     }
-    const fetchAudio = async fetcher => {
-      const ctl = new AbortController(), tm = setTimeout(() => ctl.abort(), 12000);
+    const fetchAudio = async (fetcher, timeoutMs = 6500) => {
+      const ctl = new AbortController(), tm = setTimeout(() => ctl.abort(), timeoutMs);
       try {
         const res = await fetcher(u, { signal: ctl.signal, cache: 'no-store', credentials: 'omit' });
         if (!res.ok) throw new Error('Audio HTTP ' + res.status);
-        return await res.arrayBuffer();
+        const ab = await res.arrayBuffer();
+        if (!ab || ab.byteLength < 120) throw new Error('Audio empty');
+        return ab;
       } finally { clearTimeout(tm); }
     };
+    const dsPromise = directSession().catch(() => null);
     let audioBuf = null;
     if (e?.sender?.session) {
-      audioBuf = await fetchAudio((url, op) => e.sender.session.fetch(url, op)).catch(() => null);
+      const sessJob = fetchAudio((url, op) => e.sender.session.fetch(url, op), 5500);
+      const fallbackJob = new Promise((resolve, reject) => {
+        const t = setTimeout(async () => {
+          try {
+            const ds = await dsPromise;
+            resolve(await fetchAudio((url, op) => nodeOrDirectFetch(url, op, ds), 6500));
+          } catch (err) { reject(err); }
+        }, 850);
+        sessJob.then(() => clearTimeout(t), () => {});
+      });
+      audioBuf = await Promise.any([sessJob, fallbackJob]).catch(() => null);
     }
     if (!audioBuf) {
-      const ds = await directSession().catch(() => null);
-      audioBuf = await fetchAudio((url, op) => nodeOrDirectFetch(url, op, ds));
+      const ds = await dsPromise;
+      audioBuf = await fetchAudio((url, op) => nodeOrDirectFetch(url, op, ds), 8000);
     }
     if (!audioBuf || !audioBuf.byteLength) return { ok: false, error: '语音文件为空' };
-    const ds = await directSession().catch(() => null);
-    let finalTranscript = '';
-    for (const witKey of ['JVHWCNWJLWLGN6MFALYLHAPKUFHMNTAC', '2462825872496115']) {
-      const ctl = new AbortController(), tm = setTimeout(() => ctl.abort(), 14000);
-      let witText = '';
+    const ds = await dsPromise;
+    const parseWitTranscript = witText => {
+      if (!witText) return '';
+      const matches = [...String(witText).matchAll(/"_?text"\s*:\s*"([^"]*)"/g)].map(m => m[1].trim()).filter(Boolean);
+      if (matches.length) return matches[matches.length - 1];
+      let found = '';
+      for (const line of String(witText).split(/\r?\n/).map(x => x.trim()).filter(Boolean)) {
+        try { const j = JSON.parse(line); if (j.text || j._text) { found = j.text || j._text; if (j.is_final) break; } } catch {}
+      }
+      return found;
+    };
+    const postWit = async (fetcher, witKey, timeoutMs = 8000) => {
+      const ctl = new AbortController(), tm = setTimeout(() => ctl.abort(), timeoutMs);
       try {
-        const witRes = await nodeOrDirectFetch('https://api.wit.ai/speech?v=20220622', {
+        const witRes = await fetcher('https://api.wit.ai/speech?v=20220622', {
           method: 'POST',
           headers: {
             Authorization: 'Bearer ' + witKey,
@@ -3120,18 +3214,21 @@ ipcMain.handle('host:solveCaptchaAudio', async (e, audioUrl) => {
           },
           body: Buffer.from(audioBuf),
           signal: ctl.signal,
-        }, ds);
-        witText = await witRes.text();
-      } catch {} finally { clearTimeout(tm); }
-      if (!witText) continue;
-      const matches = [...witText.matchAll(/"_?text"\s*:\s*"([^"]*)"/g)].map(m => m[1].trim()).filter(Boolean);
-      if (matches.length) {
-        finalTranscript = matches[matches.length - 1];
-        break;
-      }
-      for (const line of witText.split(/\r?\n/).map(x => x.trim()).filter(Boolean)) {
-        try { const j = JSON.parse(line); if (j.text || j._text) { finalTranscript = j.text || j._text; if (j.is_final) break; } } catch {}
-      }
+        });
+        const txt = parseWitTranscript(await witRes.text());
+        if (!txt) throw new Error('Empty transcript');
+        return txt;
+      } finally { clearTimeout(tm); }
+    };
+    let finalTranscript = '';
+    for (const witKey of ['JVHWCNWJLWLGN6MFALYLHAPKUFHMNTAC']) {
+      try {
+        const jobs = [postWit((url, op) => nodeOrDirectFetch(url, op, ds), witKey, 8500)];
+        if (e?.sender?.session) {
+          jobs.unshift(postWit((url, op) => e.sender.session.fetch(url, op), witKey, 8500));
+        }
+        finalTranscript = await Promise.any(jobs);
+      } catch {}
       if (finalTranscript) break;
     }
     let cleanText = String(finalTranscript || '').replace(/[^a-zA-Z0-9\s]/g, '').trim().toLowerCase();
@@ -3313,24 +3410,47 @@ function syncSiblingInstallDirs() {
     const curAsar = path.join(curDir, 'resources', 'app.asar');
     if (!fs.existsSync(curAsar)) return;
     const curStat = fs.statSync(curAsar);
-    const candidates = [
+    const candidates = [...new Set([
+      process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, 'Programs', 'Arena Client') : '',
       process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, 'Programs', 'Brana AI') : '',
       process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, 'Programs', 'Brana') : '',
       process.env.ProgramFiles ? path.join(process.env.ProgramFiles, 'Brana AI') : '',
-    ].filter(Boolean);
+      'C:\\Program Files\\Brana AI',
+      'D:\\Program Files\\Brana AI',
+      'E:\\Program Files\\Brana AI',
+      'F:\\Program Files\\Brana AI',
+    ].filter(Boolean))];
     for (const dir of candidates) {
       try {
         if (path.resolve(dir).toLowerCase() === path.resolve(curDir).toLowerCase()) continue;
         const dstExe = path.join(dir, path.basename(process.execPath));
         const dstAsar = path.join(dir, 'resources', 'app.asar');
-        if (!fs.existsSync(dstExe) || !fs.existsSync(dstAsar)) continue;
-        const dstStat = fs.statSync(dstAsar);
-        if (dstStat.size !== curStat.size || Math.abs(dstStat.mtimeMs - curStat.mtimeMs) > 2000) {
+        if (!fs.existsSync(dstExe) && !fs.existsSync(dstAsar)) continue;
+        const dstStat = fs.existsSync(dstAsar) ? fs.statSync(dstAsar) : null;
+        if (!dstStat || dstStat.size !== curStat.size || Math.abs(dstStat.mtimeMs - curStat.mtimeMs) > 2000) {
+          try {
+            for (const f of fs.readdirSync(dir)) {
+              if (/^BranaAI(-.*)?\.exe$/i.test(f)) {
+                try { fs.unlinkSync(path.join(dir, f)); } catch {}
+              }
+            }
+          } catch {}
+          fs.mkdirSync(path.dirname(dstAsar), { recursive: true });
           const tmpAsar = dstAsar + '.upd-' + process.pid;
           fs.copyFileSync(curAsar, tmpAsar);
           fs.renameSync(tmpAsar, dstAsar);
+          try {
+            const tmpExe = dstExe + '.upd-' + process.pid;
+            fs.copyFileSync(process.execPath, tmpExe);
+            fs.renameSync(tmpExe, dstExe);
+          } catch {}
           const curUnpacked = curAsar + '.unpacked';
           const dstUnpacked = dstAsar + '.unpacked';
+          if (fs.existsSync(dstUnpacked) && typeof fs.rmSync === 'function') {
+            for (const sub of ['gen', 'ui']) {
+              try { fs.rmSync(path.join(dstUnpacked, sub), { recursive: true, force: true }); } catch {}
+            }
+          }
           if (fs.existsSync(curUnpacked) && typeof fs.cpSync === 'function') {
             try { fs.cpSync(curUnpacked, dstUnpacked, { recursive: true, force: true }); } catch {}
           }
@@ -3358,6 +3478,8 @@ function checkPending() {
   if (process.argv.includes('--updated')) {
     updJustCompleted = true;
     setTimeout(syncSiblingInstallDirs, 1500);
+  } else if (process.platform === 'win32' && app.isPackaged) {
+    setTimeout(syncSiblingInstallDirs, 2500);
   }
   try {
     const sessFile = updSessionPath();
@@ -4015,7 +4137,7 @@ const poolProbes=createPoolProbeRunner(async (e, o, job) => {
     job.stage('probing');
     const ds = await directSession().catch(() => null);
     const dsFetch = (u, op) => nodeOrDirectFetch(u, op, ds);
-    const pOpt = { ...purityCacheOpt(ds), forcePurity: pips.length <= 4, fastBatch: pips.length > 4 };
+    const pOpt = { ...purityCacheOpt(ds), forcePurity: o?.forcePurity === true || pips.length <= 12, fastBatch: o?.fastBatch === true };
     const queue = [...directCands];
     const hasValidVless = Boolean(parseVless(o?.link));
     const runDirectWorker = async () => {
@@ -5779,10 +5901,14 @@ app.whenReady().then(async () => {
   if (dbRestored) { try { saveDB(); } catch {} }
   try { themeWas = DB.shared?.prefs?.theme; syncThemeSource(); } catch {} showSplash(); loadBundle(); menu();
   gProbe().catch(() => {}); setInterval(() => gProbe().catch(() => {}), 5 * 60e3);
+  const isAcctBanned = x => Boolean(x && (x.ban || x.banned || x.status?.ban || x.status?.banned));
   const ids = (DB.open || []).filter(id => acct(id));
   if (!ids.length) ids.push(DB.last && acct(DB.last) ? DB.last : DB.accounts[0].id);
-  const savedLast = (DB.last && ids.includes(DB.last)) ? DB.last : ids[0];
-  const bootIds = (updRestoredOpen && updRestoredOpen.length > 1) ? ids : (!app.isPackaged || ids.length <= 4 ? ids : [savedLast]);
+  const healthyAlt = (DB.accounts || []).find(x => x && x.id && !isAcctBanned(x) && x.status?.loggedIn !== false);
+  const savedLastRaw = (DB.last && ids.includes(DB.last)) ? DB.last : ids[0];
+  const savedLast = (healthyAlt && isAcctBanned(acct(savedLastRaw))) ? healthyAlt.id : savedLastRaw;
+  let bootIds = (updRestoredOpen && updRestoredOpen.length > 1) ? ids : (!app.isPackaged || ids.length <= 4 ? ids : [savedLast]);
+  if (bootIds.length === 1 && isAcctBanned(acct(bootIds[0])) && healthyAlt) bootIds = [healthyAlt.id];
   DB.open = [...bootIds];
   DB.last = savedLast;
   try { saveDB(); } catch {}
@@ -5807,6 +5933,7 @@ app.whenReady().then(async () => {
             const ses = prepSession(a);
             try {
               const w = wins.get(a.id);
+              if (w && !w.isDestroyed() && (w.webContents.isLoading() || ses.__routeApplying)) continue;
               if (!w || w.isDestroyed()) await applyProxy(a);
               await refreshStatus(a, ses);
             } catch {} finally {
@@ -5822,7 +5949,7 @@ app.whenReady().then(async () => {
         saveDB();
       }
     } catch {}
-  }, 1000).unref?.();
+  }, 5500).unref?.();
   setTimeout(async () => {
     try {
       const userData = app.getPath('userData');

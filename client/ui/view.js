@@ -4719,13 +4719,12 @@ const UI = {
       }
       let curIp = typeof IP !== 'undefined' ? ((!IP.err && IP.ip) || a.status?.ip || '') : (a.status?.ip || '');
       if (!curIp && !a.proxyIp && !a.proxy && !(typeof IP !== 'undefined' && IP.err)) return true;
-      let ipRep = (typeof IPRep !== 'undefined' && IPRep.cur) ? IPRep.cur(a, curIp) : null;
       const isTrusted = Boolean(typeof IPRep !== 'undefined' && IPRep.trusted && ((a.proxyIp && IPRep.trusted(a.proxyIp)) || (curIp && IPRep.trusted(curIp))));
-      let isPure = Boolean(isTrusted || (ipRep && ipRep.label === '纯净' && (ipRep.pct == null || ipRep.pct >= 75) && !(typeof IP !== 'undefined' && IP.err)));
-      if (isPure) return true;
+      if (isTrusted) return true;
 
+      let ipRep = (typeof IPRep !== 'undefined' && IPRep.cur) ? IPRep.cur(a, curIp) : null;
       if (!(typeof IP !== 'undefined' && IP.err) && typeof IPRep !== 'undefined' && typeof IPRep.ensurePreSendPure === 'function') {
-        const pre = await IPRep.ensurePreSendPure({ timeoutMs: 1200 }).catch(() => null);
+        const pre = await IPRep.ensurePreSendPure({ timeoutMs: 2400 }).catch(() => null);
         if (pre?.pure || pre?.switched) {
           if (pre?.switched) { try { Recaptcha.clearCache?.(); } catch {} }
           return true;
@@ -4733,10 +4732,9 @@ const UI = {
         a = this.host?.account || a;
         curIp = typeof IP !== 'undefined' ? ((!IP.err && IP.ip) || pre?.eg || a.status?.ip || curIp) : (pre?.eg || curIp);
         ipRep = IPRep.cur ? IPRep.cur(a, curIp) : ipRep;
-        isPure = Boolean(isTrusted || (ipRep && ipRep.label === '纯净' && (ipRep.pct == null || ipRep.pct >= 75) && !(typeof IP !== 'undefined' && IP.err)));
-        if (isPure) return true;
-        if (ipRep?.label === '未评估' && (!ipRep?.sc || !ipRep.sc.known)) return true;
       }
+      const isPure = Boolean(isTrusted || (ipRep && ipRep.label === '纯净' && (ipRep.pct == null || ipRep.pct >= 75) && !(typeof IP !== 'undefined' && IP.err)));
+      if (isPure) return true;
 
       const statusParts = [
         ipRep?.label || (typeof IP !== 'undefined' && IP.err ? '连接异常' : '未评估'),

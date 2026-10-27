@@ -18,7 +18,7 @@ function setupExtensions({BrowserWindow,ipcMain,dialog,store,accountFor,navigate
     const existing=[...windows.values()].find(x=>x.id===a.id);
     if(existing&&!existing.window.isDestroyed()){existing.window.show();existing.window.focus();return true;}
     const owner=wc, parent=BrowserWindow.fromWebContents(wc);
-    const w=new BrowserWindow({width:780,height:620,minWidth:520,minHeight:360,title:'扩展 · '+a.name,parent,icon,autoHideMenuBar:true,webPreferences:{preload:path.join(__dirname,'extensions-preload.js'),contextIsolation:true,sandbox:true,nodeIntegration:false,partition:'extensions-manager-'+wc.id}});
+    const w=new BrowserWindow({width:780,height:620,minWidth:520,minHeight:360,title:'扩展 · '+a.name,parent,icon,autoHideMenuBar:true,webPreferences:{preload:(()=>{const p=path.join(__dirname,'extensions-preload.js'),u=p.replace(/app\.asar([\\/])/i,'app.asar.unpacked$1');try{if(u!==p&&require('node:fs').existsSync(u))return u;}catch{}return p;})(),contextIsolation:true,sandbox:true,nodeIntegration:false,partition:'extensions-manager-'+wc.id}});
     const entry={id:a.id,owner,window:w}, windowId=w.webContents.id;windows.set(windowId,entry);
     w.webContents.setWindowOpenHandler(()=>({action:'deny'}));
     w.webContents.on('will-navigate',e=>e.preventDefault());

@@ -251,15 +251,20 @@ const RegionIP = {
       if(v.hsig!==sig){v.hsig=sig;
         // 一行：国旗 + 国家代码 + IP + 实时延迟（不再写「日本」、不再列线路小字；不右对齐，右边不留大空白）
         const code=String(IP.loc||cc||'').toUpperCase();
-        const e=a.proxyIp&&typeof Pool!=='undefined'?Pool.d?.ips?.[a.proxyIp]:null,sc=e&&typeof IPRep!=='undefined'?IPRep.score?.(a.proxyIp,e):null,rl=sc?IPRep.label(sc):'';
+        const e=a.proxyIp&&typeof Pool!=='undefined'?Pool.d?.ips?.[a.proxyIp]:null;
+        const curRep=typeof IPRep!=='undefined'&&IPRep.cur?IPRep.cur(a,ip):null;
+        const sc=curRep?.sc||(e&&typeof IPRep!=='undefined'?IPRep.score?.(a.proxyIp,e):null),rl=curRep?.label||(sc?IPRep.label(sc):'');
+        if(ip&&!IP.err&&(rl==='高风险'||rl==='一般')&&typeof IPRep!=='undefined'&&typeof IPRep.check==='function'){
+          try{void IPRep.check({forceOnHighRisk:true});}catch{}
+        }
         const pipNote=a.proxyIp&&ip&&!ip.startsWith(String(a.proxyIp).split(':')[0])?'（入口 '+String(a.proxyIp).split(':')[0]+'）':'';
         // 手机紧凑：第一行「当前 IP 🇯🇵 JP 61.124.1.97」完整显示，延迟 / 纯净度 / 住宅等标签放第二行
         v.ipline.replaceChildren(v.title,h('span',{class:'rip-flag'},f),...(code?[h('span',{class:'rip-cc'},code)]:[]),h('b',{title:ip+(pipNote?' '+pipNote:'')},(ip||(IP.err?'出口检测失败':'正在获取…'))+pipNote));
         const chips=[
           isOff?h('span',{class:'rip-chip bad'},arBusy?'检测到连接超时 · 正在自动切换最优节点 / ProxyIP…':'无法连接 · 请切换节点（点右上角 × 可直接离线查阅）'):null,
           ms&&!rttTimeout?h('span',{class:'rip-chip dly '+(ms<300?'d-good':ms<600?'d-mid':'d-bad'),title:'实际延迟（节点 + ProxyIP）\n'+(typeof IP!=='undefined'&&IP.rttTip?IP.rttTip():'')},ms+' ms · 实时'):rttTimeout?h('span',{class:'rip-chip dly d-fail',title:'当前线路实时探测超时'},'超时 · 实时'):null,
-          rl&&rl!=='未评估'?h('span',{class:'rip-chip risk '+(rl==='纯净'?'r-good':rl==='一般'?'r-mid':rl==='高风险'?'r-bad':'r-none'),title:'纯净度 '+sc.s+'%'},rl+' '+Math.round(sc.s)+'%'):null,
-          (()=>{const x=e&&typeof IPRep!=='undefined'&&IPRep.kind?IPRep.kind?.(a.proxyIp,e):null;return x?h('span',{class:'rip-chip ipt '+x.c,title:x.why},x.t):null;})()].filter(Boolean);
+          rl&&rl!=='未评估'&&sc?h('span',{class:'rip-chip risk '+(rl==='纯净'?'r-good':rl==='一般'?'r-mid':rl==='高风险'?'r-bad':'r-none'),title:'纯净度 '+sc.s+'%'},rl+' '+Math.round(sc.s)+'%'):null,
+          (()=>{const x=curRep?.kind||(e&&typeof IPRep!=='undefined'&&IPRep.kind?IPRep.kind?.(a.proxyIp,e):null);return x?h('span',{class:'rip-chip ipt '+x.c,title:x.why},x.t):null;})()].filter(Boolean);
         v.chips.replaceChildren(...chips); v.chips.hidden=!chips.length;
       }
     }

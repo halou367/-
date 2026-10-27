@@ -4243,3 +4243,113 @@ test('Task 64 (v2.0.0-beta.2): Inline HTML preview truncation healing, builtinRe
   assert.ok(mainSrc.includes('provisionalReg: true') && authSrc.includes('delete a.provisionalReg;'));
   assert.ok(capSrc.includes('人机验证进行中…') && !capSrc.includes('千面助手'));
 });
+
+test('Task 65 (v2.0.1): Real-time IPPure purity verification, 10-item viewport dropdown probing + impure quarantine cooldown, pre-send purity gate, and banned-account startup recovery', () => {
+  const vm = require('node:vm');
+  const mainSrc = read('src/main.js');
+  const bootSrc = read('ui/boot.js');
+  const rnSrc = read('src/route-native.js');
+  const rpSrc = read('ui/route-policy.js');
+  const iprepSrc = read('ui/iprep.js');
+  const poolSrc = read('ui/pool.js');
+  const nrSrc = read('ui/node-routes.js');
+  const ripSrc = read('ui/region-ip.js');
+  const viewSrc = read('ui/view.js');
+  const coreSrc = read('ui/core.js');
+  const evalCoreSrc = read('ui/eval-core.js');
+  const envCheckSrc = read('ui/env-check.js');
+  const routeSupportSrc = read('android/app/src/main/java/ai/arena/client/RouteSupport.java');
+  const mainActSrc = read('android/app/src/main/java/ai/arena/client/MainActivity.java');
+  const RoutePolicy = require('../ui/route-policy.js');
+
+  // 1. IPPure top-level data.type & data.is_residential parsing + monotonic x-t + Scamalytics/ProxyCheck fallback
+  assert.ok(rnSrc.includes('lt: entry?.lt || 0'));
+  assert.ok(rnSrc.includes('const asnType = String(d.type || d.asn?.type || \'\')'));
+  assert.ok(rnSrc.includes('async function _scamalyticsDirect(qIp, ms = 2600, signal'));
+  assert.ok(routeSupportSrc.includes('static JSONObject queryIppureSigned(String qIp, int tmo)'));
+  assert.ok(mainActSrc.includes('RouteSupport.purityDirect('));
+
+  // 2. Datacenter/hosting IPs (e.g. 185.66.164.4) with basicOnly fallback never fake 84% pure; verified IPPure dc:true with fs=3 scores 44% (高风险)
+  const poolData = {
+    v: 1,
+    ips: {
+      '185.66.164.4:443': { ok: true, loc: 'NL', eg: '185.66.164.4', ms: 62 },
+      '185.66.164.4:2053': { ok: true, loc: 'NL', eg: '185.66.164.4', ms: 65 },
+    },
+    rep: {
+      '185.66.164.4': {
+        a: 1792400000000,
+        h: true,
+        px: false,
+        m: false,
+        isp: 'FT Systems Ltd',
+        pu: { fs: 14, ip: '185.66.164.4', res: false, bc: false, dc: true, org: 'FT Systems Ltd', basicOnly: 1 },
+      },
+    },
+  };
+  assert.equal(RoutePolicy.reputationOK(poolData, '185.66.164.4:443', poolData.ips['185.66.164.4:443'], 1792450000000), false, 'Hosting IP with basicOnly fallback must not pass reputationOK');
+
+  const poolCtx = vm.createContext({
+    console, setTimeout: () => 0, clearTimeout: () => {}, now: () => 1792450000000, sleep: async () => {},
+    cleanErr: e => String(e?.message || e), regionLabel: x => x, ccF: x => x, REGION_NAME: x => x,
+    h: () => ({ append() {}, replaceChildren() {}, classList: { add() {} }, remove() {} }),
+    document: { body: { append() {} }, querySelector: () => null }, toast: () => {}, isVless: p => /^vless:/i.test(p || ''),
+    UI: { host: { account: null } }, Bus: { emit() {}, on: () => () => {} }, Chats: new Map(),
+    Store: { get: (_k, d) => d, set() {} }, Nodes: { accts: [], refreshAccts: async () => {}, list: [] },
+    RouteState: require('../ui/route-state'), Host: { shared: async () => poolData },
+  });
+  vm.runInContext(poolSrc.slice(poolSrc.indexOf('const Pool ='), poolSrc.indexOf('// 节点在编辑器里改了')) + ';this.Pool=Pool;', poolCtx);
+  vm.runInContext(iprepSrc.slice(0, iprepSrc.indexOf('// 后台：启动 1 分钟后')) + ';this.IPRep=IPRep;', poolCtx);
+  poolCtx.Pool.d = JSON.parse(JSON.stringify(poolData));
+
+  const scBasic = poolCtx.IPRep.score('185.66.164.4:443', poolCtx.Pool.d.ips['185.66.164.4:443']);
+  assert.equal(scBasic.known, false, 'basicOnly hosting IP must stay unverified (known: false)');
+  assert.ok(scBasic.s < 75, 'basicOnly hosting IP must not score >= 75 (was 84%)');
+
+  // Once real IPPure data arrives (dc: true, res: false, fs: 3), score is 44% (高风险)
+  Object.assign(poolCtx.Pool.d.rep['185.66.164.4'], { a: 1792400000000, h: true, px: true, pu: { fs: 37, ip: '185.66.164.4', res: false, bc: false, dc: true, org: 'FT Systems Ltd', real: 1, via: 'ippure' } });
+  poolCtx.IPRep.invalidate();
+  const scReal = poolCtx.IPRep.score('185.66.164.4:443', poolCtx.Pool.d.ips['185.66.164.4:443']);
+  assert.equal(scReal.known, true);
+  assert.equal(scReal.s, 44);
+  assert.equal(scReal.tier, 'bad');
+  assert.equal(poolCtx.IPRep.label(scReal), '高风险');
+
+  // 3. Impure quarantine cooldown & recovery in Pool
+  assert.ok(poolSrc.includes("else if (kind === 'impure')"));
+  assert.ok(poolSrc.includes("coolTemporarily(d, k, kind = 'rc', egIp = '', why = '')"));
+  poolCtx.Pool.coolTemporarily(poolCtx.Pool.d, '185.66.164.4:443', 'impure', '185.66.164.4', '纯净度不足');
+  assert.equal(poolCtx.Pool.cooling(poolCtx.Pool.d.ips['185.66.164.4:443']), true, 'Quarantined impure IP must be in cooling state');
+
+  // 4. Viewport 10-item probing on open & scroll in NodeRoutes & RegionIP + pre-send purity gate
+  assert.ok(nrSrc.includes('function visiblePipBatch(limit=10'));
+  assert.ok(nrSrc.includes("pipList.addEventListener('scroll'"));
+  assert.ok(ripSrc.includes('const liveEg=IPRep.normIp?.(IP.ip)||IP.ip;'));
+  assert.ok(viewSrc.includes('const pre = await IPRep.ensurePreSendPure({ timeoutMs: 2400 })'));
+  assert.ok(coreSrc.includes('IPRep.ensurePreSendPure({ timeoutMs: 2400 })'));
+  assert.ok(evalCoreSrc.includes('IPRep.ensurePreSendPure({ timeoutMs: 2400 })'));
+  assert.ok(envCheckSrc.includes('IPRep.check({ forceOnHighRisk: true })'));
+
+  // 5. Banned-account startup recovery (compactPipPool on loadDB, skip banned cur on close, 12s boot loader watchdog, immediate boot.js fallback)
+  assert.ok(mainSrc.includes('DB.shared.pippool = compactPipPool(DB.shared.pippool)'));
+  assert.ok(mainSrc.includes('if (cur === a.id && a.ban) {'));
+  assert.ok(mainSrc.includes('if(st!==\'ready\'&&st!==\'browse\')'));
+  assert.ok(bootSrc.includes('const coldBanned = Boolean(UI.host?.account?.ban || (cmCold && cmCold.id === UI.host?.account?.id && cmCold.banned === true));'));
+  assert.ok(bootSrc.includes("setTimeout(() => r({ state: 'offline', reason: 'timeout' }), 6000)"));
+
+  // 6. Consistent 44% purity before & after connecting (entry host:port vs bare exit IP) & preload/bundle upgrade protection
+  poolCtx.Pool.d.ips['185.66.164.51:443'] = { ip: '185.66.164.51', port: '443', loc: 'GB', eg: '185.66.164.4', ms: 210, ok: true };
+  poolCtx.Pool.d.rep['185.66.164.4'] = { a: 1793088000000, h: true, px: true, isp: 'Iomart Managed Services Limited', pu: { fs: 3, ip: '185.66.164.4', res: false, bc: false, dc: true, org: 'Perfecto Mobile UK LTD', real: 1, via: 'ippure' } };
+  poolCtx.IPRep.invalidate();
+  const scBeforeConnect = poolCtx.IPRep.score('185.66.164.51:443', poolCtx.Pool.d.ips['185.66.164.51:443']);
+  const scAfterConnect = poolCtx.IPRep.score('185.66.164.4');
+  assert.equal(scBeforeConnect.s, 44, 'Proxy+hosting exit with fs:3 dc:true must score 44% before connecting (never 88% or 84%)');
+  assert.equal(scAfterConnect.s, 44, 'Bare exit IP lookup after connecting must match 44%');
+
+  const bundleSrc = fs.readFileSync(path.join(__dirname, '..', 'src', 'bundle.js'), 'utf8');
+  const afterPackSrc = fs.readFileSync(path.join(__dirname, '..', 'scripts', 'after-pack.js'), 'utf8');
+  const extCompatPreloadSrc = fs.readFileSync(path.join(__dirname, '..', 'src', 'extension-compat-preload.js'), 'utf8');
+  assert.ok(bundleSrc.includes("txt.includes('const VERSION = ' + JSON.stringify(version || ''))"));
+  assert.ok(afterPackSrc.includes('delete node.unpacked;'));
+  assert.ok(extCompatPreloadSrc.includes("typeof contextBridge?.executeInMainWorld === 'function'"));
+});

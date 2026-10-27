@@ -3162,7 +3162,7 @@ const EvalEngine = (() => {
       let v3Token = null;
       let v2Token = opts.v2 || null;
       const prePureTask = (typeof IPRep !== 'undefined' && typeof IPRep.ensurePreSendPure === 'function')
-        ? IPRep.ensurePreSendPure({ timeoutMs: 1200 }).catch(() => null)
+        ? IPRep.ensurePreSendPure({ timeoutMs: 2400 }).catch(() => null)
         : Promise.resolve(null);
       if (!v2Token && typeof Recaptcha !== 'undefined') {
         const v3IpBefore = (typeof IP !== 'undefined' && IP.ip) || '';
@@ -4165,7 +4165,7 @@ const EvalEngine = (() => {
     let v3Token = null;
     try {
       const prePureTask = (typeof IPRep !== 'undefined' && typeof IPRep.ensurePreSendPure === 'function')
-        ? IPRep.ensurePreSendPure({ timeoutMs: 1200 }).catch(() => null)
+        ? IPRep.ensurePreSendPure({ timeoutMs: 2400 }).catch(() => null)
         : Promise.resolve(null);
       if (typeof Recaptcha !== 'undefined') {
         const v3IpBefore = (typeof IP !== 'undefined' && IP.ip) || '';

@@ -4,7 +4,7 @@
 const {contextBridge, ipcRenderer} = require('electron');
 const RPC='brana:extension-compat:call', EVENT='brana:extension-compat:event', ACK='brana:extension-compat:ack';
 try {
-  const allowed=contextBridge.executeInMainWorld({func:()=>{
+  const allowed = (typeof location === 'undefined' || location.protocol === 'chrome-extension:') && typeof contextBridge?.executeInMainWorld === 'function' && contextBridge.executeInMainWorld({func:()=>{
     try{return location.protocol==='chrome-extension:'&&/^[a-p]{32}$/.test(chrome.runtime.id);}catch{return false;}
   }});
   if(allowed) contextBridge.executeInMainWorld({

@@ -22,7 +22,7 @@ let _h2RiskExhaustedUntil = 0;
 let _pcExhaustedUntil = 0;
 let _ipApiDownUntil = 0;
 let _scExhaustedUntil = 0;
-const HOSTING_ORG_RE = /akile|baxet|dromatics|hostkey|cloudflare|oracle|amazon|aws|google|microsoft|azure|linode|akamai|vultr|digitalocean|hetzner|ovh|choopa|constant company|datacamp|contabo|zenlayer|cogent|hurricane|m247|aceville|6 collyer quay|tencent|alibaba|alicloud|huawei|ucloud|dmit|bandwagon|it7|kurun|cera|hll llc|assertivenet|ddos-guard|selectel|aeza|firstbyte|melbicom|pq\.hosting|stark industries|\bace\b|datawave|yeahtech|yeah\s*tech|ipxo|sondercloud|netcup|a2b|gcore|ufovps|packethub|psychz|sharktech|quadranet|colocrossing|frantech|buyvm|worldstream|cherry\s*servers|latitude|equinix|kamatera|upcloud|scaleway|leaseweb|ionos|fornex|kagoya|webhorizon|timeweb|racknerd|alphavps|gthost|365\.partners|global connectivity|nsc-solutions|ibcs|fbw networks|velia\.net|iphoster|cgi global|virtua systems|3nt solutions|bzsolutions|baykov|netrouting|alice networks|netranex|chsl one|beafort|hosting|hoster|datacenter|data\s*center|server|vps|cloud|colocation|dedicated/i;
+const HOSTING_ORG_RE = /iomart|perfecto|ft systems|routerhosting|sculk|gtelcom|nuxtcloud|a100 row|snowd|first server|xorek|virtuasys|akile|baxet|dromatics|hostkey|cloudflare|oracle|amazon|aws|google|microsoft|azure|linode|akamai|vultr|digitalocean|hetzner|ovh|choopa|constant company|datacamp|contabo|zenlayer|cogent|hurricane|m247|aceville|6 collyer quay|tencent|alibaba|alicloud|huawei|ucloud|dmit|bandwagon|it7|kurun|cera|hll llc|assertivenet|ddos-guard|selectel|aeza|firstbyte|melbicom|pq\.hosting|stark industries|\bace\b|datawave|yeahtech|yeah\s*tech|ipxo|sondercloud|netcup|a2b|gcore|ufovps|packethub|psychz|sharktech|quadranet|colocrossing|frantech|buyvm|worldstream|cherry\s*servers|latitude|equinix|kamatera|upcloud|scaleway|leaseweb|ionos|fornex|kagoya|webhorizon|timeweb|racknerd|alphavps|gthost|365\.partners|global connectivity|nsc-solutions|ibcs|fbw networks|velia\.net|iphoster|cgi global|virtua systems|3nt solutions|bzsolutions|baykov|netrouting|alice networks|netranex|chsl one|beafort|hosting|hoster|datacenter|data\s*center|server|vps|cloud|colocation|dedicated/i;
 const TELECOM_ORG_RE = /\b(?:free sas|proxad|orange|wanadoo|sfr|bouygues|deutsche telekom|vodafone|british telecommunications|\bbt\b|virgin media|sky uk|talktalk|comcast|xfinity|verizon|at&t|charter|spectrum|cox communications|centurylink|lumen|frontier|ziply|sonic|astound|rcn|wideopenwest|windstream|kinetic|mediacom|optimum|altice|cablevision|consolidated|fidium|tds telecom|hawaiian telcom|gci communication|cincinnati bell|altafiber|bell canada|rogers|telus|shaw|ntt|ocn|kddi|au one|softbank|bbtec|nuro|so-net|korea telecom|\bkt\b|sk broadband|lg uplus|chunghwa|hinet|taiwan mobile|far easitone|pccw|hkt|hong kong telecommunications|hkbn|smartone|singtel|starhub|m1 limited|telstra|optus|tpg|spark nz|kpn|ziggo|proximus|telenet|swisscom|sunrise|a1 telekom|telia|telenor|elisa|dna oy|movistar|telefonica|masmovil|digi spain|telecom italia|\btim\b|fastweb|wind tre|meo|nos comunica|ote|cosmote|turk telekom|turkcell|beeline|mts|megafon|rostelecom|kyivstar|ukrtelecom|polkomtel|vectra|netia|upc|o2|three|ee limited)\b/i;
 
 function _getH2Session(host) {
@@ -131,7 +131,7 @@ async function _ippureH2Host(host, qIp, ms = 3200, signal, optV4Host = '') {
     const xk = hdrs?.['x-k'], xt = parseInt(hdrs?.['x-t'], 10);
     if (xk) {
       entry.xk = String(xk);
-      if (Number.isFinite(xt)) { entry.xt = xt; entry.lt = Date.now(); }
+      if (Number.isFinite(xt)) { entry.xt = xt; entry.lt = Date.now(); entry.lastT = Math.max(entry.lastT || 0, xt); }
       return true;
     }
     return false;
@@ -145,7 +145,9 @@ async function _ippureH2Host(host, qIp, ms = 3200, signal, optV4Host = '') {
     }
     if (!entry.xk) return null;
     for (let attempt = 0; attempt < 3; attempt++) {
-      const t = Date.now() - (entry.lt || Date.now()) + (entry.xt || Date.now());
+      const rawT = Date.now() - (entry.lt || Date.now()) + (entry.xt || Date.now());
+      const t = Math.max((entry.lastT || entry.xt || 0) + 1, rawT);
+      entry.lastT = t;
       const sig = crypto.createHmac('sha256', entry.xk).update(['GET', 'https://' + host + p, '', t].join('-')).digest('hex');
       const r = await h2Get(p, { 'x-k': entry.xk, 'x-t': t + '-' + sig });
       if (updateToken(r.headers)) continue;
@@ -188,9 +190,10 @@ async function _ippureH2Host(host, qIp, ms = 3200, signal, optV4Host = '') {
     const d = bJson.data;
     ip = String(d.ip || qIp).slice(0, 64);
     org = String(d.asn?.organization || '').slice(0, 40);
-    const asnType = String(d.asn?.type || '').toLowerCase();
-    dc = asnType ? /hosting|datacenter|cloud/i.test(asnType) : Boolean((d.asn?.is_residential === false && HOSTING_ORG_RE.test(org)) || HOSTING_ORG_RE.test(org));
-    res = d.asn?.is_residential !== undefined ? Boolean(d.asn.is_residential && !dc) : (!dc && TELECOM_ORG_RE.test(org));
+    const asnType = String(d.type || d.asn?.type || '').toLowerCase();
+    const isResField = d.is_residential !== undefined ? d.is_residential : d.asn?.is_residential;
+    dc = asnType ? /hosting|datacenter|cloud|vpn|proxy/i.test(asnType) : Boolean((isResField === false && HOSTING_ORG_RE.test(org)) || HOSTING_ORG_RE.test(org));
+    res = isResField !== undefined ? Boolean(isResField && !dc) : (!dc && TELECOM_ORG_RE.test(org));
     bc = !!d.traits?.is_broadcast;
   } else {
     const sc = await _scamalyticsDirect(qIp, Math.min(2200, ms), signal, v4Fallback).catch(() => null);
@@ -282,25 +285,27 @@ async function _fallbackDirectRisk(qIp, ms = 2800, signal, optV4Host = '') {
   let fs;
   if (!sc) {
     if (pcExplicitBad || risk >= 75) fs = Math.max(risk, 55);
+    else if (px) fs = Math.max(38, risk);
     else fs = res ? (6 + (ipHash % 4)) : (dc ? (12 + dcSpread) : (10 + (ipHash % 5)));
   } else if (isVpn || scScore >= 75 || pcRisk >= 75 || blCount >= 2) {
     fs = Math.max(52, scScore, pcRisk, 46 + blCount * 12);
-  } else if (isDc) {
-    fs = Math.max(10 + dcSpread, Math.min(22, 10 + Math.round(scScore * 0.18) + blCount * 6 + dcSpread));
+  } else if (isDc || px) {
+    fs = Math.max(26 + dcSpread, scScore, pcRisk, (px ? 38 : 26) + blCount * 8);
   } else if (isRes) {
-    fs = Math.max(2, Math.min(14, Math.round(scScore * 0.25) || (2 + (ipHash % 4))));
+    fs = Math.max(4, scScore, Math.round(pcRisk * 0.6));
   } else {
-    fs = Math.max(8 + (ipHash % 5), Math.min(20, 8 + Math.round(scScore * 0.2) + (ipHash % 5)));
+    fs = Math.max(16 + (ipHash % 5), scScore, pcRisk);
   }
+  const roundedFs = Math.max(0, Math.min(100, Math.round(fs)));
   return {
-    fs: Math.max(0, Math.min(100, Math.round(fs))),
+    fs: roundedFs,
     ip: qIp,
     res: isRes,
     bc,
     dc: isDc || isVpn,
     org,
-    real: 1,
-    via: 'ippure',
+    ...(sc || roundedFs >= 50 ? { real: 1 } : { basicOnly: 1 }),
+    via: sc ? 'scamalytics' : 'proxycheck',
   };
 }
 async function ippureDirect(targetIp, ms = 3200, signal, opt = null) {
@@ -384,35 +389,20 @@ async function purity(ses, ms=3200, signal, targetIp='', opt=null) {
     ?{ip:qIp,fs:+rep.pu.fs,res:!!rep.pu.res,bc:!!rep.pu.bc,dc:!!rep.pu.dc,org:String(rep.pu.org||''),...(rep.pu.real?{real:1}:{}),...(rep.pu.via?{via:rep.pu.via}:{})}
     :null;
   const cmExit=opt?.cmliuExit||null;
-  let cachedIpa=(qIp&&rep?.a&&(nowMs-(+rep.a||0)<7*86400e3))
+  let cachedIpa=(!opt?.forcePurity&&qIp&&rep?.a&&(nowMs-(+rep.a||0)<7*86400e3))
     ?{ip:qIp,h:!!rep.h,px:!!rep.px,m:!!rep.m,isp:String(rep.isp||''),as:String(rep.as||'')}
     :null;
-  if(!cachedIpa&&qIp&&cmExit&&(cmExit.asOrganization||cmExit.org||cmExit.asn)){
+  let cmFallbackIpa=null;
+  if(qIp&&cmExit&&(cmExit.asOrganization||cmExit.org||cmExit.asn)){
     const orgStr=String(cmExit.asOrganization||cmExit.org||'').replace(/^AS\d+\s+/i,'').trim().slice(0,40);
     const asnStr=cmExit.asn?'AS'+cmExit.asn:'';
     const bmScore=Number(cmExit.botManagement?.score);
     const isBotProxy=Boolean(cmExit.botManagement?.corporateProxy||(Number.isFinite(bmScore)&&bmScore>0&&bmScore<30));
     const isHosting=HOSTING_ORG_RE.test(orgStr+' '+asnStr)||Boolean(cmExit.botManagement?.corporateProxy);
-    cachedIpa={ip:qIp,h:isHosting,px:isBotProxy,m:false,isp:orgStr,as:asnStr};
+    cmFallbackIpa={ip:qIp,h:isHosting,px:isBotProxy,m:false,isp:orgStr,as:asnStr};
   }
   const fetchPure=async()=>{
-    if(cachedPu&&(cachedPu.via==='ippure'||cachedPu.fs>=50||(!ses&&cachedPu.via==='scamalytics')))return cachedPu;
-    if(opt?.fastBatch&&qIp&&(cmExit||cachedIpa)){
-      const bmScore=Number(cmExit?.botManagement?.score);
-      const bmCorp=Boolean(cmExit?.botManagement?.corporateProxy);
-      const orgStr=String(cachedIpa?.isp||cmExit?.asOrganization||cmExit?.org||'').replace(/^AS\d+\s+/i,'').trim().slice(0,40);
-      const asnStr=String(cachedIpa?.as||(cmExit?.asn?'AS'+cmExit.asn:'')).trim();
-      const isHosting=Boolean(cachedIpa?.h||bmCorp||HOSTING_ORG_RE.test(orgStr+' '+asnStr));
-      const isTelecom=!isHosting&&Boolean(cachedIpa?.m||TELECOM_ORG_RE.test(orgStr));
-      const isBadBot=Boolean(cachedIpa?.px||bmCorp||(Number.isFinite(bmScore)&&bmScore>0&&bmScore<30));
-      const ipHash=qIp.split(/[.:]/).reduce((acc,part)=>(acc*31+(parseInt(part,10)||0))%97,0);
-      let fs;
-      if(isBadBot)fs=Math.max(58,Math.min(92,100-(Number.isFinite(bmScore)?bmScore:20)));
-      else if(isHosting)fs=(Number.isFinite(bmScore)&&bmScore>=85?22:34)+(ipHash%6);
-      else if(isTelecom)fs=(Number.isFinite(bmScore)&&bmScore>=85?4:9)+(ipHash%4);
-      else fs=(Number.isFinite(bmScore)&&bmScore>=85?10:16)+(ipHash%5);
-      return {ip:qIp,fs,res:Boolean(!isHosting&&!isBadBot&&isTelecom),bc:Boolean(isBadBot),dc:Boolean(isHosting||isBadBot),org:orgStr,real:1,via:'ippure'};
-    }
+    if(cachedPu&&!cachedPu.basicOnly&&cachedPu.real&&cachedPu.via==='ippure')return cachedPu;
     let dp=null;
     if(qIp&&(opt?.directIppure===true||!ses)){
       dp=await ippureDirect(qIp,ms,signal,opt);
@@ -424,9 +414,31 @@ async function purity(ses, ms=3200, signal, targetIp='', opt=null) {
     }
     return dp||cachedPu||null;
   };
+  const fetchIpa=async()=>{
+    if(cachedIpa){
+      if(cmFallbackIpa){
+        cachedIpa.h=Boolean(cachedIpa.h||cmFallbackIpa.h);
+        cachedIpa.px=Boolean(cachedIpa.px||cmFallbackIpa.px);
+        cachedIpa.isp=cachedIpa.isp||cmFallbackIpa.isp;
+        cachedIpa.as=cachedIpa.as||cmFallbackIpa.as;
+      }
+      return cachedIpa;
+    }
+    const liveIpa=await ipapi(ses,ms,signal,targetIp,opt?.directFetch||null);
+    if(liveIpa&&cmFallbackIpa){
+      return {
+        ...liveIpa,
+        h:Boolean(liveIpa.h||cmFallbackIpa.h),
+        px:Boolean(liveIpa.px||cmFallbackIpa.px),
+        isp:liveIpa.isp||cmFallbackIpa.isp,
+        as:liveIpa.as||cmFallbackIpa.as,
+      };
+    }
+    return liveIpa||cmFallbackIpa||null;
+  };
   let [pure,ipa]=await Promise.all([
     fetchPure(),
-    cachedIpa?Promise.resolve(cachedIpa):ipapi(ses,ms,signal,targetIp,opt?.directFetch||null),
+    fetchIpa(),
   ]);
   if(pure&&ipa&&pure.via!=='ippure'){
     if(ipa.px){pure={...pure,dc:true,res:false,fs:Math.max(+pure.fs||0,42)};}

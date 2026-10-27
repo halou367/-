@@ -5885,7 +5885,7 @@ class Chat {
       }
       const canSkipDrain = Boolean(this.loaded && this.lastSeq != null && !this.srvBusy && (this.gacha || opt.hitl || wasMidStall || ((this.tcAt || this.endAt || this.recAt) && now() - Math.max(this.tcAt || 0, this.endAt || 0, this.recAt || 0) < 180000)));
       const prePureTask = (typeof IPRep !== 'undefined' && typeof IPRep.ensurePreSendPure === 'function')
-        ? IPRep.ensurePreSendPure({ timeoutMs: 1800 }).catch(() => null)
+        ? IPRep.ensurePreSendPure({ timeoutMs: 2400 }).catch(() => null)
         : Promise.resolve(null);
       const v3IpBefore = (typeof IP !== 'undefined' && IP.ip) || '';
       let [v3, di, prePure] = await Promise.all([opt.v2 ? null : Recaptcha.take('chat_submit').catch(() => null), (this.wakeSessionToken ? this.wakeSessionToken() : this.ensureToken()).catch(() => null).then(() => canSkipDrain ? { max: +this.lastSeq, run: false } : this.drain(900)), prePureTask]);
@@ -9195,7 +9195,7 @@ async function createChat0(text, opt = {}) {
     const [v3Tok, prePure] = await Promise.all([
       (opt.gacha ? Recaptcha.v3(CREATE_ACTION) : Recaptcha.take(CREATE_ACTION)).catch(() => null),
       (typeof IPRep !== 'undefined' && typeof IPRep.ensurePreSendPure === 'function')
-        ? IPRep.ensurePreSendPure({ timeoutMs: 1200 }).catch(() => null)
+        ? IPRep.ensurePreSendPure({ timeoutMs: 2400 }).catch(() => null)
         : Promise.resolve(null),
     ]);
     if (prePure?.switched || (v3IpBefore && typeof IP !== 'undefined' && IP.ip && IP.ip !== v3IpBefore)) {

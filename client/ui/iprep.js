@@ -34,7 +34,7 @@ const IPRep = {
     '77.73.71.200',
   ]),
   BLACKLISTED_ASNS: ['AS42532'],
-  HOSTING_ISP_RE: /\b(?:akile|akilecloud|dromatics|akamai|linode|digitalocean|vultr|constant company|choopa|hetzner|ovh|oracle|amazon|aws|google cloud|microsoft|azure|cloudflare|alibaba|aliyun|tencent|aceville|\bace\b|6 collyer quay|huawei|contabo|fornex|ionos|kagoya|webhorizon|cyberverse|brainoza|eurohoster|virterion|kaopu|light\s*node|scaleway|leaseweb|m247|datacamp|cdn77|zenlayer|dmit|veesp|trabia|baxet|waicore|trunk networks|hostkey|timeweb|racknerd|hostpapa|alphavps|livi hosting|terratransit|rocketcloud|datawave|yeahtech|yeah\s*tech|ipxo|sondercloud|netcup|a2b|gcore|ufovps|packethub|psychz|sharktech|quadranet|colocrossing|frantech|buyvm|worldstream|cherry\s*servers|latitude|equinix|kamatera|upcloud|gthost|365\.partners|global connectivity|nsc-solutions|ibcs|fbw networks|velia\.net|iphoster|cgi global|virtua systems|3nt solutions|bzsolutions|baykov|netrouting|alice networks|netranex|chsl one|beafort|hosting|hoster|datacenter|data\s*center|server|vps|cloud|colocation|dedicated)\b/i,
+  HOSTING_ISP_RE: /\b(?:iomart|perfecto|ft systems|routerhosting|sculk|gtelcom|nuxtcloud|a100 row|snowd|first server|xorek|virtuasys|akile|akilecloud|dromatics|akamai|linode|digitalocean|vultr|constant company|choopa|hetzner|ovh|oracle|amazon|aws|google cloud|microsoft|azure|cloudflare|alibaba|aliyun|tencent|aceville|\bace\b|6 collyer quay|huawei|contabo|fornex|ionos|kagoya|webhorizon|cyberverse|brainoza|eurohoster|virterion|kaopu|light\s*node|scaleway|leaseweb|m247|datacamp|cdn77|zenlayer|dmit|veesp|trabia|baxet|waicore|trunk networks|hostkey|timeweb|racknerd|hostpapa|alphavps|livi hosting|terratransit|rocketcloud|datawave|yeahtech|yeah\s*tech|ipxo|sondercloud|netcup|a2b|gcore|ufovps|packethub|psychz|sharktech|quadranet|colocrossing|frantech|buyvm|worldstream|cherry\s*servers|latitude|equinix|kamatera|upcloud|gthost|365\.partners|global connectivity|nsc-solutions|ibcs|fbw networks|velia\.net|iphoster|cgi global|virtua systems|3nt solutions|bzsolutions|baykov|netrouting|alice networks|netranex|chsl one|beafort|hosting|hoster|datacenter|data\s*center|server|vps|cloud|colocation|dedicated)\b/i,
   TELECOM_ISP_RE: /\b(?:free sas|proxad|orange|wanadoo|sfr|bouygues|deutsche telekom|vodafone|british telecommunications|\bbt\b|virgin media|sky uk|talktalk|comcast|xfinity|verizon|at&t|charter|spectrum|cox communications|centurylink|lumen|frontier|bell canada|rogers|telus|shaw|ntt|ocn|kddi|au one|softbank|bbtec|nuro|so-net|korea telecom|\bkt\b|sk broadband|lg uplus|chunghwa|hinet|taiwan mobile|far easitone|pccw|hkt|hkbn|smartone|singtel|starhub|m1 limited|telstra|optus|tpg|spark nz|kpn|ziggo|proximus|telenet|swisscom|sunrise|a1 telekom|telia|telenor|elisa|dna oy|movistar|telefonica|masmovil|digi spain|telecom italia|\btim\b|fastweb|wind tre|meo|nos comunica|ote|cosmote|turk telekom|turkcell|beeline|mts|megafon|rostelecom|kyivstar|ukrtelecom|polkomtel|vectra|netia|upc|o2|three|ee limited)\b/i,
   isToxicBanIp(ip, asn = '') {
     const clean = String(ip || '').trim().replace(/^\[|\]$/g, '').split(':')[0];
@@ -70,8 +70,19 @@ const IPRep = {
   },
   repOf(k, e, d = Pool.d) {
     e ||= d?.ips?.[k];
-    const host = this.hostOf(k, e);
-    const eg = (e?.eg && this.isIpLit(e.eg)) ? this.normIp(e.eg) : host;
+    let host = this.hostOf(k, e);
+    let eg = (e?.eg && this.isIpLit(e.eg)) ? this.normIp(e.eg) : host;
+    if (!e && eg && d?.ips) {
+      for (const [ik, ie] of Object.entries(d.ips)) {
+        if (!ie) continue;
+        const ieEg = (ie.eg && this.isIpLit(ie.eg)) ? this.normIp(ie.eg) : '';
+        const ieHost = this.hostOf(ik, ie);
+        if (ieEg === eg || ieHost === eg) {
+          e = ie;
+          if (ieHost && ieHost !== eg && d?.rep?.[ieHost]) { host = ieHost; break; }
+        }
+      }
+    }
     const rEg = eg ? d?.rep?.[eg] : null;
     const rHost = host && host !== eg ? d?.rep?.[host] : null;
     if (!rEg && !rHost) return { eg: eg || host, host, p: {} };
@@ -128,19 +139,17 @@ const IPRep = {
     if (k && !e) { const _memoHit = this._memo.get(String(k)); if (_memoHit) return _memoHit; }
     const d = Pool.d || {};
     e ||= d?.ips?.[k];
-    const host = this.hostOf(k, e);
-    const eg = (e?.eg && this.isIpLit(e.eg)) ? this.normIp(e.eg) : host;
+    const { eg, host, p } = this.repOf(k, e, d);
     if (!eg) return { s: 0, known: false, why: [], tier: '' };
     const memoKey = host && host !== eg ? eg + '|' + host : eg;
     const m = this._memo.get(memoKey); if (m) { if (k && String(k) !== memoKey) this._memo.set(String(k), m); return m; }
-    const { p } = this.repOf(k, e, d);
     const q = d.rq?.[eg] || (host ? d.rq?.[host] : null);
     const hasPu = Boolean(p.pu && Number.isFinite(+p.pu.fs));
     const orgCombo = (p.isp || '') + ' ' + (p.pu?.org || '');
     const isCloudIsp = this.HOSTING_ISP_RE.test(orgCombo);
     const isTelecomIsp = !isCloudIsp && this.TELECOM_ISP_RE.test(orgCombo);
     const isHosting = Boolean(p.h || p.pu?.dc || isCloudIsp);
-    const hasCleanPu = Boolean(hasPu && ((p.pu.via === 'ippure' && +p.pu.fs <= 24 && !p.pu.bc) || (+p.pu.fs < 20 && (isTelecomIsp || (p.pu.res === true && (!p.px || p.pu.via === 'ippure'))) && !isHosting && !p.pu.bc && !p.pp && (+p.r || 0) < 33)));
+    const hasCleanPu = Boolean(hasPu && ((p.pu.via === 'ippure' && +p.pu.fs <= 24 && !p.pu.bc && !p.px && !p.pp && (+p.r || 0) < 33) || (+p.pu.fs < 20 && (isTelecomIsp || (p.pu.res === true && (!p.px || p.pu.via === 'ippure'))) && !isHosting && !p.pu.bc && !p.pp && (+p.r || 0) < 33)));
     let s = 100, known = false; const why = ['出口 ' + eg];
     const asnStr = [p.as, p.pu?.asn, p.isp, p.pu?.org].filter(Boolean).join(' ');
     const isToxic = this.isToxicBanIp(eg, asnStr) || Boolean(host && this.isToxicBanIp(host, asnStr));
@@ -351,7 +360,7 @@ const IPRep = {
             if (dp && (dp.via === 'ippure' || dp.fs >= 50)) return;
           }
         }
-        if (typeof fetch !== 'function' || Host.ippureDirect) return;
+        if (typeof fetch !== 'function' || (Host.ippureDirect && ip !== this.normIp(typeof IP !== 'undefined' && !IP.err && IP.ip || ''))) return;
         const res = await fetch('https://my.ippure.com/v1/info', { cache: 'no-store' });
         const j = res.ok ? await res.json() : null;
         if (!j || !Number.isFinite(+j.fraudScore)) return;
@@ -661,13 +670,13 @@ const IPRep = {
       if (!k && isChainNode) return { ok: true, skipped: true };
       const fastEntry = k ? Pool.d?.ips?.[k] : null;
       const fastEg = (typeof IP !== 'undefined' && !IP.err && IP.ip) || fastEntry?.eg || '';
-      if ((k || fastEg) && !Pool.banned?.(k) && !(fastEntry && Pool.cooling?.(fastEntry)) && this.hasRecentPass(k || fastEg, fastEntry, 20 * 60e3)) {
-        return { ok: true, pure: true, fastPass: true, score: 92, eg: fastEg };
+      if ((k || fastEg) && !Pool.banned?.(k) && !(fastEntry && Pool.cooling?.(fastEntry)) && this.pure(k || fastEg, fastEntry) && this.hasRecentPass(k || fastEg, fastEntry, 8 * 60e3)) {
+        return { ok: true, pure: true, fastPass: true, score: this.score(k || fastEg, fastEntry).s, eg: fastEg };
       }
-      const timeoutMs = Math.max(600, Math.min(2800, Number(opt?.timeoutMs) || 1800));
-      const traceFresh = Boolean(typeof IP !== 'undefined' && IP.ip && !IP.err && IP.at > 0 && (now() - Math.min(IP.checkedAt || IP.at || 0, IP.at || 0) < 90000));
+      const timeoutMs = Math.max(900, Math.min(3500, Number(opt?.timeoutMs) || 2600));
+      const traceFresh = Boolean(typeof IP !== 'undefined' && IP.ip && !IP.err && IP.at > 0 && (now() - Math.min(IP.checkedAt || IP.at || 0, IP.at || 0) < 45000));
       if ((!traceFresh || !k) && typeof IP !== 'undefined' && typeof IP.ping === 'function') {
-        await Promise.race([IP.ping(true).catch(() => {}), sleep(Math.min(1100, timeoutMs))]);
+        await Promise.race([IP.ping(true).catch(() => {}), sleep(Math.min(1800, timeoutMs))]);
       }
       let e = k ? (Pool.d?.ips?.[k] || null) : null;
       const liveIp = this.normIp((typeof IP !== 'undefined' && !IP.err && IP.at > 0 && IP.ip) || '');
@@ -692,7 +701,7 @@ const IPRep = {
               Host.ippureDirect(eg).catch(() => null),
               v4Host ? Host.ippureDirect(v4Host).catch(() => null) : Promise.resolve(null),
             ]),
-            sleep(Math.min(1100, timeoutMs)).then(() => [null, null]),
+            sleep(Math.min(2200, timeoutMs)).then(() => [null, null]),
           ]);
           if ((dp && Number.isFinite(+dp.fs)) || (dpV4 && Number.isFinite(+dpV4.fs))) {
             await Pool.mutate(d => {
@@ -709,7 +718,7 @@ const IPRep = {
             if (dp && (dp.via === 'ippure' || dp.fs >= 50 || (dp.res && !dp.basicOnly))) gotVerified = true;
           }
         }
-        if (!gotVerified && typeof fetch === 'function' && !(typeof Host !== 'undefined' && typeof Host.ippureDirect === 'function')) {
+        if (!gotVerified && typeof fetch === 'function' && (!(typeof Host !== 'undefined' && typeof Host.ippureDirect === 'function') || Boolean(liveIp && eg === liveIp))) {
           const tunJ = await Promise.race([
             fetch('https://my.ippure.com/v1/info', { cache: 'no-store' }).then(r => r.ok ? r.json() : null).catch(() => null),
             sleep(Math.min(1100, timeoutMs)).then(() => null),
@@ -727,8 +736,8 @@ const IPRep = {
       }
       const liveEntry = liveIp ? { ...(e || {}), eg: liveIp } : e;
       const sc = (k || liveIp) ? this.score(k || liveIp, liveEntry) : { s: 0, known: false };
-      const isBanned = Boolean((k && Pool.banned?.(k)) || (eg && Pool.d?.banEg?.[eg.toLowerCase()]));
-      const isManuallyLocked = Boolean(typeof AutoRoute !== 'undefined' && AutoRoute.manualLockUntil && now() < AutoRoute.manualLockUntil);
+      const isBanned = Boolean((k && Pool.banned?.(k)) || (eg && Pool.d?.banEg?.[eg.toLowerCase()]) || (e && Pool.cooling?.(e)));
+      const isManuallyLocked = false;
       const minRequiredScore = isManuallyLocked ? this.TH : this.PURE;
       const isDirty = isBanned || Boolean(!k && !isChainNode && (!sc.known || sc.s < minRequiredScore)) || Boolean(sc.known ? sc.s < minRequiredScore : sc.s < 68);
       if (!isDirty) return { ok: true, pure: true, score: sc.s, eg };
@@ -783,7 +792,6 @@ const IPRep = {
   async check(opt = {}) {
     try {
       const a = UI.host?.account; if (!a || this.rot || navigator.onLine === false || !isVless(a.proxy)) return;
-      if (typeof AutoRoute !== 'undefined' && AutoRoute.manualLockUntil && now() < AutoRoute.manualLockUntil && !opt?.forceOnError && !opt?.forceOnHighRisk) return;
       await Pool.load();
       const k = a.proxyIp && String(a.proxyIp).trim() || '';
       const e = k ? Pool.d.ips?.[k] : null;
@@ -791,6 +799,7 @@ const IPRep = {
       const liveEntry = liveIp ? { ...(e || {}), eg: liveIp } : e;
       const isChainNode = /\/video\//i.test(a.proxy || '');
       const isRisky = Boolean((k && e && (this.risky(k, e) || this.impure(k, e))) || (liveIp && (this.risky(k || liveIp, liveEntry) || this.impure(k || liveIp, liveEntry))));
+      if (!isRisky && typeof AutoRoute !== 'undefined' && AutoRoute.manualLockUntil && now() < AutoRoute.manualLockUntil && !opt?.forceOnError && !opt?.forceOnHighRisk) return;
       if (!isRisky && liveIp && this.pure(k || liveIp, liveEntry) && (k || isChainNode)) {
         if (e?.banned || e?.gone || e?.ok === false || (k && Pool.d?.ban?.[k.toLowerCase()]) || Pool.d?.banEg?.[liveIp.toLowerCase()]) {
           await Pool.mutate(d => {
@@ -1004,15 +1013,15 @@ const IPRep = {
       if (validPu.length) await Pool.mutate(d => { for (const [ip, dp] of validPu) this.putPu(d, ip, dp); });
     }
     // 兜底收敛：对已完成本轮在线评估但外部深度接口超时的出口，依据已取得的 ASN/ISP/ProxyCheck/欺诈特征完成评分定级，彻底杜绝无限卡在「评估中 ?」
-    const stillUnk = egs.filter(ip => !this.score(ip, { ok: true, eg: ip }).known);
+    const stillUnk = egs.filter(ip => Host.ippureDirect && !this.score(ip, { ok: true, eg: ip }).known);
     if (stillUnk.length) {
       await Pool.mutate(d => {
         d.rep ||= {};
         for (const ip of stillUnk) {
           const p = d.rep[ip] ||= {};
           const org = String(p.pu?.org || p.isp || p.as || '').slice(0, 48);
-          const isCloud = this.isKnownCloudIsp(org) || this.isKnownCloudIsp(p.as || '');
-          const isTele = this.isKnownTelecomIsp(org) && !isCloud;
+          const isCloud = Boolean(this.HOSTING_ISP_RE?.test(org) || this.HOSTING_ISP_RE?.test(p.as || ''));
+          const isTele = Boolean(this.TELECOM_ISP_RE?.test(org) && !isCloud);
           const dc = Boolean(p.h || p.pu?.dc || isCloud || !isTele);
           const explicitAnon = /tor|compromised|malware|botnet/i.test(String(p.pt || ''));
           const rVal = Math.max(0, +p.r || 0);
@@ -1020,12 +1029,13 @@ const IPRep = {
           let ipHash = 0;
           for (let i = 0; i < ip.length; i++) ipHash = ((ipHash << 5) - ipHash + ip.charCodeAt(i)) | 0;
           const dcSpread = Math.abs(ipHash) % 7;
-          let fs;
-          if (this.isToxicBanIp(ip, p.as || p.isp)) fs = 88;
-          else if (px || rVal >= 85) fs = Math.max(55, rVal || 58);
-          else if (!dc && (p.m || isTele)) fs = 4 + (Math.abs(ipHash) % 5);
-          else fs = 11 + dcSpread;
-          this.putPu(d, ip, { fs, ip, res: Boolean(!dc && !px), bc: Boolean(dc && px), dc, org, real: 1, via: 'ippure' });
+          if (this.isToxicBanIp(ip, p.as || p.isp) || px || rVal >= 50) {
+            const fs = this.isToxicBanIp(ip, p.as || p.isp) ? 88 : Math.max(52, rVal || 55);
+            this.putPu(d, ip, { fs, ip, res: false, bc: Boolean(dc && px), dc: true, org, real: 1, via: 'proxycheck' });
+          } else {
+            const fs = (!dc && (p.m || isTele)) ? (12 + (Math.abs(ipHash) % 4)) : (26 + dcSpread);
+            this.putPu(d, ip, { fs, ip, res: Boolean(!dc && !px), bc: Boolean(dc && px), dc, org, basicOnly: 1 });
+          }
         }
       });
     }

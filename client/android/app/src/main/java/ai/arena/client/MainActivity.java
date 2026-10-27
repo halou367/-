@@ -2623,12 +2623,8 @@ public class MainActivity extends Activity {
                         int asnNum = exit != null ? exit.optInt("asn", 0) : j.optInt("asn", 0);
                         boolean corpProxy = bm != null && bm.optBoolean("corporateProxy", false);
                         boolean isHosting = corpProxy || orgStr.toLowerCase(java.util.Locale.US).matches(".*(akile|baxet|dromatics|cloudflare|oracle|amazon|aws|google|microsoft|azure|linode|akamai|vultr|digitalocean|hetzner|ovh|choopa|datacamp|contabo|zenlayer|cogent|hurricane|leaseweb|scaleway|netcup|gcore|kamatera|upcloud|racknerd|hosting|datacenter|data center|cloud|vps|server).*");
-                        boolean isRes = !isHosting && orgStr.toLowerCase(java.util.Locale.US).matches(".*(telecom|communications|broadband|cable|mobile|ntt|kddi|softbank|korea telecom|sk broadband|lg uplus|hinet|chunghwa|singtel|starhub|vodafone|deutsche telekom|comcast|verizon|charter|at&t|bt|orange|free sas|sfr|bell|rogers|telus).*");
-                        int ipHash = 0; for (int k = 0; k < ip.length(); k++) ipHash = ((ipHash << 5) - ipHash + ip.charAt(k));
-                        int spread = Math.abs(ipHash) % 7;
-                        int synthFs = isRes ? (4 + (Math.abs(ipHash) % 5)) : (isHosting ? (10 + spread) : (8 + (Math.abs(ipHash) % 5)));
-                        out.put("pure", new JSONObject().put("fs", synthFs).put("ip", ip).put("res", isRes).put("bc", false).put("dc", isHosting).put("org", orgStr).put("real", 1).put("via", "ippure"));
                         out.put("ipa", new JSONObject().put("ip", ip).put("h", isHosting).put("px", false).put("m", false).put("isp", orgStr).put("as", asnNum > 0 ? "AS" + asnNum : ""));
+                        RouteSupport.purityDirect(ip, out);
                     }
                     return out;
                 }

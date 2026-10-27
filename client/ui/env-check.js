@@ -162,14 +162,17 @@ const EnvCheck = {
       if (!alive()) return { ok: false, stale: true };
       const pct = cur?.pct, label = cur?.label || '未评估', kind = cur?.kind?.t || '';
       const line = [vl ? nodeName() : '', IP.ip && !IP.err ? ccF(cc) + ' ' + IP.ip : '', ms ? ms + ' ms' : '', pct != null ? label + ' ' + pct + '%' : '', kind].filter(Boolean).join(' · ');
+      if (label === '高风险' || label === '一般') {
+        try { if (typeof IPRep !== 'undefined' && typeof IPRep.check === 'function') void IPRep.check({ forceOnHighRisk: true }); } catch {}
+      }
       if (label === '高风险') {
         c.step('pure', 'warn');
-        c.finish('warn', '网络正常 · 出口风险较高', line);
+        c.finish('warn', '网络正常 · 出口风险较高（正在自动切换纯净出口）', line);
         this.saveLast({ key: k, at: now(), ok: true });
         return { ok: true, risky: true };
       }
       c.step('pure', pct == null ? 'wait' : label === '一般' ? 'warn' : 'ok');
-      const head = (this.tag ? this.tag + ' · ' : '') + (label === '一般' ? '网络正常 · 纯净度一般' : '网络正常');
+      const head = (this.tag ? this.tag + ' · ' : '') + (label === '一般' ? '网络正常 · 纯净度一般（正在自动切换纯净出口）' : '网络正常');
       this.tag = '';
       c.finish(label === '一般' ? 'warn' : 'ok', head, line);
       this.saveLast({ key: k, at: now(), ok: true });

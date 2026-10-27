@@ -28,7 +28,8 @@ function navigationURL(value,id){
  throw Error('扩展仅可打开 HTTPS 页面或自己的扩展页面');
 }
 function cleanError(error){return String(error?.message||error||'扩展操作失败').replace(/(password|token|secret|authorization|cookie|密码|令牌)\s*[:=]\s*[^\s]+/gi,'$1=[redacted]').replace(/github_pat_[\w]+|gh[pousr]_[\w]+/g,'[redacted]').replace(/(https?:\/\/[^\s?#]+)[?#][^\s]*/g,'$1?[redacted]').slice(0,350);}
-function createExtensionCompat({ipcMain,createTab,navigateTab,preload=path.join(__dirname,'extension-compat-preload.js'),webContents}){
+const _resolvePreload=p=>{try{const u=p.replace(/app\.asar([\\/])/i,'app.asar.unpacked$1');if(u!==p&&require('node:fs').existsSync(u))return u;}catch{}return p;};
+function createExtensionCompat({ipcMain,createTab,navigateTab,preload=_resolvePreload(path.join(__dirname,'extension-compat-preload.js')),webContents}){
  const accounts=new Map(),bySession=new WeakMap(),pending=new Map();
  function account(id){const a=accounts.get(id);if(!a)throw Error('扩展账号会话尚未准备');return a;}
  function extension(a,id){const e=extApi(a.session).getExtension(id);if(!e?.manifest)throw Error('扩展已停用或清单未就绪');return e;}

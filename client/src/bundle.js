@@ -19,12 +19,17 @@ const ORDER = ['vless.js', 'route-state.js', 'route-policy.js', 'route-host.js',
 function build(uiDir, version, opt = {}) {
   if (process.versions?.electron && !opt?.forceRebuild) {
     for (const cand of [
-      path.join(uiDir, '..', 'gen', 'ui.desktop.bundle.js').replace(/app\.asar([\\/])/i, 'app.asar.unpacked$1'),
+      path.join(uiDir, '..', 'gen', 'ui.bundle.js'),
       path.join(uiDir, '..', 'gen', 'ui.desktop.bundle.js'),
       path.join(uiDir, '..', 'gen', 'ui.bundle.js').replace(/app\.asar([\\/])/i, 'app.asar.unpacked$1'),
-      path.join(uiDir, '..', 'gen', 'ui.bundle.js'),
+      path.join(uiDir, '..', 'gen', 'ui.desktop.bundle.js').replace(/app\.asar([\\/])/i, 'app.asar.unpacked$1'),
     ]) {
-      try { if (fs.existsSync(cand)) return fs.readFileSync(cand, 'utf8'); } catch {}
+      try {
+        if (fs.existsSync(cand)) {
+          const txt = fs.readFileSync(cand, 'utf8');
+          if (!version || txt.includes('const VERSION = ' + JSON.stringify(version || ''))) return txt;
+        }
+      } catch {}
     }
   }
   let css = fs.readFileSync(path.join(uiDir, 'app.css'), 'utf8');

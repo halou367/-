@@ -24,7 +24,7 @@ function createNativeStorage({WebContentsView,ipcMain}){
   });
  }
  return async({session,extensionId,onChange})=>{
-  const view=new WebContentsView({webPreferences:{session,preload:path.join(__dirname,'extension-storage-preload.js'),sandbox:true,contextIsolation:true,nodeIntegration:false,backgroundThrottling:false}}),wc=view.webContents;
+  const view=new WebContentsView({webPreferences:{session,preload:(()=>{const p=path.join(__dirname,'extension-storage-preload.js'),u=p.replace(/app\.asar([\\/])/i,'app.asar.unpacked$1');try{if(u!==p&&require('node:fs').existsSync(u))return u;}catch{}return p;})(),sandbox:true,contextIsolation:true,nodeIntegration:false,backgroundThrottling:false}}),wc=view.webContents;
   const wcId=wc.id,url='chrome-extension://'+extensionId+'/manifest.json';
   wc.setWindowOpenHandler(()=>({action:'deny'}));wc.on('will-navigate',e=>e.preventDefault());
   // Keep the detached View alive: retaining webContents alone does not prevent View GC.

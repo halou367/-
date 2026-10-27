@@ -251,7 +251,18 @@ const old = pool.rep?.[ip] || {};
 const nextRep = { ...old };
 let changed = false;
 if (Number.isFinite(fs)) {
-nextRep.pu = { ...(old.pu || {}), fs, res: !!r?.pure?.res, bc: !!r?.pure?.bc, dc: !!r?.pure?.dc };
+nextRep.pu = {
+...(old.pu || {}),
+fs,
+res: !!r?.pure?.res,
+bc: !!r?.pure?.bc,
+dc: !!r?.pure?.dc,
+...(r?.pure?.org ? { org: String(r.pure.org).slice(0, 40) } : {}),
+...(r?.pure?.real ? { real: 1 } : {}),
+...(r?.pure?.via ? { via: String(r.pure.via).slice(0, 20) } : {}),
+...(r?.pure?.basicOnly ? { basicOnly: 1 } : {}),
+};
+if (r?.pure?.real && !r?.pure?.basicOnly) delete nextRep.pu.basicOnly;
 changed = true;
 }
 if (r?.ipa && typeof r.ipa === 'object') {
@@ -300,12 +311,13 @@ isp: rEg.isp || rHost.isp || '',
 } : (rEg || rHost || {});
 const q = pool.rq?.[egIp] || (hIp ? pool.rq?.[hIp] : null);
 const hasPu = Boolean(p.pu && Number.isFinite(+p.pu.fs));
-const isCloudIsp = /\b(?:akile|akilecloud|dromatics|akamai|linode|digitalocean|vultr|constant company|choopa|hetzner|ovh|oracle|amazon|aws|google cloud|microsoft|azure|cloudflare|alibaba|aliyun|tencent|aceville|\bace\b|6 collyer quay|huawei|contabo|fornex|ionos|kagoya|webhorizon|cyberverse|brainoza|eurohoster|virterion|kaopu|light\s*node|scaleway|leaseweb|m247|datacamp|cdn77|zenlayer|dmit|veesp|trabia|baxet|waicore|trunk networks|hostkey|timeweb|racknerd|hostpapa|alphavps|livi hosting|terratransit|rocketcloud|datawave|yeahtech|yeah\s*tech|ipxo|sondercloud|netcup|a2b|gcore|ufovps|packethub|psychz|sharktech|quadranet|colocrossing|frantech|buyvm|worldstream|cherry\s*servers|latitude|equinix|kamatera|upcloud|hosting|hoster|datacenter|data\s*center|server|vps|cloud|colocation|dedicated)\b/i.test((p.isp || '') + ' ' + (p.pu?.org || ''));
+const isCloudIsp = /\b(?:iomart|perfecto|ft systems|routerhosting|sculk|gtelcom|nuxtcloud|a100 row|snowd|first server|xorek|virtuasys|akile|akilecloud|dromatics|akamai|linode|digitalocean|vultr|constant company|choopa|hetzner|ovh|oracle|amazon|aws|google cloud|microsoft|azure|cloudflare|alibaba|aliyun|tencent|aceville|\bace\b|6 collyer quay|huawei|contabo|fornex|ionos|kagoya|webhorizon|cyberverse|brainoza|eurohoster|virterion|kaopu|light\s*node|scaleway|leaseweb|m247|datacamp|cdn77|zenlayer|dmit|veesp|trabia|baxet|waicore|trunk networks|hostkey|timeweb|racknerd|hostpapa|alphavps|livi hosting|terratransit|rocketcloud|datawave|yeahtech|yeah\s*tech|ipxo|sondercloud|netcup|a2b|gcore|ufovps|packethub|psychz|sharktech|quadranet|colocrossing|frantech|buyvm|worldstream|cherry\s*servers|latitude|equinix|kamatera|upcloud|hosting|hoster|datacenter|data\s*center|server|vps|cloud|colocation|dedicated)\b/i.test((p.isp || '') + ' ' + (p.pu?.org || ''));
 const isHosting = Boolean(p.h || p.pu?.dc || isCloudIsp);
-const hasCleanPu = Boolean(hasPu && ((p.pu.via === 'ippure' && +p.pu.fs <= 24 && !p.pu.bc) || (+p.pu.fs < 20 && p.pu.res === true && !p.pu.dc && !p.pu.bc && !isHosting && !p.pp && (+p.r || 0) < 33)));
+const hasCleanPu = Boolean(hasPu && ((p.pu.via === 'ippure' && +p.pu.fs <= 24 && !p.pu.bc && !p.px && !p.pp && (+p.r || 0) < 33) || (+p.pu.fs < 20 && p.pu.res === true && !p.pu.dc && !p.pu.bc && !isHosting && !p.pp && (+p.r || 0) < 33)));
 let score = 100, known = false;
 if (p.a) { known = true; if (p.px && !hasCleanPu) { score -= 35; if (isHosting) score -= 15; } if (isHosting && !hasCleanPu) score -= 8; }
 if (p.c) { known = true; const risk = Math.max(0, Math.min(100, +p.r || 0)); if (risk > 33) { const pen = Math.round((risk - 33) * .9); score -= hasCleanPu && risk <= 75 ? Math.min(10, pen) : pen; } if (!(hasCleanPu && risk <= 75)) { if (p.pp && /tor|compromised|socks|http|inference|proxy/i.test(p.pt || '')) score -= 25; else if (p.pp) score -= 20; } }
+if ((e?.impureUntil || 0) > at || (p.impureUntil || 0) > at) return { ok: false, score: 45, rank: 0, isRes: false };
 if ((egIp.includes(':') || isHosting || p.px) && !hasPu && !p.c) { known = false; score = Math.min(score, 68); }
 if ((egIp.includes(':') || isHosting || p.px) && !hasPu && p.c && (+p.r || 0) < 50 && !p.pp) { known = false; score = Math.min(score, 68); }
 if (hasPu) {
@@ -6866,7 +6878,7 @@ this.phase = '发送中'; this.emit();
 }
 const canSkipDrain = Boolean(this.loaded && this.lastSeq != null && !this.srvBusy && (this.gacha || opt.hitl || wasMidStall || ((this.tcAt || this.endAt || this.recAt) && now() - Math.max(this.tcAt || 0, this.endAt || 0, this.recAt || 0) < 180000)));
 const prePureTask = (typeof IPRep !== 'undefined' && typeof IPRep.ensurePreSendPure === 'function')
-? IPRep.ensurePreSendPure({ timeoutMs: 1800 }).catch(() => null)
+? IPRep.ensurePreSendPure({ timeoutMs: 2400 }).catch(() => null)
 : Promise.resolve(null);
 const v3IpBefore = (typeof IP !== 'undefined' && IP.ip) || '';
 let [v3, di, prePure] = await Promise.all([opt.v2 ? null : Recaptcha.take('chat_submit').catch(() => null), (this.wakeSessionToken ? this.wakeSessionToken() : this.ensureToken()).catch(() => null).then(() => canSkipDrain ? { max: +this.lastSeq, run: false } : this.drain(900)), prePureTask]);
@@ -10051,7 +10063,7 @@ async function createChat0(text, opt = {}) {
     const [v3Tok, prePure] = await Promise.all([
       (opt.gacha ? Recaptcha.v3(CREATE_ACTION) : Recaptcha.take(CREATE_ACTION)).catch(() => null),
       (typeof IPRep !== 'undefined' && typeof IPRep.ensurePreSendPure === 'function')
-        ? IPRep.ensurePreSendPure({ timeoutMs: 1200 }).catch(() => null)
+        ? IPRep.ensurePreSendPure({ timeoutMs: 2400 }).catch(() => null)
         : Promise.resolve(null),
     ]);
     if (prePure?.switched || (v3IpBefore && typeof IP !== 'undefined' && IP.ip && IP.ip !== v3IpBefore)) {
@@ -14965,7 +14977,7 @@ const rcAction = 'chat_submit';
 let v3Token = null;
 let v2Token = opts.v2 || null;
 const prePureTask = (typeof IPRep !== 'undefined' && typeof IPRep.ensurePreSendPure === 'function')
-? IPRep.ensurePreSendPure({ timeoutMs: 1200 }).catch(() => null)
+? IPRep.ensurePreSendPure({ timeoutMs: 2400 }).catch(() => null)
 : Promise.resolve(null);
 if (!v2Token && typeof Recaptcha !== 'undefined') {
 const v3IpBefore = (typeof IP !== 'undefined' && IP.ip) || '';
@@ -15918,7 +15930,7 @@ const cx = typeof packClientInteraction === 'function'
 let v3Token = null;
 try {
 const prePureTask = (typeof IPRep !== 'undefined' && typeof IPRep.ensurePreSendPure === 'function')
-? IPRep.ensurePreSendPure({ timeoutMs: 1200 }).catch(() => null)
+? IPRep.ensurePreSendPure({ timeoutMs: 2400 }).catch(() => null)
 : Promise.resolve(null);
 if (typeof Recaptcha !== 'undefined') {
 const v3IpBefore = (typeof IP !== 'undefined' && IP.ip) || '';
@@ -29576,13 +29588,12 @@ const UI = {
       }
       let curIp = typeof IP !== 'undefined' ? ((!IP.err && IP.ip) || a.status?.ip || '') : (a.status?.ip || '');
       if (!curIp && !a.proxyIp && !a.proxy && !(typeof IP !== 'undefined' && IP.err)) return true;
-      let ipRep = (typeof IPRep !== 'undefined' && IPRep.cur) ? IPRep.cur(a, curIp) : null;
       const isTrusted = Boolean(typeof IPRep !== 'undefined' && IPRep.trusted && ((a.proxyIp && IPRep.trusted(a.proxyIp)) || (curIp && IPRep.trusted(curIp))));
-      let isPure = Boolean(isTrusted || (ipRep && ipRep.label === '纯净' && (ipRep.pct == null || ipRep.pct >= 75) && !(typeof IP !== 'undefined' && IP.err)));
-      if (isPure) return true;
+      if (isTrusted) return true;
 
+      let ipRep = (typeof IPRep !== 'undefined' && IPRep.cur) ? IPRep.cur(a, curIp) : null;
       if (!(typeof IP !== 'undefined' && IP.err) && typeof IPRep !== 'undefined' && typeof IPRep.ensurePreSendPure === 'function') {
-        const pre = await IPRep.ensurePreSendPure({ timeoutMs: 1200 }).catch(() => null);
+        const pre = await IPRep.ensurePreSendPure({ timeoutMs: 2400 }).catch(() => null);
         if (pre?.pure || pre?.switched) {
           if (pre?.switched) { try { Recaptcha.clearCache?.(); } catch {} }
           return true;
@@ -29590,10 +29601,9 @@ const UI = {
         a = this.host?.account || a;
         curIp = typeof IP !== 'undefined' ? ((!IP.err && IP.ip) || pre?.eg || a.status?.ip || curIp) : (pre?.eg || curIp);
         ipRep = IPRep.cur ? IPRep.cur(a, curIp) : ipRep;
-        isPure = Boolean(isTrusted || (ipRep && ipRep.label === '纯净' && (ipRep.pct == null || ipRep.pct >= 75) && !(typeof IP !== 'undefined' && IP.err)));
-        if (isPure) return true;
-        if (ipRep?.label === '未评估' && (!ipRep?.sc || !ipRep.sc.known)) return true;
       }
+      const isPure = Boolean(isTrusted || (ipRep && ipRep.label === '纯净' && (ipRep.pct == null || ipRep.pct >= 75) && !(typeof IP !== 'undefined' && IP.err)));
+      if (isPure) return true;
 
       const statusParts = [
         ipRep?.label || (typeof IP !== 'undefined' && IP.err ? '连接异常' : '未评估'),
@@ -73072,7 +73082,7 @@ TOXIC_BAN_IPS: new Set([
 '77.73.71.200',
 ]),
 BLACKLISTED_ASNS: ['AS42532'],
-HOSTING_ISP_RE: /\b(?:akile|akilecloud|dromatics|akamai|linode|digitalocean|vultr|constant company|choopa|hetzner|ovh|oracle|amazon|aws|google cloud|microsoft|azure|cloudflare|alibaba|aliyun|tencent|aceville|\bace\b|6 collyer quay|huawei|contabo|fornex|ionos|kagoya|webhorizon|cyberverse|brainoza|eurohoster|virterion|kaopu|light\s*node|scaleway|leaseweb|m247|datacamp|cdn77|zenlayer|dmit|veesp|trabia|baxet|waicore|trunk networks|hostkey|timeweb|racknerd|hostpapa|alphavps|livi hosting|terratransit|rocketcloud|datawave|yeahtech|yeah\s*tech|ipxo|sondercloud|netcup|a2b|gcore|ufovps|packethub|psychz|sharktech|quadranet|colocrossing|frantech|buyvm|worldstream|cherry\s*servers|latitude|equinix|kamatera|upcloud|gthost|365\.partners|global connectivity|nsc-solutions|ibcs|fbw networks|velia\.net|iphoster|cgi global|virtua systems|3nt solutions|bzsolutions|baykov|netrouting|alice networks|netranex|chsl one|beafort|hosting|hoster|datacenter|data\s*center|server|vps|cloud|colocation|dedicated)\b/i,
+HOSTING_ISP_RE: /\b(?:iomart|perfecto|ft systems|routerhosting|sculk|gtelcom|nuxtcloud|a100 row|snowd|first server|xorek|virtuasys|akile|akilecloud|dromatics|akamai|linode|digitalocean|vultr|constant company|choopa|hetzner|ovh|oracle|amazon|aws|google cloud|microsoft|azure|cloudflare|alibaba|aliyun|tencent|aceville|\bace\b|6 collyer quay|huawei|contabo|fornex|ionos|kagoya|webhorizon|cyberverse|brainoza|eurohoster|virterion|kaopu|light\s*node|scaleway|leaseweb|m247|datacamp|cdn77|zenlayer|dmit|veesp|trabia|baxet|waicore|trunk networks|hostkey|timeweb|racknerd|hostpapa|alphavps|livi hosting|terratransit|rocketcloud|datawave|yeahtech|yeah\s*tech|ipxo|sondercloud|netcup|a2b|gcore|ufovps|packethub|psychz|sharktech|quadranet|colocrossing|frantech|buyvm|worldstream|cherry\s*servers|latitude|equinix|kamatera|upcloud|gthost|365\.partners|global connectivity|nsc-solutions|ibcs|fbw networks|velia\.net|iphoster|cgi global|virtua systems|3nt solutions|bzsolutions|baykov|netrouting|alice networks|netranex|chsl one|beafort|hosting|hoster|datacenter|data\s*center|server|vps|cloud|colocation|dedicated)\b/i,
 TELECOM_ISP_RE: /\b(?:free sas|proxad|orange|wanadoo|sfr|bouygues|deutsche telekom|vodafone|british telecommunications|\bbt\b|virgin media|sky uk|talktalk|comcast|xfinity|verizon|at&t|charter|spectrum|cox communications|centurylink|lumen|frontier|bell canada|rogers|telus|shaw|ntt|ocn|kddi|au one|softbank|bbtec|nuro|so-net|korea telecom|\bkt\b|sk broadband|lg uplus|chunghwa|hinet|taiwan mobile|far easitone|pccw|hkt|hkbn|smartone|singtel|starhub|m1 limited|telstra|optus|tpg|spark nz|kpn|ziggo|proximus|telenet|swisscom|sunrise|a1 telekom|telia|telenor|elisa|dna oy|movistar|telefonica|masmovil|digi spain|telecom italia|\btim\b|fastweb|wind tre|meo|nos comunica|ote|cosmote|turk telekom|turkcell|beeline|mts|megafon|rostelecom|kyivstar|ukrtelecom|polkomtel|vectra|netia|upc|o2|three|ee limited)\b/i,
 isToxicBanIp(ip, asn = '') {
 const clean = String(ip || '').trim().replace(/^\[|\]$/g, '').split(':')[0];
@@ -73108,8 +73118,19 @@ return this.hostOf(k, e);
 },
 repOf(k, e, d = Pool.d) {
 e ||= d?.ips?.[k];
-const host = this.hostOf(k, e);
-const eg = (e?.eg && this.isIpLit(e.eg)) ? this.normIp(e.eg) : host;
+let host = this.hostOf(k, e);
+let eg = (e?.eg && this.isIpLit(e.eg)) ? this.normIp(e.eg) : host;
+if (!e && eg && d?.ips) {
+for (const [ik, ie] of Object.entries(d.ips)) {
+if (!ie) continue;
+const ieEg = (ie.eg && this.isIpLit(ie.eg)) ? this.normIp(ie.eg) : '';
+const ieHost = this.hostOf(ik, ie);
+if (ieEg === eg || ieHost === eg) {
+e = ie;
+if (ieHost && ieHost !== eg && d?.rep?.[ieHost]) { host = ieHost; break; }
+}
+}
+}
 const rEg = eg ? d?.rep?.[eg] : null;
 const rHost = host && host !== eg ? d?.rep?.[host] : null;
 if (!rEg && !rHost) return { eg: eg || host, host, p: {} };
@@ -73164,19 +73185,17 @@ this.sync();
 if (k && !e) { const _memoHit = this._memo.get(String(k)); if (_memoHit) return _memoHit; }
 const d = Pool.d || {};
 e ||= d?.ips?.[k];
-const host = this.hostOf(k, e);
-const eg = (e?.eg && this.isIpLit(e.eg)) ? this.normIp(e.eg) : host;
+const { eg, host, p } = this.repOf(k, e, d);
 if (!eg) return { s: 0, known: false, why: [], tier: '' };
 const memoKey = host && host !== eg ? eg + '|' + host : eg;
 const m = this._memo.get(memoKey); if (m) { if (k && String(k) !== memoKey) this._memo.set(String(k), m); return m; }
-const { p } = this.repOf(k, e, d);
 const q = d.rq?.[eg] || (host ? d.rq?.[host] : null);
 const hasPu = Boolean(p.pu && Number.isFinite(+p.pu.fs));
 const orgCombo = (p.isp || '') + ' ' + (p.pu?.org || '');
 const isCloudIsp = this.HOSTING_ISP_RE.test(orgCombo);
 const isTelecomIsp = !isCloudIsp && this.TELECOM_ISP_RE.test(orgCombo);
 const isHosting = Boolean(p.h || p.pu?.dc || isCloudIsp);
-const hasCleanPu = Boolean(hasPu && ((p.pu.via === 'ippure' && +p.pu.fs <= 24 && !p.pu.bc) || (+p.pu.fs < 20 && (isTelecomIsp || (p.pu.res === true && (!p.px || p.pu.via === 'ippure'))) && !isHosting && !p.pu.bc && !p.pp && (+p.r || 0) < 33)));
+const hasCleanPu = Boolean(hasPu && ((p.pu.via === 'ippure' && +p.pu.fs <= 24 && !p.pu.bc && !p.px && !p.pp && (+p.r || 0) < 33) || (+p.pu.fs < 20 && (isTelecomIsp || (p.pu.res === true && (!p.px || p.pu.via === 'ippure'))) && !isHosting && !p.pu.bc && !p.pp && (+p.r || 0) < 33)));
 let s = 100, known = false; const why = ['出口 ' + eg];
 const asnStr = [p.as, p.pu?.asn, p.isp, p.pu?.org].filter(Boolean).join(' ');
 const isToxic = this.isToxicBanIp(eg, asnStr) || Boolean(host && this.isToxicBanIp(host, asnStr));
@@ -73378,7 +73397,7 @@ this.putPu(d, v4Host, { ...dpV4, ip: v4Host, ...(dpV4.real ? { real: 1 } : {}) }
 if (dp && (dp.via === 'ippure' || dp.fs >= 50)) return;
 }
 }
-if (typeof fetch !== 'function' || Host.ippureDirect) return;
+if (typeof fetch !== 'function' || (Host.ippureDirect && ip !== this.normIp(typeof IP !== 'undefined' && !IP.err && IP.ip || ''))) return;
 const res = await fetch('https://my.ippure.com/v1/info', { cache: 'no-store' });
 const j = res.ok ? await res.json() : null;
 if (!j || !Number.isFinite(+j.fraudScore)) return;
@@ -73669,13 +73688,13 @@ if (k && this.trusted(k)) return { ok: true, skipped: true };
 if (!k && isChainNode) return { ok: true, skipped: true };
 const fastEntry = k ? Pool.d?.ips?.[k] : null;
 const fastEg = (typeof IP !== 'undefined' && !IP.err && IP.ip) || fastEntry?.eg || '';
-if ((k || fastEg) && !Pool.banned?.(k) && !(fastEntry && Pool.cooling?.(fastEntry)) && this.hasRecentPass(k || fastEg, fastEntry, 20 * 60e3)) {
-return { ok: true, pure: true, fastPass: true, score: 92, eg: fastEg };
+if ((k || fastEg) && !Pool.banned?.(k) && !(fastEntry && Pool.cooling?.(fastEntry)) && this.pure(k || fastEg, fastEntry) && this.hasRecentPass(k || fastEg, fastEntry, 8 * 60e3)) {
+return { ok: true, pure: true, fastPass: true, score: this.score(k || fastEg, fastEntry).s, eg: fastEg };
 }
-const timeoutMs = Math.max(600, Math.min(2800, Number(opt?.timeoutMs) || 1800));
-const traceFresh = Boolean(typeof IP !== 'undefined' && IP.ip && !IP.err && IP.at > 0 && (now() - Math.min(IP.checkedAt || IP.at || 0, IP.at || 0) < 90000));
+const timeoutMs = Math.max(900, Math.min(3500, Number(opt?.timeoutMs) || 2600));
+const traceFresh = Boolean(typeof IP !== 'undefined' && IP.ip && !IP.err && IP.at > 0 && (now() - Math.min(IP.checkedAt || IP.at || 0, IP.at || 0) < 45000));
 if ((!traceFresh || !k) && typeof IP !== 'undefined' && typeof IP.ping === 'function') {
-await Promise.race([IP.ping(true).catch(() => {}), sleep(Math.min(1100, timeoutMs))]);
+await Promise.race([IP.ping(true).catch(() => {}), sleep(Math.min(1800, timeoutMs))]);
 }
 let e = k ? (Pool.d?.ips?.[k] || null) : null;
 const liveIp = this.normIp((typeof IP !== 'undefined' && !IP.err && IP.at > 0 && IP.ip) || '');
@@ -73700,7 +73719,7 @@ Promise.all([
 Host.ippureDirect(eg).catch(() => null),
 v4Host ? Host.ippureDirect(v4Host).catch(() => null) : Promise.resolve(null),
 ]),
-sleep(Math.min(1100, timeoutMs)).then(() => [null, null]),
+sleep(Math.min(2200, timeoutMs)).then(() => [null, null]),
 ]);
 if ((dp && Number.isFinite(+dp.fs)) || (dpV4 && Number.isFinite(+dpV4.fs))) {
 await Pool.mutate(d => {
@@ -73717,7 +73736,7 @@ this.invalidate(k || eg);
 if (dp && (dp.via === 'ippure' || dp.fs >= 50 || (dp.res && !dp.basicOnly))) gotVerified = true;
 }
 }
-if (!gotVerified && typeof fetch === 'function' && !(typeof Host !== 'undefined' && typeof Host.ippureDirect === 'function')) {
+if (!gotVerified && typeof fetch === 'function' && (!(typeof Host !== 'undefined' && typeof Host.ippureDirect === 'function') || Boolean(liveIp && eg === liveIp))) {
 const tunJ = await Promise.race([
 fetch('https://my.ippure.com/v1/info', { cache: 'no-store' }).then(r => r.ok ? r.json() : null).catch(() => null),
 sleep(Math.min(1100, timeoutMs)).then(() => null),
@@ -73735,8 +73754,8 @@ this.invalidate(k || eg);
 }
 const liveEntry = liveIp ? { ...(e || {}), eg: liveIp } : e;
 const sc = (k || liveIp) ? this.score(k || liveIp, liveEntry) : { s: 0, known: false };
-const isBanned = Boolean((k && Pool.banned?.(k)) || (eg && Pool.d?.banEg?.[eg.toLowerCase()]));
-const isManuallyLocked = Boolean(typeof AutoRoute !== 'undefined' && AutoRoute.manualLockUntil && now() < AutoRoute.manualLockUntil);
+const isBanned = Boolean((k && Pool.banned?.(k)) || (eg && Pool.d?.banEg?.[eg.toLowerCase()]) || (e && Pool.cooling?.(e)));
+const isManuallyLocked = false;
 const minRequiredScore = isManuallyLocked ? this.TH : this.PURE;
 const isDirty = isBanned || Boolean(!k && !isChainNode && (!sc.known || sc.s < minRequiredScore)) || Boolean(sc.known ? sc.s < minRequiredScore : sc.s < 68);
 if (!isDirty) return { ok: true, pure: true, score: sc.s, eg };
@@ -73789,7 +73808,6 @@ return { ok: true };
 async check(opt = {}) {
 try {
 const a = UI.host?.account; if (!a || this.rot || navigator.onLine === false || !isVless(a.proxy)) return;
-if (typeof AutoRoute !== 'undefined' && AutoRoute.manualLockUntil && now() < AutoRoute.manualLockUntil && !opt?.forceOnError && !opt?.forceOnHighRisk) return;
 await Pool.load();
 const k = a.proxyIp && String(a.proxyIp).trim() || '';
 const e = k ? Pool.d.ips?.[k] : null;
@@ -73797,6 +73815,7 @@ const liveIp = this.normIp(!IP?.err && IP?.ip || '');
 const liveEntry = liveIp ? { ...(e || {}), eg: liveIp } : e;
 const isChainNode = /\/video\//i.test(a.proxy || '');
 const isRisky = Boolean((k && e && (this.risky(k, e) || this.impure(k, e))) || (liveIp && (this.risky(k || liveIp, liveEntry) || this.impure(k || liveIp, liveEntry))));
+if (!isRisky && typeof AutoRoute !== 'undefined' && AutoRoute.manualLockUntil && now() < AutoRoute.manualLockUntil && !opt?.forceOnError && !opt?.forceOnHighRisk) return;
 if (!isRisky && liveIp && this.pure(k || liveIp, liveEntry) && (k || isChainNode)) {
 if (e?.banned || e?.gone || e?.ok === false || (k && Pool.d?.ban?.[k.toLowerCase()]) || Pool.d?.banEg?.[liveIp.toLowerCase()]) {
 await Pool.mutate(d => {
@@ -74002,15 +74021,15 @@ validPu.push(...puRows.filter(Boolean));
 }
 if (validPu.length) await Pool.mutate(d => { for (const [ip, dp] of validPu) this.putPu(d, ip, dp); });
 }
-const stillUnk = egs.filter(ip => !this.score(ip, { ok: true, eg: ip }).known);
+const stillUnk = egs.filter(ip => Host.ippureDirect && !this.score(ip, { ok: true, eg: ip }).known);
 if (stillUnk.length) {
 await Pool.mutate(d => {
 d.rep ||= {};
 for (const ip of stillUnk) {
 const p = d.rep[ip] ||= {};
 const org = String(p.pu?.org || p.isp || p.as || '').slice(0, 48);
-const isCloud = this.isKnownCloudIsp(org) || this.isKnownCloudIsp(p.as || '');
-const isTele = this.isKnownTelecomIsp(org) && !isCloud;
+const isCloud = Boolean(this.HOSTING_ISP_RE?.test(org) || this.HOSTING_ISP_RE?.test(p.as || ''));
+const isTele = Boolean(this.TELECOM_ISP_RE?.test(org) && !isCloud);
 const dc = Boolean(p.h || p.pu?.dc || isCloud || !isTele);
 const explicitAnon = /tor|compromised|malware|botnet/i.test(String(p.pt || ''));
 const rVal = Math.max(0, +p.r || 0);
@@ -74018,12 +74037,13 @@ const px = Boolean(explicitAnon || (p.pp && rVal >= 85));
 let ipHash = 0;
 for (let i = 0; i < ip.length; i++) ipHash = ((ipHash << 5) - ipHash + ip.charCodeAt(i)) | 0;
 const dcSpread = Math.abs(ipHash) % 7;
-let fs;
-if (this.isToxicBanIp(ip, p.as || p.isp)) fs = 88;
-else if (px || rVal >= 85) fs = Math.max(55, rVal || 58);
-else if (!dc && (p.m || isTele)) fs = 4 + (Math.abs(ipHash) % 5);
-else fs = 11 + dcSpread;
-this.putPu(d, ip, { fs, ip, res: Boolean(!dc && !px), bc: Boolean(dc && px), dc, org, real: 1, via: 'ippure' });
+if (this.isToxicBanIp(ip, p.as || p.isp) || px || rVal >= 50) {
+const fs = this.isToxicBanIp(ip, p.as || p.isp) ? 88 : Math.max(52, rVal || 55);
+this.putPu(d, ip, { fs, ip, res: false, bc: Boolean(dc && px), dc: true, org, real: 1, via: 'proxycheck' });
+} else {
+const fs = (!dc && (p.m || isTele)) ? (12 + (Math.abs(ipHash) % 4)) : (26 + dcSpread);
+this.putPu(d, ip, { fs, ip, res: Boolean(!dc && !px), bc: Boolean(dc && px), dc, org, basicOnly: 1 });
+}
 }
 });
 }
@@ -74248,6 +74268,19 @@ q.l = 0;
 }
 }
 }
+if (!this.d.unpoisonV202 && !this.isFixtureEnv() && this.d.rep && typeof this.d.rep === 'object' && Object.keys(this.d.rep).length >= 20) {
+this.d.unpoisonV202 = 1;
+let dirty202 = false;
+for (const r of Object.values(this.d.rep)) {
+if (!r || typeof r !== 'object') continue;
+if (r.a) { delete r.a; dirty202 = true; }
+if (r.pu && !r.pu.res && (!r.pu.dc || [10, 11, 12, 13, 14, 15, 16, 22, 23, 24, 25, 26, 27].includes(+r.pu.fs))) {
+delete r.pu;
+dirty202 = true;
+}
+}
+if (dirty202) Host.shared('pippool', this.d).catch(() => {});
+}
 if (!this.d.unpoisonV171 && this.d.rep && typeof this.d.rep === 'object') {
 this.d.unpoisonV171 = 1;
 let dirtyRep = false;
@@ -74297,10 +74330,6 @@ if (this.d.rep && typeof this.d.rep === 'object') {
 for (const r of Object.values(this.d.rep)) {
 if (!r || typeof r !== 'object') continue;
 if (r.pu && (r.pu.via === 'proxycheck' || +r.pu.fs === 65 || +r.pu.fs === 66 || (r.pu.via === 'scamalytics' && +r.pu.fs >= 25 && +r.pu.fs <= 60))) delete r.pu;
-else if (r.pu && +r.pu.fs <= 48) { r.pu.bc = false; r.pu.via = 'ippure'; r.pu.real = 1; if (+r.pu.fs > 14) r.pu.fs = 12; delete r.pu.basicOnly; }
-if (r.pt === 'VPN' || r.pp === true || r.px === true || (+r.r >= 50 && +r.r <= 90)) {
-delete r.pt; delete r.pp; delete r.px; delete r.r; delete r.c;
-}
 }
 }
 const srcSet = new Set(this.d.src || []);
@@ -74417,6 +74446,7 @@ const c = this.dns.get(host); if (!force && c && now() - c.at < 60e3) return c.i
 const validIp = x => /^\d{1,3}(\.\d{1,3}){3}(:\d{1,5})?$/.test(x) && !/^198\.1[89]\./.test(x) && !this.isCfOfficialIp(x);
 if (Host.resolve) { const r = await Host.resolve(host).catch(() => null); const ips = (r || []).filter(validIp); if (ips.length) { this.dns.set(host, { at: now(), ips }); return ips; }
 if (Host.platform !== 'android') return []; }
+if (Host.platform === 'web' && typeof location !== 'undefined' && /^https?:$/i.test(location.protocol || '')) return [];
 const qs = [['https://223.5.5.5/resolve?edns_client_subnet=8.8.8.8/24&type=1&name=', {}], ['https://1.12.12.12/dns-query?edns_client_subnet=8.8.8.8/24&type=A&name=', { accept: 'application/dns-json' }], ['https://dns.alidns.com/resolve?edns_client_subnet=8.8.8.8/24&type=1&name=', {}], ['https://cloudflare-dns.com/dns-query?type=A&name=', { accept: 'application/dns-json' }], ['https://dns.google/resolve?type=A&name=', {}]];
 const one = async ([u, hd]) => {
 const fullU = u + encodeURIComponent(host);
@@ -74811,19 +74841,29 @@ if (sub) { d.subCool ||= {}; d.subCool[sub] = Math.max(d.subCool[sub] || 0, tNow
 const hits = (e ? (e.rcHits = (e.rcHits || 0) + 1) : 1);
 coolMs = hits <= 1 ? 20 * 60e3 : hits === 2 ? 60 * 60e3 : 150 * 60e3;
 if (sub) { d.subCool ||= {}; d.subCool[sub] = Math.max(d.subCool[sub] || 0, tNow + 12 * 60e3); }
+} else if (kind === 'impure') {
+const hits = (e ? (e.impureHits = (e.impureHits || 0) + 1) : 1);
+coolMs = hits <= 1 ? 2 * 3600e3 : hits === 2 ? 6 * 3600e3 : 12 * 3600e3;
 } else {
 coolMs = 25 * 60e3;
 }
 const until = tNow + coolMs;
 if (e) {
 e.cool = Math.max(e.cool || 0, until);
+if (kind === 'impure') e.impureUntil = Math.max(e.impureUntil || 0, until);
 e.used = tNow;
-e.err = why || (kind === '429' || kind === 'l' ? '429 限流冷却中' : kind === 'rc' ? '人机验证冷却中' : '短期信誉波动冷却中');
+e.err = why || (kind === '429' || kind === 'l' ? '429 限流冷却中' : kind === 'rc' ? '人机验证冷却中' : kind === 'impure' ? '纯净度不足隔离冷却中' : '短期信誉波动冷却中');
 }
 if (eg) {
+if (kind === 'impure') {
+d.rep ||= {};
+d.rep[eg] ||= {};
+d.rep[eg].impureUntil = Math.max(d.rep[eg].impureUntil || 0, until);
+}
 for (const [, ent] of Object.entries(d.ips || {})) {
 if (ent && String(ent.eg || '').toLowerCase() === eg) {
 ent.cool = Math.max(ent.cool || 0, until);
+if (kind === 'impure') ent.impureUntil = Math.max(ent.impureUntil || 0, until);
 }
 }
 }
@@ -74866,25 +74906,27 @@ if (ns && ns.ok === true && now() - (ns.at || 0) < 60000) return true;
 return false;
 },
 purgeImpureAndUnstable() {
+const tNow = now();
 if (this.d && this.d.ips) {
 let hasWork = false;
 for (const [k, e] of Object.entries(this.d.ips)) {
 if (!e) continue;
 const sc = typeof IPRep !== 'undefined' && IPRep.score ? IPRep.score?.(k, e) : null;
-const canRecover = sc && sc.known && sc.s >= (IPRep.TH || 50) && (e.banned || e.gone || this.d.ban?.[k.toLowerCase()]);
+const canRecover = sc && sc.known && sc.s >= (IPRep.PURE || 75) && !(e.impureUntil > tNow) && (e.banned || e.gone || this.d.ban?.[k.toLowerCase()]);
 if (canRecover) { hasWork = true; break; }
-const isSevereRisk = typeof IPRep !== 'undefined' && !IPRep.trusted?.(k) && (IPRep.isToxicBanIp?.(e.eg || k) || (e.ok === true && sc?.known && sc.s < 32));
-if (isSevereRisk && !e.banned) { hasWork = true; break; }
+const isImpure = typeof IPRep !== 'undefined' && !IPRep.trusted?.(k) && (IPRep.isToxicBanIp?.(e.eg || k) || (e.ok === true && sc?.known && sc.s < (IPRep.PURE || 75)));
+if (isImpure && !e.banned && !(e.impureUntil > tNow)) { hasWork = true; break; }
 }
 if (!hasWork) return Promise.resolve(0);
 }
 return this.mutate(d => {
 let n = 0;
+const at = now();
 for (const [k, e] of Object.entries(d.ips || {})) {
 if (!e) continue;
 const sc = typeof IPRep !== 'undefined' && IPRep.score ? IPRep.score?.(k, e) : null;
-if (sc && sc.known && sc.s >= (IPRep.TH || 50) && (e.banned || e.gone || d.ban?.[k.toLowerCase()])) {
-e.banned = false; e.gone = false; if (e.ip || e.eg) e.ok = true; e.err = ''; e.fc = 0;
+if (sc && sc.known && sc.s >= (IPRep.PURE || 75) && !(e.impureUntil > at) && (e.banned || e.gone || d.ban?.[k.toLowerCase()])) {
+e.banned = false; e.gone = false; if (e.ip || e.eg) e.ok = true; e.err = ''; e.fc = 0; e.impureUntil = 0; e.impureHits = 0;
 if (d.ban) delete d.ban[k.toLowerCase()];
 if (e.eg && d.banEg) delete d.banEg[String(e.eg).toLowerCase()];
 continue;
@@ -74892,6 +74934,9 @@ continue;
 const isSevereRisk = typeof IPRep !== 'undefined' && !IPRep.trusted?.(k) && sc?.known && (sc.s < 32 || IPRep.isToxicBanIp?.(e.eg || k));
 if (isSevereRisk) {
 this.banForever(d, k, '极高风险 · 已永久拉黑');
+n++;
+} else if (typeof IPRep !== 'undefined' && !IPRep.trusted?.(k) && e.ok === true && sc?.known && sc.s < (IPRep.PURE || 75) && !(e.impureUntil > at)) {
+this.coolTemporarily(d, k, 'impure', e.eg || '', '纯净度不足（' + sc.s + ' 分）· 已自动隔离冷却');
 n++;
 }
 }
@@ -74953,9 +74998,25 @@ apply(d, k, r) {
 const e = d.ips[k]; if (!e) return;
 e.at = now(); if (r.loc) e.loc = r.loc; e.eg = r.ip || e.eg || ''; e.ms = r.ms || 0;
 e.ok = !!(r.ip && r.brana); e.err = e.ok ? '' : (r.error || (r.ip ? 'Brana 不可用' : '连接失败')); e.fc = e.ok ? 0 : (e.fc || 0) + 1;
-if (typeof IPRep !== 'undefined') { if (r.pure && e.eg) IPRep.putPu?.(d, e.eg, r.pure); if (r.ipa && e.eg) IPRep.putIpa?.(d, e.eg, r.ipa); IPRep.invalidate?.(); if (e.ok) IPRep.soon?.([k]); }
+if (typeof IPRep !== 'undefined') {
+if (r.pure && e.eg) IPRep.putPu?.(d, e.eg, r.pure);
+if (r.ipa && e.eg) IPRep.putIpa?.(d, e.eg, r.ipa);
+IPRep.invalidate?.();
+if (e.ok) {
+const sc = IPRep.score?.(k, e);
+if (sc?.known && sc.s >= (IPRep.PURE || 75)) {
+e.impureUntil = 0; e.impureHits = 0;
+if ((e.cool || 0) > now() && /纯净度|信誉波动/.test(String(e.err || ''))) e.cool = 0;
+if (e.eg && d.rep?.[String(e.eg).toLowerCase()]) delete d.rep[String(e.eg).toLowerCase()].impureUntil;
+} else if (sc?.known && sc.s < (IPRep.PURE || 75) && !IPRep.trusted?.(k)) {
+if (sc.s < 32 || IPRep.isToxicBanIp?.(e.eg || k)) this.banForever(d, k, '极高风险（' + sc.s + ' 分）· 已永久拉黑');
+else this.coolTemporarily(d, k, 'impure', e.eg || '', '实测纯净度不足（' + sc.s + ' 分）· 已自动隔离冷却');
+}
+IPRep.soon?.([k]);
+}
+}
 const egLow = String(e.eg || '').toLowerCase();
-const isRiskBanned = Boolean((egLow && d.banEg?.[egLow]) || (r.pure && Number.isFinite(+r.pure.fs) && +r.pure.fs >= 50));
+const isRiskBanned = Boolean((egLow && d.banEg?.[egLow]) || (r.pure && Number.isFinite(+r.pure.fs) && +r.pure.fs > 24));
 if (e.ok && e.banned && !isRiskBanned) { e.gone = false; e.banned = false; if (d.ban) delete d.ban[String(k || '').trim().toLowerCase()]; }
 },
 cancelScan() {
@@ -75146,7 +75207,7 @@ try{scanAbort.abort();}catch{}
 const r=await this.streamProbe(part,{link,timeout:8000,signal:scanAbort.signal,cancelled:()=>!live(),onItem:accept});
 await flushBatch(true);
 if(live()&&typeof IPRep!=='undefined'&&(Host.fetchText||Host.ippureDirect)){
-const isManualPing=keys.length<=4;
+const isManualPing=keys.length<=12;
 const unrated=part.filter(k=>{const e=this.d?.ips?.[k];if(!e||e.ok!==true||e.gone||this.banned(k)||IPRep.trusted?.(k))return false;if(isManualPing)return true;const eg=IPRep.egOf?.(k,e)||e.eg||k;const pu=this.d?.rep?.[eg]?.pu;return !IPRep.score?.(k,e).known||!pu||pu.basicOnly;});
 if(unrated.length){await IPRep.rate(unrated,[],{force:isManualPing}).catch(()=>{});IPRep.invalidate?.();await this.purgeImpureAndUnstable().catch(()=>{});Bus.emit('pool');for(const cb of callbacks){try{cb(done,state.total);}catch{}}}
 }
@@ -75187,7 +75248,7 @@ if (!m.size) return null;
 const e = this.d?.ips?.[k], low = String(k).trim().toLowerCase();
 return m.get(low) || m.get(String(e?.ip || this.parse(k)?.host || '').toLowerCase()) || (e?.eg && m.get(String(e.eg).toLowerCase())) || null;
 },
-cooling: e => (e.cool || 0) > now(),
+cooling: e => Boolean(e && ((e.cool || 0) > now() || (e.impureUntil || 0) > now())),
 banned(k) {
 const low = String(k || '').trim().toLowerCase();
 if (!low) return false;
@@ -75247,18 +75308,8 @@ const passB = typeof IPRep !== 'undefined' && IPRep.hasRecentPass?.(b[0], b[1], 
 if (passB !== passA) return passB - passA;
 return (a[1].ms || 9e9) - (b[1].ms || 9e9) || (a[1].used || 0) - (b[1].used || 0);
 };
-const tier1 = this.entries()
-.filter(([k, e]) => e.loc === cc && this.state(k, e, exceptId) === 'ok' && !(exclude && exclude.has(k)))
-.sort(sortFn)
-.map(([k]) => k);
-if (tier1.length) return tier1;
 return this.entries()
-.filter(([k, e]) => {
-if (!e || e.loc !== cc || e.ok !== true || e.gone || this.banned(k) || this.cooling(e) || this.owner(k, exceptId)) return false;
-if (exclude && exclude.has(k)) return false;
-const sc = typeof IPRep !== 'undefined' && IPRep.score ? IPRep.score?.(k, e) : null;
-return Boolean(sc && sc.known && sc.s >= 58 && !IPRep.isToxicBanIp?.(e.eg || k));
-})
+.filter(([k, e]) => e.loc === cc && this.state(k, e, exceptId) === 'ok' && !(exclude && exclude.has(k)))
 .sort(sortFn)
 .map(([k]) => k);
 },
@@ -76553,9 +76604,36 @@ region.addEventListener('click',()=>{if(!region.disabled)regionToggle();});
 const reloadRegions=ico('refresh','rsel-reload','强制刷新当前地区的 ProxyIP：重新解析并逐项检测',()=>void refreshRegion(true));
 const refreshPips=ico('refresh','pip-refresh','强制刷新当前地区的 ProxyIP：重新解析并逐项检测',()=>void refreshRegion(true));
 const pipList=h('div',{class:'pip-list',role:'radiogroup','aria-label':'出口 IP',hidden:true});
-let pipOpen=false;const pipCnt=h('span',{class:'np-cnt'}),pipVal=h('span',{class:'pip-cv'});
+let pipOpen=false,pipScrollTimer=0;const pipProbedAt=new Map(),pipCnt=h('span',{class:'np-cnt'}),pipVal=h('span',{class:'pip-cv'});
 const pipBtn=h('button',{type:'button',class:'pip-cur','aria-haspopup':'listbox','aria-expanded':'false','aria-label':'出口 IP',onclick:()=>pipToggle()},pipVal,chev());
-function pipToggle(open){pipOpen=open==null?!pipOpen:!!open;pipList.hidden=!pipOpen;pipBtn.setAttribute('aria-expanded',String(pipOpen));pipBox.classList.toggle('open',pipOpen);if(pipOpen){fillPips();if(P&&!poolWork?.running){const visKeys=pipRows().map(([k])=>k),candKeys=candidateRows().map(([k])=>k),listKeys=[...new Set([...visKeys,...candKeys])];if(listKeys.length)void testPips(listKeys);}}}
+function visiblePipBatch(limit=10,visKeys=null,candKeys=null){
+if(!P)return [];
+const nowMs=Date.now(),fresh=k=>!pipBusy.has(k)&&nowMs-(pipProbedAt.get(k)||0)>45000;
+const picked=[];const add=k=>{if(k&&k!==AUTO&&fresh(k)&&!picked.includes(k)&&picked.length<limit)picked.push(k);};
+if(pipOpen&&!pipList.hidden&&pipList.clientHeight>0){
+const top=pipList.scrollTop-24,bot=pipList.scrollTop+pipList.clientHeight+60;
+for(const el of pipList.querySelectorAll('.pip-row[data-k]')){
+const k=el.getAttribute('data-k');if(!k||k===AUTO)continue;
+const y0=el.offsetTop,y1=y0+(el.offsetHeight||32);
+if(y1>=top&&y0<=bot)add(k);
+if(picked.length>=limit)break;
+}
+}
+if(!picked.length){for(const k of (visKeys||pipRows().map(([k])=>k)).slice(0,limit))add(k);}
+if(picked.length<limit){for(const k of (candKeys||candidateRows().map(([k])=>k))){add(k);if(picked.length>=limit)break;}}
+return picked;
+}
+pipList.addEventListener('scroll',()=>{
+if(!pipOpen||!P)return;
+if(pipScrollTimer)clearTimeout(pipScrollTimer);
+pipScrollTimer=setTimeout(()=>{
+pipScrollTimer=0;
+if(!pipOpen||!P||poolWork?.running||P.prog)return;
+const listKeys=visiblePipBatch(10);
+if(listKeys.length)void testPips(listKeys);
+},120);
+},{passive:true});
+function pipToggle(open){pipOpen=open==null?!pipOpen:!!open;pipList.hidden=!pipOpen;pipBtn.setAttribute('aria-expanded',String(pipOpen));pipBox.classList.toggle('open',pipOpen);if(pipOpen){fillPips();if(P&&!poolWork?.running&&!P.prog){const visKeys=pipRows().map(([k])=>k),candKeys=candidateRows().map(([k])=>k),listKeys=visiblePipBatch(10,visKeys,candKeys);if(listKeys.length)void testPips(listKeys);}}}
 const pipBox=h('div',{class:'pip-box2'},pipBtn,pipList);
 const refreshPipListBtn=h('button',{type:'button',class:'btn ghost xs pip-list-btn pip-refresh-btn',title:'打开 ProxyIP 列表：查看 / 添加 / 刷新检测 / 拉黑',onclick:e=>{e.stopPropagation();if(typeof ProxySet!=='undefined'&&typeof ProxySet.open==='function')ProxySet.open();}},typeof icon==='function'?icon('globe'):'☰','ProxyIP 列表');
 const pipHead=secHead('出口 IP（ProxyIP）',pipCnt,refreshPipListBtn);
@@ -76724,12 +76802,12 @@ regionRows=[{v:'*',name:regAuto&&cc?'自动 · '+ccF(cc):'自动（优先用 Pro
 region.value=regAuto?'*':cc;
 }
 async function probeMany(keys,link,onPart,j){
-const modern=!!(Host.onProbeProgress&&P.streamProbe),size=modern?32:4,q=[];
+const modern=!!(Host.onProbeProgress&&P.streamProbe),size=modern?(keys.length<=12?Math.max(1,keys.length):12):4,q=[];
 for(let i=0;i<keys.length;i+=size)q.push(keys.slice(i,i+size));let fatal='',consecFail=0,okSeen=0;
 const worker=async()=>{while(q.length&&!fatal&&workLive(j)){
 const part=q.shift(),seen=new Set(),sources=new Map(part.map(k=>[k,P.d?.ips?.[k]?.src||''])),pendingBatch=[];
 let flushJob=null;
-const applyOne=(d,k,r)=>{const e=d.ips[k];if(workLive(j)&&e&&!e.gone&&(e.src||'')===sources.get(k)&&!(d.drop?.[k]>j.started)&&!P.banned?.(k)){P.apply(d,k,r);if(typeof IPRep!=='undefined')IPRep.invalidate?.();if(isCurPip(k)&&r?.ip&&r?.brana&&r?.ms>0&&typeof IP!=='undefined'){IP.rtt=r.ms;IP.at=Date.now();IP.rttFail=0;try{Bar.render?.();}catch{}}if(typeof IPRep!=='undefined'&&!IPRep.trusted?.(k)&&IPRep.risky?.(k,e))P.banForever?.(d,k,'高风险 · 已永久拉黑');}};
+const applyOne=(d,k,r)=>{const e=d.ips[k];if(workLive(j)&&e&&!e.gone&&(e.src||'')===sources.get(k)&&!(d.drop?.[k]>j.started)&&!P.banned?.(k)){P.apply(d,k,r);if(typeof IPRep!=='undefined')IPRep.invalidate?.();if(isCurPip(k)&&r?.ip&&r?.brana&&r?.ms>0&&typeof IP!=='undefined'){IP.rtt=r.ms;IP.at=Date.now();IP.rttFail=0;try{Bar.render?.();}catch{}}if(typeof IPRep!=='undefined'&&!IPRep.trusted?.(k)){if(IPRep.risky?.(k,e))P.banForever?.(d,k,'高风险 · 已永久拉黑');else if(IPRep.impure?.(k,e))P.coolTemporarily?.(d,k,'impure',e.eg||'','实测纯净度不足 · 已自动隔离冷却');}}};
 const needsLiveRate=k=>{if(typeof IPRep==='undefined'||!(Host.fetchText||Host.ippureDirect))return false;const e=P.d?.ips?.[k];if(!e||e.ok!==true||e.gone||P.banned?.(k)||IPRep.trusted?.(k))return false;const eg=IPRep.egOf?.(k,e)||e.eg||k;const pu=P.d?.rep?.[eg]?.pu;return !IPRep.score(k,e).known||!pu||pu.basicOnly||!pu.via;};
 const flushBatch=async()=>{
 if(!pendingBatch.length)return;
@@ -76763,9 +76841,9 @@ paintPoolSoon();
 }
 else {fatal=r?.error||'检测失败';return;}
 if(workLive(j)&&typeof IPRep!=='undefined'&&(Host.fetchText||Host.ippureDirect)){
-const isManualPing=keys.length<=4;
+const isManualPing=keys.length<=12;
 const unrated=part.filter(k=>isManualPing?Boolean(P.d?.ips?.[k]?.ok===true&&!P.d.ips[k].gone&&!P.banned?.(k)&&!IPRep.trusted?.(k)):needsLiveRate(k));
-if(unrated.length){if(isManualPing)await IPRep.rate(unrated,[],{force:true}).catch(()=>{});else await IPRep.rate(unrated).catch(()=>{});await P.purgeImpureAndUnstable?.().catch(()=>{});IPRep.invalidate?.();if(workLive(j))paintPoolSoon();}
+if(unrated.length){if(isManualPing)await IPRep.rate(unrated,[],{force:true}).catch(()=>{});else await IPRep.rate(unrated).catch(()=>{});await P.purgeImpureAndUnstable?.().catch(()=>{});IPRep.invalidate?.();if(workLive(j)&&isCurPip(part.find(x=>isCurPip(x))))try{void IPRep.check({forceOnHighRisk:true});}catch{}if(workLive(j))paintPoolSoon();}
 }
 if(consecFail>=24&&consecFail>=120&&okSeen===0){fatal='连续 '+consecFail+' 个候选连接失败，已自动熔断停止全量扫描（可直接点「应用更改」使用节点自身代理兜底）';return;}
 }};
@@ -76798,9 +76876,20 @@ const pipScoreVal=(k,e)=>R?(R.score(k,e)?.known?Math.round(R.score(k,e).s):-1):0
 const pipKindRank=(k,e)=>{const kd=R?.kind?.(k,e)?.c;return kd==='res'?3:kd==='mob'?2:kd==='dc'?1:0;};
 function pipRows(){
 if(!P)return [];
-const byRegion=!regAuto&&!!cc;
-return P.entries().filter(([k,e])=>!e.gone&&(byRegion?(e.ok===true&&e.loc===cc):e.ok===true)&&!P.banned?.(k)&&pureK(k))
-.sort(([ka,x],[kb,y])=>((cc&&x.loc===cc?0:1)-(cc&&y.loc===cc?0:1))||grp(x)-grp(y)||(pipScoreVal(kb,y)-pipScoreVal(ka,x))||(pipKindRank(kb,y)-pipKindRank(ka,x))||((x.ms||9e9)-(y.ms||9e9))||ka.localeCompare(kb)).slice(0,60);
+const byRegion=!regAuto&&!!cc,nowMs=Date.now();
+const sorted=P.entries().filter(([k,e])=>!e.gone&&(byRegion?(e.ok===true&&e.loc===cc):e.ok===true)&&!P.banned?.(k)&&pureK(k)&&!((e.impureUntil||0)>nowMs))
+.sort(([ka,x],[kb,y])=>((ka===selPip?0:1)-(kb===selPip?0:1))||((cc&&x.loc===cc?0:1)-(cc&&y.loc===cc?0:1))||grp(x)-grp(y)||(pipScoreVal(kb,y)-pipScoreVal(ka,x))||(pipKindRank(kb,y)-pipKindRank(ka,x))||((x.ms||9e9)-(y.ms||9e9))||ka.localeCompare(kb));
+const seenIp=new Set(),deduped=[];
+for(const [k,e] of sorted){
+const sh=pipShow(k,e),hostKey=String(P?.parse?.(k)?.host||k).replace(/:\d+$/,'').trim().toLowerCase(),mKey=String(sh.main||hostKey).replace(/:\d+$/,'').trim().toLowerCase(),egKey=String(e?.eg||'').trim().toLowerCase();
+if((mKey&&seenIp.has(mKey))||(egKey&&seenIp.has(egKey))||(hostKey&&seenIp.has(hostKey)))continue;
+if(mKey)seenIp.add(mKey);
+if(egKey)seenIp.add(egKey);
+if(hostKey)seenIp.add(hostKey);
+deduped.push([k,e]);
+if(deduped.length>=60)break;
+}
+return deduped;
 }
 const mins=t=>Math.max(1,Math.ceil((t-Date.now())/60e3));
 const when=t=>t?'测于 '+new Date(t).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})+'（'+Math.max(0,Math.round((Date.now()-t)/60000))+' 分钟前）':'';
@@ -76816,7 +76905,7 @@ if(!e||e.ok==null)return {cls:'d-wait',text:'未测'};if(!e.ok)return {cls:'d-fa
 function pipShow(k,e){
 const p=P?.parse?.(k)||{},eg4=e?.eg&&/^\d+\.\d+\.\d+\.\d+$/.test(e.eg)?e.eg:'',eg6=e?.eg&&!eg4&&/^[0-9a-f:]+$/i.test(e.eg)?e.eg:'';
 const viaBase=p.chain?({socks5:'SOCKS5',http:'HTTP',https:'HTTPS',turn:'TURN',sstp:'SSTP'}[p.chain]||p.chain.toUpperCase()):'ProxyIP';
-return {main:eg4||k,via:eg6?viaBase+' · 出口 '+eg6.slice(0,14)+'…':viaBase,eg:e?.eg||''};
+return {main:eg4||p.host||String(k||'').replace(/:\d+$/,''),via:eg6?viaBase+' · 出口 '+eg6.slice(0,14)+'…':viaBase,eg:e?.eg||''};
 }   // 只标类型，不写具体来源（完整地址在悬停提示里）
 function kindTag(k,e){const x=k&&e&&R?.kind?R.kind(k,e):null;return x?h('span',{class:'ipt '+x.c,title:x.why},x.t):null;}
 function fillPips(){
@@ -76847,11 +76936,16 @@ paintFooter();
 function pickPip(k){if(k!==selPip){selPip=k;changed=true;choice=null;tests=null;lastBrana=null;}pipToggle(false);fillPips();say(k===AUTO?'出口自动选择；点「确认」保存':'已选出口 IP '+k+'；点「确认」检测并保存');preflight();}
 async function testPips(keys,seq=pipSeq,existing=null){
 keys=[...new Set(keys)].filter(k=>P?.d?.ips?.[k]&&!P.d.ips[k].gone&&!P.banned?.(k)&&!used(k));
-if(keys.length>96){
+if(!existing&&keys.length>10){
+const visSet=new Set(pipRows().slice(0,10).map(([k])=>k));
+keys.sort((ka,kb)=>{const x=P?.d?.ips?.[ka]||{},y=P?.d?.ips?.[kb]||{};return ((visSet.has(kb)?1:0)-(visSet.has(ka)?1:0))||((y.ok===true?2:y.ok==null?1:0)-(x.ok===true?2:x.ok==null?1:0))||((x.fc||0)-(y.fc||0))||((x.ms||9e9)-(y.ms||9e9));});
+keys=keys.slice(0,10);
+} else if(keys.length>96){
 const visSet=new Set(pipRows().map(([k])=>k));
 keys.sort((ka,kb)=>{const x=P?.d?.ips?.[ka]||{},y=P?.d?.ips?.[kb]||{};return ((visSet.has(kb)?1:0)-(visSet.has(ka)?1:0))||((y.ok===true?2:y.ok==null?1:0)-(x.ok===true?2:x.ok==null?1:0))||((x.fc||0)-(y.fc||0))||((x.ms||9e9)-(y.ms||9e9));});
 keys=keys.slice(0,96);
 }
+const nowMs=Date.now();keys.forEach(k=>pipProbedAt.set(k,nowMs));
 const j=existing||startPoolWork(cc?regionLabel(cc):'出口 IP');if(!j||!workLive(j))return;
 j.total=keys.length;j.phase='probing';keys.forEach(k=>pipBusy.add(k));fillPips();paintWork();
 try{const fatal=await probeMany(keys,j.link,()=>{},j);if(!workLive(j))return;
@@ -77481,14 +77575,19 @@ const arBusy=Boolean(typeof AutoRoute!=='undefined'&&AutoRoute.busy);
 const sig=[ip,IP.loc,cc,ms,a.proxyIp,a.proxy,IP.err,isOff,arBusy].join('|');
 if(v.hsig!==sig){v.hsig=sig;
 const code=String(IP.loc||cc||'').toUpperCase();
-const e=a.proxyIp&&typeof Pool!=='undefined'?Pool.d?.ips?.[a.proxyIp]:null,sc=e&&typeof IPRep!=='undefined'?IPRep.score?.(a.proxyIp,e):null,rl=sc?IPRep.label(sc):'';
+const e=a.proxyIp&&typeof Pool!=='undefined'?Pool.d?.ips?.[a.proxyIp]:null;
+const curRep=typeof IPRep!=='undefined'&&IPRep.cur?IPRep.cur(a,ip):null;
+const sc=curRep?.sc||(e&&typeof IPRep!=='undefined'?IPRep.score?.(a.proxyIp,e):null),rl=curRep?.label||(sc?IPRep.label(sc):'');
+if(ip&&!IP.err&&(rl==='高风险'||rl==='一般')&&typeof IPRep!=='undefined'&&typeof IPRep.check==='function'){
+try{void IPRep.check({forceOnHighRisk:true});}catch{}
+}
 const pipNote=a.proxyIp&&ip&&!ip.startsWith(String(a.proxyIp).split(':')[0])?'（入口 '+String(a.proxyIp).split(':')[0]+'）':'';
 v.ipline.replaceChildren(v.title,h('span',{class:'rip-flag'},f),...(code?[h('span',{class:'rip-cc'},code)]:[]),h('b',{title:ip+(pipNote?' '+pipNote:'')},(ip||(IP.err?'出口检测失败':'正在获取…'))+pipNote));
 const chips=[
 isOff?h('span',{class:'rip-chip bad'},arBusy?'检测到连接超时 · 正在自动切换最优节点 / ProxyIP…':'无法连接 · 请切换节点（点右上角 × 可直接离线查阅）'):null,
 ms&&!rttTimeout?h('span',{class:'rip-chip dly '+(ms<300?'d-good':ms<600?'d-mid':'d-bad'),title:'实际延迟（节点 + ProxyIP）\n'+(typeof IP!=='undefined'&&IP.rttTip?IP.rttTip():'')},ms+' ms · 实时'):rttTimeout?h('span',{class:'rip-chip dly d-fail',title:'当前线路实时探测超时'},'超时 · 实时'):null,
-rl&&rl!=='未评估'?h('span',{class:'rip-chip risk '+(rl==='纯净'?'r-good':rl==='一般'?'r-mid':rl==='高风险'?'r-bad':'r-none'),title:'纯净度 '+sc.s+'%'},rl+' '+Math.round(sc.s)+'%'):null,
-(()=>{const x=e&&typeof IPRep!=='undefined'&&IPRep.kind?IPRep.kind?.(a.proxyIp,e):null;return x?h('span',{class:'rip-chip ipt '+x.c,title:x.why},x.t):null;})()].filter(Boolean);
+rl&&rl!=='未评估'&&sc?h('span',{class:'rip-chip risk '+(rl==='纯净'?'r-good':rl==='一般'?'r-mid':rl==='高风险'?'r-bad':'r-none'),title:'纯净度 '+sc.s+'%'},rl+' '+Math.round(sc.s)+'%'):null,
+(()=>{const x=curRep?.kind||(e&&typeof IPRep!=='undefined'&&IPRep.kind?IPRep.kind?.(a.proxyIp,e):null);return x?h('span',{class:'rip-chip ipt '+x.c,title:x.why},x.t):null;})()].filter(Boolean);
 v.chips.replaceChildren(...chips); v.chips.hidden=!chips.length;
 }
 }
@@ -77762,14 +77861,17 @@ for (let i = 0; i < 2 && cur && !cur.sc?.known && alive(); i++) { await sleep(12
 if (!alive()) return { ok: false, stale: true };
 const pct = cur?.pct, label = cur?.label || '未评估', kind = cur?.kind?.t || '';
 const line = [vl ? nodeName() : '', IP.ip && !IP.err ? ccF(cc) + ' ' + IP.ip : '', ms ? ms + ' ms' : '', pct != null ? label + ' ' + pct + '%' : '', kind].filter(Boolean).join(' · ');
+if (label === '高风险' || label === '一般') {
+try { if (typeof IPRep !== 'undefined' && typeof IPRep.check === 'function') void IPRep.check({ forceOnHighRisk: true }); } catch {}
+}
 if (label === '高风险') {
 c.step('pure', 'warn');
-c.finish('warn', '网络正常 · 出口风险较高', line);
+c.finish('warn', '网络正常 · 出口风险较高（正在自动切换纯净出口）', line);
 this.saveLast({ key: k, at: now(), ok: true });
 return { ok: true, risky: true };
 }
 c.step('pure', pct == null ? 'wait' : label === '一般' ? 'warn' : 'ok');
-const head = (this.tag ? this.tag + ' · ' : '') + (label === '一般' ? '网络正常 · 纯净度一般' : '网络正常');
+const head = (this.tag ? this.tag + ' · ' : '') + (label === '一般' ? '网络正常 · 纯净度一般（正在自动切换纯净出口）' : '网络正常');
 this.tag = '';
 c.finish(label === '一般' ? 'warn' : 'ok', head, line);
 this.saveLast({ key: k, at: now(), ok: true });
@@ -83604,7 +83706,8 @@ try {
 const cmCold = Store.get('me:u', null);
 History.warm('fast');
 try { if (typeof RunningTracker !== 'undefined') RunningTracker.prewarmTrackedChats(); } catch {}
-const hasColdCache = Boolean((cmCold && cmCold.id && !/@example\.invalid$/i.test(String(cmCold.email || ''))) || (History.items && History.items.length > 0));
+const coldBanned = Boolean(UI.host?.account?.ban || (cmCold && cmCold.id === UI.host?.account?.id && cmCold.banned === true));
+const hasColdCache = Boolean(!coldBanned && ((cmCold && cmCold.id && !/@example\.invalid$/i.test(String(cmCold.email || ''))) || (History.items && History.items.length > 0)));
 if (hasColdCache) {
 UI.me = (cmCold && cmCold.id) ? cmCold : { id: 'local', email: '' };
 Tabs.list = Tabs.list.filter(t => t && t.key);
@@ -83789,7 +83892,10 @@ try { if (typeof AutoRoute !== 'undefined') void AutoRoute.request('network', tr
 return;
 }
 try { UI.setBootStep?.('正在连接 arena.ai 核对登录状态…', (UI.host?.account?.email || '') + (UI.host?.account?.proxyIp ? ' · ' + UI.host.account.proxyIp : '')); } catch {}
-const check = await SessionGate.check({ early });
+const check = await Promise.race([
+SessionGate.check({ early }),
+...(early && !window.__fixture && !window.__routeFixture ? [new Promise(r => setTimeout(() => r({ state: 'offline', reason: 'timeout' }), 6000))] : []),
+]);
 if (check.browse || window.__BRANA_BROWSE_MODE) {
 if (!UI.authed) UI.enterBrowseMode('已进入查阅模式（免登录浏览本地缓存对话）');
 return;
@@ -83812,11 +83918,16 @@ if (!UI.me) {
 needShell = (!early || !!window.__fixture || !!window.__routeFixture);
 const cred = await Host.getCred().catch(() => null);
 if (cred?.email && cred?.password) {
-if (!early || window.__fixture || window.__routeFixture) $('#view').replaceChildren(h('div', { class: 'gate' }, h('div', { class: 'lform' }, h('div', { class: 'hero-t' }, '正在登录…'), h('div', { class: 'lsub' }, cred.email + ' · ' + (isDirectP(UI.host.account?.proxy) ? '直连' : '代理 ' + maskProxy(UI.host.account?.proxy))), h('i', { class: 'spin' }))));
+if (!early || window.__fixture || window.__routeFixture) {
+$('#view').replaceChildren(h('div', { class: 'gate' }, h('div', { class: 'lform' }, h('div', { class: 'hero-t' }, '正在登录…'), h('div', { class: 'lsub' }, cred.email + ' · ' + (isDirectP(UI.host.account?.proxy) ? '直连' : '代理 ' + maskProxy(UI.host.account?.proxy))), h('i', { class: 'spin' }))));
+UI.shown();
+}
+let signInTries = 0;
+const maxSignInRetries = (window.__fixture || window.__routeFixture) ? 99 : 1;
 for (;;) {
 try { UI.me = checkedUser(await Auth.signIn(cred.email, cred.password)); connOk(); break; }
 catch (e) {
-if (e.net && await connWait(describe(e), e.slow) !== 'gate') continue;
+if (++signInTries <= maxSignInRetries && e.net && await connWait(describe(e), e.slow) !== 'gate') continue;
 connOk();
 try { Host.noteAccount?.({ loggedIn: false })?.catch?.(() => {}); } catch {}
 if (early && !window.__fixture && !window.__routeFixture) { UI.enterBrowseMode('自动登录暂未完成（' + describe(e) + '）· 已保留本地缓存对话'); return; }
@@ -84003,10 +84114,10 @@ if (window.__ANC_BOOTED) return; window.__ANC_BOOTED = true;
 addEventListener('dragover', e => { if ([...(e.dataTransfer?.types || [])].includes('Files')) e.preventDefault(); });
 addEventListener('drop', e => { if ([...(e.dataTransfer?.types || [])].includes('Files')) e.preventDefault(); });
 if (location.pathname !== '/robots.txt') { if (Host.platform !== 'web') overlay(); return; }
-const start = () => { UI.build(); Mob.bind();
+const start = () => { UI.build(); Mob.bind(); window.__arenaNextClientLoaded = true;
 try { const A = window.BranaAndroid; if (A?.insets) { const [t, b] = JSON.parse(A.insets()); const st = document.documentElement.style; st.setProperty('--sa-top', t + 'px'); st.setProperty('--sa-bottom', b + 'px'); } } catch {}
 if (Host.platform === 'android' && Host.takeEnter?.()) { EnterFlow.go(); requestAnimationFrame(() => requestAnimationFrame(() => UI.shown())); }
-setTimeout(() => { try { window.BranaHost?.ready?.()?.catch?.(() => {}); } catch {} }, 320); init().catch(e => { console.error(e); try { UI.setBootStep?.('初始化遇到问题：' + (e?.message || e), '可点击下方按钮切换节点、进入离线查阅或重新加载', true); } catch {} toast('初始化失败：' + e.message, 'err'); UI.shown(); }); setTimeout(() => UI.shown(), 8000); };
+setTimeout(() => { try { window.BranaHost?.ready?.()?.catch?.(() => {}); } catch {} }, 320); init().catch(e => { console.error(e); try { UI.setBootStep?.('初始化遇到问题：' + (e?.message || e), '可点击下方按钮切换节点、进入离线查阅或重新加载', true); } catch {} toast('初始化失败：' + e.message, 'err'); UI.shown(); }); setTimeout(() => UI.shown(), 3500); };
 if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start, { once: true }); else start();
 }
 boot();
