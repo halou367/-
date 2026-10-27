@@ -76881,10 +76881,12 @@ const sorted=P.entries().filter(([k,e])=>!e.gone&&(byRegion?(e.ok===true&&e.loc=
 .sort(([ka,x],[kb,y])=>((ka===selPip?0:1)-(kb===selPip?0:1))||((cc&&x.loc===cc?0:1)-(cc&&y.loc===cc?0:1))||grp(x)-grp(y)||(pipScoreVal(kb,y)-pipScoreVal(ka,x))||(pipKindRank(kb,y)-pipKindRank(ka,x))||((x.ms||9e9)-(y.ms||9e9))||ka.localeCompare(kb));
 const seenIp=new Set(),deduped=[];
 for(const [k,e] of sorted){
-const sh=pipShow(k,e),hostKey=String(P?.parse?.(k)?.host||k).replace(/:\d+$/,'').trim().toLowerCase(),mKey=String(sh.main||hostKey).replace(/:\d+$/,'').trim().toLowerCase(),egKey=String(e?.eg||'').trim().toLowerCase();
+const sh=pipShow(k,e),hostKey=String(P?.parse?.(k)?.host||k).replace(/:\d+$/,'').trim().toLowerCase(),isIpHost=/^\d+\.\d+\.\d+\.\d+$/.test(hostKey),mKey=String(sh.main||hostKey).replace(/:\d+$/,'').trim().toLowerCase(),egKey=String(e?.eg||'').trim().toLowerCase();
+if(isIpHost){
 if((mKey&&seenIp.has(mKey))||(egKey&&seenIp.has(egKey))||(hostKey&&seenIp.has(hostKey)))continue;
 if(mKey)seenIp.add(mKey);
 if(egKey)seenIp.add(egKey);
+}else if(hostKey&&seenIp.has(hostKey))continue;
 if(hostKey)seenIp.add(hostKey);
 deduped.push([k,e]);
 if(deduped.length>=60)break;
