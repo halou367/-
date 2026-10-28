@@ -12361,7 +12361,7 @@ const BillingProbe = (() => {
       summaryCache.delete(sid);
       topConfidenceCache.delete(sid);
     }
-    const sum = summary(sid, { commit: true, readOnly: false, preferLatestTurn }), d = sum.diagnostics, c = sum.consensus;
+    const sum = summary(sid, { commit: Boolean(interactive), noModelSync: !interactive, readOnly: false, preferLatestTurn }), d = sum.diagnostics, c = sum.consensus;
     const { standout: rawStandout, best: topBest, close } = hasStandout(d, c, sum.mergedCandidates);
     const standout = Boolean(forceLock || fallbackQuestionMark || rawStandout);
     let best = topBest;
@@ -12383,7 +12383,7 @@ const BillingProbe = (() => {
     const hasLoadedMsgs = compAsstForGuard.length > 0;
     const needsV12Audit = !known || (Number(known._tihuEngineFixVer) || 0) < 15;
     const hasNewerLoadedTurn = Boolean(hasLoadedMsgs && ((compAsstForGuard.length > (Number(known?.completedTurnCount) || 0)) || !known?.lastMessageId || (compAsstForGuard.at(-1)?.id && compAsstForGuard.at(-1).id !== known.lastMessageId) || (known?.reverseVer || 0) < 187 || needsV12Audit));
-    if (!interactive && !forceLock && !best?.isPelicanHtml && !best?.tihuLocked && !(d?.samples?.observations > 0) && ((typeof TitleCipher !== 'undefined' && TitleCipher.isEncoded?.(cloudTitle)) || (restoredMeta && !restoredMeta.fromPrefix)) && !(known?.lastMessageId && compAsstForGuard.at(-1)?.id && compAsstForGuard.at(-1).id !== known.lastMessageId)) {
+    if (!interactive && !best?.isPelicanHtml && !best?.tihuLocked && !(d?.samples?.observations > 0) && ((typeof TitleCipher !== 'undefined' && TitleCipher.isEncoded?.(cloudTitle)) || (restoredMeta && !restoredMeta.fromPrefix)) && !(known?.lastMessageId && compAsstForGuard.at(-1)?.id && compAsstForGuard.at(-1).id !== known.lastMessageId)) {
       return { entry: known, best, close: [best], standout: true, preimage: sum.preimage, payment: sum.payment };
     }
     if (!interactive && !force && !forceLock && !needsV12Audit && !hasLoadedMsgs && restoredMeta?.fromPrefix && (known?.reverseVer || 0) >= 174) {
