@@ -444,7 +444,8 @@ const Workspace = {
   dirCache: new Map(), casCache: new Map(), casPending: new Map(), _wsSeq: 0,
   async protoJson(path, opt = {}) {
     const seq = (this._wsSeq = (this._wsSeq + 1) % 10000);
-    const preferProto = Boolean(opt.preferProto || (typeof ReadLimit !== 'undefined' && ReadLimit.active?.()));
+    const hasNativeProto = typeof window !== 'undefined' && !window.__fixture && !window.__routeFixture && typeof Host !== 'undefined' && typeof Host.protoFetch === 'function';
+    const preferProto = Boolean(opt.preferProto || hasNativeProto || (typeof ReadLimit !== 'undefined' && ReadLimit.active?.()));
     const tryProto = async () => {
       if (typeof Host === 'undefined' || typeof Host.protoFetch !== 'function') return null;
       const pr = await Host.protoFetch(path, {
@@ -514,6 +515,35 @@ const Workspace = {
     const run = (async () => {
       const relPath = '/api/chat/workspace/cas/user/' + encodeURIComponent(hKey);
       const hdrs = opt.range ? { Range: opt.range } : undefined;
+      if (!opt.range && typeof Host !== 'undefined' && typeof Host.protoFetch === 'function' && !(typeof window !== 'undefined' && window.__fixture)) {
+        try {
+          const seq = (this._wsSeq = (this._wsSeq + 1) % 10000);
+          const pr = await Host.protoFetch(relPath, {
+            method: 'GET',
+            bypass429: true,
+            responseType: 'base64',
+            pipSlot: seq,
+            headers: hdrs || {},
+            timeout: 30000,
+          });
+          if (pr && pr.ok && typeof pr.base64 === 'string') {
+            const binStr = atob(pr.base64);
+            const bytes = new Uint8Array(binStr.length);
+            for (let i = 0; i < binStr.length; i++) bytes[i] = binStr.charCodeAt(i);
+            const b = new Blob([bytes], { type: pr.contentType || 'application/octet-stream' });
+            if (b.size <= 8 * 1024 * 1024) {
+              if (this.casCache.size >= 96) this.casCache.delete(this.casCache.keys().next().value);
+              this.casCache.set(hKey, b);
+            }
+            return b;
+          }
+          if (pr && !pr.fallback && pr.status && pr.status !== 429 && pr.status !== 403) {
+            throw new HttpError(pr.status, pr.text || '');
+          }
+        } catch (e) {
+          if (e instanceof HttpError && e.status !== 429 && e.status !== 403) throw e;
+        }
+      }
       try {
         const res = await rawFetch(this.casUrl(hKey), {
           credentials: 'same-origin',
@@ -951,18 +981,18 @@ const BotService = (() => {
     const detail = `IP ${ipScore}(${ipTag}) · 过盾 ${v3Score}(${v3Tag}) · 出货 ${sign(drawScore)}(${drawTag}) · 额度 ${sign(quotaScore)}(${quotaTag}) · 信任 ${sign(nurtureBonus - replayPen)}(${nurtureTag})`;
     const sweetSpotSummary = `${sweetSpot ? '🟢 72%-95% 额度甜区' : (pct != null ? `Pulse ${Math.round(pct)}%` : '额度待采样')} · ${drawWindowLabel}${battleTrustCount > 0 ? ` · 对战养号 ${battleTrustCount} 次` : ''}`;
     const computeTideSummary = `${computeTide.label} · 皇冠爆率 ${computeTide.crownHitRatePct}% · Gittins k*=4`;
-    const tier = finalScore >= 80 ? 'T1' : finalScore >= 50 ? 'T2' : 'T3';
-    const label = finalScore >= 80 ? 'T1 旗舰池' : finalScore >= 50 ? 'T2 混合池' : 'T3 惩罚池';
+    const tier = finalScore >= 80 ? 'T0' : finalScore >= 50 ? 'T1' : 'T2';
+    const label = tier;
     const opusUnlocked = (typeof Skew !== 'undefined' && typeof Skew.opusUnlocked === 'function')
       ? Skew.opusUnlocked()
       : (typeof Prefs === 'object' ? Prefs.opusUnlock !== false : true);
     const prizePool = !opusUnlocked
-      ? { tier: 'LOCKED', short: '常规受限池', name: '常规池 (Opus未解封)', models: 'Sonnet / Gemini / 开源', tone: 'warn' }
+      ? { tier: 'T2', short: 'T2', name: 'T2', models: 'Sonnet · Gemini · 开源', tone: 'warn' }
       : finalScore >= 80
-      ? { tier: 'T1', short: 'T1 皇冠池', name: 'T1 皇冠池 (Opus / 6.1 Sol)', models: 'Opus 4.6 · Fable 5.1 Max · 6.1 Sol', tone: 'ok' }
+      ? { tier: 'T0', short: 'T0', name: 'T0', models: 'Opus 4.6 · Fable 5.1 Max · 6.1 Sol', tone: 'ok' }
       : finalScore >= 50
-      ? { tier: 'T2', short: 'T2 进阶池', name: 'T2 进阶池 (Opus已解封)', models: 'Opus / Astra / Sonnet 混合', tone: 'acc' }
-      : { tier: 'T3', short: 'T3 降级池', name: 'T3 降级池 (开源高发)', models: 'MiMo / DeepSeek / Kimi', tone: 'bad' };
+      ? { tier: 'T1', short: 'T1', name: 'T1', models: 'Opus · Astra · Sonnet', tone: 'acc' }
+      : { tier: 'T2', short: 'T2', name: 'T2', models: 'MiMo · DeepSeek · Kimi', tone: 'bad' };
 
     const baseHit = Number(computeTide.crownHitRatePct) || 9.18;
     const scoreBoost = finalScore >= 80 ? 1.16 : finalScore >= 65 ? 1.04 : 0.78;
@@ -1078,21 +1108,21 @@ const BotService = (() => {
     if (s >= 80) {
       return {
         tone: 'ok',
-        label: 'T1 旗舰池',
-        desc: `${srcTag} ${s}/99（🟢 T1 旗舰高优池：高信誉真人环境，正常分配 Opus / 6.1 Sol / Argon 等顶级模型）\n构成：${ev.detail}`,
+        label: 'T0',
+        desc: `${srcTag} ${s}/99（🟢 T0：高信誉环境，正常分配 Opus / 6.1 Sol / Argon 等模型）\n构成：${ev.detail}`,
       };
     }
     if (s >= 50) {
       return {
         tone: 'warn',
-        label: 'T2 混合池',
-        desc: `${srcTag} ${s}/99（🟡 T2 常规混合池：中等信誉，旗舰权重受限或偶发分流开源模型，建议保持纯净原生家宽 IP）\n构成：${ev.detail}`,
+        label: 'T1',
+        desc: `${srcTag} ${s}/99（🟡 T1：中等信誉，建议保持纯净 IP）\n构成：${ev.detail}`,
       };
     }
     return {
       tone: 'bad',
-      label: 'T3 惩罚池',
-      desc: `${srcTag} ${s}/99（🔴 T3 降级惩罚池：疑似触发低分号屏蔽 Opus 机制，高频分配 MiMo/DeepSeek 或弹验证，建议立即切换纯净住宅 IP）\n构成：${ev.detail}`,
+      label: 'T2',
+      desc: `${srcTag} ${s}/99（🔴 T2：低信誉受限，建议切换纯净 IP）\n构成：${ev.detail}`,
     };
   }
 

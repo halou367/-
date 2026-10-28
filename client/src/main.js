@@ -2378,11 +2378,14 @@ ipcMain.handle('host:protoFetch', async (e, u, opt = {}) => {
       }
       const baseCookies = (Array.isArray(ses.__cookieCache) ? ses.__cookieCache : [])
         .filter(c => c && c.name && c.name !== 'arena_visit_id' && c.name !== '__vdpl');
+      const pinVdpl = /^dpl_[A-Za-z0-9]{16,48}$/.test(String(opt?.vdpl || '').trim()) ? String(opt.vdpl).trim() : null;
       const skewPool = [null, ...COST_SKEW_DPLS.filter(x => !EXPIRED_COST_DPLS.has(x))].slice(0, 3);
+      const defMethod = String(opt?.method || 'GET').toUpperCase();
       const rawRoutes = Array.isArray(opt?.routes) && opt.routes.length
         ? opt.routes.filter(r => r && typeof r.path === 'string' && r.path.startsWith('/') && !r.path.startsWith('//'))
-        : [{ path: raw, method: opt?.method || 'POST', body: opt?.body }];
-      const routeSteps = rawRoutes.length ? rawRoutes : [{ path: raw, method: opt?.method || 'POST', body: opt?.body }];
+        : [{ path: raw, method: defMethod, body: opt?.body }];
+      const routeSteps = rawRoutes.length ? rawRoutes : [{ path: raw, method: defMethod, body: opt?.body }];
+      const isSingleRead = routeSteps.length === 1 && /^(?:GET|HEAD)$/i.test(String(routeSteps[0].method || defMethod));
       const mSid = new RegExp('/([0-9a-f-]{36})\\b', 'i').exec(raw);
       const referer = opt?.referer || (mSid ? 'https://arena.ai/c/' + mSid[1] : 'https://arena.ai/');
 
@@ -2391,48 +2394,67 @@ ipcMain.handle('host:protoFetch', async (e, u, opt = {}) => {
         const ckParts = baseCookies.map(c => c.name + '=' + c.value);
         ckParts.push('arena_visit_id=' + visitId);
         if (skewDpl) ckParts.push('__vdpl=' + skewDpl);
-        const stepMethod = String(step.method || opt?.method || 'POST').toUpperCase();
+        const stepMethod = String(step.method || defMethod).toUpperCase();
         const stepBody = step.body !== undefined ? step.body : opt?.body;
         const hdrs = {
-          Accept: 'application/json',
+          Accept: opt?.accept || 'application/json',
+          'Accept-Language': a?.fp?.lang || 'en-US,en;q=0.9',
           Referer: referer,
-          Origin: 'https://arena.ai',
+          'User-Agent': a?.fp?.ua || DEFAULT_UA,
+          ...(stepMethod !== 'GET' && stepMethod !== 'HEAD' ? { Origin: 'https://arena.ai' } : {}),
           Cookie: ckParts.join('; '),
           ...(opt?.headers && typeof opt.headers === 'object' ? opt.headers : {}),
           ...(step.headers && typeof step.headers === 'object' ? step.headers : {}),
           ...(skewDpl ? { 'x-deployment-id': skewDpl } : {}),
         };
         if (stepBody !== undefined && !hdrs['Content-Type'] && !hdrs['content-type']) {
-          hdrs['Content-Type'] = 'application/json';
+          hdrs['Content-Type'] = opt?.contentType || 'application/json';
         }
         const r = await targetSes.fetch('https://arena.ai' + step.path, {
           method: stepMethod,
           headers: hdrs,
           body: stepBody !== undefined ? String(stepBody) : undefined,
           credentials: includeCredentials ? 'include' : 'omit',
-          redirect: 'error',
+          redirect: opt?.redirect || 'error',
           cache: 'no-store',
           signal: ctl.signal,
         });
+        if (includeCredentials && (r.headers.get('set-cookie') || (typeof r.headers.getSetCookie === 'function' && r.headers.getSetCookie().length))) {
+          ses.__cookieCache = null;
+          ses.__cookieCacheAt = 0;
+          try {
+            const scCount = await storeSetCookies(ses, r);
+            if (scCount > 0) await ses.cookies.flushStore().catch(() => {});
+          } catch {}
+        }
         const isB64 = opt?.responseType === 'base64';
         let text = '', base64 = '';
         if (isB64) {
           const ab = await r.arrayBuffer().catch(() => new ArrayBuffer(0));
           base64 = Buffer.from(ab).toString('base64');
         } else {
-          text = (await r.text().catch(() => '')).slice(0, 2e6);
+          text = (await r.text().catch(() => '')).slice(0, 12e6);
         }
+        const contentType = r.headers.get('content-type') || '';
+        const retryAfter = r.headers.get('retry-after') || '';
         return {
           ok: r.ok,
           status: r.status,
           text,
           base64,
-          contentType: r.headers.get('content-type') || '',
-          retryAfter: r.headers.get('retry-after') || '',
+          contentType,
+          retryAfter,
           ratelimitRemaining: r.headers.get('ratelimit-remaining') || '',
           ratelimitReset: r.headers.get('ratelimit-reset') || '',
           ratelimitLimit: r.headers.get('ratelimit-limit') || '',
           date: r.headers.get('date') || '',
+          headers: {
+            'content-type': contentType,
+            'retry-after': retryAfter,
+            'content-range': r.headers.get('content-range') || '',
+            'x-arena-trigger-version': r.headers.get('x-arena-trigger-version') || '',
+            'x-arena-api-deployment': r.headers.get('x-arena-api-deployment') || '',
+          },
           path: step.path,
           method: stepMethod,
         };
@@ -2440,17 +2462,32 @@ ipcMain.handle('host:protoFetch', async (e, u, opt = {}) => {
 
       let lastResp = null;
       const slotSeed = Math.abs(Number(opt?.pipSlot) || 0);
-      // Phase 1: Try multi-route + fresh arena_visit_id + deployment skew rotation on primary session
-      for (let i = 0; i < routeSteps.length; i++) {
-        const step = routeSteps[i];
-        const skewDpl = skewPool[(i + slotSeed) % skewPool.length];
-        try {
-          const resp = await execStep(ses, step, skewDpl, true);
-          lastResp = resp;
-          if (resp.ok || resp.status === 404) return resp;
-          if (resp.status === 401) return resp;
-        } catch (stepErr) {
+      // Phase 1: Primary session with fresh arena_visit_id; single GET/HEAD starts on live/pinned deployment first and rotates skew on 429/403/409
+      if (isSingleRead) {
+        const readDpls = [...new Set([pinVdpl, null, ...COST_SKEW_DPLS.filter(x => !EXPIRED_COST_DPLS.has(x))])].slice(0, 2);
+        for (let i = 0; i < readDpls.length; i++) {
           if (ctl.signal.aborted) break;
+          try {
+            const resp = await execStep(ses, routeSteps[0], readDpls[i], true);
+            lastResp = resp;
+            if (resp.ok || resp.status === 404 || resp.status === 401) return resp;
+            if (resp.status !== 429 && resp.status !== 403 && !(resp.status === 409 && readDpls[i])) return resp;
+          } catch (stepErr) {
+            if (ctl.signal.aborted) break;
+          }
+        }
+      } else {
+        for (let i = 0; i < routeSteps.length; i++) {
+          const step = routeSteps[i];
+          const skewDpl = skewPool[(i + slotSeed) % skewPool.length];
+          try {
+            const resp = await execStep(ses, step, skewDpl, true);
+            lastResp = resp;
+            if (resp.ok || resp.status === 404) return resp;
+            if (resp.status === 401) return resp;
+          } catch (stepErr) {
+            if (ctl.signal.aborted) break;
+          }
         }
       }
 
@@ -2583,16 +2620,9 @@ ipcMain.handle('host:protoFetch', async (e, u, opt = {}) => {
             }).catch(() => {})
           );
         }
+        // 仅在当次 /cost 请求头注入 __vdpl，清理共享 Cookie 罐中的残留 __vdpl 以防污染普通会话读取
         tasks.push(
-          skewDpl ? ses.cookies.set({
-            url: 'https://arena.ai',
-            name: '__vdpl',
-            value: skewDpl,
-            path: '/',
-            secure: true,
-            sameSite: 'lax',
-            expirationDate: Math.floor(nowMs / 1000) + 31536000,
-          }).catch(() => {}) : Promise.all([
+          Promise.all([
             ses.cookies.remove('https://arena.ai', '__vdpl').catch(() => {}),
             ses.cookies.remove('https://arena.ai/', '__vdpl').catch(() => {}),
           ])
@@ -2695,7 +2725,7 @@ ipcMain.handle('host:protoFetch', async (e, u, opt = {}) => {
       lastResp = {
         ok: r.ok,
         status: r.status,
-        text: text.slice(0, 4e6),
+        text: text.slice(0, 12e6),
         contentType,
         retryAfter,
         headers: {
@@ -4712,6 +4742,7 @@ function mergeSharedPelshots(v, sender = null, { broadcast = true } = {}) {
 }
 let pelHarvesting = false, pelHarvestedOnce = false;
 function harvestAccountPelicanSoon(force = false) {
+  return;   // 截图库已取消（2.0.3-beta.1）：不再用调试器逐账号收割鹈鹕截图
   if (pelHarvesting || (!force && pelHarvestedOnce)) return;
   if (process.env.BRANA_EXTENSION_TEST_DATA || typeof app === 'undefined' || !app.isReady?.()) return;
   if (!force && Array.isArray(DB?.accounts) && DB.accounts.every(a => !a?.id || a.pelHarvested)) {
@@ -5643,24 +5674,49 @@ ipcMain.handle('host:gbStart', async (e, o) => {
 const winDrags = new Map();
 ipcMain.handle('host:winDrag', (e, phase) => {
   const w = BrowserWindow.fromWebContents(e.sender); if (!w || w.isDestroyed()) return false;
-  const stop = () => { const d = winDrags.get(w.id); if (d) { clearInterval(d.iv); winDrags.delete(w.id); } };
-  if (phase !== 'start') { stop(); return true; }
-  stop();
+  const stop = snapOnEnd => {
+    const d = winDrags.get(w.id);
+    if (!d) return;
+    clearInterval(d.iv);
+    if (d.onBlur) { try { w.removeListener('blur', d.onBlur); } catch {} }
+    winDrags.delete(w.id);
+    if (snapOnEnd && d.moved && !w.isDestroyed() && !w.isMaximized() && !w.isFullScreen()) {
+      try {
+        const pt = screen.getCursorScreenPoint();
+        const wa = screen.getDisplayNearestPoint(pt)?.workArea;
+        if (wa && pt.y <= wa.y + 5) w.maximize();
+      } catch {}
+    }
+  };
+  if (phase === 'toggleMax') {
+    stop(false);
+    if (w.isFullScreen()) w.setFullScreen(false);
+    else if (w.isMaximized()) w.unmaximize();
+    else w.maximize();
+    return w.isMaximized();
+  }
+  if (phase !== 'start') { stop(phase === 'end'); return true; }
+  stop(false);
   const p0 = screen.getCursorScreenPoint(); let b = w.getBounds();
+  let unmaxMoved = false;
   if (w.isMaximized() || w.isFullScreen()) {
     if (w.isFullScreen()) return false;
-    const rx = (p0.x - b.x) / Math.max(1, b.width), oy = p0.y - b.y;
+    const rx = Math.max(0.05, Math.min(0.95, (p0.x - b.x) / Math.max(1, b.width)));
+    const oy = Math.max(8, Math.min(36, p0.y - b.y));
     w.unmaximize(); const nb = w.getBounds();
     b = { x: Math.round(p0.x - rx * nb.width), y: Math.round(p0.y - oy), width: nb.width, height: nb.height };
     w.setBounds(b);
+    unmaxMoved = true;
   }
-  const d = { iv: null, t: Date.now(), lastX: b.x, lastY: b.y };
+  const onBlur = () => stop(false);
+  const d = { iv: null, t: Date.now(), lastX: b.x, lastY: b.y, moved: unmaxMoved, onBlur };
+  w.once('blur', onBlur);
   d.iv = setInterval(() => {
-    if (w.isDestroyed() || Date.now() - d.t > 60000) { stop(); return; }
+    if (w.isDestroyed() || Date.now() - d.t > 60000) { stop(false); return; }
     const p = screen.getCursorScreenPoint();
     const nx = b.x + p.x - p0.x, ny = b.y + p.y - p0.y;
     if (nx === d.lastX && ny === d.lastY) return;
-    d.lastX = nx; d.lastY = ny;
+    d.lastX = nx; d.lastY = ny; d.moved = true;
     try { w.setBounds({ x: nx, y: ny, width: b.width, height: b.height }); } catch {}
   }, 12);
   winDrags.set(w.id, d);
@@ -5695,7 +5751,8 @@ async function storeSetCookies(ses, r) {
   }
   for (const line of list) {
     const [nv, ...attrs] = line.split(';'); const i = nv.indexOf('='); if (i < 1) continue;
-    const c = { url: 'https://arena.ai', name: nv.slice(0, i).trim(), value: nv.slice(i + 1).trim(), path: '/', secure: true };
+    const ckName = nv.slice(0, i).trim(); if (ckName === '__vdpl') continue;
+    const c = { url: 'https://arena.ai', name: ckName, value: nv.slice(i + 1).trim(), path: '/', secure: true };
     if (c.name === '__vdpl') {
       if (c.value && /^dpl_[A-Za-z0-9]{16,48}$/.test(c.value) && !EXPIRED_COST_DPLS.has(c.value)) rememberCostDpl(c.value, false);
       continue;

@@ -8645,10 +8645,14 @@ const ChatHabitFingerprint = (() => {
     } catch { return false; }
   }
 
+  const _identifyingSids = new Set();
   function identifyAndApply(chat, { force = false, fromCostFallback = false, interactive = false, preferLatestTurn = false } = {}) {
     if (!chat?.sid || isEvalSession(chat)) return null;
     const sid = chat.sid;
     const known = typeof Models !== 'undefined' ? Models.get(sid) : null;
+    if (_identifyingSids.has(sid)) return known || null;
+    _identifyingSids.add(sid);
+    try {
     if (known?.userCorrected && !interactive && !CONFIRMED_GEMINI_FLASH_SIDS.has(sid)) return known;
     if (interactive && known?.userCorrected) {
       delete known.userCorrected;
@@ -8793,6 +8797,8 @@ const ChatHabitFingerprint = (() => {
       billingProbe: true,
       reverseVer: 187,
       _v197CalibVer: 3,
+      _tihuEngineFixVer: Math.max(Number(known?._tihuEngineFixVer) || 0, 15),
+      _mismatchCheckedVer: 187,
       guess: false,
       sure: Boolean(best.userLearned || best.match >= 75),
       uncertain: !isStandout,
@@ -8822,7 +8828,7 @@ const ChatHabitFingerprint = (() => {
       nextEntry.tihuVendorId = decomp.vendor;
       nextEntry.tihuExact = Boolean(topTihuNow.tihuExact);
       nextEntry.tihuConfidence = best.match;
-      nextEntry._tihuEngineFixVer = 3;
+      nextEntry._tihuEngineFixVer = 15;
       if (!hasRealCostModel && !isNowMidTurnRouted) {
         nextEntry.provider = '醍醐 Pelican HTML/SVG 识别';
       }
@@ -8883,9 +8889,12 @@ const ChatHabitFingerprint = (() => {
       (!latestAsstId || known.lastMessageId === latestAsstId) &&
       (known.reverseVer || 0) >= 187
     );
-    if (isUnchanged && !interactive) {
+    const normKnownName = (typeof Strength !== 'undefined' && Strength.canon ? Strength.canon(known?.name || '') : String(known?.name || '')).replace(/[?？]+$/, '');
+    const normNextName = (typeof Strength !== 'undefined' && Strength.canon ? Strength.canon(nextEntry.name || '') : String(nextEntry.name || '')).replace(/[?？]+$/, '');
+    if ((isUnchanged || (known && normKnownName && normKnownName === normNextName && known.reverseLabel === nextEntry.reverseLabel && known.tier === nextEntry.tier && Boolean(known.routed) === Boolean(nextEntry.routed) && known.routeTo === nextEntry.routeTo && Boolean(known.habitInferred) === true && !known.pendingConfirm && !known.guess && (!latestAsstId || known.lastMessageId === latestAsstId) && (known.reverseVer || 0) >= 187)) && !interactive) {
       known._v197CalibVer = 3;
       known._mismatchCheckedVer = 187;
+      known._tihuEngineFixVer = Math.max(Number(known._tihuEngineFixVer) || 0, 15);
       return known;
     }
     if (typeof Models !== 'undefined') {
@@ -8900,11 +8909,12 @@ const ChatHabitFingerprint = (() => {
         Notes.save?.();
       }
       if (typeof Titles !== 'undefined') {
-        Titles.local?.(sid);
         const shouldCloudSync = Boolean(interactive || (typeof Prefs !== 'undefined' && Prefs.autoTitle) || (typeof TitleSync !== 'undefined' && TitleSync.shouldGoldPrefix?.(sid)));
         if (shouldCloudSync) {
           Titles.capture?.(sid, chat?.sentAt);
           Titles.touch?.(sid);
+        } else {
+          Titles.local?.(sid);
         }
       }
       UI?.renderListSoon?.();
@@ -8912,6 +8922,9 @@ const ChatHabitFingerprint = (() => {
       Dock?.soon?.();
     } catch {}
     return nextEntry;
+    } finally {
+      _identifyingSids.delete(sid);
+    }
   }
 
   function confirmUserCorrection(sid, rawModelName, { learn = true, vendorHint = '', familyHint = '', effortHint = '' } = {}) {
@@ -11991,6 +12004,7 @@ const BillingProbe = (() => {
 
   const summaryCache = new Map();
   const topConfidenceCache = new Map();
+  const _summarySyncingSids = new Set();
   const clearSummaryCache = () => { try { summaryCache.clear(); topConfidenceCache.clear(); _routeDetectCache.clear(); } catch {} };
   function summary(sid, opts = {}) {
     const mPre = sid && typeof Models !== 'undefined' ? Models.get(sid) : null;
@@ -12098,8 +12112,12 @@ const BillingProbe = (() => {
       model?.habitFeatures ||
       (diagnostics?.samples?.observations > 0)
     );
+    if (cacheKey) {
+      if (summaryCache.size > 256) summaryCache.delete(summaryCache.keys().next().value);
+      summaryCache.set(sid, { key: cacheKey, prevKey: cacheKey, compKey: preCacheKey || cacheKey, val: out, synced: !readOnly });
+    }
     try {
-    if (!opts?.readOnly && !opts?.noModelSync && (!isFullEncodedTitle || opts?.commit === true || Boolean(mergedCandidates[0]?.isPelicanHtml)) && (isActiveOrLoadedChat || hasLocalSyncEvidence) && sid && mergedCandidates.length > 0 && (!model || ((!model.userCorrected || Boolean(out.habitRoute?.routed && out.habitRoute?.fromBank)) && !(model.fingerprint?.result && !model.reverseInferred && !model.habitInferred && !model.billingProbe)))) {
+    if (!readOnly && !opts?.noModelSync && !_summarySyncingSids.has(sid) && (!isFullEncodedTitle || opts?.commit === true || Boolean(mergedCandidates[0]?.isPelicanHtml)) && (isActiveOrLoadedChat || hasLocalSyncEvidence) && sid && mergedCandidates.length > 0 && (!model || ((!model.userCorrected || Boolean(out.habitRoute?.routed && out.habitRoute?.fromBank)) && !(model.fingerprint?.result && !model.reverseInferred && !model.habitInferred && !model.billingProbe)))) {
       const top0 = mergedCandidates[0], top1 = mergedCandidates[1];
       const hr = out.habitRoute;
       const isNowRouted = Boolean(top0?.routed || hr?.routed || diagnostics?.routeSwitched || diagnostics?.effortDowngraded || diagnostics?.routeType);
@@ -12112,7 +12130,7 @@ const BillingProbe = (() => {
         top0.supportGranularity = 'family';
       }
       const isUniqueTop = Boolean(top0 && !top0.streamFallback && Number(top0.match || 0) >= 50 && hasClearTopMargin && top0.supportGranularity !== 'family');
-      if (isUniqueTop && (opts?.readOnly === false || model?.name) && (!model?.routed || isNowRouted || opts?.readOnly === false)) {
+      if (isUniqueTop && (!readOnly || model?.name) && (!model?.routed || isNowRouted || !readOnly)) {
         const rawTopCanon = (top0.label === '开源模型' || top0.canon === '开源模型') ? '开源模型' : (typeof Strength !== 'undefined' && Strength.canon ? Strength.canon(top0.canon || top0.label) : String(top0.canon || top0.label || '')).replace(/[?？]+$/, '');
         const topCanon = (rawTopCanon !== '开源模型' && typeof Strength !== 'undefined' && Strength.foldVer) ? Strength.foldVer(rawTopCanon) : rawTopCanon;
         const rawCurCanon = (typeof Strength !== 'undefined' && Strength.canon ? Strength.canon(model?.name || '') : String(model?.name || '')).replace(/[?？]+$/, '');
@@ -12233,8 +12251,15 @@ const BillingProbe = (() => {
           const syncedFam = /claude|anthropic|opus|sonnet|haiku|fable/i.test(topCanon) ? 'claude' : /gemini|google|argon|carbon|barium/i.test(topCanon) ? 'gemini' : /gpt|openai|\bsol\b|luna|astra|terra/i.test(topCanon) ? 'gpt' : /muse|spark|\bmeta\b/i.test(topCanon) ? 'muse' : /grok|xai/i.test(topCanon) ? 'grok' : 'compat';
           syncedEntry.fam = syncedFam;
           if (syncedFam !== 'claude' && /闭合推理|tc_/.test(String(syncedEntry.why || ''))) delete syncedEntry.why;
-          Models.set(sid, syncedEntry);
+          _summarySyncingSids.add(sid);
           try {
+            Models.set(sid, syncedEntry);
+            if (cacheKey) {
+              const mAfterSync = Models.get(sid);
+              const postKeySync = makeSumCacheKey(mAfterSync, latest?.id);
+              const compKeySync = makeSumCacheKey(mAfterSync, compTail?.id);
+              summaryCache.set(sid, { key: postKeySync || cacheKey, prevKey: cacheKey, compKey: compKeySync, val: out, synced: true });
+            }
             if (typeof Notes !== 'undefined') {
               const nRec = Notes.owns?.(sid) ? Notes.all[sid] : Notes.rec?.(sid, chat?.sentAt || Date.now());
               if (nRec) { delete nRec.modelData; delete nRec.modelStamp; }
@@ -12243,16 +12268,19 @@ const BillingProbe = (() => {
             if (typeof PelicanShots !== 'undefined' && PelicanShots.syncSid) PelicanShots.syncSid(sid);
             if (typeof TitleSync !== 'undefined' && TitleSync.dirty) TitleSync.dirty(sid);
             if (typeof Titles !== 'undefined') {
-              Titles.local?.(sid);
               const shouldCloudSync = Boolean((typeof Prefs !== 'undefined' && Prefs.autoTitle) || (typeof TitleSync !== 'undefined' && TitleSync.shouldGoldPrefix?.(sid)));
               if (shouldCloudSync) {
                 Titles.capture?.(sid, chat?.sentAt);
                 Titles.touch?.(sid);
+              } else {
+                Titles.local?.(sid);
               }
             }
             UI?.renderListSoon?.();
             UI?.renderTabs?.();
-          } catch {}
+          } catch {} finally {
+            _summarySyncingSids.delete(sid);
+          }
         }
       }
     }
@@ -12849,8 +12877,13 @@ const BillingProbe = (() => {
   let _fullOpus56MigratedAcct = '';
   let _fullOpus56MigratedCount = -1;
   const _upgradedCacheSids = new Set();
+  const _upgradingOpusSids = new Set();
   function upgradeCachedOpus56(sid) {
     if (typeof Models === 'undefined' || !Models.all) return;
+    const _upGuardKey = sid || '__ALL__';
+    if (_upgradingOpusSids.has(_upGuardKey)) return;
+    _upgradingOpusSids.add(_upGuardKey);
+    try {
     const hasNameRevMismatch = (mObj) => {
       if (!mObj || !mObj.name || !mObj.reverseLabel) return false;
       if (mObj.userCorrected || mObj.routed || mObj.battleTruth || mObj.directTruth || (mObj._mismatchCheckedVer || 0) >= 187) return false;
@@ -13482,10 +13515,11 @@ const BillingProbe = (() => {
           (hasLoadedAsst || (sid && (m.habitFeatures || (Array.isArray(m.habitTags) && m.habitTags.length > 0))))
         );
         if (canReidentify) {
+          try { if (m) { m._mismatchCheckedVer = 187; m._v197CalibVer = 3; m._tihuEngineFixVer = Math.max(Number(m._tihuEngineFixVer) || 0, 15); } } catch {}
           summaryCache.delete(id);
           const re = ChatHabitFingerprint.identifyAndApply(chatObj, { force: true, fromCostFallback: true });
           if (re && re.name) {
-            try { re._mismatchCheckedVer = 187; re._v197CalibVer = 3; if (Models.all?.[id]) { Models.all[id]._mismatchCheckedVer = 187; Models.all[id]._v197CalibVer = 3; } } catch {}
+            try { re._mismatchCheckedVer = 187; re._v197CalibVer = 3; re._tihuEngineFixVer = Math.max(Number(re._tihuEngineFixVer) || 0, 15); if (Models.all?.[id]) { Models.all[id]._mismatchCheckedVer = 187; Models.all[id]._v197CalibVer = 3; Models.all[id]._tihuEngineFixVer = Math.max(Number(Models.all[id]._tihuEngineFixVer) || 0, 15); } } catch {}
             ensurePelLoaded();
             if (pelMap && typeof pelMap === 'object' && pelMap[id]) {
               pelMap[id] = { ...pelMap[id], model: re.name, label: re.rawLabel || re.name };
@@ -13560,6 +13594,9 @@ const BillingProbe = (() => {
         if (pelShots) Store.set('pelican-shots', pelShots);
         if (typeof PelicanShots !== 'undefined' && PelicanShots.push) PelicanShots.push();
       } catch {}
+    }
+    } finally {
+      _upgradingOpusSids.delete(_upGuardKey);
     }
   }
   function automatic(chat) {
@@ -14196,7 +14233,8 @@ const BillingProbe = (() => {
     bgSweeping = true;
     const batch = candidates.slice(0, 3);
     try {
-      await Promise.allSettled(batch.map(async (target) => {
+      await Promise.allSettled(batch.map(async (target, bIdx) => {
+        if (bIdx > 0) await sleep(bIdx * 120);
         activeIdentSid = target.id;
         const prevAtt = bgSweepAttempts.get(target.id) || { count: 0, lastAt: 0 };
         bgSweepAttempts.set(target.id, { count: prevAtt.count + 1, lastAt: now() });
@@ -14217,7 +14255,7 @@ const BillingProbe = (() => {
             }
           } catch {}
         }
-        if ((!c.loaded && !globalThis.ArenaBilling.completed(c).length) && typeof c.load === 'function' && !(typeof ReadLimit !== 'undefined' && ReadLimit.active?.())) {
+        if ((!c.loaded && !c.loading && !globalThis.ArenaBilling.completed(c).length) && typeof c.load === 'function' && !(typeof ReadLimit !== 'undefined' && ReadLimit.active?.())) {
           try { await c.load(); } catch {}
         }
         const isGachaChat = typeof Gacha !== 'undefined' && Gacha.isGachaChat ? Gacha.isGachaChat(target.id, c, target) : gachaAttempts.some(a => a?.sid === target.id);

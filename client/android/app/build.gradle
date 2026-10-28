@@ -24,13 +24,17 @@ android {
 
     signingConfigs {
         release {
-            def ks = file('release.keystore')
-            if (ks.exists()) {
-                storeFile ks
-                storePassword System.getenv('KS_PASS') ?: 'arena123'
-                keyAlias System.getenv('KEY_ALIAS') ?: 'arena'
-                keyPassword System.getenv('KEY_PASS') ?: 'arena123'
+            // 可用环境变量覆盖，否则使用仓库内置永久签名 release.jks（CN=Arena Client），严禁回退随机 debug 证书
+            def envKs = System.getenv('ANDROID_KEYSTORE_FILE')
+            def ks = envKs ? file(envKs) : (file('release.jks').exists() ? file('release.jks') : file('release.keystore'))
+            if (!ks.exists()) {
+                throw new GradleException("Release keystore missing: " + ks)
             }
+            storeFile ks
+            storeType 'pkcs12'
+            storePassword System.getenv('ANDROID_KEYSTORE_PASSWORD') ?: System.getenv('KS_PASS') ?: 'arenaclient'
+            keyAlias System.getenv('ANDROID_KEY_ALIAS') ?: System.getenv('KEY_ALIAS') ?: 'arena'
+            keyPassword System.getenv('ANDROID_KEY_PASSWORD') ?: System.getenv('KEY_PASS') ?: 'arenaclient'
         }
     }
 
@@ -39,8 +43,7 @@ android {
             minifyEnabled true
             shrinkResources true
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
-            def ks = file('release.keystore')
-            signingConfig ks.exists() ? signingConfigs.release : signingConfigs.debug
+            signingConfig signingConfigs.release
         }
         debug {
             ndk {

@@ -2106,22 +2106,22 @@ const WS = {
     try {
       toast('正在打包下载…');
       let zipBlob = null;
-      const res = await rawFetch(Workspace.downloadUrl(sid, node), { credentials: 'same-origin' }).catch(() => null);
-      if (res && res.ok) {
-        zipBlob = await res.blob();
-      } else if ((!res || res.status === 429 || res.status === 403) && typeof Host !== 'undefined' && typeof Host.protoFetch === 'function') {
-        const relPath = '/api/chat/' + encodeURIComponent(sid) + '/workspace/' + encodeURIComponent(node) + '/download';
-        const pr = await Host.protoFetch(relPath, { method: 'GET', bypass429: true, responseType: 'base64', timeout: 45000 });
+      const relPath = '/api/chat/' + encodeURIComponent(sid) + '/workspace/' + encodeURIComponent(node) + '/download';
+      if (typeof Host !== 'undefined' && typeof Host.protoFetch === 'function' && !(typeof window !== 'undefined' && window.__fixture)) {
+        const pr = await Host.protoFetch(relPath, { method: 'GET', bypass429: true, responseType: 'base64', timeout: 45000 }).catch(() => null);
         if (pr && pr.ok && typeof pr.base64 === 'string') {
           const binStr = atob(pr.base64);
           const bytes = new Uint8Array(binStr.length);
           for (let i = 0; i < binStr.length; i++) bytes[i] = binStr.charCodeAt(i);
           zipBlob = new Blob([bytes], { type: 'application/zip' });
-        } else {
-          throw new HttpError(pr?.status || res?.status || 429, '');
+        } else if (pr && !pr.fallback && pr.status && pr.status !== 429 && pr.status !== 403) {
+          throw new HttpError(pr.status, '');
         }
-      } else {
-        throw new HttpError(res?.status || 500, '');
+      }
+      if (!zipBlob) {
+        const res = await rawFetch(Workspace.downloadUrl(sid, node), { credentials: 'same-origin' }).catch(() => null);
+        if (res && res.ok) zipBlob = await res.blob();
+        else throw new HttpError(res?.status || 500, '');
       }
       await FileExport.blob(zipBlob, `workspace-${sid.slice(0, 8)}.zip`, 'application/zip');
     } catch (e) { toast('下载失败：' + describe(e), 'err'); }
@@ -2220,9 +2220,18 @@ const Bar = {
     av.setAttribute('role', 'button'); av.setAttribute('aria-label', '余额明细（' + (pct != null ? pct + '%' : '未知') + '）');
     if (!av.dataset.bound) {
       av.dataset.bound = '1';
-      av.addEventListener('mouseenter', () => this.hoverDonut(av));
-      av.addEventListener('mouseleave', () => this.scheduleCloseDonut());
+      av.addEventListener('mouseenter', () => {
+        clearTimeout(this._donutHoverT);
+        this._donutHoverT = setTimeout(() => { this._donutHoverT = 0; this.hoverDonut(av); }, 180);
+      });
+      av.addEventListener('mouseleave', () => {
+        clearTimeout(this._donutHoverT);
+        this._donutHoverT = 0;
+        this.scheduleCloseDonut();
+      });
       av.addEventListener('click', e => {
+        clearTimeout(this._donutHoverT);
+        this._donutHoverT = 0;
         e.stopPropagation();
         if (this.balance && this.balance.anchor === av && (now() - (this.balance.openedAt || 0) < 500)) return;
         this.donut(av);
@@ -2233,12 +2242,7 @@ const Bar = {
     const nmEl = card.querySelector('.acct-n'); if (nmEl && (!nmEl.textContent || nmEl.textContent === '…') && (a.email || me?.email)) nmEl.textContent = (a.email || me?.email).split('@')[0];
     document.body.classList.add('acct-bal-on');
     if (card.__btnPressUntil && Date.now() < card.__btnPressUntil) return;
-    const bsCard = typeof BotService !== 'undefined' && BotService.state ? BotService.state() : null;
-    const opusOn = typeof Skew !== 'undefined' && typeof Skew.opusUnlocked === 'function' ? Skew.opusUnlocked() : (bsCard?.opusUnlocked !== false);
-    const poolTier = bsCard?.prizePool?.tier || bsCard?.poolTier || 'T1';
-    const dropPct = bsCard?.effectiveDropRatePct ?? bsCard?.computeTide?.crownHitRatePct ?? 11.6;
-    const riskObj = bsCard?.routeRisk || { pct: 12, tone: 'ok', label: '低风险' };
-    const subSig = [!me && UI.host ? '0' : '1', remark, bal || '节点与账号', bt?.why || '', this._refreshingBal ? '1' : '0', opusOn ? '1' : '0', poolTier, dropPct, riskObj.pct].join('|');
+    const subSig = [!me && UI.host ? '0' : '1', remark, bal || '节点与账号', bt?.why || '', this._refreshingBal ? '1' : '0'].join('|');
     if (sub.__paintSig === subSig && sub.childNodes.length > 0) return;
     sub.__paintSig = subSig;
     const kids = [];
@@ -2246,32 +2250,6 @@ const Bar = {
     if (remark) kids.push(h('span', { class: 'acct-rm', title: '备注：' + remark }, remark));
     {
       const guardDown = e => { card.__btnPressUntil = Date.now() + 1200; e.stopPropagation(); };
-      const opusPill = h('button', {
-        type: 'button',
-        class: 'acct-pill ' + (opusOn ? 'is-ok' : 'is-warn'),
-        title: opusOn
-          ? 'Opus 解封已生效 (override="control" · Cookie 四层锁定)，点击可切换或重新强制注入'
-          : 'Opus 当前未解封，点击立即开启四层解封 (disable-opus="control")',
-        onpointerdown: guardDown,
-        onmousedown: guardDown,
-        onclick: e => {
-          e.stopPropagation();
-          e.preventDefault();
-          card.__btnPressUntil = 0;
-          const next = typeof Skew !== 'undefined' && Skew.toggleOpusUnlock ? Skew.toggleOpusUnlock() : true;
-          sub.__paintSig = '';
-          this.paintCard();
-          if (this.balance) this.paintDonut();
-          if (typeof toast === 'function') toast(next ? '已开启 Opus 四层解封 (disable-opus="control")' : '已关闭 Opus 解封覆盖');
-        },
-      }, opusOn ? 'Opus✓' : 'Opus关');
-      const poolTone = poolTier === 'T1' ? 'is-ok' : poolTier === 'T2' ? 'is-acc' : 'is-warn';
-      const poolPill = h('span', {
-        class: 'acct-pill ' + poolTone,
-        title: `当前奖池：${bsCard?.prizePool?.name || poolTier}
-当前爆率：${dropPct}%
-路由风险：${riskObj.label} ${riskObj.pct}%（${riskObj.summary || ''}）`,
-      }, `${poolTier} · ${dropPct}%`);
       const refBtn = h('button', {
         type: 'button',
         class: 'ib acct-refresh' + (this._refreshingBal ? ' spinning' : ''),
@@ -2333,7 +2311,7 @@ const Bar = {
         },
       }, icon('plug'));
       kids.push(
-        h('span', { class: 'acct-bal-row' }, h('span', { class: 'acct-bal', title: bt?.why || '' }, bal || '节点与账号'), poolPill, opusPill, refBtn, gwBtn)
+        h('span', { class: 'acct-bal-row' }, h('span', { class: 'acct-bal', title: bt?.why || '' }, bal || '节点与账号'), refBtn, gwBtn)
       );
     }
     sub.replaceChildren(...kids);
@@ -2360,7 +2338,17 @@ const Bar = {
     const bestEffort = mi?.effort || bpTop?.effort || null;
     const bestLabel = bestBase ? (typeof Strength !== 'undefined' && Strength.withEffort ? Strength.withEffort(bestBase, bestEffort) : bestBase) : ''; void bestLabel;
     const upd = Math.max(u?.at || 0, p?.at || 0); void upd;
-    /* 底栏左侧仅保留对话消耗与三个功能图标，不显示刷新按钮与模型名称识别 */
+    /* 底栏最左侧显示 T0/T1/T2 与当前爆率，其后为三个功能图标 */
+    {
+      const poolTier = bsState?.prizePool?.tier || bsState?.poolTier || (botScore != null ? (botScore >= 80 ? 'T0' : botScore >= 50 ? 'T1' : 'T2') : 'T0');
+      const dropPct = Number(bsState?.effectiveDropRatePct ?? bsState?.computeTide?.crownHitRatePct) || 11.6;
+      const riskObj = bsState?.routeRisk || { pct: 12, tone: 'ok', label: '低风险' };
+      const poolTone = poolTier === 'T0' ? 'is-ok' : poolTier === 'T1' ? 'is-acc' : 'is-warn';
+      kids.push(h('span', {
+        class: 'bi bpool-pill',
+        title: `${poolTier}（${bsState?.prizePool?.models || ''}） · 当前爆率 ${dropPct.toFixed(1)}% · 路由风险 ${riskObj.label} ${riskObj.pct}%`,
+      }, h('span', { class: 'acct-pill ' + poolTone }, `${poolTier} · ${dropPct.toFixed(1)}%`)));
+    }
     kids.push(LeaderPop.btn());
     kids.push(h('button',{class:'bi link pel-library-btn bico',title:'醍醐 HTML/SVG 样本库：查看各厂商/型号/强度的鹈鹕网页样本并自动识别全部对话','aria-label': '醍醐样本库',onclick:()=>typeof PelicanShots!=='undefined'&&(PelicanShots.openLibrary||PelicanShots.table)?(PelicanShots.openLibrary||PelicanShots.table)():null},icon('pelican')));
     const barGwProxies = (typeof LocalApiGateway !== 'undefined' && LocalApiGateway.getAccountProxies) ? LocalApiGateway.getAccountProxies() : [];
@@ -2392,8 +2380,8 @@ const Bar = {
     ipIt.onclick = () => RegionIP.open();ipIt.onkeydown=e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();RegionIP.open();}}; kids.push(ipIt);
     kids.push(Update.newer() ? h('button', { class: 'bi link upd-badge bar-ver', title: '有新版本，点击更新', onclick: () => Update.prompt() }, icon('download'), '新版本 v' + Update.info.version) : h('button', { class: 'bi link ver bar-ver', title: '点击检查更新（' + (Update.isBeta(VERSION) ? '测试版通道' : '正式版通道') + '）', onclick: () => Update.checkNow() }, 'v' + VERSION));
     el.replaceChildren(...kids.flat().filter(Boolean));
-    const m=el.querySelector('.bmeter');if(m){m.removeAttribute('title');m.setAttribute('role','button');m.tabIndex=0;m.setAttribute('aria-label','余额明细');m.setAttribute('aria-controls','bdonut');m.setAttribute('aria-haspopup','dialog');m.setAttribute('aria-expanded',String(!!this.balance));m.onmouseenter=()=>this.hoverDonut(m);m.onmouseleave=()=>this.scheduleCloseDonut();m.onclick=()=>{if(this.balance&&this.balance.anchor===m&&(now()-(this.balance.openedAt||0)<500))return;this.donut(m);};m.onkeydown=e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();this.donut(m,true);}};}
-    if(this.balance){const anchor=this.balance.anchor;if(!anchor.isConnected&&anchor.classList.contains('bmeter')&&m)this.balance.anchor=m;if(this.balance.anchor.isConnected)this.paintDonut();else this.closeDonut();}
+    const m=el.querySelector('.bpool-pill, .bmeter');if(m){m.removeAttribute('title');m.setAttribute('role','button');m.tabIndex=0;m.setAttribute('aria-label','余额明细');m.setAttribute('aria-controls','bdonut');m.setAttribute('aria-haspopup','dialog');m.setAttribute('aria-expanded',String(!!this.balance));m.onmouseenter=()=>{clearTimeout(this._donutHoverT);this._donutHoverT=setTimeout(()=>{this._donutHoverT=0;this.hoverDonut(m);},180);};m.onmouseleave=()=>{clearTimeout(this._donutHoverT);this._donutHoverT=0;this.scheduleCloseDonut();};m.onclick=()=>{clearTimeout(this._donutHoverT);this._donutHoverT=0;if(this.balance&&this.balance.anchor===m&&(now()-(this.balance.openedAt||0)<500))return;this.donut(m);};m.onkeydown=e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();this.donut(m,true);}};}
+    if(this.balance){const anchor=this.balance.anchor;if(!anchor.isConnected&&(anchor.classList.contains('bmeter')||anchor.classList.contains('bpool-pill'))&&m)this.balance.anchor=m;if(this.balance.anchor.isConnected)this.paintDonut();else this.closeDonut();}
   },
   async refresh(sid) {
     if (this.refreshing) return; this.refreshing = true; this.render();
@@ -2433,7 +2421,7 @@ const Bar = {
     clearTimeout(this._donutHideT);this._donutHideT=0;
     if(this.balance){if(fromHover)return;this.closeDonut();return;}
     const box=h('div',{id:'bdonut',class:'bdonut',role:'dialog','aria-label':'余额明细',tabindex:-1,title:'移开鼠标或点击关闭按钮收起',onmouseenter:()=>{clearTimeout(this._donutHideT);this._donutHideT=0;},onmouseleave:()=>this.scheduleCloseDonut(150),onclick:()=>this.closeDonut(true)});
-    const outside=e=>{const path=e.composedPath?.()||[];if(!box.contains(e.target)&&!path.includes(anchor)&&!e.target.closest?.('#bar .bmeter')&&!e.target.closest?.('#acct .av'))this.closeDonut();};
+    const outside=e=>{const path=e.composedPath?.()||[];if(!box.contains(e.target)&&!path.includes(anchor)&&!e.target.closest?.('#bar .bmeter, #bar .bpool-pill')&&!e.target.closest?.('#acct .av'))this.closeDonut();};
     const key=e=>{if(e.key==='Escape'){e.preventDefault();e.stopPropagation();this.closeDonut(true);}};
     const resize=()=>this.closeDonut(),visibility=()=>{if((typeof document !== 'undefined' && document.hidden))this.closeDonut();};
     document.addEventListener('pointerdown',outside,true);document.addEventListener('focusin',outside,true);document.addEventListener('keydown',key,true);document.addEventListener('visibilitychange',visibility);
@@ -2464,7 +2452,7 @@ const Bar = {
     const brakeRem=hjb?.brakeRemPct??21.6;
     const botPct=botScore!=null?clamp(Math.round(botScore/99*100)):0;
     const botTone=botScore==null?'muted':botScore>=80?'ok':botScore>=50?'warn':'bad';
-    const botTier=bsState?.poolTier||(botScore>=80?'T1':botScore>=50?'T2':'T3');
+    const botTier=bsState?.poolTier||(botScore>=80?'T0':botScore>=50?'T1':'T2');
     const botBadge=botScore!=null?`${botScore} · ${botTier}`:'—';
 
     // Top Hero Right: 2 clean graphical bars (no noisy sub-text)
@@ -2523,9 +2511,9 @@ const Bar = {
       ))
     ):null;
 
-    // Middle-Bottom: 奖池与 Opus 解封控制栏 + 四维状态条 (会话余量 / 当前爆率 / 路由风险 / 缓存护航)
+    // Middle-Bottom: T0/T1/T2 与 Opus 解封控制栏 + 四维状态条 (会话余量 / 当前爆率 / 路由风险 / 缓存护航)
     const opusOn=typeof Skew!=='undefined'&&typeof Skew.opusUnlocked==='function'?Skew.opusUnlocked():(bsState?.opusUnlocked!==false);
-    const pz=bsState?.prizePool||{tier:botTier,short:botTier+' 奖池',name:botTier+' 旗舰池 (Opus / 6.1 Sol)',models:'Opus 4.6 · Fable 5.1 Max · 6.1 Sol',tone:botTone==='ok'?'ok':'acc'};
+    const pz=bsState?.prizePool||{tier:botTier,short:botTier,name:botTier,models:'Opus 4.6 · Fable 5.1 Max · 6.1 Sol',tone:botTone==='ok'?'ok':'acc'};
     const opusToggleBtn=h('button',{
       type:'button',
       class:'bd-opus-btn '+(opusOn?'is-on':'is-off'),
@@ -2535,13 +2523,13 @@ const Bar = {
         const next=typeof Skew!=='undefined'&&Skew.toggleOpusUnlock?Skew.toggleOpusUnlock():true;
         this.paintCard();
         this.paintDonut();
+        this.render();
         if(typeof toast==='function')toast(next?'已开启 Opus 解封 (override="control")':'已关闭 Opus 解封');
       }
     },opusOn?'Opus 已解封 ✓':'开启 Opus 解封');
-    const poolBanner=h('div',{class:'bd-pool-bar',title:`当前奖池：${pz.name}
-覆盖模型：${pz.models}`},
+    const poolBanner=h('div',{class:'bd-pool-bar',title:`${pz.tier || botTier} · ${pz.models}`},
       h('div',{class:'bd-pool-left'},
-        h('span',{class:'bd-pool-tag is-'+pz.tone},pz.short),
+        h('span',{class:'bd-pool-tag is-'+pz.tone},pz.tier || pz.short),
         h('span',{class:'bd-pool-models'},pz.models)
       ),
       opusToggleBtn
@@ -2587,8 +2575,7 @@ ${rk.summary}`},
     const chipRow=h('div',{class:'bd-chips'},
       h('span',{class:'bd-chip '+(opusOn?'is-ok':'is-warn')},opusOn?'✓ Opus解封':'! Opus未开'),
       h('span',{class:'bd-chip is-ok'},'✓ 压缩v2'),
-      h('span',{class:'bd-chip is-ok'},'✓ 框架锁定'),
-      h('span',{class:'bd-chip is-ok'},'✓ 独享IP')
+      h('span',{class:'bd-chip is-ok'},'✓ 框架锁定')
     );
 
     const footGrid=footCells.length?h('div',{class:'bd-fgrid'},...footCells):null;

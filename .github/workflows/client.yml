@@ -281,7 +281,19 @@ jobs:
         shell: bash
         run: |
           set -e
-          for f in release/*.apk; do unzip -tq "$f"; done
+          APKSIGNER="$(find "${ANDROID_SDK_ROOT:-$ANDROID_HOME}/build-tools" -name apksigner 2>/dev/null | sort -V | tail -n1)"
+          [ -n "$APKSIGNER" ] || { echo "::error::apksigner not found in Android SDK build-tools"; exit 1; }
+          EXPECTED_FP_COLON="E9:92:D4:48:E7:E1:F2:96:FF:E9:D3:A1:F3:F5:03:72:29:B4:AB:BA:09:3B:7E:8B:3F:20:1F:60:A6:8D:4F:91"
+          EXPECTED_FP_HEX="e992d448e7e1f296ffe9d3a1f3f5037229b4abba093b7e8b3f201f60a68d4f91"
+          for f in release/*.apk; do
+            unzip -tq "$f"
+            CERT_INFO="$("$APKSIGNER" verify --verbose --print-certs "$f")"
+            echo "$CERT_INFO" | grep -qi "$EXPECTED_FP_HEX" || {
+              echo "::error::APK signing certificate mismatch (expected $EXPECTED_FP_COLON from permanent release.jks)!"
+              echo "$CERT_INFO"
+              exit 1
+            }
+          done
           (cd release && sha256sum *.apk > SHA256SUMS.txt)
       - name: Retain manual Android package
         if: github.event_name == 'workflow_dispatch'

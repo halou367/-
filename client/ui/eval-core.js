@@ -1648,7 +1648,8 @@ const EvalEngine = (() => {
     }
 
     try {
-      const data = (typeof ReadLimit !== 'undefined' && ReadLimit.active?.() && lsCached?.messages?.length) ? null : await api('/api/evaluation/' + encodeURIComponent(sid), { timeout: 20000, bg: Boolean(lsCached?.messages?.length), noApiRetry: true });
+      const hasNativeProto = typeof window !== 'undefined' && !window.__fixture && !window.__routeFixture && typeof Host !== 'undefined' && typeof Host?.protoFetch === 'function';
+      const data = (!hasNativeProto && typeof ReadLimit !== 'undefined' && ReadLimit.active?.() && lsCached?.messages?.length) ? null : await api('/api/evaluation/' + encodeURIComponent(sid), { timeout: 20000, bg: Boolean(!hasNativeProto && lsCached?.messages?.length), noApiRetry: true });
       if (data && typeof data === 'object') {
         const evalObj = data.evaluation || data.session || data.data || data;
         const merged = mergeEvalObjects(evalObj, lsCached);

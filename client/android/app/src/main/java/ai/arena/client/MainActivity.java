@@ -1984,6 +1984,7 @@ public class MainActivity extends Activity {
                     jp = new java.net.Proxy(java.net.Proxy.Type.HTTP, new InetSocketAddress("127.0.0.1", nativeTun.port));
                 }
                 final boolean isCostShown = opts.optBoolean("costShown", false);
+                final boolean isBypass429 = opts.optBoolean("bypass429", false);
                 String baseCk = "";
                 if (!isPub) {
                     try {
@@ -2027,6 +2028,16 @@ public class MainActivity extends Activity {
                     }
                     if (dplCandidates.isEmpty()) dplCandidates.add("dpl_HAxwrhqRf48UW1Hf4MDQquRXSs7x");
                     dplCandidates.add("");
+                } else if (isBypass429 && !isPub) {
+                    String reqVdpl = opts.optString("vdpl", "").trim();
+                    if (!reqVdpl.isEmpty() && reqVdpl.startsWith("dpl_")) dplCandidates.add(reqVdpl);
+                    dplCandidates.add(null);
+                    for (String d : costSkewPool) {
+                        if (d != null && !d.isEmpty() && !expiredCostDpls.contains(d) && !dplCandidates.contains(d)) {
+                            dplCandidates.add(d);
+                            break;
+                        }
+                    }
                 } else {
                     dplCandidates.add(null);
                 }
@@ -2062,6 +2073,18 @@ public class MainActivity extends Activity {
                             if (!activeSkewDpl.isEmpty()) {
                                 String vdplCk = "__vdpl=" + activeSkewDpl;
                                 ck = ck + "; " + vdplCk;
+                                c.setRequestProperty("x-deployment-id", activeSkewDpl);
+                            }
+                        } else if (isBypass429) {
+                            if (!ck.isEmpty()) {
+                                ck = ck.replaceAll("(^|;\s*)__vdpl=[^;]*", "");
+                                ck = ck.replaceAll("(^|;\s*)arena_visit_id=[^;]*", "");
+                                ck = ck.replaceAll("^;\s*", "").trim();
+                            }
+                            String visitCk = "arena_visit_id=" + java.util.UUID.randomUUID().toString();
+                            ck = ck.isEmpty() ? visitCk : (ck + "; " + visitCk);
+                            if (!activeSkewDpl.isEmpty()) {
+                                ck = ck + "; __vdpl=" + activeSkewDpl;
                                 c.setRequestProperty("x-deployment-id", activeSkewDpl);
                             }
                         }
@@ -2116,15 +2139,35 @@ public class MainActivity extends Activity {
                             }
                         } catch (Exception ignored) {}
                     }
+                    final boolean wantBase64 = "base64".equalsIgnoreCase(opts.optString("responseType", ""));
                     java.io.InputStream is = (code >= 200 && code < 400) ? c.getInputStream() : c.getErrorStream();
-                    StringBuilder b = new StringBuilder();
+                    String text = "";
+                    String base64 = "";
                     if (is != null) {
-                        BufferedReader r = new BufferedReader(new InputStreamReader(is, StandardCharsets.UTF_8));
-                        char[] buf = new char[8192]; int n;
-                        while ((n = r.read(buf)) > 0) { b.append(buf, 0, n); if (b.length() > 8000000) break; }
+                        if (wantBase64) {
+                            java.io.ByteArrayOutputStream baos = new java.io.ByteArrayOutputStream();
+                            byte[] bbuf = new byte[16384]; int bn;
+                            while ((bn = is.read(bbuf)) > 0) {
+                                baos.write(bbuf, 0, bn);
+                                if (baos.size() > 16 * 1024 * 1024) break;
+                            }
+                            base64 = android.util.Base64.encodeToString(baos.toByteArray(), android.util.Base64.NO_WRAP);
+                        } else {
+                            StringBuilder b = new StringBuilder();
+                            BufferedReader r = new BufferedReader(new InputStreamReader(is, StandardCharsets.UTF_8));
+                            char[] buf = new char[8192]; int n;
+                            while ((n = r.read(buf)) > 0) { b.append(buf, 0, n); if (b.length() > 12000000) break; }
+                            text = b.toString();
+                        }
                     }
-                    String text = b.toString();
                     String ct = c.getContentType() == null ? "" : c.getContentType();
+                    String retryAfterHdr = c.getHeaderField("retry-after") == null ? "" : c.getHeaderField("retry-after");
+                    JSONObject respHdrJson = new JSONObject()
+                        .put("content-type", ct)
+                        .put("retry-after", retryAfterHdr)
+                        .put("content-range", c.getHeaderField("content-range") == null ? "" : c.getHeaderField("content-range"))
+                        .put("x-arena-trigger-version", c.getHeaderField("x-arena-trigger-version") == null ? "" : c.getHeaderField("x-arena-trigger-version"))
+                        .put("x-arena-api-deployment", c.getHeaderField("x-arena-api-deployment") == null ? "" : c.getHeaderField("x-arena-api-deployment"));
                     if (code == 403 && (cfChallenge || ct.toLowerCase().contains("text/html") || text.trim().startsWith("<!DOCTYPE") || text.trim().startsWith("<html"))) {
                         cfChallenge = true;
                     }
@@ -2137,11 +2180,18 @@ public class MainActivity extends Activity {
                         .put("ok", ok)
                         .put("status", code)
                         .put("text", text)
+                        .put("base64", base64)
                         .put("contentType", ct)
+                        .put("retryAfter", retryAfterHdr)
+                        .put("headers", respHdrJson)
                         .put("dpl", respDpl)
                         .put("skewDpl", activeSkewDpl)
                         .put("triedAllSkew", idx >= dplCandidates.size() - 1 && !cfChallenge)
                         .toString();
+                    if (isBypass429 && !isCostShown && (code == 429 || (code == 409 && !activeSkewDpl.isEmpty())) && idx < dplCandidates.size() - 1) {
+                        try { Thread.sleep(280L); } catch (Exception ignored) {}
+                        continue;
+                    }
                     if (code != 403 || !isCostShown || cfChallenge) break;
                     if (!activeSkewDpl.isEmpty()) demoteAndroidCostDpl(activeSkewDpl);
                     if (idx == dplCandidates.size() - 1 && !discoveredOnce) {

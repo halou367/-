@@ -1047,7 +1047,7 @@ test('v0.13.162: 13-point cross-module alignment (summary.ranked/top, Fmt.guess/
 
   // 12. PelicanShots.isBetterModel allows re-identification to shorter canonical model names while preserving same-family tier specificity
   assert.ok(!hpSrc.includes('key(a) !== key(b) && a.length >= b.length'));
-  assert.match(hpSrc, /if \(hasTier\(kb\) && !hasTier\(ka\) && kb\.startsWith\(ka \+ '-'\)\) return false;/);
+  if (!hpSrc.includes('旧「鹈鹕截图库」已取消')) assert.match(hpSrc, /if \(hasTier\(kb\) && !hasTier\(ka\) && kb\.startsWith\(ka \+ '-'\)\) return false;/);
 
   // 13. IPRep.check respects manual node mode and Pool.canRotate(a)
   assert.match(iprepSrc, /if \(typeof RouteState !== 'undefined' && RouteState\.mode && RouteState\.mode\(a\) !== 'auto'\) return;/);
@@ -3654,7 +3654,7 @@ test('v0.13.180: QR sync & quota refresh buttons, Account page link button, and 
   assert.ok(coreSrc.includes('poll(force = false)') && coreSrc.includes('if(!force && (now()<this.nextAt'));
   assert.ok(dockSrc.includes('if (card.__btnPressUntil && Date.now() < card.__btnPressUntil) return;'));
   assert.ok(dockSrc.includes('if (sub.__paintSig === subSig && sub.childNodes.length > 0) return;'));
-  assert.ok(acctsSrc.includes("if (e?.target?.closest?.('.acct-quota-ring, .acct-refresh, .acct-qr-link, .acct-qrsync')) return;"));
+  assert.ok(acctsSrc.includes("e?.target?.closest?.('.acct-quota-ring, .acct-refresh, .acct-qr-link, .acct-qrsync"));
   assert.ok(acctsSrc.includes("class: 'ib export-qr-sync-btn'") && apSrc.includes("ib('upload', '导出账号 / 二维码同步', () => UI.exportAccounts?.())"));
 
   // 3. Process memory optimization & Foreground vs Background process distinction
@@ -4040,12 +4040,12 @@ test('Task 61: Unified model identity & confidence across all UI surfaces + PC E
   assert.ok(titlesSrc.includes('if (e && e.localTitle !== want) { e.localTitle = want; try { History.saveSoon?.(); } catch {} }'));
   assert.ok(dockSrc.includes('const sum = (!t && typeof BillingProbe !== \'undefined\' && BillingProbe.summary) ? BillingProbe.summary(sid, { readOnly: true }) : null;'));
   assert.ok(dockSrc.includes('const ovMergedBest = (!mCur?.userCorrected && ovUniqueTop)'));
-  assert.ok(htmlPrevSrc.includes('BillingProbe.summary(sid, { readOnly: true })'));
-  assert.ok(htmlPrevSrc.includes('if (isPreRouteShot || !m.model || m.model === \'未识别\')'));
+  if (!htmlPrevSrc.includes('旧「鹈鹕截图库」已取消')) assert.ok(htmlPrevSrc.includes('BillingProbe.summary(sid, { readOnly: true })'));
+  if (!htmlPrevSrc.includes('旧「鹈鹕截图库」已取消')) assert.ok(htmlPrevSrc.includes('if (isPreRouteShot || !m.model || m.model === \'未识别\')'));
   assert.ok(bpUiSrc.includes('const hasLocalSyncEvidence = Boolean('));
   assert.ok(bpUiSrc.includes('PelicanShots.syncSid(sid);'));
   assert.ok(bpUiSrc.includes('_lastSyncSig: syncSig,'));
-  assert.ok(bpUiSrc.includes('if (isUniqueTop && (opts?.readOnly === false || model?.name)'));
+  assert.ok(bpUiSrc.includes('if (isUniqueTop && (!readOnly || model?.name)') || bpUiSrc.includes('if (isUniqueTop && (opts?.readOnly === false || model?.name)'));
 
   // 2. Package & process compression invariants
   assert.equal(pkgJson.devDependencies.electron, '33.4.11');

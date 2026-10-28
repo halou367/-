@@ -1605,9 +1605,7 @@ const TihuHub = (() => {
       }
       if ((bundleChanged || triggerScan) && isReady()) {
         void scanAndRecognizeAllChats({ forceLoadUncached: true, quiet: true });
-      } else if ((cfgChanged || triggerSyncIfEmpty) && !isReady() && _cfg?.url && !_cfg?.disconnected) {
-        void sync({ force: false, quiet: true });
-      }
+      }   // 2.0.3-beta.1：配置变化 / 库为空不再自动拉取，只在手动或每天 09:00 拉取
       return { cfgChanged, bundleChanged };
     })().finally(() => { _pullSharedInflight = null; });
     return _pullSharedInflight;
@@ -2297,7 +2295,9 @@ const TihuHub = (() => {
     return null;
   }
 
-  async function sync({ force = false, quiet = false, customCfg = null, skipRetroScan = false } = {}) {
+  async function sync({ force = false, quiet = false, customCfg = null, skipRetroScan = false, scheduled = false } = {}) {
+    // 2.0.3-beta.1：在线库只在「手动拉取」或「每天 09:00 定时」时更新。静默的自动拉取（quiet 且非 force、非定时）直接跳过。
+    if (quiet && !force && !scheduled && !customCfg) return { ok: false, skipped: 'manual-or-daily-0900-only' };
     if (_syncing) return _syncing;
     _syncing = (async () => {
       try {
@@ -2393,6 +2393,7 @@ const TihuHub = (() => {
         emitChange();
         try { if (typeof Dock !== 'undefined' && Dock.render) Dock.render(); } catch {}
         try { if (typeof PelicanShots !== 'undefined' && typeof PelicanShots.table?.refreshOpen === 'function') PelicanShots.table.refreshOpen(); } catch {}
+        setTimeout(() => { void flushCorrectionQueue().catch(() => {}); }, 1500);
 
         const st = status();
         if (!quiet && typeof toast === 'function') {
@@ -4138,7 +4139,34 @@ const TihuHub = (() => {
     return out.slice(-2);
   }
 
+  const CORR_Q_KEY = 'tihu:corr-queue:v1';
+  const corrQ = {
+    load() { try { const v = JSON.parse(localStorage.getItem(CORR_Q_KEY) || '[]'); return Array.isArray(v) ? v : []; } catch { return []; } },
+    save(a) { try { localStorage.setItem(CORR_Q_KEY, JSON.stringify(a.slice(-50))); } catch {} },
+    put(sid, entry, err) { const a = corrQ.load().filter(x => x && x.sid !== sid); a.push({ sid, entry, at: Date.now(), err: String(err || '').slice(0, 120), n: 0 }); corrQ.save(a); },
+    drop(sid) { corrQ.save(corrQ.load().filter(x => x && x.sid !== sid)); },
+  };
+  let _corrFlushing = false;
+  async function flushCorrectionQueue() {
+    if (_corrFlushing) return; _corrFlushing = true;
+    try {
+      for (const it of corrQ.load()) {
+        if (!it?.sid || !it.entry) continue;
+        const chat = (typeof Chats !== 'undefined' && Chats.get) ? Chats.get(it.sid) : null;
+        const r = await uploadChatCorrectionOnce(it.sid, chat || { sid: it.sid, messages: [] }, it.entry, { fromQueue: true }).catch(e => ({ ok: false, error: String(e?.message || e) }));
+        if (r?.ok || r?.skipped) corrQ.drop(it.sid);
+        else { const a = corrQ.load(); const x = a.find(y => y.sid === it.sid); if (x) { x.n = (x.n || 0) + 1; x.err = String(r?.error || '').slice(0, 120); if (x.n >= 8) a.splice(a.indexOf(x), 1); corrQ.save(a); } }
+      }
+    } finally { _corrFlushing = false; }
+  }
+  // 纠错记录自动上传到云端醍醐库；网络失败时排队，之后自动重传
   async function uploadChatCorrection(sid, chatObj, nextEntry) {
+    const r = await uploadChatCorrectionOnce(sid, chatObj, nextEntry).catch(e => ({ ok: false, error: String(e?.message || e) }));
+    if (r && r.ok === false && r.error && sid && nextEntry?.userCorrected) corrQ.put(sid, nextEntry, r.error);
+    else if (r?.ok) corrQ.drop(sid);
+    return r;
+  }
+  async function uploadChatCorrectionOnce(sid, chatObj, nextEntry, { fromQueue = false } = {}) {
     const c = loadLocalCfg();
     if (!c.url || !sid || !nextEntry?.userCorrected) return null;
 
@@ -4216,8 +4244,8 @@ const TihuHub = (() => {
       }
       return { ok: true, uploaded, replaced: replacedAny };
     }
-    if (lastErr && typeof toast === 'function') {
-      toast('醍醐库纠错样本上传失败：' + lastErr, 'err');
+    if (lastErr && typeof toast === 'function' && !fromQueue) {
+      toast('醍醐库纠错样本上传失败（已排队，下次拉取时自动重传）：' + lastErr, 'err');
     }
     return { ok: false, error: lastErr };
   }
@@ -4280,7 +4308,11 @@ const TihuHub = (() => {
     };
   }
 
-  function toSrcdoc(rawCode) {
+  // 样本预览同样只在鼠标悬停时运动（见 html-preview.js · PvAnim）
+  function pvAnimInject(s) { return (typeof PvAnim !== 'undefined' && PvAnim.inject) ? PvAnim.inject(s) : s; }
+  function pvAnimBind(host, f) { try { if (typeof PvAnim !== 'undefined' && PvAnim.bind) PvAnim.bind(host, f); } catch {} }
+  function toSrcdoc(rawCode) { return pvAnimInject(toSrcdocRaw(rawCode)); }
+  function toSrcdocRaw(rawCode) {
     const code = String(rawCode || '').trim();
     if (!code) return '<!doctype html><html><body></body></html>';
     const isSvg = !/<(?:!doctype|html|body)\b/i.test(code) && /<svg[\s>]/i.test(code);
@@ -4327,6 +4359,7 @@ const TihuHub = (() => {
     ifr.style.cssText = 'width:100%;height:100%;border:0;display:block;background:#fff;';
     ifr.srcdoc = toSrcdoc(code);
     frameWrap.append(ifr);
+    pvAnimBind(frameWrap, ifr);
     const m = modal(
       title,
       frameWrap,
@@ -4364,6 +4397,7 @@ const TihuHub = (() => {
       applyScale();
       ifr.srcdoc = toSrcdoc(code);
       box.append(ifr);
+      pvAnimBind(box, ifr);
       if (typeof ResizeObserver !== 'undefined') {
         const ro = new ResizeObserver(() => { if (!box.isConnected) ro.disconnect(); else applyScale(); });
         ro.observe(box);
@@ -4410,7 +4444,7 @@ const TihuHub = (() => {
         h('div', { class: 'mc-sh' },
           h('span', {}, '醍醐 HTML/SVG 样本库'),
           h('span', { class: 'grow' }),
-          h('button', { type: 'button', class: 'mc-pelb', onclick: () => openLib(dispModel) }, '打开醍醐库 (' + st.specimenCount + ')'),
+          h('button', { type: 'button', class: 'mc-pelb', onclick: () => openLib('') }, '打开醍醐库 (' + st.specimenCount + ')'),
           h('button', { type: 'button', class: 'ib xs tihu-sync-ib' + (st.syncing ? ' spinning' : ''), disabled: st.syncing || null, title: st.syncing ? '正在同步醍醐样本库…' : '同步更新醍醐样本库', 'aria-label': '同步更新醍醐样本库', onclick: e => { e.stopPropagation(); void sync({ force: true }); } }, typeof icon === 'function' ? icon('refresh') : '↻')),
         h('div', { class: 'mc-uses sm dim' },
           dispModel && dispModel !== '未识别'
@@ -4548,8 +4582,9 @@ const TihuHub = (() => {
   function renderLibraryPanel(initialQuery = '', opts = {}) {
     const onClose = typeof opts?.onClose === 'function' ? opts.onClose : null;
     const host = h('div', { class: 'pel-lib-panel' });
-    let qRaw = String(initialQuery || '').trim();
-    let qStr = qRaw.toLowerCase();
+    let initPendingModel = String(initialQuery || '').trim();
+    let qRaw = '';
+    let qStr = '';
     let vendorFilter = 'all';
     let modelFilter = 'all';
     let tierFilter = 'all';
@@ -4616,7 +4651,7 @@ const TihuHub = (() => {
       }
       const sortedVendors = [...vendorCounts.entries()].sort((a, b) => b[1] - a[1]);
 
-      const modelKeyOf = (it) => normSlug(it.family || String(it.displayModel || '').replace(/\s*\((?:none|minimal|low|medium|high|xhigh|max)\)\s*$/i, '') || it.id || 'unknown');
+      const modelKeyOf = (it) => normSlug(((it.family && it.family !== 'other') ? it.family : '') || String(it.displayModel || it.rawModel || '').replace(/\s*\((?:none|minimal|low|medium|high|xhigh|max)\)\s*$/i, '') || it.id || 'unknown');
       const modelLabelOf = (it) => String(it.displayModel || it.family || it.id || 'Unknown').replace(/\s*\((?:none|minimal|low|medium|high|xhigh|max)\)\s*$/i, '').trim();
 
       const vendorScopedItems = vendorFilter === 'all'
@@ -4637,6 +4672,37 @@ const TihuHub = (() => {
         if (TIER_LIST.includes(tr)) rec.tiers.add(tr.toUpperCase());
       }
       const sortedModels = [...modelMap.values()].sort((a, b) => b.count - a.count || a.label.localeCompare(b.label));
+      if (initPendingModel) {
+        const stripped = initPendingModel
+          .replace(/\s*\((?:none|minimal|low|medium|high|xhigh|max)\)\s*$/i, '')
+          .replace(/[\s-]+(?:minimal|low|medium|high|xhigh|max)$/i, '')
+          .trim();
+        const candKey1 = normSlug(initPendingModel);
+        const candKey2 = normSlug(stripped);
+        const alnumCand = alnumSlug(stripped || initPendingModel);
+        let matchedKey = "";
+        if (candKey1 && modelMap.has(candKey1)) matchedKey = candKey1;
+        else if (candKey2 && modelMap.has(candKey2)) matchedKey = candKey2;
+        else if (alnumCand) {
+          for (const [mk, rec] of modelMap.entries()) {
+            if (alnumSlug(mk) === alnumCand || alnumSlug(rec.label) === alnumCand) { matchedKey = mk; break; }
+          }
+        }
+        if (matchedKey) {
+          modelFilter = matchedKey;
+        } else {
+          const qCand = stripped.toLowerCase();
+          const anyHit = qCand && allItems.some(it => {
+            const hay = (String(it.displayModel || '') + ' ' + String(it.family || '') + ' ' + String(it.vendor || '') + ' ' + String(it.id || '')).toLowerCase();
+            return hay.includes(qCand) || hay.replace(/[\s_]+/g, '-').includes(qCand) || alnumSlug(hay).includes(alnumSlug(qCand));
+          });
+          if (anyHit) {
+            qRaw = stripped;
+            qStr = qCand;
+          }
+        }
+        initPendingModel = '';
+      }
       if (modelFilter !== 'all' && !modelMap.has(modelFilter)) {
         modelFilter = 'all';
       }
@@ -4985,16 +5051,25 @@ const TihuHub = (() => {
       }
     } catch {}
 
-    const checkDaily = async () => {
-      const c = loadLocalCfg();
-      if (!c.url) return;
-      if (c.autoDaily !== false && (!_bundle.syncedAt || !isReady() || !globalThis.PelicanFingerprintEngine?._conditionedV3 || (Date.now() - _bundle.syncedAt) >= DAY_MS)) {
-        await sync({ force: !globalThis.PelicanFingerprintEngine?._conditionedV3, quiet: true });
-      } else if (isReady()) {
-        void scanAndRecognizeAllChats({ forceLoadUncached: true, quiet: true });
-      }
+    // 在线库自动更新（2.0.3-beta.1）：只在每天 09:00（本地时间）拉取一次；09:00 时客户端没开 → 当天第一次启动补拉一次。
+    // 不再每小时检查、不再滚动 24 小时、不再因引擎版本标记不一致强制全量重下。多个账号窗口共用同一份库：先读共享库，已有人拉过就不再请求。
+    const DAILY_HOUR = 9;
+    const lastSlot = (t = Date.now()) => { const d = new Date(t); d.setHours(DAILY_HOUR, 0, 0, 0); if (d.getTime() > t) d.setDate(d.getDate() - 1); return d.getTime(); };
+    const nextSlot = (t = Date.now()) => { const d = new Date(t); d.setHours(DAILY_HOUR, 0, 0, 0); if (d.getTime() <= t) d.setDate(d.getDate() + 1); return d.getTime(); };
+    const dailyDue = () => { const c = loadLocalCfg(); return Boolean(c.url && !c.disconnected && c.autoDaily !== false && (Number(_bundle.syncedAt) || 0) < lastSlot()); };
+    const runDaily = async () => {
+      if (!dailyDue()) return;
+      try { await pullSharedFromHost({ triggerScan: false, triggerSyncIfEmpty: false }); } catch {}
+      if (!dailyDue()) return;
+      await sync({ force: false, quiet: true, scheduled: true }).catch(() => {});
     };
-    void checkDaily();
+    const armDaily = () => {
+      const wait = Math.min(nextSlot() - Date.now() + Math.floor(Math.random() * 90000), 2147483000);
+      const t = setTimeout(() => { void runDaily().finally(armDaily); }, Math.max(1000, wait)); t?.unref?.();
+    };
+    if (dailyDue()) setTimeout(() => { void runDaily(); }, 8000 + Math.floor(Math.random() * 20000));
+    else if (isReady()) void scanAndRecognizeAllChats({ forceLoadUncached: true, quiet: true });
+    setTimeout(() => { void flushCorrectionQueue().catch(() => {}); }, 30000);
     setTimeout(() => {
       const curCnt = (typeof History !== 'undefined' && Array.isArray(History.items)) ? History.items.length : 0;
       if (isReady() && (curCnt > lastHistCount || (_lastScanSummary && _lastScanSummary.scanned < curCnt))) {
@@ -5002,7 +5077,7 @@ const TihuHub = (() => {
         void scanAndRecognizeAllChats({ forceLoadUncached: true, quiet: true });
       }
     }, 4500);
-    if (typeof setInterval === 'function') setInterval(() => { void checkDaily(); }, 3600 * 1000);
+    if (typeof setTimeout === 'function') armDaily();
   }
 
   if (typeof setTimeout === 'function') {
@@ -5034,6 +5109,8 @@ const TihuHub = (() => {
     scanAndRecognizeAllChats,
     toTihuThreeTuple,
     uploadChatCorrection,
+    flushCorrectionQueue,
+    correctionQueue: () => corrQ.load(),
     allSpecimens,
     matchSpecimens,
     fetchSpecimenCode,

@@ -16,6 +16,109 @@ ICON.pvfull = ICON.pvfull || '<path d="M14 4h6v6M10 20H4v-6M20 4l-7 7M4 20l7-7"/
 ICON.check = ICON.check || '<path d="M5 12.5l4.5 4.5L19 7.5"/>';
 ICON.pvtable = ICON.pvtable || '<rect x="4" y="4" width="16" height="16" rx="2"/><path d="M4 10h16M4 15h16M10 4v16"/>';
 ICON.pvsize = ICON.pvsize || '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="M7.5 9.5L5 12l2.5 2.5M16.5 9.5L19 12l-2.5 2.5M8.5 12h7"/>';
+// 预览动画按需播放：所有 HTML / SVG 预览（对话小窗、右侧预览窗格、醍醐样本库缩略图与放大预览）默认静止，
+// 鼠标移到预览上才运动，移开后停在离开那一刻的画面（节省 GPU / CPU）。页面加载后先跑 ~1.2 秒让画面画出来再定格。
+// 页面内注入一段很小的脚本：暂停 CSS 动画 / 过渡 / Web Animations、SVG SMIL、音视频，并把 requestAnimationFrame 与 setTimeout 回调挂起，
+// performance.now / Date.now / rAF 时间戳扣掉暂停时长，恢复时从定格处接着动，不会跳帧。触屏设备（无悬停）保持原来的一直播放。
+const PvAnim = (() => {
+  const WARM_MS = 1200;
+  function guest(WARM) {
+    var W = window, D = document;
+    if (W.__pvAnim) return;
+    try { if (W.matchMedia && W.matchMedia('(hover: none)').matches && !W.matchMedia('(any-hover: hover)').matches) return; } catch (e) {}
+    var paused = false, want = false, warm = true, offset = 0, pausedAt = 0, frozenPerf = 0, frozenDate = 0;
+    var dNow = Date.now, perf = W.performance;
+    var pNow = perf && perf.now ? perf.now.bind(perf) : function () { return dNow(); };
+    var nRAF = W.requestAnimationFrame, nCAF = W.cancelAnimationFrame;
+    var nST = W.setTimeout, nCT = W.clearTimeout, nSI = W.setInterval;
+    var rafSeq = 0, rafLive = new Map(), rafHeld = new Map(), heldTimers = new Map(), flushTimers = new Map();
+    var pausedAnims = [], pausedSvgs = [], pausedMedia = [];
+    function run(fn, args) { if (typeof fn === 'function') fn.apply(W, args); else if (fn != null) (0, eval)(String(fn)); }
+    try { if (perf) perf.now = function () { return paused ? frozenPerf : pNow() - offset; }; } catch (e) {}
+    try { Date.now = function () { return paused ? frozenDate : dNow() - offset; }; } catch (e) {}
+    function schedule(id, cb) {
+      rafLive.set(id, nRAF.call(W, function (t) { rafLive.delete(id); if (paused) rafHeld.set(id, cb); else cb(t - offset); }));
+    }
+    if (nRAF) {
+      W.requestAnimationFrame = function (cb) { var id = ++rafSeq; if (paused) rafHeld.set(id, cb); else schedule(id, cb); return id; };
+      W.cancelAnimationFrame = function (id) { if (rafLive.has(id)) { nCAF.call(W, rafLive.get(id)); rafLive.delete(id); } rafHeld.delete(id); };
+    }
+    W.setTimeout = function (fn, ms) {
+      var args = Array.prototype.slice.call(arguments, 2), id;
+      id = nST.call(W, function () { if (paused) heldTimers.set(id, [fn, args]); else run(fn, args); }, ms);
+      return id;
+    };
+    W.clearTimeout = function (id) { heldTimers.delete(id); flushTimers.delete(id); nCT.call(W, id); };
+    W.setInterval = function (fn, ms) {
+      var args = Array.prototype.slice.call(arguments, 2);
+      return nSI.call(W, function () { if (!paused) run(fn, args); }, ms);
+    };
+    try {
+      var css = D.createElement('style');
+      css.textContent = 'html.__pvp *,html.__pvp *::before,html.__pvp *::after{animation-play-state:paused!important}';
+      (D.head || D.documentElement).appendChild(css);
+    } catch (e) {}
+    function pause() {
+      if (paused) return;
+      frozenPerf = pNow() - offset; frozenDate = dNow() - offset; pausedAt = pNow(); paused = true;
+      try { D.documentElement.classList.add('__pvp'); } catch (e) {}
+      try { var a = D.getAnimations ? D.getAnimations() : []; for (var i = 0; i < a.length; i++) if (a[i].playState === 'running') { a[i].pause(); pausedAnims.push(a[i]); } } catch (e) {}
+      try { var s = D.getElementsByTagName('svg'); for (var j = 0; j < s.length; j++) if (s[j].pauseAnimations && !(s[j].animationsPaused && s[j].animationsPaused())) { s[j].pauseAnimations(); pausedSvgs.push(s[j]); } } catch (e) {}
+      try { var m = D.querySelectorAll('video,audio'); for (var k = 0; k < m.length; k++) if (!m[k].paused) { m[k].pause(); pausedMedia.push(m[k]); } } catch (e) {}
+    }
+    function resume() {
+      if (!paused) return;
+      offset += pNow() - pausedAt; paused = false;
+      try { D.documentElement.classList.remove('__pvp'); } catch (e) {}
+      var a = pausedAnims, s = pausedSvgs, m = pausedMedia, i;
+      pausedAnims = []; pausedSvgs = []; pausedMedia = [];
+      for (i = 0; i < a.length; i++) { try { a[i].play(); } catch (e) {} }
+      for (i = 0; i < s.length; i++) { try { s[i].unpauseAnimations(); } catch (e) {} }
+      for (i = 0; i < m.length; i++) { try { var p = m[i].play(); if (p && p.catch) p.catch(function () {}); } catch (e) {} }
+      if (rafHeld.size) { var held = []; rafHeld.forEach(function (cb, id) { held.push([id, cb]); }); rafHeld.clear(); for (i = 0; i < held.length; i++) schedule(held[i][0], held[i][1]); }
+      if (heldTimers.size) {
+        heldTimers.forEach(function (v, id) { flushTimers.set(id, v); }); heldTimers.clear();
+        nST.call(W, function () { var ids = []; flushTimers.forEach(function (v, id) { ids.push(id); }); for (var q = 0; q < ids.length; q++) { var v = flushTimers.get(ids[q]); if (!v) continue; flushTimers.delete(ids[q]); if (paused) { heldTimers.set(ids[q], v); continue; } try { run(v[0], v[1]); } catch (e) { nST.call(W, function () { throw e; }, 0); } } }, 0);
+      }
+    }
+    function apply() { if (want || warm) resume(); else pause(); }
+    function set(play) { warm = false; want = !!play; apply(); }
+    W.__pvAnim = { play: function () { set(true); }, pause: function () { set(false); }, isPaused: function () { return paused; } };
+    W.addEventListener('message', function (e) { var d = e && e.data; if (d && typeof d === 'object' && typeof d.__pvAnim === 'string') set(d.__pvAnim === 'play'); });
+    D.addEventListener('mouseover', function () { if (!want || warm) set(true); }, true);
+    D.addEventListener('mouseout', function (e) { if (!e.relatedTarget) set(false); }, true);
+    function endWarm() { if (!warm) return; warm = false; apply(); }
+    if (D.readyState === 'complete') nST.call(W, endWarm, WARM);
+    else W.addEventListener('load', function () { nST.call(W, endWarm, WARM); });
+    nST.call(W, endWarm, WARM + 5000);
+  }
+  const SCRIPT = '(' + guest.toString() + ')(' + WARM_MS + ');';
+  // 给原始 html 文本插入控制脚本：放在 <head> 开头（保证先于页面自己的脚本执行），不破坏 <!doctype>
+  function inject(html) {
+    const s = String(html == null ? '' : html);
+    if (!s || s.includes('W.__pvAnim')) return s;
+    const tag = '<script>' + SCRIPT + '<\/script>';
+    for (const re of [/<head\b[^>]*>/i, /<html\b[^>]*>/i, /<!doctype[^>]*>/i]) {
+      const m = re.exec(s);
+      if (m) return s.slice(0, m.index + m[0].length) + tag + s.slice(m.index + m[0].length);
+    }
+    return tag + s;
+  }
+  const post = (f, play) => { try { f?.contentWindow?.postMessage({ __pvAnim: play ? 'play' : 'pause' }, '*'); } catch {} };
+  // host = 包住预览 iframe 的容器（缩略图 iframe 通常 pointer-events:none，鼠标事件只能在容器上收）
+  function bind(host, f) {
+    if (!host || !f) return;
+    if (!host.__pvAnimBound) {
+      host.__pvAnimBound = true;
+      const all = play => { try { host.querySelectorAll('iframe').forEach(x => post(x, play)); } catch {} };
+      host.addEventListener('pointerenter', e => { if (e.pointerType !== 'touch') all(true); });
+      host.addEventListener('pointerleave', e => { if (e.pointerType !== 'touch') all(false); });
+    }
+    f.addEventListener('load', () => { let hov = false; try { hov = host.matches(':hover'); } catch {} if (hov) post(f, true); });
+  }
+  return { SCRIPT, inject, bind, post, WARM_MS };
+})();
+if (typeof globalThis !== 'undefined') globalThis.PvAnim = PvAnim;
 const HtmlPreview = (() => {
   const CSP = "default-src 'none'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; media-src data:; base-uri 'none'; form-action 'none'";
   const CSP_RUN = "default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; media-src data: blob:; base-uri 'none'; form-action 'none'";
@@ -112,6 +215,9 @@ const HtmlPreview = (() => {
       const syncSc = d.createElement('script');
       syncSc.textContent = `(function(){function unpause(){try{var svgs=document.querySelectorAll('svg');for(var j=0;j<svgs.length;j++){if(svgs[j].animationsPaused&&svgs[j].animationsPaused()&&svgs[j].unpauseAnimations)svgs[j].unpauseAnimations();}}catch(e){}}if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',unpause,{once:true});else unpause();})();`;
       d.head.prepend(syncSc);
+      const animSc = d.createElement('script');
+      animSc.textContent = PvAnim.SCRIPT;   // 预览动画仅鼠标悬停时播放，移开定格
+      d.head.prepend(animSc);
     }
     d.head.prepend(m);
     if (thumb) { const s = d.createElement('style'); s.textContent = NOBAR; d.head.append(s); }   // 小窗隐藏滚动条，保留原生时间轴动画与脚本运行
@@ -512,6 +618,7 @@ const HtmlPreview = (() => {
       probe.srcdoc = docOf(text, name, { run: false, thumb: true, sid: cardSid, basePath: cardPath });
       f.srcdoc = docOf(text, name, { run: true, thumb: true, sid: cardSid, basePath: cardPath });
       c.stage.append(probe, f);
+      PvAnim.bind(c.stage, f);
     };
     c.render = (text, name) => {
       c.pending = false;
@@ -1248,6 +1355,7 @@ const HtmlPreview = (() => {
       f.srcdoc = docOf(src, st.name, { run: true, sid: pvSid, basePath: st.path || st.name });
       p.srcdoc = docOf(src, st.name, { run: false, sid: pvSid, basePath: st.path || st.name });
       frame = f; st.probe = p; st.frameAt = now();
+      PvAnim.bind(stage, f);
       body.append(stage);
       stageToMount = { stage, f, p, src };
     }
@@ -1297,71 +1405,13 @@ const HtmlPreview = (() => {
     }
   }
   function applyWidth() { if (root) root.style.setProperty('--pvw', Prefs.pvW > 0 ? Prefs.pvW + 'px' : ''); }
-  // ---------- 记录：当前帧 → 小图 ----------
-  const kebab = k => k === 'cssFloat' ? 'float' : k.startsWith('--') ? k : k.replace(/[A-Z]/g, c => '-' + c.toLowerCase());
-  async function shoot(fr = st?.probe || frame) {
-    const frame = fr;
-    if (!frame) throw Error('没有可记录的画面');
-    const wasHidden = frame.style?.display === 'none';
-    if (wasHidden) { frame.style.display = ''; void frame.offsetHeight; }
-    try {
-      if (frame.contentDocument?.readyState !== 'complete') await new Promise(r => { const t = setTimeout(r, 2500); frame.addEventListener('load', () => { clearTimeout(t); r(); }, { once: true }); });
-      const doc = frame.contentDocument, win = frame.contentWindow; if (!doc?.documentElement) throw Error('读不到预览画面');
-      const W = Math.max(240, Math.round(frame.clientWidth)), H = Math.max(160, Math.round(frame.clientHeight));
-      const live = [...doc.querySelectorAll('*')], idx = new Map(live.map((e, i) => [e, i]));
-      const rootEl = doc.documentElement.cloneNode(true), copy = [rootEl, ...rootEl.querySelectorAll('*')];
-      // 动画冻结在「此刻」：把每个动画正在显示的值写成行内样式，再关掉所有动画
-      let frozen = 0;
-      for (const a of (doc.getAnimations?.() || [])) {
-        const eff = a.effect, t = eff?.target; if (!t || eff.pseudoElement || !idx.has(t)) continue;
-        const cs = win.getComputedStyle(t), el = copy[idx.get(t)], props = new Set();
-        try { for (const kf of eff.getKeyframes()) for (const k of Object.keys(kf)) if (!['offset', 'computedOffset', 'easing', 'composite'].includes(k)) props.add(k); } catch {}
-        for (const k of props) { const p = kebab(k), v = cs.getPropertyValue(p); if (v) { el.style?.setProperty(p, v); frozen++; } }
-      }
-      rootEl.querySelectorAll('script,iframe,object,embed,link,meta[http-equiv],base').forEach(n => n.remove());
-      for (const im of rootEl.querySelectorAll('img,image,video,audio,source')) for (const at of ['src', 'href', 'xlink:href']) { const v = im.getAttribute(at); if (v && !/^data:/i.test(v)) im.removeAttribute(at); }
-      const css = doc.createElement('style'); css.textContent = '*,*::before,*::after{animation:none!important;transition:none!important}';
-      (rootEl.querySelector('head') || rootEl).append(css);
-      const bg = win.getComputedStyle(doc.body).backgroundColor, hb = win.getComputedStyle(doc.documentElement).backgroundColor;
-      const solid = c => c && c !== 'rgba(0, 0, 0, 0)' && c !== 'transparent';
-      const fill = solid(hb) ? hb : solid(bg) ? bg : '#ffffff';
-      const xhtml = new XMLSerializer().serializeToString(rootEl);
-      const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}"><foreignObject x="0" y="0" width="${W}" height="${H}">${xhtml}</foreignObject></svg>`;
-      const img = new Image(); img.decoding = 'sync';
-      await new Promise((res, rej) => { img.onload = res; img.onerror = () => rej(Error('画面转图片失败')); img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg); });
-      const cw = Math.min(W, 560), ch = Math.round(H * cw / W), cv = document.createElement('canvas'); cv.width = cw; cv.height = ch;
-      const g = cv.getContext('2d'); g.fillStyle = fill; g.fillRect(0, 0, cw, ch); g.drawImage(img, 0, 0, cw, ch);
-      let url; try { url = cv.toDataURL('image/jpeg', 0.82); } catch { throw Error('此环境不允许读取画面像素'); }
-      return { url, w: cw, h: ch, frozen };
-    } finally {
-      if (wasHidden) frame.style.display = 'none';
-    }
-  }
-  // 不用打开预览窗格：把一段 html / svg 文本放进一个看不见的只读页面，等动画走一小段再截图（鹈鹕测试跑完自动存图用）
-  async function shootText(text, name, { w = 720, h: hh = 480, settle = 900 } = {}) {
-    const f = document.createElement('iframe'); f.setAttribute('sandbox', 'allow-same-origin'); f.setAttribute('csp', CSP); f.setAttribute('aria-hidden', 'true'); f.tabIndex = -1;
-    f.style.cssText = `position:fixed;left:-99999px;top:0;width:${w}px;height:${hh}px;border:0;pointer-events:none`;
-    document.body.append(f);
-    try {
-      await new Promise((res, rej) => { const t = setTimeout(() => rej(Error('页面加载超时')), 6000); f.addEventListener('load', () => { clearTimeout(t); res(); }, { once: true }); f.srcdoc = docOf(text, name); });
-      await sleep(settle);
-      return await shoot(f);
-    } finally { f.remove(); }
-  }
+  // 「醍醐库」按钮：用在线醍醐库识别当前作品，并打开在线样本库对照（2.0.3-beta.1 起不再截图、不再存图）
   async function record() {
     if (!st || st.kind !== 'html' || st.recording) return; st.recording = true;
     try {
-      if (st.mode !== 'run') { setMode('run'); await sleep(350); }
-      await sleep(60);
       const baseSid = st.sid || (typeof Tabs !== 'undefined' ? Tabs.cur?.sid : null) || null;
       const curChat = baseSid && typeof Chats !== 'undefined' ? Chats.get(baseSid) : null;
-      const sid = (baseSid && st.evalPos && curChat?.evalMode === 'battle') ? `${baseSid}#${st.evalPos}` : baseSid;
       const rawTextNow = String(textOf() || '');
-      let hDig = 2166136261 >>> 0;
-      for (let i = 0; i < rawTextNow.length; i++) { hDig ^= rawTextNow.charCodeAt(i); hDig = Math.imul(hDig, 16777619) >>> 0; }
-      const artifactDigest = rawTextNow.length + ':' + hDig.toString(36);
-      const messageId = st.evalMsg?.id || st.messageId || curChat?.messages?.filter(m => m && m.role === 'assistant')?.at(-1)?.id || null;
-      const shot = (st.previewUrl && rawTextNow.trim()) ? await shootText(rawTextNow, st.name) : await shoot();
       let cmpModel = '';
       try {
         if (typeof TihuHub !== 'undefined' && TihuHub.isReady?.() && rawTextNow.trim().length >= 90) {
@@ -1375,12 +1425,9 @@ const HtmlPreview = (() => {
           }
         }
       } catch {}
-      const curM = PelicanShots.modelOf ? PelicanShots.modelOf(sid) : { model: null, score: null, think: null };
-      const explicitModel = st.evalModelName || (curM?.model && curM.model !== '未识别' ? curM.model : undefined) || cmpModel || undefined;
-      const r = PelicanShots.add({ sid, ...shot, file: st.name, messageId, artifactDigest, model: explicitModel, score: curM?.score, think: curM?.think, lockedModel: Boolean(explicitModel) });
-      toast('已记录 · ' + r.model + (r.score != null ? ' · 推理分 ' + Strength.fmtScore(r.score) : '') + '（模型信息 · 概览 · 鹈鹕测试图）');
+      PelicanShots.table({ compareModel: st.evalModelName || cmpModel || '' });
       try { Dock.render(); } catch {}
-    } catch (e) { toast('记录失败：' + describe(e), 'err'); }
+    } catch (e) { toast('打开醍醐库失败：' + describe(e), 'err'); }
     finally { if (st) st.recording = false; }
   }
   // 含脚本的页面：仍可手动交给原来的隔离窗口（不是默认路径）
@@ -1412,937 +1459,54 @@ const HtmlPreview = (() => {
     });
   }
   return { previewable, kindOf, inlineAssets, open, openEvalMessage, selectEvalOption, syncEval, extractEvalBundle, activeEvalPos: () => st?.evalPos || null,
-    activeMode: () => st?.mode || '', activeEvalMsgId: () => st?.evalMsgId || null, image, isFull: () => !!root?.classList.contains('pv-full'), close, dismiss, on, mount, bindRow, render, syncLive, record, shoot, shootText, card, titleOf, sid: () => st?.sid || null, docOf,
+    activeMode: () => st?.mode || '', activeEvalMsgId: () => st?.evalMsgId || null, image, isFull: () => !!root?.classList.contains('pv-full'), close, dismiss, on, mount, bindRow, render, syncLive, record, card, titleOf, sid: () => st?.sid || null, docOf,
     resolvedText, resolvedVer: () => _resolvedVer, cacheResolvedText, healFileText, isUsablePreviewText };
 })();
 
+// 旧「鹈鹕截图库」已取消（2.0.3-beta.1）：不再截图、不再存 JPEG、不再多账号合并 / 收割、不再导入导出截图库。
+// 只保留在线醍醐 HTML/SVG 样本库。保留同名对象只是为了兼容旧调用点：打开库 → 在线库面板；概览卡片 → 醍醐网页样本卡片；
+// 鹈鹕测试 / 抽卡结束 → 只做在线库识别；其余（存图 / 拉取 / 推送 / 改型号）都是空操作。
 const PelicanShots = (() => {
-  const KEY = 'pelican-shots', DEL_KEY = 'pelican-shots-del', PER = 8, TOTAL = 240;
-  let _tihuOpenModalBody = null;   /* PER = 每个对话最多留几张；全客户端所有账号互通合并 */
-  const cleanName = s => String(s || '').replace(/\?+$/, '').trim();
-  const key = m => cleanName(m).toLowerCase().replace(/\s*\((none|minimal|low|medium|high|xhigh|max)\)\s*$/i, '-$1').replace(/[\s_]+/g, '-');
-  const isBetterModel = (cand, cur) => {
-    const a = cleanName(cand), b = cleanName(cur);
-    if (!a || a === '未识别' || a === '开源模型') return false;
-    if (!b || b === '未识别' || b === '开源模型' || /\?$/.test(String(cur || ''))) return true;
-    const ka = key(a), kb = key(b);
-    if (ka === kb) return false;
-    const hasTier = k => /-(?:none|minimal|low|medium|high|xhigh|max)$/i.test(k);
-    if (hasTier(kb) && !hasTier(ka) && kb.startsWith(ka + '-')) return false;
-    return true;
-  };
-  const curAcct = () => {
-    try { const a = typeof UI !== 'undefined' && UI.host?.account; return String(a?.name || (a?.email || '').split('@')[0] || '').trim(); } catch { return ''; }
-  };
-  const delMap = () => {
-    const d = Store.get(DEL_KEY, {});
-    return d && typeof d === 'object' && !Array.isArray(d) ? d : {};
-  };
-  const saveDel = d => { try { Store.set(DEL_KEY, d || {}); } catch {} };
-  const LOCAL_MAX_ROWS = 14, LOCAL_MAX_CHARS = 550000;
-  let memRows = null;
-  const all = () => {
-    const dm = delMap();
-    const src = Array.isArray(memRows) ? memRows : Store.get(KEY, []);
-    const list = Array.isArray(src) ? src.filter(x => x && typeof x.url === 'string' && x.model && !dm[x.id]) : [];
-    if (!Array.isArray(memRows)) memRows = list;
-    return list;
-  };
-  const save = a => {
-    const full = Array.isArray(a) ? a.slice(-TOTAL) : [];
-    let r = full.slice(-LOCAL_MAX_ROWS);
-    memRows = (typeof table === 'function' && table.refreshOpen) ? full : r;
-    while (r.length > 4) {
-      try {
-        if (JSON.stringify(r).length <= LOCAL_MAX_CHARS) break;
-      } catch { break; }
-      r = r.slice(1);
-    }
-    while (r.length && !Store.set(KEY, r)) r = r.slice(Math.max(1, Math.ceil(r.length * 0.2)));
-    return full;
-  };
-  function modelOf(rawSid) {
-    let name = '', score = null, think = null;
-    const [sid, evalSide] = String(rawSid || '').split('#');
-    try {
-      const cObj = sid && typeof Chats !== 'undefined' ? Chats.get(sid) : null;
-      if (cObj) {
-        if (evalSide === 'a' || evalSide === 'b') {
-          const vs = cObj.voteState || null;
-          const revName = evalSide === 'b' ? vs?.modelBName : vs?.modelAName;
-          if (revName && revName !== '未识别') name = Strength.canon(revName);
-          if (!name && typeof ChatHabitFingerprint !== 'undefined' && typeof ChatHabitFingerprint.analyzeBattleChat === 'function') {
-            const bSnap = ChatHabitFingerprint.analyzeBattleChat(cObj);
-            const topCand = bSnap?.[evalSide]?.candidates?.[0];
-            if (topCand?.label && topCand.label !== '未识别') name = Strength.canon(topCand.label);
-          }
-        } else if (cObj.evalMode === 'direct' && cObj.directModelName) {
-          name = Strength.canon(cObj.directModelName);
-        }
-      }
-      const mi = sid ? Models.get(sid) : null;
-      const hRow = sid && typeof History !== 'undefined' ? History.byId?.(sid) : null;
-      if (!name && sid && !mi?.userCorrected && typeof BillingProbe !== 'undefined' && typeof BillingProbe.summary === 'function') {
-        const sumTop = BillingProbe.summary(sid, { readOnly: true })?.mergedCandidates?.[0];
-        if (sumTop && !sumTop.streamFallback && Number(sumTop.match || 0) >= 50 && sumTop.supportGranularity !== 'family' && (sumTop.canon || sumTop.label)) {
-          name = Strength.canon(sumTop.canon || sumTop.label);
-        }
-      }
-      const hasReidMi = Boolean(mi && !mi.pendingConfirm && (!mi.guess || mi.userCorrected || mi.habitInferred || mi.reverseInferred || mi.billingProbe));
-      if (!name && mi && mi.name && hasReidMi) name = Strength.canon(mi.name);
-      if (!name && mi && mi.reverseCandidateId && mi.sure) name = Strength.canon(mi.name || mi.reverseLabel || mi.reverseCandidateId);
-      if (!name) { const t = Titles.view(sid, hRow?.title || '', hRow?.localTitle).model; if (t && Brand.of(t)) name = Strength.canon(t); }
-    } catch {}
-    try {
-      const p = sid ? PelicanTest.result(sid) : null;
-      score = Number.isFinite(p?.score) ? p.score : null;
-      think = Number.isFinite(p?.think) ? p.think : null;
-      if (!name && p?.name && p.name !== '未识别') name = Strength.canon(p.name);
-    } catch {}
-    if (score == null) try { const mi = sid ? Models.get(sid) : null; const hRow = sid && typeof History !== 'undefined' ? History.byId?.(sid) : null; score = ConversationLabels.score(mi, hRow?.localTitle || hRow?.title || ''); } catch {}
-    if (score == null) try { const mi = sid ? Models.get(sid) : null; const rs = mi?.reverseScore ?? mi?.habitScore; if (Number.isFinite(rs)) score = rs; } catch {}
-    return { model: name || '未识别', score, think };
-  }
-  /* 展示用的型号 / 推理分跟着对话走：测完指纹、校准、改名之后型号变了，图还是这个对话的，只是归到新型号下；跨账号或外部导入的图保留其记录的型号与分数 */
-  const view = r => {
-    if (!r) return r;
-    if (!r.sid) {
-      const sc = r.score ?? (r.model && r.model !== '未识别' && typeof Strength !== 'undefined' ? Strength.board?.()?.find?.(b => key(b.name) === key(r.model))?.score ?? null : null);
-      return { ...r, model: cleanName(r.model) || '未识别', score: sc ?? null };
-    }
-    const m = modelOf(r.sid);
-    const mi = typeof Models !== 'undefined' ? Models.get(r.sid) : null;
-    const isPreRouteShot = Boolean(r.model && r.model !== '未识别' && mi?.routed && mi?.routeFrom && key(r.model) === key(mi.routeFrom));
-    if (isPreRouteShot || !m.model || m.model === '未识别') {
-      return { ...r, model: cleanName(r.model) || '未识别', score: r.score ?? m.score ?? null, think: r.think ?? m.think ?? null };
-    }
-    const nextModel = isBetterModel(m.model, r.model) ? m.model : (cleanName(r.model) || m.model || '未识别');
-    const nextScore = m.score ?? r.score ?? null;
-    const nextThink = m.think ?? r.think ?? null;
-    return { ...r, model: nextModel, score: nextScore, think: nextThink };
-  };
-  function mergeRows(baseRows, incomingRows, dm = delMap(), fallbackAcct = '') {
-    const byId = new Map(), bySig = new Map();
-    const put = (rawRow, acctFallback = '') => {
-      if (!rawRow || typeof rawRow !== 'object' || typeof rawRow.url !== 'string' || !/^data:image\//i.test(rawRow.url)) return;
-      const r = view(rawRow);
-      const id = String(r.id || '').trim() || ((r.sid || 'pel') + '-' + (r.at || 0));
-      if (dm && dm[id]) return;
-      const acct = String(r.acct || acctFallback || '').trim();
-      const norm = {
-        ...r,
-        id,
-        at: Number(r.at) || now(),
-        sid: r.sid || null,
-        model: cleanName(r.model) || '未识别',
-        score: r.score != null && Number.isFinite(+r.score) ? +r.score : null,
-        think: r.think != null && Number.isFinite(+r.think) ? +r.think : null,
-        w: Number(r.w) || 560,
-        h: Number(r.h) || 373,
-        file: String(r.file || ''),
-        ...(r.auto ? { auto: true } : {}),
-        ...(acct ? { acct } : {}),
-      };
-      const sig = (norm.sid || key(norm.model) || '') + '|' + (norm.at || 0) + '|' + (norm.file || '') + '|' + norm.url.slice(-120);
-      const ex = byId.get(id) || bySig.get(sig);
-      if (!ex) {
-        byId.set(id, norm);
-        bySig.set(sig, norm);
-        return;
-      }
-      const merged = {
-        ...ex,
-        ...norm,
-        id: ex.id || norm.id,
-        at: Math.max(ex.at || 0, norm.at || 0),
-        model: isBetterModel(norm.model, ex.model) ? norm.model : (ex.model || norm.model || '未识别'),
-        score: norm.score ?? ex.score ?? null,
-        think: norm.think ?? ex.think ?? null,
-        acct: ex.acct || norm.acct || '',
-      };
-      byId.set(merged.id, merged);
-      bySig.set(sig, merged);
+  const noop = () => {};
+  const cleanName = s => String(s || '').replace(/[?？]+$/, '').trim();
+  let openBody = null;
+  function table(initOpts = {}) {
+    const opts = initOpts && typeof initOpts === 'object' && !initOpts.target && !initOpts.preventDefault ? initOpts : {};
+    if (typeof TihuHub === 'undefined' || typeof TihuHub.renderLibraryPanel !== 'function') { try { toast('醍醐在线样本库尚未加载', 'err'); } catch {} return null; }
+    try { if (typeof document !== 'undefined' && document.querySelectorAll) document.querySelectorAll('.modal-back').forEach(b => { if (b.querySelector?.('.pel-lib-modal')) b.remove(); }); } catch {}
+    const rawCmp = opts.compareModel && opts.compareModel !== '未识别' && opts.compareModel !== '开源模型' ? cleanName(opts.compareModel) : '';
+    let back = null;
+    const closeModal = () => { openBody = null; table.refreshOpen = null; try { back?.remove(); } catch {} };
+    const panelEl = TihuHub.renderLibraryPanel(rawCmp, { onClose: closeModal });
+    back = modal('', panelEl, null, 'pt-modal pel-lib-modal');
+    openBody = { host: panelEl, cmp: rawCmp, onClose: closeModal };
+    table.refreshOpen = () => {
+      if (!openBody || !openBody.host?.isConnected) { openBody = null; return; }
+      try { const fresh = TihuHub.renderLibraryPanel(openBody.cmp || '', { onClose: openBody.onClose }); openBody.host.replaceWith(fresh); openBody.host = fresh; } catch {}
     };
-    for (const r of (Array.isArray(baseRows) ? baseRows : [])) put(r, '');
-    for (const r of (Array.isArray(incomingRows) ? incomingRows : [])) put(r, fallbackAcct);
-    return [...byId.values()].sort((a, b) => (a.at || 0) - (b.at || 0)).slice(-TOTAL);
+    return back;
   }
-  async function readShared() {
-    if (typeof Host === 'undefined' || !Host.shared) return null;
-    try {
-      const d = await Host.shared('pelshots');
-      if (d && typeof d === 'object') return d;
-    } catch {}
-    if (Host.platform === 'android') {
-      try {
-        const s = await Host.shared('strsamples');
-        if (s && typeof s === 'object' && s.pelshots && typeof s.pelshots === 'object') return s.pelshots;
-      } catch {}
-    }
-    return null;
+  function card(sid) {
+    if (typeof TihuHub === 'undefined' || typeof TihuHub.renderModelCardSection !== 'function') return null;
+    const rawSid = String(sid || '').split('#')[0];
+    const m = (rawSid && typeof Models !== 'undefined' && Models.get) ? Models.get(rawSid) : null;
+    const rawModel = cleanName(m?.rawLabel || m?.name || m?.candidateName || '');
+    const effort = String(m?.effort || m?.tier || m?.reverseEffort || '').trim().toLowerCase();
+    try { return TihuHub.renderModelCardSection(sid, rawModel, effort, true) || null; } catch { return null; }
   }
-  async function writeShared(payload) {
-    if (typeof Host === 'undefined' || !Host.shared) return false;
-    let ok = false;
-    try { ok = !!(await Host.shared('pelshots', payload)); } catch {}
-    if (Host.platform === 'android') {
-      try {
-        let s = await Host.shared('strsamples');
-        if (!s || typeof s !== 'object' || Array.isArray(s)) s = { S: {}, clr: {} };
-        s.S = s.S && typeof s.S === 'object' ? s.S : {};
-        s.clr = s.clr && typeof s.clr === 'object' ? s.clr : {};
-        s.pelshots = { rows: payload.rows || [], del: payload.del || {}, pelican: payload.pelican || {}, at: now() };
-        await Host.shared('strsamples', s);
-        ok = true;
-      } catch {}
-    }
-    return ok;
-  }
-  let pullP = null;
-  async function pull(forceHarvest = false, quiet = true, fromRemoteSync = false) {
-    if (pullP && !forceHarvest) return pullP;
-    pullP = (async () => {
-      try {
-        const localRows = all().map(view), dm = { ...delMap() }, acct = curAcct();
-        let remote = await readShared();
-        const absorbRemote = rRaw => {
-          if (!rRaw) return [];
-          const rObj = Array.isArray(rRaw) ? { rows: rRaw, del: {}, pelican: {} } : rRaw;
-          if (rObj.del && typeof rObj.del === 'object') {
-            for (const [id, ts] of Object.entries(rObj.del)) if (id && Number(ts) > (dm[id] || 0)) dm[id] = Number(ts);
-          }
-          if (rObj.pelican && typeof rObj.pelican === 'object' && typeof PelicanTest !== 'undefined' && PelicanTest.merge) {
-            PelicanTest.merge(rObj.pelican);
-          }
-          return Array.isArray(rObj.rows) ? rObj.rows : [];
-        };
-        const remoteRows1 = absorbRemote(remote);
-        try {
-          const sharedPel = await Host.shared?.('pelican');
-          if (sharedPel && typeof sharedPel === 'object' && typeof PelicanTest !== 'undefined' && PelicanTest.merge) PelicanTest.merge(sharedPel);
-        } catch {}
-        let merged = mergeRows(remoteRows1, localRows, dm, acct);
-        saveDel(dm);
-        const pelLocal = typeof PelicanTest !== 'undefined' && PelicanTest.all ? PelicanTest.all() : {};
-        const modelsSlim = {};
-        if (typeof Models !== 'undefined' && Models.all) {
-          for (const r of merged) {
-            if (r?.sid && Models.all[r.sid]) {
-              const mv = Models.all[r.sid];
-              modelsSlim[r.sid] = { name: mv.name, reverseScore: mv.reverseScore, habitScore: mv.habitScore, sure: mv.sure };
-            }
-          }
-        }
-        const sigOfRows = rs => JSON.stringify([...(Array.isArray(rs) ? rs : [])].sort((a, b) => (a.at || 0) - (b.at || 0) || String(a.id || '').localeCompare(String(b.id || ''))).map(x => [x.id, x.model, x.score, x.think, x.acct]));
-        const remoteSig = sigOfRows(remoteRows1);
-        const mergedSig = sigOfRows(merged);
-        const hasNewModelEnrich = Object.keys(modelsSlim).some(sid => {
-          const r = remoteRows1.find(x => x?.sid === sid);
-          return r && isBetterModel(modelsSlim[sid]?.name, r.model);
-        });
-        const remoteDelObj = (remote && !Array.isArray(remote) && remote.del && typeof remote.del === 'object') ? remote.del : {};
-        const remotePelObj = (remote && !Array.isArray(remote) && remote.pelican && typeof remote.pelican === 'object') ? remote.pelican : {};
-        const hasNewDel = Object.keys(dm).some(id => !remoteDelObj[id] || dm[id] > remoteDelObj[id]);
-        const hasNewPel = Object.keys(pelLocal).some(id => !remotePelObj[id] || (pelLocal[id]?.at || 0) > (remotePelObj[id]?.at || 0));
-        if (!fromRemoteSync && (forceHarvest || !remote || mergedSig !== remoteSig || hasNewModelEnrich || hasNewDel || hasNewPel || Host.platform === 'android')) {
-          await writeShared({ rows: merged, del: dm, pelican: pelLocal, models: modelsSlim, acct, harvest: !!forceHarvest });
-        }
-        if (forceHarvest && Host.platform !== 'android') {
-          await new Promise(r => setTimeout(r, 240));
-          const remote2 = await readShared();
-          const remoteRows2 = absorbRemote(remote2);
-          merged = mergeRows(merged, remoteRows2, dm, acct);
-          saveDel(dm);
-        }
-        const changed = merged.length !== localRows.length || JSON.stringify(merged.map(x => [x.id, x.model, x.score])) !== JSON.stringify(localRows.map(x => [x.id, x.model, x.score]));
-        if (changed) {
-          save(merged);
-          try { Dock.render?.(); } catch {}
-          try { if (typeof table.refreshOpen === 'function') table.refreshOpen(); } catch {}
-        }
-        if (!quiet) toast('已同步全客户端鹈鹕测试库 · 共 ' + latest().length + ' 个型号 / ' + merged.length + ' 张记录');
-        return merged;
-      } catch { return all(); }
-      finally { pullP = null; }
-    })();
-    return pullP;
-  }
-  let pushT = 0;
-  function push() { clearTimeout(pushT); pushT = setTimeout(() => { pushT = 0; void pull(false, true); }, 600); }
-  // Re-entrancy guard: Bus 'model' -> syncSid -> TihuHub.recognizePelicanChatAndApply -> Bus.emit('model') -> syncSid ...
-  // was an unbounded synchronous recursion (allowHealStub:false has no await before the emit) that froze the whole UI.
-  function syncSid(sid) {
-    if (!sid) return;
-    const active = syncSid._active || (syncSid._active = new Set());
-    if (active.has(sid)) return;
-    active.add(sid);
-    try {
-      if (typeof TihuHub !== 'undefined' && typeof TihuHub.recognizePelicanChatAndApply === 'function' && TihuHub.isReady?.()) {
-        const c = (typeof Chats !== 'undefined' && Chats.get) ? Chats.get(sid) : null;
-        if (c?.messages?.length) {
-          try { Promise.resolve(TihuHub.recognizePelicanChatAndApply(sid, c, { allowHealStub: false })).catch(() => {}); } catch {}
-        }
-      }
-      const rawList = all();
-      if (!rawList.some(x => x.sid === sid)) return;
-      const updated = rawList.map(x => x.sid === sid ? view(x) : x);
-      save(updated);
-      push();
-    } finally {
-      active.delete(sid);
-    }
-  }
-  function add({ sid, url, w, h: hh, file, auto, acct, messageId, artifactDigest, lockedModel, model: explicitModel, score: explicitScore, think: explicitThink }) {
-    const m = modelOf(sid), aLabel = acct || curAcct();
-    const finalModel = (explicitModel && explicitModel !== '未识别') ? cleanName(explicitModel) : m.model;
-    const finalScore = (explicitScore !== undefined && explicitScore !== null && Number.isFinite(+explicitScore)) ? +explicitScore : m.score;
-    const finalThink = (explicitThink !== undefined && explicitThink !== null && Number.isFinite(+explicitThink)) ? +explicitThink : m.think;
-    const rec = { id: uuid7(), at: now(), sid, model: finalModel, score: finalScore, ...(finalThink != null ? { think: finalThink } : {}), url, w, h: hh, file: file || '', ...(auto ? { auto: true } : {}), ...(aLabel ? { acct: aLabel } : {}), ...(messageId ? { messageId } : {}), ...(artifactDigest ? { artifactDigest } : {}), ...(lockedModel ? { lockedModel: true } : {}) };
-    let a = all(); a.push(rec);
-    const mine = rec.sid ? a.filter(x => x.sid === rec.sid) : a.filter(x => !x.sid && key(x.model) === key(rec.model));
-    if (mine.length > PER) { const drop = new Set(mine.slice(0, mine.length - PER).map(x => x.id)); a = a.filter(x => !drop.has(x.id)); }
-    if (a.length > TOTAL) a = a.slice(a.length - TOTAL);
-    save(a);
-    push();
-    return rec;
-  }
-  const del = id => {
-    const dm = { ...delMap(), [id]: now() };
-    saveDel(dm);
-    save(all().filter(x => x.id !== id));
-    push();
-  };
-  /* 鹈鹕测试跑完自动存图：取这个对话里最后写出的 html / svg，不打开预览也不用手点「记录」。
-     返回 { rec } 成功；{ none:'原因' } = 没有可截图的页面（模型没写文件 / 还没写完）；抛错 = 截图失败 */
+  // 鹈鹕测试 / 抽卡结束：只用在线库识别型号（不截图）
   async function auto(sid, chat) {
     let tihu = null;
     if (typeof TihuHub !== 'undefined' && typeof TihuHub.recognizePelicanChatAndApply === 'function' && TihuHub.isReady?.() && sid) {
       tihu = await TihuHub.recognizePelicanChatAndApply(sid, chat, { allowHealStub: true }).catch(() => null);
     }
-    const list = (typeof R !== 'undefined' && R.writes ? R.writes(sid) : []).filter(x => HtmlPreview.kindOf(x.path) === 'html'), w = list[list.length - 1];
-    if (!w) return { tihu, none: '这一轮没有写出 html / svg 文件，没有可存的图' };
-    const text = String(w.get() || ''); if (text.trim().length < 80) return { none: '写出的页面是空的，没有存图' };
-    let hDig = 2166136261 >>> 0;
-    for (let i = 0; i < text.length; i++) { hDig ^= text.charCodeAt(i); hDig = Math.imul(hDig, 16777619) >>> 0; }
-    const artifactDigest = text.length + ':' + hDig.toString(36);
-    const lastAsst = (chat || (typeof Chats !== 'undefined' ? Chats.get(sid) : null))?.messages?.filter(m => m && m.role === 'assistant')?.at(-1);
-    const curM = modelOf(sid);
-    const explicitModel = (curM.model && curM.model !== '未识别') ? curM.model : undefined;
-    const shot = await HtmlPreview.shootText(text, w.path.split('/').pop() || w.path);
-    return { rec: add({ sid, ...shot, file: w.path.split('/').pop() || w.path, auto: true, messageId: lastAsst?.id || null, artifactDigest, model: explicitModel, score: curM.score, think: curM.think, lockedModel: Boolean(explicitModel) }) };
+    return { tihu, none: '截图库已取消，只做在线醍醐库识别' };
   }
-  const forSid = sid => sid ? all().filter(x => x.sid === sid).map(view).sort((x, y) => y.at - x.at) : [];
-  const forModel = name => { const k = key(name); return k ? all().map(view).filter(x => key(x.model) === k).sort((x, y) => y.at - x.at) : []; };
-  // 每个型号取最新一张，按推理分从高到低（没有分的排最后）；若最新一张未带分则继承同型号已有推理分
-  const latest = () => {
-    const m = new Map();
-    for (const r of all().map(view)) {
-      const k = key(r.model) || '未识别', o = m.get(k);
-      if (!o) m.set(k, { ...r });
-      else if (r.at >= o.at) m.set(k, { ...r, score: r.score ?? o.score ?? null, think: r.think ?? o.think ?? null });
-      else if (o.score == null && r.score != null) o.score = r.score;
-    }
-    return [...m.values()].sort((x, y) => (y.score ?? -1) - (x.score ?? -1) || y.at - x.at);
+  return {
+    retired: true, add: () => null, auto, all: () => [], del: noop, latest: () => [], forModel: () => [], forSid: () => [],
+    card, entryCard: card, table, openLibrary: table, tableSvg: () => '', modelOf: () => ({ model: null, score: null, think: null }),
+    pull: async () => ({ retired: true }), push: noop, syncSid: noop, exportData: () => null, exportLibrary: noop,
+    importData: async () => ({ added: 0, retired: true }), openImport: () => table(),
   };
-  function exportData({ models = null } = {}) {
-    const filterKeys = Array.isArray(models) && models.length ? new Set(models.map(key)) : null;
-    const rows = all().map(view).filter(r => !filterKeys || filterKeys.has(key(r.model)));
-    const sids = new Set(rows.map(r => r.sid).filter(Boolean));
-    const mKeys = new Set(rows.map(r => key(r.model)).filter(Boolean));
-    const pelAll = typeof PelicanTest !== 'undefined' && PelicanTest.all ? PelicanTest.all() : {};
-    const pelican = {};
-    for (const [sid, p] of Object.entries(pelAll || {})) {
-      if (!filterKeys || sids.has(sid) || (p?.name && mKeys.has(key(p.name)))) pelican[sid] = p;
-    }
-    const samples = {};
-    try {
-      const sMap = typeof Strength !== 'undefined' && Strength.samples ? Strength.samples : {};
-      for (const [mName, arr] of Object.entries(sMap || {})) {
-        if (!Array.isArray(arr) || !arr.length) continue;
-        if (filterKeys && !mKeys.has(key(mName))) continue;
-        const stdRows = arr.filter(x => x && x.std);
-        if (stdRows.length) samples[mName] = stdRows;
-      }
-    } catch {}
-    const modSet = new Set(rows.map(r => key(r.model)));
-    return {
-      schema: 'brana-pelican-library-v1',
-      version: typeof VERSION !== 'undefined' ? VERSION : '0.13.154',
-      exportedAt: new Date().toISOString(),
-      acct: curAcct() || 'client',
-      modelCount: modSet.size,
-      count: rows.length,
-      shots: rows,
-      pelican,
-      samples,
-    };
-  }
-  function exportLibrary(opts = {}) {
-    const data = exportData(opts);
-    if (!data.shots.length) { toast('当前鹈鹕测试库还没有记录可导出', 'err'); return null; }
-    const fname = 'brana-pelican-library-' + new Date().toISOString().slice(0, 10) + '.json';
-    const json = JSON.stringify(data, null, 2);
-    try {
-      if (typeof FileExport !== 'undefined' && FileExport.text) FileExport.text(json, fname, 'application/json');
-      else if (typeof FileExport !== 'undefined' && FileExport.write) void FileExport.write(json, fname, 'application/json');
-    } catch (e) { toast('导出失败：' + describe(e), 'err'); return null; }
-    toast('已导出鹈鹕测试库 · ' + data.modelCount + ' 个型号 / ' + data.count + ' 张测试图');
-    return data;
-  }
-  function parseSvgTableImport(svgText) {
-    const s = String(svgText || '');
-    if (!/<svg[\s>]/i.test(s) || !/<image\b/i.test(s)) return null;
-    try {
-      const doc = new DOMParser().parseFromString(s, 'image/svg+xml');
-      const imgs = [...doc.querySelectorAll('image')];
-      const texts = [...doc.querySelectorAll('text')];
-      const shots = [];
-      for (const im of imgs) {
-        const href = im.getAttribute('href') || im.getAttribute('xlink:href') || '';
-        if (!/^data:image\//i.test(href)) continue;
-        const iy = parseFloat(im.getAttribute('y') || '0');
-        const rowTexts = texts.filter(t => { const ty = parseFloat(t.getAttribute('y') || '0'); return ty >= iy - 15 && ty <= iy + 185; });
-        const model = cleanName(rowTexts[0]?.textContent || '导入型号') || '导入型号';
-        const scTxt = rowTexts.find(t => /^\d+(\.\d+)?$/.test((t.textContent || '').trim()))?.textContent;
-        const score = scTxt != null && Number.isFinite(+scTxt) ? +scTxt : null;
-        shots.push({
-          id: 'svg-' + key(model) + '-' + shots.length,
-          at: now() - shots.length * 1000,
-          sid: null,
-          model,
-          score,
-          url: href,
-          w: Math.round(parseFloat(im.getAttribute('width') || '560')) || 560,
-          h: Math.round(parseFloat(im.getAttribute('height') || '373')) || 373,
-          file: 'pelican.svg',
-          acct: 'SVG导入',
-        });
-      }
-      return shots.length ? { shots, pelican: {}, samples: {} } : null;
-    } catch { return null; }
-  }
-  function importData(rawInput, { quiet = false } = {}) {
-    let obj = rawInput;
-    if (typeof rawInput === 'string') {
-      const trimmed = rawInput.trim();
-      if (trimmed.startsWith('<')) {
-        obj = parseSvgTableImport(trimmed);
-        if (!obj) throw Error('SVG 文件中未找到可导入的鹈鹕测试图记录');
-      } else {
-        try { obj = JSON.parse(trimmed); } catch { throw Error('导入文件格式不是有效的 JSON 或鹈鹕能力表 SVG'); }
-      }
-    }
-    const inShots = Array.isArray(obj) ? obj : Array.isArray(obj?.shots) ? obj.shots : Array.isArray(obj?.rows) ? obj.rows : [];
-    const inPel = obj && typeof obj === 'object' && !Array.isArray(obj) && obj.pelican && typeof obj.pelican === 'object' ? obj.pelican : {};
-    const inSamples = obj && typeof obj === 'object' && !Array.isArray(obj) && obj.samples && typeof obj.samples === 'object' ? obj.samples : {};
-    if (!inShots.length && !Object.keys(inPel).length && !Object.keys(inSamples).length) {
-      throw Error('导入文件中没有找到有效的鹈鹕测试图或评分记录');
-    }
-    if (Object.keys(inPel).length && typeof PelicanTest !== 'undefined' && PelicanTest.merge) {
-      try { PelicanTest.merge(inPel); } catch {}
-    }
-    if (Object.keys(inSamples).length && typeof Strength !== 'undefined' && Strength.addSample) {
-      for (const [mName, arr] of Object.entries(inSamples)) {
-        if (!Array.isArray(arr)) continue;
-        for (const sRow of arr) { try { Strength.addSample(mName, sRow); } catch {} }
-      }
-    }
-    const dm = { ...delMap() };
-    const existing = all().map(view);
-    const byId = new Map(existing.map(x => [x.id, x]));
-    let added = 0, updated = 0, skipped = 0;
-    const validIncoming = [];
-    for (const rawRow of inShots) {
-      if (!rawRow || typeof rawRow !== 'object' || typeof rawRow.url !== 'string' || !/^data:image\//i.test(rawRow.url)) continue;
-      const id = String(rawRow.id || '').trim() || ('imp-' + (rawRow.at || now()) + '-' + Math.random().toString(36).slice(2, 7));
-      if (dm[id]) delete dm[id];
-      const normModel = cleanName(rawRow.model) || '未识别';
-      const normScore = rawRow.score != null && Number.isFinite(+rawRow.score) ? +rawRow.score : null;
-      const normThink = rawRow.think != null && Number.isFinite(+rawRow.think) ? +rawRow.think : null;
-      const match = byId.get(id) || existing.find(x => x.url === rawRow.url && ((x.sid && x.sid === rawRow.sid) || key(x.model) === key(normModel)));
-      if (!match) {
-        added++;
-      } else if ((isBetterModel(normModel, match.model) && normModel !== match.model) || (normScore != null && match.score == null) || (normThink != null && match.think == null)) {
-        updated++;
-      } else {
-        skipped++;
-      }
-      validIncoming.push({
-        ...rawRow,
-        id: match?.id || id,
-        at: Number(rawRow.at) || now(),
-        sid: rawRow.sid || null,
-        model: normModel,
-        score: normScore,
-        think: normThink,
-        w: Number(rawRow.w) || 560,
-        h: Number(rawRow.h) || 373,
-        file: String(rawRow.file || 'pelican.html'),
-        acct: String(rawRow.acct || obj?.acct || '外部导入').trim(),
-      });
-    }
-    saveDel(dm);
-    const merged = mergeRows(existing, validIncoming, dm, '外部导入');
-    save(merged);
-    void writeShared({ rows: merged, del: dm, pelican: typeof PelicanTest !== 'undefined' && PelicanTest.all ? PelicanTest.all() : {}, acct: curAcct(), import: true });
-    try { Dock.render?.(); } catch {}
-    try { if (typeof table.refreshOpen === 'function') table.refreshOpen(); } catch {}
-    const modCount = latest().length;
-    if (!quiet) toast(`已导入合并鹈鹕测试库：新增 ${added} 条 · 更新 ${updated} 条 · 跳过重复 ${skipped} 条（当前共 ${modCount} 个型号 / ${merged.length} 张图）`);
-    return { ok: true, added, updated, skipped, total: merged.length, modelCount: modCount };
-  }
-  function openImport(onDone) {
-    const inp = document.createElement('input');
-    inp.type = 'file';
-    inp.multiple = true;
-    inp.accept = '.json,.svg,application/json,image/svg+xml';
-    inp.onchange = async () => {
-      const files = [...(inp.files || [])];
-      if (!files.length) return;
-      let totalAdd = 0, totalUpd = 0, totalSkip = 0;
-      for (const f of files) {
-        try {
-          const txt = await f.text();
-          const r = importData(txt, { quiet: files.length > 1 });
-          totalAdd += r.added; totalUpd += r.updated; totalSkip += r.skipped;
-        } catch (e) {
-          toast((f.name ? f.name + '：' : '') + describe(e), 'err');
-        }
-      }
-      if (files.length > 1) {
-        toast(`已合并 ${files.length} 个测试库文件：新增 ${totalAdd} 条 · 更新 ${totalUpd} 条 · 跳过重复 ${totalSkip} 条（共 ${latest().length} 个型号）`);
-      }
-      if (typeof onDone === 'function') try { onDone(); } catch {}
-    };
-    inp.click();
-  }
-  const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&apos;' }[c]));
-  function tableSvg(customRows) {
-    const rows = Array.isArray(customRows) ? customRows : latest(), W = 980, PAD = 20, LW = 330, RH = 200, TOP = 78, imgW = W - LW - PAD * 2 - 10, H = TOP + Math.max(1, rows.length) * RH + PAD;
-    const date = new Date().toLocaleString('zh-CN', { hour12: false });
-    const out = [`<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" font-family="system-ui,-apple-system,'Segoe UI','Microsoft YaHei',sans-serif">`,
-      `<rect width="${W}" height="${H}" fill="#ffffff"/>`,
-      `<text x="${PAD}" y="38" font-size="24" font-weight="700" fill="#111">Brana · 鹈鹕测试能力表</text>`,
-      `<text x="${PAD}" y="62" font-size="13" fill="#777">全客户端共享 · 按推理分从高到低 · 共 ${rows.length} 个型号 · ${esc(date)}</text>`];
-    rows.forEach((r, i) => {
-      const y = TOP + i * RH, sc = r.score;
-      out.push(`<line x1="${PAD}" x2="${W - PAD}" y1="${y}" y2="${y}" stroke="#e5e5e5"/>`,
-        `<text x="${PAD}" y="${y + 50}" font-size="22" font-weight="600" fill="#111">${esc(r.model.length > 26 ? r.model.slice(0, 25) + '…' : r.model)}</text>`,
-        `<text x="${PAD}" y="${y + 92}" font-size="13" fill="#777">推理分</text>`,
-        `<text x="${PAD + 56}" y="${y + 96}" font-size="34" font-weight="700" fill="${sc == null ? '#aaa' : '#111'}">${sc == null ? '—' : esc(Strength.fmtScore(sc))}</text>`);
-      out.push(`<rect x="${PAD}" y="${y + 112}" width="${LW - 50}" height="8" rx="4" fill="#eee"/>`);
-      if (sc != null) out.push(`<rect x="${PAD}" y="${y + 112}" width="${Math.max(6, (LW - 50) * sc / 100).toFixed(1)}" height="8" rx="4" fill="#d97757"/>`);
-      const metaParts = [new Date(r.at).toLocaleDateString('zh-CN')];
-      if (r.think != null) metaParts.push('思考 ' + r.think + 's');
-      if (r.acct) metaParts.push(r.acct.slice(0, 12));
-      else if (r.file) metaParts.push(r.file.slice(0, 22));
-      out.push(`<text x="${PAD}" y="${y + 150}" font-size="12" fill="#999">${esc(metaParts.join(' · '))}</text>`);
-      const rw = Math.max(1, Number(r.w) || 560), rh = Math.max(1, Number(r.h) || 373);
-      const ih = Math.min(RH - 20, imgW * rh / rw), iw = ih * rw / rh, ix = PAD + LW + 10;
-      out.push(`<rect x="${ix - 1}" y="${y + 10 - 1}" width="${iw + 2}" height="${ih + 2}" rx="6" fill="none" stroke="#ddd"/>`, `<image x="${ix}" y="${y + 10}" width="${iw.toFixed(1)}" height="${ih.toFixed(1)}" preserveAspectRatio="xMidYMid meet" href="${r.url}"/>`);
-    });
-    out.push('</svg>'); return out.join('\n');
-  }
-  function table(initOpts = {}) {
-    const opts = initOpts && typeof initOpts === 'object' && !initOpts.target && !initOpts.preventDefault ? initOpts : {};
-    const st = {
-      q: '',
-      vf: '',
-      sort: 'score',
-      viewMode: 'cards',
-      onlyCmp: false,
-      cmp: new Set(),
-      shotIdx: new Map(),
-    };
-    if (opts.compareModel && opts.compareModel !== '未识别') st.cmp.add(key(opts.compareModel));
-    const hostWrap = h('div', { class: 'pel-lib-wrap' });
-    const statBadgeEl = h('span', { class: 'pel-stat-badge' }, '全客户端共享');
-    const viewCardsBtn = h('button', { type: 'button', class: 'on', onclick: () => { st.viewMode = 'cards'; paintContent(); } }, icon('pvtable'), h('span', {}, '卡片网格'));
-    const viewTableBtn = h('button', { type: 'button', class: '', onclick: () => { st.viewMode = 'table'; paintContent(); } }, icon('list'), h('span', {}, '能力排行表'));
-    const viewTabsEl = h('div', { class: 'pel-view-tabs' }, viewCardsBtn, viewTableBtn);
-    let back = null;
-    const titleEl = h('div', { class: 'pel-mhead-inner' },
-      h('div', { class: 'pel-mhead-title' },
-        h('span', { class: 'pel-mhead-ico' }, icon('pelican')),
-        h('span', {}, '鹈鹕测试库')),
-      statBadgeEl,
-      viewTabsEl,
-      h('button', { type: 'button', class: 'ib pel-close-x', title: '关闭', onclick: () => { if (table.refreshOpen) table.refreshOpen = null; back?.remove(); } }, icon('x')));
-
-    const getFilteredModels = () => {
-      const base = latest();
-      const q = st.q.trim().toLowerCase();
-      let list = base.filter(r => {
-        if (st.onlyCmp && st.cmp.size && !st.cmp.has(key(r.model))) return false;
-        const vid = (typeof Brand !== 'undefined' && Brand.of ? Brand.of(r.model) : '') || 'other';
-        if (st.vf && vid !== st.vf) return false;
-        if (q && !String(r.model + ' ' + (r.acct || '') + ' ' + (r.file || '')).toLowerCase().includes(q)) return false;
-        return true;
-      });
-      if (st.sort === 'at') list = list.slice().sort((a, b) => (b.at || 0) - (a.at || 0));
-      else if (st.sort === 'think') list = list.slice().sort((a, b) => (a.think ?? 99999) - (b.think ?? 99999) || (b.score ?? -1) - (a.score ?? -1));
-      else if (st.sort === 'name') list = list.slice().sort((a, b) => String(a.model).localeCompare(String(b.model)));
-      return list;
-    };
-
-    const searchInput = h('input', {
-      type: 'search',
-      placeholder: '搜索型号 / 账号来源 / 文件名…',
-      value: st.q,
-      oninput: e => { st.q = e.target.value; paintContent(); },
-    });
-    const sortSelect = h('select', {
-      class: 'pel-select',
-      value: st.sort,
-      onchange: e => { st.sort = e.target.value; paintContent(); },
-    },
-      h('option', { value: 'score', selected: 'selected' }, '按推理分从高到低'),
-      h('option', { value: 'at' }, '按记录时间最新'),
-      h('option', { value: 'think' }, '按思考耗时最短'),
-      h('option', { value: 'name' }, '按型号名称 A–Z'));
-
-    const quickGroup = h('div', { class: 'pel-quick-group' });
-    const topBar = h('div', { class: 'pel-toolbar' },
-      h('label', { class: 'pel-search' }, icon('search'), searchInput),
-      h('div', { class: 'pel-select-wrap' }, sortSelect),
-      quickGroup);
-    const bodySlot = h('div', { class: 'pel-body-slot' });
-    hostWrap.append(topBar, bodySlot);
-
-    const paintContent = () => {
-      const allShots = all().map(view), models = latest(), filtered = getFilteredModels();
-      statBadgeEl.replaceChildren(
-        '全客户端共享 · ',
-        h('b', {}, String(models.length)),
-        ' 个型号 / ',
-        h('b', {}, String(allShots.length)),
-        ' 张测试图'
-      );
-      viewCardsBtn.classList.toggle('on', st.viewMode === 'cards');
-      viewTableBtn.classList.toggle('on', st.viewMode === 'table');
-      viewCardsBtn.querySelector('span').textContent = `卡片网格 (${filtered.length})`;
-      viewTableBtn.querySelector('span').textContent = `能力排行表 (${filtered.length})`;
-
-      quickGroup.replaceChildren(
-        h('button', {
-          type: 'button',
-          class: 'btn xs ghost',
-          title: '快速把排名前 2 的型号加入并排对比',
-          onclick: () => {
-            st.cmp.clear();
-            for (const r of (filtered.length ? filtered : models).slice(0, 2)) st.cmp.add(key(r.model));
-            paintContent();
-          },
-        }, '前 2 名对比'),
-        h('button', {
-          type: 'button',
-          class: 'btn xs ghost',
-          title: '快速把排名前 4 的型号加入并排对比',
-          onclick: () => {
-            st.cmp.clear();
-            for (const r of (filtered.length ? filtered : models).slice(0, 4)) st.cmp.add(key(r.model));
-            paintContent();
-          },
-        }, '前 4 名对比'),
-        st.cmp.size ? h('button', {
-          type: 'button',
-          class: 'btn xs ' + (st.onlyCmp ? '' : 'subtle'),
-          onclick: () => { st.onlyCmp = !st.onlyCmp; paintContent(); },
-        }, st.onlyCmp ? `显示全部 (${models.length})` : `只看已选对比 (${st.cmp.size})`) : null,
-        st.cmp.size ? h('button', {
-          type: 'button',
-          class: 'btn xs subtle',
-          onclick: () => { st.cmp.clear(); st.onlyCmp = false; paintContent(); },
-        }, '清空对比') : null
-      );
-
-      const byModelShots = new Map();
-      for (const r of allShots) {
-        const k = key(r.model) || '未识别';
-        if (!byModelShots.has(k)) byModelShots.set(k, []);
-        byModelShots.get(k).push(r);
-      }
-      for (const arr of byModelShots.values()) arr.sort((a, b) => (b.at || 0) - (a.at || 0));
-
-      const vidCounts = new Map();
-      for (const r of models) {
-        const v = (typeof Brand !== 'undefined' && Brand.of ? Brand.of(r.model) : '') || 'other';
-        vidCounts.set(v, (vidCounts.get(v) || 0) + 1);
-      }
-      const vids = [...vidCounts.keys()];
-      const vName = v => v === 'other' ? '开源/其它' : (typeof Brand !== 'undefined' && Brand.NAME?.[v]) || v;
-
-      const vendBar = vids.length > 1 ? h('div', { class: 'pel-vend-bar' },
-        h('button', { type: 'button', class: 'pel-vchip' + (!st.vf ? ' on' : ''), onclick: () => { st.vf = ''; paintContent(); } },
-          '全部 ', h('span', { class: 'cnt' }, String(models.length))),
-        ...vids.map(v => h('button', {
-          type: 'button',
-          class: 'pel-vchip' + (st.vf === v ? ' on' : ''),
-          onclick: () => { st.vf = st.vf === v ? '' : v; paintContent(); },
-        },
-          v !== 'other' && typeof vlogo === 'function' ? vlogo(v, 15) : (v !== 'other' && typeof VIcon !== 'undefined' ? VIcon.el(v, 13) : null),
-          vName(v),
-          h('span', { class: 'cnt' }, String(vidCounts.get(v) || 0))))) : null;
-
-      let cmpSection = null;
-      const cmpModels = models.filter(r => st.cmp.has(key(r.model)));
-      if (cmpModels.length >= 1) {
-        const topScore = cmpModels.reduce((m, r) => r.score != null && r.score > m ? r.score : m, -Infinity);
-        const nextCand = (filtered.length ? filtered : models).find(r => !st.cmp.has(key(r.model)));
-        cmpSection = h('div', { class: 'pel-cmp-box' },
-          h('div', { class: 'pel-cmp-head' },
-            h('span', { class: 'pel-cmp-title' },
-              h('i', { class: 'pel-cmp-dot' }),
-              h('span', {}, `鹈鹕结果并排对比（已选 ${cmpModels.length} 款模型）`)),
-            h('span', { class: 'pel-cmp-sub' }, cmpModels.length === 1 ? '点下方任意型号「+ 对比」或右侧引导框即可同屏并排比对画面细节与推理分差距' : '点图片可放大查看画面细节；同一型号有多张记录时可左右切换对比'),
-            h('button', { type: 'button', class: 'btn xs ghost', onclick: () => exportLibrary({ models: [...st.cmp] }) }, icon('download'), ' 导出对比组 JSON')),
-          h('div', { class: 'pel-cmp-grid' + (cmpModels.length === 1 ? ' single-mode' : '') },
-            ...cmpModels.map((mRow, idx) => {
-              const mk = key(mRow.model), shots = byModelShots.get(mk) || [mRow];
-              const sIdx = Math.min(shots.length - 1, Math.max(0, st.shotIdx.get(mk) || 0));
-              const cur = shots[sIdx] || mRow;
-              const sc = cur.score ?? mRow.score;
-              const diff = sc != null && Number.isFinite(topScore) && topScore > -Infinity ? +(sc - topScore).toFixed(1) : null;
-              const vid = typeof Brand !== 'undefined' && Brand.of ? Brand.of(mRow.model) : null;
-              return h('div', { class: 'pel-cmp-card' + (idx === 0 ? ' rank-1' : '') },
-                h('div', { class: 'pel-cmp-card-top' },
-                  h('span', { class: 'pel-rank-pill' + (idx === 0 ? ' top' : '') }, '#' + (idx + 1)),
-                  vid && typeof vlogo === 'function' ? vlogo(vid, 16) : (vid && typeof VIcon !== 'undefined' ? VIcon.el(vid, 14) : null),
-                  h('b', { class: 'pel-model-name', title: mRow.model }, mRow.model),
-                  h('button', { type: 'button', class: 'ib xs', title: '移出对比', onclick: () => { st.cmp.delete(mk); paintContent(); } }, icon('x'))),
-                h('div', { class: 'pel-meta-row' },
-                  h('span', { class: 'pel-score-badge' }, sc != null ? '推理分 ' + Strength.fmtScore(sc) : '未计分'),
-                  diff != null && cmpModels.length > 1 ? h('span', { class: 'pel-diff-badge mono' + (diff === 0 ? ' best' : '') }, diff === 0 ? '最高分' : (diff > 0 ? '+' : '') + diff + ' 分') : null,
-                  cur.think != null ? h('span', { class: 'mono' }, '思考 ' + cur.think + 's') : null,
-                  cur.acct ? h('span', { class: 'pel-acct-text', title: cur.acct }, '· ' + cur.acct) : null),
-                h('div', {
-                  class: 'pel-stage',
-                  title: '点击放大查看画面细节',
-                  onclick: () => HtmlPreview.image?.(cur.url, mRow.model + ' · 鹈鹕测试图', [sc != null ? '推理分 ' + Strength.fmtScore(sc) : '', cur.acct ? '来源 ' + cur.acct : ''].filter(Boolean).join(' · ')),
-                },
-                  h('img', { src: cur.url, alt: mRow.model, loading: 'lazy' }),
-                  shots.length > 1 ? h('span', { class: 'pel-stage-count' }, `${shots.length} 张记录`) : null),
-                h('div', { class: 'pel-cmp-foot' },
-                  h('span', { class: 'mono' }, new Date(cur.at).toLocaleString('zh-CN', { hour12: false })),
-                  shots.length > 1 ? h('div', { class: 'pel-pager' },
-                    h('button', { type: 'button', onclick: () => { st.shotIdx.set(mk, (sIdx - 1 + shots.length) % shots.length); paintContent(); } }, '◀'),
-                    h('span', { class: 'mono' }, `${sIdx + 1} / ${shots.length}`),
-                    h('button', { type: 'button', onclick: () => { st.shotIdx.set(mk, (sIdx + 1) % shots.length); paintContent(); } }, '▶')) : h('span', { class: 'mono' }, cur.file || '')));
-            }),
-            cmpModels.length === 1 ? h('div', { class: 'pel-cmp-empty-slot' },
-              h('b', {}, '再选 1~3 款模型即可同屏并排比对'),
-              h('span', {}, '在下方点击任意型号的「+ 对比」，或点击上方「前 2 名对比」比对画面细节与推理分差距'),
-              nextCand ? h('button', {
-                type: 'button',
-                class: 'btn xs ghost',
-                onclick: () => { st.cmp.add(key(nextCand.model)); paintContent(); },
-              }, `+ 加入 ${nextCand.model} 对比`) : null) : null));
-      }
-
-      if (!models.length) {
-        const emptySvg = tableSvg([]), emptySrc = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(emptySvg);
-        bodySlot.replaceChildren(
-          h('div', { class: 'pel-empty-box' },
-            h('p', { class: 'pel-empty-t' }, '当前客户端还没有鹈鹕测试记录'),
-            h('p', { class: 'sm dim' }, '在任意账号跑完「鹈鹕测试」或点 HTML 预览窗格右上角「记录」会自动汇总到这里；也可以直接导入他人分享的测试库 JSON / SVG 进行合并对比。'),
-            h('div', { class: 'pel-empty-acts' },
-              h('button', { type: 'button', class: 'btn sm', onclick: () => openImport(() => paintContent()) }, icon('plus'), ' 导入合并测试库 (JSON / SVG)'),
-              h('button', { type: 'button', class: 'btn sm ghost', onclick: () => void pull(true, false).then(() => paintContent()) }, icon('refresh'), ' 扫描合并本机所有账号'))),
-          h('div', { class: 'pt-wrap', style: { display: 'none' } }, h('img', { class: 'pt-img', src: emptySrc, alt: '鹈鹕测试能力表' })));
-        return;
-      }
-
-      let mainViewEl = null;
-      if (st.viewMode === 'table') {
-        mainViewEl = h('div', { class: 'pel-board-wrap' },
-          h('div', { class: 'pel-btr th' },
-            h('span', {}, '排名'),
-            h('span', {}, '模型名称'),
-            h('span', {}, '推理分'),
-            h('span', {}, '思考耗时'),
-            h('span', {}, '账号来源'),
-            h('span', {}, '测试图预览'),
-            h('span', { style: { textAlign: 'right' } }, '操作')),
-          ...filtered.map((mRow, idx) => {
-            const mk = key(mRow.model), shots = byModelShots.get(mk) || [mRow];
-            const sIdx = Math.min(shots.length - 1, Math.max(0, st.shotIdx.get(mk) || 0));
-            const cur = shots[sIdx] || mRow;
-            const inCmp = st.cmp.has(mk);
-            const vid = typeof Brand !== 'undefined' && Brand.of ? Brand.of(mRow.model) : null;
-            const sc = cur.score ?? mRow.score;
-            const pct = sc != null ? Math.max(6, Math.min(100, sc)) : 0;
-            return h('div', { class: 'pel-btr' + (inCmp ? ' in-cmp' : '') },
-              h('span', { class: 'mono' + (idx < 3 ? ' top-rk' : ' dim') }, '#' + (idx + 1)),
-              h('div', { class: 'pel-btr-nm' },
-                vid && typeof vlogo === 'function' ? vlogo(vid, 16) : (vid && typeof VIcon !== 'undefined' ? VIcon.el(vid, 14) : null),
-                h('b', { class: 'pel-model-name', title: mRow.model }, mRow.model),
-                shots.length > 1 ? h('span', { class: 'pel-cnt-pill mono' }, `${shots.length}张`) : null),
-              h('div', { class: 'pel-bar-cell' },
-                h('b', { class: 'mono pel-sc-num' }, sc != null ? Strength.fmtScore(sc) : '—'),
-                h('div', { class: 'pel-bar-track' }, h('i', { class: 'pel-bar-fill', style: { width: pct + '%' } }))),
-              h('span', { class: 'mono dim' }, cur.think != null ? cur.think + 's' : '—'),
-              h('span', { class: 'pel-acct-text', title: cur.acct || '' }, cur.acct || '本机记录'),
-              h('div', {
-                class: 'pel-mini-shot',
-                title: '点击放大查看',
-                onclick: () => HtmlPreview.image?.(cur.url, mRow.model + ' · 鹈鹕测试图', [sc != null ? '推理分 ' + Strength.fmtScore(sc) : '', cur.acct ? '来源 ' + cur.acct : ''].filter(Boolean).join(' · ')),
-              }, h('img', { src: cur.url, alt: mRow.model, loading: 'lazy' })),
-              h('div', { style: { textAlign: 'right' } },
-                h('button', {
-                  type: 'button',
-                  class: 'pel-cmp-toggle' + (inCmp ? ' on' : ''),
-                  onclick: () => { if (inCmp) st.cmp.delete(mk); else st.cmp.add(mk); paintContent(); },
-                }, inCmp ? '✓ 对比中' : '+ 对比')));
-          }));
-      } else {
-        mainViewEl = h('div', { class: 'pel-cards-grid' }, ...filtered.map(mRow => {
-          const mk = key(mRow.model), shots = byModelShots.get(mk) || [mRow];
-          const sIdx = Math.min(shots.length - 1, Math.max(0, st.shotIdx.get(mk) || 0));
-          const cur = shots[sIdx] || mRow;
-          const inCmp = st.cmp.has(mk);
-          const vid = typeof Brand !== 'undefined' && Brand.of ? Brand.of(mRow.model) : null;
-          const sc = cur.score ?? mRow.score;
-          return h('div', { class: 'pel-model-card' + (inCmp ? ' on' : '') },
-            h('div', { class: 'pel-card-head' },
-              vid && typeof vlogo === 'function' ? vlogo(vid, 16) : (vid && typeof VIcon !== 'undefined' ? VIcon.el(vid, 14) : null),
-              h('b', { class: 'pel-model-name', title: mRow.model }, mRow.model),
-              h('button', {
-                type: 'button',
-                class: 'pel-cmp-toggle' + (inCmp ? ' on' : ''),
-                onclick: () => { if (inCmp) st.cmp.delete(mk); else st.cmp.add(mk); paintContent(); },
-              }, inCmp ? '✓ 对比中' : '+ 对比')),
-            h('div', { class: 'pel-meta-row' },
-              h('span', { class: 'pel-score-badge' }, sc != null ? '推理分 ' + Strength.fmtScore(sc) : '未计分'),
-              cur.think != null ? h('span', { class: 'mono' }, '思考 ' + cur.think + 's') : null,
-              cur.acct ? h('span', { class: 'pel-acct-text', title: cur.acct }, '· ' + cur.acct) : null),
-            h('div', {
-              class: 'pel-stage',
-              title: '点击放大查看',
-              onclick: () => HtmlPreview.image?.(cur.url, mRow.model + ' · 鹈鹕测试图', [sc != null ? '推理分 ' + Strength.fmtScore(sc) : '', cur.acct ? '来源 ' + cur.acct : ''].filter(Boolean).join(' · ')),
-            },
-              h('img', { src: cur.url, alt: mRow.model, loading: 'lazy' }),
-              shots.length > 1 ? h('span', { class: 'pel-stage-count' }, `${shots.length} 张`) : null),
-            shots.length > 1 ? h('div', { class: 'mc-pelth' }, ...shots.map((x, i) => h('button', {
-              type: 'button',
-              class: i === sIdx ? 'on' : '',
-              title: new Date(x.at).toLocaleString('zh-CN', { hour12: false }) + (x.acct ? ' · ' + x.acct : ''),
-              onclick: () => { st.shotIdx.set(mk, i); paintContent(); },
-            }, h('img', { src: x.url, alt: '' })))) : null,
-            h('div', { class: 'pel-card-foot' },
-              h('span', { class: 'mono' }, new Date(cur.at).toLocaleDateString('zh-CN') + (cur.file ? ' · ' + cur.file.slice(0, 18) : '')),
-              h('button', { type: 'button', class: 'pel-del-btn', onclick: () => { del(cur.id); paintContent(); try { Dock.render?.(); } catch {} } }, '删除')));
-        }));
-      }
-
-      const svg = tableSvg(filtered.length ? filtered : models), src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
-      const hiddenSvgWrap = h('div', { class: 'pt-wrap', style: { display: 'none' } }, h('img', { class: 'pt-img', src, alt: '鹈鹕测试能力表' }));
-      bodySlot.replaceChildren(...[vendBar, cmpSection, mainViewEl, hiddenSvgWrap].filter(Boolean));
-    };
-
-    paintContent();
-    table.refreshOpen = () => {
-    if (typeof TihuHub !== 'undefined' && typeof TihuHub.renderLibraryPanel === 'function') {
-      if (!_tihuOpenModalBody || !_tihuOpenModalBody.host?.isConnected) { _tihuOpenModalBody = null; return; }
-      try {
-        const fresh = TihuHub.renderLibraryPanel(_tihuOpenModalBody.cmp || '', { onClose: _tihuOpenModalBody.onClose });
-        _tihuOpenModalBody.host.replaceChildren(...fresh.childNodes);
-      } catch {}
-      return;
-    } if (hostWrap.isConnected) paintContent(); };
-    void pull(true, true).then(() => { if (hostWrap.isConnected) paintContent(); });
-
-    const foot = h('div', { class: 'pel-mfoot-inner' },
-      h('div', { class: 'pel-mfoot-left' },
-        h('button', { class: 'btn sm ghost', title: '汇总合并本客户端所有账号的鹈鹕测试记录', onclick: () => void pull(true, false).then(() => paintContent()) }, icon('refresh'), ' 同步全账号'),
-        h('button', { class: 'btn sm ghost', title: '导入他人或其它设备导出的鹈鹕测试库 JSON / SVG 并自动去重合并', onclick: () => openImport(() => paintContent()) }, icon('plus'), ' 导入合并')),
-      h('div', { class: 'pel-mfoot-right' },
-        h('button', { class: 'btn sm ghost', title: '导出完整鹈鹕测试库 JSON（含所有型号截图、推理分、思考时长，方便分享与合并）', onclick: () => exportLibrary(st.onlyCmp && st.cmp.size ? { models: [...st.cmp] } : {}) }, icon('download'), ' 导出测试库 (JSON)'),
-        h('button', { class: 'btn sm ghost', title: '导出可视化 SVG 能力总表长图', onclick: () => {
-          const list = getFilteredModels();
-          const svg = tableSvg(list.length ? list : latest());
-          if (typeof FileExport !== 'undefined' && FileExport.text) FileExport.text(svg, 'brana-pelican-table.svg', 'image/svg+xml');
-          else if (typeof FileExport !== 'undefined' && FileExport.write) FileExport.write(svg, 'brana-pelican-table.svg', 'image/svg+xml').catch(e => toast('导出失败：' + describe(e), 'err'));
-        } }, icon('download'), ' 导出 SVG'),
-        h('button', { class: 'btn sm', onclick: () => { if (table.refreshOpen) table.refreshOpen = null; back.remove(); } }, '关闭')));
-    back = modal(titleEl, hostWrap, foot, 'pt-modal');
-    return back;
-  }
-  function entryCard(sid) {
-    if (typeof TihuHub !== 'undefined' && typeof TihuHub.renderModelCardSection === 'function') return card(sid);
-    const total = all().length, modCount = latest().length;
-    return h('section', { class: 'mc-card mc-pel' },
-      h('div', { class: 'mc-pel-head' },
-        h('div', { class: 'mc-pel-r1' },
-          h('b', {}, '模型鹈鹕测试图'),
-          h('button', { type: 'button', class: 'ib xs', title: '打开全客户端鹈鹕测试库（查看 / 对比 / 导入 / 导出）', onclick: () => table() }, icon('pvtable'))),
-        h('div', { class: 'mc-pel-r2' }, modCount ? `全客户端共享 · 库内 ${modCount} 型号 / ${total} 张` : '全客户端所有账号互通共享'),
-        h('div', { class: 'mc-pel-r3' },
-          h('button', { type: 'button', class: 'btn xs ghost', title: '导入合并外部鹈鹕测试库 JSON / SVG', onclick: e => { e.stopPropagation(); openImport(); } }, icon('plus'), ' 导入'),
-          h('button', { type: 'button', class: 'btn xs ghost', disabled: !total || null, title: '导出全客户端鹈鹕测试库 JSON', onclick: e => { e.stopPropagation(); exportLibrary(); } }, icon('download'), ' 导出'))),
-      h('div', { class: 'mc-uses sm dim' }, '全客户端所有账号的鹈鹕测试图自动互通。点右上角表格图标可打开测试库并排对比。'));
-  }
-  // 概览卡片：当前对话这个型号的鹈鹕测试图（最新一张大图 + 其余缩略图 + 全客户端测试库导入/导出/对比）
-  function card(sid) {
-    const ownShots = forSid(sid);
-    if (typeof TihuHub !== 'undefined' && typeof TihuHub.renderModelCardSection === 'function' && (TihuHub.isReady?.() || (!ownShots.length && !all().length))) {
-      const rawSid = String(sid || '').split('#')[0];
-      const m = (rawSid && typeof Models !== 'undefined' && Models.get) ? Models.get(rawSid) : null;
-      const rawModel = String(m?.rawLabel || m?.name || m?.candidateName || '').replace(/[?？]+$/, '').trim();
-      const effort = String(m?.effort || m?.tier || m?.reverseEffort || '').trim().toLowerCase();
-      const tihuEl = TihuHub.renderModelCardSection(sid, rawModel, effort, true);
-      if (tihuEl && ownShots.length && !tihuEl.querySelector?.('img.mc-pelimg')) {
-        const curShot = ownShots[0];
-        const disp = rawModel || curShot.model || '未识别';
-        tihuEl.append(h('div', {
-          class: 'pel-stage mc-pel-stage',
-          style: { marginTop: '6px' },
-          title: '点击放大查看本对话已记录测试图',
-          onclick: () => HtmlPreview.image?.(curShot.url, disp + ' · 鹈鹕测试图', curShot.acct ? '来源：' + curShot.acct : ''),
-        }, h('img', { class: 'mc-pelimg', src: curShot.url, alt: disp + ' 鹈鹕测试图', loading: 'lazy' })));
-      }
-      if (tihuEl) return tihuEl;
-    }
-    const m = modelOf(sid), own = forSid(sid), mine = own.length ? own : (m.model !== '未识别' ? forModel(m.model) : []), total = all().length;
-    if (!mine.length && !total) return null;
-    const sel = (card.sel ||= new Map()), sk = own.length ? 's:' + sid : key(m.model), cur = mine.find(x => x.id === sel.get(sk)) || mine[0];
-    const modCount = latest().length;
-    const dispModel = m.model !== '未识别' ? m.model : (cur?.model || '未识别');
-    const subText = dispModel + (own.length || !mine.length ? '' : ' · 同型号参考') + (modCount > 1 ? ` · 库内 ${modCount} 型号 / ${total} 张` : '');
-    const head = h('div', { class: 'mc-pel-head' },
-      h('div', { class: 'mc-pel-r1' },
-        h('b', {}, '模型鹈鹕测试图'),
-        h('button', { type: 'button', class: 'ib xs', title: '全客户端鹈鹕测试库（能力表 · 多模型并排对比 · 导入导出）', onclick: () => table({ compareModel: dispModel }) }, icon('pvtable'))),
-      h('div', { class: 'mc-pel-r2', title: own.length ? '这张图跟这个对话绑定，型号变了也不会丢' : '这个对话还没有存过图，显示全客户端同型号记录' }, subText),
-      h('div', { class: 'mc-pel-r3' },
-        h('button', { type: 'button', class: 'btn xs ghost', title: '导入外部鹈鹕测试库 JSON / SVG 并与当前客户端合并', onclick: e => { e.stopPropagation(); openImport(); } }, icon('plus'), ' 导入'),
-        h('button', { type: 'button', class: 'btn xs ghost', title: '导出全客户端鹈鹕测试库 JSON（方便分享与合并对比）', onclick: e => { e.stopPropagation(); exportLibrary(); } }, icon('download'), ' 导出')));
-    const el = h('section', { class: 'mc-card mc-pel' }, head);
-    if (!cur) {
-      el.append(h('div', { class: 'mc-uses sm dim' }, '这个型号还没有记录。点开对话里 Write 出来的 html，在预览窗格里点「记录」，或点右上角打开全客户端测试库（已汇总 ' + modCount + ' 个型号 / ' + total + ' 张图）对比与导入。'));
-      return el;
-    }
-    el.append(
-      h('div', {
-        class: 'pel-stage mc-pel-stage',
-        title: '点击放大查看',
-        onclick: () => HtmlPreview.image?.(cur.url, dispModel + ' · 鹈鹕测试图', cur.acct ? '来源：' + cur.acct : ''),
-      },
-        h('img', { class: 'mc-pelimg', src: cur.url, alt: dispModel + ' 鹈鹕测试图', loading: 'lazy' }),
-        mine.length > 1 ? h('span', { class: 'pel-stage-count' }, `${mine.length} 张记录`) : null),
-      h('div', { class: 'pel-meta-row mc-pel-meta' },
-        h('span', { class: 'pel-score-badge' }, cur.score != null ? '推理分 ' + Strength.fmtScore(cur.score) : '未计分'),
-        cur.think != null ? h('span', { class: 'mono' }, '思考 ' + cur.think + 's') : null,
-        h('span', { class: 'pel-acct-text mono' }, '· ' + new Date(cur.at).toLocaleDateString('zh-CN')),
-        h('button', { type: 'button', class: 'pel-cmp-toggle', title: '把该型号加入全客户端鹈鹕测试库进行多模型并排对比', onclick: () => table({ compareModel: dispModel }) }, '对比'),
-        h('button', { type: 'button', class: 'pel-del-btn', onclick: () => { del(cur.id); try { Dock.render(); } catch {} } }, '删除')));
-    if (mine.length > 1) el.append(h('div', { class: 'mc-pelth' }, ...mine.map(x => h('button', { type: 'button', class: x.id === cur.id ? 'on' : '', title: new Date(x.at).toLocaleString('zh-CN', { hour12: false }) + (x.acct ? ' · ' + x.acct : ''), onclick: () => { sel.set(sk, x.id); try { Dock.render(); } catch {} } }, h('img', { src: x.url, alt: '' })))));
-    return el;
-  }
-  try {
-    if (typeof Bus !== 'undefined' && Bus.on) {
-      Bus.on('model', chat => { if (chat?.sid) syncSid(chat.sid); });
-    }
-  } catch {}
-  if (typeof TihuHub === 'undefined') setTimeout(() => { void pull(true, true); }, 650);
-  return { add, auto, all, del, latest, forModel, forSid, card, entryCard, table, openLibrary: table, tableSvg, modelOf, pull, push, syncSid, exportData, exportLibrary, importData, openImport };
 })();
+if (typeof globalThis !== 'undefined') globalThis.PelicanShots = PelicanShots;

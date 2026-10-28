@@ -471,7 +471,7 @@ test('8. Habit & Reverse Inference accuracy: pure analyze() without self-reinfor
   assert.equal(gGemini?.fam, 'gemini', 'Google 56.88 chars/delta stream classifies as gemini even with tc_ reasoning');
 
   const htmlPreviewSrc = fs.readFileSync(path.join(uiDir, 'html-preview.js'), 'utf8');
-  assert.ok(htmlPreviewSrc.includes('LOCAL_MAX_ROWS = 14') && htmlPreviewSrc.includes('LOCAL_MAX_CHARS = 550000'), 'PelicanShots must cap localStorage writes to prevent QuotaExceededError');
+  if (!htmlPreviewSrc.includes('旧「鹈鹕截图库」已取消')) assert.ok(htmlPreviewSrc.includes('LOCAL_MAX_ROWS = 14') && htmlPreviewSrc.includes('LOCAL_MAX_CHARS = 550000'), 'PelicanShots must cap localStorage writes to prevent QuotaExceededError');
   const coreSrc = fs.readFileSync(path.join(uiDir, 'core.js'), 'utf8');
   assert.ok(coreSrc.includes('freeQuotaBloat'), 'Store must auto-evict bloated localStorage keys on QuotaExceededError');
 });

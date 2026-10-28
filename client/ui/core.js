@@ -6,7 +6,9 @@ const RC_V2 = '6Le3_cYsAAAAAGwWOK2RLDgNI15Bh8C0yLBOL1yL';
 const currentTimezone = () => { try { return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'; } catch { return 'UTC'; } }; // Read at send time: region may change while the page stays open.
 const now = () => Date.now();
 const sleep = ms => new Promise(r => setTimeout(r, ms));
-const _rawFetch = window.fetch.bind(window);
+const _origFetch = window.fetch;
+const _rawFetch = _origFetch.bind(window);
+let _protoPipSeq = 0;
 // 流量统计（右下角 IP 徽标悬停时显示）：只数经过 rawFetch 的应用数据（对话、列表、下载…），不含 8 秒一次的延迟探测。
 // 用来区分「有延迟但没速度」和「线路真的不通」：有请求在等、却长时间一个字节都没收到，就是联通但没速度。
 const Traffic = {
@@ -94,8 +96,6 @@ const _costFetchCache = new Map();
 function _canUseProtoFetch(u, o) {
   if (typeof window === 'undefined' || typeof Host === 'undefined' || typeof Host?.protoFetch !== 'function') return '';
   if (window.__fixture || window.__routeFixture || typeof window.__capFetch === 'function') return '';
-  const wf = window.fetch;
-  if (typeof wf === 'function' && wf !== _rawFetch && wf !== window.__ancPinFetchFn) return '';
   let rel = '';
   if (typeof u === 'string') {
     if (u.startsWith('/') && !u.startsWith('//')) rel = u;
@@ -104,22 +104,17 @@ function _canUseProtoFetch(u, o) {
   if (!rel) return '';
   if (/^\/(?:nextjs-api\/stream|api\/stream|ai-proxy\/realtime)\b/i.test(rel)) return '';
   if (/\/out(?:\?|$)/i.test(rel)) return '';
+  if (/\/workspace\/(?:cas\/|[^/]+\/download\b)/i.test(rel)) return '';
   const body = o?.body;
   if (body != null && typeof body !== 'string') return '';
   const hdrs = o?.headers || {};
   const accept = String(hdrs.Accept || hdrs.accept || '');
   if (/text\/event-stream/i.test(accept)) return '';
-  if (/^\/(?:nextjs-api|api|cdn-cgi\/trace)\b/i.test(rel)) return rel;
+  if (/^\/(?:nextjs-api|api|leaderboard|cdn-cgi\/trace)\b/i.test(rel)) return rel;
   return '';
 }
 const _doExtFetch = (u, o) => {
   const absU = typeof u === 'string' && u.startsWith('/') ? ORIGIN + u : u;
-  const wf = window.fetch;
-  if (typeof wf === 'function' && wf !== window.__ancPinFetchFn && !window.__ancInExtFetch) {
-    window.__ancInExtFetch = true;
-    try { return wf.call(window, absU, o); }
-    finally { window.__ancInExtFetch = false; }
-  }
   const protoRel = _canUseProtoFetch(u, o);
   if (protoRel) {
     const signal = o?.signal;
@@ -129,14 +124,18 @@ const _doExtFetch = (u, o) => {
       if (typeof o.headers.forEach === 'function') o.headers.forEach((v, k) => { hdrObj[k] = v; });
       else if (typeof o.headers === 'object') Object.assign(hdrObj, o.headers);
     }
-    const isAuth = /^\/nextjs-api\/(?:sign-in|sign-up|reset-password|resend-verification|account\/password|auth\/set-password)\b/i.test(protoRel);
-    const timeout = isAuth ? 18000 : protoRel === '/cdn-cgi/trace' ? 6000 : 20000;
+    const isAuth = /^\/nextjs-api\/(?:sign-in|sign-up|signup|signin|reset-password|resend-verification|account\/password|auth|magic-link|verify|set-password|create-password|onboarding)\b/i.test(protoRel);
+    const isCostRel = /\/(?:api|nextjs-api)\/(?:chat|evaluation)\/[^/]+\/cost\b/i.test(protoRel);
+    const useBypass429 = !isAuth && !isCostRel && protoRel !== '/cdn-cgi/trace';
+    const timeout = Number(o?.timeout) || (isAuth ? 18000 : protoRel === '/cdn-cgi/trace' ? 6000 : 35000);
     const pCall = Host.protoFetch(protoRel, {
       method: o?.method || 'GET',
       headers: hdrObj,
       body: typeof o?.body === 'string' ? o.body : undefined,
       accept: hdrObj.Accept || hdrObj.accept || undefined,
       contentType: hdrObj['Content-Type'] || hdrObj['content-type'] || undefined,
+      bypass429: useBypass429,
+      pipSlot: useBypass429 ? ((_protoPipSeq = (_protoPipSeq + 1) % 10000)) : 0,
       vdpl: (!isAuth && typeof Pin !== 'undefined' && Pin.on?.() && !Pin.held && Pin.id) ? Pin.id : '',
       timeout,
     });
@@ -151,14 +150,19 @@ const _doExtFetch = (u, o) => {
     return raced.then(pr => {
       if (!pr || pr.fallback) return _rawFetch(absU, o);
       const h = new Headers();
+      if (pr.contentType) h.set('content-type', String(pr.contentType));
+      if (pr.retryAfter) h.set('retry-after', String(pr.retryAfter));
       if (pr.headers && typeof pr.headers === 'object') {
         for (const [k, v] of Object.entries(pr.headers)) if (v) h.set(k, String(v));
-      } else {
-        if (pr.contentType) h.set('content-type', String(pr.contentType));
-        if (pr.retryAfter) h.set('retry-after', String(pr.retryAfter));
       }
       return new Response(pr.text ?? '', { status: Number(pr.status) || 200, headers: h });
     });
+  }
+  const wf = window.fetch;
+  if (typeof wf === 'function' && wf !== _origFetch && wf !== _rawFetch && wf !== window.__ancPinFetchFn && !window.__ancInExtFetch) {
+    window.__ancInExtFetch = true;
+    try { return wf.call(window, absU, o); }
+    finally { window.__ancInExtFetch = false; }
   }
   return _rawFetch(absU, o);
 };
@@ -2738,6 +2742,27 @@ const QrSync = (() => {
 })();
 if (typeof window !== 'undefined') window.QrSync = QrSync;
 
+// 429 来源记录（2.0.3-beta.1）：哪类请求被限流、服务器要求等多久，写进 renderer.log（同一类 20 秒内合并成一行），用来查「为什么频繁 429」。
+// 只做记录，不改变任何重试 / 冷却行为。
+const RateLog = {
+  agg: new Map(), T: 0, total: 0,
+  kind(path) { return String(path || '?').split('?')[0].replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi, ':id').replace(/\/\d{3,}/g, '/:n').slice(0, 80); },
+  note(path, retryAfterMs, src) {
+    try {
+      this.total++;
+      const k = this.kind(path) + ' [' + (src || '') + ']';
+      const e = this.agg.get(k) || { n: 0, ra: 0 }; e.n++; e.ra = Math.max(e.ra, Number(retryAfterMs) || 0); this.agg.set(k, e);
+      if (this.T) return;
+      this.T = setTimeout(() => {
+        this.T = 0;
+        const line = [...this.agg].map(([k2, v]) => k2 + ' ×' + v.n + (v.ra ? ' retry-after=' + Math.ceil(v.ra / 1000) + 's' : '')).join(' | ');
+        this.agg.clear();
+        try { console.warn('[限流429] ' + line + ' · 累计 ' + this.total); } catch {}
+      }, 20000);
+      this.T?.unref?.();
+    } catch {}
+  },
+};
 const ReadLimit = {
   until: 0, inflight: 0, lastAt: 0,
   hit(ms) { this.until = Math.max(this.until, now() + Math.max(30000, Math.min(ms || 0, 600000))); },
@@ -2747,6 +2772,8 @@ const ReadLimit = {
   // 限流冷却期间：后台读（预读、定时刷新）直接放弃；前台读（点开对话）等到冷却结束再发，冷却超过 60 秒就直接报错，不硬等也不换 IP。
   GAP: 250, readAt: 0, q: Promise.resolve(),
   async take(bg) {
+    const hasNativeProto = typeof window !== 'undefined' && !window.__fixture && !window.__routeFixture && typeof Host !== 'undefined' && typeof Host?.protoFetch === 'function';
+    if (!bg && hasNativeProto) { this.readAt = now(); return; }
     const wait = this.until - now();
     if (wait > 0) {
       if (bg || wait > 60000) throw Object.assign(new Error('请求过于频繁（429），冷却中，约 ' + Math.ceil(wait / 1000) + ' 秒后再试'), { status: 429, retryAfterMs: wait, rateLimitedLocally: true });
@@ -2765,7 +2792,9 @@ async function api(path, opt = {}) {
   const onProgress = typeof opt.onProgress === 'function' ? opt.onProgress : null;
   const noApiRetry = !!opt.noApiRetry;
   const allowDirectFallback = !!opt.allowDirectFallback;
+  const hasNativeProto = typeof window !== 'undefined' && !window.__fixture && !window.__routeFixture && typeof Host !== 'undefined' && typeof Host?.protoFetch === 'function';
   if (allowDirectFallback && ReadLimit.active()) opt = { ...opt, bg: true };
+  if (allowDirectFallback && hasNativeProto) opt = { ...opt, bg: false };
   const isBg = !!opt.bg;
   delete init.noRelogin; delete init.timeout; delete init.bg; delete init._retried; delete init._retryCount; delete init._retried409; delete init.onProgress; delete init.noApiRetry; delete init.allowDirectFallback;
   const mark = NetHealth.mark(), read = /^(GET|HEAD)$/i.test(init.method || 'GET');
@@ -2849,7 +2878,7 @@ async function api(path, opt = {}) {
     // Cloudflare 的限流页（网页版 429）：和纯文本 429 一样是出口 IP 被限流
     if (res.status === 429 && read && /^\/api\/chat\//.test(path) && !isCost) {
       const error = Object.assign(new HttpError(429, '出口 IP 被限流（429）', res), { ipLimited: true });
-      ReadLimit.hit(error.retryAfterMs); IPRep.note('l'); Bus.emit('limited', { path, ip: true, retryAfterMs: NetPolicy.retryAfter(res.headers?.get('retry-after')) }); throw error;
+      if (typeof RateLog !== 'undefined') RateLog.note(path, error.retryAfterMs, 'cf'); ReadLimit.hit(error.retryAfterMs); IPRep.note('l'); Bus.emit('limited', { path, ip: true, retryAfterMs: NetPolicy.retryAfter(res.headers?.get('retry-after')) }); throw error;
     }
     const isCfChallenge = res.headers?.get?.('cf-mitigated') === 'challenge' || /just a moment|cf-browser-verification|challenge-platform|cf-chl|cloudflare|attention required|verify you are human/i.test(text);
     const cfErr = Object.assign(new HttpError(res.status, 'Brana 返回了网页或验证页面，请用网页登录检查', res), isCfChallenge ? { responseFormat: true, cfChallenge: true, captchaTriggered: true } : { responseFormat: true });
@@ -2872,7 +2901,7 @@ async function api(path, opt = {}) {
   }
   if (!res.ok) {
     let msg = text; try { const j = JSON.parse(text); msg = j.error?.message || j.error || j.message || text; if (typeof msg !== 'string') msg = JSON.stringify(msg); } catch {}
-    const error = new HttpError(res.status, msg, res); fault(error);
+    const error = new HttpError(res.status, msg, res); fault(error); if (res.status === 429 && typeof RateLog !== 'undefined') RateLog.note(path, error.retryAfterMs, isBg ? 'bg' : 'fg');
     // 429 / 404 不触发自动换 IP（防止把用户手动选择的未限流 IP 误切换走）；仅网关/传输故障才交由 AutoRoute
     const ipLimited = !isCost && res.status === 429 && (read || /^\/(?:api|nextjs-api)\//.test(path));
     if (ipLimited) error.ipLimited = true;
@@ -6646,7 +6675,7 @@ class Chat {
           failed = true;
           this.dbg?.('stream-err', { e: String(e?.name === 'AbortError' ? 'Abort' : e?.message || e).slice(0, 100), st: e?.status || 0, route: routeTimeout });
           if (typeof AutoRoute !== 'undefined' && (routeTimeout || e.name !== 'AbortError')) AutoRoute.fault(routeTimeout ? Object.assign(new Error('实时连接超时'), { routeTimeout: true }) : e, headers && routeTimeout ? 'network' : 'stream');
-          retryWait = Math.max(e.retryAfterMs || 0, e.status === 429 ? 30000 : 0);
+          retryWait = Math.max(e.retryAfterMs || 0, e.status === 429 ? 30000 : 0); if (e.status === 429 && typeof RateLog !== 'undefined') RateLog.note('/stream/' + (peek ? 'peek' : 'live'), e.retryAfterMs, 'stream');
           if (e.name !== 'AbortError') {
             this.netErr = describe(e);
             if (e.responseFormat || (e.status >= 400 && e.status < 500 && e.status !== 429 && e.status !== 408)) {
@@ -9886,7 +9915,7 @@ const History = {
     this.retryT = setTimeout(() => { this.retryT = 0; if (typeof document !== 'undefined' && document.hidden) { this.autoRetries--; return; } this.refresh().then(() => { if (!this.err) this.autoRetries = 0; }); }, [20e3, 60e3, 180e3][n - 1]); this.retryT?.unref?.();
   },
   failure(e) {
-    this.err = describe(e); this.errKind = e.status === 429 ? 'limit' : '';
+    this.err = describe(e); this.errKind = e.status === 429 ? 'limit' : ''; if (e.status === 429 && typeof RateLog !== 'undefined') RateLog.note('/history-list', e.retryAfterMs, 'list');
     const wait = Math.max(Number(e.retryAfterMs) || 0, e.status === 429 ? 60000 : 0);
     if (wait) this.retryAt = now() + wait;
     if (wait || e.historyStop || e.responseFormat || [401,403].includes(e.status)) this.blocked = true;
@@ -9926,7 +9955,7 @@ const History = {
         for (; i < 200 && this.hasMore && this.cursor && !this.blocked; i++) {
           await this.more(true);
           if (this.err) { if (this.blocked || ++fail >= 3) break; await sleep(1500); }
-          else { fail = 0; await sleep(120); }
+          else { fail = 0; await sleep(220); }
         }
         if (i >= 200 && this.hasMore && !this.err) this.err = '历史记录较多，本轮已暂停；可滚动继续加载';
         this.complete();
@@ -11173,3 +11202,68 @@ try {
     };
   }
 } catch {}
+
+// ── 回合卡住兜底（2.0.3-beta.1）──
+// 现象：回复其实已经结束（服务器快照里最后一条助手消息已 completedAt / pending=false），本地却一直停在「接收回复中 NNNs」、停止按钮不消失。
+// 做法：本地显示进行中、且 ≥45 秒没有收到任何新记录、且没有正在运行的工具时，最多每 45 秒读一次对话快照；
+// 只有服务器明确表示「这一轮（同一条用户消息之后的助手回复）已经结束」才收尾。进行中的回合服务器快照最后一条是用户消息，不会误收尾。
+// 限流冷却期间不读；请求走 bg（排队、遵守 Retry-After）。
+const StuckGuard = {
+  QUIET_MS: 45000, GAP_MS: 45000, timer: 0, n: 0,
+  start() {
+    if (this.timer || typeof document === 'undefined') return;
+    this.timer = setInterval(() => { void this.tick().catch(() => {}); }, 15000); this.timer?.unref?.();
+  },
+  openTool(m) { return Boolean(m && Array.isArray(m.parts) && m.parts.some(p => p?.toolCallId && /^(input-streaming|input-available)$/.test(p.state || '') && !(typeof Hitl !== 'undefined' && Hitl.name?.(p)))); },
+  suspect(c, t) {
+    if (!c || !c.sid || c.gacha || c.isEvaluation || c.stopReq || c.awaitId || c.preSend || c.sending || c.loading || c.syncing) return false;
+    if (!(c.busy || c.status === 'streaming')) return false;
+    if (typeof EvalEngine !== 'undefined' && EvalEngine.isEvalChat?.(c)) return false;
+    const quietSince = Math.max(c.recAt || 0, c.sentAt || 0, c.respAt || 0, c.connAt && !c.recAt ? c.connAt : 0);
+    if (!quietSince || t - quietSince < this.QUIET_MS) return false;
+    const live = c.live || c.messages?.at(-1);
+    if (!live || live.role !== 'assistant') return false;
+    if (this.openTool(live)) return false;                     // 长命令可以很久没有输出，交给原有流程
+    if (typeof Hitl !== 'undefined' && Hitl.idleWait?.(c)) return false;
+    if (typeof ReadLimit !== 'undefined' && ReadLimit.active()) return false;
+    return true;
+  },
+  sameTurn(c, live, msgs) {
+    const srv = msgs.at(-1);
+    if (live.id && (srv.id === live.id || (live.metadata?.nodeId && srv.metadata?.nodeId === live.metadata.nodeId))) return true;
+    const idx = c.messages.indexOf(live);
+    const prevUser = [...c.messages.slice(0, idx < 0 ? c.messages.length : idx)].reverse().find(m => m?.role === 'user');
+    if (!prevUser) return false;
+    const k = msgs.findIndex(m => m && (m.id === prevUser.id || (prevUser.metadata?.nodeId && m.metadata?.nodeId === prevUser.metadata.nodeId)));
+    return k >= 0 && k < msgs.length - 1 && msgs.slice(k + 1).every(m => m?.role === 'assistant');
+  },
+  async tick() {
+    if (typeof Chats === 'undefined') return;
+    const t = now();
+    for (const c of Chats.values()) {
+      if (!this.suspect(c, t) || t - (c._sgAt || 0) < this.GAP_MS) continue;
+      c._sgAt = t;
+      const j = await api('/api/chat/' + c.sid + '?includeStreamToken=false&recoverRun=false', { timeout: 10000, bg: true, noApiRetry: true }).catch(() => null);
+      const msgs = Array.isArray(j?.messages) ? j.messages : null;
+      if (!msgs?.length || !this.suspect(c, now())) continue;
+      const srv = msgs.at(-1), md = srv.metadata || {};
+      const done = srv.role === 'assistant' && md.pending !== true && Boolean(md.timing?.completedAt || /^(stop|end-turn)$/.test(md.finishReason || '') || md.aborted || md.error) && !this.openTool(srv);
+      const live = c.live || c.messages.at(-1);
+      if (!done || !live || !this.sameTurn(c, live, msgs)) { c.dbg?.('stuck-guard', { act: 'keep', srvRole: srv.role, srvPend: !!md.pending, done }); continue; }
+      this.n++;
+      c.dbg?.('stuck-guard', { act: 'finish', srvId: String(srv.id || '').slice(0, 13), liveId: String(live.id || '').slice(0, 13), quiet: Math.round((now() - Math.max(c.recAt || 0, c.sentAt || 0)) / 1000) });
+      try { console.warn('[卡住兜底] 服务器已确认本轮结束，本地仍显示进行中，已自动收尾 sid=' + String(c.sid).slice(0, 8) + ' status=' + c.status + ' phase=' + (c.phase || '') + ' 静默 ' + Math.round((now() - Math.max(c.recAt || 0, c.sentAt || 0)) / 1000) + 's'); } catch {}
+      try {
+        if (j.lastEventId != null) { c.lastSeq = String(j.lastEventId); c.fence = +j.lastEventId; }
+        c.remote = false; c.midTurnStall = null; c.fakeEnd = null;
+        c.finAt = c.finAt || now(); c.realTcAt = c.realTcAt || now();
+        if (c.live) c.finishTurn(c.runTok || null, true);
+        if (typeof c.mergeServer === 'function') { const ch = c.mergeServer(msgs, null); if (ch) c.saveCache?.(); }
+        if (c.status !== 'idle' && !c.live && !c.awaitId && !c.preSend && !c.sending) { c.status = 'idle'; c.phase = ''; c._startupResuming = false; c._recoveringIncomplete = false; }
+        c.emit?.();
+        if (typeof SendQ !== 'undefined' && (c.queue || []).length) setTimeout(() => { try { SendQ.check(c); } catch {} }, 50);
+      } catch (e) { try { console.warn('[卡住兜底] 收尾失败 ' + (e?.message || e)); } catch {} }
+    }
+  },
+};
+try { if (typeof window !== 'undefined' && typeof document !== 'undefined') { window.StuckGuard = StuckGuard; setTimeout(() => StuckGuard.start(), 20000); } } catch {}

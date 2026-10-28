@@ -242,23 +242,30 @@ const Titles = {
   // 本地先显示新名字（左侧卡片、标签页立即变）
   local(sid) {
     if (!sid || (typeof History !== 'undefined' && History.isDeleted?.(sid))) return;
-    if (this._viewMemo) this._viewMemo.delete(sid);
-    try { TitleSync?.invalidate?.(sid); } catch {}
-    try { UI?._cards?.delete?.(sid); } catch {}
-    if (!Notes.owns(sid) && this.known(sid)) { Notes.rec(sid); Notes.save(); }
-    const n = Notes.all[sid];
-    if (n) { const ts = this.timeAt(sid, n.t || 0); if (ts > (Number(n.t) || 0)) { n.t = ts; Notes.save(); } }
-    const want = this.want(sid);
-    if (want) {
-      const e = History.byId(sid); if (e && e.localTitle !== want) { e.localTitle = want; try { History.saveSoon?.(); } catch {} }
-      const ae = typeof ArchiveHistory !== 'undefined' ? ArchiveHistory.byId?.(sid) : null;
-      if (ae && ae.localTitle !== want) ae.localTitle = want;
-      const c = typeof Chats !== 'undefined' ? Chats.get(sid) : null;
-      if (c) { c.localTitle = want; }
-    }
-    UI.renderListSoon?.(50); UI.renderTabs?.();
-    if (typeof UI !== 'undefined' && UI.els?.chat?.sid === sid && typeof UI.renderChat === 'function') {
-      try { UI.renderChat(UI.els.chat, false); } catch {}
+    if (!this._localBusy) this._localBusy = new Set();
+    if (this._localBusy.has(sid)) return;
+    this._localBusy.add(sid);
+    try {
+      if (this._viewMemo) this._viewMemo.delete(sid);
+      try { TitleSync?.invalidate?.(sid); } catch {}
+      try { UI?._cards?.delete?.(sid); } catch {}
+      if (!Notes.owns(sid) && this.known(sid)) { Notes.rec(sid); Notes.save(); }
+      const n = Notes.all[sid];
+      if (n) { const ts = this.timeAt(sid, n.t || 0); if (ts > (Number(n.t) || 0)) { n.t = ts; Notes.save(); } }
+      const want = this.want(sid);
+      if (want) {
+        const e = History.byId(sid); if (e && e.localTitle !== want) { e.localTitle = want; try { History.saveSoon?.(); } catch {} }
+        const ae = typeof ArchiveHistory !== 'undefined' ? ArchiveHistory.byId?.(sid) : null;
+        if (ae && ae.localTitle !== want) ae.localTitle = want;
+        const c = typeof Chats !== 'undefined' ? Chats.get(sid) : null;
+        if (c) { c.localTitle = want; }
+      }
+      UI.renderListSoon?.(50); UI.renderTabs?.();
+      if (typeof UI !== 'undefined' && UI.els?.chat?.sid === sid && typeof UI.renderChat === 'function') {
+        try { UI.renderChat(UI.els.chat, false); } catch {}
+      }
+    } finally {
+      this._localBusy.delete(sid);
     }
   },
   raw(sid) { return (sid && typeof History !== 'undefined' && History.byId?.(sid)?.title) || (sid && Notes.all?.[sid]?.c) || ''; },

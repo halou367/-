@@ -899,7 +899,7 @@ Object.assign(UI, {
 
   // ----- 账号切换面板 -----
   async acctMenu(e, page=0) {
-    if (e?.target?.closest?.('.acct-quota-ring, .acct-refresh, .acct-qr-link, .acct-qrsync')) return;
+    if (e?.target?.closest?.('.acct-quota-ring, .acct-refresh, .acct-qr-link, .acct-qrsync, .acct-pill, .acct-gw-btn, .av')) return;
     e?.stopPropagation?.();
     // 再点一次底部当前账号 = 收起面板
     if (e && !isMob() && document.querySelector('.amenu:not(.anc-gh)')) { document.querySelectorAll('.menu:not(.anc-gh)').forEach(m => m.remove()); return; }

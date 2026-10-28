@@ -1041,21 +1041,21 @@ const TabPress = {
   bind(box) {
     let st = null;
     const desk = Host.platform === 'desktop' && typeof Host.winDrag === 'function';
-    const reset = () => { if (!st) return; if (st.mode === 'pull' && !st.fired) this.hide(); if (st.mode === 'move') Host.winDrag('end').catch?.(() => {}); st = null; arm(false); };
+    const reset = () => { if (!st) return; if (st.mode === 'pull' && !st.fired) this.hide(); if (st.mode === 'move') { document.body.classList.remove('wdrag'); Host.winDrag('end').catch?.(() => {}); } st = null; arm(false); };
     const release = () => {
       if (!st) return;
       const s0 = st;
       if (s0.mode === 'pull') { if (s0.dy >= this.PULL) { s0.fired = true; box.__skip = s0.key; setTimeout(() => { box.__skip = null; }, 350); this.spin(s0.key); } else this.hide(); }
-      else if (s0.mode === 'move') { Host.winDrag('end').catch?.(() => {}); box.__skip = s0.key; setTimeout(() => { box.__skip = null; }, 350); }
+      else if (s0.mode === 'move') { document.body.classList.remove('wdrag'); Host.winDrag('end').catch?.(() => {}); box.__skip = s0.key; setTimeout(() => { box.__skip = null; }, 350); }
       st = null; arm(false);
     };
     const move = (x, y) => {
       if (!st) return false;
       const dx = x - st.x, dy = y - st.y;
       if (!st.mode) {
-        if (Math.hypot(dx, dy) < (st.mouse ? 7 : 10)) return false;
-        if (dy > 0 && Math.abs(dx) < dy) st.mode = 'pull';                               // 往下拉 = 重新载入
-        else if (st.mouse && desk) { st.mode = 'move'; Host.winDrag('start').catch?.(() => {}); }   // 电脑：往左右 / 往上拖 = 移动窗口
+        if (Math.hypot(dx, dy) < (st.mouse ? 5 : 10)) return false;
+        if (st.mouse && desk && !isMob()) { st.mode = 'move'; document.body.classList.add('wdrag'); Host.winDrag('start').catch?.(() => {}); }   // 桌面端：任意方向拖动（含向下拖拽还原最大化窗口）= 移动窗口
+        else if (dy > 0 && Math.abs(dx) < dy) st.mode = 'pull';                         // 移动端触屏：往下拉 = 重新载入
         else { st = null; arm(false); return false; }                                   // 手机：横向滑动标签栏 = 取消
       }
       if (st.mode === 'pull') { st.dy = Math.max(0, dy); this.show(st.dy); return true; }
@@ -3760,7 +3760,7 @@ const UI = {
       if (s0.on) { Host.winDrag('end')?.catch?.(() => {}); document.body.classList.remove('wdrag'); }
       return s0;
     };
-    const mv = e => { if (!st) return; if (!e.buttons) { up(); return; } if (st.on) return; if (Math.hypot(e.clientX - st.x, e.clientY - st.y) > 6) { st.on = true; document.body.classList.add('wdrag'); Host.winDrag('start')?.catch?.(() => {}); } };
+    const mv = e => { if (!st) return; if (!e.buttons) { up(); return; } if (st.on) return; if (Math.hypot(e.clientX - st.x, e.clientY - st.y) > 5) { st.on = true; document.body.classList.add('wdrag'); Host.winDrag('start')?.catch?.(() => {}); } };
     const up = () => {
       const s0 = end(); if (!s0?.on) return;
       const kill = ev => { ev.stopPropagation(); ev.preventDefault(); };
@@ -3774,7 +3774,19 @@ const UI = {
       try { t.setPointerCapture(e.pointerId); } catch {}
       addEventListener('pointermove', mv, true); addEventListener('pointerup', up, true); addEventListener('pointercancel', end, true); addEventListener('blur', end);
     };
-    for (const z of [$('#sb .sb-top'), $('#tabs')]) z?.addEventListener('pointerdown', down);
+    const onDbl = e => {
+      if (e.button !== 0 || isMob()) return;
+      const t = e.target;
+      if (!(t instanceof Element)) return;
+      if (t.closest('button, .ib, .x, input, textarea, select, a, [contenteditable], #thseg, #extpins, #sbgrip, .menu, .dlg-back')) return;
+      try { if (getComputedStyle(t).webkitAppRegion === 'drag') return; } catch {}
+      e.preventDefault();
+      Host.winDrag('toggleMax')?.catch?.(() => {});
+    };
+    for (const z of [$('#sb .sb-top'), $('#tabs')]) {
+      z?.addEventListener('pointerdown', down);
+      z?.addEventListener('dblclick', onDbl);
+    }
   },
   // 左上角：一键归档（按归档黑名单关键词）+ 删除归档（按厂商选）；跑的时候按钮上显示进度
   archDelBtn() {

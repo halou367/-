@@ -103,6 +103,10 @@ const WorkspacePreview = {
         if (!range && typeof Workspace !== 'undefined' && Workspace.casCache?.has(e.hash)) {
           return Workspace.casCache.get(e.hash).slice(r.start, r.end + 1);
         }
+        if (!range && size <= 6 * 1024 * 1024 && typeof Host !== 'undefined' && typeof Host.protoFetch === 'function' && !(typeof window !== 'undefined' && window.__fixture) && typeof Workspace !== 'undefined' && typeof Workspace.fetchCasBlob === 'function') {
+          const fullBlob = await Workspace.fetchCasBlob(e.hash, { signal });
+          return fullBlob.slice(r.start, r.end + 1);
+        }
         const res = await rawFetch(Workspace.casUrl(e.hash), { credentials: 'same-origin', cache: 'no-store', signal,
           ...(range ? { headers: { Range: 'bytes=' + r.start + '-' + r.end } } : {}) });
         if ((res.status === 429 || res.status === 403) && typeof Workspace !== 'undefined' && typeof Workspace.fetchCasBlob === 'function') {

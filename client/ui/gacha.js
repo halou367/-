@@ -180,6 +180,7 @@ const Ranking = (() => {
         try {
           const pr = await Host.protoFetch('/leaderboard/agent', {
             method: 'GET',
+            bypass429: true,
             accept: 'text/x-component, text/html;q=0.9, */*;q=0.8',
             headers: { RSC: '1', 'Next-Url': '/leaderboard/agent' },
             referer: 'https://arena.ai/leaderboard/agent',

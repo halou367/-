@@ -33,7 +33,7 @@ test('Issue 2: open-source thinking is never folded into tool groups and is stro
 });
 
 test('Issue 3: inline HTML preview card (.pvc) and preview pane (#pv) use isolated sandboxes and proportional scene scaling', () => {
-  assert.match(hpSrc, /f\.setAttribute\('sandbox', 'allow-same-origin'\)/);
+  if (!hpSrc.includes('旧「鹈鹕截图库」已取消')) assert.match(hpSrc, /f\.setAttribute\('sandbox', 'allow-same-origin'\)/);   // 截图库专用的离屏截图框，2.0.3-beta.1 已随截图库删除
   assert.match(hpSrc, /f\.setAttribute\('sandbox', 'allow-scripts'\)/);
   assert.match(hpSrc, /f\.srcdoc = docOf\(text, name, \{ (?:run: true, )?thumb: true/);
   assert.match(hpSrc, /function mountStage\(stage, f, text, name, o = \{\}\)/);

@@ -1945,6 +1945,42 @@ const PelicanShots = (() => {
   }
   function table(initOpts = {}) {
     const opts = initOpts && typeof initOpts === 'object' && !initOpts.target && !initOpts.preventDefault ? initOpts : {};
+    if (typeof TihuHub !== 'undefined' && typeof TihuHub.renderLibraryPanel === 'function') {
+      try {
+        if (typeof document !== 'undefined' && document.querySelectorAll) {
+          document.querySelectorAll('.modal-back').forEach(b => {
+            if (b.querySelector?.('.pel-lib-modal')) b.remove();
+          });
+        }
+      } catch {}
+      const rawCmp = opts.compareModel && opts.compareModel !== '未识别' && opts.compareModel !== '开源模型'
+        ? cleanName(opts.compareModel)
+        : '';
+      let tihuBack = null;
+      const closeModal = () => {
+        _tihuOpenModalBody = null;
+        if (table.refreshOpen) table.refreshOpen = null;
+        try { tihuBack?.remove(); } catch {}
+      };
+      const panelEl = TihuHub.renderLibraryPanel(rawCmp, { onClose: closeModal });
+      tihuBack = modal('', panelEl, null, 'pt-modal pel-lib-modal');
+      _tihuOpenModalBody = { host: panelEl, cmp: rawCmp, onClose: closeModal };
+      table.refreshOpen = () => {
+        if (!_tihuOpenModalBody || !_tihuOpenModalBody.host?.isConnected) {
+          _tihuOpenModalBody = null;
+          return;
+        }
+        try {
+          const fresh = TihuHub.renderLibraryPanel(_tihuOpenModalBody.cmp || '', { onClose: _tihuOpenModalBody.onClose });
+          _tihuOpenModalBody.host.replaceWith(fresh);
+          _tihuOpenModalBody.host = fresh;
+        } catch {}
+      };
+      if (!TihuHub.isReady?.() && typeof TihuHub.sync === 'function') {
+        void TihuHub.sync({ quiet: true });
+      }
+      return tihuBack;
+    }
     const st = {
       q: '',
       vf: '',
@@ -2245,7 +2281,8 @@ const PelicanShots = (() => {
       if (!_tihuOpenModalBody || !_tihuOpenModalBody.host?.isConnected) { _tihuOpenModalBody = null; return; }
       try {
         const fresh = TihuHub.renderLibraryPanel(_tihuOpenModalBody.cmp || '', { onClose: _tihuOpenModalBody.onClose });
-        _tihuOpenModalBody.host.replaceChildren(...fresh.childNodes);
+        _tihuOpenModalBody.host.replaceWith(fresh);
+        _tihuOpenModalBody.host = fresh;
       } catch {}
       return;
     } if (hostWrap.isConnected) paintContent(); };
@@ -2346,3 +2383,4 @@ const PelicanShots = (() => {
   if (typeof TihuHub === 'undefined') setTimeout(() => { void pull(true, true); }, 650);
   return { add, auto, all, del, latest, forModel, forSid, card, entryCard, table, openLibrary: table, tableSvg, modelOf, pull, push, syncSid, exportData, exportLibrary, importData, openImport };
 })();
+if (typeof globalThis !== 'undefined') globalThis.PelicanShots = PelicanShots;

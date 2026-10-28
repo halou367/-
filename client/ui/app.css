@@ -811,8 +811,9 @@ input.bad{border-color:#d9534f !important}
 .fp-ed input{color:var(--fg);border:1px solid var(--bd2);border-radius:8px;padding:5px 8px;background:var(--bg);min-width:0;width:100%;font-size:12px}
 @media (max-width:720px){.fp-ed{grid-template-columns:1fr 1fr}}
 /* 顶部标签平分整条栏：右侧只留一小段拖动区 */
-#tabs > .grow{flex:0 0 56px;min-width:56px}
-#tablist{flex:1 1 auto;min-width:0}
+#tabs > .grow{flex:0 0 14px;min-width:14px}
+#tablist{flex:1 1 auto;min-width:0;display:flex}
+body:not(.m) #tablist .tab{flex:1 1 0%;width:auto;min-width:76px;max-width:none;overflow:hidden}
 /* v0.8 细调：用量行不重叠（窄时只留色块 + 数字，悬停看名称）；步骤条随宽度变粗 */
 .mc-uses{overflow:hidden}.mc-uses .u{flex:none}
 @container (max-width:330px){.mc-uses .u em{display:none}.mc-uses{gap:9px}}
@@ -6695,6 +6696,7 @@ details:not([open]) .spin, details.tgroup:not([open]) .spin {
 .acct-pill.is-ok{color:var(--ok,#2fb36b);background:color-mix(in srgb,var(--ok,#2fb36b) 14%,transparent);border-color:color-mix(in srgb,var(--ok,#2fb36b) 32%,transparent)}
 .acct-pill.is-acc{color:var(--amp-acc);background:color-mix(in srgb,var(--amp-acc) 14%,transparent);border-color:color-mix(in srgb,var(--amp-acc) 32%,transparent)}
 .acct-pill.is-warn{color:var(--warn,#e0a526);background:color-mix(in srgb,var(--warn,#e0a526) 14%,transparent);border-color:color-mix(in srgb,var(--warn,#e0a526) 32%,transparent)}
+#bar .bi.bpool-pill{display:inline-flex!important;align-items:center;padding:0 8px 0 0;border-left:0;cursor:pointer}
 
 /* Battle column auto-collapse (Show more / Show less) & live SSE progress bar */
 .battle-col-content {

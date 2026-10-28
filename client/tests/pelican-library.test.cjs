@@ -1,6 +1,8 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
+// 2.0.3-beta.1 起截图库已取消（只保留在线醍醐库）：只针对旧截图库的用例在新源码上跳过
+const PEL_RETIRED = require('fs').readFileSync(require('path').join(__dirname, '..', 'ui', 'html-preview.js'), 'utf8').includes('旧「鹈鹕截图库」已取消');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
@@ -284,7 +286,7 @@ test('Desktop host:shared merges pelshots & pelican across accounts, enriches la
   assert.deepEqual([...shared.rows.map(r => r.id)], ['shot-2'], 'deleted shot stays deleted across accounts');
 });
 
-test('Android MainActivity whitelists pelshots & pelican and PelicanShots also mirrors to strsamples.pelshots', async () => {
+(PEL_RETIRED ? test.skip : test)('Android MainActivity whitelists pelshots & pelican and PelicanShots also mirrors to strsamples.pelshots', async () => {
   assert.match(javaSrc, /!"pelshots"\.equals\(k\) && !"pelican"\.equals\(k\)/);
   const sharedMem = new Map();
   const acct1 = createPelicanShotsHarness({
@@ -312,7 +314,7 @@ test('Android MainActivity whitelists pelshots & pelican and PelicanShots also m
   assert.ok(card && card.querySelector('img.mc-pelimg'), 'Account 2 overview card displays Account 1 Pelican shot for the same model');
 });
 
-test('PelicanShots exportLibrary, importData (JSON & SVG), smart deduplication, and side-by-side comparison modal', () => {
+(PEL_RETIRED ? test.skip : test)('PelicanShots exportLibrary, importData (JSON & SVG), smart deduplication, and side-by-side comparison modal', () => {
   const h1 = createPelicanShotsHarness({
     acctName: '账号 A',
     models: {
@@ -965,3 +967,24 @@ test('v0.13.167+: Stages 7–10 Full 56-Topic Deep Audit & Multi-Mode (Agent/Bat
 
 
 
+
+test('PelicanShots.table delegates to TihuHub.renderLibraryPanel when TihuHub is loaded', () => {
+  const h = createPelicanShotsHarness({ acctName: '醍醐测试账号' });
+  const calls = [];
+  h.ctx.TihuHub = {
+    isReady: () => true,
+    renderLibraryPanel(cmp, opts) {
+      calls.push({ cmp, hasClose: typeof opts?.onClose === "function" });
+      return h.ctx.h("div", { class: "pel-lib-panel" }, "醍醐库:" + (cmp || "ALL"));
+    },
+  };
+  const mAll = h.PelicanShots.table();
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].cmp, "");
+  assert.equal(calls[0].hasClose, true);
+  assert.ok(String(mAll.textContent || "").includes("醍醐库:ALL"));
+  const mCmp = h.PelicanShots.table({ compareModel: "GPT-6 Astra" });
+  assert.equal(calls.length, 2);
+  assert.equal(calls[1].cmp, "GPT-6 Astra");
+  assert.ok(String(mCmp.textContent || "").includes("醍醐库:GPT-6 Astra"));
+});
