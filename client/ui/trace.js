@@ -769,10 +769,12 @@ const BotService = (() => {
     if (ipRep?.sc?.known || ipRep?.pct != null || rep) {
       const pct = ipRep?.pct ?? (Number.isFinite(ipRep?.sc?.s) ? Math.round(ipRep.sc.s) : 68);
       ipScore = Math.round((pct / 100) * 35);
+      const isCleanNode = pct >= 78 && (!pu?.bc || pu.bc === 0) && (!pu?.fs || pu.fs <= 28) && !rep?.px;
       if (pu?.res && !pu?.bc) { ipScore += 10; ipTag = '原生家宽'; }
       else if (pu?.res || ipRep?.kind?.c === 'res') { ipScore += 8; ipTag = '住宅宽带'; }
       else if (ipRep?.kind?.c === 'mob' || rep?.m) { ipScore += 7; ipTag = '移动网络'; }
-      else if (ipRep?.kind?.c === 'dc' || pu?.dc || rep?.h) { ipScore -= 12; ipTag = '机房ASN'; }
+      else if (isCleanNode) { ipScore += 4; ipTag = '纯净专线'; }
+      else if (ipRep?.kind?.c === 'dc' || pu?.dc || rep?.h) { ipScore -= (pct >= 75 ? 4 : 10); ipTag = '机房ASN'; }
       else { ipTag = ipRep?.label || '常规线路'; }
       if (rep?.px) { ipScore -= 8; ipTag += '·代理标记'; }
       ipScore = Math.max(4, Math.min(45, ipScore));
@@ -951,6 +953,50 @@ const BotService = (() => {
     const computeTideSummary = `${computeTide.label} · 皇冠爆率 ${computeTide.crownHitRatePct}% · Gittins k*=4`;
     const tier = finalScore >= 80 ? 'T1' : finalScore >= 50 ? 'T2' : 'T3';
     const label = finalScore >= 80 ? 'T1 旗舰池' : finalScore >= 50 ? 'T2 混合池' : 'T3 惩罚池';
+    const opusUnlocked = (typeof Skew !== 'undefined' && typeof Skew.opusUnlocked === 'function')
+      ? Skew.opusUnlocked()
+      : (typeof Prefs === 'object' ? Prefs.opusUnlock !== false : true);
+    const prizePool = !opusUnlocked
+      ? { tier: 'LOCKED', short: '常规受限池', name: '常规池 (Opus未解封)', models: 'Sonnet / Gemini / 开源', tone: 'warn' }
+      : finalScore >= 80
+      ? { tier: 'T1', short: 'T1 皇冠池', name: 'T1 皇冠池 (Opus / 6.1 Sol)', models: 'Opus 4.6 · Fable 5.1 Max · 6.1 Sol', tone: 'ok' }
+      : finalScore >= 50
+      ? { tier: 'T2', short: 'T2 进阶池', name: 'T2 进阶池 (Opus已解封)', models: 'Opus / Astra / Sonnet 混合', tone: 'acc' }
+      : { tier: 'T3', short: 'T3 降级池', name: 'T3 降级池 (开源高发)', models: 'MiMo / DeepSeek / Kimi', tone: 'bad' };
+
+    const baseHit = Number(computeTide.crownHitRatePct) || 9.18;
+    const scoreBoost = finalScore >= 80 ? 1.16 : finalScore >= 65 ? 1.04 : 0.78;
+    const opusBoost = opusUnlocked ? 1.15 : 0.55;
+    const sweetBoost = sweetSpot ? 1.06 : 1.0;
+    const effectiveDropRatePct = Math.max(1.5, Math.min(24.5, Math.round(baseHit * scoreBoost * opusBoost * sweetBoost * 10) / 10));
+
+    // 实时路由降级风险评估（0–100%，越低越稳：综合 5m Prompt Cache 热度、429 快败重试、上下文余量与 IP 独享）
+    let riskVal = 12;
+    const riskReasons = [];
+    if (v3Score < 18) { riskVal += (22 - v3Score) * 3; riskReasons.push(v3Tag); }
+    if (ipScore < 26) { riskVal += 16; riskReasons.push('IP信誉偏低'); }
+    if (!opusUnlocked) { riskVal += 18; riskReasons.push('Opus未解封'); }
+    let cacheWarm = true;
+    try {
+      const sidCur = typeof Dock !== 'undefined' && Dock.sid ? Dock.sid() : null;
+      const cCur = sidCur && typeof Chats !== 'undefined' ? Chats.get(sidCur) : null;
+      const lastMsg = cCur?.messages?.[cCur.messages.length - 1];
+      const lastAt = lastMsg?.createdAt ? new Date(lastMsg.createdAt).getTime() : (cCur?.updatedAt || 0);
+      if (lastAt && (t - lastAt > 5 * 60e3) && (cCur?.messages?.length || 0) >= 4) {
+        cacheWarm = false;
+        riskVal += 22;
+        riskReasons.push('5m缓存已冷(防快败切模)');
+      }
+    } catch {}
+    if (banWave.active) { riskVal += 20; riskReasons.push(banWave.label); }
+    riskVal = Math.max(6, Math.min(95, Math.round(riskVal)));
+    const routeRisk = {
+      pct: riskVal,
+      tone: riskVal <= 25 ? 'ok' : riskVal <= 52 ? 'warn' : 'bad',
+      label: riskVal <= 25 ? '低风险' : riskVal <= 52 ? '中风险' : '高风险',
+      cacheWarm,
+      summary: riskReasons.length ? riskReasons.join(' · ') : (cacheWarm ? '缓存温热 · 独享IP · 压缩v2护航' : '常规路由态'),
+    };
 
     _calcMemo = {
       score: finalScore,
@@ -968,6 +1014,10 @@ const BotService = (() => {
       drawWindowLabel,
       battleTrustCount,
       banWave,
+      opusUnlocked,
+      prizePool,
+      effectiveDropRatePct,
+      routeRisk,
       breakdown: { ipScore, ipTag, v3Score, v3Tag, drawScore, drawTag, quotaScore, quotaTag, nurtureBonus, nurtureTag, replayPen },
     };
     return _calcMemo;
@@ -1065,6 +1115,10 @@ const BotService = (() => {
       drawWindowLabel: ev.drawWindowLabel,
       battleTrustCount: ev.battleTrustCount,
       banWave: ev.banWave,
+      opusUnlocked: ev.opusUnlocked,
+      prizePool: ev.prizePool,
+      effectiveDropRatePct: ev.effectiveDropRatePct,
+      routeRisk: ev.routeRisk,
       cxIntegrity: 'v2-clean',
       breakdown: ev.breakdown,
     };
@@ -1082,7 +1136,7 @@ const BotService = (() => {
   });
   Bus.on('turn', () => { invalidate(); });
 
-  return { state, noteCloudflare, noteBattleVote, notePromptReplay, banWaveStatus, computeTideWindow, gittinsIndex, refreshPulse, levelOf, calcPoolScore };
+  return { state, invalidate, noteCloudflare, noteBattleVote, notePromptReplay, banWaveStatus, computeTideWindow, gittinsIndex, refreshPulse, levelOf, calcPoolScore };
 })();
 try { globalThis.BotService = BotService; } catch {}
 

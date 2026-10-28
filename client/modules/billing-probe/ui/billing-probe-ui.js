@@ -12099,7 +12099,7 @@ const BillingProbe = (() => {
       (diagnostics?.samples?.observations > 0)
     );
     try {
-    if (!opts?.readOnly && !opts?.noModelSync && (!isFullEncodedTitle || opts?.commit === true || (Number(model?._tihuEngineFixVer) || 0) < 15 || Boolean(mergedCandidates[0]?.isPelicanHtml)) && (isActiveOrLoadedChat || hasLocalSyncEvidence) && sid && mergedCandidates.length > 0 && (!model || ((!model.userCorrected || Boolean(out.habitRoute?.routed && out.habitRoute?.fromBank)) && !(model.fingerprint?.result && !model.reverseInferred && !model.habitInferred && !model.billingProbe)))) {
+    if (!opts?.readOnly && !opts?.noModelSync && (!isFullEncodedTitle || opts?.commit === true || Boolean(mergedCandidates[0]?.isPelicanHtml)) && (isActiveOrLoadedChat || hasLocalSyncEvidence) && sid && mergedCandidates.length > 0 && (!model || ((!model.userCorrected || Boolean(out.habitRoute?.routed && out.habitRoute?.fromBank)) && !(model.fingerprint?.result && !model.reverseInferred && !model.habitInferred && !model.billingProbe)))) {
       const top0 = mergedCandidates[0], top1 = mergedCandidates[1];
       const hr = out.habitRoute;
       const isNowRouted = Boolean(top0?.routed || hr?.routed || diagnostics?.routeSwitched || diagnostics?.effortDowngraded || diagnostics?.routeType);
@@ -12203,6 +12203,7 @@ const BillingProbe = (() => {
             reverseInferred: Boolean(!isHabitWinner || (top0.revPct != null && top0.revPct > 0 && !top0.structuralRev)),
             billingProbe: Boolean(!isHabitWinner || (top0.revPct != null && top0.revPct > 0 && !top0.structuralRev)),
             reverseVer: 187,
+            _tihuEngineFixVer: 15,
             _v197CalibVer: 3,
             _mismatchCheckedVer: 187,
             at: model?.at || Date.now(),

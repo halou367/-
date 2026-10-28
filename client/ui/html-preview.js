@@ -1349,32 +1349,39 @@ const HtmlPreview = (() => {
     } finally { f.remove(); }
   }
   async function record() {
-    const baseSid = st?.sid || (typeof Tabs !== 'undefined' ? Tabs.cur?.sid : null) || null;
-    const curChat = baseSid && typeof Chats !== 'undefined' ? Chats.get(baseSid) : null;
-    let cmpModel = '';
+    if (!st || st.kind !== 'html' || st.recording) return; st.recording = true;
     try {
-      if (typeof TihuHub !== 'undefined') {
-        const rawTextNow = String(textOf() || '');
-        if (TihuHub.isReady?.() && rawTextNow.trim().length >= 90) {
+      if (st.mode !== 'run') { setMode('run'); await sleep(350); }
+      await sleep(60);
+      const baseSid = st.sid || (typeof Tabs !== 'undefined' ? Tabs.cur?.sid : null) || null;
+      const curChat = baseSid && typeof Chats !== 'undefined' ? Chats.get(baseSid) : null;
+      const sid = (baseSid && st.evalPos && curChat?.evalMode === 'battle') ? `${baseSid}#${st.evalPos}` : baseSid;
+      const rawTextNow = String(textOf() || '');
+      let hDig = 2166136261 >>> 0;
+      for (let i = 0; i < rawTextNow.length; i++) { hDig ^= rawTextNow.charCodeAt(i); hDig = Math.imul(hDig, 16777619) >>> 0; }
+      const artifactDigest = rawTextNow.length + ':' + hDig.toString(36);
+      const messageId = st.evalMsg?.id || st.messageId || curChat?.messages?.filter(m => m && m.role === 'assistant')?.at(-1)?.id || null;
+      const shot = (st.previewUrl && rawTextNow.trim()) ? await shootText(rawTextNow, st.name) : await shoot();
+      let cmpModel = '';
+      try {
+        if (typeof TihuHub !== 'undefined' && TihuHub.isReady?.() && rawTextNow.trim().length >= 90) {
           if (baseSid && curChat) {
-            const r = await TihuHub.recognizePelicanChatAndApply(baseSid, curChat, { allowHealStub: true });
-            if (r?.matched && r.displayLabel) cmpModel = r.family || r.displayLabel;
+            const rT = await TihuHub.recognizePelicanChatAndApply(baseSid, curChat, { allowHealStub: true });
+            if (rT?.matched && rT.displayLabel) cmpModel = rT.family || rT.displayLabel;
           }
           if (!cmpModel) {
             const idRes = TihuHub.identifySync(rawTextNow);
-            if (idRes?.detectedModel) {
-              cmpModel = idRes.detectedModel.id || idRes.detectedModel.label || '';
-              toast('醍醐即时指纹识别：' + (idRes.detectedModel.label || cmpModel) + ' [' + String(idRes.effortTier || 'high').toUpperCase() + ']', 'ok');
-            }
+            if (idRes?.detectedModel) cmpModel = idRes.detectedModel.id || idRes.detectedModel.label || '';
           }
         }
-      }
-      if (!cmpModel && baseSid && typeof Models !== 'undefined') {
-        const m = Models.get(baseSid);
-        cmpModel = m?.family || m?.rawLabel || m?.name || '';
-      }
-    } catch {}
-    PelicanShots.table({ compareModel: cmpModel });
+      } catch {}
+      const curM = PelicanShots.modelOf ? PelicanShots.modelOf(sid) : { model: null, score: null, think: null };
+      const explicitModel = st.evalModelName || (curM?.model && curM.model !== '未识别' ? curM.model : undefined) || cmpModel || undefined;
+      const r = PelicanShots.add({ sid, ...shot, file: st.name, messageId, artifactDigest, model: explicitModel, score: curM?.score, think: curM?.think, lockedModel: Boolean(explicitModel) });
+      toast('已记录 · ' + r.model + (r.score != null ? ' · 推理分 ' + Strength.fmtScore(r.score) : '') + '（模型信息 · 概览 · 鹈鹕测试图）');
+      try { Dock.render(); } catch {}
+    } catch (e) { toast('记录失败：' + describe(e), 'err'); }
+    finally { if (st) st.recording = false; }
   }
   // 含脚本的页面：仍可手动交给原来的隔离窗口（不是默认路径）
   async function runIsolated() {
@@ -1664,10 +1671,10 @@ const PelicanShots = (() => {
   function push() { clearTimeout(pushT); pushT = setTimeout(() => { pushT = 0; void pull(false, true); }, 600); }
   function syncSid(sid) {
     if (typeof TihuHub !== 'undefined' && typeof TihuHub.recognizePelicanChatAndApply === 'function') {
-      if (!sid || !TihuHub.isReady?.()) return;
-      const c = (typeof Chats !== 'undefined' && Chats.get) ? Chats.get(sid) : null;
-      if (c?.messages?.length) void TihuHub.recognizePelicanChatAndApply(sid, c, { allowHealStub: false });
-      return;
+      if (sid && TihuHub.isReady?.()) {
+        const c = (typeof Chats !== 'undefined' && Chats.get) ? Chats.get(sid) : null;
+        if (c?.messages?.length) void TihuHub.recognizePelicanChatAndApply(sid, c, { allowHealStub: false });
+      }
     }
     if (!sid) return;
     const rawList = all();
@@ -1699,15 +1706,12 @@ const PelicanShots = (() => {
   /* 鹈鹕测试跑完自动存图：取这个对话里最后写出的 html / svg，不打开预览也不用手点「记录」。
      返回 { rec } 成功；{ none:'原因' } = 没有可截图的页面（模型没写文件 / 还没写完）；抛错 = 截图失败 */
   async function auto(sid, chat) {
-    if (typeof TihuHub !== 'undefined' && typeof TihuHub.recognizePelicanChatAndApply === 'function') {
-      if (TihuHub.isReady?.() && sid) {
-        const r = await TihuHub.recognizePelicanChatAndApply(sid, chat, { allowHealStub: true }).catch(() => null);
-        if (r?.matched) return { tihu: r, rec: null, none: null };
-      }
-      return { tihu: null, rec: null, none: null };
+    let tihu = null;
+    if (typeof TihuHub !== 'undefined' && typeof TihuHub.recognizePelicanChatAndApply === 'function' && TihuHub.isReady?.() && sid) {
+      tihu = await TihuHub.recognizePelicanChatAndApply(sid, chat, { allowHealStub: true }).catch(() => null);
     }
     const list = (typeof R !== 'undefined' && R.writes ? R.writes(sid) : []).filter(x => HtmlPreview.kindOf(x.path) === 'html'), w = list[list.length - 1];
-    if (!w) return { none: '这一轮没有写出 html / svg 文件，没有可存的图' };
+    if (!w) return { tihu, none: '这一轮没有写出 html / svg 文件，没有可存的图' };
     const text = String(w.get() || ''); if (text.trim().length < 80) return { none: '写出的页面是空的，没有存图' };
     let hDig = 2166136261 >>> 0;
     for (let i = 0; i < text.length; i++) { hDig ^= text.charCodeAt(i); hDig = Math.imul(hDig, 16777619) >>> 0; }
@@ -2270,12 +2274,24 @@ const PelicanShots = (() => {
   }
   // 概览卡片：当前对话这个型号的鹈鹕测试图（最新一张大图 + 其余缩略图 + 全客户端测试库导入/导出/对比）
   function card(sid) {
-    if (typeof TihuHub !== 'undefined' && typeof TihuHub.renderModelCardSection === 'function') {
+    const ownShots = forSid(sid);
+    if (typeof TihuHub !== 'undefined' && typeof TihuHub.renderModelCardSection === 'function' && (TihuHub.isReady?.() || (!ownShots.length && !all().length))) {
       const rawSid = String(sid || '').split('#')[0];
       const m = (rawSid && typeof Models !== 'undefined' && Models.get) ? Models.get(rawSid) : null;
       const rawModel = String(m?.rawLabel || m?.name || m?.candidateName || '').replace(/[?？]+$/, '').trim();
       const effort = String(m?.effort || m?.tier || m?.reverseEffort || '').trim().toLowerCase();
-      return TihuHub.renderModelCardSection(sid, rawModel, effort, true);
+      const tihuEl = TihuHub.renderModelCardSection(sid, rawModel, effort, true);
+      if (tihuEl && ownShots.length && !tihuEl.querySelector?.('img.mc-pelimg')) {
+        const curShot = ownShots[0];
+        const disp = rawModel || curShot.model || '未识别';
+        tihuEl.append(h('div', {
+          class: 'pel-stage mc-pel-stage',
+          style: { marginTop: '6px' },
+          title: '点击放大查看本对话已记录测试图',
+          onclick: () => HtmlPreview.image?.(curShot.url, disp + ' · 鹈鹕测试图', curShot.acct ? '来源：' + curShot.acct : ''),
+        }, h('img', { class: 'mc-pelimg', src: curShot.url, alt: disp + ' 鹈鹕测试图', loading: 'lazy' })));
+      }
+      if (tihuEl) return tihuEl;
     }
     const m = modelOf(sid), own = forSid(sid), mine = own.length ? own : (m.model !== '未识别' ? forModel(m.model) : []), total = all().length;
     if (!mine.length && !total) return null;
