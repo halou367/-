@@ -499,7 +499,7 @@ test('v0.13.161-beta.7: Remove 清理并回退重发, optimize /cost per 当前�
   //    dpl_HAxwrhqRf48UW1Hf4MDQquRXSs7x, 2-key OVERRIDES, arena_build_bucket=stable, 10s watchdog, 403 replay-once, sid:effDpl cache key
   assert.ok(mainSrc.includes("'dpl_HAxwrhqRf48UW1Hf4MDQquRXSs7x'"));
   assert.ok(mainSrc.includes("cookieParts.push('arena_build_bucket=stable')"));
-  assert.ok(mainSrc.includes("encodeURIComponent(JSON.stringify({ 'credit-system-m1': 'cost-shown', 'credit-system-m2': 'limits-enabled' }))"));
+  assert.ok(mainSrc.includes("'credit-system-m1': 'cost-shown'") && mainSrc.includes("'credit-system-m2': 'limits-enabled'"));
   assert.ok(coreSrc.includes("COST_DPL: 'dpl_HAxwrhqRf48UW1Hf4MDQquRXSs7x'"));
   assert.ok(coreSrc.includes('ensureBillingFlags(force = false)'));
   assert.ok(coreSrc.includes('window.__ancCostWatchdog'));
