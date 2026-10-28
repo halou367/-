@@ -126,47 +126,33 @@ async function fixture({ platform = 'android', width = 390, mode = 'slow', cache
     assert.ok((await p.locator('#pv .pv-code').textContent()).includes('@keyframes go'));
     await p.locator('#pv .pv-seg button', { hasText: '预览' }).click();   // beta.1 起 html 页签也统一叫「预览」
     await p.waitForSelector('#pv iframe.pv-frame');
-    // 记录：动画跑一会儿再截，红色小车应该已经离开起点
-    await p.waitForTimeout(1500);
-    await p.locator('#pv .pv-rec').click();
-    for (let i = 0; i < 40 && !(await p.evaluate(() => __anc.PelicanShots.all().length)); i++) { await p.clock.runFor(250); await p.waitForTimeout(40); }
-    assert.equal(await p.evaluate(() => __anc.PelicanShots.all().length), 1, platform + ' one record saved: ' + await p.evaluate(() => [...document.querySelectorAll('.toast,#toast,[class*=toast]')].map(x => x.textContent).join('|')));
-    const shot = await p.evaluate(async () => {
-      const r = __anc.PelicanShots.all()[0], im = new Image(); im.src = r.url; await im.decode();
-      const cv = document.createElement('canvas'); cv.width = im.width; cv.height = im.height; const g = cv.getContext('2d'); g.drawImage(im, 0, 0);
-      const k = im.width / document.querySelector('#pv iframe').clientWidth, px = (x, y) => [...g.getImageData(Math.round(x * k), Math.round(y * k), 1, 1).data];
-      return { mime: r.url.slice(0, 22), w: im.width, h: im.height, model: r.model, bg: px(5, 5), start: px(70, 100), moved: px(30 + 40 + 40 + 30, 100) };
+    // 醍醐库（2.0.3 起取消旧 JPEG 截图库，点击打开统一在线醍醐 HTML/SVG 样本库面板）
+    await p.waitForTimeout(200);
+    if (await p.locator('#pv .pv-rec').count()) {
+      await p.locator('#pv .pv-rec').click();
+      await p.waitForTimeout(150);
+    } else {
+      await p.evaluate(() => __anc.HtmlPreview.record());
+      await p.waitForTimeout(150);
+    }
+    const libState = await p.evaluate(() => {
+      const modalOpen = !!document.querySelector('.pel-lib-modal');
+      document.querySelectorAll('.modal-back').forEach(b => { if (b.querySelector('.pel-lib-modal')) b.remove(); });
+      return {
+        retired: __anc.PelicanShots.retired === true,
+        allLen: __anc.PelicanShots.all().length,
+        modalOpen,
+        hasCard: !!__anc.PelicanShots.card(__anc.Tabs?.cur?.sid || null),
+        hiddenIframes: document.querySelectorAll('iframe[style*="-99999px"]').length,
+      };
     });
-    assert.equal(shot.mime, 'data:image/jpeg;base64,'.slice(0, 22)); assert.ok(shot.w > 100 && shot.h > 60, 'image size');
-    assert.ok(shot.bg[2] > 200 && shot.bg[0] < 230 && shot.bg[1] > 200, platform + ' sky background captured ' + shot.bg);
-    const red = c => c[0] > 180 && c[1] < 90 && c[2] < 90;
-    assert.ok(red(shot.moved) && !red(shot.start), platform + ' animation frame frozen at current time ' + JSON.stringify(shot));
-    // 能力表：SVG 合法、带图片
-    const svg = await p.evaluate(() => __anc.PelicanShots.tableSvg());
-    assert.ok(/<image /.test(svg) && /推理分/.test(svg)); const bad = await p.evaluate(s => !!new DOMParser().parseFromString(s, 'image/svg+xml').querySelector('parsererror'), svg); assert.equal(bad, false, 'table svg parses');
-    // 概览卡片
-    assert.ok(await p.evaluate(() => !!__anc.PelicanShots.card(__anc.Tabs?.cur?.sid || null)), 'overview card');
-    // 图跟对话 id 绑定：型号被校准 / 改名之后图还在，且归到新型号下；换对话的图不混
-    { const out = await p.evaluate(() => { const sid = __anc.Tabs.cur.sid, before = __anc.PelicanShots.forSid(sid).length, old = __anc.Models.get(sid);
-        __anc.Models.set(sid, { name: 'qwen3.8-max-0902?', guess: true, fingerprint: { count: 3, result: null, reasoning: { score: 42 } } });
-        const c = __anc.PelicanShots.card(sid), v = __anc.PelicanShots.forSid(sid);
-        const res = { before, after: v.length, img: !!c?.querySelector('img.mc-pelimg'), empty: /还没有记录/.test(c?.textContent || ''), model: v[0]?.model, other: __anc.PelicanShots.forSid('another-chat').length };
-        old ? __anc.Models.set(sid, old) : __anc.Models.del?.(sid); return res; });
-      assert.ok(out.before >= 1 && out.after === out.before && out.img && !out.empty, platform + ' pelican image stays with the chat after the model changes: ' + JSON.stringify(out)); assert.equal(out.other, 0); }
-    // 鹈鹕测试跑完自动存图：不开预览窗格，把对话里最后写出的 html 放进看不见的只读页面截图
-    await p.evaluate(() => { window.__au = null; __anc.PelicanShots.auto(__anc.Tabs.cur.sid).then(r => { window.__au = r; }, e => { window.__au = { err: String(e) }; }); });
-    for (let i = 0; i < 60 && !(await p.evaluate(() => window.__au)); i++) { await p.clock.runFor(250); await p.waitForTimeout(60); }
-    const au = await p.evaluate(async () => {
-      const r = window.__au; if (!r?.rec) return r; const im = new Image(); im.src = r.rec.url; await im.decode();
-      const cv = document.createElement('canvas'); cv.width = im.width; cv.height = im.height; const g = cv.getContext('2d'); g.drawImage(im, 0, 0);
-      const out = { auto: r.rec.auto, file: r.rec.file, w: im.width, h: im.height, bg: [...g.getImageData(5, 5, 1, 1).data], hidden: document.querySelectorAll('iframe[style*="-99999px"]').length, count: __anc.PelicanShots.all().length };
-      __anc.PelicanShots.del(r.rec.id); return out;
-    });
-    assert.ok(au && !au.err && !au.none, platform + ' auto shot: ' + JSON.stringify(au));
-    assert.equal(au.auto, true); assert.equal(au.count, 2, 'saved next to the manual record'); assert.equal(au.hidden, 0, 'the hidden page is removed afterwards');
-    assert.ok(au.w > 100 && au.h > 60 && au.bg[2] > 200 && au.bg[0] < 230, platform + ' auto shot has the page background ' + JSON.stringify(au));
-    assert.match(String((await p.evaluate(() => __anc.PelicanShots.auto('no-such-chat').then(r => r.none)))), /没有写出/);
-    if (process.env.SHOTS) { await p.screenshot({ path: '/tmp/pv-' + platform + '.png' }); const data = await p.evaluate(() => [__anc.PelicanShots.all()[0].url, __anc.PelicanShots.tableSvg()]); require('fs').writeFileSync('/tmp/shot-' + platform + '.jpg', Buffer.from(data[0].split(',')[1], 'base64')); require('fs').writeFileSync('/tmp/table-' + platform + '.svg', data[1]); }
+    assert.equal(libState.retired, true, platform + ' legacy JPEG screenshot library is retired');
+    assert.equal(libState.allLen, 0, platform + ' zero legacy JPEG records stored');
+    assert.equal(libState.modalOpen, true, platform + ' opens unified online Tihu Pelican library modal');
+    assert.equal(libState.hasCard, true, platform + ' renders Tihu model overview card');
+    assert.equal(libState.hiddenIframes, 0, platform + ' no hidden screenshot iframes');
+    const autoRes = await p.evaluate(() => __anc.PelicanShots.auto('no-such-chat'));
+    assert.ok(autoRes && typeof autoRes.none === 'string', platform + ' auto skips legacy screenshot capture');
     // 舞台：整体最大化 + 留白（横幅上下留白，竖版左右留白）；响应式页面按容器真实大小铺满
     const box = () => p.evaluate(() => { const f = document.querySelector('#pv iframe.pv-frame').getBoundingClientRect(), s = document.querySelector('#pv .pv-stage').getBoundingClientRect(); return { fw: f.width, fh: f.height, sw: s.width, sh: s.height, fx: f.left - s.left, fy: f.top - s.top }; });
     let b = await box();
