@@ -1,21 +1,41 @@
 'use strict';
 const http = require('http');
+const https = require('https');
+const fs = require('fs');
+const path = require('path');
+const { spawn } = require('child_process');
 const crypto = require('crypto');
+const ApiMultimodal = require('./api-multimodal');
+const MAX_API_BODY_BYTES = 60 * 1024 * 1024;
 
 function genApiKey() {
   return 'sk-brana-' + crypto.randomBytes(12).toString('hex');
 }
 
-function inferVendorProtocol(modelId, fam) {
-  const m = String(modelId || '').toLowerCase();
-  const f = String(fam || '').toLowerCase();
-  if (f === 'anthropic' || m.includes('claude') || m.includes('opus') || m.includes('sonnet') || m.includes('haiku') || m.includes('fable')) {
-    return 'anthropic';
+function genShortBattleId(seed = '') {
+  const s = String(seed || '').trim();
+  if (!s) return crypto.randomBytes(2).toString('hex').toLowerCase();
+  let h = 2166136261;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 16777619);
   }
-  if (f === 'google' || m.includes('gemini') || m.includes('gemma')) {
-    return 'gemini';
-  }
-  return 'openai';
+  return ((h >>> 0).toString(36) + '0000').slice(0, 4).toLowerCase();
+}
+
+function extractCloudflaredToken(raw = '') {
+  const s = String(raw || '').trim();
+  if (!s) return '';
+  const m = s.match(/(?:--token|install)\s+([A-Za-z0-9_-]{20,})/i);
+  if (m && m[1]) return m[1].trim();
+  const tokMatch = s.match(/eyJ[A-Za-z0-9_-]{20,}/);
+  if (tokMatch) return tokMatch[0].trim();
+  return s.replace(/\s+/g, '');
+}
+
+
+function inferVendorProtocol() {
+  return 'arena';
 }
 
 function canonicalModelSlug(rawName, rawInternal, fam) {
@@ -34,196 +54,17 @@ function parseJsonSafe(str, fallback = null) {
   try { return JSON.parse(str); } catch { return fallback; }
 }
 
-function normalizeIncomingRequest(req, urlObj, body, state) {
-  const pathname = String(urlObj.pathname || '/').replace(/\/+$/, '') || '/';
-  const headers = req.headers || {};
-  let protocol = 'openai';
-
-  const gemMatch = pathname.match(/\/models\/([^/:]+):(streamGenerateContent|generateContent)$/i);
-  if (gemMatch) {
-    protocol = 'gemini';
-  } else if (/\/(?:v1\/)?messages$/i.test(pathname) || headers['anthropic-version']) {
-    protocol = 'anthropic';
-  } else if (/\/(?:v1\/)?responses$/i.test(pathname)) {
-    protocol = 'openai-responses';
-  } else if (/\/(?:v1\/)?auto$/i.test(pathname)) {
-    if (Array.isArray(body?.contents)) protocol = 'gemini';
-    else if (headers['anthropic-version'] || (body?.max_tokens && Array.isArray(body?.messages) && inferVendorProtocol(body?.model || state.modelId, state.modelFam) === 'anthropic')) {
-      protocol = 'anthropic';
-    } else if (body?.input !== undefined && !Array.isArray(body?.messages)) {
-      protocol = 'openai-responses';
-    } else {
-      protocol = 'openai';
-    }
-  }
-
-  const model = String(body?.model || (gemMatch ? decodeURIComponent(gemMatch[1]) : '') || state.modelId || 'brana-current').trim();
-  let stream = Boolean(body?.stream);
-  if (protocol === 'gemini' && gemMatch) {
-    stream = /^streamGenerateContent$/i.test(gemMatch[2]) || urlObj.searchParams.get('alt') === 'sse' || Boolean(body?.stream);
-  }
-
-  let systemText = '';
-  const messages = [];
-  const tools = [];
-
-  if (protocol === 'anthropic') {
-    if (typeof body?.system === 'string') systemText = body.system.trim();
-    else if (Array.isArray(body?.system)) {
-      systemText = body.system.map((x) => (typeof x === 'string' ? x : String(x?.text || ''))).filter(Boolean).join('\n\n').trim();
-    }
-    for (const m of (Array.isArray(body?.messages) ? body.messages : [])) {
-      if (!m || !m.role) continue;
-      const role = m.role === 'assistant' ? 'assistant' : 'user';
-      if (typeof m.content === 'string') {
-        messages.push({ role, content: m.content });
-      } else if (Array.isArray(m.content)) {
-        const textParts = [], toolCalls = [], toolResults = [], images = [];
-        for (const blk of m.content) {
-          if (!blk) continue;
-          if (blk.type === 'text' && blk.text) textParts.push(String(blk.text));
-          else if (blk.type === 'tool_use') {
-            toolCalls.push({
-              id: String(blk.id || ('toolu_' + crypto.randomBytes(6).toString('hex'))),
-              name: String(blk.name || 'tool'),
-              arguments: typeof blk.input === 'string' ? blk.input : JSON.stringify(blk.input || {}),
-            });
-          } else if (blk.type === 'tool_result') {
-            const resContent = typeof blk.content === 'string'
-              ? blk.content
-              : Array.isArray(blk.content)
-                ? blk.content.map((c) => (typeof c === 'string' ? c : String(c?.text || JSON.stringify(c)))).join('\n')
-                : JSON.stringify(blk.content ?? '');
-            toolResults.push({ toolCallId: String(blk.tool_use_id || ''), isError: Boolean(blk.is_error), content: resContent });
-          } else if (blk.type === 'image' && blk.source?.data) {
-            images.push({
-              mime: String(blk.source.media_type || 'image/png'),
-              dataUrl: 'data:' + (blk.source.media_type || 'image/png') + ';base64,' + blk.source.data,
-            });
-          }
-        }
-        for (const tr of toolResults) messages.push({ role: 'tool', toolCallId: tr.toolCallId, isError: tr.isError, content: tr.content });
-        if (textParts.length || toolCalls.length || images.length) messages.push({ role, content: textParts.join('\n'), toolCalls, images });
-      }
-    }
-    for (const t of (Array.isArray(body?.tools) ? body.tools : [])) {
-      if (!t || !t.name) continue;
-      tools.push({ name: String(t.name), description: String(t.description || ''), parameters: t.input_schema || t.parameters || { type: 'object', properties: {} } });
-    }
-  } else if (protocol === 'gemini') {
-    const sysInst = body?.systemInstruction || body?.system_instruction;
-    if (sysInst) {
-      const parts = Array.isArray(sysInst.parts) ? sysInst.parts : [sysInst];
-      systemText = parts.map((p) => String(p?.text || '')).filter(Boolean).join('\n\n').trim();
-    }
-    for (const c of (Array.isArray(body?.contents) ? body.contents : [])) {
-      if (!c) continue;
-      const role = c.role === 'model' || c.role === 'assistant' ? 'assistant' : 'user';
-      const parts = Array.isArray(c.parts) ? c.parts : [];
-      const textParts = [], toolCalls = [];
-      for (const p of parts) {
-        if (!p) continue;
-        if (typeof p.text === 'string' && !p.thought) textParts.push(p.text);
-        else if (p.functionCall) {
-          toolCalls.push({
-            id: 'call_' + crypto.randomBytes(6).toString('hex'),
-            name: String(p.functionCall.name || 'tool'),
-            arguments: JSON.stringify(p.functionCall.args || {}),
-          });
-        } else if (p.functionResponse) {
-          messages.push({
-            role: 'tool',
-            toolCallId: String(p.functionResponse.name || 'tool'),
-            content: typeof p.functionResponse.response === 'string' ? p.functionResponse.response : JSON.stringify(p.functionResponse.response || {}),
-          });
-        }
-      }
-      if (textParts.length || toolCalls.length) messages.push({ role, content: textParts.join('\n'), toolCalls });
-    }
-    for (const tg of (Array.isArray(body?.tools) ? body.tools : [])) {
-      const decls = Array.isArray(tg?.functionDeclarations) ? tg.functionDeclarations : (tg?.name ? [tg] : []);
-      for (const d of decls) {
-        if (!d || !d.name) continue;
-        tools.push({ name: String(d.name), description: String(d.description || ''), parameters: d.parameters || { type: 'object', properties: {} } });
-      }
-    }
-  } else if (protocol === 'openai-responses') {
-    if (typeof body?.instructions === 'string') systemText = body.instructions.trim();
-    const inp = body?.input;
-    if (typeof inp === 'string') messages.push({ role: 'user', content: inp });
-    else if (Array.isArray(inp)) {
-      for (const item of inp) {
-        if (!item) continue;
-        if (item.type === 'function_call_output') {
-          messages.push({ role: 'tool', toolCallId: String(item.call_id || ''), content: typeof item.output === 'string' ? item.output : JSON.stringify(item.output ?? '') });
-          continue;
-        }
-        const role = item.role === 'assistant' ? 'assistant' : (item.role === 'system' || item.role === 'developer' ? 'system' : 'user');
-        let text = '';
-        if (typeof item.content === 'string') text = item.content;
-        else if (Array.isArray(item.content)) text = item.content.map((c) => String(c?.text || c?.input_text || c?.output_text || '')).filter(Boolean).join('\n');
-        if (role === 'system') systemText = (systemText ? systemText + '\n\n' : '') + text;
-        else if (text) messages.push({ role, content: text });
-      }
-    }
-    for (const t of (Array.isArray(body?.tools) ? body.tools : [])) {
-      const fn = t?.function || t;
-      if (!fn || !fn.name) continue;
-      tools.push({ name: String(fn.name), description: String(fn.description || ''), parameters: fn.parameters || { type: 'object', properties: {} } });
-    }
-  } else {
-    const sysParts = [];
-    for (const m of (Array.isArray(body?.messages) ? body.messages : [])) {
-      if (!m || !m.role) continue;
-      let text = '';
-      const images = [];
-      if (typeof m.content === 'string') text = m.content;
-      else if (Array.isArray(m.content)) {
-        const tArr = [];
-        for (const c of m.content) {
-          if (!c) continue;
-          if (typeof c === 'string') tArr.push(c);
-          else if (c.type === 'text' && c.text) tArr.push(String(c.text));
-          else if (c.type === 'image_url' && c.image_url?.url) images.push({ dataUrl: String(c.image_url.url) });
-        }
-        text = tArr.join('\n');
-      }
-      if (m.role === 'system' || m.role === 'developer') {
-        if (text.trim()) sysParts.push(text.trim());
-      } else if (m.role === 'tool' || m.role === 'function') {
-        messages.push({ role: 'tool', toolCallId: String(m.tool_call_id || m.name || 'tool'), content: text });
-      } else {
-        const toolCalls = Array.isArray(m.tool_calls)
-          ? m.tool_calls.map((tc) => ({
-              id: String(tc?.id || ('call_' + crypto.randomBytes(6).toString('hex'))),
-              name: String(tc?.function?.name || tc?.name || 'tool'),
-              arguments: typeof tc?.function?.arguments === 'string' ? tc?.function?.arguments : JSON.stringify(tc?.function?.arguments || {}),
-            }))
-          : [];
-        messages.push({ role: m.role === 'assistant' ? 'assistant' : 'user', content: text, toolCalls, images });
-      }
-    }
-    if (!messages.length && typeof body?.prompt === 'string') messages.push({ role: 'user', content: body.prompt });
-    systemText = sysParts.join('\n\n');
-    const rawTools = Array.isArray(body?.tools) ? body.tools : (Array.isArray(body?.functions) ? body.functions : []);
-    for (const t of rawTools) {
-      const fn = t?.function || t;
-      if (!fn || !fn.name) continue;
-      tools.push({ name: String(fn.name), description: String(fn.description || ''), parameters: fn.parameters || fn.input_schema || { type: 'object', properties: {} } });
-    }
-  }
-
-  return { protocol, model, stream, systemText, messages, tools, gemAltSse: urlObj.searchParams.get('alt') === 'sse' };
-}
+const normalizeIncomingRequest = ApiMultimodal.normalizeIncomingRequest;
 
 function setCorsHeaders(res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-api-key, anthropic-version, anthropic-beta, x-goog-api-key, OpenAI-Beta, X-Requested-With');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-api-key, anthropic-version, anthropic-beta, x-goog-api-key, OpenAI-Beta, X-Requested-With, Range');
+  res.setHeader('Access-Control-Expose-Headers', 'Content-Length, Content-Range, Accept-Ranges, Content-Type');
   res.setHeader('Cache-Control', 'no-cache, no-transform');
 }
 
-function createResponseAdapter(res, normReq, state) {
+function createResponseAdapter(res, normReq, state, mediaStore) {
   const { protocol, stream } = normReq;
   const createdSec = Math.floor(Date.now() / 1000);
   const msgId = 'chatcmpl_brana_' + crypto.randomBytes(8).toString('hex');
@@ -236,6 +77,7 @@ function createResponseAdapter(res, normReq, state) {
   let fullReasoning = '';
   let fullText = '';
   const toolCalls = [];
+  const outputMedia = [];
 
   let anthStarted = false;
   let anthCurBlockType = null;
@@ -349,6 +191,66 @@ function createResponseAdapter(res, normReq, state) {
       }
     },
 
+    async onMedia(raw = {}) {
+      if (finished || !raw) return;
+      const dataUrlValue = raw.dataUrl || raw.data_url || '';
+      let type = String(raw.type || '').toLowerCase().replace(/_url$/, '');
+      let mimeType = String(raw.mimeType || raw.mime_type || raw.contentType || raw.content_type || '');
+      if (!mimeType && dataUrlValue) mimeType = String(/^data:([^;,]+)/i.exec(String(dataUrlValue))?.[1] || '');
+      if (!mimeType) mimeType = type === 'image' ? 'image/png' : type === 'video' ? 'video/mp4' : type === 'audio' ? 'audio/wav' : 'application/octet-stream';
+      if (!['image', 'video', 'audio', 'file'].includes(type)) type = ApiMultimodal.mediaTypeForMime(mimeType, 'file');
+      if (mimeType === 'application/octet-stream' && type !== 'file') mimeType = type === 'image' ? 'image/png' : type === 'video' ? 'video/mp4' : 'audio/wav';
+      const rawData = raw.data || raw.base64 || '';
+      let dataUrl = String(dataUrlValue || '');
+      if (!dataUrl && rawData) {
+        const dataString = String(rawData);
+        dataUrl = /^data:/i.test(dataString) ? dataString : 'data:' + mimeType + ';base64,' + dataString.replace(/\s+/g, '');
+      }
+      const media = {
+        type,
+        mimeType,
+        name: String(raw.name || raw.filename || raw.fileName || ''),
+        dataUrl,
+        url: String(raw.url || raw.fileUri || raw.file_uri || ''),
+      };
+      if (!media.dataUrl && /^data:/i.test(media.url)) { media.dataUrl = media.url; media.url = ''; }
+      const origMediaUrl = media.url || '';
+      if (!media.dataUrl && media.url) {
+        const wrapper = { messages: [{ role: 'user', content: '', toolCalls: [], media: [media] }] };
+        try {
+          await ApiMultimodal.hydrateIncomingMedia(wrapper);
+          const hydrated = wrapper.messages[0].media[0];
+          media.dataUrl = hydrated.dataUrl || '';
+          media.mimeType = hydrated.mimeType || media.mimeType;
+          media.url = '';
+        } catch {
+          media.url = origMediaUrl;
+        }
+      }
+      if (!media.dataUrl && !media.url) return;
+      if (finished || res.writableEnded) return;
+      const apiUrl = mediaStore ? mediaStore.add(media) : media.url;
+      const item = { ...media, apiUrl: apiUrl || '' };
+      outputMedia.push(item);
+      const markdown = ApiMultimodal.appendMediaMarkdown('', [item]);
+      if (markdown) this.onText(markdown + '\n\n');
+      if (!stream) return;
+      ensureStreamHeaders();
+      if (protocol === 'openai') {
+        const chunk = {
+          id: msgId,
+          object: 'chat.completion.chunk',
+          created: createdSec,
+          model: resolvedModel,
+          choices: [{ index: 0, delta: { media: [ApiMultimodal.mediaPublicShape(item)] }, finish_reason: null }],
+        };
+        res.write('data: ' + JSON.stringify(chunk) + '\n\n');
+      } else if (protocol === 'gemini') {
+        const part = ApiMultimodal.geminiMediaPart(item);
+        if (part) res.write('data: ' + JSON.stringify({ candidates: [{ content: { role: 'model', parts: [part] }, index: 0 }], modelVersion: resolvedModel }) + '\n\n');
+      }
+    },
+
     onToolCall(tc) {
       if (finished || !tc || !tc.name) return;
       const callId = String(tc.id || ((protocol === 'anthropic' ? 'toolu_' : 'call_') + crypto.randomBytes(6).toString('hex')));
@@ -404,6 +306,9 @@ function createResponseAdapter(res, normReq, state) {
       const inTok = Number(meta.inputTokens) || Math.max(16, Math.ceil(JSON.stringify(normReq.messages || []).length / 3.5));
       const outTok = Number(meta.outputTokens) || Math.max(8, Math.ceil((fullText.length + fullReasoning.length) / 3.5));
       const hasTools = toolCalls.length > 0;
+      const mediaMeta = outputMedia.map(ApiMultimodal.mediaPublicShape);
+      const gemMedia = outputMedia.map(ApiMultimodal.geminiMediaPart).filter(Boolean);
+      const responsesMedia = outputMedia.map(ApiMultimodal.responsesOutputMedia).filter(Boolean);
 
       if (stream) {
         ensureStreamHeaders();
@@ -416,6 +321,7 @@ function createResponseAdapter(res, normReq, state) {
             choices: [{ index: 0, delta: {}, finish_reason: hasTools ? 'tool_calls' : 'stop' }],
             usage: { prompt_tokens: inTok, completion_tokens: outTok, total_tokens: inTok + outTok },
           };
+          if (mediaMeta.length) endChunk.media = mediaMeta;
           res.write('data: ' + JSON.stringify(endChunk) + '\n\ndata: [DONE]\n\n');
         } else if (protocol === 'openai-responses') {
           const finalResp = {
@@ -430,7 +336,7 @@ function createResponseAdapter(res, normReq, state) {
               id: msgId,
               status: 'completed',
               role: 'assistant',
-              content: [{ type: 'output_text', text: fullText, annotations: [] }],
+              content: [{ type: 'output_text', text: fullText, annotations: [] }, ...responsesMedia],
             }],
             usage: { input_tokens: inTok, output_tokens: outTok, total_tokens: inTok + outTok },
           };
@@ -474,6 +380,7 @@ function createResponseAdapter(res, normReq, state) {
           role: 'assistant',
           model: resolvedModel,
           content,
+          media: mediaMeta,
           stop_reason: hasTools ? 'tool_use' : 'end_turn',
           stop_sequence: null,
           usage: { input_tokens: inTok, output_tokens: outTok },
@@ -482,6 +389,7 @@ function createResponseAdapter(res, normReq, state) {
         const parts = [];
         if (fullReasoning) parts.push({ text: fullReasoning, thought: true });
         if (fullText || !hasTools) parts.push({ text: fullText });
+        for (const media of gemMedia) parts.push(media);
         for (const tc of toolCalls) {
           parts.push({ functionCall: { name: tc.name, args: parseJsonSafe(tc.arguments, {}) || {} } });
         }
@@ -503,7 +411,7 @@ function createResponseAdapter(res, normReq, state) {
             id: msgId,
             status: 'completed',
             role: 'assistant',
-            content: [{ type: 'output_text', text: fullText, annotations: [] }],
+            content: [{ type: 'output_text', text: fullText, annotations: [] }, ...responsesMedia],
           }],
           usage: { input_tokens: inTok, output_tokens: outTok, total_tokens: inTok + outTok },
         }));
@@ -513,6 +421,7 @@ function createResponseAdapter(res, normReq, state) {
           msgObj.reasoning_content = fullReasoning;
           msgObj.reasoning = fullReasoning;
         }
+        if (mediaMeta.length) msgObj.media = mediaMeta;
         if (hasTools) {
           msgObj.tool_calls = toolCalls.map((tc) => ({
             id: tc.id,
@@ -552,49 +461,202 @@ function createResponseAdapter(res, normReq, state) {
 }
 
 function createLocalApiGateway(options = {}) {
+  const storageDir = options.storageDir ? String(options.storageDir) : '';
+  const configPath = storageDir ? path.join(storageDir, 'local-api-gateway.json') : '';
+  const getWebContentsForAccount = typeof options.getWebContentsForAccount === 'function'
+    ? options.getWebContentsForAccount
+    : () => null;
+
   const state = {
     running: false,
     port: Number(options.port) || 18765,
     host: '127.0.0.1',
     apiKey: options.apiKey || genApiKey(),
+    keyFixed: true,
     requireKey: false,
     sessionMode: 'bound',
     toolMode: 'auto_bridge',
-    protocolPref: 'auto',
+    protocolPref: 'openai',
     boundSid: null,
     boundTitle: '',
+    accountId: '',
     modelName: '自动识别 / 当前会话模型',
     modelId: 'brana-current',
     modelFam: '',
-    vendorProtocol: 'openai',
+    vendorProtocol: 'arena',
     reqCount: 0,
     lastReqAt: 0,
     lastError: '',
     logs: [],
+    proxies: [],
+    tunnel: {
+      running: false,
+      status: 'stopped', // 'stopped' | 'starting' | 'downloading' | 'connected' | 'error'
+      mode: 'quick',     // 'quick' | 'token' | 'custom'
+      publicUrl: '',
+      customDomain: '',
+      token: '',
+      error: '',
+      pid: 0,
+    },
   };
 
   let server = null;
   let activeWebContents = null;
+  let tunnelProc = null;
   let reqSeq = 0;
   const inflight = new Map();
+  const mediaStore = ApiMultimodal.createMediaStore(state);
+
+  const normalizeProxyCard = (raw = {}, existing = null) => {
+    const sid = String(raw.sid !== undefined ? raw.sid : (raw.boundSid !== undefined ? raw.boundSid : (existing?.sid || ''))).trim();
+    const id = String(raw.id || existing?.id || ('px_' + (sid || crypto.randomBytes(4).toString('hex')))).trim();
+    const accountId = String(raw.accountId !== undefined ? raw.accountId : (existing?.accountId || state.accountId || 'default')).trim();
+    const mode = ['agent', 'direct', 'battle'].includes(raw.mode) ? raw.mode : (existing?.mode || 'agent');
+    const modality = String(raw.modality || existing?.modality || 'chat').trim();
+    const randomId = String(raw.randomId || existing?.randomId || genShortBattleId(sid || id)).trim().toLowerCase();
+    const battleTarget = ['A', 'B', 'AB', 'card'].includes(raw.battleTarget) ? raw.battleTarget : (existing?.battleTarget || 'B');
+    const modelIdA = randomId + '-battle-A';
+    const modelIdB = randomId + '-battle-B';
+    const modelName = String(raw.modelName !== undefined ? raw.modelName : (existing?.modelName || (mode === 'battle' ? ('Battle 双盲对战 (' + randomId + ')') : '当前对话模型'))).trim();
+    const modelInternal = String(raw.modelInternal !== undefined ? raw.modelInternal : (existing?.modelInternal || '')).trim();
+    const modelFam = String(raw.modelFam !== undefined ? raw.modelFam : (existing?.modelFam || '')).trim();
+    let defaultModelId = '';
+    if (mode === 'battle') {
+      defaultModelId = battleTarget === 'A' ? modelIdA : (battleTarget === 'card' ? (randomId + '-battle-card') : modelIdB);
+    } else {
+      const slug = canonicalModelSlug(modelName, modelInternal, modelFam);
+      defaultModelId = (slug && slug !== 'brana-current') ? slug : (randomId + '-chat');
+    }
+    const customModelId = raw.customModelId !== undefined
+      ? String(raw.customModelId || '').trim()
+      : (raw.modelId !== undefined ? String(raw.modelId || '').trim() : (existing?.customModelId || ''));
+    const finalModelId = (mode === 'battle' && !raw.customModelId && raw.battleTarget && existing && existing.modelId === (existing.battleTarget === 'A' ? existing.modelIdA : existing.modelIdB))
+      ? defaultModelId
+      : (customModelId || defaultModelId);
+    const enabled = typeof raw.enabled === 'boolean' ? raw.enabled : (existing ? existing.enabled !== false : true);
+    const skipVote = typeof raw.skipVote === 'boolean' ? raw.skipVote : (existing && typeof existing.skipVote === 'boolean' ? existing.skipVote : true);
+    const rawTitle = raw.title !== undefined ? raw.title : (raw.boundTitle !== undefined ? raw.boundTitle : (existing?.title || (mode === 'battle' ? 'Battle 对话' : '未命名对话')));
+    return {
+      id,
+      sid,
+      accountId,
+      title: String(rawTitle || '').trim().slice(0, 80) || (mode === 'battle' ? 'Battle 对话' : '未命名对话'),
+      mode,
+      modality,
+      enabled,
+      skipVote,
+      randomId,
+      battleTarget,
+      modelId: finalModelId,
+      customModelId: customModelId === defaultModelId ? '' : customModelId,
+      modelIdA,
+      modelIdB,
+      modelName,
+      modelInternal,
+      modelFam,
+      reqCount: Number(existing?.reqCount || raw.reqCount || 0),
+      lastReqAt: Number(existing?.lastReqAt || raw.lastReqAt || 0),
+      createdAt: Number(existing?.createdAt || raw.createdAt || Date.now()),
+    };
+  };
+
+  const savePersistentState = () => {
+    if (!configPath) return;
+    try {
+      fs.mkdirSync(path.dirname(configPath), { recursive: true });
+      const payload = {
+        port: state.port,
+        apiKey: state.apiKey,
+        requireKey: state.requireKey,
+        sessionMode: state.sessionMode,
+        toolMode: state.toolMode,
+        protocolPref: state.protocolPref,
+        proxies: state.proxies,
+        tunnel: {
+          mode: state.tunnel.mode,
+          customDomain: state.tunnel.customDomain,
+          token: state.tunnel.token,
+        },
+      };
+      fs.writeFileSync(configPath, JSON.stringify(payload, null, 2), 'utf8');
+    } catch {}
+  };
+
+  const loadPersistentState = () => {
+    if (!configPath || !fs.existsSync(configPath)) return;
+    try {
+      const raw = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+      if (raw && typeof raw === 'object') {
+        if (typeof raw.apiKey === 'string' && raw.apiKey.trim()) state.apiKey = raw.apiKey.trim();
+        if (Number.isInteger(Number(raw.port)) && Number(raw.port) >= 1024 && Number(raw.port) <= 65535) state.port = Number(raw.port);
+        if (typeof raw.requireKey === 'boolean') state.requireKey = raw.requireKey;
+        if (raw.sessionMode && ['bound', 'active', 'new_each'].includes(raw.sessionMode)) state.sessionMode = raw.sessionMode;
+        if (raw.toolMode && ['auto_bridge', 'client_tools_only', 'arena_native_only'].includes(raw.toolMode)) state.toolMode = raw.toolMode;
+        if (Array.isArray(raw.proxies)) {
+          state.proxies = raw.proxies.filter(Boolean).map(p => normalizeProxyCard(p));
+        }
+        if (raw.tunnel && typeof raw.tunnel === 'object') {
+          if (['quick', 'token', 'custom'].includes(raw.tunnel.mode)) state.tunnel.mode = raw.tunnel.mode;
+          if (typeof raw.tunnel.customDomain === 'string') state.tunnel.customDomain = raw.tunnel.customDomain.trim();
+          if (typeof raw.tunnel.token === 'string') state.tunnel.token = raw.tunnel.token.trim();
+          if (state.tunnel.mode === 'custom' && state.tunnel.customDomain) {
+            const d = state.tunnel.customDomain.replace(/\/+$/, '');
+            state.tunnel.publicUrl = /^https?:\/\//i.test(d) ? d : ('https://' + d);
+            state.tunnel.running = true;
+            state.tunnel.status = 'connected';
+          }
+        }
+      }
+    } catch {}
+  };
+
+  loadPersistentState();
 
   const pushLog = (entry) => {
     state.logs.unshift({ id: ++reqSeq, at: Date.now(), ...entry });
     if (state.logs.length > 30) state.logs.length = 30;
   };
 
-  const getPublicState = () => ({
-    ...state,
-    baseUrlOpenAI: 'http://' + state.host + ':' + state.port + '/v1',
-    baseUrlAnthropic: 'http://' + state.host + ':' + state.port,
-    baseUrlGemini: 'http://' + state.host + ':' + state.port + '/v1beta',
-    endpointOpenAI: 'http://' + state.host + ':' + state.port + '/v1/chat/completions',
-    endpointResponses: 'http://' + state.host + ':' + state.port + '/v1/responses',
-    endpointAnthropic: 'http://' + state.host + ':' + state.port + '/v1/messages',
-    endpointGemini: 'http://' + state.host + ':' + state.port + '/v1beta/models/' + (state.modelId || 'brana-current') + ':generateContent',
-  });
+  const getPublicState = () => {
+    const base = 'http://' + state.host + ':' + state.port;
+    const pubBase = String(state.tunnel.publicUrl || '').replace(/\/+$/, '');
+    const activeBase = pubBase || base;
+    return {
+      ...state,
+      keyFixed: true,
+      baseUrl: base,
+      baseUrlOpenAI: base + '/v1',
+      baseUrlAnthropic: base,
+      baseUrlGemini: base + '/v1beta',
+      endpointOpenAI: base + '/v1/chat/completions',
+      endpointResponses: base + '/v1/responses',
+      endpointAnthropic: base + '/v1/messages',
+      endpointGemini: base + '/v1beta/models/' + (state.modelId || 'brana-current') + ':generateContent',
+      publicBaseUrl: pubBase,
+      publicBaseUrlOpenAI: pubBase ? (pubBase + '/v1') : '',
+      publicEndpointOpenAI: pubBase ? (pubBase + '/v1/chat/completions') : '',
+      activeBaseUrlOpenAI: activeBase + '/v1',
+      proxies: state.proxies.map(p => ({ ...p })),
+      tunnel: {
+        running: state.tunnel.running,
+        status: state.tunnel.status,
+        mode: state.tunnel.mode,
+        publicUrl: state.tunnel.publicUrl,
+        customDomain: state.tunnel.customDomain,
+        hasToken: Boolean(state.tunnel.token),
+        tokenPreview: state.tunnel.token ? (state.tunnel.token.slice(0, 8) + '...' + state.tunnel.token.slice(-4)) : '',
+        error: state.tunnel.error,
+        pid: state.tunnel.pid,
+      },
+    };
+  };
 
-  const resolveTargetWebContents = () => {
+  const resolveTargetWebContents = (targetAccountId = '') => {
+    if (targetAccountId) {
+      const accWc = getWebContentsForAccount(targetAccountId);
+      if (accWc && !accWc.isDestroyed()) return accWc;
+    }
     if (activeWebContents && !activeWebContents.isDestroyed()) return activeWebContents;
     if (typeof options.getFallbackWebContents === 'function') {
       const wc = options.getFallbackWebContents();
@@ -607,20 +669,31 @@ function createLocalApiGateway(options = {}) {
     const nowSec = Math.floor(Date.now() / 1000);
     const list = [];
     const seen = new Set();
-    const addModel = (id, ownedBy, displayName) => {
-      if (!id || seen.has(id)) return;
-      seen.add(id);
-      list.push({ id, object: 'model', created: nowSec, owned_by: ownedBy || 'brana-local-gateway', display_name: displayName || id });
+    const addModel = (id, ownedBy, displayName, extra = {}) => {
+      const cleanId = String(id || '').trim();
+      if (!cleanId || seen.has(cleanId.toLowerCase())) return;
+      seen.add(cleanId.toLowerCase());
+      list.push({ id: cleanId, object: 'model', created: nowSec, owned_by: ownedBy || 'brana-local-gateway', display_name: displayName || cleanId, ...extra });
     };
-    if (state.modelId && state.modelId !== 'brana-current') {
-      addModel(state.modelId, state.modelFam || 'brana-identified', state.modelName || state.modelId);
+    for (const px of state.proxies) {
+      if (!px || px.enabled === false) continue;
+      const rid = px.randomId || genShortBattleId(px.sid || px.id);
+      if (px.mode === 'battle') {
+        const idA = px.modelIdA || (rid + '-battle-A');
+        const idB = px.modelIdB || (rid + '-battle-B');
+        if (px.modelId && px.modelId !== idA && px.modelId !== idB) {
+          addModel(px.modelId, 'arena-battle', (px.title || 'Battle') + ' (' + px.modelId + ')', { sid: px.sid, mode: 'battle', battleTarget: px.battleTarget || 'B' });
+        }
+        addModel(idB, 'arena-battle', (px.title || 'Battle') + ' [B 侧 · ' + idB + ']', { sid: px.sid, mode: 'battle', battleSide: 'b' });
+        addModel(idA, 'arena-battle', (px.title || 'Battle') + ' [A 侧 · ' + idA + ']', { sid: px.sid, mode: 'battle', battleSide: 'a' });
+      } else {
+        addModel(px.modelId || (rid + '-chat'), 'arena-session', (px.title ? px.title + ' · ' : '') + (px.modelName || px.modelId || '对话模型'), { sid: px.sid, mode: px.mode || 'agent' });
+      }
     }
-    addModel('brana-current', 'brana-gateway', 'Brana 当前绑定对话模型 (' + (state.modelName || '自动跟随') + ')');
-    addModel('claude-opus-5.6-max', 'anthropic', 'Claude Opus 5.6 (Max)');
-    addModel('claude-sonnet-5.5-high', 'anthropic', 'Claude Sonnet 5.5 (High)');
-    addModel('gpt-6.1-sol-xhigh', 'openai', 'GPT-6.1 Sol (xHigh)');
-    addModel('gemini-4-argon-high', 'google', 'Gemini 4 Argon (High)');
-    addModel('muse-spark-1.3-max', 'meta', 'Muse Spark 1.3 (Max)');
+    if (state.modelId && state.modelId !== 'brana-current') {
+      addModel(state.modelId, 'arena-session', state.modelName || state.modelId);
+    }
+    addModel('brana-current', 'arena-session', 'Brana 当前 Arena 会话模型 (' + (state.modelName || '自动跟随') + ')');
     return list;
   };
 
@@ -634,6 +707,57 @@ function createLocalApiGateway(options = {}) {
 
     const urlObj = new URL(req.url || '/', 'http://' + (req.headers.host || '127.0.0.1'));
     const pathname = urlObj.pathname.replace(/\/+$/, '') || '/';
+
+    const mediaMatch = pathname.match(/^\/v1\/media\/([a-f0-9]{32})$/i);
+    if ((req.method === 'GET' || req.method === 'HEAD') && mediaMatch) {
+      const media = mediaStore.get(mediaMatch[1].toLowerCase());
+      if (!media) {
+        res.writeHead(404, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({ error: { message: 'Media not found or expired', type: 'invalid_request_error' } }));
+        return;
+      }
+      const size = media.buffer.length;
+      const filename = String(media.name || 'media.bin').replace(/[\"\r\n]/g, '_');
+      res.setHeader('Content-Type', media.mimeType);
+      res.setHeader('X-Content-Type-Options', 'nosniff');
+      res.setHeader('Content-Disposition', 'inline; filename="' + filename + '"');
+      res.setHeader('Cache-Control', 'private, max-age=1800');
+      res.setHeader('Accept-Ranges', 'bytes');
+      let start = 0;
+      let end = size - 1;
+      let status = 200;
+      const rangeHeader = String(req.headers.range || '');
+      if (rangeHeader) {
+        const range = /^bytes=(\d*)-(\d*)$/.exec(rangeHeader);
+        if (!range || !size) {
+          res.writeHead(416, { 'Content-Range': 'bytes */' + size });
+          res.end();
+          return;
+        }
+        if (!range[1]) {
+          const suffix = Number(range[2]);
+          if (!suffix) {
+            res.writeHead(416, { 'Content-Range': 'bytes */' + size });
+            res.end();
+            return;
+          }
+          start = Math.max(0, size - suffix);
+        } else start = Number(range[1]);
+        end = range[2] ? Math.min(size - 1, Number(range[2])) : size - 1;
+        if (start >= size || start > end) {
+          res.writeHead(416, { 'Content-Range': 'bytes */' + size });
+          res.end();
+          return;
+        }
+        status = 206;
+        res.setHeader('Content-Range', 'bytes ' + start + '-' + end + '/' + size);
+      }
+      res.setHeader('Content-Length', String(Math.max(0, end - start + 1)));
+      res.writeHead(status);
+      if (req.method === 'HEAD') res.end();
+      else res.end(media.buffer.subarray(start, end + 1));
+      return;
+    }
 
     if (req.method === 'GET' && (pathname === '/' || pathname === '/health' || pathname === '/v1/health')) {
       res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
@@ -686,24 +810,105 @@ function createLocalApiGateway(options = {}) {
       return;
     }
 
+    const declaredBodyLength = Number(req.headers['content-length'] || 0);
+    if (declaredBodyLength > MAX_API_BODY_BYTES) {
+      res.writeHead(413, { 'Content-Type': 'application/json; charset=utf-8' });
+      res.end(JSON.stringify({ error: { message: 'Request body exceeds the 60 MB gateway limit', type: 'invalid_request_error', code: '413' } }));
+      req.resume();
+      return;
+    }
     const chunks = [];
     let totalBytes = 0;
+    let bodyTooLarge = false;
     req.on('data', (chunk) => {
       totalBytes += chunk.length;
-      if (totalBytes <= 25 * 1024 * 1024) chunks.push(chunk);
+      if (totalBytes <= MAX_API_BODY_BYTES) chunks.push(chunk);
+      else bodyTooLarge = true;
     });
     req.on('end', async () => {
+      if (bodyTooLarge || totalBytes > MAX_API_BODY_BYTES) {
+        res.writeHead(413, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({ error: { message: 'Request body exceeds the 60 MB gateway limit', type: 'invalid_request_error', code: '413' } }));
+        return;
+      }
       const rawBody = Buffer.concat(chunks).toString('utf8');
-      const body = parseJsonSafe(rawBody, {});
-      if (!body || typeof body !== 'object') {
+      const body = parseJsonSafe(rawBody, null);
+      if (!body || typeof body !== 'object' || Array.isArray(body)) {
         res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
         res.end(JSON.stringify({ error: { message: 'Invalid JSON request body', type: 'invalid_request_error' } }));
         return;
       }
 
-      const normReq = normalizeIncomingRequest(req, urlObj, body, state);
-      const adapter = createResponseAdapter(res, normReq, state);
-      const wc = resolveTargetWebContents();
+      let normReq;
+      try {
+        normReq = normalizeIncomingRequest(req, urlObj, body, state);
+        await ApiMultimodal.hydrateIncomingMedia(normReq);
+      } catch (err) {
+        const code = Number(err?.status) || 400;
+        res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({ error: { message: String(err?.message || 'Invalid multimodal request'), type: 'invalid_request_error', code: String(code) } }));
+        return;
+      }
+      const matchProxyForModel = (reqModelStr) => {
+        const rm = String(reqModelStr || '').trim();
+        const rmLow = rm.toLowerCase();
+        if (!state.proxies.length) return null;
+        for (const px of state.proxies) {
+          if (!px) continue;
+          if (px.mode === 'battle') {
+            if (px.modelIdA && px.modelIdA.toLowerCase() === rmLow) return { card: px, battleSide: 'a', resolvedModel: px.modelIdA };
+            if (px.modelIdB && px.modelIdB.toLowerCase() === rmLow) return { card: px, battleSide: 'b', resolvedModel: px.modelIdB };
+            if ((px.randomId + '-battle-card').toLowerCase() === rmLow) return { card: px, battleSide: 'card', resolvedModel: px.randomId + '-battle-card' };
+          }
+          if (px.modelId && px.modelId.toLowerCase() === rmLow) {
+            const bSide = px.mode === 'battle'
+              ? (px.battleTarget === 'A' ? 'a' : (px.battleTarget === 'card' ? 'card' : 'b'))
+              : '';
+            return { card: px, battleSide: bSide, resolvedModel: px.modelId };
+          }
+          if (px.sid && px.sid.toLowerCase() === rmLow) {
+            const bSide = px.mode === 'battle'
+              ? (px.battleTarget === 'A' ? 'a' : (px.battleTarget === 'card' ? 'card' : 'b'))
+              : '';
+            return { card: px, battleSide: bSide, resolvedModel: px.modelId };
+          }
+        }
+        if (rmLow === 'battle-a' || rmLow.endsWith('-battle-a')) {
+          const bCard = state.proxies.find(p => p && p.enabled !== false && p.mode === 'battle');
+          if (bCard) return { card: bCard, battleSide: 'a', resolvedModel: bCard.modelIdA };
+        }
+        if (rmLow === 'battle-b' || rmLow.endsWith('-battle-b')) {
+          const bCard = state.proxies.find(p => p && p.enabled !== false && p.mode === 'battle');
+          if (bCard) return { card: bCard, battleSide: 'b', resolvedModel: bCard.modelIdB };
+        }
+        if (state.boundSid) {
+          const bCard = state.proxies.find(p => p && p.sid === state.boundSid);
+          if (bCard) {
+            const bSide = bCard.mode === 'battle'
+              ? (bCard.battleTarget === 'A' ? 'a' : (bCard.battleTarget === 'card' ? 'card' : 'b'))
+              : '';
+            return { card: bCard, battleSide: bSide, resolvedModel: bCard.modelId };
+          }
+        }
+        return null;
+      };
+
+      const matchedProxy = matchProxyForModel(normReq.model);
+      if (matchedProxy && matchedProxy.card && matchedProxy.card.enabled === false) {
+        res.writeHead(403, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({
+          error: { message: '该对话反代卡片当前已停止 (' + (matchedProxy.card.title || matchedProxy.card.modelId) + ')，请在反代管理中点击启动', type: 'proxy_card_stopped' },
+        }));
+        return;
+      }
+
+      if (matchedProxy?.card) {
+        matchedProxy.card.reqCount = (matchedProxy.card.reqCount || 0) + 1;
+        matchedProxy.card.lastReqAt = Date.now();
+      }
+
+      const adapter = createResponseAdapter(res, normReq, state, mediaStore);
+      const wc = resolveTargetWebContents(matchedProxy?.card?.accountId || state.accountId || '');
       if (!wc) {
         adapter.onError('未找到活跃的 Brana AI 聊天窗口，请保持客户端窗口打开。', 503);
         return;
@@ -741,17 +946,26 @@ function createLocalApiGateway(options = {}) {
         }
       });
 
+      const routedCard = matchedProxy?.card || null;
       const jobPayload = {
         reqId,
         protocol: normReq.protocol,
-        model: normReq.model,
+        model: matchedProxy?.resolvedModel || normReq.model,
+        requestedModel: normReq.model,
         stream: normReq.stream,
         systemText: normReq.systemText,
         messages: normReq.messages,
         tools: normReq.tools,
-        sessionMode: state.sessionMode,
+        sessionMode: routedCard ? 'bound' : state.sessionMode,
         toolMode: state.toolMode,
-        boundSid: state.boundSid,
+        boundSid: routedCard ? routedCard.sid : state.boundSid,
+        targetMode: routedCard ? routedCard.mode : '',
+        targetModality: routedCard ? routedCard.modality : '',
+        battleSide: matchedProxy?.battleSide || '',
+        battleTarget: routedCard?.battleTarget || 'B',
+        skipVote: routedCard ? routedCard.skipVote !== false : true,
+        randomId: routedCard?.randomId || '',
+        proxyCardId: routedCard?.id || '',
       };
 
       let sentOk = false;
@@ -836,9 +1050,10 @@ function createLocalApiGateway(options = {}) {
     if (senderWc && !senderWc.isDestroyed()) activeWebContents = senderWc;
     if (patch.boundSid !== undefined) state.boundSid = patch.boundSid || null;
     if (patch.boundTitle !== undefined) state.boundTitle = String(patch.boundTitle || '');
+    if (patch.accountId !== undefined) state.accountId = String(patch.accountId || '');
     if (patch.sessionMode && ['bound', 'stateless'].includes(patch.sessionMode)) state.sessionMode = patch.sessionMode;
     if (patch.toolMode && ['auto_bridge', 'client_tools_only', 'arena_native_only'].includes(patch.toolMode)) state.toolMode = patch.toolMode;
-    if (patch.protocolPref && ['auto', 'openai', 'anthropic', 'gemini'].includes(patch.protocolPref)) state.protocolPref = patch.protocolPref;
+    if (patch.protocolPref && ['auto', 'openai', 'anthropic', 'gemini'].includes(patch.protocolPref)) state.protocolPref = patch.protocolPref === 'auto' ? 'openai' : patch.protocolPref;
     if (typeof patch.requireKey === 'boolean') state.requireKey = patch.requireKey;
     if (typeof patch.apiKey === 'string' && patch.apiKey.trim()) state.apiKey = patch.apiKey.trim();
     if (patch.regenKey) state.apiKey = genApiKey();
@@ -849,12 +1064,12 @@ function createLocalApiGateway(options = {}) {
       state.modelName = mName || '自动识别 / 当前会话模型';
       state.modelId = mSlug;
       state.modelFam = mFam;
-      state.vendorProtocol = inferVendorProtocol(mSlug + ' ' + mName, mFam);
+      state.vendorProtocol = 'arena';
     }
     return getPublicState();
   };
 
-  const handleStreamEvent = (payload = {}) => {
+  const handleStreamEvent = async (payload = {}) => {
     const { reqId, type } = payload;
     if (!reqId || !inflight.has(reqId)) return { ok: false };
     const item = inflight.get(reqId);
@@ -865,6 +1080,9 @@ function createLocalApiGateway(options = {}) {
       adapter.onText(String(payload.delta || ''));
     } else if (type === 'tool_call') {
       adapter.onToolCall(payload.call || {});
+    } else if (type === 'media' || type === 'image' || type === 'video' || type === 'audio') {
+      const mediaItems = Array.isArray(payload.media) ? payload.media : [payload.media || (type === 'media' ? {} : { ...payload, type })];
+      for (const media of mediaItems) await adapter.onMedia(media);
     } else if (type === 'done') {
       clearTimeout(timeoutTimer);
       inflight.delete(reqId);
@@ -892,17 +1110,299 @@ function createLocalApiGateway(options = {}) {
     return { ok: true };
   };
 
+  const findCloudflaredPath = () => {
+    const exeName = process.platform === 'win32' ? 'cloudflared.exe' : 'cloudflared';
+    const candidates = [];
+    if (storageDir) candidates.push(path.join(storageDir, 'bin', exeName));
+    if (process.resourcesPath) candidates.push(path.join(process.resourcesPath, 'bin', exeName));
+    candidates.push(path.join(__dirname, '..', 'bin', exeName));
+    for (const c of candidates) {
+      try { if (c && fs.existsSync(c)) return c; } catch {}
+    }
+    return '';
+  };
+
+  const downloadFileFollowRedirects = (urlStr, destPath, redirects = 0) => new Promise((resolve, reject) => {
+    if (redirects > 6) return reject(new Error('下载重定向过多'));
+    const mod = urlStr.startsWith('https:') ? https : http;
+    const req = mod.get(urlStr, { headers: { 'User-Agent': 'Brana-Local-API-Gateway/2.0' } }, res => {
+      const code = Number(res.statusCode || 0);
+      if ([301, 302, 303, 307, 308].includes(code) && res.headers.location) {
+        res.resume();
+        const nextUrl = new URL(res.headers.location, urlStr).href;
+        return downloadFileFollowRedirects(nextUrl, destPath, redirects + 1).then(resolve, reject);
+      }
+      if (code < 200 || code >= 300) {
+        res.resume();
+        return reject(new Error('HTTP ' + code));
+      }
+      fs.mkdirSync(path.dirname(destPath), { recursive: true });
+      const tmpPath = destPath + '.tmp';
+      const file = fs.createWriteStream(tmpPath);
+      res.pipe(file);
+      file.on('finish', () => {
+        file.close(() => {
+          try {
+            fs.renameSync(tmpPath, destPath);
+            if (process.platform !== 'win32') fs.chmodSync(destPath, 0o755);
+            resolve(destPath);
+          } catch (e) { reject(e); }
+        });
+      });
+      file.on('error', err => {
+        try { fs.unlinkSync(tmpPath); } catch {}
+        reject(err);
+      });
+    });
+    req.setTimeout(45000, () => req.destroy(new Error('下载 cloudflared 超时')));
+    req.on('error', reject);
+  });
+
+  const ensureCloudflaredBinary = async () => {
+    const found = findCloudflaredPath();
+    if (found) return found;
+    const cmdName = process.platform === 'win32' ? 'cloudflared.exe' : 'cloudflared';
+    const pathDirs = String(process.env.PATH || '').split(path.delimiter).filter(Boolean);
+    for (const dir of pathDirs) {
+      const full = path.join(dir, cmdName);
+      try { if (fs.existsSync(full)) return full; } catch {}
+    }
+    if (!storageDir) throw new Error('未检测到 cloudflared 组件，请先安装 cloudflared');
+    const targetPath = path.join(storageDir, 'bin', cmdName);
+    let dlUrl = '';
+    if (process.platform === 'win32') {
+      dlUrl = process.arch === 'ia32'
+        ? 'https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-386.exe'
+        : 'https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe';
+    } else if (process.platform === 'linux') {
+      dlUrl = process.arch === 'arm64'
+        ? 'https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-arm64'
+        : 'https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64';
+    } else {
+      throw new Error('请先在本机安装 cloudflared (brew install cloudflared)');
+    }
+    state.tunnel.status = 'downloading';
+    return await downloadFileFollowRedirects(dlUrl, targetPath);
+  };
+
+  const stopTunnel = async () => {
+    if (tunnelProc) {
+      try { tunnelProc.kill(); } catch {}
+      tunnelProc = null;
+    }
+    state.tunnel.running = false;
+    state.tunnel.status = 'stopped';
+    state.tunnel.pid = 0;
+    if (state.tunnel.mode !== 'custom') {
+      state.tunnel.publicUrl = '';
+    }
+    return getPublicState();
+  };
+
+  const startTunnel = async (cfg = {}) => {
+    if (cfg.mode && ['quick', 'token', 'custom'].includes(cfg.mode)) state.tunnel.mode = cfg.mode;
+    if (typeof cfg.customDomain === 'string') state.tunnel.customDomain = cfg.customDomain.trim();
+    if (typeof cfg.token === 'string' && cfg.token.trim()) state.tunnel.token = extractCloudflaredToken(cfg.token);
+    savePersistentState();
+
+    await stopTunnel();
+    state.tunnel.error = '';
+
+    if (!state.running) {
+      await startServer(state.port);
+    }
+
+    if (state.tunnel.mode === 'custom') {
+      const dom = String(state.tunnel.customDomain || '').trim().replace(/\/+$/, '');
+      if (!dom) {
+        state.tunnel.status = 'error';
+        state.tunnel.error = '请填写已绑定到本机端口的自定义公网域名';
+        return getPublicState();
+      }
+      state.tunnel.publicUrl = /^https?:\/\//i.test(dom) ? dom : ('https://' + dom);
+      state.tunnel.running = true;
+      state.tunnel.status = 'connected';
+      savePersistentState();
+      return getPublicState();
+    }
+
+    let binPath = '';
+    try {
+      state.tunnel.status = 'starting';
+      binPath = await ensureCloudflaredBinary();
+    } catch (err) {
+      state.tunnel.status = 'error';
+      state.tunnel.error = err?.message || String(err);
+      return getPublicState();
+    }
+
+    const args = state.tunnel.mode === 'token'
+      ? ['tunnel', '--no-autoupdate', 'run', '--token', state.tunnel.token]
+      : ['tunnel', '--url', `http://${state.host}:${state.port}`, '--no-autoupdate'];
+
+    if (state.tunnel.mode === 'token' && !state.tunnel.token) {
+      state.tunnel.status = 'error';
+      state.tunnel.error = '请填写 Cloudflare Tunnel Token';
+      return getPublicState();
+    }
+
+    return await new Promise(resolve => {
+      let settled = false;
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        resolve(getPublicState());
+      };
+
+      try {
+        const proc = spawn(binPath, args, { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
+        tunnelProc = proc;
+        state.tunnel.running = true;
+        state.tunnel.pid = proc.pid || 0;
+        state.tunnel.status = 'starting';
+
+        if (state.tunnel.mode === 'token') {
+          const dom = String(state.tunnel.customDomain || '').trim().replace(/\/+$/, '');
+          if (dom) {
+            state.tunnel.publicUrl = /^https?:\/\//i.test(dom) ? dom : ('https://' + dom);
+          }
+        }
+
+        const onChunk = chunk => {
+          const txt = String(chunk || '');
+          const m = txt.match(/https:\/\/[a-z0-9-]+\.trycloudflare\.com/i);
+          if (m && m[0]) {
+            state.tunnel.publicUrl = m[0];
+            state.tunnel.status = 'connected';
+            state.tunnel.error = '';
+            finish();
+          } else if (state.tunnel.mode === 'token' && /Registered tunnel connection|Connection .* registered/i.test(txt)) {
+            state.tunnel.status = 'connected';
+            state.tunnel.error = '';
+            finish();
+          }
+        };
+
+        proc.stdout.on('data', onChunk);
+        proc.stderr.on('data', onChunk);
+        proc.on('error', err => {
+          state.tunnel.running = false;
+          state.tunnel.status = 'error';
+          state.tunnel.error = err?.message || String(err);
+          tunnelProc = null;
+          finish();
+        });
+        proc.on('exit', code => {
+          if (tunnelProc === proc) {
+            tunnelProc = null;
+            state.tunnel.running = false;
+            if (state.tunnel.status !== 'error') {
+              state.tunnel.status = 'stopped';
+              if (code && code !== 0) state.tunnel.error = 'cloudflared 退出 (code ' + code + ')';
+            }
+          }
+          finish();
+        });
+
+        setTimeout(() => {
+          if (state.tunnel.running && state.tunnel.mode === 'token' && state.tunnel.status === 'starting') {
+            state.tunnel.status = 'connected';
+          }
+          finish();
+        }, 5500);
+      } catch (err) {
+        state.tunnel.running = false;
+        state.tunnel.status = 'error';
+        state.tunnel.error = err?.message || String(err);
+        finish();
+      }
+    });
+  };
+
+  const upsertProxyCard = (cardData = {}) => {
+    const sid = String(cardData.sid || cardData.boundSid || state.boundSid || '').trim();
+    const id = String(cardData.id || (sid ? 'px_' + sid : '')).trim();
+    const idx = state.proxies.findIndex(p => (sid && p.sid === sid) || (id && p.id === id));
+    const existing = idx >= 0 ? state.proxies[idx] : null;
+    const nextCard = normalizeProxyCard({ ...cardData, sid }, existing);
+    if (idx >= 0) state.proxies[idx] = nextCard;
+    else state.proxies.unshift(nextCard);
+    if (nextCard.sid) state.boundSid = nextCard.sid;
+    if (nextCard.title) state.boundTitle = nextCard.title;
+    if (nextCard.modelId) state.modelId = nextCard.modelId;
+    if (nextCard.modelName) state.modelName = nextCard.modelName;
+    savePersistentState();
+    return nextCard;
+  };
+
   const handleIpc = async (senderWc, payload = {}) => {
     if (senderWc && !senderWc.isDestroyed()) activeWebContents = senderWc;
     const op = String(payload?.op || 'status');
     if (op === 'stream') return handleStreamEvent(payload);
     if (op === 'start') {
       updateMeta(payload, senderWc);
+      if (payload.registerCurrent && (payload.sid || payload.boundSid || state.boundSid)) {
+        upsertProxyCard(payload);
+      }
+      savePersistentState();
       return await startServer(payload.port);
     }
     if (op === 'stop') return await stopServer();
+    if (op === 'upsertProxy') {
+      updateMeta(payload, senderWc);
+      upsertProxyCard(payload.card || payload);
+      if (payload.autoStart !== false && !state.running) {
+        await startServer(state.port);
+      }
+      return getPublicState();
+    }
+    if (op === 'toggleProxy') {
+      const targetId = String(payload.id || payload.sid || '').trim();
+      const px = state.proxies.find(p => p && (p.id === targetId || p.sid === targetId));
+      if (px) {
+        px.enabled = typeof payload.enabled === 'boolean' ? payload.enabled : !px.enabled;
+        savePersistentState();
+      }
+      if (px && px.enabled && !state.running) {
+        await startServer(state.port);
+      }
+      return getPublicState();
+    }
+    if (op === 'deleteProxy') {
+      const targetId = String(payload.id || payload.sid || '').trim();
+      state.proxies = state.proxies.filter(p => p && p.id !== targetId && p.sid !== targetId);
+      savePersistentState();
+      return getPublicState();
+    }
+    if (op === 'tunnelStart') {
+      return await startTunnel(payload);
+    }
+    if (op === 'tunnelStop') {
+      return await stopTunnel();
+    }
+    if (op === 'tunnelConfig') {
+      if (payload.mode && ['quick', 'token', 'custom'].includes(payload.mode)) state.tunnel.mode = payload.mode;
+      if (typeof payload.customDomain === 'string') state.tunnel.customDomain = payload.customDomain.trim();
+      if (typeof payload.token === 'string') state.tunnel.token = extractCloudflaredToken(payload.token);
+      if (state.tunnel.mode === 'custom' && state.tunnel.customDomain) {
+        const d = state.tunnel.customDomain.replace(/\/+$/, '');
+        state.tunnel.publicUrl = /^https?:\/\//i.test(d) ? d : ('https://' + d);
+        state.tunnel.running = true;
+        state.tunnel.status = 'connected';
+      }
+      savePersistentState();
+      return getPublicState();
+    }
     if (op === 'update' || op === 'sync') {
       const next = updateMeta(payload, senderWc);
+      const syncSid = String(payload.sid || payload.boundSid || '').trim();
+      if (syncSid) {
+        const existingIdx = state.proxies.findIndex(p => p && p.sid === syncSid);
+        if (existingIdx >= 0) {
+          state.proxies[existingIdx] = normalizeProxyCard(payload, state.proxies[existingIdx]);
+        }
+      }
+      savePersistentState();
       if (payload.port && Number(payload.port) !== state.port && state.running) {
         return await startServer(Number(payload.port));
       }

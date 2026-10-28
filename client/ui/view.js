@@ -896,16 +896,61 @@ const chatState = c => { if (!c) return ''; if (typeof Hitl !== 'undefined' ? Hi
 const stLogo = (vid, size, st) => { const l = vid ? vlogo(vid, size) : h('span', { class: 'vlogo none', style: { width: size + 'px', height: size + 'px' } }, st === 'run' ? '' : '·'); if (st) { l.classList.add('st-' + st); if (st === 'run') l.style.animationDelay = '-' + (Math.floor(typeof performance !== 'undefined' ? performance.now() : Date.now()) % 1100) + 'ms'; } return l; };
 const tabName = m => { m = Strength.canon(m); return Brand.of(m) ? dotVer(Brand.short(m)) : m; };
 // 名称里的「置信度 / 推理分 / 平均用时」拆成小号彩色片段：和型号名分开，三者同一色系、深浅不同
+const splitStrengthNodes = (labelStr) => {
+  const s0 = String(labelStr || '');
+  if (!s0) return '';
+  const tm = /^(.*?)(?:\s*\((none|minimal|low|medium|high|xhigh|max)\)|(?:\s*·\s*|-)(none|minimal|low|medium|high|xhigh|max))(\?+)?$/i.exec(s0);
+  if (!tm || !tm[1] || !tm[1].trim()) return s0;
+  const rawT = String(tm[2] || tm[3] || '').toLowerCase();
+  const metal = (rawT === 'max' || rawT === 'xhigh') ? 'max' : rawT === 'high' ? 'high' : rawT === 'medium' ? 'medium' : 'low';
+  return [
+    h('span', { class: 'mn' }, tm[1].trim() + (tm[4] || '')),
+    h('span', { class: 'mn-tier', 'data-tier': metal }, rawT.toUpperCase()),
+  ];
+};
+/* V14: 左侧对话列表保留原名称格式，强度字体与型号维持完全一致字体与字号，不图标化，仅在字体上对 max 做微弱金色区分 */
+const sidebarPlainStrengthNodes = (labelStr) => {
+  const raw0 = String(labelStr || '');
+  if (!raw0) return '';
+  const s0 = raw0
+    .replace(/\s*\((none|minimal|low|medium|high|xhigh|max)\)(\?+)?$/i, (_, t, q) => '-' + String(t).toLowerCase() + (q || ''))
+    .replace(/\s*·\s*(none|minimal|low|medium|high|xhigh|max)(\?+)?$/i, (_, t, q) => '-' + String(t).toLowerCase() + (q || ''));
+  const tm = /^(.*?-)(none|minimal|low|medium|high|xhigh|max)(\?+)?$/i.exec(s0);
+  if (!tm || !tm[1]) return s0;
+  const rawT = String(tm[2] || '').toLowerCase();
+  const metal = (rawT === 'max' || rawT === 'xhigh') ? 'max' : rawT === 'high' ? 'high' : rawT === 'medium' ? 'medium' : 'low';
+  const out = [
+    h('span', { class: 'cn-base' }, tm[1]),
+    h('span', { class: 'cn-tier', 'data-tier': metal }, rawT),
+  ];
+  if (tm[3]) out.push(h('span', { class: 'cn-base' }, tm[3]));
+  return out;
+};
 const metricName = (text, nameFn = x => x, bare = false) => {
   const raw = String(text || ''); if (!raw) return '';
   const p = typeof ConversationLabels !== 'undefined' ? ConversationLabels.parse(raw) : null;
-  if (!p || (p.confidence == null && !Number.isFinite(p.score) && !Number.isFinite(p.average) && !p.tier) || !p.name || /[()（）]/.test(p.name)) return nameFn(raw);
-  if (bare) return [h('span', { class: 'mn' }, nameFn(p.name))];   // 侧栏卡片：名字里不带数字，置信度用填充、其余悬停显示
+  const hasParsedMetrics = Boolean(p && (p.confidence != null || Number.isFinite(p.score) || Number.isFinite(p.average) || p.tier) && p.name);
+  if (bare) {
+    if (!hasParsedMetrics) return sidebarPlainStrengthNodes(nameFn(raw));
+    const nm = String(nameFn(p.name) || '');
+    const hasEmbeddedTier = /(?:\s*\(|\s*·\s*|-)(?:none|minimal|low|medium|high|xhigh|max)\)?\?*$/i.test(nm);
+    const fullStr = (!hasEmbeddedTier && p.tier) ? (nm.replace(/\?+$/, '') + '-' + String(p.tier).toLowerCase() + (/\?+$/.test(nm) ? '?' : '')) : nm;
+    return sidebarPlainStrengthNodes(fullStr);
+  }
+  if (!hasParsedMetrics) {
+    return splitStrengthNodes(nameFn(raw));
+  }
+  const baseNodes = [].concat(splitStrengthNodes(nameFn(p.name)));
+  const mnWrap = baseNodes.length === 1 && typeof baseNodes[0] === 'string' ? [h('span', { class: 'mn' }, baseNodes[0])] : baseNodes;
   const bits = [];
-  if (p.confidence != null) bits.push(h('span', { class: 'mt mt-c', title: '指纹匹配置信度' }, p.confidence + '%'));
-  if (p.tier) bits.push(h('span', { class: 'mt mt-t', title: '推理档位' }, p.tier + '≈' + (p.tierConfidence ? p.tierConfidence + '%' : '')));
+  if (p.confidence != null) bits.push(h('span', { class: 'mt mt-c', title: '置信度' }, p.confidence + '%'));
+  if (p.tier) {
+    const rt = String(p.tier).toLowerCase();
+    const mtKey = (rt === 'max' || rt === 'xhigh') ? 'max' : rt === 'high' ? 'high' : rt === 'medium' ? 'medium' : 'low';
+    bits.push(h('span', { class: 'mt mt-t mn-tier', 'data-tier': mtKey, title: '推理档位' }, p.tier + (p.tierConfidence ? '≈' + p.tierConfidence + '%' : '')));
+  }
   if (Number.isFinite(p.score)) bits.push(h('span', { class: 'mt mt-s', title: '推理分' }, p.score + '分'));
-  return [h('span', { class: 'mn' }, nameFn(p.name)), h('span', { class: 'mts' }, ...bits)];
+  return [...mnWrap, h('span', { class: 'mts' }, ...bits)];
 };
 const modelLabel = m => m ? (m.pendingConfirm ? '请继续沟通' : (m.name ? ((typeof cardName === 'function' ? cardName(m.name) : Strength.canon(m.name)) || m.name) + (m.partial ? '?' : '') : '')) : '';
 
@@ -3843,6 +3888,7 @@ const UI = {
         h('label', { class: 'set' }, h('span', {}, h('b', {}, '主题')), theme),
         AutoRoute.adapter ? AutoRoute.row() : null,
         Update.row('set'),
+        typeof TihuHub !== 'undefined' ? TihuHub.row('set') : null,
         Cap.row('set'),
         h('div', { class: 'set' }, h('span', {}, h('b', {}, 'ProxyIP 列表'), h('small', {}, '按地区的出口 IP · 纯净度自动过滤 · 429 自动换 IP')), h('button', { class: 'btn ghost sm', onclick: () => { back.remove(); ProxySet.open(); } }, icon('globe'), '打开')),
         (()=>{const info=h('small',{},'Google / 人机验证与 Brana 共用账号代理，禁用本机绕行与 WebRTC。');
@@ -3868,9 +3914,14 @@ const UI = {
     if(SideTools.rows().length<300){this.renderList();return;}
     this.searchListT=setTimeout(()=>{this.searchListT=0;this.renderList();},80);
   },
-  renderList() {
+  renderList(force = false) {
     clearTimeout(this.searchListT);this.searchListT=0;
-    if(document.hidden){this.listDirty=true;return;}
+    if (force) {
+      this._scrollingList = false;
+      this._pendingListRender = false;
+      clearTimeout(this._scrollListT);
+    }
+    if(document.hidden && !force){this.listDirty=true;return;}
     const box = $('#list'); if (!box) return;
     if (!box.__pull) {
       box.__pull = 1;
@@ -3885,7 +3936,7 @@ const UI = {
         }, 220);
       }, { passive: true });
     }
-    if (this._scrollingList && !($('#q')?.value || '').trim()) {
+    if (!force && this._scrollingList && !($('#q')?.value || '').trim()) {
       this._pendingListRender = true;
       return;
     }
@@ -4044,6 +4095,19 @@ const UI = {
         : (r.vid || v.vid ? stLogo(r.vid || v.vid, 16, st) : st === 'run' ? h('span', { class: 'vlogo busy' }, h('i', { class: 'spin' })) : h('span', { class: 'vlogo none' + (st ? ' st-' + st : '') }, (shown[0] || '?').toUpperCase())),
       h('span', { class: 'cn' }, ...[].concat(isBattleEntry ? shown : metricName(shown, undefined, true))),
       Fav.has(e.id) ? h('span', { class: 'cfav', title: '已收藏' }, '★') : null,
+      (typeof LocalApiGateway !== 'undefined' && LocalApiGateway.isSidProxied?.(e.id))
+        ? (() => {
+            const pxCard = LocalApiGateway.getProxyCardForSid?.(e.id);
+            const tagTxt = pxCard?.mode === 'battle'
+              ? ('API·' + (pxCard.battleTarget === 'A' ? 'A' : pxCard.battleTarget === 'card' ? '双视频' : pxCard.battleTarget === 'AB' ? 'A/B' : 'B'))
+              : 'API';
+            return h('span', {
+              class: 'capi-tag',
+              title: '已开启 API 反代：' + (pxCard?.modelId || '点击管理'),
+              onclick: ev => { ev.stopPropagation(); LocalApiGateway.openModal?.(); },
+            }, tagTxt);
+          })()
+        : null,
       gstep?.active ? h('span', { class: 'gstep-tag' + (gstep.status === 'queued' ? ' ident-queue' : gstep.status === 'pending' ? ' ident-wait' : gstep.status === 'running' ? ' ident-run' : ''), title: gstep.phase || gstep.text }, gstep.text) : (cm.tip ? h('span', { class: 'cstat' }, cm.tip) : null),
       // 电脑上和原来一样排成一行（外层不占布局）；手机上备注在上、时间在下，靠右对齐
       h('span', { class: 'cside' }, note ? h('span', { class: 'cnote' }, note) : null, h('span', { class: 'ctime' }, tm)),
@@ -4074,9 +4138,21 @@ const UI = {
       h('button', { title: '电脑上也可以 Ctrl / Cmd 点击加选，Shift 点击连续选', onclick: () => { m.remove(); CardSelect.toggle(e.id); this.renderList(); } }, icon('check'), CardSelect.ids.has(e.id) ? '取消选择' : '选择（多选）'),
       h('button', { onclick: () => { m.remove(); Tabs.open(e.id, { focus: false, title: e.title }); } }, icon('plus'), '在新标签打开'),
       h('button', { onclick: () => { m.remove(); copyText('https://arena.ai/agent/' + e.id); } }, icon('copy'), '复制链接'),
+      typeof LocalApiGateway !== 'undefined'
+        ? h('button', {
+            onclick: async () => {
+              m.remove();
+              const hasPx = Boolean(LocalApiGateway.getProxyCardForSid?.(e.id));
+              if (!hasPx && LocalApiGateway.registerChatProxy) {
+                await LocalApiGateway.registerChatProxy(e.id, { autoStart: true });
+              }
+              LocalApiGateway.openModal?.();
+            },
+          }, icon('api'), LocalApiGateway.getProxyCardForSid?.(e.id) ? '管理此对话 API 反代' : '将此对话加入 API 反代')
+        : null,
       (e.isArchived || e.archivedAt || (typeof SideTools !== 'undefined' && SideTools.scope === 'archived'))
-        ? h('button', { onclick: async () => { m.remove(); try { await History.unarchive(e.id); toast('已恢复到对话'); } catch (err) { toast('恢复失败：' + describe(err), 'err'); } } }, icon('refresh'), '恢复到对话')
-        : h('button', { onclick: async () => { m.remove(); try { await History.archive(e.id); toast('已归档'); const t = Tabs.list.find(x => x.sid === e.id); if (t) Tabs.close(t.key); } catch (err) { toast('归档失败：' + describe(err), 'err'); } } }, icon('archive'), '归档'),
+        ? h('button', { onclick: async () => { m.remove(); toast('已恢复到对话'); try { await History.unarchive(e.id); } catch (err) { toast('恢复失败：' + describe(err), 'err'); } } }, icon('refresh'), '恢复到对话')
+        : h('button', { onclick: async () => { m.remove(); const t = Tabs.list.find(x => x.sid === e.id); if (t) Tabs.close(t.key); toast('已归档'); try { await History.archive(e.id); } catch (err) { toast('归档失败：' + describe(err), 'err'); } } }, icon('archive'), '归档'),
       h('button', { class: 'danger', onclick: () => { m.remove(); deleteChat(e); } }, icon('trash'), '删除（含本机记录）'));
     document.body.append(m);
     if (typeof placeInward === 'function') placeInward(m, ev.type === 'contextmenu' ? { left: ev.clientX, top: ev.clientY, right: ev.clientX, bottom: ev.clientY, width: 0, height: 0 } : r, { pad: 8, gap: 4 });
@@ -4139,7 +4215,7 @@ const UI = {
       const tabLogoEl = isBattleTab && typeof EvalView !== 'undefined' && typeof EvalView.renderBattleLogo === 'function'
         ? EvalView.renderBattleLogo(15, battleSt)
         : (!t.sid ? icon('plus', 'tab-new') : stLogo(v.vid, 15, st));
-      const tabTextNodes = isBattleTab ? [label] : [].concat(v?.note || !v?.model ? label : metricName(label), (!isBattleTab && mi?.routed && !v?.note) ? h('span', { class: 'tab-route', title: routeTip, style: { marginLeft: '4px', opacity: '.72', fontSize: '11px', whiteSpace: 'nowrap' } }, '⇄' + (routeFromShort || '路由')) : []);
+      const tabTextNodes = isBattleTab ? [label] : [].concat(v?.note || !v?.model ? label : metricName(label, undefined, true), (!isBattleTab && mi?.routed && !v?.note) ? h('span', { class: 'tab-route', title: routeTip, style: { marginLeft: '4px', opacity: '.72', fontSize: '11px', whiteSpace: 'nowrap' } }, '⇄' + (routeFromShort || '路由')) : []);
       frag.append(h('div', { class: 'tab' + (isSel ? ' on' : '') + (hasLamp ? ' tab-lamp-on' : '') + (!t.sid ? ' tab-blank' : '') + (isBattleTab ? ' tab-battle' : '') + (battleSt ? ' st-' + battleSt : '') + (pc ? ' tinted' : ''), style: pc ? { '--tc': pc.bg, '--tco': pc.on } : null, 'data-key': t.key, title: tip + (t.sid ? '\n长按 / 下拉：重新载入' : ''), onclick: e => { if (!e.target.closest('.x')) Tabs.focus(t.key); }, onauxclick: e => { if (e.button === 1) Tabs.close(t.key); } },
         tabLogoEl, h('span', { class: 'tab-t' }, ...tabTextNodes), h('button', { class: 'x', onclick: () => Tabs.close(t.key) }, icon('x'))));
     }
@@ -4179,6 +4255,9 @@ const UI = {
       }
     }
     try { ExtCompat.syncUrl(sidNow); } catch {} if (WS.sid !== sidNow || !WS.data) WS.load(sidNow);
+    if (sidNow && typeof TihuHub !== 'undefined' && typeof TihuHub.verifyChatOnView === 'function') {
+      setTimeout(() => { try { TihuHub.verifyChatOnView(sidNow, Chats.get(sidNow)); } catch {} }, 20);
+    }
     setTimeout(() => { try { Sync.tick(); } catch {} }, 300);
     setTimeout(() => { try { const c = t?.sid && !t.kind ? Chats.get(t.sid) : null; if (c) { FingerprintReview.auto(c); FingerprintBatch.autoVerify?.(c); } } catch {} }, 1500);   // 切回一个已经读完的对话：没有指纹信息就按历史里的指纹测试自动校准
     setTimeout(() => { this.layout(); Bar.render(); }, 0);
@@ -4193,8 +4272,8 @@ const UI = {
         try { Palette.paintPage(view, t); } catch {}
         try { curChat.hydrateSync?.(); } catch {}
         this.renderChat(curChat, false);
-        if (!curChat.loaded && !curChat.loading) curChat.load().catch(() => {});
-        else if (curChat.loaded && !curChat.loading) curChat.quickSync?.();
+        if (!curChat.loaded && !curChat.loading) curChat.load().then(() => { try { TihuHub?.verifyChatOnView?.(sidNow, curChat); } catch {} }).catch(() => {});
+        else if (curChat.loaded && !curChat.loading) { Promise.resolve(curChat.quickSync?.()).finally(() => { try { TihuHub?.verifyChatOnView?.(sidNow, curChat); } catch {} }); }
         if (kbWas) this.autoFocus(this.els.composer, kbWas);
         try { if (typeof Dock !== 'undefined' && Dock.render) Dock.render(true); } catch (e) { console.error(e); }
         Pager.ensureSoon();
@@ -4256,7 +4335,7 @@ const UI = {
     P.stick = (!sv || chat._hotOnly || !chat.loaded || hasNewTailSinceSave) ? true : sv.stick;
     this.renderChat(chat, true);
     if (sv && !P.stick) scroller.scrollTop = sv.top;
-    if (!chat.loaded && !chat.loading) chat.load().catch(() => {}); else if (chat.loaded && !chat.loading) chat.quickSync?.();
+    if (!chat.loaded && !chat.loading) chat.load().then(() => { try { TihuHub?.verifyChatOnView?.(chat.sid, chat); } catch {} }).catch(() => {}); else if (chat.loaded && !chat.loading) { Promise.resolve(chat.quickSync?.()).finally(() => { try { TihuHub?.verifyChatOnView?.(chat.sid, chat); } catch {} }); }
     if (!side) this.autoFocus(composer, kbWas);
   },
   // 桌面：切换后自动聚焦输入框；手机：只有切换前就在打字才把焦点交回（不自己弹输入法）
@@ -4325,7 +4404,7 @@ const UI = {
           h('button', { class: 'ib mdbtn', title: '导出这个对话的全部内容为 Markdown', onclick: () => void ChatExport.run(chat) }, icon('doc'))
         ));
       } else {
-        E.head.replaceChildren(...K(h('div', { class: 'chead-t', title: tip, 'aria-label': 'Session cumulative cost' }, stLogo(v.vid || Brand.of(mi?.name), 18, st), h('span', { class: 'chead-n' }, ...[].concat(v.note || metricName(mi?.name || v.model, cardName) || v.plain || '对话')), v.note && (mi?.name || v.model) ? h('span', { class: 'chead-md' }, '-', ...[].concat(metricName(mi?.name || v.model, cardName))) : null),
+        E.head.replaceChildren(...K(h('div', { class: 'chead-t', title: tip, 'aria-label': 'Session cumulative cost' }, stLogo(v.vid || Brand.of(mi?.name), 18, st), h('span', { class: 'chead-n' }, ...[].concat(v.note || metricName(mi?.name || v.model, cardName, true) || v.plain || '对话')), v.note && (mi?.name || v.model) ? h('span', { class: 'chead-md' }, '-', ...[].concat(metricName(mi?.name || v.model, cardName, true))) : null),
           isDirectChat ? h('span', { class: 'badge dim' }, 'Direct 直连') : null,
           isDirectChat && chat.modality ? h('span', { class: 'badge dim' }, String(chat.modality).toUpperCase()) : null,
           isDirectChat && typeof EvalView !== 'undefined' && typeof EvalView.renderPreviewHeaderBtns === 'function' ? EvalView.renderPreviewHeaderBtns(chat, (chat.messages || []).findLast(m => m && m.role === 'assistant'), 'a') : null,
@@ -4362,9 +4441,8 @@ const UI = {
           !isEvalChat && chat.identifying ? h('span', { class: 'badge dim' }, h('i', { class: 'spin' }), '识别模型…')
             : !isEvalChat && !mi && chat.idErr ? h('button', { class: 'badge dim link', title: chat.idErr + '（点一下重试）', onclick: () => chat.identifyOld() }, '未识别') : null,
           h('span', { class: 'grow' }),
-          !isEvalChat ? h('button', { class: 'ib revbtn' + (typeof BillingProbe !== 'undefined' && BillingProbe.isRunning?.(chat) ? ' run' : ''), 'aria-label': typeof BillingProbe !== 'undefined' && BillingProbe.isRunning?.(chat) ? '停止反推' : '费用反推', disabled: (chat.busy && !(typeof BillingProbe !== 'undefined' && BillingProbe.isRunning?.(chat))) || PelicanTest.isRunning(chat), title: typeof BillingProbe !== 'undefined' && BillingProbe.isRunning?.(chat) ? '停止反推识别' + (chat.probeProgress ? '（' + chat.probeProgress + '）' : '') : '反推识别：点一下读取账单与对话记录/工具调用，按最高置信度反推并锁定当前对话的真实模型与推理分。', onclick: () => void BillingProbe.reverseIdentify(chat, { interactive: true }) }, icon('pulse')) : null,
-          !isEvalChat ? this.renderProbeTestBtn(Tabs.cur, chat, 'agent') : null,
-          !isEvalChat ? h('button', { class: 'ib pelbtn' + (PelicanTest.isRunning(chat) ? ' run' : ''), 'aria-label': PelicanTest.isRunning(chat) ? '停止鹈鹕' : '鹈鹕测试', disabled: (chat.busy && !PelicanTest.isRunning(chat)), title: PelicanTest.isRunning(chat) ? '停止鹈鹕测试' + (chat.probeProgress ? '（' + chat.probeProgress + '）' : '') : '鹈鹕测试：点一下直接发送 2D 鹈鹕骑车动态 SVG 标准测试题', onclick: e => { e.stopPropagation(); void PelicanTest.start(chat); } }, icon('pelican')) : isDirectChat ? this.renderPelicanMenuBtn(Tabs.cur, chat, 'direct') : null,
+          !isEvalChat ? h('button', { class: 'ib revbtn' + (typeof BillingProbe !== 'undefined' && BillingProbe.isRunning?.(chat) ? ' run' : ''), 'aria-label': typeof BillingProbe !== 'undefined' && BillingProbe.isRunning?.(chat) ? '停止反推' : '费用反推', disabled: (chat.busy && !(typeof BillingProbe !== 'undefined' && BillingProbe.isRunning?.(chat))) || PelicanTest.isRunning(chat), title: typeof BillingProbe !== 'undefined' && BillingProbe.isRunning?.(chat) ? '停止反推识别' + (chat.probeProgress ? '（' + chat.probeProgress + '）' : '') : '反推识别：综合醍醐 HTML/SVG 样本、计费账单、协议习惯与中途路由，一键重识并锁定当前对话型号与强度', onclick: () => void BillingProbe.reverseIdentify(chat, { interactive: true }) }, icon('pulse')) : null,
+          !isEvalChat ? h('button', { class: 'ib pelbtn' + (PelicanTest.isRunning(chat) ? ' run' : ''), 'aria-label': PelicanTest.isRunning(chat) ? '停止鹈鹕' : '鹈鹕测试', disabled: (chat.busy && !PelicanTest.isRunning(chat)), title: PelicanTest.isRunning(chat) ? '停止鹈鹕测试' + (chat.probeProgress ? '（' + chat.probeProgress + '）' : '') : '鹈鹕测试：点一下直接发送简短多语言随机鹈鹕骑车 SVG 网页指令', onclick: e => { e.stopPropagation(); void PelicanTest.start(chat); } }, icon('pelican')) : isDirectChat ? this.renderPelicanMenuBtn(Tabs.cur, chat, 'direct') : null,
           h('button', { class: 'ib mdbtn', title: '导出这个对话的全部内容（正文、思考、bash 命令和输出、工具调用）为 Markdown，自己选保存位置', onclick: () => void ChatExport.run(chat) }, icon('doc')),
           !isEvalChat ? h('button', { class: 'ib wsbtn', title: WS.shown ? '收起工作区' : '显示工作区（沙盒文件）', onclick: () => { WS.set(!WS.shown); scheduleChat(chat); } }, icon('folder')) : null));
       }
@@ -4572,12 +4650,14 @@ const UI = {
       const errText = chat.error || '上一条消息未发出（服务器未收到），请点击重试';
       const cap = /recaptcha|captcha|人机验证/i.test(errText);
       const lastUser = failedUserMsg || (chat.messages.at(-1)?.role === 'user' ? chat.messages.at(-1) : null);
+      const isNotFound = /不存在或已删除/.test(errText);
       const isRejected = /rejected this request|拒绝请求|死节点|超限/i.test(errText);
       const isBattleMode = Boolean(chat.evalMode === 'battle' || (typeof EvalView !== 'undefined' && EvalView.isBattleChat?.(chat)));
       const isUnsentOnly = Boolean(failedUserMsg && !cap && !isRejected);
       E.errbar.append(...K(h('span', {}, '⚠ ' + errText), h('span', { class: 'grow' }),
+        isNotFound ? h('button', { class: 'btn sm danger', title: '移除失效对话卡片并关闭当前标签页', onclick: () => { try { forget(chat.sid); toast('已移除失效对话'); } catch {} } }, '移除卡片并关闭') : null,
         cap ? h('button', { class: 'btn sm', onclick: () => this.retry(chat, lastUser, true) }, '人机验证后重试') : null,
-        !cap && !isRejected && !isBattleMode && !isUnsentOnly ? h('button', { class: 'btn sm', title: '保留当前轮次已有进度，直接发送新消息「继续」推进流程（不回退、不重发长文）', onclick: () => this.continueFlow(chat) }, '⚡ 继续推进') : null,
+        !isNotFound && !cap && !isRejected && !isBattleMode && !isUnsentOnly ? h('button', { class: 'btn sm', title: '保留当前轮次已有进度，直接发送新消息「继续」推进流程（不回退、不重发长文）', onclick: () => this.continueFlow(chat) }, '⚡ 继续推进') : null,
         isRejected ? h('button', { class: 'btn sm ghost', title: '跳过导致超限或死锁的上一轮，回退到再上一轮正常节点重发', onclick: () => this.rewindAndRetry(chat, lastUser) }, '⏪ 回退上一节点') : null,
         isRejected ? h('button', { class: 'btn sm ghost', title: '在当前对话内开启全新空工作区分支（清空沙盒与报错历史，保留当前模型）', onclick: () => this.resetWsBranch(chat, lastUser) }, '🧹 重置工作区救活') : null,
         h('button', { class: 'btn sm' + (isUnsentOnly ? '' : ' ghost'), onclick: () => this.retry(chat, lastUser, false) }, '↻ 重试'),
@@ -4961,12 +5041,27 @@ const UI = {
           icon('api'),
           h('div', { class: 'pm-txt' },
             h('div', { class: 'pm-t-row' },
-              h('span', { class: 'pm-t' }, 'API 反代导出'),
+              h('span', { class: 'pm-t' }, '当前账号反代管理 · 本地 API 反代'),
               gwRunning ? h('span', { class: 'gpill ok pm-pill' }, ':' + (gwState?.port || 18765)) : (modShort ? h('span', { class: 'tag pm-pill' }, modShort) : null)
             ),
-            h('small', {}, '将当前对话转译为本地标准 API 接口')
+            h('small', {}, '统一固定 API 与密钥 · Cloudflare 隧道 · Battle 双模型反代管理')
           )
-        ) : null
+        ) : null,
+        (typeof LocalApiGateway !== 'undefined' && curSid && !LocalApiGateway.getProxyCardForSid?.(curSid))
+          ? h('button', {
+              type: 'button',
+              onclick: async () => {
+                m.remove();
+                await LocalApiGateway.registerChatProxy?.(curSid, { autoStart: true });
+                LocalApiGateway.openModal?.(curChat, tab);
+              },
+            },
+            icon('zap'),
+            h('div', { class: 'pm-txt' },
+              h('span', { class: 'pm-t' }, '+ 将当前对话加入反代'),
+              h('small', {}, '一键把当前对话（含 Battle 视频/聊天）注册到当前账号反代列表')
+            ))
+          : null
       );
       document.body.append(m);
       const r = plus.getBoundingClientRect();
@@ -5263,7 +5358,6 @@ const UI = {
   renderPelicanMenuBtn(tab, chat, mode) {
     const curMode = mode || (chat?.isEvaluation ? (chat.evalMode || 'battle') : (typeof ModeState !== 'undefined' && typeof ModeState.getMode === 'function' ? ModeState.getMode() : 'agent'));
     const isPelRun = Boolean(chat && ((typeof PelicanTest !== 'undefined' && PelicanTest.isRunning?.(chat)) || (chat.isEvaluation && chat._isPelicanTest && chat.busy)));
-    const probeBtn = this.renderProbeTestBtn(tab, chat, curMode);
     const pelBtn = h('button', {
       type: 'button',
       class: 'ib pel-test-btn pelbtn' + (isPelRun ? ' run' : ''),
@@ -5272,7 +5366,7 @@ const UI = {
       disabled: Boolean(chat && chat.busy && !isPelRun),
       title: isPelRun
         ? '停止当前鹈鹕测试'
-        : '鹈鹕测试：点一下直接发送 2D 鹈鹕骑车动态 SVG 标准测试题',
+        : '鹈鹕测试：点一下直接发送简短多语言随机鹈鹕骑车 SVG 网页指令',
       onclick: e => {
         e.stopPropagation();
         if (typeof PelicanTest !== 'undefined' && typeof PelicanTest.runQuickTest === 'function') {
@@ -5282,7 +5376,7 @@ const UI = {
         }
       },
     }, icon('pelican'));
-    return [probeBtn, pelBtn];
+    return [pelBtn];
   },
   async sendQuickTestPrompt(prompt, opts = {}) {
     const text = String(prompt || '').trim();
@@ -5349,13 +5443,20 @@ function scheduleChat(chat){ChatPaint.add(chat);}
 // 侧栏重绘（1500 条会话一次 20~30ms，手机上更慢）：手机抽屉没打开 / 窗口在后台时不画，只记脏，空闲时补画；打开抽屉前一定补上
 UI.listDirty = false;
 UI.listIdle = () => { if (UI.listIdleT) return; const run = () => { UI.listIdleT = 0; if (UI.listDirty && !document.hidden && (!isMob()||document.body.classList.contains('drawer'))) UI.renderList(); }; UI.listIdleT = window.requestIdleCallback ? requestIdleCallback(run, { timeout: 5000 }) : setTimeout(run, 1500); };
-UI.renderListSoon = () => {
-  if (UI.listT) return;   // 节流（不是防抖）：连续来事件（拉全部历史每页一次）也保证按时画，不会一直往后推
-  UI.listT = setTimeout(() => {
+UI.renderListSoon = (fastMs) => {
+  const wantDelay = Number.isFinite(fastMs) && fastMs >= 0 ? fastMs : (History.fullLoading ? 1200 : 250);
+  const dueAt = Date.now() + wantDelay;
+  if (UI.listT) {
+    if (!UI._listDueAt || dueAt >= UI._listDueAt - 20) return;
+    clearTimeout(UI.listT);
     UI.listT = 0;
+  }
+  UI._listDueAt = dueAt;
+  UI.listT = setTimeout(() => {
+    UI.listT = 0; UI._listDueAt = 0;
     if (document.hidden || (isMob() && !document.body.classList.contains('drawer'))) { UI.listDirty = true; return; }
     UI.renderList();
-  }, History.fullLoading ? 1200 : 250);
+  }, wantDelay);
 };
 document.addEventListener('visibilitychange', () => { if (!document.hidden && UI.listDirty) UI.listIdle(); });
 // 手机抽屉打开时补画侧栏。注意：UI.build() 会用 documentElement.innerHTML 重建整个 <body>，
@@ -5381,7 +5482,9 @@ document.addEventListener('visibilitychange',()=>{if(document.hidden)ChatPaint.h
 // 计时：用实时的 class 集合（不用每秒全文档按属性查一遍），后台 / 没有计时的时候什么都不做
 try { Tabs.enforceLimit(Tabs.active); Tabs.save(); } catch {}
 if (typeof Bus !== 'undefined') {
-  Bus.on('history', () => { try { Tabs.enforceLimit(Tabs.active); Tabs.save(); } catch {} });
+  Bus.on('history', () => { try { Tabs.enforceLimit(Tabs.active); Tabs.save(); UI.renderListSoon?.(80); UI.renderTabs?.(); } catch {} });
+  Bus.on('models', sid => { try { if (sid) { UI._cards?.delete?.(sid); Titles?._viewMemo?.delete?.(sid); } else { UI._cards?.clear?.(); Titles?._viewMemo?.clear?.(); } UI.renderTabs?.(); UI.renderListSoon?.(50); } catch {} });
+  Bus.on('model', c => { try { const sid = c?.sid; if (sid) { UI._cards?.delete?.(sid); Titles?._viewMemo?.delete?.(sid); } UI.renderTabs?.(); UI.renderListSoon?.(50); } catch {} });
   Bus.on('modechange', () => { try { UI.renderList(); UI.renderTabs?.(); UI.showTab(); } catch {} });
   Bus.on('modalitychange', () => { try { UI.showTab(); } catch {} });
   Bus.on('directmodelchange', () => { try { UI.showTab(); } catch {} });

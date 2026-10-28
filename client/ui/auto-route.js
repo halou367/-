@@ -124,7 +124,13 @@ const StandbyPool = {
       if (!pip) return false;
       const e = pool.ips?.[pip];
       if (e && (e.gone || e.cool > at || pool.ban?.[pip.toLowerCase()])) return false;
-      if ((first?.accounts || []).some(x => x.id !== a.id && String(x.proxyIp || '').toLowerCase() === pip.toLowerCase())) return false;
+      const pipHost = v => { const s = String(v || '').trim().toLowerCase(); if (!s) return ''; if (s[0] === '[') { const i = s.indexOf(']'); return i > 0 ? s.slice(1, i) : s; } const c = s.indexOf(':'); return c > 0 && s.indexOf(':', c + 1) < 0 ? s.slice(0, c) : s; };
+      const ph = pipHost(pip), itemEg = String(item?.result?.ip || e?.eg || '').trim().toLowerCase();
+      if ((first?.accounts || []).some(x => {
+        if (!x || x.id === a.id || !x.proxyIp) return false;
+        const xh = pipHost(x.proxyIp), xeg = String(pool.ips?.[x.proxyIp]?.eg || pool.ips?.[xh]?.eg || '').trim().toLowerCase();
+        return String(x.proxyIp).toLowerCase() === pip.toLowerCase() || (ph && xh === ph) || (itemEg && (xeg === itemEg || xh === itemEg));
+      })) return false;
       if (typeof IPRep !== 'undefined' && (IPRep.risky?.(pip, e) || (IPRep.pure && !IPRep.pure(pip, e)))) return false;
       return true;
     };
@@ -481,7 +487,7 @@ const AutoRoute = {
           if(r.changed){
             if(typeof ReadLimit!=='undefined')ReadLimit.until=0;
             if(typeof Quota!=='undefined'&&Quota.clear)Quota.clear(true);
-            if(typeof Pool!=='undefined'&&r.account?.nodeId&&isVless(r.account?.proxy))void Pool.setNode(r.account.nodeId).catch(()=>{});
+            if(typeof Pool!=='undefined'&&r.account?.nodeId&&isVless(r.account?.proxy)&&Pool.d&&!Pool.d.node)Pool.d.node=r.account.nodeId;
             this.lastChanged=now();UI.host=await Host.info();
             const toReg=String(r.probe?.loc||r.account?.region||'').trim().toUpperCase();
             if(toReg)this.adoptWorkingRegion(toReg);
@@ -636,22 +642,27 @@ const AutoRoute = {
 // 后台无感维护：持续维护热备兜底库（StandbyPool），并在当前地区纯净 IP 余量不足时按需小批量补充（绝不周期性盲扫消耗 EdgeTunnel 请求量）。
 const RouteWarm = {
   t:0, busy:false, at:0,
-  start(){ if(this.t)return; this.t=setInterval(()=>void this.tick(),5*60e3); setTimeout(()=>void this.tick(),12000); },
-  idle(a){ return !AutoRoute.busy&&!(typeof NodeRoutes!=='undefined'&&NodeRoutes.manual>0)&&!Pool.switching.has(a.id)&&![...Chats.values()].some(c=>c.busy||c.streaming); },
+  start(){ if(this.t)return; this.t=setInterval(()=>void this.tick(),60e3); setTimeout(()=>void this.tick(),8000); },
+  idle(a){ return !AutoRoute.busy&&!(typeof NodeRoutes!=='undefined'&&NodeRoutes.manual>0)&&(!a?.id||!Pool.switching.has(a.id))&&![...Chats.values()].some(c=>c.busy||c.streaming); },
   async tick(force=false){
     if(this.busy||typeof document!=='undefined'&&document.hidden||navigator.onLine===false)return;
-    // 无论是否空闲，只要热备池不足，先静默把「第二 IP」备好
     try{void StandbyPool.replenish('warm');}catch{}
-    if(!force&&now()-this.at<30*60e3)return;
-    const a=UI.host?.account;if(!a?.id||!isVless(a.proxy)||!a.region||!Host.probe||typeof Pool==='undefined'||RouteState.locked(a))return;
+    const a=UI.host?.account;
+    if(typeof Pool!=='undefined'&&typeof Pool.ensureCleanPoolTarget==='function'&&this.idle(a)){
+      try{void Pool.ensureCleanPoolTarget({batchSize:48});}catch{}
+    }
+    if(!force&&now()-this.at<15*60e3)return;
+    if(!a?.id||!isVless(a.proxy)||!a.region||!Host.probe||typeof Pool==='undefined'||RouteState.locked(a))return;
     if(!this.idle(a))return;
     this.busy=true;this.at=now();
     try{
       if(typeof NodeSpeed!=='undefined'&&(force||IP.err))await NodeSpeed.testOne(a.proxy,{rounds:1,timeout:2500}).catch(()=>{});
       await Pool.load();
+      const totalClean=typeof Pool.cleanAvailCount==='function'?Pool.cleanAvailCount():0;
+      const targetClean=Pool.TARGET_CLEAN||100;
       const pc=typeof IPRep!=='undefined'?IPRep.cur(a,IP.ip):null,good=pc?.label==='纯净';
       const availCnt=typeof Pool.avail==='function'?Pool.avail(a.region,a.id).length:0;
-      if(!force&&good&&(availCnt>=2||now()-(this.pipAt||0)<2*3600e3)){Bus.emit('pool');return;}
+      if(!force&&good&&totalClean>=targetClean&&(availCnt>=4||now()-(this.pipAt||0)<2*3600e3)){Bus.emit('pool');return;}
       this.pipAt=now();
       const keys=Pool.entries().filter(([k,e])=>e&&!e.gone&&e.loc===a.region&&!Pool.banned(k)&&e.ok!==false&&(e.ok==null||now()-(e.at||0)>2*3600e3))
         .sort(([,x],[,y])=>(y.ok===true)-(x.ok===true)||(x.ms||9e9)-(y.ms||9e9)).slice(0,4).map(([k])=>k);

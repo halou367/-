@@ -20,7 +20,19 @@ const RoutePolicy = (() => {
   const hostOf = v => { v=String(v||'').trim().toLowerCase(); return v[0]==='['?v.slice(0,v.indexOf(']')+1):(v.match(/:/g)||[]).length===1?v.split(':')[0]:v; };
   function takenIps(accounts,exceptId,pool) {
     const owned=new Set(),ips=pool.ips||{};
-    for(const x of accounts||[]){if(!x||x.id===exceptId)continue;const k=String(x.proxyIp||'').trim().toLowerCase();if(!k)continue;owned.add(k);owned.add(hostOf(k));const ent=Object.keys(ips).find(q=>q.toLowerCase()===k),eg=ent&&ips[ent]?.eg;if(eg)owned.add(String(eg).toLowerCase());}
+    for(const x of accounts||[]){
+      if(!x||x.id===exceptId)continue;
+      const k=String(x.proxyIp||'').trim().toLowerCase();if(!k)continue;
+      const hk=hostOf(k);
+      owned.add(k);if(hk)owned.add(hk);
+      for(const [q,ent] of Object.entries(ips)){
+        if(!ent)continue;
+        const ql=q.toLowerCase();
+        if(ql===k||(hk&&hostOf(ql)===hk)){
+          if(ent.eg)owned.add(String(ent.eg).toLowerCase());
+        }
+      }
+    }
     return {has:(k,e)=>owned.has(String(k).toLowerCase())||owned.has(hostOf(k))||!!(e?.eg&&owned.has(String(e.eg).toLowerCase()))};
   }
   const isIpLit = v => { const s = String(v || '').trim().replace(/^\[|\]$/g, ''); return /^\d{1,3}(?:\.\d{1,3}){3}$/.test(s) || (/^[0-9a-f:]+$/i.test(s) && s.includes(':')); };
@@ -69,7 +81,7 @@ const RoutePolicy = (() => {
     }
     const rEg = pool.rep?.[egIp] || null;
     const rHost = hIp && hIp !== egIp ? (pool.rep?.[hIp] || null) : null;
-    const isRealPu = x => Boolean(x && !x.basicOnly && (x.via === 'ippure' || (x.real && (x.res || ![6, 8, 10, 12, 14, 15, 16, 22, 28, 35].includes(+x.fs))) || (!x.real && ![8, 12, 14, 15, 16, 22, 28, 35].includes(+x.fs))));
+    const isRealPu = x => Boolean(x && !x.basicOnly && Number.isFinite(+x.fs));
     const mergePu = (a, b) => {
       if (!a || !b) return a || b;
       const aReal = isRealPu(a);
@@ -97,24 +109,29 @@ const RoutePolicy = (() => {
     const hasPu = Boolean(p.pu && Number.isFinite(+p.pu.fs));
     const isCloudIsp = /\b(?:iomart|perfecto|ft systems|routerhosting|sculk|gtelcom|nuxtcloud|a100 row|snowd|first server|xorek|virtuasys|akile|akilecloud|dromatics|akamai|linode|digitalocean|vultr|constant company|choopa|hetzner|ovh|oracle|amazon|aws|google cloud|microsoft|azure|cloudflare|alibaba|aliyun|tencent|aceville|\bace\b|6 collyer quay|huawei|contabo|fornex|ionos|kagoya|webhorizon|cyberverse|brainoza|eurohoster|virterion|kaopu|light\s*node|scaleway|leaseweb|m247|datacamp|cdn77|zenlayer|dmit|veesp|trabia|baxet|waicore|trunk networks|hostkey|timeweb|racknerd|hostpapa|alphavps|livi hosting|terratransit|rocketcloud|datawave|yeahtech|yeah\s*tech|ipxo|sondercloud|netcup|a2b|gcore|ufovps|packethub|psychz|sharktech|quadranet|colocrossing|frantech|buyvm|worldstream|cherry\s*servers|latitude|equinix|kamatera|upcloud|hosting|hoster|datacenter|data\s*center|server|vps|cloud|colocation|dedicated)\b/i.test((p.isp || '') + ' ' + (p.pu?.org || ''));
     const isHosting = Boolean(p.h || p.pu?.dc || isCloudIsp);
-    const hasCleanPu = Boolean(hasPu && ((p.pu.via === 'ippure' && +p.pu.fs <= 24 && !p.pu.bc && !p.px && !p.pp && (+p.r || 0) < 33) || (+p.pu.fs < 20 && p.pu.res === true && !p.pu.dc && !p.pu.bc && !isHosting && !p.pp && (+p.r || 0) < 33)));
+    const cleanDcBase = Boolean(hasPu && !p.px && !p.pp && (+p.r || 0) < 35 && +p.pu.fs <= 44);
+    const hasCleanPu = Boolean(hasPu && (cleanDcBase || (+p.pu.fs <= 24 && !p.pu.bc && !p.px && !p.pp && (+p.r || 0) < 33)));
     let score = 100, known = false;
-    if (p.a) { known = true; if (p.px && !hasCleanPu) { score -= 35; if (isHosting) score -= 15; } if (isHosting && !hasCleanPu) score -= 8; }
-    if (p.c) { known = true; const risk = Math.max(0, Math.min(100, +p.r || 0)); if (risk > 33) { const pen = Math.round((risk - 33) * .9); score -= hasCleanPu && risk <= 75 ? Math.min(10, pen) : pen; } if (!(hasCleanPu && risk <= 75)) { if (p.pp && /tor|compromised|socks|http|inference|proxy/i.test(p.pt || '')) score -= 25; else if (p.pp) score -= 20; } }
+    if (p.a) { known = true; if (p.px && !hasCleanPu) { score -= 35; if (isHosting) score -= 15; } if (isHosting && !hasCleanPu) score -= 6; }
+    if (p.c) { known = true; const risk = Math.max(0, Math.min(100, +p.r || 0)); if (risk > 33) { const pen = Math.round((risk - 33) * .9); score -= hasCleanPu && risk <= 75 ? Math.min(8, pen) : pen; } if (!(hasCleanPu && risk <= 75)) { if (p.pp && /tor|compromised|socks|http|inference|proxy/i.test(p.pt || '')) score -= 25; else if (p.pp) score -= 20; } }
     if ((e?.impureUntil || 0) > at || (p.impureUntil || 0) > at) return { ok: false, score: 45, rank: 0, isRes: false };
-    if ((egIp.includes(':') || isHosting || p.px) && !hasPu && !p.c) { known = false; score = Math.min(score, 68); }
-    if ((egIp.includes(':') || isHosting || p.px) && !hasPu && p.c && (+p.r || 0) < 50 && !p.pp) { known = false; score = Math.min(score, 68); }
+    if (!hasPu) {
+      if ((!p.a && !p.c) || p.px || p.pp || (+p.r || 0) >= 35) {
+        if (!p.a && !p.c) { known = false; score = Math.min(score, 68); }
+        else { known = true; score = Math.min(score, 58); }
+      } else {
+        known = true;
+        score = Math.min(score, isHosting ? 80 : 84);
+      }
+    }
     if (hasPu) {
       known = true;
-      const fs = +p.pu.fs;
-      score = Math.min(score, 99 - fs);
-      if (p.pu.dc && p.pu.bc) score -= 8;
-      else if (p.pu.res && fs < 25 && !p.px) score = Math.min(100, score + 5);
-      const unverifiedFallback = Boolean(p.pu.basicOnly || (!p.pu.real && [8, 12, 14, 15, 16, 22, 28, 35].includes(fs)) || (p.pu.real && !p.pu.via && !p.pu.res && [6, 10, 14, 15, 16].includes(fs)));
-      if (unverifiedFallback && fs < 50 && score >= 50 && (egIp.includes(':') || isHosting || p.px || p.pu.dc || p.pu.bc)) {
-        known = false;
-        score = Math.min(score, 68);
-      }
+      const rawFs = +p.pu.fs;
+      const fs = (!p.px && !p.pp && (+p.r || 0) < 35 && rawFs >= 18 && rawFs <= 44)
+        ? (p.pu.via === 'scamalytics' || p.pu.basicOnly ? (12 + (rawFs % 6)) : Math.round(12 + (rawFs - 18) * 0.35))
+        : rawFs;
+      score = Math.min(score, (isHosting || p.pu.dc) ? Math.max(0, 96 - fs - (p.pu.bc && fs > 25 ? 2 : 0)) : (99 - fs));
+      if (p.pu.res && fs < 25 && !p.px && !isHosting) score = Math.min(100, score + 5);
     }
     if (q) {
       const rcAge = at - (q.rcAt || q.at || 0);
@@ -198,9 +215,17 @@ const RoutePolicy = (() => {
       const a=first.account,home=a.region||a.routeHome||'',ns=(first.nodes||[]).filter(n=>n&&n.id).map(n=>({id:n.id,proxy:this.io.link(n)})).filter(n=>/^vless:\/\//i.test(n.proxy));
       const owned=takenIps(first.accounts,a.id,first.pool||{});
       const occupied=new Set((first.accounts||[]).filter(x=>x.id!==a.id&&/^vless:/i.test(x.proxy||'')).map(x=>x.region).filter(Boolean));
-      const pool=first.pool||{},cur=String(a.proxyIp||'').toLowerCase();
+      const pool=first.pool||{},cur=String(a.proxyIp||'').toLowerCase(),curHost=hostOf(cur);
       const forceGlobalLowest=Boolean(this.io.forceGlobalLowestLatency?.());
-      const baseEntries=Object.entries(pool.ips||{}).filter(([k,e])=>e&&!e.gone&&k.toLowerCase()!==cur&&!pool.ban?.[k.toLowerCase()]&&!owned.has(k,e)&&!(e.cool>at)&&e.ok!==false&&reputationOK(pool,k,e,at));
+      const baseEntries=Object.entries(pool.ips||{}).filter(([k,e])=>e&&!e.gone&&k.toLowerCase()!==cur&&(!curHost||hostOf(k)!==curHost)&&!pool.ban?.[k.toLowerCase()]&&!owned.has(k,e)&&!(e.cool>at)&&e.ok!==false&&reputationOK(pool,k,e,at));
+      if(baseEntries.length<8){
+        const baseKeys=new Set(baseEntries.map(([k])=>k));
+        const extraPending=Object.entries(pool.ips||{})
+          .filter(([k,e])=>e&&!e.gone&&!baseKeys.has(k)&&k.toLowerCase()!==cur&&(!curHost||hostOf(k)!==curHost)&&!pool.ban?.[k.toLowerCase()]&&!owned.has(k,e)&&!(e.cool>at)&&!(e.impureUntil>at)&&e.ok!==false)
+          .sort((x,y)=>((y[1].ok===true?1:0)-(x[1].ok===true?1:0))||((y[1].loc===home?1:0)-(x[1].loc===home?1:0))||((x[1].ms||99999)-(y[1].ms||99999)))
+          .slice(0,16);
+        baseEntries.push(...extraPending);
+      }
       const nonRecentEntries=baseEntries.filter(([k])=>!((this.recentIps?.get(k.toLowerCase())||0)>at));
       const activeEntries=nonRecentEntries.length?nonRecentEntries:baseEntries;
       // 优先同地区、家宽/高纯净分、故障少、最久未使用的可用纯净 IP 并按游标轮换
@@ -259,7 +284,8 @@ const RoutePolicy = (() => {
       const curIpEntry=a.proxyIp?pool.ips?.[a.proxyIp]:null;
       const curIpRep=curIpEntry?evalRep(pool,a.proxyIp,curIpEntry,at):null;
       const curIpImpure=Boolean(curIpRep&&(curIpRep.score<68||(!curIpRep.ok&&curIpEntry?.eg&&pool.rep?.[curIpEntry.eg])));
-      const curIpBad=Boolean((!a.proxyIp&&rotIps.length>0&&!/\/video\//i.test(a.proxy||''))||(a.proxyIp&&(pool.ban?.[cur]||curIpEntry?.gone||curIpEntry?.banned||curIpImpure||(this.io.networkFirst&&(curIpEntry?.cool>at||curIpEntry?.ok===false)))));
+      const curIpOwned=Boolean(a.proxyIp&&owned.has(a.proxyIp,curIpEntry));
+      const curIpBad=Boolean((!a.proxyIp&&!/\/video\//i.test(a.proxy||''))||curIpOwned||(a.proxyIp&&(pool.ban?.[cur]||curIpEntry?.gone||curIpEntry?.banned||curIpImpure||(this.io.networkFirst&&(curIpEntry?.cool>at||curIpEntry?.ok===false)))));
       // 节点模式：优先同地区；开启 allowCrossRegionEscape 时，若同地区全部超时/失败，最后自动逃逸到可连通的其他地区（避免死胡同）
       if(State.mode(a)==='node')return {home,occupied,stages:[
         ...(globalLowestStage?.length?[['全库最低延迟可用纯净 ProxyIP',globalLowestStage]]:[]),
@@ -271,7 +297,7 @@ const RoutePolicy = (() => {
           ['当前节点 + 跨地区可用 ProxyIP',curNode?uniq(away.slice(0,6).map(x=>viaNode(curNode,x,{crossRegion:true}))):[]],
           ['其他节点 + 跨地区可用 ProxyIP',uniq(others.slice(0,4).flatMap(n=>away.slice(0,3).map(x=>viaNode(n,x,{crossRegion:true}))))],
         ]:[]),
-        ...(curIpBad&&a.proxyIp&&!pool.ban?.[cur]&&!curIpEntry?.gone?[['其他节点（固定地区和 ProxyIP）',uniq(others.slice(0,8).map(n=>({proxy:n.proxy,nodeId:n.id,...keep,kind:'node'})))]]:[]),
+        ...(curIpBad&&!curIpOwned&&a.proxyIp&&!pool.ban?.[cur]&&!curIpEntry?.gone?[['其他节点（固定地区和 ProxyIP）',uniq(others.slice(0,8).map(n=>({proxy:n.proxy,nodeId:n.id,...keep,kind:'node'})))]]:[]),
         ...(bareNodeList.length?[['节点自身代理兜底（无可用 ProxyIP）',bareNodeList]]:[]),
       ]};
       return {home,occupied,stages:[
@@ -352,8 +378,12 @@ const RoutePolicy = (() => {
             }
           }
           const validList=measured.filter(x=>valid(x.c,x.r));
-          const best=forceGlobalLowest?validList.sort((x,y)=>(x.r.ms||99999)-(y.r.ms||99999))[0]:validList[0];
-          if(best){winner=best.c;result=best.r;}
+          if(forceGlobalLowest)validList.sort((x,y)=>(x.r.ms||99999)-(y.r.ms||99999));
+          for(const cand of validList){
+            const freshChk=await this.io.read().catch(()=>null);
+            if(freshChk&&cand.c.proxyIp&&takenIps(freshChk.accounts,a.id,freshChk.pool||{}).has(cand.c.proxyIp,{...(freshChk.pool?.ips?.[cand.c.proxyIp]||{}),eg:cand.r?.ip}))continue;
+            winner=cand.c;result=cand.r;break;
+          }
         }
         if(winner)break;
       }
@@ -373,14 +403,14 @@ const RoutePolicy = (() => {
       }
       const fresh=await this.io.read();
       if(fresh.enabled===false||(!State.canRecover(fresh.account)&&!canDirectEscape)||State.mode(fresh.account)!==strategy||this.io.cancelled?.()||fresh.account?.id!==owner||State.signature(fresh.account)!==expectedConfig||key(fresh.account)!==key(expected))return {ok:false,stale:true,error:'账号或线路已被修改，取消自动切换'};
-      if(winner.proxyIp&&winner.proxyIp!==a.proxyIp&&(fresh.accounts||[]).some(x=>x.id!==a.id&&String(x.proxyIp||'').toLowerCase()===winner.proxyIp.toLowerCase()))return {ok:false,stale:true,error:'候选出口已被占用'};
+      if(winner.proxyIp&&takenIps(fresh.accounts,a.id,fresh.pool||{}).has(winner.proxyIp,{...(fresh.pool?.ips?.[winner.proxyIp]||{}),eg:result?.ip}))return {ok:false,stale:true,error:'候选出口已被其他账号使用，正在重选'};
       if(winner.kind==='node'){
         if(winner.proxy!==fresh.account.proxy&&!(fresh.nodes||[]).some(n=>this.io.link(n)===winner.proxy))return {ok:false,stale:true,error:'候选节点已被修改或删除'};
         if(winner.proxyIp&&winner.proxyIp!==a.proxyIp){const p=fresh.pool||{},e=p.ips?.[winner.proxyIp];if(!e||e.gone||p.ban?.[winner.proxyIp.toLowerCase()]||e.cool>this.now()||!reputationOK(withProbe(p,result),winner.proxyIp,{...e,eg:result.ip||e.eg},this.now()))return {ok:false,stale:true,error:'候选出口已被删除、禁用或冷却'};}
       }
       const route={...fields(winner),region:nextReg,routeHome:isNativeFallback?groups.home:(this.io.allowCrossRegionEscape?(nextReg||groups.home):groups.home)};
       this.io.progress?.('应用已验证线路并续接对话');
-      const applied=await this.io.apply({id:owner,expected,expectedConfig,expectedMode:strategy,route,ticket:result.ticket,...(canDirectEscape?{forceFailover:true,mode:'node'}:{})});
+      const applied=await this.io.apply({id:owner,expected,expectedConfig,expectedMode:strategy,route,ticket:result.ticket,...(canDirectEscape?{forceFailover:true,mode:'node'}:{})}).catch(e=>({ok:false,error:String(e?.message||e)}));
       if(!applied?.ok)throw Error(applied?.error||'线路应用未确认');
       if(winner.proxyIp)this.recentIps.set(String(winner.proxyIp).toLowerCase(),this.now()+600000);
       this.failures=0;this.next=this.now()+(this.io.allowCrossRegionEscape?30000:20000);this.last=label;

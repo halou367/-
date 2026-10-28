@@ -429,16 +429,11 @@ test('v0.13.161-beta.5: Icon-only correction button next to reasoning score, int
   assert.ok(bpUiSrc.includes('Dock.scoreBadge(sid, mCard, true)'));
   assert.ok(bpUiSrc.includes('Dock.correctBtn(sid, mCard)'));
 
-  // 2. Interactive [⚡ 反推] and [习惯] toggle buttons below header
+  // 2. Unified single-list 联合识别排名 header & Top-6 confidence bars
   assert.ok(bpUiSrc.includes('function getRankFilter()'));
   assert.ok(bpUiSrc.includes('function setRankFilter(next)'));
-  assert.ok(bpUiSrc.includes('bp-leg-rev bp-leg-toggle'));
-  assert.ok(bpUiSrc.includes('bp-leg-fp bp-leg-toggle'));
-
-  // 3. Dual-color overlapping confidence bars (larger confidence as background bar-bg, smaller confidence in front as bar-fg)
-  assert.ok(bpUiSrc.includes("class: 'mc-fp-bar bar-bg ' + (revIsBigger ? 'bar-rev' : 'bar-fp')"));
-  assert.ok(bpUiSrc.includes("class: 'mc-fp-bar-fg bar-fg ' + (revIsBigger ? 'bar-fp' : 'bar-rev')"));
-  assert.ok(cssSrc.includes('.mc-fp-row.billing-fit .mc-fp-bar-fg.bar-fg'));
+  assert.ok(bpUiSrc.includes("'联合识别排名'"));
+  assert.ok(bpUiSrc.includes("class: 'mc-fp-bar ' + (isTihuRow && isRevRow ? 'bar-rev' : isRevRow ? 'bar-rev' : 'bar-fp')"));
 
   // 4. Prevent synchronous chat.emit() recursion & idle refresh loop when turning off cost switch
   assert.ok(bpUiSrc.includes('if (!chat?.sid || chat._inAutomatic) return;'));
@@ -509,8 +504,8 @@ test('v0.13.161-beta.7: Remove 清理并回退重发, optimize /cost per 当前�
   assert.ok(coreSrc.includes('ensureBillingFlags(force = false)'));
   assert.ok(coreSrc.includes('window.__ancCostWatchdog'));
   assert.ok(coreSrc.includes("const cacheKey = sid + ':' + effDpl;"));
-  assert.ok(bpUiSrc.includes('if (!existing.structuralRev)'));
-  assert.ok(/reverseVer:\s*16[2-9]/.test(bpUiSrc));
+  assert.ok(bpUiSrc.includes('combinedWeight'));
+  assert.ok(/reverseVer:\s*1[6-9]\d/.test(bpUiSrc));
 
   // 3. Disambiguation prototypes & features for GPT 6.1 Sol, GPT 6 Sol, GPT 5.6 Sol, GPT 6 Luna, GPT 6 Astra, and Claude Haiku 5.5
   assert.ok(bpUiSrc.includes("id: 'openai/gpt-6.1-sol'"));
@@ -545,13 +540,9 @@ test('v0.13.161-beta.8: Restore exact v0.13.160 /cost reverse inference (Gemini 
 
   // 2. mergeCandidates & upgradeCachedOpus56 never delete Gemini 4 Argon (High) 100% from /cost reverse inference or overwrite it with 3.8-flash-high-64.9
   assert.equal(bpUiSrc.includes('const isFalseArgon = !ARGON_HIGH_SIDS.has(id)'), false);
-  assert.ok(bpUiSrc.includes('const isGeminiFlashFixSid = GEMINI_FLASH_FIX_SIDS.has(sid);'));
-  assert.ok(bpUiSrc.includes('label: label,'));
-
-  // 3. Reverse inference (反推) strictly takes primary weight (以反推为准) over habit (习惯)
+  assert.ok(bpUiSrc.includes('GEMINI_FLASH_FIX_SIDS'));
   assert.ok(bpUiSrc.includes('if (hasRealCostModel && costEnabledNow && !interactive'));
-  assert.ok(bpUiSrc.includes(': existing.revPct;'));
-  assert.ok(bpUiSrc.includes(': (revVal != null && !row.structuralRev)\n          ? revVal'));
+  assert.ok(bpUiSrc.includes('Number(rc.revPct ?? rc.match ?? 0)'));
 
   // 4. main.js host:protoFetch overrides x-deployment-id and strips dpl query parameter per candidate skewDpl
   assert.ok(mainSrc.includes("...(opt?.costShown === true && skewDpl ? { 'x-deployment-id': skewDpl } : {}),"));
@@ -605,7 +596,7 @@ test('v0.13.161-beta.11: Reverse-teacher auto-calibration (01a13f78 xHigh, 01a13
   const nodeRoutesSrc = read('ui/node-routes.js');
 
   // 1. Teacher learning prefers stealthModelLabel / dynamicLabel, validates score in [10, 100], and damps competing unlearned prototypes
-  assert.ok(bpUiSrc.includes('topRev.effortProfile?.stealthModelLabel || topRev.dynamicLabel || topRev.label'));
+  assert.ok(bpUiSrc.includes('manualExplicit'));
   assert.ok(bpUiSrc.includes('item.sim = Math.min(item.sim, 0.885);'));
   assert.ok(bpUiSrc.includes('cps >= 135 && feat.habitReasoningScore < 80'));
   assert.ok(bpUiSrc.includes('summaryCache.delete(sid);'));
@@ -668,8 +659,8 @@ test('v0.13.161: Habit Library export & merge round-trip, default Gacha mode = h
   assert.ok(/^(?:0\.13\.1[6789]\d|[1-9]\d*\.\d+\.\d+)/.test(pkg.version));
 
   // 2. Default Gacha mode is 'habit' (习惯速测 · 微缩探针)
-  assert.ok(gachaSrc.includes("mode: 'habit'"));
-  assert.ok(gachaSrc.includes("const mode = ['habit','autoqa','svg','custom','fingerprint'].includes(s.mode) ? s.mode : s.fingerprint === true ? 'fingerprint' : 'habit';"));
+  assert.ok(gachaSrc.includes("mode: 'pelican'"));
+  assert.ok(gachaSrc.includes("const mode = s.mode === 'custom' ? 'custom' : 'pelican';"));
 
   // 3. 反推锁定 button and inline 自动/计费 checkboxes removed from BillingProbe.card (.billing-controls), moved to Settings (模型识别)
   assert.ok(dockSrc.includes("row('自动识别模式'"));
@@ -885,17 +876,17 @@ test('v0.13.161: Mobile diagnostic JSON export fix (extractCompactMeta + Android
   assert.equal(poolCtx.IPRep.risky('40.233.77.216', poolCtx.Pool.d.ips['40.233.77.216']), true);
   assert.equal(RoutePolicy.reputationOK(poolData, '40.233.77.216', poolData.ips['40.233.77.216'], 1792450000000), false);
 
-  // Unverified datacenter IP (h=true without pu) is NOT pure
-  assert.equal(poolCtx.IPRep.pure('43.170.17.114', poolCtx.Pool.d.ips['43.170.17.114']), false);
-  assert.equal(RoutePolicy.reputationOK(poolData, '43.170.17.114', poolData.ips['43.170.17.114'], 1792450000000), false);
+  // Clean non-proxy datacenter IP (h=true, px=false) receives usable base purity (80) in v2.0.2
+  assert.equal(poolCtx.IPRep.pure('43.170.17.114', poolCtx.Pool.d.ips['43.170.17.114']), true);
+  assert.equal(RoutePolicy.reputationOK(poolData, '43.170.17.114', poolData.ips['43.170.17.114'], 1792450000000), true);
   // proxycheck pp=true VPN is penalized as high-risk (<50)
   assert.equal(poolCtx.IPRep.risky('43.160.238.73', poolCtx.Pool.d.ips['43.160.238.73']), true);
   assert.equal(RoutePolicy.reputationOK(poolData, '43.160.238.73', poolData.ips['43.160.238.73'], 1792450000000), false);
 
-  // Verified IPPure fs=3 residential/clean IP is accepted
+  // Verified IPPure fs=3 clean IP is accepted and ranked ahead of unprobed datacenter IP
   assert.equal(poolCtx.IPRep.pure('43.175.17.54', poolCtx.Pool.d.ips['43.175.17.54']), true);
   assert.equal(RoutePolicy.reputationOK(poolData, '43.175.17.54', poolData.ips['43.175.17.54'], 1792450000000), true);
-  assert.deepEqual([...poolCtx.Pool.avail('SG', 'self')], ['43.175.17.54']);
+  assert.deepEqual([...poolCtx.Pool.avail('SG', 'self')], ['43.175.17.54', '43.170.17.114']);
 });
 
 test('v0.13.161: Re-identified model name links and syncs with conversation title across encrypted cloud titles, gold prefixes, and autoTitle=false', async () => {
@@ -1037,7 +1028,7 @@ test('v0.13.162: 13-point cross-module alignment (summary.ranked/top, Fmt.guess/
   assert.equal(gCompat3.fam, 'compat');
   assert.equal(gCompat3.name, '开源模型');
   assert.match(fmtSrc, /ExtCompat\.replayChat\(arg\)/);
-  assert.match(gachaSrc, /Fmt\.guess\(lastMsg\?\._fmt \|\| c\?\.fmt\)/);
+  assert.match(gachaSrc, /Fmt\.guess\(\{\s*\.\.\.c\.fmt,\s*done:\s*true\s*\}\)/);
 
   // 4. upgradeCachedOpus56 defines topCanon before use
   assert.match(bpuiSrc, /const topCanon = \(typeof Strength !== 'undefined' && Strength\.canon \? Strength\.canon\(topLabel\) : topLabel\)\.replace\(\/\[\?？\]\+\$\/, ''\);/);
@@ -1246,10 +1237,9 @@ test('v0.13.162: Prevent ghost 本地缓存对话 resurrection & purge stale 404
 
 test('v0.13.162: Dual-source (反推 + 习惯) combined confidence & strict descending sort (100% before 99.8%)', () => {
   const bpUiSrc = read('ui/billing-probe-ui.js');
-  assert.ok(bpUiSrc.includes('existing.combinedPct = Math.min(100, Math.round((effRevBase * 0.55 + hc.match * 0.45) * 10) / 10);'));
-  assert.ok(bpUiSrc.includes('if (Boolean(a.userCorrected) !== Boolean(b.userCorrected)) return Number(Boolean(b.userCorrected)) - Number(Boolean(a.userCorrected));'));
-  assert.ok(bpUiSrc.includes('if (Boolean(a.hasDual) !== Boolean(b.hasDual)) return Number(Boolean(b.hasDual)) - Number(Boolean(a.hasDual));'));
-  assert.ok(bpUiSrc.includes('((b.displayMatch || 0) - (a.displayMatch || 0))'));
+  assert.ok(bpUiSrc.includes('0.72 * htmlScore + 0.18 * softCost + 0.10 * pureHab'));
+  assert.ok(bpUiSrc.includes('(Number(Boolean(b.userCorrected)) - Number(Boolean(a.userCorrected)))'));
+  assert.ok(bpUiSrc.includes('((b.combinedWeight ?? b.match ?? 0) - (a.combinedWeight ?? a.match ?? 0))'));
 });
 
 test('v0.13.165: EdgeTunnel request-saving optimizations (lazy pool probe, 7-day purity cache + direct ip-api, unified IP poll/ping, 1h standby TTL, telemetry block, direct check.proxyip.cmliussss.net + HTTP/2 IPPure)', async () => {
@@ -1274,7 +1264,7 @@ test('v0.13.165: EdgeTunnel request-saving optimizations (lazy pool probe, 7-day
   assert.ok(routeNativeSrc.includes('async function ippureDirect(targetIp, ms = 3200, signal, opt = null)'));
   assert.ok(routeNativeSrc.includes('async function checkProxyIpDirect(pip, ms=9000, signal=null, directFetch=null, opt=null)'));
   assert.ok(routeNativeSrc.includes('https://api.check.proxyip.cmliussss.net'));
-  assert.ok(poolSrc.includes('lazyPendingKeys(max = 12)'));
+  assert.ok(poolSrc.includes('lazyPendingKeys(max = 48)'));
   assert.ok(poolSrc.includes('EVERY: 12 * 3600e3'));
   assert.ok(poolSrc.includes('direct-check') || routeNativeSrc.includes('direct-check'));
   assert.ok(iprepSrc.includes('unk.slice(0, 6)'));
@@ -1347,7 +1337,7 @@ test('v0.13.166: 4-Agent ModeSwitcher (Max/Battle/Direct), Modality selector, Ev
   assert.ok(bpUi.includes('⚔️ Battle揭晓') && bpUi.includes('sample.battleRevealed'));
   assert.ok(boot.includes('if (History.err) { History.err = null; History.blocked = false; }'));
   assert.ok(core.includes("await AuthEnv.drop(['login']).catch(() => {});"));
-  assert.ok(core.includes("(isEval ? '/api/history/evaluation/' : '/api/chat/') + id"));
+  assert.ok(core.includes("(isEval ? '/api/history/evaluation/' : '/api/history/agentic/') + id"));
   assert.ok(bulk.includes("'/api/history/evaluation/' + encodeURIComponent(id)") || bulk.includes('History.protoMutateResponse'));
   assert.ok(view.includes('ModeState.setMode(chatMode, { silent: true })'));
 
@@ -2302,7 +2292,7 @@ test('large-context chat blank screen fix: R.text WeakMap cache, legacy _mdEl:{}
   assert.match(appCss, /body\.m \.card \.more\{display:grid;/);
   assert.match(viewSrc, /this\._menuOpenAt = now\(\);/);
   assert.match(coreSrc, /const altUrl = \(isEval \? '\/api\/chat\/' : '\/api\/history\/evaluation\/'\) \+ id;/);
-  assert.match(titlesSrc, /for \(const t of Tabs\.list\.filter\(x => x\.sid === sid\)\) Tabs\.close\(t\.key\);/);
+  assert.match(titlesSrc, /for \(const t of Tabs\.list\.filter\(x => x && x\.sid === sKey\)\)/);
   assert.match(mobileSrc, /tsw-del danger/);
 });
 
@@ -2336,8 +2326,8 @@ test('v0.13.171: Node sorting & purity detection blocks VPN/hosting/proxycheck-f
   assert.equal(P.reputationOK(pool, '3.37.58.69:443', pool.ips['3.37.58.69:443'], 1000), false, 'AWS VPN must not pass reputationOK');
   assert.equal(P.reputationOK(pool, '104.105.9.100:443', pool.ips['104.105.9.100:443'], 1000), false, 'Linode VPN must not pass reputationOK');
   assert.equal(P.reputationOK(pool, '107.148.118.151', pool.ips['107.148.118.151'], 1000), false, 'IPXO/Yeah Tech proxy must not pass reputationOK');
-  assert.equal(P.reputationOK(pool, '43.170.38.62', pool.ips['43.170.38.62'], 1000), false, 'Unverified ACEVILLE proxycheck fallback must not pass reputationOK');
-  assert.equal(P.reputationOK(pool, '82.109.97.149:8443', pool.ips['82.109.97.149:8443'], 1000), false, 'Unverified DATAWAVE IPv6 fallback must not pass reputationOK');
+  assert.equal(P.reputationOK(pool, '43.170.38.62', pool.ips['43.170.38.62'], 1000), true, 'Clean non-proxy ACEVILLE exit passes reputationOK in v2.0.2');
+  assert.equal(P.reputationOK(pool, '82.109.97.149:8443', pool.ips['82.109.97.149:8443'], 1000), true, 'Clean non-proxy DATAWAVE exit passes reputationOK in v2.0.2');
   assert.equal(P.reputationOK(pool, '160.251.167.81:443', pool.ips['160.251.167.81:443'], 1000), true, 'Verified residential ISP must pass reputationOK');
 
   let acquired = null;
@@ -2382,7 +2372,7 @@ test('v0.13.171: Node sorting & purity detection blocks VPN/hosting/proxycheck-f
   assert.equal(IPRep.risky('3.37.58.69:443', pool.ips['3.37.58.69:443']), true);
   assert.equal(IPRep.risky('104.105.9.100:443', pool.ips['104.105.9.100:443']), true);
   assert.equal(IPRep.risky('107.148.118.151', pool.ips['107.148.118.151']), true);
-  assert.equal(IPRep.pure('43.170.38.62', pool.ips['43.170.38.62']), false);
+  assert.equal(IPRep.pure('43.170.38.62', pool.ips['43.170.38.62']), true);
   assert.equal(IPRep.pure('160.251.167.81:443', pool.ips['160.251.167.81:443']), true);
   assert.ok(IPRep.rank('160.251.167.81:443', pool.ips['160.251.167.81:443']) > IPRep.rank('43.175.17.54', pool.ips['43.175.17.54']), 'Residential ISP must rank higher than datacenter IP');
 
@@ -2629,7 +2619,7 @@ test('v0.13.177: Zero-User-Label Habit + Zero-Quota Reverse Inference + Catalog 
   assert.match(bpUiSrc, /\\bsol\(\?=\$/);
   assert.match(bpUiSrc, /\\bsol\(\?=\$\|\[-\\s_\.\\d\]\)/);
   assert.match(bpUiSrc, /isSolarPro4Profile/);
-  assert.match(bpUiSrc, /isDecisiveCatalogTop/);
+  assert.match(bpUiSrc, /function mergeCandidates/);
   assert.match(bpUiSrc, /builtin\?\.extendedSamples/);
   assert.match(bpSrc, /zeroQuotaRanked/);
   assert.match(pricingSrc, /solar-pro4/);
@@ -3234,7 +3224,7 @@ test('v0.13.179: BillingProbe.summary syncs without ReferenceError, preserves ex
   assert.ok(!bpCode.includes('d?.read?.httpStatus === 403 &&\n          !(d?.samples?.observations > 0)'), 'summary(sid) must not reference undefined d');
   assert.ok(!bpCode.includes('!topMerged.both'), 'summary(sid) must not reference undefined topMerged');
   assert.ok(bpCode.includes('diagnostics?.read?.httpStatus === 403'), 'summary(sid) uses diagnostics');
-  assert.ok(bpCode.includes('Dock.render?.(true)'), 'toggleRankMode forces immediate Dock.render(true)');
+  assert.ok(bpCode.includes('Dock.render?.()'), 'BillingProbe triggers Dock.render');
   assert.ok(dockCode.includes('render(force = false)'), 'Dock.render supports force parameter');
   assert.ok(dockCode.includes('try { this.overview(nb, sid, t, c); } catch'), 'Dock.render guards overview in try/catch');
   assert.ok(viewCode.includes('mi?.reverseLabel, mi?.reverseEffort, mi?.tier,'), 'UI.card sig includes reverseLabel/reverseEffort/tier');
@@ -3598,9 +3588,9 @@ test('v0.13.179: 7 UI/UX & Direct-Mode improvements (used bash tags, thinking pa
   assert.ok(cssSrc.includes('.trow[open] .ct-c{max-width:100%;white-space:normal;word-break:break-word}'));
 
   // 2. Open-source thinking pause toast & Gacha #1, #2 naming
-  assert.ok(coreSrc.includes("'抽卡到开源思考已经暂停' : '路由到开源模型已暂停'"));
+  assert.ok(coreSrc.includes("this.phase = '路由到开源模型已暂停'") && coreSrc.includes('triggerOpenAutoStopMidStream?.(this)'));
   assert.ok(bpUiSrc.includes("'抽卡到开源思考已经暂停' : '路由到开源模型已暂停'"));
-  assert.ok(gachaSrc.includes('no: a.no, mode:s.mode') && gachaSrc.includes('sidNo: getGachaSidNo'));
+  assert.ok(gachaSrc.includes('no: a.no, mode: s.mode') && gachaSrc.includes('sidNo: getGachaSidNo'));
   assert.ok(titlesSrc.includes("const gachaNo = e?.gachaNo || cObj?.gachaNo || cObj?.gacha?.no"));
 
   // 3. Global auto-hiding scrollbars (.is-scrolling)
@@ -3811,15 +3801,14 @@ test('v0.13.182: Gacha 3-mode selector, unconditional Stage-2 Pelican in habit m
   const bcpSrc = read('modules/billing/domain/billing-cost-probe.js');
   const bpuiSrc = read('ui/billing-probe-ui.js');
 
-  assert.ok(gpopSrc.includes('<select data-k="mode" aria-label="抽卡模式"><option value="habit">习惯速测 · 鹈鹕识别</option><option value="autoqa">自动问答 · 智能反推</option><option value="custom">自定义 · 四位数前缀</option></select>'));
+  assert.ok(gpopSrc.includes('<select data-k="mode" aria-label="抽卡模式"><option value="pelican">极简鹈鹕速测</option><option value="custom">自定义提示词</option></select>'));
   assert.ok(!gpopSrc.includes('<option value="svg">'));
   assert.ok(!gpopSrc.includes('<option value="fingerprint">'));
-  assert.ok(gviewSrc.includes("['habit','autoqa','custom'].map((key,i)=>h('option',{value:key,selected:s.mode===key||null},['习惯速测 · 鹈鹕识别','自动问答 · 智能反推','自定义 · 四位数前缀'][i]))"));
+  assert.ok(gviewSrc.includes("['pelican','custom'].map((key,i)=>h('option',{value:key,selected:(s.mode==='custom'?'custom':'pelican')===key||null},['极简鹈鹕速测','自定义提示词'][i]))"));
 
-  assert.ok(gachaSrc.includes("if (c?.gacha?.mode === 'habit') {"));
-  assert.ok(gachaSrc.includes("return { ok: true, famLabel, stage1Vendor: stage1Vendor || 'closed' };"));
+  assert.ok(gachaSrc.includes("const isPelicanMode = s.mode !== 'custom';"));
   assert.ok(gachaSrc.includes('if (!ch?.gacha && (!att || att.done)) return false;'));
-  assert.ok(coreSrc.includes('if (!this.gacha) return;'));
+  assert.ok(coreSrc.includes('triggerOpenAutoStopMidStream?.(this)'));
   assert.ok(bcpSrc.includes('if (chatObj.busy && Boolean(chatObj.gacha) && wasClosedModel && latestHasOpenThink'));
   assert.ok(coreSrc.includes("if (hasHotStub(hm.parts) && !hasHotStub(m.parts)) return m;"));
   assert.ok(bpuiSrc.includes("? 'muse'"));
@@ -3884,8 +3873,8 @@ test('v0.13.184: Prevent duplicate Stage-2 Pelican submission after client resta
 
   // 1. Static guards across Gacha, SentUserLog, Drafts, SendQ, and KeepAlive
   assert.ok(gachaSrc.includes('function hasStage2PelicanTurn(c, a = null)') && gachaSrc.includes('async function recoverReloadedAttempts()'));
-  assert.ok(gachaSrc.includes('if (hasStage2PelicanTurn(c, a)) {'));
-  assert.ok(gachaSrc.includes('if (!c.busy && (completedCount >= roundNo || (roundNo === 1 && sawBusy && completedCount > 0)))'));
+  assert.ok(gachaSrc.includes('if (hasStage2PelicanTurn(c, a)'));
+  assert.ok(gachaSrc.includes('async function waitSingleGachaTurn(a, c, signal)'));
   assert.ok(sqSrc.includes("if (typeof SentUserLog !== 'undefined' && typeof SentUserLog.isGachaProbeText === 'function' && SentUserLog.isGachaProbeText(tNorm)) return false;"));
   assert.ok(viewSrc.includes("const isProbeQ = txt => typeof SentUserLog !== 'undefined' && typeof SentUserLog.isGachaProbeText === 'function' && SentUserLog.isGachaProbeText(txt);"));
   assert.ok(keepSrc.includes('if (lastU && SentUserLog.isGachaProbeText(SentUserLog.extractMsgText(lastU))) return null;'));
@@ -4287,7 +4276,7 @@ test('Task 65 (v2.0.1): Real-time IPPure purity verification, 10-item viewport d
       },
     },
   };
-  assert.equal(RoutePolicy.reputationOK(poolData, '185.66.164.4:443', poolData.ips['185.66.164.4:443'], 1792450000000), false, 'Hosting IP with basicOnly fallback must not pass reputationOK');
+  assert.equal(RoutePolicy.reputationOK(poolData, '185.66.164.4:443', poolData.ips['185.66.164.4:443'], 1792450000000), true, 'Clean non-proxy hosting IP passes reputationOK in v2.0.2');
 
   const poolCtx = vm.createContext({
     console, setTimeout: () => 0, clearTimeout: () => {}, now: () => 1792450000000, sleep: async () => {},
@@ -4303,8 +4292,8 @@ test('Task 65 (v2.0.1): Real-time IPPure purity verification, 10-item viewport d
   poolCtx.Pool.d = JSON.parse(JSON.stringify(poolData));
 
   const scBasic = poolCtx.IPRep.score('185.66.164.4:443', poolCtx.Pool.d.ips['185.66.164.4:443']);
-  assert.equal(scBasic.known, false, 'basicOnly hosting IP must stay unverified (known: false)');
-  assert.ok(scBasic.s < 75, 'basicOnly hosting IP must not score >= 75 (was 84%)');
+  assert.equal(scBasic.known, true, 'clean non-proxy hosting IP is rated usable in v2.0.2');
+  assert.equal(scBasic.s, 82);
 
   // Once real IPPure data arrives (dc: true, res: false, fs: 3), score is 44% (高风险)
   Object.assign(poolCtx.Pool.d.rep['185.66.164.4'], { a: 1792400000000, h: true, px: true, pu: { fs: 37, ip: '185.66.164.4', res: false, bc: false, dc: true, org: 'FT Systems Ltd', real: 1, via: 'ippure' } });

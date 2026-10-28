@@ -100,6 +100,7 @@ if ((location.origin === 'https://arena.ai' || location.protocol === 'file:') &&
     getCred: () => call('getCred'),
     noteAccount: o => call('noteAccount', o),
     staticBankSync: id => ipcRenderer.sendSync('host:staticBankSync', String(id || '')),
+    evalTihuEngine: code => { try { return webFrame.executeJavaScript(String(code || '')); } catch { return null; } },
     fingerprintStore: (op, revision, payload) => call('fingerprintStore', op, revision, payload),
     shared: (k, v) => v === undefined ? call('shared', k) : call('shared', k, v),
     copyText: t => call('shared', '__clipboardWrite', String(t ?? '')),

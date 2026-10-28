@@ -6,7 +6,7 @@ Object.assign(ICON, {
   doc: '<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5M8.5 13h7M8.5 17h5"/>', dl: '<path d="M12 4v11M7 10l5 5 5-5M5 20h14"/>', folder: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
   file: '<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/>', chevr: '<path d="M9 6l6 6-6 6"/>', chevl: '<path d="M15 6l-6 6 6 6"/>',
   pulse: '<path d="M3 12h4l3-8 4 16 3-8h4"/>', expand: '<path d="M4 9V4h5M20 15v5h-5M4 4l6 6M20 20l-6-6"/>', palette: '<path d="M12 3a9 9 0 1 0 0 18c1.1 0 1.5-.8 1.5-1.5 0-.9-.7-1.2-.7-2 0-.8.7-1.5 1.5-1.5H17a4 4 0 0 0 4-4c0-5-4-9-9-9z"/><circle cx="7.5" cy="11" r="1"/><circle cx="10" cy="7" r="1"/><circle cx="15" cy="7.5" r="1"/>', trophy: '<path d="M8 4h8v5a4 4 0 0 1-8 0zM8 6H5a3 3 0 0 0 3 4M16 6h3a3 3 0 0 1-3 4M12 13v4M8 20h8"/>', info: '<circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/>', check: '<path d="M5 12l5 5L20 7"/>',
-  bolt: '<path d="M13 3L4 14h7l-1 7 9-11h-7z"/>', layers: '<path d="M12 3l9 5-9 5-9-5z"/><path d="M3 13l9 5 9-5"/>', alert: '<path d="M12 4l9 16H3z"/><path d="M12 10v4M12 17h.01"/>',
+  bolt: '<path d="M13 3L4 14h7l-1 7 9-11h-7z"/>', plug: '<path d="M12 22v-5"/><path d="M9 8V2"/><path d="M15 8V2"/><path d="M18 8v5a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V8Z"/>', layers: '<path d="M12 3l9 5-9 5-9-5z"/><path d="M3 13l9 5 9-5"/>', alert: '<path d="M12 4l9 16H3z"/><path d="M12 10v4M12 17h.01"/>',
   route: '<circle cx="6" cy="18" r="2"/><circle cx="18" cy="6" r="2"/><path d="M8 18h7a3 3 0 0 0 0-6H9a3 3 0 0 1 0-6h7"/>', side: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16"/>',
   panel: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M15 4v16"/>', note: '<path d="M4 20h4L19 9l-4-4L4 16z"/>', img: '<rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="2"/><path d="M21 17l-5-5-9 8"/>',
   upload: '<path d="M12 20V9M7 14l5-5 5 5M5 4h14"/>', download: '<path d="M12 4v11M7 10l5 5 5-5M5 20h14"/>', moon: '<path d="M20 14.5A8 8 0 0 1 9.5 4 8 8 0 1 0 20 14.5z"/>', sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>',
@@ -63,7 +63,7 @@ const Dock = {
       savePrefs();
     }
     UI.layout();
-    this.render();
+    this.render(true);
   },
   sid() { const t = Tabs.cur; return t && !t.kind ? t.sid : null; },
   mount(el) {
@@ -100,7 +100,7 @@ const Dock = {
     const el = this.el; if (!el || !el.isConnected) return;
     if (!(typeof isMob === 'function' && isMob()) ? !this.open : !this.mOpen) { if (el.firstChild) el.replaceChildren(); return; }
     const curSidForBarrier = typeof this.sid === 'function' ? this.sid() : null;
-    if (this._renderedSid !== undefined && this._renderedSid !== curSidForBarrier) { this.force = true; this._pointerDownUntil = 0; }
+    if ((this._renderedSid !== undefined && this._renderedSid !== curSidForBarrier) || (this._renderedTab !== undefined && this._renderedTab !== this.tab)) { this.force = true; this._pointerDownUntil = 0; }
     if (!this.force && typeof window !== 'undefined') {
       const tScroll = Math.max(window.__ancLastScrollAt || 0, window.__ancLastListScrollAt || 0);
       const dtScroll = Date.now() - tScroll;
@@ -114,6 +114,7 @@ const Dock = {
     const ae = document.activeElement; if (ae && el.contains(ae) && /^(SELECT|INPUT|TEXTAREA)$/.test(ae.tagName) && !this.force) { clearTimeout(this.t); this.t = setTimeout(() => this.render(), 1500); return; }
     this.force = false;
     this._renderedSid = curSidForBarrier;
+    this._renderedTab = this.tab;
     const sid = curSidForBarrier, { t, c, ts = [] } = (typeof this.cur === 'function' ? this.cur(sid) : {});
     if (this.sel.sid !== sid) this.sel = { sid, turn: null, call: null };
     const body = el.querySelector('.dk-body'), keepTop = body && this.lastKey === sid + this.tab ? body.scrollTop : 0; this.lastKey = sid + this.tab;
@@ -124,7 +125,7 @@ const Dock = {
     const head = h('div', { class: 'dk-head' },
       h('b', { class: 'dk-title' + (now() > (this.titleUntil || 0) ? ' gone' : '') }, '模型信息'),
       sid && ts.length ? h('button', { class: 'ib sm', title: '导出本对话的模型信息（JSON）', onclick: () => this.exportJson(sid) }, icon('dl')) : null,
-      h('div', { class: 'dk-tabs' }, ...tabs.map(([k, l]) => h('button', { class: this.tab === k ? 'on' : '', onclick: () => { this.tab = k; Store.set('dock:tab', k); this.render(); } }, l))));
+      h('div', { class: 'dk-tabs' }, ...tabs.map(([k, l]) => h('button', { type: 'button', class: this.tab === k ? 'on' : '', onclick: e => { e.stopPropagation(); try { const ae0 = document.activeElement; if (ae0 && this.el?.contains(ae0) && ae0 !== e.currentTarget) ae0.blur?.(); } catch {} this._pointerDownUntil = 0; this.tab = k; try { Store.set('dock:tab', k); } catch {} this.render(true); } }, l))));
     const sel = h('div', { class: 'dk-sel' });
     if (sid && ts.length && ['overview', 'data'].includes(this.tab)) {
       const tsel = h('select', { onchange: e => { e.target.blur(); this.sel = { sid, turn: e.target.value, call: null }; this.render(); } },
@@ -146,12 +147,12 @@ const Dock = {
           }
         }
       }
-      try { this.overview(nb, sid, t, c); } catch (err) { console.error('[Dock.overview]', err); }
+      try { this.overview(nb, sid, t, c); } catch (err) { console.error('[Dock.overview]', err); nb.append(h('div', { class: 'empty' }, '概览加载异常：' + describe(err))); }
     }
-    else if (this.tab === 'data') this.data(nb, sid, t, c);
-    else if (this.tab === 'records') this.records(nb, sid);
-    else if (this.tab === 'settings') this.settings(nb);
-    else this.about(nb);
+    else if (this.tab === 'data') { try { this.data(nb, sid, t, c); } catch (err) { console.error('[Dock.data]', err); nb.append(h('div', { class: 'empty' }, '数据面板加载异常：' + describe(err))); } }
+    else if (this.tab === 'records') { try { this.records(nb, sid); } catch (err) { console.error('[Dock.records]', err); nb.append(h('div', { class: 'empty' }, '记录面板加载异常：' + describe(err))); } }
+    else if (this.tab === 'settings') { try { this.settings(nb); } catch (err) { console.error('[Dock.settings]', err); nb.append(h('div', { class: 'empty' }, '设置面板加载异常：' + describe(err))); } }
+    else { try { this.about(nb); } catch (err) { console.error('[Dock.about]', err); nb.append(h('div', { class: 'empty' }, '关于面板加载异常：' + describe(err))); } }
     el.dataset.ks = this.tab + '|' + (this.sid?.() || ''); el.replaceChildren(head, sel, nb);
     // 面板标题：打开时显示，几秒后淡出让出空间（鼠标移到顶部时再显示）
     if (now() < (this.titleUntil || 0)) { clearTimeout(this.titleT); this.titleT = setTimeout(() => this.el?.querySelector('.dk-title')?.classList.add('gone'), this.titleUntil - now()); }
@@ -1082,10 +1083,11 @@ const Dock = {
       : candidate ? '候选 · ' + candidate.reason + ' ' + +(conf * 100).toFixed(1) + '%'
       : !m?.name && !top0IsCost ? '待识别'
       : m?.fromTitle && !fp && !top0IsCost ? '同步标题'
-      : fp?.skipped && !top0IsCost ? '指纹已跳过'
-      : top0IsCost ? ('费用反推' + (Number.isFinite(revMatch) ? ' ' + +Number(revMatch).toFixed(1) + '%' : ''))
-      : m?.habitInferred ? ((m?.provider || '对话习惯指纹') + (Number.isFinite(revMatch) ? ' ' + +Number(revMatch).toFixed(1) + '%' : ''))
-      : (m?.reverseInferred || m?.billingProbe) ? ('费用反推' + (Number.isFinite(revMatch) ? ' ' + +Number(revMatch).toFixed(1) + '%' : ''))
+      : fp?.skipped && !top0IsCost && !m?.tihuRecognized ? '指纹已跳过'
+      : (top0?.tihuLocked || m?.tihuRecognized) ? ((top0?.costAssisted ? '醍醐 HTML + 计费协同' : '醍醐 HTML 识别') + (Number.isFinite(revMatch) ? ' ' + +Number(revMatch).toFixed(1) + '%' : ''))
+      : top0IsCost ? ('计费 + 习惯联合识别' + (Number.isFinite(revMatch) ? ' ' + +Number(revMatch).toFixed(1) + '%' : ''))
+      : m?.habitInferred ? ((m?.provider || '协议与习惯识别') + (Number.isFinite(revMatch) ? ' ' + +Number(revMatch).toFixed(1) + '%' : ''))
+      : (m?.reverseInferred || m?.billingProbe) ? ('计费 + 习惯联合识别' + (Number.isFinite(revMatch) ? ' ' + +Number(revMatch).toFixed(1) + '%' : ''))
       : !fp && m?.guess ? '按回复格式推测'
       : !fp ? '型号记录'
       : fp.apiIdentity ? 'API记录'
@@ -1736,7 +1738,7 @@ const Dock = {
   },
   data(box, sid, t, c) {
     if (!t) return this.empty(box, sid);
-    box.append(h('div', { class: 'dk-sub' }, ...[['sources', '来源'], ['raw', '原始']].map(([k, l]) => h('button', { class: this.sub.data === k ? 'on' : '', onclick: () => { this.sub.data = k; this.render(); } }, l))));
+    box.append(h('div', { class: 'dk-sub' }, ...[['sources', '来源'], ['raw', '原始']].map(([k, l]) => h('button', { type: 'button', class: this.sub.data === k ? 'on' : '', onclick: () => { this.sub.data = k; this.render(true); } }, l))));
     if (this.sub.data === 'sources') {
       const tb = h('div', { class: 'dk-table' }, h('div', { class: 'dk-tr th' }, h('span', {}, '#'), h('span', {}, '时间'), h('span', {}, '型号'), h('span', {}, '输入/输出'), h('span', {}, '花费')));
       t.calls.forEach((x, i) => tb.append(h('div', { class: 'dk-tr' + (x === c ? ' on' : '') + (x.failed ? ' bad' : ''), onclick: () => { this.sel = { sid, turn: t.key, call: x.id }; this.render(); } }, h('span', {}, i + 1), h('span', {}, fmtClock2(x.at)), h('span', { title: x.request || x.model || '' }, Brand.short(x.request || x.model || '?')), h('span', {}, x.input != null ? fmtTokS(x.input) + '/' + fmtTokS(x.output) : x.totalLabel || '—'), h('span', {}, x.aiCost != null ? fmtUsd(x.aiCost) : x.usd != null ? fmtUsd(x.usd) : '—'))));
@@ -1753,7 +1755,7 @@ const Dock = {
     }
   },
   records(box, sid) {
-    box.append(h('div', { class: 'dk-sub' }, ...[['cache', '缓存'], ['logs', '日志']].map(([k, l]) => h('button', { class: this.sub.records === k ? 'on' : '', onclick: () => { this.sub.records = k; this.render(); } }, l))));
+    box.append(h('div', { class: 'dk-sub' }, ...[['cache', '缓存'], ['logs', '日志']].map(([k, l]) => h('button', { type: 'button', class: this.sub.records === k ? 'on' : '', onclick: () => { this.sub.records = k; this.render(true); } }, l))));
     if (this.sub.records === 'cache') {
       const idx = Object.entries(Trace.index()).sort((a, b) => (b[1].at || 0) - (a[1].at || 0)), bytes = idx.reduce((a, [, v]) => a + (v.bytes || 0), 0);
       box.append(h('section', { class: 'mc-card' }, h('div', { class: 'mc-h' }, h('b', {}, '本机缓存'), h('span', { class: 'eyebrow grow r' }, idx.length + ' 个对话 · ' + fmtBytes(bytes))),
@@ -1807,7 +1809,7 @@ const Dock = {
     const grp = (title, ...rows) => h('section', { class: 'mc-card st-grp' }, h('div', { class: 'st-gh' }, title), ...rows.flat().filter(Boolean));
     const btn = (t, fn, title) => h('button', { type: 'button', class: 'btn ghost sm', title: title || null, onclick: fn }, t);
     /* 其他模块自带的设置行（span>b+small + 按钮）：把小字说明换成 ⓘ，套同一种行样式 */
-    const adopt = el => { el.className = 'st-row'; const sp = el.querySelector(':scope>span'); if (sp) { sp.className = 'st-l'; const sm = sp.querySelector(':scope>small'); if (sm) sm.replaceWith(tipI(sm.textContent)); } return el; };
+    const adopt = fnOrEl => { try { const el = typeof fnOrEl === 'function' ? fnOrEl() : fnOrEl; if (!el) return null; el.className = 'st-row'; const sp = el.querySelector(':scope>span'); if (sp) { sp.className = 'st-l'; const sm = sp.querySelector(':scope>small'); if (sm) sm.replaceWith(tipI(sm.textContent)); } return el; } catch (err) { console.error('[Dock.adopt]', err); return null; } };
     return { sw, row, grp, btn, adopt };
   },
   settings(box) {
@@ -1845,6 +1847,7 @@ const Dock = {
         row('计费接口反推（/cost）', '开启时对闭源模型请求 /api/chat/:id/cost 进行精确账单反推（开源模型自动跳过不请求，防 429 限流）；关闭后完全不请求计费接口，100% 使用本地「对话习惯 + 推理分 + 习惯库」识别，可随时开关对比准确性。', sw('costProbe', true, on => { if (typeof BillingProbe !== 'undefined' && BillingProbe.setCostProbeEnabled) BillingProbe.setCostProbeEnabled(on); const curSid = this.sid(); const ch = curSid ? Chats.get(curSid) : null; if (ch) { if (on && BillingProbe.automatic) BillingProbe.automatic(ch); else if (typeof ChatHabitFingerprint !== 'undefined') ChatHabitFingerprint.identifyAndApply(ch, { force: true }); } this.render(); })),
         row('计费接口部署锁定（/cost）', '手动输入并锁定 /cost 账单接口的 Vercel 部署编号（dpl_…，支持直接粘贴完整链接）。锁定后优先级最高，不会被自动轮换覆盖。\n当前生效：' + Pin.dpl() + (Pin.lockedDpl() ? '（已手动锁定）' : '（默认在线部署）'), h('div', { style: { display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' } }, costLockInput, btn('锁定部署', () => { if (!applyPinInput(costLockInput.value)) costLockInput.value = Pin.dpl(); }), btn('默认', () => applyPinInput(''))), { div: true }),
         row('习惯库（诊断 JSON 导入与自学习）', '通过对话记录与工具调用习惯零风控识别模型；支持将确定知道是什么模型的诊断 JSON（billing-*.json）导入到习惯库中帮助习惯识别，或在右上角点「纠偏」沉淀学习，越用越准。', btn('管理 / 导入 (' + (typeof ChatHabitFingerprint !== 'undefined' ? ChatHabitFingerprint.learnedCount() : 0) + ')', () => typeof ChatHabitFingerprint !== 'undefined' && ChatHabitFingerprint.openManager?.()), { div: true }),
+        typeof TihuHub !== 'undefined' && typeof TihuHub.row === 'function' ? adopt(() => TihuHub.row('st-row')) : null,
         row('自动读取运行记录', '每轮结束后读取 Trace（型号 / token / 花费 / 改派 / BotService），保存在本机。', sw('traceAuto', true)),
         row('实时监控换模型', '这一轮进行中每 6 秒读一次当前对话的 Trace（只读当前打开的对话）。', sw('traceLive', true)),
         row('旧版固定', '新对话由旧部署创建，实时通道照常下发运行令牌，型号能准确识别。只是一个公开的部署编号 cookie，和账号无关；Brana 删掉旧部署后自动失效。\n当前：' + st.text, h('input', { type: 'checkbox', class: 'sw', role: 'switch', checked: pinOn || null, onchange: e => Pin.set({ pinOn: e.target.checked }).then(() => this.render()) }), { cls: 'st-pin', sub: pinOn ? null : '已关闭' }),
@@ -1852,12 +1855,13 @@ const Dock = {
         row('格式推测核对', '同一轮既有「按回复格式推测」、又拿到真实型号时自动记录，看推测准不准。' + (accTxt ? '\n' + accTxt : ''), btn('查看', () => this.accTable()), { div: true })),
       grp('同步',
         row('加密同步会话名', '云端保存英文单词密文；同一口令恢复型号、匹配权重、推理分、平均耗时、时间和备注；未解锁不上传明文。', sw('autoTitle', true)),
-        adopt(TitleSync.row('st-row'))),
+        typeof TitleSync !== 'undefined' && typeof TitleSync.row === 'function' ? adopt(() => TitleSync.row('st-row')) : null),
       (() => {   // 抽卡：配置一次就很少改的选项（从抽卡面板挪过来）；张数 / 模式 / 优选 / 黑名单仍在抽卡面板
         const g = Gacha.settings(), gsw = (k, after) => h('input', { type: 'checkbox', class: 'sw', role: 'switch', checked: g[k] ? true : null, disabled: k === 'stopOnThinking' && g.fingerprint ? true : null, onchange: e => { Gacha.save({ [k]: e.target.checked }); after?.(e.target.checked); } });
         const vfOn = !!Prefs.vf && Prefs.vf === (g.vendor || ''), vfOk = !!g.vendor && g.vendor !== 'custom';
         const el = grp('抽卡',
-          row('回复中途 Thinking 就停止', '只影响抽卡发出的那一轮：回复中途出现思考链就停止生成。普通对话不受影响。测指纹模式下不适用。', gsw('stopOnThinking')),
+          row('开源自停', '开启后：新建对话抽卡过程中遇到识别开源自动暂停并自动「归档删除」；关闭则完整生成后独立识别。', gsw('openAutoStop')),
+          row('抽卡模式', '极简鹈鹕速测：直接发送简短多语言随机鹈鹕 SVG 网页指令，开源与闭源均等完整生成后识别 HTML；自定义提示词：发送设定提示词。黑名单仅归档不删除。', sel([['pelican', '极简鹈鹕速测'], ['custom', '自定义提示词']], g.mode === 'custom' ? 'custom' : 'pelican', v => { Gacha.save({ mode: v }); this.render(); })),
           row('老虎机', '抽卡时在屏幕中央显示 厂商 → 型号 → 档位 三个转轮，识别出结果后依次停下揭晓。', gsw('slot', on => { if (on) try { GSlot.reopen(); } catch {} })),
           row('目标厂商置顶', '侧栏里目标厂商的对话排在最前（同模型按推理分降序）。', gsw('sortSidebar', () => UI.renderList())),
           row('侧栏只显示目标厂商', vfOk ? '侧栏只列出当前目标厂商（' + (g.targetName || g.vendor) + '）的对话。' : '先在抽卡面板里选一个目标厂商。', h('input', { type: 'checkbox', class: 'sw', role: 'switch', checked: vfOn || null, disabled: vfOk ? null : true, onchange: e => { Prefs.vf = e.target.checked ? g.vendor : ''; savePrefs(); UI.renderList(); } })));
@@ -1939,7 +1943,7 @@ const WS = {
     this.sid = sid; this.err = null;
     if (!sid) { this.data = null; this.loading = false; this.render(); return; }
     this.loading = true; this.render();
-    try { const data = await Workspace.latest(sid, force); if (this.sid === sid && this.loadToken === token) { this.data = data; this.err = null; } }
+    try { const data = await Workspace.latest(sid, force); if (this.sid === sid && this.loadToken === token) { this.data = data; this.err = null; try { TihuHub?.onWorkspaceLoaded?.(sid, data); } catch {} } }
     catch (e) { if (this.sid === sid && this.loadToken === token) { this.err = describe(e); this.data = null; } }
     finally { if (this.sid === sid && this.loadToken === token) { this.loading = false; this.render(); } }
   },
@@ -2280,7 +2284,24 @@ const Bar = {
           if (typeof QrSync !== 'undefined' && QrSync.openModal) QrSync.openModal('export');
         },
       }, icon('link'));
-      kids.push(h('span', { class: 'acct-bal-row' }, h('span', { class: 'acct-bal', title: bt?.why || '' }, bal || '节点与账号'), refBtn));
+      const gwProxies = (typeof LocalApiGateway !== 'undefined' && LocalApiGateway.getAccountProxies) ? LocalApiGateway.getAccountProxies() : [];
+      const gwOnCount = gwProxies.filter(p => p && p.enabled !== false).length;
+      const gwRunning = Boolean(typeof LocalApiGateway !== 'undefined' && LocalApiGateway.state?.running);
+      const gwBtn = h('button', {
+        type: 'button',
+        class: 'acct-gw-btn' + (gwRunning && gwOnCount > 0 ? ' is-on' : ''),
+        'aria-label': '反代管理',
+        title: '当前账号反代管理' + (gwOnCount > 0 ? ('（已启用 ' + gwOnCount + ' 个）') : '') + '：管理已开启反代的对话卡片、固定 API 密钥与 Cloudflare 隧道',
+        onpointerdown: guardDown,
+        onmousedown: guardDown,
+        onclick: e => {
+          e.stopPropagation();
+          e.preventDefault();
+          card.__btnPressUntil = 0;
+          if (typeof LocalApiGateway !== 'undefined' && LocalApiGateway.openModal) LocalApiGateway.openModal();
+        },
+      }, icon('plug'));
+      kids.push(h('span', { class: 'acct-bal-row' }, h('span', { class: 'acct-bal', title: bt?.why || '' }, bal || '节点与账号'), refBtn, gwBtn));
     }
     sub.replaceChildren(...kids);
   },
@@ -2308,8 +2329,11 @@ const Bar = {
     const upd = Math.max(u?.at || 0, p?.at || 0); void upd;
     /* 底栏左侧仅保留对话消耗与三个功能图标，不显示刷新按钮与模型名称识别 */
     kids.push(LeaderPop.btn());
-    kids.push(h('button',{class:'bi link fp-library-btn habit-library-btn bico',title:'习惯库：将确定知道是什么模型的诊断 JSON（billing-*.json）导入到习惯库中帮助习惯识别 · 管理纠偏自学习样本','aria-label': '习惯库',onclick:()=>typeof ChatHabitFingerprint!=='undefined'&&ChatHabitFingerprint.openManager?ChatHabitFingerprint.openManager():FingerprintLibrary.open()},icon('fingerprint')));
-    kids.push(h('button',{class:'bi link pel-library-btn bico',title:'鹈鹕测试库：查看/导入/导出骑自行车鹈鹕 SVG 作品与评分，辅助后续同画像模型识别','aria-label': '鹈鹕测试库',onclick:()=>typeof PelicanShots!=='undefined'&&(PelicanShots.openLibrary||PelicanShots.table)?(PelicanShots.openLibrary||PelicanShots.table)():null},icon('pelican')));
+    kids.push(h('button',{class:'bi link pel-library-btn bico',title:'醍醐 HTML/SVG 样本库：查看各厂商/型号/强度的鹈鹕网页样本并自动识别全部对话','aria-label': '醍醐样本库',onclick:()=>typeof PelicanShots!=='undefined'&&(PelicanShots.openLibrary||PelicanShots.table)?(PelicanShots.openLibrary||PelicanShots.table)():null},icon('pelican')));
+    const barGwProxies = (typeof LocalApiGateway !== 'undefined' && LocalApiGateway.getAccountProxies) ? LocalApiGateway.getAccountProxies() : [];
+    const barGwOn = barGwProxies.filter(p => p && p.enabled !== false).length;
+    const barGwRun = Boolean(typeof LocalApiGateway !== 'undefined' && LocalApiGateway.state?.running);
+    kids.push(h('button', { class: 'bi link api-gw-bar-btn bico' + (barGwRun ? ' is-on' : ''), 'aria-label': '反代管理', title: '当前账号的反代管理' + (barGwOn > 0 ? ('（已启用 ' + barGwOn + ' 个）') : '') + '：管理已开启反代的对话卡片、固定 API 密钥与 Cloudflare 隧道', onclick: () => typeof LocalApiGateway !== 'undefined' && LocalApiGateway.openModal ? LocalApiGateway.openModal() : null }, icon('plug')));
     const run = [...Chats.values()].filter(c => (typeof Hitl !== 'undefined' ? Hitl.blocked(c) : c.busy)).length; if (run) kids.push(it('brun', '进行中的对话：' + run, h('i', { class: 'dot' }), 'X' + run));
     const curBarChat = sid && typeof Chats !== 'undefined' ? Chats.get(sid) : null;
     const isBattleBarMode = curBarChat

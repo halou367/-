@@ -83,60 +83,61 @@ const PelicanTest = (() => {
       let shot = null;
       try {
         if (chat.busy) {
-          say('鹈鹕测试：推理分已记录，等页面写完自动存图…');
+          say('鹈鹕测试：推理分已记录，等页面写完通过醍醐库识别型号…');
           for (let i = 0; chat.busy && i < 2400; i++) { if (ctl.signal.aborted) { try { await chat.stop(); } catch {} break; } await sleep(250); }
         }
         if (!chat.busy && !ctl.signal.aborted) {
-          const prevModel = name || (mi && mi.name ? Strength.canon(mi.name) : '');
-          say('鹈鹕测试：正在核对型号与保存测试图…'); await sleep(350);
+          const prevModel = (mi && !mi.guess && (mi.rawLabel || mi.name)) ? (mi.rawLabel || Strength.canon(mi.name)) : (name ? Strength.canon(name) : '');
+          say('鹈鹕测试：正在结合最新鹈鹕作品与客户端路由识别核对厂商、型号与强度…'); await sleep(320);
           try { if (typeof Fmt !== 'undefined' && Fmt.fromReplay) await Fmt.fromReplay(chat); } catch {}
-          try {
-            if (typeof ChatHabitFingerprint !== 'undefined' && typeof ChatHabitFingerprint.identifyAndApply === 'function') {
-              ChatHabitFingerprint.identifyAndApply(chat, { force: true, preferLatestTurn: true });
-            } else if (typeof BillingProbe !== 'undefined' && typeof BillingProbe.habit?.identifyAndApply === 'function') {
-              BillingProbe.habit.identifyAndApply(chat, { force: true, preferLatestTurn: true });
-            }
-          } catch {}
           if (typeof BillingProbe !== 'undefined' && typeof BillingProbe.refresh === 'function') {
             try {
-              await Promise.race([BillingProbe.refresh(chat, { force: true }), sleep(2600)]);
+              await Promise.race([BillingProbe.refresh(chat, { interactive: false, force: true, preferLatestTurn: true }), sleep(2600)]);
+            } catch {}
+          }
+          let pelMatched = null;
+          if (typeof TihuHub !== 'undefined' && typeof TihuHub.recognizePelicanChatAndApply === 'function') {
+            try {
+              pelMatched = await TihuHub.recognizePelicanChatAndApply(sid, chat, {
+                force: true,
+                preferLatestTurn: true,
+                allowHealStub: true,
+                prevModel,
+              });
+            } catch {}
+          }
+          if (!pelMatched?.matched) {
+            try {
               if (typeof ChatHabitFingerprint !== 'undefined' && typeof ChatHabitFingerprint.identifyAndApply === 'function') {
                 ChatHabitFingerprint.identifyAndApply(chat, { force: true, preferLatestTurn: true });
-              } else if (typeof BillingProbe.habit?.identifyAndApply === 'function') {
+              } else if (typeof BillingProbe !== 'undefined' && typeof BillingProbe.habit?.identifyAndApply === 'function') {
                 BillingProbe.habit.identifyAndApply(chat, { force: true, preferLatestTurn: true });
               }
-              if (typeof BillingProbe.applyReverseIdentity === 'function') BillingProbe.applyReverseIdentity(chat, { interactive: false, force: true, preferLatestTurn: true });
+              if (typeof BillingProbe !== 'undefined' && typeof BillingProbe.applyReverseIdentity === 'function') {
+                BillingProbe.applyReverseIdentity(chat, { interactive: false, force: true, preferLatestTurn: true });
+              }
             } catch {}
           }
           const latestMi = Models.get(sid);
           const hmBest = latestMi?.habitFeatures?.htmlSvgMatch?.best || chat?._habitFeatures?.htmlSvgMatch?.best || null;
-          const hmCanon = hmBest?.canon ? Strength.canon(hmBest.canon) : '';
-          const hmConf = Number(hmBest?.match || (hmBest?.prob != null ? hmBest.prob * 100 : 0) || (hmBest?.confidence != null ? hmBest.confidence * 100 : 0) || 0);
-          const hmStrongEvidence = Boolean((Number(hmBest?.ruleScore) || 0) >= 0.58 || (Number(hmBest?.protoSim) || 0) >= 0.82);
           const spectralScore = latestMi?.habitFeatures?.htmlSvgMatch?.spectralScore ?? chat?._habitFeatures?.htmlSvgMatch?.spectralScore ?? null;
-          const latestMiCanon = (latestMi && !latestMi.guess && latestMi.name) ? Strength.canon(latestMi.name) : '';
+          const hmCanon = hmBest ? Strength.canon(hmBest.canon || hmBest.id || '') : '';
+          const hmConfRaw = Number(hmBest?.confidence || 0);
+          const hmConf = hmConfRaw <= 1 ? hmConfRaw * 100 : hmConfRaw;
+          const hmStrongEvidence = Boolean(Number(hmBest?.ruleScore) >= 0.55 || Number(hmBest?.score) >= 0.88);
+          const latestMiCanon = (latestMi && !latestMi.guess && latestMi.name) ? Strength.canon(latestMi.rawLabel || latestMi.name) : '';
           const latestName = latestMiCanon || ((hmCanon && hmConf >= 82 && hmStrongEvidence) ? hmCanon : '') || name;
-          const stripBaseFam = s => (typeof ChatHabitFingerprint !== 'undefined' && ChatHabitFingerprint.parseModelFamilyAndTier)
-            ? (ChatHabitFingerprint.parseModelFamilyAndTier(s).famKey || String(s || '').toLowerCase())
-            : String(s || '').toLowerCase().replace(/\s*\((?:none|minimal|low|medium|high|xhigh|max)\)\s*$/i, '').replace(/-(?:none|minimal|low|medium|high|xhigh|max)$/i, '').replace(/[?？]+$/, '').trim();
-          const prevBaseFam = stripBaseFam(prevModel);
-          const nextBaseFam = stripBaseFam(latestName);
-          const isTrueCrossFamilyRoute = Boolean(
-            prevModel && latestName && prevBaseFam && nextBaseFam && prevBaseFam !== nextBaseFam &&
-            (Boolean(latestMi?.routed) || (mi && !mi.guess && !mi.pendingConfirm && Number(mi.reverseMatch ?? mi.confidence ?? 0) >= 92 && hmStrongEvidence))
-          );
-          if (isTrueCrossFamilyRoute) {
+
+          if (latestMi?.routed && latestMi.routeFrom && latestMi.routeTo) {
             chat.routed = true;
-            chat.routeFrom = prevModel;
-            chat.routeTo = latestName;
-            try {
-              const curM = Models.get(sid) || {};
-              Models.put(sid, { ...curM, name: latestName, guess: false, routed: true, routeFrom: prevModel, routeTo: latestName, routeType: 'model' });
-              Bus.emit('model', chat, Models.get(sid));
-            } catch {}
-            toast('检测到模型路由切换：' + prevModel + ' → ' + latestName, 'warn');
+            chat.routeFrom = latestMi.routeFrom;
+            chat.routeTo = latestMi.routeTo;
+            toast('检测到模型路由切换：' + latestMi.routeFrom + ' → ' + latestMi.routeTo, 'warn');
+          } else if (latestMi?.effortDowngraded && latestMi.routeFrom && latestMi.routeTo) {
+            toast('检测到同型号强度降档：' + latestMi.routeFrom + ' → ' + latestMi.routeTo, 'warn');
           }
-          if ((latestName && latestName !== name) || spectralScore != null) {
+
+          if ((latestName && latestName !== name) || spectralScore != null || pelMatched?.matched) {
             remember(sid, {
               at: now(),
               score,
@@ -145,14 +146,24 @@ const PelicanTest = (() => {
               estimated: own != null && !real,
               name: latestName || name,
               ...(spectralScore != null ? { spectralScore } : {}),
-              ...(hmBest?.canon ? { htmlSvgModel: hmBest.canon, htmlSvgVendor: hmBest.vendor, htmlSvgEffort: hmBest.effort } : {}),
+              ...(hmBest?.id || hmBest?.canon ? { htmlSvgModel: hmBest.id || hmBest.canon, htmlSvgEffort: hmBest.effort } : {}),
             });
           }
           shot = await PelicanShots.auto(sid, chat);
-          if (shot?.rec) { try { Dock.render(); } catch {} toast('鹈鹕测试图已自动保存 · ' + (latestName || shot.rec.model) + '（模型信息 · 概览 · 鹈鹕测试图）'); }
-          else if (shot?.none) toast('鹈鹕测试：' + shot.none);
+          if (typeof Titles !== 'undefined' && typeof Titles.syncRecognized === 'function') {
+            Titles.syncRecognized(sid, { cloud: true, sentAt: chat?.sentAt });
+          }
+          const toastLabel = pelMatched?.displayLabel || shot?.tihu?.displayLabel || latestMi?.rawLabel || '';
+          if (toastLabel && !latestMi?.routed) {
+            try { Dock.render(); UI?.renderListSoon?.(); UI?.renderTabs?.(); } catch {}
+            toast('醍醐已匹配最新鹈鹕测试 · ' + toastLabel, 'ok');
+          } else {
+            try { Dock.render(); UI?.renderListSoon?.(); UI?.renderTabs?.(); } catch {}
+            if (shot?.rec) toast('鹈鹕测试图已自动保存 · ' + (latestName || shot.rec.model) + '（模型信息 · 概览 · 鹈鹕测试图）');
+            else if (shot?.none) toast('鹈鹕测试：' + shot.none);
+          }
         } else if (chat.busy) { try { await chat.stop(); } catch {} }
-      } catch (e) { toast('测试图保存失败：' + describe(e), 'err'); }
+      } catch (e) { toast('醍醐识别更新失败：' + describe(e), 'err'); }
       const finalMi = Models.get(sid);
       const finalName = (finalMi && !finalMi.guess && finalMi.name) ? Strength.canon(finalMi.name) : name;
       return { score, think: est.think, name: finalName, routed: Boolean(chat.routed), routeFrom: chat.routeFrom || '', routeTo: chat.routeTo || '', shot: !!shot?.rec };

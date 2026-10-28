@@ -288,6 +288,57 @@ function httpReq(port, method, urlPath, headers, body) {
     assert.deepStrictEqual(gemMediaParts.map(p => p.inlineData.mimeType).sort(), ['audio/wav', 'image/png', 'video/mp4']);
     assert.ok(gemMediaParts.every(p => p.inlineData.data.length > 0));
 
+    console.log('[9b] Battle proxy card registration (-battle-A / -battle-B routing & toggle/delete)');
+    const upSt = await gw.handleIpc(activeWebContents, {
+      op: 'upsertProxy',
+      card: {
+        sid: 'battle-sid-999',
+        accountId: 'acc-1',
+        title: '视频 Battle 对话',
+        mode: 'battle',
+        modality: 'video',
+        battleTarget: 'B',
+      },
+    });
+    assert.strictEqual(upSt.proxies.length, 1);
+    const bCard = upSt.proxies[0];
+    assert.ok(bCard.modelIdA.endsWith('-battle-A'));
+    assert.ok(bCard.modelIdB.endsWith('-battle-B'));
+    assert.strictEqual(bCard.modelId, bCard.modelIdB);
+
+    const modelsAfterBattle = await httpReq(port, 'GET', '/v1/models');
+    const modelIdsAfter = modelsAfterBattle.json.data.map(m => m.id);
+    assert.ok(modelIdsAfter.includes(bCard.modelIdA), 'models list must include <id>-battle-A');
+    assert.ok(modelIdsAfter.includes(bCard.modelIdB), 'models list must include <id>-battle-B');
+
+    const resBattleB = await httpReq(port, 'POST', '/v1/chat/completions', { Authorization: 'Bearer ' + key }, {
+      model: bCard.modelIdB,
+      messages: [{ role: 'user', content: '继续生成下一个视频' }],
+    });
+    assert.strictEqual(resBattleB.status, 200);
+    assert.strictEqual(latestGatewayRequest.boundSid, 'battle-sid-999');
+    assert.strictEqual(latestGatewayRequest.battleSide, 'b');
+
+    const resBattleA = await httpReq(port, 'POST', '/v1/chat/completions', { Authorization: 'Bearer ' + key }, {
+      model: bCard.modelIdA,
+      messages: [{ role: 'user', content: '继续生成下一个视频' }],
+    });
+    assert.strictEqual(resBattleA.status, 200);
+    assert.strictEqual(latestGatewayRequest.battleSide, 'a');
+
+    await gw.handleIpc(activeWebContents, { op: 'toggleProxy', sid: 'battle-sid-999', enabled: false });
+    const stoppedRes = await httpReq(port, 'POST', '/v1/chat/completions', { Authorization: 'Bearer ' + key }, {
+      model: bCard.modelIdB,
+      messages: [{ role: 'user', content: '测试暂停' }],
+    });
+    assert.strictEqual(stoppedRes.status, 403);
+
+    const afterDel = await gw.handleIpc(activeWebContents, { op: 'deleteProxy', sid: 'battle-sid-999' });
+    assert.strictEqual(afterDel.proxies.length, 0);
+
+    const tunSt = await gw.handleIpc(activeWebContents, { op: 'tunnelConfig', mode: 'custom', customDomain: 'https://api.example.com' });
+    assert.strictEqual(tunSt.publicBaseUrlOpenAI, 'https://api.example.com/v1');
+
     console.log('[10] Checking UI bundle source & Direct/Battle mode copy button stability...');
     const coreCode = fs.readFileSync(path.join(clientRoot, 'ui/core.js'), 'utf8');
     const viewCode = fs.readFileSync(path.join(clientRoot, 'ui/view.js'), 'utf8');

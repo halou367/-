@@ -94,11 +94,11 @@ test('5. Habit Gacha Mode (习惯速测 · 微缩探针) & Micro-Probe ChatHabit
   const bpUiSrc = fs.readFileSync(path.join(uiDir, 'billing-probe-ui.js'), 'utf8');
 
   // Verify UI mode wiring for 'habit'
-  assert.ok(gachaSrc.includes("['habit','autoqa','svg','custom','fingerprint'].includes(s.mode)"));
-  assert.ok(gachaSrc.includes("const isHabitOnly = c.gacha?.mode === 'habit';"));
-  assert.ok(gachaSrc.includes("const costAllowed = !isHabitOnly &&"));
-  assert.ok(gviewSrc.includes("'习惯速测 · 鹈鹕识别'"));
-  assert.ok(gpopSrc.includes('<option value="habit">习惯速测 · 鹈鹕识别</option>'));
+  assert.ok(gachaSrc.includes("const mode = s.mode === 'custom' ? 'custom' : 'pelican';"));
+  assert.ok(gachaSrc.includes("const isPelicanMode = s.mode !== 'custom';"));
+  assert.ok(gachaSrc.includes('openAutoStop'));
+  assert.ok(gviewSrc.includes("'极简鹈鹕速测'"));
+  assert.ok(gpopSrc.includes('<option value="pelican">极简鹈鹕速测</option>'));
 
   // Evaluate GachaPrompts in sandbox and verify 6 technical refinements
   const gpStore = {};
@@ -418,7 +418,7 @@ test('8. Habit & Reverse Inference accuracy: pure analyze() without self-reinfor
   // 4. Unified cross-account habitLearnBank sync & 22 newest userConfirmed sessions (46/46 total)
   const bootSrc = fs.readFileSync(path.join(uiDir, 'boot.js'), 'utf8');
   assert.ok(bootSrc.includes('m?.habitBankSync'), 'boot.js must listen for habitBankSync');
-  assert.ok(bootSrc.includes('ChatHabitFingerprint.syncShared({ force: true })'), 'boot.js must syncShared on startup/account switch');
+  assert.ok(bootSrc.includes('TihuHub.pullSharedFromHost'), 'boot.js must sync TihuHub shared state across accounts');
   assert.equal(typeof CHF.syncShared, 'function', 'ChatHabitFingerprint must export syncShared');
   assert.equal(typeof CHF.applyRemoteSync, 'function', 'ChatHabitFingerprint must export applyRemoteSync');
 

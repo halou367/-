@@ -208,7 +208,7 @@ const LeaderPop = {
         h('span', { class: 'dim' }, fams.length + ' 个型号 · ' + scoredCount + ' 个有分 · ', h('b', { class: 'lp-time' }, '更新 ' + this.fmtTime(strAt))),
         tipI('推理分（0–100）：综合实测思考时长、指纹与费用反推隐藏思考深度计算。\n点任意档位可点亮/熄灭金色置顶。'),
         h('span', { class: 'grow' }),
-        h('button', { class: 'btn xs ghost', title: '打开全客户端鹈鹕测试库：查看/对比各型号鹈鹕测试图、导入合并、导出分享', onclick: () => { this.close(); if (typeof PelicanShots !== 'undefined') PelicanShots.table?.(); } }, icon('pelican'), '鹈鹕库'),
+        h('button', { class: 'btn xs ghost', title: '打开醍醐 HTML/SVG 样本库：查看各厂商/型号/强度的鹈鹕网页样本并重识全部对话', onclick: () => { this.close(); if (typeof PelicanShots !== 'undefined') PelicanShots.table?.(); } }, icon('pelican'), '醍醐库'),
         h('button', { class: 'btn xs ghost', title: '重新收集本机推理分样本', onclick: async () => { await Strength.pull(true); Strength.collectAll(); this.fill(); } }, icon('refresh')),
         h('button', { class: 'btn xs ghost', onclick: () => { this.close(); Tabs.openPower('power'); } }, '完整排行 ↗')));
       body.append(GoldBoard.el({ compact: true, cur }));
@@ -353,21 +353,35 @@ const LocalApiGateway = (() => {
     port: 18765,
     host: '127.0.0.1',
     apiKey: '',
+    keyFixed: true,
     requireKey: false,
     sessionMode: 'bound',
     toolMode: 'auto_bridge',
-    protocolTab: 'auto',
+    protocolTab: 'openai',
     snippetTab: 'client',
     boundSid: null,
     boundTitle: '',
+    accountId: '',
     modelName: '自动识别 / 当前会话模型',
     modelId: 'brana-current',
     modelFam: '',
-    vendorProtocol: 'openai',
+    vendorProtocol: 'arena',
     reqCount: 0,
     lastReqAt: 0,
     lastError: '',
     logs: [],
+    proxies: [],
+    tunnel: {
+      running: false,
+      status: 'stopped',
+      mode: 'quick',
+      publicUrl: '',
+      customDomain: '',
+      hasToken: false,
+      tokenPreview: '',
+      error: '',
+      pid: 0,
+    },
     baseUrlOpenAI: 'http://127.0.0.1:18765/v1',
     baseUrlAnthropic: 'http://127.0.0.1:18765',
     baseUrlGemini: 'http://127.0.0.1:18765/v1beta',
@@ -375,6 +389,10 @@ const LocalApiGateway = (() => {
     endpointResponses: 'http://127.0.0.1:18765/v1/responses',
     endpointAnthropic: 'http://127.0.0.1:18765/v1/messages',
     endpointGemini: 'http://127.0.0.1:18765/v1beta/models/brana-current:generateContent',
+    publicBaseUrl: '',
+    publicBaseUrlOpenAI: '',
+    publicEndpointOpenAI: '',
+    activeBaseUrlOpenAI: 'http://127.0.0.1:18765/v1',
   };
 
   let _modalBack = null;
@@ -383,16 +401,35 @@ const LocalApiGateway = (() => {
   let _lastSyncKey = '';
   let _pointerDownInModal = false;
   let _pendingModalRender = false;
+  let _editingCardId = '';
+  let _editingApiKey = false;
+  let _showAdvancedProto = false;
   let _reqChain = Promise.resolve();
   const _handledReqIds = new Set();
   const _statelessMap = new Map();
+  const _sharedBattleTurns = new Map();
 
-  function inferVendor(modelSlugOrName, fam) {
-    const m = String(modelSlugOrName || '').toLowerCase();
-    const f = String(fam || '').toLowerCase();
-    if (f === 'anthropic' || m.includes('claude') || m.includes('opus') || m.includes('sonnet') || m.includes('haiku') || m.includes('fable')) return 'anthropic';
-    if (f === 'google' || m.includes('gemini') || m.includes('gemma')) return 'gemini';
-    return 'openai';
+  function inferVendor() {
+    return 'arena';
+  }
+
+  function genShortBattleId(seed = '') {
+    const s = String(seed || '').trim();
+    if (!s) return Math.random().toString(36).slice(2, 6).toLowerCase();
+    let h = 2166136261;
+    for (let i = 0; i < s.length; i++) {
+      h ^= s.charCodeAt(i);
+      h = Math.imul(h, 16777619);
+    }
+    return ((h >>> 0).toString(36) + '0000').slice(0, 4).toLowerCase();
+  }
+
+  function getCurrentAccountId() {
+    try {
+      if (typeof window !== 'undefined' && window.__accountId) return String(window.__accountId);
+      if (typeof AccountMgr !== 'undefined' && AccountMgr.state?.activeId) return String(AccountMgr.state.activeId);
+    } catch {}
+    return 'default';
   }
 
   function toModelSlug(name, internal) {
@@ -402,10 +439,35 @@ const LocalApiGateway = (() => {
     return slug || 'brana-current';
   }
 
+  function getAccountProxies(accId) {
+    const curAcc = String(accId || getCurrentAccountId() || 'default');
+    const all = Array.isArray(_state.proxies) ? _state.proxies : [];
+    return all.filter(p => p && (!p.accountId || p.accountId === curAcc || p.accountId === 'default' || curAcc === 'default'));
+  }
+
+  function getProxyCardForSid(sid) {
+    if (!sid) return null;
+    const s = String(sid).trim();
+    const all = Array.isArray(_state.proxies) ? _state.proxies : [];
+    return all.find(p => p && p.sid === s) || null;
+  }
+
+  function isSidProxied(sid) {
+    if (!sid) return false;
+    const card = getProxyCardForSid(sid);
+    if (card) return card.enabled !== false;
+    return Boolean(_state.running && _state.boundSid === sid);
+  }
+
   function computeModalSig() {
     const logsSig = Array.isArray(_state.logs)
       ? _state.logs.slice(0, 8).map(l => `${l.id || ''}:${l.status || ''}:${l.model || ''}:${l.toolsCount || 0}`).join('|')
       : '';
+    const pxSig = Array.isArray(_state.proxies)
+      ? _state.proxies.map(p => `${p.id}:${p.sid}:${p.enabled ? 1 : 0}:${p.modelId}:${p.battleTarget}:${p.reqCount || 0}:${p.title}`).join('|')
+      : '';
+    const tun = _state.tunnel || {};
+    const tunSig = `${tun.running ? 1 : 0}:${tun.status || ''}:${tun.mode || ''}:${tun.publicUrl || ''}:${tun.customDomain || ''}:${tun.error || ''}`;
     return [
       _state.running ? 1 : 0,
       _state.port || 18765,
@@ -413,7 +475,7 @@ const LocalApiGateway = (() => {
       _state.requireKey ? 1 : 0,
       _state.sessionMode || 'bound',
       _state.toolMode || 'auto_bridge',
-      _state.protocolTab || 'auto',
+      _state.protocolTab || 'openai',
       _state.snippetTab || 'client',
       _state.boundSid || '',
       _state.modelName || '',
@@ -422,6 +484,11 @@ const LocalApiGateway = (() => {
       _state.vendorProtocol || 'openai',
       _state.reqCount || 0,
       _state.lastError || '',
+      _editingCardId || '',
+      _editingApiKey ? 1 : 0,
+      _showAdvancedProto ? 1 : 0,
+      pxSig,
+      tunSig,
       logsSig,
     ].join('\u0001');
   }
@@ -429,8 +496,16 @@ const LocalApiGateway = (() => {
   function syncPlusIndicator() {
     try {
       const curSid = typeof Tabs !== 'undefined' ? Tabs.cur?.sid : null;
-      const on = Boolean(_state.running && (_state.sessionMode === 'stateless' || !_state.boundSid || _state.boundSid === curSid));
+      const acctProxies = getAccountProxies();
+      const activeCount = acctProxies.filter(p => p.enabled !== false).length;
+      const on = Boolean(_state.running && (isSidProxied(curSid) || activeCount > 0 || !_state.boundSid || _state.boundSid === curSid));
       document.querySelectorAll('.crow .attbtn').forEach(el => el.classList.toggle('api-on', on));
+      if (typeof Dock !== 'undefined' && typeof Dock.render === 'function') {
+        try { Dock.render(); } catch {}
+      }
+      if (typeof UI !== 'undefined' && typeof UI.renderListSoon === 'function') {
+        try { UI.renderListSoon(); } catch {}
+      }
     } catch {}
   }
 
@@ -440,6 +515,7 @@ const LocalApiGateway = (() => {
     const hEntry = (targetSid && typeof History !== 'undefined' && typeof History.byId === 'function') ? History.byId(targetSid) : null;
     const m = (targetSid && typeof Models !== 'undefined' ? Models.get(targetSid) : null) || c?.model || null;
     const curGlobalMode = (typeof ModeState !== 'undefined' && typeof ModeState.getMode === 'function') ? ModeState.getMode() : 'agent';
+    const curModality = String(c?.modality || c?.evalModality || c?.resolvedModality || hEntry?.modality || (typeof ModeState !== 'undefined' && ModeState.getModality ? ModeState.getModality() : 'chat') || 'chat');
     const isDirect = Boolean(
       c?.evalMode === 'direct' ||
       hEntry?.mode === 'direct' ||
@@ -456,6 +532,8 @@ const LocalApiGateway = (() => {
       (!c && !targetSid && curGlobalMode === 'battle')
     );
     const isUuidLike = (s) => /^[0-9a-f]{8}-[0-9a-f]{4}-/i.test(String(s || '').trim());
+    const randomId = genShortBattleId(targetSid || 'battle');
+    const accountId = getCurrentAccountId();
 
     if (isDirect) {
       const dm = (typeof ModeState !== 'undefined' && typeof ModeState.getDirectModel === 'function') ? ModeState.getDirectModel() : null;
@@ -474,6 +552,10 @@ const LocalApiGateway = (() => {
       const vendorProtocol = inferVendor(modelId + ' ' + rawName, rawFam);
       return {
         sid: targetSid || null,
+        accountId,
+        mode: 'direct',
+        modality: curModality,
+        randomId,
         title: String(c?.title || hEntry?.title || ('Direct · ' + (rawName || '直连会话'))).slice(0, 60),
         modelName: rawName || 'Direct 直连模型',
         modelInternal: !isUuidLike(rawSlug) ? rawSlug : rawName,
@@ -491,14 +573,27 @@ const LocalApiGateway = (() => {
       const validB = (bName && !isUuidLike(bName) && !/^(未知|待定|Model B)$/i.test(bName)) ? bName : '';
       const canonA = (validA && typeof Strength !== 'undefined' && Strength.canon) ? Strength.canon(validA) : validA;
       const canonB = (validB && typeof Strength !== 'undefined' && Strength.canon) ? Strength.canon(validB) : validB;
-      const displayBattle = (canonA && canonB) ? `${canonA} vs ${canonB}` : (canonA || 'Battle 匿名盲测双模型');
-      const primarySlug = canonA ? toModelSlug(canonA, canonA) : 'brana-battle';
+      const existingCard = getProxyCardForSid(targetSid);
+      const bTarget = existingCard?.battleTarget || 'B';
+      const modelIdA = `${randomId}-battle-A`;
+      const modelIdB = `${randomId}-battle-B`;
+      const primarySlug = existingCard?.modelId || (bTarget === 'A' ? modelIdA : (bTarget === 'card' ? `${randomId}-battle-card` : modelIdB));
+      const displayBattle = (canonA && canonB)
+        ? `${canonA} vs ${canonB}`
+        : `Battle 盲测 (${modelIdA} / ${modelIdB})`;
       const vid = (canonA && typeof Brand !== 'undefined' && Brand.of) ? Brand.of(canonA) : '';
       const rawFam = String(m?.fam || vid || '').trim();
       const vendorProtocol = inferVendor(primarySlug + ' ' + canonA, rawFam);
       return {
         sid: targetSid || null,
-        title: String(c?.title || hEntry?.title || 'Battle 盲测会话').slice(0, 60),
+        accountId,
+        mode: 'battle',
+        modality: curModality,
+        randomId,
+        battleTarget: bTarget,
+        modelIdA,
+        modelIdB,
+        title: String(c?.title || hEntry?.title || (curModality === 'video' ? `视频 Battle (${randomId})` : `Battle 对话 (${randomId})`)).slice(0, 60),
         modelName: displayBattle,
         modelInternal: primarySlug,
         modelFam: rawFam,
@@ -517,13 +612,18 @@ const LocalApiGateway = (() => {
     const vid = (rawName && typeof Brand !== 'undefined' && Brand.of) ? Brand.of(rawName) : '';
     const rawFam = String(m?.fam || vid || '').trim();
     const modelName = rawName || '当前对话模型（对话后自动锁定名称）';
-    const modelId = toModelSlug(rawName, rawInternal);
+    const rawSlug = toModelSlug(rawName, rawInternal);
+    const modelId = (rawSlug && rawSlug !== 'brana-current') ? rawSlug : `${randomId}-chat`;
     const vendorProtocol = inferVendor(modelId + ' ' + rawName, rawFam);
     return {
       sid: targetSid || null,
+      accountId,
+      mode: 'agent',
+      modality: curModality,
+      randomId,
       title: String(c?.title || hEntry?.title || '当前对话').slice(0, 60),
       modelName,
-      modelInternal: rawInternal,
+      modelInternal: rawInternal || modelId,
       modelFam: rawFam,
       vid,
       modelId,
@@ -560,9 +660,10 @@ const LocalApiGateway = (() => {
 
   async function syncCurrentContext(chat, tab) {
     const meta = readChatModelMeta(chat, tab?.sid);
-    const syncKey = [meta.sid || '', meta.title || '', meta.modelName || '', meta.modelInternal || '', meta.modelFam || '', meta.modelId || ''].join('\u0001');
+    const syncKey = [meta.sid || '', meta.accountId || '', meta.mode || '', meta.title || '', meta.modelName || '', meta.modelInternal || '', meta.modelFam || '', meta.modelId || ''].join('\u0001');
     _state.boundSid = meta.sid;
     _state.boundTitle = meta.title;
+    _state.accountId = meta.accountId;
     _state.modelName = meta.modelName;
     _state.modelId = meta.modelId;
     _state.modelFam = meta.modelFam;
@@ -574,12 +675,54 @@ const LocalApiGateway = (() => {
     _lastSyncKey = syncKey;
     return await callHost({
       op: 'sync',
+      sid: meta.sid,
       boundSid: meta.sid,
       boundTitle: meta.title,
+      title: meta.title,
+      accountId: meta.accountId,
+      mode: meta.mode,
+      modality: meta.modality,
+      randomId: meta.randomId,
       modelName: meta.modelName,
       modelInternal: meta.modelInternal,
       modelFam: meta.modelFam,
     });
+  }
+
+  async function registerChatProxy(chatOrSid, opts = {}) {
+    const c = (chatOrSid && typeof chatOrSid === 'object')
+      ? chatOrSid
+      : (chatOrSid && typeof Chats !== 'undefined' ? Chats.get(chatOrSid) : (typeof UI !== 'undefined' ? UI.els?.chat : null));
+    const sid = (typeof chatOrSid === 'string' ? chatOrSid : c?.sid) || (typeof Tabs !== 'undefined' ? Tabs.cur?.sid : null);
+    const meta = readChatModelMeta(c, sid);
+    if (!meta.sid) {
+      if (typeof toast === 'function') toast('请先选择一个对话或发送一条消息后再加入反代', 'warn');
+      return _state;
+    }
+    const res = await callHost({
+      op: 'upsertProxy',
+      autoStart: opts.autoStart !== false,
+      accountId: meta.accountId,
+      card: {
+        sid: meta.sid,
+        accountId: meta.accountId,
+        title: opts.title || meta.title,
+        mode: opts.mode || meta.mode,
+        modality: opts.modality || meta.modality,
+        randomId: meta.randomId,
+        battleTarget: opts.battleTarget || meta.battleTarget || 'B',
+        customModelId: opts.customModelId,
+        modelName: meta.modelName,
+        modelInternal: meta.modelInternal,
+        modelFam: meta.modelFam,
+        enabled: opts.enabled !== undefined ? Boolean(opts.enabled) : true,
+      },
+    });
+    if (typeof toast === 'function' && !opts.silent) {
+      const px = getProxyCardForSid(meta.sid);
+      toast('已加入反代：' + (px?.modelId || meta.modelId), 'ok');
+    }
+    return res;
   }
 
   function createToolStreamSplitter(onTextDelta, onToolCall) {
@@ -640,30 +783,34 @@ const LocalApiGateway = (() => {
       flush(fullText) {
         const str = String(fullText || '');
         if (processedLen < str.length) {
-          const tail = str.slice(processedLen);
-          const openIdx = tail.indexOf(OPEN_TAG);
-          if (openIdx >= 0 && tail.indexOf(CLOSE_TAG, openIdx + OPEN_TAG.length) >= 0) {
+          const rem = str.slice(processedLen);
+          const openIdx = rem.indexOf(OPEN_TAG);
+          const closeIdx = openIdx !== -1 ? rem.indexOf(CLOSE_TAG, openIdx + OPEN_TAG.length) : -1;
+          if (openIdx !== -1 && closeIdx !== -1) {
             this.feed(str);
-            return;
+          } else {
+            onTextDelta(rem);
+            processedLen = str.length;
           }
-          onTextDelta(tail);
-          processedLen = str.length;
         }
       },
     };
   }
 
-  function buildTurnPrompt(chat, job) {
-    const msgs = Array.isArray(job.messages) ? job.messages : [];
-    const tools = Array.isArray(job.tools) ? job.tools : [];
-    const useToolBridge = tools.length > 0 && job.toolMode !== 'arena_native_only';
-    const toolsSig = useToolBridge ? tools.map((t) => t.name).sort().join(',') : '';
-    const hasExistingTurns = Boolean(chat && Array.isArray(chat.messages) && chat.messages.length > 0);
+  function composePromptFromJob(job, hasExistingTurns) {
+    const msgs = Array.isArray(job?.messages) ? job.messages : [];
+    const tools = Array.isArray(job?.tools) ? job.tools : [];
+    const toolMode = job?.toolMode || _state.toolMode || 'auto_bridge';
     const blocks = [];
+    const mediaHint = (m) => {
+      const list = Array.isArray(m?.media) ? m.media : [];
+      if (!list.length) return '';
+      return '[Attached Media: ' + list.map((x) => `${x.type || 'file'}(${x.name || x.mimeType || 'media'})`).join(', ') + ']';
+    };
 
-    if (useToolBridge && (!chat || chat._apiToolsSig !== toolsSig)) {
-      const toolLines = tools.slice(0, 40).map((t) => {
-        const desc = String(t.description || '').replace(/\s+/g, ' ').slice(0, 200);
+    if (tools.length > 0 && toolMode !== 'arena_native_only') {
+      const toolLines = tools.map((t) => {
+        const desc = t.description ? String(t.description).trim() : '无描述';
         const schema = JSON.stringify(t.parameters || { type: 'object', properties: {} });
         return '- `' + t.name + '`: ' + desc + ' | schema: ' + schema;
       });
@@ -684,122 +831,390 @@ const LocalApiGateway = (() => {
       if (msgs.length <= 1) {
         const m0 = msgs[0];
         if (m0?.content) blocks.push(String(m0.content));
+        if (Array.isArray(m0?.media) && m0.media.length) blocks.push(mediaHint(m0));
       } else {
         const prior = msgs.slice(0, -1);
         const last = msgs[msgs.length - 1];
         const histLines = prior.map((m) => {
-          if (m.role === 'tool') return '[Tool Result (' + (m.toolCallId || 'tool') + ')]: ' + String(m.content || '');
-          return (m.role === 'assistant' ? 'Assistant: ' : 'User: ') + String(m.content || '');
-        });
-        if (histLines.length) blocks.push('[Conversation Context]\n' + histLines.join('\n\n'));
-        if (last) {
-          if (last.role === 'tool') {
-            blocks.push('[本地工具执行结果 (' + (last.toolCallId || 'tool') + ')]:\n' + String(last.content || ''));
-          } else {
-            blocks.push(String(last.content || ''));
-          }
+          const line = m.role === 'tool'
+            ? '[Tool Result (' + (m.toolCallId || 'tool') + ')]: ' + String(m.content || '')
+            : (m.role === 'assistant' ? 'Assistant: ' : 'User: ') + String(m.content || '');
+          const hint = mediaHint(m);
+          return hint ? (line ? line + '\n' + hint : hint) : line;
+        }).filter(Boolean);
+        if (histLines.length) {
+          blocks.push('[Conversation History]\n' + histLines.join('\n\n'));
         }
+        const lastBlock = last?.role === 'tool'
+          ? '[Tool Execution Result (' + (last.toolCallId || 'tool') + ')]\n' + String(last.content || '')
+          : String(last?.content || '');
+        const lastHint = mediaHint(last);
+        if (lastBlock || lastHint) blocks.push([lastBlock, lastHint].filter(Boolean).join('\n'));
       }
     } else {
-      let lastAsstIdx = -1;
+      const tail = [];
       for (let i = msgs.length - 1; i >= 0; i--) {
-        if (msgs[i]?.role === 'assistant') {
-          lastAsstIdx = i;
-          break;
-        }
+        const m = msgs[i];
+        if (m.role === 'assistant') break;
+        tail.unshift(m);
       }
-      const deltaMsgs = lastAsstIdx >= 0 ? msgs.slice(lastAsstIdx + 1) : msgs.slice(-1);
-      for (const dm of deltaMsgs) {
-        if (!dm) continue;
-        if (dm.role === 'tool') {
-          blocks.push(
-            '[本地工具执行结果 (tool_call_id: ' + (dm.toolCallId || 'tool') + ')]' +
-            (dm.isError ? ' [执行出错]' : '') + ':\n' +
-            String(dm.content || '')
-          );
-        } else if (dm.content) {
-          blocks.push(String(dm.content));
+      if (!tail.length && msgs.length) tail.push(msgs[msgs.length - 1]);
+      for (const m of tail) {
+        if (m.role === 'tool') {
+          blocks.push('[Tool Execution Result (' + (m.toolCallId || 'tool') + ')]\n' + String(m.content || ''));
+        } else if (m.content) {
+          blocks.push(String(m.content));
         }
-      }
-      if (useToolBridge && deltaMsgs.some((m) => m?.role === 'tool')) {
-        blocks.push('（如需继续调用外部工具，请继续输出 <brana_tool_call>{"name":"...","arguments":{...}}</brana_tool_call>；如已完成，请直接输出最终回复。）');
+        if (Array.isArray(m?.media) && m.media.length) blocks.push(mediaHint(m));
       }
     }
 
-    const promptText = blocks.filter(Boolean).join('\n\n').trim() || '继续';
-    return { promptText, toolsSig };
+    const finalPrompt = blocks.filter(Boolean).join('\n\n').trim();
+    return finalPrompt || '继续';
   }
 
-  function sendStreamEvent(payload) {
-    try {
-      if (typeof BranaHost !== 'undefined') {
-        if (BranaHost.apiGateway) BranaHost.apiGateway({ op: 'stream', ...payload });
-        else if (BranaHost.shared) BranaHost.shared('__localApiGateway', { op: 'stream', ...payload });
+  function dataUrlToFile(dataUrl, fallbackName = 'attachment.bin', fallbackMime = 'application/octet-stream') {
+    const raw = String(dataUrl || '');
+    const m = /^data:([^,]*?),(.*)$/is.exec(raw);
+    if (!m) return null;
+    const header = m[1] || '';
+    const params = header.split(';');
+    const mime = String(params.shift() || fallbackMime || 'application/octet-stream').trim() || 'application/octet-stream';
+    const isBase64 = params.some((x) => String(x).trim().toLowerCase() === 'base64');
+    let bytes;
+    if (isBase64) {
+      const bin = atob(String(m[2] || '').replace(/\s+/g, ''));
+      bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    } else {
+      bytes = new TextEncoder().encode(decodeURIComponent(m[2] || ''));
+    }
+    return new File([bytes], fallbackName, { type: mime, lastModified: Date.now() });
+  }
+
+  function extractJobMediaFiles(job, hasExistingTurns) {
+    const msgs = Array.isArray(job?.messages) ? job.messages : [];
+    let sourceMsgs = msgs;
+    if (hasExistingTurns && msgs.length) {
+      const tail = [];
+      for (let i = msgs.length - 1; i >= 0; i--) {
+        if (msgs[i]?.role === 'assistant') break;
+        tail.unshift(msgs[i]);
       }
-    } catch {}
+      sourceMsgs = tail.length ? tail : [msgs[msgs.length - 1]];
+    }
+    const files = [];
+    for (const msg of sourceMsgs) {
+      for (const media of (Array.isArray(msg?.media) ? msg.media : [])) {
+        if (!media?.dataUrl) continue;
+        try {
+          const f = dataUrlToFile(media.dataUrl, media.name || 'api-media', media.mimeType);
+          if (f) files.push(f);
+        } catch {}
+      }
+    }
+    return files;
+  }
+
+  function blobToDataUrl(blob) {
+    return new Promise((resolve, reject) => {
+      const fr = new FileReader();
+      fr.onload = () => resolve(String(fr.result || ''));
+      fr.onerror = () => reject(fr.error || new Error('FileReader failed'));
+      fr.readAsDataURL(blob);
+    });
   }
 
   async function waitChatIdle(chat, maxMs = 120000) {
     const t0 = Date.now();
-    while (chat && (chat.busy || chat.streaming || chat._evalStreaming || chat._evalPollingInc) && Date.now() - t0 < maxMs) {
-      await new Promise((r) => setTimeout(r, 80));
+    const isChatBusy = (c) => Boolean(
+      c && (
+        c.busy ||
+        c.streaming ||
+        c._evalStreaming ||
+        c._evalPollingInc ||
+        c.status === 'submitted' ||
+        c.status === 'streaming'
+      )
+    );
+    while (isChatBusy(chat) && Date.now() - t0 < maxMs) {
+      await new Promise(r => setTimeout(r, 120));
     }
+  }
+
+  function parseBattleChoiceCommand(text = '') {
+    const s = String(text || '').trim();
+    if (!s || s.length > 16) return null;
+    if (/^(?:1|a|选\s*a|a\s*更好|model\s*a)$/i.test(s)) return 'model_a';
+    if (/^(?:2|b|选\s*b|b\s*更好|model\s*b)$/i.test(s)) return 'model_b';
+    if (/^(?:3|都不行|都不佳|都不好|both_bad|bad)$/i.test(s)) return 'both_bad';
+    if (/^(?:4|都可以|都行|平局|tie|both_good)$/i.test(s)) return 'tie';
+    if (/^(?:5|跳过|不选|继续|skip)$/i.test(s)) return 'skip';
+    return null;
   }
 
   async function runSingleApiRequest(job) {
     const reqId = job?.reqId;
     if (!reqId) return;
 
-    try {
-      const mode = job.sessionMode || _state.sessionMode || 'bound';
-      let targetSid = null;
-      let statKey = '';
+    const sendStream = (payload) => callHost({ op: 'stream', reqId, ...payload });
+    let mediaTasks = [];
 
-      if (mode === 'stateless') {
-        const firstUser = (job.messages || []).find((m) => m.role === 'user');
-        statKey = String(job.systemText || '').slice(0, 120) + '||' + String(firstUser?.content || '').slice(0, 200);
-        if ((job.messages || []).length > 1 && _statelessMap.has(statKey)) {
-          targetSid = _statelessMap.get(statKey);
+    try {
+      const sessionMode = job.sessionMode || _state.sessionMode || 'bound';
+      let chat = null;
+      if (sessionMode === 'stateless') {
+        const firstUser = Array.isArray(job.messages) ? job.messages.find(m => m && m.role === 'user') : null;
+        const fpKey = [
+          String(job.model || ''),
+          String(job.systemText || '').slice(0, 120),
+          String(firstUser?.content || '').slice(0, 200),
+        ].join('\u0001');
+        const mappedSid = _statelessMap.get(fpKey);
+        if (mappedSid && typeof Chats !== 'undefined') {
+          chat = Chats.get(mappedSid) || null;
         }
-      } else {
-        targetSid = job.boundSid || _state.boundSid || (typeof Tabs !== 'undefined' ? Tabs.cur?.sid : null);
+        if (chat) job._statelessFpKey = fpKey;
+        else job._statelessNewFpKey = fpKey;
+      } else if (sessionMode === 'bound') {
+        const bSid = job.boundSid || _state.boundSid || (typeof Tabs !== 'undefined' ? Tabs.cur?.sid : null);
+        if (bSid && typeof Chats !== 'undefined') chat = Chats.get(bSid);
+      } else if (sessionMode === 'active') {
+        const aSid = (typeof Tabs !== 'undefined' ? Tabs.cur?.sid : null) || _state.boundSid;
+        if (aSid && typeof Chats !== 'undefined') chat = Chats.get(aSid);
+      }
+      if (!chat && sessionMode !== 'new_each' && sessionMode !== 'stateless' && typeof UI !== 'undefined' && UI.els?.chat) {
+        chat = UI.els.chat;
       }
 
-      let chat = targetSid && typeof Chats !== 'undefined'
-        ? (Chats.get(targetSid) || (typeof chatOf === 'function' ? chatOf(targetSid) : null))
-        : null;
-
-      if (chat && !chat.loaded && (!Array.isArray(chat.messages) || chat.messages.length === 0)) {
+      if (chat && !chat.loaded && typeof chat.load === 'function') {
         try { await chat.load(); } catch {}
       }
-      if (chat) {
-        await waitChatIdle(chat, 180000);
+
+      const isExistingBattle = Boolean(
+        chat && (
+          chat.evalMode === 'battle' ||
+          job.targetMode === 'battle' ||
+          job.battleSide ||
+          /-battle-[ab]$/i.test(String(job.requestedModel || job.model || ''))
+        )
+      );
+
+      const reqModelRaw = String(job.requestedModel || job.model || '').trim();
+      let effectiveBattleSide = '';
+      if (isExistingBattle || job.targetMode === 'battle' || /-battle-(?:a|b|card)$/i.test(reqModelRaw)) {
+        if (job.battleSide === 'a' || /-battle-a$/i.test(reqModelRaw)) effectiveBattleSide = 'a';
+        else if (job.battleSide === 'b' || /-battle-b$/i.test(reqModelRaw)) effectiveBattleSide = 'b';
+        else if (job.battleSide === 'card' || job.battleTarget === 'card' || /-battle-card$/i.test(reqModelRaw)) effectiveBattleSide = 'card';
+        else effectiveBattleSide = (job.battleTarget === 'A') ? 'a' : 'b';
       }
 
-      const { promptText, toolsSig } = buildTurnPrompt(chat, job);
-      const externalToolNames = new Set((job.tools || []).map((t) => String(t?.name || '')).filter(Boolean));
-      const emittedNativeToolIds = new Set();
+      const hasTurns = Boolean(chat && ((Array.isArray(chat.turns) && chat.turns.length > 0) || (Array.isArray(chat.messages) && chat.messages.length > 0)));
+      const promptText = composePromptFromJob(job, hasTurns);
+      const apiFiles = extractJobMediaFiles(job, hasTurns);
 
-      let sentReasonLen = 0;
+      const battleCmd = (isExistingBattle && hasTurns && !apiFiles.length) ? parseBattleChoiceCommand(promptText) : null;
+      if (battleCmd && chat) {
+        if (battleCmd === 'skip') {
+          chat.voteState = null;
+          const skipMsg = '已跳过本轮选择（不锁定模型），请直接发送下一条内容继续对话或制作下一个视频。';
+          await sendStream({ type: 'text', delta: skipMsg });
+          await sendStream({ type: 'done', modelId: job.model || _state.modelId, inputTokens: 8, outputTokens: 24 });
+          return;
+        }
+        let voteReply = '';
+        try {
+          const lastT = Array.isArray(chat.turns) ? chat.turns.at(-1) : null;
+          const res = (typeof EvalEngine !== 'undefined' && typeof EvalEngine.submitVote === 'function')
+            ? await EvalEngine.submitVote(chat.sid, battleCmd, { messageAId: lastT?.msgA?.id || null, messageBId: lastT?.msgB?.id || null })
+            : null;
+          const labelMap = { model_a: 'A 更好', model_b: 'B 更好', both_bad: '都不行', tie: '都可以 (平局)' };
+          voteReply = `已记录本轮选择：【${labelMap[battleCmd] || battleCmd}】` +
+            (res?.modelAName || res?.modelBName ? `\n揭晓身份：Model A = \`${res.modelAName || 'A'}\` · Model B = \`${res.modelBName || 'B'}\`` : '') +
+            `\n可直接发送新内容继续下一轮对话或视频生成。`;
+        } catch {
+          chat.voteState = null;
+          voteReply = `已处理选择并跳过锁定，可直接发送新内容继续下一轮对话或视频生成。`;
+        }
+        await sendStream({ type: 'text', delta: voteReply });
+        await sendStream({ type: 'done', modelId: job.model || _state.modelId, inputTokens: 8, outputTokens: 32 });
+        return;
+      }
+
+      const battleShareKey = (chat?.sid && (effectiveBattleSide === 'a' || effectiveBattleSide === 'b'))
+        ? `${chat.sid}::${promptText}`
+        : '';
+      let sharedTurn = battleShareKey ? _sharedBattleTurns.get(battleShareKey) : null;
+      if (sharedTurn && (Date.now() - sharedTurn.startedAt > 45000 || sharedTurn.consumedSides.has(effectiveBattleSide))) {
+        sharedTurn = null;
+      }
+
+      let baselineMsgIds = new Set();
+      let sendPromise = null;
+
+      if (sharedTurn) {
+        sharedTurn.consumedSides.add(effectiveBattleSide);
+        chat = sharedTurn.chat;
+        baselineMsgIds = sharedTurn.baselineMsgIds;
+        sendPromise = sharedTurn.sendPromise;
+      } else {
+        await waitChatIdle(chat, 90000);
+        if (chat) {
+          if (Array.isArray(chat.turns)) {
+            for (const t of chat.turns) {
+              if (t?.msgA?.id) baselineMsgIds.add(t.msgA.id);
+              if (t?.msgB?.id) baselineMsgIds.add(t.msgB.id);
+            }
+          }
+          if (Array.isArray(chat.messages)) {
+            for (const m of chat.messages) {
+              if (m?.id) baselineMsgIds.add(m.id);
+            }
+          }
+          if (chat.live?.id) baselineMsgIds.add(chat.live.id);
+          if (chat.evalMode === 'battle') {
+            chat.voteState = null;
+          }
+        }
+      }
+
+      let lastReasoningLen = 0;
+      const emittedMediaKeys = new Set();
       const splitter = createToolStreamSplitter(
-        (textDelta) => {
-          if (textDelta) sendStreamEvent({ reqId, type: 'text', delta: textDelta });
+        (deltaText) => {
+          if (deltaText) void sendStream({ type: 'text', delta: deltaText });
         },
         (toolCall) => {
-          if (toolCall) sendStreamEvent({ reqId, type: 'tool_call', call: toolCall });
+          if (toolCall) void sendStream({ type: 'tool_call', call: toolCall });
         }
       );
 
-      const baselineMsgIds = new Set();
-      if (chat && Array.isArray(chat.messages)) {
-        for (const oldM of chat.messages) {
-          if (oldM && oldM.role === 'assistant' && oldM.id) baselineMsgIds.add(oldM.id);
+      const queueAssistantMedia = (mediaType, rawValue, mimeType, name) => {
+        const raw = String(rawValue || '').trim();
+        if (!raw) return;
+        const key = `${mediaType}:${raw.slice(0, 240)}`;
+        if (emittedMediaKeys.has(key)) return;
+        emittedMediaKeys.add(key);
+        const task = (async () => {
+          let dataUrl = /^data:/i.test(raw) ? raw : '';
+          let finalMime = mimeType || '';
+          if (!dataUrl && (/^blob:/i.test(raw) || /^https?:\/\//i.test(raw) || raw.startsWith('/'))) {
+            try {
+              const resp = await fetch(raw, { credentials: 'include' });
+              if (resp.ok) {
+                const blob = await resp.blob();
+                if (blob && blob.size > 0 && blob.size <= 20 * 1024 * 1024) {
+                  finalMime = finalMime || blob.type;
+                  dataUrl = await blobToDataUrl(blob);
+                }
+              }
+            } catch {}
+          }
+          if (!dataUrl && !/^https?:\/\//i.test(raw)) return;
+          await sendStream({
+            type: 'media',
+            media: {
+              type: mediaType || 'file',
+              mimeType: finalMime || (mediaType === 'image' ? 'image/png' : mediaType === 'video' ? 'video/mp4' : mediaType === 'audio' ? 'audio/wav' : 'application/octet-stream'),
+              name: name || (mediaType || 'media') + '-output',
+              ...(dataUrl ? { dataUrl } : { url: raw }),
+            },
+          });
+        })();
+        mediaTasks.push(task);
+      };
+
+      const collectMediaFromMsg = (m, prefixLabel = '') => {
+        if (!m) return [];
+        const foundUrls = [];
+        const pfx = prefixLabel ? (prefixLabel + '-') : '';
+        if (Array.isArray(m.parts)) {
+          for (const p of m.parts) {
+            if (!p) continue;
+            if (p.type === 'image' || p.type === 'video' || p.type === 'audio') {
+              const u = p.image || p.video || p.audio || p.url || p.src || p.data;
+              if (u) foundUrls.push({ type: p.type, url: u, mime: p.mimeType || p.contentType || p.mediaType, name: pfx + (p.name || (p.type + '.mp4')) });
+              queueAssistantMedia(p.type, u, p.mimeType || p.contentType || p.mediaType, pfx + (p.name || ''));
+            } else if (p.type === 'file' && /^(?:image|video|audio)\//i.test(String(p.mimeType || p.contentType || ''))) {
+              const kind = String(p.mimeType || p.contentType).split('/')[0].toLowerCase();
+              const u = p.url || p.data || p.src;
+              if (u) foundUrls.push({ type: kind, url: u, mime: p.mimeType || p.contentType, name: pfx + (p.name || '') });
+              queueAssistantMedia(kind, u, p.mimeType || p.contentType, pfx + (p.name || ''));
+            }
+          }
         }
-      }
+        const atts = Array.isArray(m.experimental_attachments) ? m.experimental_attachments : (Array.isArray(m.attachments) ? m.attachments : []);
+        for (const a of atts) {
+          if (!a) continue;
+          const mime = String(a.contentType || a.mimeType || a.type || '');
+          const kind = /^image\//i.test(mime) ? 'image' : /^video\//i.test(mime) ? 'video' : /^audio\//i.test(mime) ? 'audio' : '';
+          const u = a.url || a.dataUrl || a.src || a.previewUrl;
+          if (kind && u) {
+            foundUrls.push({ type: kind, url: u, mime, name: pfx + (a.name || '') });
+            queueAssistantMedia(kind, u, mime, pfx + (a.name || ''));
+          }
+        }
+        return foundUrls;
+      };
+
+      const extractMsgText = (m) => {
+        if (!m) return { text: '', rsn: '' };
+        let text = String(m.text ?? m.content ?? '');
+        let rsn = String(m.reasoning ?? '');
+        if (!text && Array.isArray(m.parts)) {
+          text = m.parts.filter(p => p && p.type === 'text' && p.text).map(p => p.text).join('');
+        }
+        if (!rsn && Array.isArray(m.parts)) {
+          rsn = m.parts.filter(p => p && p.type === 'reasoning' && p.text).map(p => p.text).join('');
+        }
+        return { text, rsn };
+      };
+
+      const findNewBattleMessages = (c) => {
+        let msgA = null;
+        let msgB = null;
+        if (Array.isArray(c?.messages)) {
+          const newAssts = c.messages.filter(x => x && x.role === 'assistant' && !baselineMsgIds.has(x.id));
+          for (const m of newAssts) {
+            if (m.participantPosition === 'a') msgA = m;
+            else if (m.participantPosition === 'b') msgB = m;
+          }
+          if (!msgA && newAssts.length >= 1 && newAssts[0] !== msgB) msgA = newAssts[0];
+          if (!msgB && newAssts.length >= 2) msgB = newAssts[1];
+        }
+        if ((!msgA || !msgB) && Array.isArray(c?.turns) && c.turns.length > 0) {
+          const lastT = c.turns[c.turns.length - 1];
+          if (!msgA && lastT?.msgA && !baselineMsgIds.has(lastT.msgA.id)) msgA = lastT.msgA;
+          if (!msgB && lastT?.msgB && !baselineMsgIds.has(lastT.msgB.id)) msgB = lastT.msgB;
+        }
+        return { msgA, msgB };
+      };
 
       const inspectActiveTurn = (c) => {
         if (!c) return;
-        let m = c.live;
+        if (effectiveBattleSide === 'a' || effectiveBattleSide === 'b') {
+          const { msgA, msgB } = findNewBattleMessages(c);
+          const targetMsg = effectiveBattleSide === 'a' ? msgA : (msgB || (!c.evalMode ? msgA : null));
+          if (!targetMsg) return;
+          const { text, rsn } = extractMsgText(targetMsg);
+          if (rsn.length > lastReasoningLen) {
+            const rDelta = rsn.slice(lastReasoningLen);
+            lastReasoningLen = rsn.length;
+            void sendStream({ type: 'reasoning', delta: rDelta });
+          }
+          splitter.feed(text);
+          collectMediaFromMsg(targetMsg, effectiveBattleSide === 'a' ? 'battle-A' : 'battle-B');
+          return;
+        }
+
+        if (effectiveBattleSide === 'card') {
+          const { msgA, msgB } = findNewBattleMessages(c);
+          collectMediaFromMsg(msgA, 'battle-A');
+          collectMediaFromMsg(msgB, 'battle-B');
+          return;
+        }
+
+        let m = (c.live && !baselineMsgIds.has(c.live.id)) ? c.live : null;
         if (!m && Array.isArray(c.turns) && c.turns.length > 0) {
           const lastT = c.turns[c.turns.length - 1];
           const candA = lastT?.msgA && !baselineMsgIds.has(lastT.msgA.id) ? lastT.msgA : null;
@@ -809,743 +1224,827 @@ const LocalApiGateway = (() => {
           else m = candA || candB;
         }
         if (!m && Array.isArray(c.messages) && c.messages.length > 0) {
+          const newAssts = [];
           for (let i = c.messages.length - 1; i >= 0; i--) {
-            const cand = c.messages[i];
-            if (!cand) continue;
-            if (cand.role === 'user') break;
-            if (cand.role === 'assistant' && !baselineMsgIds.has(cand.id)) {
-              if (!m || String(cand.participantPosition || '').toLowerCase() === 'a') m = cand;
+            const msg = c.messages[i];
+            if (msg && msg.role === 'assistant' && !baselineMsgIds.has(msg.id)) {
+              newAssts.unshift(msg);
             }
           }
-        }
-        if (!m || !Array.isArray(m.parts)) return;
-
-        let rFull = '';
-        let tFull = '';
-        for (const p of m.parts) {
-          if (!p) continue;
-          if (p.type === 'reasoning') rFull += String(p.text || '');
-          else if (p.type === 'text') tFull += String(p.text || '');
-          else if ((p.type === 'dynamic-tool' || String(p.type || '').startsWith('tool-')) && p.toolName && job.toolMode !== 'arena_native_only') {
-            if (job.toolMode === 'client_tools_only' || externalToolNames.has(p.toolName)) {
-              const tcId = String(p.toolCallId || p.id || '');
-              if (tcId && !emittedNativeToolIds.has(tcId) && (p.state === 'input-available' || p.state === 'output-available' || p.state === 'done' || p.input)) {
-                emittedNativeToolIds.add(tcId);
-                sendStreamEvent({
-                  reqId,
-                  type: 'tool_call',
-                  call: {
-                    id: tcId,
-                    name: String(p.toolName),
-                    arguments: typeof p.input === 'string' ? p.input : JSON.stringify(p.input || {}),
-                  },
-                });
-              }
-            }
+          if (newAssts.length > 0) {
+            m = newAssts.find(x => x.participantPosition === 'a' && !x.failed && x.status !== 'failed')
+              || newAssts.find(x => !x.failed && x.status !== 'failed')
+              || newAssts[0];
           }
         }
-
-        if (rFull.length > sentReasonLen) {
-          const rDelta = rFull.slice(sentReasonLen);
-          sentReasonLen = rFull.length;
-          sendStreamEvent({ reqId, type: 'reasoning', delta: rDelta });
+        if (!m) return;
+        const { text, rsn } = extractMsgText(m);
+        if (rsn.length > lastReasoningLen) {
+          const rDelta = rsn.slice(lastReasoningLen);
+          lastReasoningLen = rsn.length;
+          void sendStream({ type: 'reasoning', delta: rDelta });
         }
-        if (tFull.length > 0) {
-          splitter.feed(tFull);
-        }
-        return { rFull, tFull, m };
+        splitter.feed(text);
+        collectMediaFromMsg(m);
       };
 
-      let busOff = null;
-      let evalBusOff = null;
-      let pollTimer = null;
-      const attachListeners = (c) => {
-        if (!c) return;
-        c._allowOpenThink = true;
-        if (toolsSig) c._apiToolsSig = toolsSig;
-        if (typeof Bus !== 'undefined' && Bus.on) {
-          if (!busOff) {
-            busOff = Bus.on('chat', (evChat) => {
-              if (evChat === c || (c.sid && evChat?.sid === c.sid)) {
-                inspectActiveTurn(c);
-              }
+      let unsub = null;
+      const attachSub = (c) => {
+        if (!c || unsub) return;
+        unsub = c.sub((evChat) => {
+          inspectActiveTurn(evChat || c);
+        });
+      };
+
+      if (!sharedTurn) {
+        if (chat) {
+          attachSub(chat);
+          sendPromise = chat.send(promptText, { files: apiFiles });
+          if (battleShareKey) {
+            _sharedBattleTurns.set(battleShareKey, {
+              chat,
+              baselineMsgIds,
+              startedAt: Date.now(),
+              sendPromise,
+              consumedSides: new Set([effectiveBattleSide]),
             });
           }
-          if (!evalBusOff) {
-            evalBusOff = Bus.on('eval:stream', (ev) => {
-              if (ev?.chat === c || (c.sid && ev?.sid === c.sid)) {
-                inspectActiveTurn(c);
-              }
-            });
-          }
-        }
-        if (!pollTimer) pollTimer = setInterval(() => inspectActiveTurn(c), 45);
-      };
-
-      const cleanupListeners = () => {
-        if (busOff) { try { busOff(); } catch {} busOff = null; }
-        if (evalBusOff) { try { evalBusOff(); } catch {} evalBusOff = null; }
-        if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
-      };
-
-      let finalSnap = null;
-      try {
-        if (!chat) {
-          if (typeof createChat !== 'function') throw new Error('客户端尚未就绪 (createChat 不可用)');
-          const existingSids = new Set(typeof Chats !== 'undefined' && Chats.keys ? [...Chats.keys()] : []);
-          const createP = createChat(promptText, { files: [] });
-          const watchStart = Date.now();
-          while (!chat && Date.now() - watchStart < 8000) {
-            if (typeof Chats !== 'undefined') {
-              for (const cand of Chats.values()) {
-                if (cand && (!existingSids.has(cand.sid) || cand.busy || cand.streaming || cand._evalStreaming || cand.status === 'submitted') && (!targetSid || cand.sid === targetSid)) {
-                  chat = cand;
-                  break;
-                }
-              }
-            }
-            if (chat) break;
-            await new Promise((r) => setTimeout(r, 35));
-          }
-          if (chat) attachListeners(chat);
-          const created = await createP;
-          if (created && created !== chat) {
-            chat = created;
-            attachListeners(chat);
-          }
-          if (chat?.sid) {
-            if (mode === 'stateless' && statKey) {
-              _statelessMap.set(statKey, chat.sid);
-            } else {
-              _state.boundSid = chat.sid;
-              if (typeof Tabs !== 'undefined' && Tabs.cur && !Tabs.cur.sid) {
-                Tabs.cur.sid = chat.sid;
-                if (typeof Tabs.save === 'function') Tabs.save();
-                try { UI?.renderList?.(); UI?.renderTabs?.(); UI?.showTab?.(); } catch {}
-              }
-            }
-          }
+          await sendPromise;
         } else {
-          attachListeners(chat);
-          await chat.send(promptText, { files: [] });
+          const curMode = job.targetMode || ((typeof ModeState !== 'undefined' && typeof ModeState.getMode === 'function') ? ModeState.getMode() : 'agent');
+          if ((curMode === 'direct' || curMode === 'battle') && typeof EvalEngine !== 'undefined') {
+            if (job.targetModality && typeof ModeState !== 'undefined' && typeof ModeState.setModality === 'function') {
+              try { ModeState.setModality(job.targetModality); } catch {}
+            }
+            chat = curMode === 'direct'
+              ? await EvalEngine.createDirectChat(promptText, { files: apiFiles })
+              : await EvalEngine.createEvalChat(promptText, { files: apiFiles });
+            attachSub(chat);
+          } else if (typeof Chats !== 'undefined' && typeof Chats.create === 'function') {
+            chat = await Chats.create(promptText, null, (createdChat) => {
+              attachSub(createdChat);
+            }, { files: apiFiles });
+            attachSub(chat);
+          } else {
+            throw new Error('聊天引擎尚未就绪');
+          }
         }
-
-        await waitChatIdle(chat, 240000);
-        finalSnap = inspectActiveTurn(chat);
-        if (finalSnap?.tFull) {
-          splitter.flush(finalSnap.tFull);
+      } else {
+        attachSub(chat);
+        if (sendPromise) {
+          try { await sendPromise; } catch {}
         }
-      } finally {
-        cleanupListeners();
       }
 
-      const chatErr = chat?.err || chat?.error;
-      if (chatErr && !finalSnap?.tFull && (!chat.messages?.length || chat.status === 'error')) {
-        sendStreamEvent({ reqId, type: 'error', error: String(chatErr) });
-        return;
+      await waitChatIdle(chat, 240000);
+      if (unsub) { try { unsub(); } catch {} unsub = null; }
+
+      inspectActiveTurn(chat);
+
+      let finalMsg = null;
+      if (effectiveBattleSide === 'card' && chat) {
+        const { msgA, msgB } = findNewBattleMessages(chat);
+        const outA = extractMsgText(msgA);
+        const outB = extractMsgText(msgB);
+        collectMediaFromMsg(msgA, 'battle-A');
+        collectMediaFromMsg(msgB, 'battle-B');
+        const cardLines = [
+          '### 🅰️ Model A 回复 / 视频',
+          outA.text || '（见上方/下方视频 A 附件）',
+          '',
+          '### 🅱️ Model B 回复 / 视频',
+          outB.text || '（见上方/下方视频 B 附件）',
+          '',
+          '---',
+          '> **Battle 盲测 5 选交互卡片**：`1. 选A` ｜ `2. 选B` ｜ `3. 都不行` ｜ `4. 都可以` ｜ `5. 跳过`',
+          '> 💡 **默认免选继续**：无需点击或回复投票选项，直接发送下一条提示词即自动视为**跳过选择**，强制继续下一轮对话或制作下一个视频！',
+        ];
+        splitter.flush(cardLines.join('\n'));
+        finalMsg = msgB || msgA;
+      } else if ((effectiveBattleSide === 'a' || effectiveBattleSide === 'b') && chat) {
+        const { msgA, msgB } = findNewBattleMessages(chat);
+        finalMsg = effectiveBattleSide === 'a' ? msgA : (msgB || msgA);
+        const { text: finalTxt } = extractMsgText(finalMsg);
+        splitter.flush(finalTxt);
+      } else {
+        finalMsg = (chat?.live && !baselineMsgIds.has(chat.live.id)) ? chat.live : null;
+        if (!finalMsg && Array.isArray(chat?.turns) && chat.turns.length > 0) {
+          const lastT = chat.turns[chat.turns.length - 1];
+          const candA = lastT?.msgA && !baselineMsgIds.has(lastT.msgA.id) ? lastT.msgA : null;
+          const candB = lastT?.msgB && !baselineMsgIds.has(lastT.msgB.id) ? lastT.msgB : null;
+          if (candA && !candA.failed && candA.status !== 'failed') finalMsg = candA;
+          else if (candB && !candB.failed && candB.status !== 'failed') finalMsg = candB;
+          else finalMsg = candA || candB;
+        }
+        if (!finalMsg && Array.isArray(chat?.messages) && chat.messages.length > 0) {
+          for (let i = chat.messages.length - 1; i >= 0; i--) {
+            const msg = chat.messages[i];
+            if (msg && msg.role === 'assistant' && !baselineMsgIds.has(msg.id)) {
+              finalMsg = msg;
+              break;
+            }
+          }
+        }
+        const { text: finalTxt } = extractMsgText(finalMsg);
+        splitter.flush(finalTxt);
       }
+
+      if (mediaTasks.length) await Promise.allSettled(mediaTasks);
 
       const meta = readChatModelMeta(chat, chat?.sid);
-      sendStreamEvent({
-        reqId,
+      _state.boundSid = meta.sid;
+      _state.boundTitle = meta.title;
+      _state.modelName = meta.modelName;
+      _state.modelId = meta.modelId;
+      _state.modelFam = meta.modelFam;
+      _state.vendorProtocol = meta.vendorProtocol;
+      if (job._statelessNewFpKey && meta.sid) {
+        _statelessMap.set(job._statelessNewFpKey, meta.sid);
+      }
+
+      const usage = finalMsg?.usage || {};
+      await sendStream({
         type: 'done',
-        modelId: meta.modelId,
         modelName: meta.modelName,
         modelInternal: meta.modelInternal,
         modelFam: meta.modelFam,
+        modelId: job.model || meta.modelId,
+        inputTokens: usage.inputTokens || Math.max(1, Math.round(promptText.length / 3.5)),
+        outputTokens: usage.outputTokens || 32,
       });
-      syncCurrentContext(chat);
     } catch (err) {
-      sendStreamEvent({
-        reqId,
+      await sendStream({
         type: 'error',
-        error: String(err?.message || err || '执行对话请求失败'),
+        error: typeof describe === 'function' ? describe(err) : (err?.message || String(err)),
       });
     }
   }
 
-  function _onMainRequest(job) {
-    if (!job || !job.reqId) return;
-    if (_handledReqIds.has(job.reqId)) return;
+  function onMainRequest(job) {
+    if (!job?.reqId || _handledReqIds.has(job.reqId)) return;
     _handledReqIds.add(job.reqId);
-    if (_handledReqIds.size > 200) {
+    if (_handledReqIds.size > 300) {
       const first = _handledReqIds.values().next().value;
-      if (first) _handledReqIds.delete(first);
+      _handledReqIds.delete(first);
+    }
+    const reqModel = String(job.requestedModel || job.model || '');
+    const isBattleDualCandidate = Boolean(job.battleSide === 'a' || job.battleSide === 'b' || /-battle-[ab]$/i.test(reqModel));
+    if (isBattleDualCandidate) {
+      void Promise.resolve().then(() => runSingleApiRequest(job)).catch(() => {});
+      return;
     }
     _reqChain = _reqChain.then(() => runSingleApiRequest(job)).catch(() => {});
   }
 
-  function resolveActiveProtoInfo() {
-    const pTab = _state.protocolTab || 'auto';
-    const effProto = pTab === 'auto' ? (_state.vendorProtocol || 'openai') : pTab;
-    const hostPort = 'http://' + (_state.host || '127.0.0.1') + ':' + (_state.port || 18765);
-    const modelId = _state.modelId || 'brana-current';
-    if (effProto === 'anthropic') {
-      return {
-        effProto: 'anthropic',
-        protoLabel: 'Anthropic 原生协议 (Messages API)',
-        baseUrl: hostPort,
-        endpoint: hostPort + '/v1/messages',
-        modelId,
-        note: '当前会话识别为 Claude 系列，已自动匹配 Anthropic 原生 /v1/messages 协议（同时兼容 OpenAI /v1/chat/completions）',
-      };
-    }
-    if (effProto === 'gemini') {
-      return {
-        effProto: 'gemini',
-        protoLabel: 'Google Gemini 原生协议 (v1beta)',
-        baseUrl: hostPort + '/v1beta',
-        endpoint: hostPort + '/v1beta/models/' + modelId + ':generateContent',
-        modelId,
-        note: '当前会话识别为 Gemini 系列，已自动匹配 Google v1beta 原生协议（同时兼容 OpenAI /v1/chat/completions）',
-      };
-    }
-    return {
-      effProto: 'openai',
-      protoLabel: 'OpenAI 标准兼容协议 (/v1)',
-      baseUrl: hostPort + '/v1',
-      endpoint: hostPort + '/v1/chat/completions',
-      modelId,
-      note: '通用 OpenAI 标准格式，可直接接入 Cherry Studio、Cursor、Cline、OpenWebUI、NextChat、LobeChat 等任意客户端（同时兼容 /v1/messages 与 /v1/responses）',
-    };
-  }
-
-  function buildSnippetText(info) {
-    const tab = _state.snippetTab || 'client';
-    const key = _state.apiKey || 'sk-brana-local';
-    const hostPort = 'http://' + (_state.host || '127.0.0.1') + ':' + (_state.port || 18765);
-    if (tab === 'claude_code') {
-      return [
-        '# Claude Code / Anthropic 终端接入配置 (Bash / PowerShell)',
-        'export ANTHROPIC_BASE_URL="' + hostPort + '"',
-        'export ANTHROPIC_AUTH_TOKEN="' + key + '"',
-        'export ANTHROPIC_MODEL="' + info.modelId + '"',
-        '',
-        '# PowerShell:',
-        '$env:ANTHROPIC_BASE_URL="' + hostPort + '"',
-        '$env:ANTHROPIC_AUTH_TOKEN="' + key + '"',
-        '$env:ANTHROPIC_MODEL="' + info.modelId + '"',
-      ].join('\n');
-    }
-    if (tab === 'curl') {
-      if (info.effProto === 'anthropic') {
-        return [
-          'curl ' + hostPort + '/v1/messages \\',
-          '  -H "Content-Type: application/json" \\',
-          '  -H "x-api-key: ' + key + '" \\',
-          '  -H "anthropic-version: 2023-06-01" \\',
-          '  -d \'{"model":"' + info.modelId + '","max_tokens":2048,"stream":true,"messages":[{"role":"user","content":"你好"}]}\'',
-        ].join('\n');
-      }
-      return [
-        'curl ' + hostPort + '/v1/chat/completions \\',
-        '  -H "Content-Type: application/json" \\',
-        '  -H "Authorization: Bearer ' + key + '" \\',
-        '  -d \'{"model":"' + info.modelId + '","stream":true,"messages":[{"role":"user","content":"你好"}]}\'',
-      ].join('\n');
-    }
-    if (tab === 'sdk') {
-      return [
-        '// OpenAI Python / Node.js SDK 接入示例',
-        'import OpenAI from "openai";',
-        'const client = new OpenAI({',
-        '  baseURL: "' + hostPort + '/v1",',
-        '  apiKey: "' + key + '",',
-        '});',
-        'const res = await client.chat.completions.create({',
-        '  model: "' + info.modelId + '", // 也可填 "brana-current" 始终跟随当前对话',
-        '  messages: [{ role: "user", content: "你好" }],',
-        '  stream: true,',
-        '});',
-      ].join('\n');
-    }
-    return [
-      '【本地 AI 客户端一键接入参数】',
-      '接口协议: ' + info.protoLabel,
-      'API 地址 (Base URL): ' + info.baseUrl,
-      '完整端点 (Endpoint): ' + info.endpoint,
-      'API 密钥 (API Key): ' + key,
-      '模型名称 (Model ID): ' + info.modelId,
-      '动态跟随别名: brana-current (填写此模型名将自动跟随客户端当前绑定的对话)',
-    ].join('\n');
-  }
-
-  async function openModal(chat, tab) {
+  function closeModal() {
     if (_modalBack) {
-      try { _modalBack.remove(); } catch {}
+      _modalBack.remove();
       _modalBack = null;
+      _renderModalBody = null;
+      _lastModalSig = '';
+      _pointerDownInModal = false;
+      _pendingModalRender = false;
+      _editingCardId = '';
+      _editingApiKey = false;
     }
+  }
 
-    const meta = readChatModelMeta(chat, tab?.sid);
-    _state.boundSid = meta.sid;
-    _state.boundTitle = meta.title;
-    _state.modelName = meta.modelName;
-    _state.modelId = meta.modelId;
-    _state.modelFam = meta.modelFam;
-    _state.vendorProtocol = meta.vendorProtocol;
+  function openModal() {
+    closeModal();
+    const curChat = typeof UI !== 'undefined' ? UI.els?.chat : null;
+    const curTab = typeof Tabs !== 'undefined' ? Tabs.cur : null;
+    void syncCurrentContext(curChat, curTab);
 
-    const close = () => {
-      if (_modalBack) {
-        try { _modalBack.remove(); } catch {}
-        _modalBack = null;
-        _renderModalBody = null;
-      }
-      syncPlusIndicator();
-    };
-
-    const bodyEl = h('div', { class: 'modal-b api-gw-b' });
-    const statusBadge = h('span', { class: 'api-gw-st' }, '启动中...');
-
-    const modal = h(
-      'div',
-      { class: 'modal api-gw-modal', onclick: (e) => e.stopPropagation() },
-      h(
-        'div',
-        { class: 'modal-h' },
-        icon('api'),
-        h('b', {}, '本地 API 反代网关'),
-        h('span', { class: 'dim' }, '将当前对话直接反代为本地标准 API · 自动按模型厂商转译'),
-        h('span', { class: 'grow' }),
-        statusBadge,
-        h('button', { class: 'ib', title: '关闭', onclick: close }, icon('x'))
-      ),
-      bodyEl
-    );
-
-    _modalBack = h('div', { class: 'modal-back', onclick: close }, modal);
-    _pointerDownInModal = false;
-    _pendingModalRender = false;
-    modal.addEventListener('pointerdown', () => { _pointerDownInModal = true; }, true);
-    const clearPtr = () => {
+    const box = h('div', { class: 'modal api-gw-modal' });
+    const markModalPointerDown = () => { _pointerDownInModal = true; };
+    const clearModalPointerDown = () => {
       if (!_pointerDownInModal) return;
       _pointerDownInModal = false;
       if (_pendingModalRender && typeof _renderModalBody === 'function') {
         _pendingModalRender = false;
-        setTimeout(() => { if (!_pointerDownInModal && typeof _renderModalBody === 'function') _renderModalBody(); }, 80);
+        _renderModalBody();
       }
     };
-    window.addEventListener('pointerup', clearPtr, true);
-    window.addEventListener('pointercancel', clearPtr, true);
-    document.body.append(_modalBack);
+    box.addEventListener('pointerdown', markModalPointerDown, true);
+    window.addEventListener('pointerup', clearModalPointerDown, true);
 
-    const copyVal = (txt, label, btnEl) => {
-      const str = String(txt ?? '');
-      const cleanLbl = String(label || '').trim();
-      const msg = '已复制' + (cleanLbl ? ' ' + cleanLbl : '') + '：' + str.slice(0, 48);
-      if (typeof copyText === 'function') {
-        void copyText(str, { toastMsg: msg });
-      } else {
-        try { navigator.clipboard.writeText(str); } catch {}
-        if (typeof toast === 'function') toast(msg);
-      }
-      if (btnEl && btnEl.classList) {
-        btnEl.classList.add('copied');
-        clearTimeout(btnEl._cpTimer);
-        btnEl._cpTimer = setTimeout(() => {
-          try { btnEl.classList.remove('copied'); } catch {}
-        }, 1200);
+    const copyTxt = async (txt, label = '已复制') => {
+      try {
+        await navigator.clipboard.writeText(String(txt || ''));
+        if (typeof toast === 'function') toast(label, 'ok');
+      } catch {
+        if (typeof toast === 'function') toast('复制失败，请手动复制', 'err');
       }
     };
 
     _renderModalBody = () => {
-      if (!bodyEl || !_modalBack) return;
       _lastModalSig = computeModalSig();
-      const info = resolveActiveProtoInfo();
-      const vendorTag = _state.vendorProtocol === 'anthropic'
-        ? 'Anthropic 原生'
-        : (_state.vendorProtocol === 'gemini' ? 'Gemini 原生' : 'OpenAI 标准');
+      box.replaceChildren();
 
-      statusBadge.className = 'api-gw-st ' + (_state.running ? 'on' : 'off');
-      statusBadge.textContent = _state.running
-        ? ('运行中 · 127.0.0.1:' + _state.port)
-        : '已停止';
+      const meta = readChatModelMeta(typeof UI !== 'undefined' ? UI.els?.chat : null, typeof Tabs !== 'undefined' ? Tabs.cur?.sid : null);
+      const isRun = Boolean(_state.running);
+      const baseLocal = `http://${_state.host || '127.0.0.1'}:${_state.port || 18765}`;
+      const tun = _state.tunnel || {};
+      const pubUrl = String(tun.publicUrl || '').replace(/\/+$/, '');
+      const activeBaseV1 = pubUrl ? `${pubUrl}/v1` : `${baseLocal}/v1`;
+      const acctProxies = getAccountProxies(meta.accountId);
+      const curSidCard = meta.sid ? getProxyCardForSid(meta.sid) : null;
 
-      const portInp = h('input', {
-        class: 'inp api-gw-port',
-        type: 'number',
-        min: '1024',
-        max: '65535',
-        value: String(_state.port || 18765),
-        title: '本地监听端口',
-      });
-
-      const fieldRow = (label, val, copyLabel, extraKids = []) =>
-        h(
-          'div',
-          { class: 'api-gw-row' },
-          h('span', { class: 'api-gw-lbl' }, label),
-          h(
-            'code',
-            {
-              class: 'api-gw-val',
-              title: '点击复制：' + val,
-              onclick: (e) => { e.stopPropagation(); copyVal(val, copyLabel || label, e.currentTarget); },
-            },
-            val
+      box.append(
+        h('div', { class: 'modal-h api-gw-head' },
+          h('div', { class: 'api-gw-title-wrap' },
+            icon('plug'),
+            h('span', { class: 'api-gw-status-dot' + (isRun ? ' on' : '') }),
+            h('span', { class: 'api-gw-head-title' }, '反代管理 · 本地多协议 API 网关'),
+            h('span', { class: 'api-gw-badge' + (isRun ? ' on' : '') }, isRun ? ('运行中 :' + _state.port) : '未启动'),
+            tun.running && pubUrl ? h('span', { class: 'api-gw-badge on' }, 'CF 隧道已连通') : null
           ),
-          ...extraKids.filter(Boolean),
-          h(
-            'button',
-            {
+          h('button', { class: 'ib api-gw-close', type: 'button', title: '关闭', onclick: closeModal }, icon('x'))
+        )
+      );
+
+      const body = h('div', { class: 'modal-b api-gw-body' });
+
+      let portInput = null;
+      let keyInput = null;
+      let cfDomainInput = null;
+      let cfTokenInput = null;
+
+      const unifiedCard = h('div', { class: 'api-gw-unified-card' },
+        h('div', { class: 'api-gw-sec-head' },
+          h('div', { class: 'api-gw-sec-title' },
+            icon('plug'),
+            h('span', {}, '统一 API 接入地址与固定密钥'),
+            h('span', { class: 'api-gw-fixed-pill' }, '所有模型共用同一地址与固定 Key')
+          ),
+          h('div', { class: 'api-gw-ctrl-actions' },
+            h('label', { class: 'api-gw-inline-port' },
+              h('span', {}, '端口'),
+              (portInput = h('input', {
+                class: 'm-in api-gw-port-in',
+                type: 'number',
+                min: '1024',
+                max: '65535',
+                value: String(_state.port || 18765),
+              }))
+            ),
+            isRun
+              ? h('button', {
+                  class: 'm-btn ghost',
+                  type: 'button',
+                  onclick: async () => {
+                    const p = Number(portInput?.value) || 18765;
+                    await callHost({ op: 'update', port: p });
+                    if (typeof toast === 'function') toast('端口及配置已更新', 'ok');
+                  },
+                }, '应用端口')
+              : null,
+            h('button', {
+              class: 'm-btn ' + (isRun ? 'danger' : 'primary'),
               type: 'button',
-              class: 'ib api-gw-cp',
-              title: '复制' + (copyLabel || label),
-              onclick: (e) => { e.stopPropagation(); copyVal(val, copyLabel || label, e.currentTarget); },
-            },
-            icon('copy')
-          )
-        );
-
-      const snippetText = buildSnippetText(info);
-
-      bodyEl.replaceChildren(
-        h(
-          'div',
-          { class: 'api-gw-card api-gw-hero' },
-          h(
-            'div',
-            { class: 'api-gw-hero-l' },
-            h(
-              'div',
-              { class: 'api-gw-title-row' },
-              h('span', { class: 'api-gw-dot ' + (_state.running ? 'on' : 'off') }),
-              h('b', {}, _state.running ? ('本地反代已开启 (http://127.0.0.1:' + _state.port + ')') : '本地反代服务未开启'),
-              _state.reqCount > 0 ? h('span', { class: 'api-gw-tag' }, '已处理 ' + _state.reqCount + ' 次请求') : null
-            ),
-            h(
-              'div',
-              { class: 'api-gw-sub' },
-              (_state.modelFam && typeof VIcon !== 'undefined' && VIcon.el && Brand?.NAME?.[_state.modelFam]) ? VIcon.el(_state.modelFam, 14) : icon('cpu'),
-              h('span', {}, '识别模型：'),
-              h('b', { class: 'api-gw-mname' }, _state.modelName || '自动识别'),
-              h('code', { class: 'api-gw-mslug', title: '点击复制模型 ID', onclick: (e) => { e.stopPropagation(); copyVal(_state.modelId, '模型 ID', e.currentTarget); } }, _state.modelId),
-              h('span', { class: 'api-gw-vbadge' }, vendorTag)
-            ),
-            _state.lastError ? h('div', { class: 'api-gw-err' }, _state.lastError) : null
-          ),
-          h(
-            'div',
-            { class: 'api-gw-hero-r' },
-            h('span', { class: 'dim', style: { fontSize: '12px' } }, '端口'),
-            portInp,
-            h(
-              'button',
-              {
-                class: 'btn',
-                onclick: async () => {
-                  const p = Number(portInp.value) || 18765;
-                  await callHost({ op: 'start', port: p });
-                  if (typeof toast === 'function') toast('已应用端口 ' + _state.port);
-                },
-              },
-              icon('refresh'),
-              '应用端口'
-            ),
-            h(
-              'button',
-              {
-                class: 'btn ' + (_state.running ? '' : 'pri'),
-                onclick: async () => {
-                  if (_state.running) {
-                    await callHost({ op: 'stop' });
-                    if (typeof toast === 'function') toast('本地 API 反代已停止');
-                  } else {
-                    const p = Number(portInp.value) || _state.port || 18765;
-                    await callHost({ op: 'start', port: p });
-                    if (typeof toast === 'function') toast('本地 API 反代已启动: 127.0.0.1:' + _state.port);
+              onclick: async () => {
+                if (isRun) {
+                  await callHost({ op: 'stop' });
+                  if (typeof toast === 'function') toast('反代网关已停止', 'ok');
+                } else {
+                  const p = Number(portInput?.value) || 18765;
+                  const st = await callHost({
+                    op: 'start',
+                    port: p,
+                    registerCurrent: Boolean(meta.sid),
+                    sid: meta.sid,
+                    boundSid: meta.sid,
+                    boundTitle: meta.title,
+                    title: meta.title,
+                    accountId: meta.accountId,
+                    mode: meta.mode,
+                    modality: meta.modality,
+                    randomId: meta.randomId,
+                    modelName: meta.modelName,
+                    modelInternal: meta.modelInternal,
+                    modelFam: meta.modelFam,
+                  });
+                  if (st?.running && typeof toast === 'function') {
+                    toast('API 反代已启动：http://127.0.0.1:' + st.port + '/v1', 'ok');
                   }
-                },
+                }
               },
-              icon(_state.running ? 'x' : 'zap'),
-              _state.running ? '停止反代' : '开启反代'
-            )
+            }, isRun ? '停止总服务' : '启动反代服务')
           )
         ),
 
-        h(
-          'div',
-          { class: 'api-gw-modes' },
-          h(
-            'div',
-            { class: 'api-gw-mgroup' },
-            h('span', { class: 'api-gw-mlbl' }, '会话承载模式'),
-            h(
-              'div',
-              { class: 'api-gw-seg' },
-              h(
-                'button',
-                {
-                  class: _state.sessionMode === 'bound' ? 'on' : '',
-                  onclick: () => callHost({ op: 'update', sessionMode: 'bound', boundSid: meta.sid }),
-                  title: '外部 AI 请求直接发入当前对话窗口，客户端界面实时同步流式回复与模型识别',
-                },
-                icon('link'),
-                '绑定当前对话'
-              ),
-              h(
-                'button',
-                {
-                  class: _state.sessionMode === 'stateless' ? 'on' : '',
-                  onclick: () => callHost({ op: 'update', sessionMode: 'stateless' }),
-                  title: '外部客户端发起新对话时自动在客户端创建独立会话',
-                },
-                icon('plus'),
-                '无状态自动新建'
-              )
-            )
+        _state.lastError ? h('div', { class: 'api-gw-err' }, '错误：' + _state.lastError) : null,
+
+        h('div', { class: 'api-gw-ep-list' },
+          h('div', { class: 'api-gw-ep-row' },
+            h('span', { class: 'api-gw-ep-k' }, '本地 Base URL'),
+            h('code', { class: 'api-gw-ep-v' }, `${baseLocal}/v1`),
+            h('button', { class: 'api-gw-copy', type: 'button', onclick: () => copyTxt(`${baseLocal}/v1`, '已复制本地 Base URL') }, '复制')
           ),
-          h(
-            'div',
-            { class: 'api-gw-mgroup' },
-            h('span', { class: 'api-gw-mlbl' }, '工具调用 (Tools)'),
-            h(
-              'div',
-              { class: 'api-gw-seg' },
-              h(
-                'button',
-                {
-                  class: _state.toolMode === 'auto_bridge' ? 'on' : '',
-                  onclick: () => callHost({ op: 'update', toolMode: 'auto_bridge' }),
-                  title: '当外部客户端传入 tools 时自动转译为 tool_calls 供本地客户端执行；普通聊天走原生回复',
-                },
-                icon('zap'),
-                '智能自适应桥接'
-              ),
-              h(
-                'button',
-                {
-                  class: _state.toolMode === 'client_tools_only' ? 'on' : '',
-                  onclick: () => callHost({ op: 'update', toolMode: 'client_tools_only' }),
-                  title: '始终优先转译为本地客户端工具调用',
-                },
-                '仅本地客户端工具'
-              ),
-              h(
-                'button',
-                {
-                  class: _state.toolMode === 'arena_native_only' ? 'on' : '',
-                  onclick: () => callHost({ op: 'update', toolMode: 'arena_native_only' }),
-                  title: '不注入外部工具桥接，仅使用云端原生回复',
-                },
-                '仅云端原生'
-              )
-            )
-          )
-        ),
-
-        h(
-          'div',
-          { class: 'dk-tabs api-gw-ptabs' },
-          ...[
-            ['auto', '自动按厂商 (' + vendorTag + ')'],
-            ['openai', 'OpenAI 兼容格式 (/v1)'],
-            ['anthropic', 'Anthropic 原生 (/v1/messages)'],
-            ['gemini', 'Gemini 原生 (/v1beta)'],
-          ].map(([k, lbl]) =>
-            h(
-              'button',
-              {
-                class: (_state.protocolTab || 'auto') === k ? 'on' : '',
+          pubUrl ? h('div', { class: 'api-gw-ep-row is-pub' },
+            h('span', { class: 'api-gw-ep-k' }, '公网 Base URL'),
+            h('code', { class: 'api-gw-ep-v' }, `${pubUrl}/v1`),
+            h('button', { class: 'api-gw-copy', type: 'button', onclick: () => copyTxt(`${pubUrl}/v1`, '已复制 Cloudflare 公网 Base URL') }, '复制公网')
+          ) : null,
+          h('div', { class: 'api-gw-ep-row' },
+            h('span', { class: 'api-gw-ep-k' }, '固定 API 密钥'),
+            _editingApiKey
+              ? (keyInput = h('input', {
+                  class: 'm-in api-gw-key-in',
+                  type: 'text',
+                  value: String(_state.apiKey || ''),
+                  placeholder: '输入固定 API Key (如 sk-brana-...)',
+                }))
+              : h('code', { class: 'api-gw-ep-v' }, _state.apiKey || 'sk-brana-local'),
+            h('div', { class: 'api-gw-ep-btns' },
+              _editingApiKey
+                ? h('button', {
+                    class: 'api-gw-copy primary',
+                    type: 'button',
+                    onclick: async () => {
+                      const nextKey = String(keyInput?.value || '').trim();
+                      if (!nextKey) return;
+                      _editingApiKey = false;
+                      await callHost({ op: 'update', apiKey: nextKey });
+                      if (typeof toast === 'function') toast('固定 API 密钥已保存（重启亦保持不变）', 'ok');
+                    },
+                  }, '保存')
+                : h('button', {
+                    class: 'api-gw-copy',
+                    type: 'button',
+                    onclick: () => copyTxt(_state.apiKey || 'sk-brana-local', '已复制固定 API Key'),
+                  }, '复制'),
+              h('button', {
+                class: 'api-gw-copy',
+                type: 'button',
                 onclick: () => {
-                  _state.protocolTab = k;
+                  _editingApiKey = !_editingApiKey;
                   _renderModalBody();
                 },
-              },
-              lbl
+              }, _editingApiKey ? '取消' : '修改'),
+              h('label', { class: 'api-gw-chk', title: '开启后客户端请求需携带此固定 API Key' },
+                h('input', {
+                  type: 'checkbox',
+                  checked: _state.requireKey ? 'checked' : null,
+                  onchange: (e) => callHost({ op: 'update', requireKey: Boolean(e.target.checked) }),
+                }),
+                h('span', {}, '校验')
+              )
             )
           )
         ),
 
-        h('div', { class: 'api-gw-pnote' }, info.note),
-
-        h(
-          'div',
-          { class: 'api-gw-card api-gw-fields' },
-          fieldRow('API 地址 (Base URL)', info.baseUrl, ' Base URL'),
-          fieldRow('完整接口 (Endpoint)', info.endpoint, '接口地址'),
-          fieldRow('模型名称 (Model ID)', info.modelId, '模型名称', [
-            h(
-              'button',
-              {
-                type: 'button',
-                class: 'btn api-gw-alias',
-                title: '复制动态别名 brana-current（始终跟随当前绑定对话，切换对话无需改配置）',
-                onclick: (e) => { e.stopPropagation(); copyVal('brana-current', '动态模型别名', e.currentTarget); },
-              },
-              icon('copy'),
-              '通用别名: brana-current'
-            ),
-          ]),
-          fieldRow('API 密钥 (API Key)', _state.apiKey || 'sk-brana-local', ' API Key', [
-            h(
-              'button',
-              {
-                class: 'ib',
-                title: '重新生成随机密钥',
-                onclick: async () => {
-                  await callHost({ op: 'update', regenKey: true });
-                  if (typeof toast === 'function') toast('已生成新的 API 密钥');
-                },
-              },
-              icon('refresh')
-            ),
-            h(
-              'button',
-              {
-                class: 'btn api-gw-alias ' + (_state.requireKey ? 'on' : ''),
-                title: '开启后仅允许携带正确 API Key 的请求访问；关闭时兼容任意本地无密客户端',
-                onclick: () => callHost({ op: 'update', requireKey: !_state.requireKey }),
-              },
-              _state.requireKey ? '已开启密钥校验' : '免密兼容模式'
-            ),
-          ])
-        ),
-
-        h(
-          'div',
-          { class: 'api-gw-card api-gw-snippets' },
-          h(
-            'div',
-            { class: 'api-gw-sn-h' },
-            h(
-              'div',
-              { class: 'dk-tabs api-gw-sntabs' },
-              ...[
-                ['client', '通用客户端配置'],
-                ['claude_code', 'Claude Code 终端'],
-                ['curl', 'cURL 调试命令'],
-                ['sdk', 'Python / JS SDK'],
-              ].map(([k, lbl]) =>
-                h(
-                  'button',
-                  {
-                    class: (_state.snippetTab || 'client') === k ? 'on' : '',
-                    onclick: () => {
-                      _state.snippetTab = k;
-                      _renderModalBody();
-                    },
-                  },
-                  lbl
-                )
+        h('div', { class: 'api-gw-cf-box' },
+          h('div', { class: 'api-gw-cf-top' },
+            h('div', { class: 'api-gw-cf-label' },
+              h('span', { class: 'api-gw-cf-dot' + (tun.running ? ' on' : '') }),
+              h('b', {}, 'Cloudflare 公网隧道'),
+              h('span', { class: 'api-gw-cf-sub' },
+                tun.status === 'connected' && pubUrl
+                  ? ('已映射公网：' + pubUrl)
+                  : tun.status === 'downloading'
+                  ? '正在自动下载 cloudflared 组件…'
+                  : tun.status === 'starting'
+                  ? '正在建立 Cloudflare 隧道连接…'
+                  : '支持免配置临时域名 (trycloudflare.com) 与固定域名隧道'
               )
             ),
-            h('span', { class: 'grow' }),
-            h(
-              'button',
-              {
-                class: 'btn',
-                onclick: async () => {
-                  try {
-                    const t0 = Date.now();
-                    const r = await fetch('http://127.0.0.1:' + _state.port + '/v1/models');
-                    const j = await r.json();
-                    const ms = Date.now() - t0;
-                    if (r.ok && Array.isArray(j?.data)) {
-                      if (typeof toast === 'function') {
-                        toast('本地网关自检通过 (' + ms + 'ms) · 已暴露模型: ' + j.data.map((x) => x.id).slice(0, 3).join(', '));
-                      }
-                    } else {
-                      if (typeof toast === 'function') toast('网关响应异常: HTTP ' + r.status);
-                    }
-                  } catch (e) {
-                    if (typeof toast === 'function') toast('自检连接失败: ' + (e?.message || e));
-                  }
-                },
-              },
-              icon('check'),
-              '联通自检'
-            ),
-            h(
-              'button',
-              {
+            h('div', { class: 'api-gw-seg' },
+              ...[
+                { id: 'quick', label: '临时隧道 (免配置)' },
+                { id: 'token', label: '固定域名 (CF Token)' },
+                { id: 'custom', label: '自定义公网域名' },
+              ].map(tab => h('button', {
                 type: 'button',
-                class: 'btn pri',
-                onclick: (e) => { e.stopPropagation(); copyVal(snippetText, '接入配置', e.currentTarget); },
-              },
-              icon('copy'),
-              '一键复制配置'
+                class: 'api-gw-seg-btn' + ((tun.mode || 'quick') === tab.id ? ' on' : ''),
+                onclick: () => callHost({ op: 'tunnelConfig', mode: tab.id }),
+              }, tab.label))
             )
           ),
-          h('pre', { class: 'api-gw-pre' }, snippetText)
-        ),
+          (tun.mode === 'token' || tun.mode === 'custom')
+            ? h('div', { class: 'api-gw-cf-inputs' },
+                tun.mode === 'token'
+                  ? (cfTokenInput = h('input', {
+                      class: 'm-in api-gw-cf-in',
+                      type: 'password',
+                      value: '',
+                      placeholder: tun.hasToken ? ('已保存 Token (' + tun.tokenPreview + ')，留空则沿用') : '粘贴 Cloudflare Tunnel Token 或安装命令',
+                    }))
+                  : null,
+                (cfDomainInput = h('input', {
+                  class: 'm-in api-gw-cf-in',
+                  type: 'text',
+                  value: String(tun.customDomain || ''),
+                  placeholder: '绑定的固定公网域名，如 https://api.yourdomain.com',
+                }))
+              )
+            : null,
+          tun.error ? h('div', { class: 'api-gw-err', style: 'margin-top:6px' }, '隧道提示：' + tun.error) : null,
+          h('div', { class: 'api-gw-cf-actions' },
+            h('button', {
+              type: 'button',
+              class: 'm-btn ' + (tun.running ? 'danger' : 'primary') + ' api-gw-cf-btn',
+              onclick: async () => {
+                if (tun.running) {
+                  await callHost({ op: 'tunnelStop' });
+                  if (typeof toast === 'function') toast('公网隧道已关闭', 'ok');
+                } else {
+                  if (typeof toast === 'function') toast('正在启动公网隧道，请稍候…', 'ok');
+                  const res = await callHost({
+                    op: 'tunnelStart',
+                    mode: tun.mode || 'quick',
+                    customDomain: cfDomainInput ? cfDomainInput.value : tun.customDomain,
+                    token: cfTokenInput ? cfTokenInput.value : '',
+                  });
+                  if (res?.tunnel?.publicUrl && typeof toast === 'function') {
+                    toast('公网隧道已就绪：' + res.tunnel.publicUrl + '/v1', 'ok');
+                  }
+                }
+              },
+            }, tun.running ? '停止公网隧道' : (tun.mode === 'custom' ? '应用公网域名' : '一键开启公网隧道')),
+            pubUrl
+              ? h('button', {
+                  type: 'button',
+                  class: 'm-btn ghost api-gw-cf-btn',
+                  onclick: () => copyTxt(`${pubUrl}/v1`, '已复制公网 API 地址'),
+                }, '复制公网 API 地址')
+              : null
+          )
+        )
+      );
+      body.append(unifiedCard);
 
-        Array.isArray(_state.logs) && _state.logs.length > 0
-          ? h(
-              'div',
-              { class: 'api-gw-card api-gw-logs' },
-              h(
-                'div',
-                { class: 'api-gw-log-h' },
-                icon('server'),
-                h('b', {}, '最近反代请求记录 (' + _state.logs.length + ')'),
-                h('span', { class: 'grow' }),
-                h(
-                  'button',
-                  { class: 'btn', onclick: () => callHost({ op: 'clearLogs' }) },
-                  '清空记录'
-                )
+      const proxyListSec = h('div', { class: 'api-gw-proxies-sec' },
+        h('div', { class: 'api-gw-sec-head' },
+          h('div', { class: 'api-gw-sec-title' },
+            icon('layers'),
+            h('span', {}, '当前账号的反代对话管理'),
+            h('span', { class: 'api-gw-count-pill' }, `${acctProxies.filter(p => p.enabled !== false).length} 启用 / 共 ${acctProxies.length} 个`)
+          ),
+          meta.sid
+            ? h('button', {
+                type: 'button',
+                class: 'm-btn ' + (curSidCard ? 'ghost' : 'primary') + ' api-gw-add-cur-btn',
+                onclick: async () => {
+                  await registerChatProxy(meta.sid, { autoStart: true });
+                },
+              }, curSidCard ? '✓ 刷新当前对话反代' : '+ 将当前对话加入反代')
+            : null
+        )
+      );
+
+      if (!acctProxies.length) {
+        proxyListSec.append(
+          h('div', { class: 'api-gw-empty-cards' },
+            h('div', { class: 'api-gw-empty-title' }, '当前账号暂未添加反代对话卡片'),
+            h('div', { class: 'api-gw-empty-sub' },
+              meta.sid
+                ? `当前打开对话：「${meta.title}」（${meta.mode === 'battle' ? `Battle 模式 · 自动分配 ${meta.modelIdA} / ${meta.modelIdB}` : `模型 ID: ${meta.modelId}`}），点击右上角「+ 将当前对话加入反代」即可一键启用。`
+                : '请先在左侧选择或新建一个对话（支持 Agent / Direct / Battle 视频与聊天），然后点击加入反代。'
+            )
+          )
+        );
+      } else {
+        const cardsWrap = h('div', { class: 'api-gw-proxy-cards' });
+        for (const px of acctProxies) {
+          const isBattleCard = px.mode === 'battle';
+          const isCardOn = px.enabled !== false && isRun;
+          const isEditing = _editingCardId === px.id;
+          const rid = px.randomId || genShortBattleId(px.sid || px.id);
+          const idA = px.modelIdA || `${rid}-battle-A`;
+          const idB = px.modelIdB || `${rid}-battle-B`;
+          const bTarget = px.battleTarget || 'B';
+
+          let editTitleIn = null;
+          let editModelIn = null;
+          let editModeSel = px.mode || 'agent';
+          let editBattleTarget = bTarget;
+
+          const cardBrandVid = (typeof Brand !== 'undefined' && Brand.of) ? Brand.of(px.modelName || px.modelId || px.title || '') : '';
+          const cardEl = h('div', { class: 'api-gw-pcard' + (px.enabled !== false ? ' is-enabled' : ' is-paused') + (px.sid === meta.sid ? ' is-current' : '') },
+            h('div', { class: 'api-gw-pcard-top' },
+              h('div', { class: 'api-gw-pcard-title-row' },
+                h('span', { class: 'api-gw-status-dot' + (isCardOn ? ' on' : '') }),
+                cardBrandVid && typeof vlogo === 'function' ? vlogo(cardBrandVid, 15) : null,
+                h('span', { class: 'api-gw-pcard-title', title: px.title || px.sid }, px.title || '未命名对话'),
+                px.sid === meta.sid ? h('span', { class: 'api-gw-cur-tag' }, '当前窗口对话') : null,
+                h('span', { class: 'api-gw-mode-tag mode-' + (px.mode || 'agent') },
+                  isBattleCard
+                    ? (px.modality === 'video' ? '视频 Battle' : 'Battle 盲测')
+                    : (px.mode === 'direct' ? 'Direct 直连' : 'Agent 模式')
+                ),
+                h('span', { class: 'api-gw-pcard-stat' }, `调用 ${px.reqCount || 0} 次`)
               ),
-              h(
-                'div',
-                { class: 'api-gw-log-list' },
-                ..._state.logs.slice(0, 8).map((lg) =>
-                  h(
-                    'div',
-                    { class: 'api-gw-log-it' },
-                    h('span', { class: 'api-gw-pbadge ' + lg.protocol }, String(lg.protocol || 'openai').toUpperCase()),
-                    h('code', { class: 'api-gw-lmod' }, lg.model || 'brana-current'),
-                    lg.toolsCount > 0 ? h('span', { class: 'api-gw-tbadge' }, 'Tools×' + lg.toolsCount) : null,
-                    h('span', { class: 'api-gw-lprev grow' }, lg.preview || '(空内容)'),
-                    h('span', { class: 'api-gw-lst ' + lg.status }, lg.status === 'done' ? '完成' : (lg.status === 'error' ? '错误' : '流式生成中'))
+              h('div', { class: 'api-gw-pcard-btns' },
+                h('button', {
+                  type: 'button',
+                  class: 'api-gw-act-btn ' + (px.enabled !== false ? 'warn' : 'ok'),
+                  title: px.enabled !== false ? '暂停此对话反代' : '启动此对话反代',
+                  onclick: async () => {
+                    await callHost({ op: 'toggleProxy', id: px.id, sid: px.sid, enabled: px.enabled === false });
+                    if (typeof toast === 'function') {
+                      toast(px.enabled === false ? ('已启动反代：' + px.title) : ('已停止反代：' + px.title), 'ok');
+                    }
+                  },
+                }, px.enabled !== false ? '停止' : '启动'),
+                h('button', {
+                  type: 'button',
+                  class: 'api-gw-act-btn' + (isEditing ? ' on' : ''),
+                  onclick: () => {
+                    _editingCardId = isEditing ? '' : px.id;
+                    _renderModalBody();
+                  },
+                }, isEditing ? '收起' : '编辑'),
+                px.sid && px.sid !== meta.sid
+                  ? h('button', {
+                      type: 'button',
+                      class: 'api-gw-act-btn',
+                      title: '切换到该对话',
+                      onclick: () => {
+                        try {
+                          if (typeof UI !== 'undefined' && typeof UI.pick === 'function') {
+                            closeModal();
+                            UI.pick(px.sid);
+                          }
+                        } catch {}
+                      },
+                    }, '定位')
+                  : null,
+                h('button', {
+                  type: 'button',
+                  class: 'api-gw-act-btn danger',
+                  title: '从反代管理中移除此对话',
+                  onclick: async () => {
+                    await callHost({ op: 'deleteProxy', id: px.id, sid: px.sid });
+                    if (typeof toast === 'function') toast('已删除反代卡片：' + (px.title || px.modelId), 'ok');
+                  },
+                }, '删除')
+              )
+            ),
+
+            isBattleCard
+              ? h('div', { class: 'api-gw-pcard-models battle-models' },
+                  h('div', { class: 'api-gw-battle-ids' },
+                    h('span', { class: 'api-gw-m-label' }, 'Battle 模型名 (点击复制)：'),
+                    h('button', {
+                      type: 'button',
+                      class: 'api-gw-mid-pill' + (bTarget === 'B' || bTarget === 'AB' ? ' on' : ''),
+                      title: '点击复制 B 侧模型 ID（请求该模型固定只输出 B 的回复/视频）',
+                      onclick: () => copyTxt(idB, '已复制 B 侧模型名：' + idB),
+                    }, '[B] ' + idB),
+                    h('button', {
+                      type: 'button',
+                      class: 'api-gw-mid-pill' + (bTarget === 'A' || bTarget === 'AB' ? ' on' : ''),
+                      title: '点击复制 A 侧模型 ID（请求该模型固定只输出 A 的回复/视频）',
+                      onclick: () => copyTxt(idA, '已复制 A 侧模型名：' + idA),
+                    }, '[A] ' + idA),
+                    bTarget === 'card'
+                      ? h('button', {
+                          type: 'button',
+                          class: 'api-gw-mid-pill on',
+                          onclick: () => copyTxt(`${rid}-battle-card`, '已复制双视频卡片模型名：' + `${rid}-battle-card`),
+                        }, '[双路] ' + `${rid}-battle-card`)
+                      : null
+                  ),
+                  h('div', { class: 'api-gw-battle-target-row' },
+                    h('span', { class: 'api-gw-m-label' }, '反代输出策略：'),
+                    h('div', { class: 'api-gw-seg compact' },
+                      ...[
+                        { id: 'B', label: '固定 B (只输出B·忽略A)' },
+                        { id: 'A', label: '固定 A (只输出A·忽略B)' },
+                        { id: 'AB', label: 'A/B 双模型对话' },
+                        { id: 'card', label: '双视频/双回复 + 5选卡片' },
+                      ].map(opt => h('button', {
+                        type: 'button',
+                        class: 'api-gw-seg-btn' + (bTarget === opt.id ? ' on' : ''),
+                        onclick: async () => {
+                          await callHost({
+                            op: 'upsertProxy',
+                            autoStart: false,
+                            card: { ...px, battleTarget: opt.id },
+                          });
+                        },
+                      }, opt.label))
+                    ),
+                    h('span', { class: 'api-gw-skip-hint' }, '✓ 默认不选择 · 发内容即当跳过选择直接强制继续下一轮/下一视频')
                   )
                 )
+              : h('div', { class: 'api-gw-pcard-models' },
+                  h('span', { class: 'api-gw-m-label' }, '模型 ID (model)：'),
+                  h('button', {
+                    type: 'button',
+                    class: 'api-gw-mid-pill on',
+                    title: '点击复制模型 ID',
+                    onclick: () => copyTxt(px.modelId, '已复制模型 ID：' + px.modelId),
+                  }, px.modelId),
+                  h('span', { class: 'api-gw-m-sub' }, px.modelName || '')
+                ),
+
+            isEditing
+              ? h('div', { class: 'api-gw-pcard-edit' },
+                  h('div', { class: 'api-gw-edit-grid' },
+                    h('label', { class: 'api-gw-edit-field' },
+                      h('span', {}, '卡片备注名称'),
+                      (editTitleIn = h('input', {
+                        class: 'm-in',
+                        type: 'text',
+                        value: String(px.title || ''),
+                        placeholder: '对话备注名称',
+                      }))
+                    ),
+                    h('label', { class: 'api-gw-edit-field' },
+                      h('span', {}, '自定义模型 ID (model)'),
+                      (editModelIn = h('input', {
+                        class: 'm-in',
+                        type: 'text',
+                        value: String(px.modelId || ''),
+                        placeholder: isBattleCard ? idB : '自定义模型名称',
+                      }))
+                    )
+                  ),
+                  h('div', { class: 'api-gw-edit-foot' },
+                    h('div', { class: 'api-gw-seg compact' },
+                      ...[
+                        { id: 'agent', label: 'Agent 模式' },
+                        { id: 'direct', label: 'Direct 模式' },
+                        { id: 'battle', label: 'Battle 模式 (生成 -battle-A/B)' },
+                      ].map(mOpt => h('button', {
+                        type: 'button',
+                        class: 'api-gw-seg-btn' + (editModeSel === mOpt.id ? ' on' : ''),
+                        onclick: async () => {
+                          editModeSel = mOpt.id;
+                          await callHost({
+                            op: 'upsertProxy',
+                            autoStart: false,
+                            card: {
+                              ...px,
+                              title: editTitleIn ? editTitleIn.value : px.title,
+                              mode: mOpt.id,
+                            },
+                          });
+                        },
+                      }, mOpt.label))
+                    ),
+                    h('button', {
+                      type: 'button',
+                      class: 'm-btn primary',
+                      onclick: async () => {
+                        const newTitle = String(editTitleIn?.value || px.title || '').trim();
+                        const newMid = String(editModelIn?.value || px.modelId || '').trim();
+                        _editingCardId = '';
+                        await callHost({
+                          op: 'upsertProxy',
+                          autoStart: false,
+                          card: {
+                            ...px,
+                            title: newTitle || px.title,
+                            customModelId: newMid,
+                            modelId: newMid,
+                            battleTarget: editBattleTarget,
+                          },
+                        });
+                        if (typeof toast === 'function') toast('反代卡片修改已保存', 'ok');
+                      },
+                    }, '保存修改')
+                  )
+                )
+              : null
+          );
+          cardsWrap.append(cardEl);
+        }
+        proxyListSec.append(cardsWrap);
+      }
+      body.append(proxyListSec);
+
+      const protoToggleBar = h('div', { class: 'api-gw-more-bar' },
+        h('button', {
+          type: 'button',
+          class: 'api-gw-more-btn',
+          onclick: () => {
+            _showAdvancedProto = !_showAdvancedProto;
+            _renderModalBody();
+          },
+        }, _showAdvancedProto ? '▾ 收起多协议端点与请求日志' : '▸ 展开多协议端点 (/v1/chat/completions · /v1/messages · Gemini) 与最近日志')
+      );
+      body.append(protoToggleBar);
+
+      if (_showAdvancedProto) {
+        const activeModelForSnippet = curSidCard?.modelId || acctProxies[0]?.modelId || meta.modelId || 'brana-current';
+        const epSection = h('div', { class: 'api-gw-ep-list', style: 'margin-top:6px' },
+          h('div', { class: 'api-gw-ep-row' },
+            h('span', { class: 'api-gw-ep-k' }, 'OpenAI Chat'),
+            h('code', { class: 'api-gw-ep-v' }, `${activeBaseV1}/chat/completions`),
+            h('button', { class: 'api-gw-copy', type: 'button', onclick: () => copyTxt(`${activeBaseV1}/chat/completions`, '已复制 OpenAI Endpoint') }, '复制')
+          ),
+          h('div', { class: 'api-gw-ep-row' },
+            h('span', { class: 'api-gw-ep-k' }, 'Anthropic'),
+            h('code', { class: 'api-gw-ep-v' }, `${pubUrl || baseLocal}/v1/messages`),
+            h('button', { class: 'api-gw-copy', type: 'button', onclick: () => copyTxt(`${pubUrl || baseLocal}/v1/messages`, '已复制 Anthropic Endpoint') }, '复制')
+          ),
+          h('div', { class: 'api-gw-ep-row' },
+            h('span', { class: 'api-gw-ep-k' }, 'Gemini'),
+            h('code', { class: 'api-gw-ep-v' }, `${pubUrl || baseLocal}/v1beta/models/${activeModelForSnippet}:generateContent`),
+            h('button', { class: 'api-gw-copy', type: 'button', onclick: () => copyTxt(`${pubUrl || baseLocal}/v1beta/models/${activeModelForSnippet}:generateContent`, '已复制 Gemini Endpoint') }, '复制')
+          )
+        );
+        body.append(epSection);
+
+        const logs = Array.isArray(_state.logs) ? _state.logs : [];
+        if (logs.length > 0) {
+          body.append(
+            h('div', { class: 'api-gw-logs' },
+              h('div', { class: 'api-gw-logs-head' },
+                h('span', {}, `最近 API 请求日志（累计 ${_state.reqCount || logs.length} 次）`),
+                h('button', {
+                  class: 'api-gw-copy',
+                  type: 'button',
+                  onclick: () => callHost({ op: 'clearLogs' }),
+                }, '清空')
+              ),
+              h('div', { class: 'api-gw-logs-list' },
+                ...logs.slice(0, 6).map(l => h('div', { class: 'api-gw-log-item' },
+                  h('span', { class: 'api-gw-log-proto' }, String(l.protocol || 'openai').toUpperCase()),
+                  h('span', { class: 'api-gw-log-model' }, l.model || 'brana-current'),
+                  l.toolsCount ? h('span', { class: 'api-gw-log-tools' }, `Tools:${l.toolsCount}`) : null,
+                  h('span', { class: 'api-gw-log-prev' }, l.preview || '—'),
+                  h('span', { class: 'api-gw-log-st ' + (l.status || '') }, l.status === 'done' ? '完成' : (l.status === 'error' ? '错误' : '生成中'))
+                ))
               )
             )
-          : null
+          );
+        }
+      }
+
+      box.append(body);
+      box.append(
+        h('div', { class: 'modal-f api-gw-foot' },
+          h('span', { class: 'dim', style: 'font-size:11.5px' }, '支持 OpenAI / Anthropic / Gemini 协议直连本地端口或 Cloudflare 隧道'),
+          h('span', { class: 'grow' }),
+          h('button', { type: 'button', class: 'btn sm', onclick: closeModal }, '完成')
+        )
       );
     };
 
-    const initPayload = {
-      op: _state.running ? 'sync' : 'start',
-      boundSid: meta.sid,
-      boundTitle: meta.title,
-      modelName: meta.modelName,
-      modelInternal: meta.modelInternal,
-      modelFam: meta.modelFam,
-    };
-    await callHost(initPayload);
     _renderModalBody();
-    if (typeof View !== 'undefined' && typeof View.render === 'function') {
-      try { View.render(); } catch {}
-    }
+    let gwDownOnBack = false;
+    _modalBack = h('div', {
+      class: 'modal-back api-gw-back',
+      onpointerdown: (e) => { gwDownOnBack = (e.target === _modalBack); },
+      onclick: (e) => { if (gwDownOnBack && e.target === _modalBack) closeModal(); gwDownOnBack = false; },
+    }, box);
+    document.body.append(_modalBack);
   }
 
-  setTimeout(() => {
-    try {
-      if (typeof BranaHost !== 'undefined' && typeof BranaHost.onApiGatewayReq === 'function') {
-        BranaHost.onApiGatewayReq((job) => _onMainRequest(job));
-      }
-      if (typeof Bus !== 'undefined' && typeof Bus.on === 'function') {
-        for (const ev of ['models', 'modechange', 'directmodelchange', 'eval:vote-revealed']) {
-          Bus.on(ev, () => {
-            if (_state.running || _modalBack) syncCurrentContext();
-          });
+  let _ipcBound = false;
+  function init() {
+    if (typeof window !== 'undefined') {
+      window.__BranaLocalApiGateway = {
+        _onMainRequest: onMainRequest,
+        openModal,
+        syncCurrentContext,
+        registerChatProxy,
+      };
+    }
+    if (!_ipcBound) {
+      try {
+        if (typeof BranaHost !== 'undefined') {
+          const bindFn = typeof BranaHost.onApiGatewayReq === 'function'
+            ? BranaHost.onApiGatewayReq.bind(BranaHost)
+            : (typeof BranaHost.onApiGatewayRequest === 'function' ? BranaHost.onApiGatewayRequest.bind(BranaHost) : null);
+          if (bindFn) {
+            bindFn((payload) => onMainRequest(payload));
+            _ipcBound = true;
+          }
         }
+      } catch {}
+    }
+    try {
+      if (typeof Bus !== 'undefined' && typeof Bus.on === 'function') {
+        Bus.on('turn', (chat) => { void syncCurrentContext(chat); });
+        Bus.on('eval:stream', (ev) => { if (ev?.chat) void syncCurrentContext(ev.chat); });
+        Bus.on('eval:vote-revealed', (ev) => { if (ev?.chat) void syncCurrentContext(ev.chat); });
       }
     } catch {}
-  }, 50);
+    setTimeout(() => { void callHost({ op: 'status' }); }, 600);
+  }
 
-  const api = {
+  init();
+
+  return {
+    get state() { return _state; },
+    getState() { return _state; },
+    isRunning() { return Boolean(_state.running); },
+    isBoundTo(sid) { return isSidProxied(sid); },
     openModal,
+    closeModal,
     syncCurrentContext,
-    isRunning: () => Boolean(_state.running),
-    isBoundTo: (sid) => Boolean(_state.running && (_state.sessionMode === 'stateless' || !_state.boundSid || _state.boundSid === sid)),
-    getState: () => _state,
-    _onMainRequest,
-    _createToolStreamSplitter: createToolStreamSplitter,
-    _buildTurnPrompt: buildTurnPrompt,
+    readChatModelMeta,
+    registerChatProxy,
+    getAccountProxies,
+    getProxyCardForSid,
+    isSidProxied,
+    genShortBattleId,
+    _onMainRequest: onMainRequest,
   };
-  try { window.__BranaLocalApiGateway = api; } catch {}
-  try { globalThis.__BranaLocalApiGateway = api; } catch {}
-  return api;
 })();
+

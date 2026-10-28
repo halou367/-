@@ -66,7 +66,7 @@ test('出口 IP 下拉测速实时更新纯净度并校验，杜绝未测欺诈�
   const mainJs = fs.readFileSync(path.join(__dirname, '..', 'src/main.js'), 'utf8');
   assert.match(nr, /const visKeys=pipRows\(\)\.map\(\(\[k\]\)=>k\),candKeys=candidateRows\(\)\.map\(\(\[k\]\)=>k\)/);
   assert.match(nr, /needsLiveRate/);
-  assert.match(iprep, /尚未获取 IPPure 欺诈分/);
+  assert.match(iprep, /已完成 ISP\/ASN 基础纯净度评估|尚未完成纯净度评估/);
   assert.match(iprep, /this\.invalidate\(\)/);
   assert.match(mainJs, /ipcMain\.handle\('host:ippureDirect'[\s\S]*?forcePurity: true/);
 });

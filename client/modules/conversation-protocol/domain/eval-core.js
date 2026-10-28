@@ -2116,7 +2116,8 @@ const EvalEngine = (() => {
           }
         } catch {}
         chat.emit();
-        try { if (typeof HtmlPreview !== 'undefined' && typeof HtmlPreview.syncEval === 'function') HtmlPreview.syncEval(chat); } catch {}
+        rebuildTurns(chat);
+    try { if (typeof HtmlPreview !== 'undefined' && typeof HtmlPreview.syncEval === 'function') HtmlPreview.syncEval(chat); } catch {}
         try { if (typeof Dock !== 'undefined' && Dock.render) Dock.render(); } catch {}
         if (chat.modality === 'webdev' || chat.evalModality === 'webdev' || chat.messages.some(m => m && (m.webdev || m.activeWorkflowRunId || m.metadata?.workflowRunId))) {
           void hydrateChatWebDev(chat);
@@ -2963,7 +2964,7 @@ const EvalEngine = (() => {
         try {
           chat.phase = '正在加载生成的媒体文件…';
           chat.emit?.();
-          const freshData = await fetchEvalSessionData(chat.sid).catch(() => null);
+          const freshData = await fetchEvalSessionData(chat._activeEvalSid || chat.sid).catch(() => null);
           const freshMsgs = extractMessagesFromData(freshData);
           if (Array.isArray(freshMsgs) && freshMsgs.length) {
             for (const m of [msgA, msgB]) {
@@ -3183,9 +3184,10 @@ const EvalEngine = (() => {
         ? packClientInteraction(String(text || '') || 8, Math.random() < 0.45 ? 'button' : 'enter')
         : undefined;
 
-      const endpoint = isFirst
+      const activeEvalSid = chat._activeEvalSid || chat.sid;
+      let endpoint = isFirst
         ? '/nextjs-api/stream/create-evaluation'
-        : `/nextjs-api/stream/post-to-evaluation/${encodeURIComponent(chat.sid)}`;
+        : `/nextjs-api/stream/post-to-evaluation/${encodeURIComponent(activeEvalSid)}`;
 
       let resolvedDirectModelId = null;
       if (chat.evalMode === 'direct') {
@@ -3197,7 +3199,7 @@ const EvalEngine = (() => {
 
       const wireMode = isBattle ? 'battle' : 'direct-battle';
       const payload = {
-        id: chat.sid,
+        id: activeEvalSid,
         mode: wireMode,
         modality: effectiveModality,
         userMessageId,
@@ -3332,6 +3334,38 @@ const EvalEngine = (() => {
             });
           }
         }
+      }
+      if (!res.ok && !isFirst && [400, 403, 404, 405, 409, 422].includes(res.status) && !ctl.signal.aborted) {
+        const nextEvalSid = genUuid();
+        chat._activeEvalSid = nextEvalSid;
+        endpoint = '/nextjs-api/stream/create-evaluation';
+        const fallbackPayload = {
+          ...payload,
+          id: nextEvalSid,
+          parentMessageIds: [],
+          messages: [
+            {
+              id: userMessageId,
+              role: 'user',
+              content: text,
+              experimental_attachments: attachments,
+              parentMessageIds: [],
+            },
+          ],
+        };
+        if (typeof Recaptcha !== 'undefined' && typeof Recaptcha.v3 === 'function') {
+          try { Recaptcha.clearCache?.(); } catch {}
+          const fbTok = await Recaptcha.v3('chat_submit').catch(() => v3Token);
+          if (fbTok) fallbackPayload.recaptchaV3Token = fbTok;
+        }
+        res = await fetchFn(endpoint, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Accept: '*/*' },
+          body: JSON.stringify(fallbackPayload),
+          credentials: 'same-origin',
+          cache: 'no-store',
+          signal: ctl.signal,
+        });
       }
       if (!res.ok) {
         const errTxt = await res.text().catch(() => `HTTP ${res.status}`);

@@ -655,7 +655,32 @@ const Pin = {
   EXPIRED: new Set(['dpl_DaEk6YQDh7utsYDiEtpTgeRc5jct', 'dpl_HAxwrhqRf48UW1Hf4MDQquRXSs7x', 'dpl_ESfaucDQhCnPyQUz9QQZg82hdgNT', 'dpl_9gD8cB3xQ7eTwzU2jLmVpR5kHs1Y', 'dpl_4NhYCxHezktNSfr9x2GMwqJnbJPa', 'dpl_Gxhd5ZSm5y3NhjeyXwjCYo8o3ADC', 'dpl_6gJxa2MLrLxAx6KcYkVgvMmbV2EA', 'dpl_D2yWTJ2pjpQeiwvqpbtqDTpsZnY4', 'dpl_2W47bX6FpYa8XrFCCjzBA2JNNZ4V', 'dpl_BieRM8wzCXHw6R6ToLUsTdhu4ZBZ']),
   COST_TRIGGER: '20261017.19',
   TRIGGER: '20260930.5',
-  OVERRIDES: { 'credit-system-m1': 'cost-shown', 'credit-system-m2': 'limits-enabled' },
+  OVERRIDES: {
+    'credit-system-m1': 'cost-shown',
+    'credit-system-m2': 'limits-enabled',
+    'disable-opus': 'control',
+    'chat-agent-mention-edu-v2': 'control',
+    'agent-harness-randomization': 'control',
+  },
+  opusUnlocked() {
+    try { return typeof Prefs === 'object' ? Prefs.opusUnlock !== false : true; } catch { return true; }
+  },
+  toggleOpusUnlock(nextVal) {
+    try {
+      const target = typeof nextVal === 'boolean' ? nextVal : !this.opusUnlocked();
+      if (typeof Prefs === 'object') {
+        Prefs.opusUnlock = target;
+        if (typeof savePrefs === 'function') savePrefs();
+      }
+      this._phMemoKey = '';
+      this._phMemoRaw = '';
+      this.ensureBillingFlags(true);
+      if (typeof BotService !== 'undefined' && BotService.invalidate) BotService.invalidate();
+      if (typeof Bus !== 'undefined') Bus.emit('botservice', typeof BotService !== 'undefined' && BotService.state ? BotService.state() : null);
+      if (typeof Bar !== 'undefined' && Bar.render) Bar.render();
+      return target;
+    } catch { return true; }
+  },
   trigger: '', apiDpl: '', at: 0, fellBack: '',
   extractDpl(raw) {
     const s = String(raw || '').trim();
@@ -732,7 +757,15 @@ const Pin = {
   ensureBillingFlags(force = false) {
     if (typeof location === 'undefined' || location.hostname !== 'arena.ai') return;
     try {
-      const ov = this.OVERRIDES || { 'credit-system-m1': 'cost-shown', 'credit-system-m2': 'limits-enabled' };
+      const unlockOpus = this.opusUnlocked();
+      const ov = Object.assign({}, this.OVERRIDES || { 'credit-system-m1': 'cost-shown', 'credit-system-m2': 'limits-enabled' });
+      if (unlockOpus) {
+        ov['disable-opus'] = 'control';
+        ov['chat-agent-mention-edu-v2'] = 'control';
+        ov['agent-harness-randomization'] = 'control';
+      } else {
+        delete ov['disable-opus'];
+      }
       // 1. localStorage PostHog 持久化对象深度合并
       let patchedLs = false;
       if (!force && this._phMemoKey && this._phMemoRaw && localStorage.getItem(this._phMemoKey) === this._phMemoRaw) {
@@ -746,8 +779,17 @@ const Pin = {
             const obj = JSON.parse(raw);
             if (obj && typeof obj === 'object') {
               const cur = obj.$override_feature_flags || {};
-              if (force || cur['credit-system-m1'] !== 'cost-shown' || cur['credit-system-m2'] !== 'limits-enabled') {
-                obj.$override_feature_flags = Object.assign({}, cur, ov);
+              const needPatch = force || cur['credit-system-m1'] !== 'cost-shown' || cur['credit-system-m2'] !== 'limits-enabled' || (unlockOpus && cur['disable-opus'] !== 'control');
+              if (needPatch) {
+                const nextOv = Object.assign({}, cur, ov);
+                if (!unlockOpus) delete nextOv['disable-opus'];
+                obj.$override_feature_flags = nextOv;
+                if (unlockOpus && Array.isArray(obj.$active_feature_flags)) {
+                  obj.$active_feature_flags = obj.$active_feature_flags.filter(f => f !== 'disable-opus' && f !== 'chat-agent-mention-edu-v2');
+                }
+                if (obj.featureFlags && typeof obj.featureFlags === 'object') {
+                  Object.assign(obj.featureFlags, nextOv);
+                }
                 raw = JSON.stringify(obj);
                 localStorage.setItem(k, raw);
               }
@@ -759,23 +801,26 @@ const Pin = {
         }
       }
       if (!patchedLs) {
-        const fbKey = 'ph_phc_arena_posthog';
+        const fbKey = 'ph_phc_LG7IJbVJqBsk584rbcKca0D5lV2vHguiijDrVji7yDM_posthog';
         try {
           let raw = localStorage.getItem(fbKey) || '{}';
           const obj = JSON.parse(raw);
           const cur = obj.$override_feature_flags || {};
-          if (force || cur['credit-system-m1'] !== 'cost-shown' || cur['credit-system-m2'] !== 'limits-enabled') {
-            obj.$override_feature_flags = Object.assign({}, cur, ov);
-            raw = JSON.stringify(obj);
-            localStorage.setItem(fbKey, raw);
+          const nextOv = Object.assign({}, cur, ov);
+          if (!unlockOpus) delete nextOv['disable-opus'];
+          obj.$override_feature_flags = nextOv;
+          if (unlockOpus && Array.isArray(obj.$active_feature_flags)) {
+            obj.$active_feature_flags = obj.$active_feature_flags.filter(f => f !== 'disable-opus' && f !== 'chat-agent-mention-edu-v2');
           }
+          raw = JSON.stringify(obj);
+          localStorage.setItem(fbKey, raw);
           this._phMemoKey = fbKey;
           this._phMemoRaw = raw;
         } catch {}
       }
       // 2. ph-toolbar-overrides Cookie + arena_build_bucket=stable
       const rawCookie = String(document.cookie || '');
-      const hasPhOk = rawCookie.includes('ph-toolbar-overrides=') && rawCookie.includes('cost-shown') && rawCookie.includes('limits-enabled');
+      const hasPhOk = rawCookie.includes('ph-toolbar-overrides=') && rawCookie.includes('cost-shown') && (!unlockOpus || rawCookie.includes('disable-opus'));
       if (force || !hasPhOk) {
         const val = encodeURIComponent(JSON.stringify(ov));
         document.cookie = `ph-toolbar-overrides=${val}; path=/; max-age=2592000; SameSite=Lax; Secure`;
@@ -784,8 +829,14 @@ const Pin = {
         document.cookie = 'arena_build_bucket=stable; path=/; max-age=31536000; SameSite=Lax; Secure';
       }
       // 3. PostHog 运行时实例直接注入
-      if (typeof window !== 'undefined' && window.posthog?.featureFlags?.override) {
-        try { window.posthog.featureFlags.override(ov); } catch {}
+      if (typeof window !== 'undefined' && window.posthog?.featureFlags) {
+        try {
+          if (typeof window.posthog.featureFlags.overrideFeatureFlags === 'function') {
+            window.posthog.featureFlags.overrideFeatureFlags({ flags: ov });
+          } else if (typeof window.posthog.featureFlags.override === 'function') {
+            window.posthog.featureFlags.override(ov);
+          }
+        } catch {}
       }
     } catch {}
   },
@@ -1016,35 +1067,7 @@ const Models = {
   all: (() => {
     const raw = Store.get('models', {}) || {};
     let dirty = false;
-    const FIXED_SIDS_182 = {
-      '01a16ec7-6178-7ad4-b4da-96e7b047aecb': { name: 'Muse Spark 1.3 (Max)', fam: 'muse', htmlMaxLen: 39264, writtenChars: 39264 },
-      '01a16ec6-1cba-75d4-ac9e-b09f7efaba51': { name: 'Claude Fable 5.1 (Max)', fam: 'claude', htmlMaxLen: 37416, writtenChars: 37416 },
-      '01a16eb7-bf59-732f-8092-651a2e86c9e5': { name: 'Claude Sonnet 5.5 (Thinking)', fam: 'claude', htmlMaxLen: 23945, writtenChars: 23945 },
-      '01a16eb5-85f8-70c9-9533-a36c6a24ff15': { name: 'GPT 6.1 Sol (High)', fam: 'gpt', htmlMaxLen: 38262, writtenChars: 38262 },
-    };
-    for (const [sid, fix] of Object.entries(FIXED_SIDS_182)) {
-      const m = raw[sid];
-      if (m && (m.name !== fix.name || (m.reverseVer || 0) < 182)) {
-        m.name = fix.name;
-        m.reverseLabel = fix.name;
-        m.candidateName = fix.name;
-        m.fam = fix.fam;
-        m.sure = true;
-        m.guess = false;
-        m.pendingConfirm = false;
-        m.reverseVer = 182;
-        if (m.sseMemo && m.sseMemo.streamIdPrefix === 'claude-tc-empty' && Number(m.sseMemo.avgChunk) >= 15.0) {
-          delete m.sseMemo.streamIdPrefix;
-        }
-        if (m.habitFeatures?.meta) {
-          m.habitFeatures.meta.isMicroProbeChat = false;
-          m.habitFeatures.meta.htmlMaxLen = Math.max(Number(m.habitFeatures.meta.htmlMaxLen || 0), fix.htmlMaxLen);
-          m.habitFeatures.meta.writtenChars = Math.max(Number(m.habitFeatures.meta.writtenChars || 0), fix.writtenChars);
-          if (fix.fam !== 'claude' && m.habitFeatures.meta.wireFam === 'anthropic') m.habitFeatures.meta.wireFam = '';
-        }
-        dirty = true;
-      }
-    }
+    // V12: 硬编码特定 SID 已彻底移除，所有对话统一经由醍醐重权 HTML + /cost + 协议习惯管道自动识别
     for (const [k, m] of Object.entries(raw)) {
       if (m && (m.pendingConfirm || (m.guess && (m.habitInferred || m.reverseInferred || m.billingProbe || m.userCorrected)))) {
         if (Array.isArray(m.candidates) && m.candidates.length > 0) {
@@ -1095,13 +1118,47 @@ const Models = {
   },
   get(sid) { return this.all[sid] || null; },
   set(sid, v) { if (v && typeof v.name === 'string' && typeof Strength !== 'undefined' && Strength.foldVer) {
-      v = { ...v, name: Strength.canon ? Strength.canon(v.name) : Strength.foldVer(v.name) };
+      const nextName = Strength.canon ? Strength.canon(v.name) : Strength.foldVer(v.name);
+      v = { ...v, name: nextName };
+      if (v.rawLabel && typeof Strength.canon === 'function') {
+        const cName = String(nextName || '').replace(/[?？]+$/, '').trim().toLowerCase();
+        const cRaw = String(Strength.canon(v.rawLabel) || '').replace(/[?？]+$/, '').trim().toLowerCase();
+        const stripTier = s => s.replace(/[-\s]*(none|minimal|low|medium|high|xhigh|max)$/i, '').trim();
+        if (cName && cRaw && stripTier(cName) !== stripTier(cRaw)) {
+          v = { ...v, rawLabel: nextName, ...(v.reverseLabel ? { reverseLabel: nextName } : {}) };
+        }
+      }
     }
-    if (v && v.name && !/^(未识别|未知型号|待定)$/.test(String(v.name).trim()) && (v.habitInferred || v.reverseInferred || v.billingProbe || v.userCorrected)) {
+    if (v && v.name && !/^(未识别|未知型号|待定)$/.test(String(v.name).trim()) && (v.tihuRecognized || v.habitInferred || v.reverseInferred || v.billingProbe || v.userCorrected)) {
       v = { ...v, pendingConfirm: false, guess: false };
     }
     const prev = sid ? this.all[sid] : null;
-    if (prev && v && prev.name === v.name && Boolean(prev.sure) === Boolean(v.sure) && Boolean(prev.guess) === Boolean(v.guess) && Boolean(prev.pendingConfirm) === Boolean(v.pendingConfirm) && Boolean(prev.directMode) === Boolean(v.directMode) && Boolean(prev.battleRevealed) === Boolean(v.battleRevealed) && Boolean(prev.userCorrected) === Boolean(v.userCorrected) && Boolean(prev.routed) === Boolean(v.routed) && (prev.effort || '') === (v.effort || '') && (prev.tier || '') === (v.tier || '') && (prev.confidence ?? null) === (v.confidence ?? null) && (prev.usd ?? null) === (v.usd ?? null) && (prev.modelA || '') === (v.modelA || '') && (prev.modelB || '') === (v.modelB || '') && prev.fingerprint === v.fingerprint) {
+    if (prev && v
+      && prev.name === v.name
+      && (prev.rawLabel || '') === (v.rawLabel || '')
+      && (prev.reverseLabel || '') === (v.reverseLabel || '')
+      && Boolean(prev.sure) === Boolean(v.sure)
+      && Boolean(prev.guess) === Boolean(v.guess)
+      && Boolean(prev.pendingConfirm) === Boolean(v.pendingConfirm)
+      && Boolean(prev.directMode) === Boolean(v.directMode)
+      && Boolean(prev.battleRevealed) === Boolean(v.battleRevealed)
+      && Boolean(prev.tihuRecognized) === Boolean(v.tihuRecognized)
+      && (prev._tihuEngineFixVer || 0) === (v._tihuEngineFixVer || 0)
+      && Boolean(prev.fromTitle) === Boolean(v.fromTitle)
+      && Boolean(prev.userCorrected) === Boolean(v.userCorrected)
+      && Boolean(prev.routed) === Boolean(v.routed)
+      && Boolean(prev.effortDowngraded) === Boolean(v.effortDowngraded)
+      && (prev.routeTo || '') === (v.routeTo || '')
+      && (prev.effort || '') === (v.effort || '')
+      && (prev.tier || '') === (v.tier || '')
+      && (prev.confidence ?? null) === (v.confidence ?? null)
+      && (prev.reverseMatch ?? null) === (v.reverseMatch ?? null)
+      && (prev.reverseScore ?? null) === (v.reverseScore ?? null)
+      && (prev.habitScore ?? null) === (v.habitScore ?? null)
+      && (prev.usd ?? null) === (v.usd ?? null)
+      && (prev.modelA || '') === (v.modelA || '')
+      && (prev.modelB || '') === (v.modelB || '')
+      && prev.fingerprint === v.fingerprint) {
       return prev;
     }
     this.all[sid] = { ...v, at: now() };
@@ -1109,6 +1166,18 @@ const Models = {
     if (ks.length > 3000) for (const k of ks.slice(0, ks.length - 3000)) delete this.all[k];
     if (!this._lastSaveAt || now() - this._lastSaveAt > 250) this.save();
     else this.saveSoon(220);
+    if (sid) {
+      try { if (typeof TitleSync !== 'undefined' && TitleSync.invalidate) TitleSync.invalidate(sid); } catch {}
+      try { if (typeof Titles !== 'undefined' && Titles._viewMemo) Titles._viewMemo.delete(sid); } catch {}
+      try { if (typeof UI !== 'undefined' && UI._cards) UI._cards.delete(sid); } catch {}
+      if (this._syncingTitleSid !== sid && !(typeof History !== 'undefined' && History.isDeleted?.(sid))) {
+        const hasRealName = Boolean(v?.name && !v.pendingConfirm && !/^(未识别|未知型号|待定)$/.test(String(v.name).trim()) && (!v.guess || v.tihuRecognized || v.habitInferred || v.reverseInferred || v.billingProbe || v.userCorrected));
+        if (hasRealName && typeof Titles !== 'undefined' && typeof Titles.local === 'function') {
+          this._syncingTitleSid = sid;
+          try { Titles.local(sid); } catch {} finally { this._syncingTitleSid = null; }
+        }
+      }
+    }
     Bus.emit('models', sid);
   },
 };
@@ -5474,10 +5543,22 @@ class Chat {
         }
         if (e.status === 404) {
           try {
+            const isOnline = (typeof Host === 'undefined' || Host.online !== false)
+              && !(typeof BrowseMode !== 'undefined' && BrowseMode.active?.())
+              && !(typeof window !== 'undefined' && window.__BRANA_BROWSE_MODE);
             const hRow = typeof History !== 'undefined' ? History.byId?.(this.sid) : null;
-            if (hRow && (hRow._localRecovered || /^本地缓存对话(\s|$)/i.test(String(hRow.title || '').trim()))) {
-              if (typeof LocalCache !== 'undefined' && LocalCache.drop) LocalCache.drop([this.sid]);
-              if (typeof History !== 'undefined' && History.bury) History.bury([this.sid]);
+            const isLocalGhost = Boolean(hRow && (hRow._localRecovered || /^本地缓存对话(\s|$)/i.test(String(hRow.title || '').trim())));
+            if (isLocalGhost || isOnline) {
+              try { if (typeof LocalCache !== 'undefined' && LocalCache.drop) LocalCache.drop([this.sid]); } catch {}
+              try { if (typeof ArchiveHistory !== 'undefined' && ArchiveHistory.drop) ArchiveHistory.drop([this.sid]); } catch {}
+              try { if (typeof History !== 'undefined') { History.markDeleted?.([this.sid]); History.bury?.([this.sid]); } } catch {}
+              try {
+                if (typeof UI !== 'undefined') {
+                  UI._cards?.delete?.(this.sid);
+                  UI.renderList?.(true);
+                  UI.renderTabs?.();
+                }
+              } catch {}
             }
           } catch {}
         }
@@ -6263,17 +6344,22 @@ class Chat {
       return;
     }
     this._closedLockedModel = false;
+    const isPelicanRunning = typeof PelicanTest !== 'undefined' && Boolean(PelicanTest.isRunning?.(this));
     if (typeof BillingProbe !== 'undefined' && typeof BillingProbe.markAsOpenSourceModel === 'function') {
-      try { BillingProbe.markAsOpenSourceModel(this, { silent: isGachaActive }); } catch {}
+      try { BillingProbe.markAsOpenSourceModel(this, { silent: isGachaActive || isPelicanRunning }); } catch {}
     }
-    if (this.gacha && this.gacha.skipCompatThinking !== false && typeof Fingerprint !== 'undefined') {
-      try { Fingerprint.maybeStopCompat?.(this); } catch {}
+    /* V17: 鹈鹕单聊测试不停；新建对话抽卡按「开源自停」开关决定：开启时立即触发自动暂停并归档删除，关闭时完整生成后独立识别 */
+    if (isGachaActive || this.gacha || isPelicanRunning) {
+      if ((isGachaActive || this.gacha) && !isPelicanRunning && typeof Gacha !== 'undefined' && Gacha.isOpenAutoStopEnabled?.()) {
+        try { Gacha.triggerOpenAutoStopMidStream?.(this); } catch {}
+      }
+      return;
     }
-    if (!isGachaActive && !priorHadClosed) { if (!this.gacha) return; }
+    if (!priorHadClosed) return;
     // 出现开源思考（路由开源模型），自动暂停
     this.thinkStopped = true; this.routedThink = true; this._routePaused = true; this._hadOpenThinkStop = true;
     if (this.live) this.live.metadata = { ...(this.live.metadata || {}), openThinkStopped: true };
-    this.phase = isGachaActive ? '抽卡到开源思考已经暂停' : '路由到开源模型已暂停';
+    this.phase = '路由到开源模型已暂停';
     Trace.note?.(this.sid, this.phase, 'warn');
     toast(this.phase, 'err');
     setTimeout(() => this.stop(), 0);
@@ -7425,7 +7511,7 @@ class Chat {
           }
           this.parts.set(key, p);
         }
-        if (p.type === 'reasoning' && /[^\s.…·。]/.test(String(ch.delta || ''))) { const firstVis = !/[^\s.…·。]/.test(p.text); const isClosed = false; if (!isClosed) { this._closedLockedModel = false; if (firstVis || !this.thinkStopped) { this.thinkGuard(p); try { if (typeof BillingProbe !== 'undefined' && typeof BillingProbe.markAsOpenSourceModel === 'function') BillingProbe.markAsOpenSourceModel(this); } catch {} } try { if (this.gacha && this.gacha.skipCompatThinking !== false && typeof Fingerprint !== 'undefined') Fingerprint.maybeStopCompat?.(this); } catch {} if (firstVis && this.gacha?.stopThink && !this.stopReq && P.some(x => x !== p && x.type === 'text' && String(x.text || '').trim())) { this.thinkStopped = true; this.routedThink = true; if (this.live) this.live.metadata = { ...(this.live.metadata || {}), openThinkStopped: true }; setTimeout(() => this.stop(), 0); } } }
+        if (p.type === 'reasoning' && /[^\s.…·。]/.test(String(ch.delta || ''))) { const firstVis = !/[^\s.…·。]/.test(p.text); const isClosed = false; if (!isClosed) { this._closedLockedModel = false; if (firstVis || !this.thinkStopped) { this.thinkGuard(p); try { if (typeof BillingProbe !== 'undefined' && typeof BillingProbe.markAsOpenSourceModel === 'function') BillingProbe.markAsOpenSourceModel(this); } catch {} } /* V14: 抽卡模式下开源思考不暂停 */ } }
         const dStr = ch.delta || '';
         if (typeof p._replayBuf === 'string') {
           p._replayBuf += dStr;
@@ -7455,7 +7541,7 @@ class Chat {
         if (/^(?:call_\d+_|call_[0-9a-f]{24}$|functions\.|_\d+_[0-9a-f]{6,}|chatcmpl-tool-)/i.test(String(ch.toolCallId || ''))) {
           this._closedLockedModel = false;
           try { if (typeof BillingProbe !== 'undefined' && typeof BillingProbe.markAsOpenSourceModel === 'function') BillingProbe.markAsOpenSourceModel(this); } catch {}
-          try { if (this.gacha && this.gacha.skipCompatThinking !== false && typeof Fingerprint !== 'undefined') Fingerprint.maybeStopCompat?.(this); } catch {}
+          /* V14: 抽卡模式下开源工具调用不暂停 */
           this.thinkGuard({ text: String(ch.toolCallId) });
         }
         this.checkMidStreamRoute(t, ch);
@@ -7565,7 +7651,7 @@ class Chat {
         if (t.startsWith('data-')) { const ex = ch.id ? P.find(x => x.type === t && x.id === ch.id) : null; if (ex) ex.data = ch.data; else P.push({ type: t, id: ch.id, data: ch.data }); }
     }
     ThinkingStatus.eventPhase(this, ch);
-    try { Fingerprint.maybeStopCompat(this); Fingerprint.maybeGuardProbe(this); } catch {}
+    try { if (!this.gacha && typeof Fingerprint !== 'undefined' && Fingerprint.isRunning?.(this)) { Fingerprint.maybeStopCompat(this); Fingerprint.maybeGuardProbe(this); } } catch {}
     if ((t === 'finish' || t === 'tool-output-available' || t === 'tool-input-available') && Hitl.idleWait(this)) this.armHitl();
     if (t === 'text-delta' || t === 'reasoning-delta' || t === 'tool-input-delta') this.emitStreamSoon(20);
     else this.emit();
@@ -9292,7 +9378,7 @@ async function createChat0(text, opt = {}) {
   if (gShort0) { c.localTitle = gShort0; c.gachaNo = gNo0; }
   if (!opt.gacha) c.armLost(c.messages[0]);
   if (opt.gacha) c.gacha = opt.gacha; else Bus.emit('sent', sid, now());
-  if (!History.byId(sid)) { const ts = new Date().toISOString(), row = { type: 'agentic', id: sid, title: initChatTitle, ...(gShort0 ? { localTitle: gShort0, gachaNo: gNo0 } : {}), updatedAt: ts, createdAt: ts, _local: true }, pi = opt.placeholder ? History.items.indexOf(opt.placeholder) : -1; if (pi >= 0) History.items[pi] = row; else History.items.unshift(row); Bus.emit('history'); }
+  if (!History.byId(sid)) { const ts = new Date().toISOString(), row = { type: 'agentic', id: sid, title: initChatTitle, ...(gShort0 ? { localTitle: gShort0, gachaNo: gNo0 } : {}), updatedAt: ts, createdAt: ts, _local: true }, pi = opt.placeholder ? History.items.indexOf(opt.placeholder) : -1; if (pi >= 0) History.items[pi] = row; else History.items.unshift(row); History._ix = null; Bus.emit('history'); }
   c.emit();
   c.stream();
   Bus.emit('created', c);
@@ -9435,13 +9521,35 @@ const History = {
     if (!this.gone) { let g = {}; try { g = Store.get('histgone', {}); } catch {} const t = now(); this.gone = new Map(Object.entries(g && typeof g === 'object' ? g : {}).filter(([, at]) => t - at < 30 * 86400e3)); }
     return this.gone;
   },
+  delMap() {
+    if (!this.deletedMap) { let g = {}; try { g = Store.get('histdel', {}); } catch {} const t = now(); this.deletedMap = new Map(Object.entries(g && typeof g === 'object' ? g : {}).filter(([, at]) => t - at < 30 * 86400e3)); }
+    return this.deletedMap;
+  },
+  isDeleted(id) {
+    if (!id) return false;
+    try { return Boolean(this.delMap()?.has(String(id))); } catch { return false; }
+  },
+  markDeleted(ids) {
+    const dm = this.delMap(), set = new Set((ids || []).filter(Boolean).map(String)); if (!set.size) return;
+    const t = now();
+    for (const id of set) { dm.delete(id); dm.set(id, t); }
+    while (dm.size > 5000) dm.delete(dm.keys().next().value);
+    try { Store.set('histdel', Object.fromEntries(dm)); } catch {}
+  },
+  isGone(id) {
+    if (!id) return false;
+    try { const s = String(id); return Boolean(this.goneMap()?.has(s) || this.delMap()?.has(s)); } catch { return false; }
+  },
   bury(ids) {
-    const m = this.goneMap(), set = new Set(ids.filter(Boolean)); if (!set.size) return;
+    const m = this.goneMap(), set = new Set((ids || []).filter(Boolean).map(String)); if (!set.size) return;
     for (const id of set) { m.delete(id); m.set(id, now()); }
     while (m.size > 5000) m.delete(m.keys().next().value);
-    Store.set('histgone', Object.fromEntries(m));
-    const n = this.items.length; this.items = this.items.filter(e => !set.has(e.id));
-    if (n !== this.items.length) { this.saveSoon(); Bus.emit('history'); }
+    try { Store.set('histgone', Object.fromEntries(m)); } catch {}
+    const n = this.items.length;
+    this.items = this.items.filter(e => e && !set.has(String(e.id)));
+    this._ix = null;
+    if (n !== this.items.length) this.saveSoon();
+    Bus.emit('history');
   },
   merge(got, head = false) {
     const prevById = new Map(this.items.map(e => [e.id, e]));
@@ -9831,13 +9939,14 @@ const History = {
     if (id == null) return undefined;
     const a = this.items; let m = this._ix;
     if (!m || this._ixA !== a || this._ixN !== a.length) { m = this._ix = new Map(); this._ixA = a; this._ixN = a.length; for (let i = a.length - 1; i >= 0; i--) if (a[i]) m.set(a[i].id, i); }
-    let i = m.get(id);
+    const i = m.get(id);
     if (i != null && a[i]?.id === id) return a[i];
-    if (i != null) { const j = a.findIndex(e => e?.id === id); if (j >= 0) { m.set(id, j); return a[j]; } }
-    return typeof ArchiveHistory!=='undefined'?ArchiveHistory.byId(id):undefined;
+    const j = a.findIndex(e => e?.id === id);
+    if (j >= 0) { m.set(id, j); return a[j]; }
+    return typeof ArchiveHistory !== 'undefined' ? ArchiveHistory.byId(id) : undefined;
   },
   // 同一个对话只留一条（保留排在前面的那条）
-  dedupe() { const s = new Set(); const n = this.items.length; this.items = this.items.filter(e => e && !s.has(e.id) && s.add(e.id)); return n !== this.items.length; },
+  dedupe() { const s = new Set(); const n = this.items.length; this.items = this.items.filter(e => e && !s.has(e.id) && s.add(e.id)); if (n !== this.items.length) this._ix = null; return n !== this.items.length; },
   async rename(id, title) {
     const e = this.byId(id), type = e?.type || 'agentic';
     const expected=e?.title;
@@ -9874,7 +9983,7 @@ const History = {
   _mutSeq: 0,
   protoMutateRoutes(kind, id, opt = {}) {
     const entry = this.byId(id) || (typeof ArchiveHistory !== 'undefined' && ArchiveHistory.byId?.(id)) || null;
-    const isEval = Boolean(entry?.type === 'evaluation' || entry?.mode === 'battle' || entry?.mode === 'direct' || (typeof Chats !== 'undefined' && Chats.get?.(id)?.isEvaluation));
+    const isEval = Boolean(opt?.isEval || entry?.type === 'evaluation' || entry?.mode === 'battle' || entry?.mode === 'direct' || (typeof Chats !== 'undefined' && Chats.get?.(id)?.isEvaluation));
     const eid = encodeURIComponent(id);
     const seq = Number.isFinite(opt.seq) ? opt.seq : (this._mutSeq = (this._mutSeq + 1) % 10000);
     if (kind === 'archive') {
@@ -9895,7 +10004,7 @@ const History = {
     const histAgentDel = { path: '/api/history/agentic/' + eid, method: 'DELETE' };
     const histEvalDel = { path: '/api/history/evaluation/' + eid, method: 'DELETE' };
     if (isEval) return [histEvalDel, chatDel, histAgentDel];
-    return [chatDel, histAgentDel, histEvalDel];
+    return [histAgentDel, chatDel, histEvalDel];
   },
   async protoMutateResponse(kind, id, opt = {}) {
     const seq = (this._mutSeq = (this._mutSeq + 1) % 10000);
@@ -9966,38 +10075,79 @@ const History = {
     return r;
   },
   async remove(id) {
+    const opt = arguments[1] || {};
     if(typeof FingerprintBatch!=='undefined'&&FingerprintBatch.owns(id))throw Error('该对话在批量指纹队列中，请先停止测试');
     const entry=this.byId(id)||(typeof ArchiveHistory!=='undefined'&&ArchiveHistory.byId?.(id))||null;
-    const isEval=Boolean(entry?.type==='evaluation'||entry?.mode==='battle'||entry?.mode==='direct'||Chats.get(id)?.isEvaluation);
-    const delUrl = (isEval ? '/api/history/evaluation/' : '/api/chat/') + id;
+    const isEval=Boolean(opt?.isEval||entry?.type==='evaluation'||entry?.mode==='battle'||entry?.mode==='direct'||Chats.get(id)?.isEvaluation);
+    const delUrl = (isEval ? '/api/history/evaluation/' : '/api/history/agentic/') + id;
     const altUrl = (isEval ? '/api/chat/' : '/api/history/evaluation/') + id;
-    await this.protoMutate('delete', id, { delUrl, altUrl });
-    if (false) await api((isEval ? '/api/history/evaluation/' : '/api/chat/') + id, { method: 'DELETE' });
+    this.markDeleted([id]);
+    await this.protoMutate('delete', id, { ...opt, isEval, delUrl, altUrl });
     try { LocalCache.drop([id]); } catch {}
-    this.items = this.items.filter(e => e.id !== id); ArchiveHistory.drop([id]); this.bury([id]); this.saveSoon(); Bus.emit('history'); try { if (typeof AcctStats !== 'undefined') AcctStats.report?.(); } catch {}
+    this.items = this.items.filter(e => e.id !== id); this._ix = null; ArchiveHistory.drop([id]); this.bury([id]); this.saveSoon();
+    try { UI?._cards?.delete?.(id); UI?.renderList?.(true); UI?.renderTabs?.(); } catch {}
+    Bus.emit('history'); try { if (typeof AcctStats !== 'undefined') AcctStats.report?.(); } catch {}
   },
   async archive(id) {
-    if(typeof FingerprintBatch!=='undefined'&&FingerprintBatch.owns(id))throw Error('该对话在批量指纹队列中，请先停止测试');
-    const entry=this.byId(id);
-    await this.protoMutate('archive', id);
-    if(entry)ArchiveHistory.add([entry]);
+    if (typeof FingerprintBatch !== 'undefined' && FingerprintBatch.owns(id)) throw Error('该对话在批量指纹队列中，请先停止测试');
+    const prevIdx = this.items.findIndex(e => e?.id === id);
+    const cObj = typeof Chats !== 'undefined' ? Chats.get(id) : null;
+    const entry = (prevIdx >= 0 ? this.items[prevIdx] : this.byId(id)) || { id, type: cObj?.isEvaluation ? 'evaluation' : 'agentic', title: cObj?.title || '已归档对话', localTitle: cObj?.localTitle, updatedAt: new Date().toISOString() };
+    // 0ms 乐观更新：先从普通对话移入归档并立刻刷新列表
+    if (entry && typeof ArchiveHistory !== 'undefined') ArchiveHistory.add([entry]);
     try { Arch.add?.(id); } catch {}
-    try { LocalCache.drop([id], { archived: true }); } catch {}
-    this.bury([id]); this.items = this.items.filter(e => e.id !== id); this.saveSoon(); Bus.emit('history'); try { if (typeof AcctStats !== 'undefined') AcctStats.report?.(); } catch {}
+    this.bury([id]);
+    this.items = this.items.filter(e => e.id !== id);
+    this._ix = null;
+    this.saveSoon();
+    try { UI?._cards?.delete?.(id); UI?.renderList?.(true); UI?.renderTabs?.(); } catch {}
+    try {
+      await this.protoMutate('archive', id);
+      try { LocalCache.drop([id], { archived: true }); } catch {}
+      try { if (typeof AcctStats !== 'undefined') AcctStats.report?.(); } catch {}
+    } catch (err) {
+      const gm = this.goneMap();
+      if (gm.delete(id)) try { Store.set('histgone', Object.fromEntries(gm)); } catch {}
+      try { ArchiveHistory?.drop?.([id]); } catch {}
+      if (entry && !this.items.some(e => e.id === id)) {
+        const at = prevIdx >= 0 ? Math.min(prevIdx, this.items.length) : 0;
+        this.items.splice(at, 0, entry);
+        this._ix = null;
+        this.saveSoon();
+      }
+      Bus.emit('history');
+      try { UI?._cards?.delete?.(id); UI?.renderList?.(true); UI?.renderTabs?.(); } catch {}
+      throw err;
+    }
   },
   async unarchive(id) {
-    const entry = (typeof ArchiveHistory !== 'undefined' && ArchiveHistory.byId?.(id)) || this.byId(id);
-    await this.protoMutate('unarchive', id);
+    const cObj = typeof Chats !== 'undefined' ? Chats.get(id) : null;
+    const entry = (typeof ArchiveHistory !== 'undefined' && ArchiveHistory.byId?.(id)) || this.byId(id) || { id, type: cObj?.isEvaluation ? 'evaluation' : 'agentic', title: cObj?.title || '恢复的对话', localTitle: cObj?.localTitle, updatedAt: new Date().toISOString() };
     const m = this.goneMap();
-    if (m.has(id)) { m.delete(id); Store.set('histgone', Object.fromEntries(m)); }
+    const hadGone = m.has(id);
+    if (hadGone) { m.delete(id); try { Store.set('histgone', Object.fromEntries(m)); } catch {} }
     if (typeof ArchiveHistory !== 'undefined' && ArchiveHistory.drop) ArchiveHistory.drop([id]);
-    if (entry) {
-      const restored = { ...entry, isArchived: false, archivedAt: null };
-      if (!this.items.some(e => e.id === id)) this.items.unshift(restored);
-      this.saveSoon();
+    const restored = { ...entry, isArchived: false, archivedAt: null };
+    if (!this.items.some(e => e.id === id)) {
+      this.items.unshift(restored);
+      this._ix = null;
     }
+    this.saveSoon();
     Bus.emit('history');
-    return true;
+    try { UI?._cards?.delete?.(id); UI?.renderList?.(true); UI?.renderTabs?.(); } catch {}
+    try {
+      await this.protoMutate('unarchive', id);
+      return true;
+    } catch (err) {
+      if (hadGone) { m.set(id, now()); try { Store.set('histgone', Object.fromEntries(m)); } catch {} }
+      this.items = this.items.filter(e => e.id !== id);
+      this._ix = null;
+      if (entry && typeof ArchiveHistory !== 'undefined') ArchiveHistory.add([entry]);
+      this.saveSoon();
+      Bus.emit('history');
+      try { UI?._cards?.delete?.(id); UI?.renderList?.(true); UI?.renderTabs?.(); } catch {}
+      throw err;
+    }
   },
   async pinCloud(id, isPinned) {
     if (!id) return false;

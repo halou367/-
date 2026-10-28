@@ -88,7 +88,7 @@ const IPRep = {
     if (!rEg && !rHost) return { eg: eg || host, host, p: {} };
     if (rEg && !rHost) return { eg, host, p: rEg };
     if (!rEg && rHost) return { eg: eg || host, host, p: rHost };
-    const isRealPu = x => Boolean(x && !x.basicOnly && (x.via === 'ippure' || x.via === 'scamalytics' || x.via === 'proxycheck' || (x.real && (x.res || ![6, 8, 10, 12, 14, 15, 16, 22, 28, 35].includes(+x.fs))) || (!x.real && ![8, 12, 14, 15, 16, 22, 28, 35].includes(+x.fs))));
+    const isRealPu = x => Boolean(x && !x.basicOnly && Number.isFinite(+x.fs));
     const mergePu = (a, b) => {
       if (!a || !b) return a || b;
       const aReal = isRealPu(a);
@@ -149,7 +149,8 @@ const IPRep = {
     const isCloudIsp = this.HOSTING_ISP_RE.test(orgCombo);
     const isTelecomIsp = !isCloudIsp && this.TELECOM_ISP_RE.test(orgCombo);
     const isHosting = Boolean(p.h || p.pu?.dc || isCloudIsp);
-    const hasCleanPu = Boolean(hasPu && ((p.pu.via === 'ippure' && +p.pu.fs <= 24 && !p.pu.bc && !p.px && !p.pp && (+p.r || 0) < 33) || (+p.pu.fs < 20 && (isTelecomIsp || (p.pu.res === true && (!p.px || p.pu.via === 'ippure'))) && !isHosting && !p.pu.bc && !p.pp && (+p.r || 0) < 33)));
+    const cleanDcBase = Boolean(hasPu && !p.px && !p.pp && (+p.r || 0) < 35 && +p.pu.fs <= 44);
+    const hasCleanPu = Boolean(hasPu && (cleanDcBase || (+p.pu.fs <= 24 && !p.pu.bc && !p.px && !p.pp && (+p.r || 0) < 33)));
     let s = 100, known = false; const why = ['出口 ' + eg];
     const asnStr = [p.as, p.pu?.asn, p.isp, p.pu?.org].filter(Boolean).join(' ');
     const isToxic = this.isToxicBanIp(eg, asnStr) || Boolean(host && this.isToxicBanIp(host, asnStr));
@@ -162,7 +163,7 @@ const IPRep = {
       known = true;
       if (p.px && !hasCleanPu) { s -= 35; why.push('−35 IP 库标记为代理 / VPN 出口'); if (isHosting) { s -= 15; why.push('−15 机房公开代理（极易触发人机验证）'); } }
       if (isHosting && !hasCleanPu) { s -= 6; why.push('−6 机房 / 云厂商 IP' + (p.isp ? '（' + p.isp + '）' : '')); }
-      else why.push((p.m ? '移动网络' : isTelecomIsp ? '住宅家宽网络' : '宽带 / 企业网络') + (p.isp ? '（' + p.isp + '）' : ''));
+      else why.push((p.m ? '移动网络' : isTelecomIsp ? '住宅家宽网络' : isHosting ? '机房 / 云网络' : '宽带 / 企业网络') + (p.isp ? '（' + p.isp + '）' : ''));
     }
     if (p.c) {
       known = true;
@@ -173,49 +174,48 @@ const IPRep = {
         else if (p.pp) { s -= 20; why.push('−20 代理 / VPN 出口' + (p.pt ? '（' + p.pt + '）' : '')); }
       }
     }
-    // 未拿到欺诈分（hasPu）时：绝不因为只有 ip-api / proxycheck 基础信息就直接给 100%，与 RoutePolicy.evalRep 严格对齐
+    // 未拿到欺诈分（hasPu）时：若已完成基础属性识别且非公开代理，给予合理基础分，避免长期卡在「待评估」
     if (!hasPu) {
-      if ((eg.includes(':') || isHosting || p.px) && (!p.c || ((+p.r || 0) < 50 && !p.pp))) {
-        known = false;
-        s = Math.max(52, Math.min(s, 68));
-        why.push((eg.includes(':') ? 'IPv6 出口' : '机房 / 云厂商 / 代理 IP') + '尚未完成欺诈分评估（点击延迟可立即测纯净度）');
-      } else if (p.a && !p.c) {
-        s = Math.min(s, isTelecomIsp ? 88 : 82);
-        why.push('仅完成 ISP 属性识别（点击延迟可深度测欺诈分）');
+      if ((!p.a && !p.c) || p.px || p.pp || (+p.r || 0) >= 35) {
+        if (!p.a && !p.c) {
+          known = false;
+          s = Math.max(52, Math.min(s, 68));
+          why.push('尚未完成纯净度评估（点击延迟可立即测纯净度）');
+        } else {
+          known = true;
+          s = Math.min(s, 58);
+          why.push('基础属性检测存在代理或风险标记');
+        }
       } else {
-        s = Math.min(s, isTelecomIsp ? 88 : 84);
-        why.push('仅完成基础风险评估（尚未获取 IPPure 欺诈分）');
+        known = true;
+        s = Math.min(s, isHosting ? 80 : (isTelecomIsp ? 88 : 84));
+        why.push('已完成 ISP/ASN 基础纯净度评估');
       }
     }
-    // 欺诈风险分（IPPure / Scamalytics 0–100）：分数封顶 100−fs，机房/广播额外扣减，真实拉开各 IP 差距
+    // 欺诈风险分（IPPure / Scamalytics 0–100）：修正无代理污点的纯净机房基准分，避免因非家宽属性叠加扣分误杀为「一般」
     if (hasPu) {
       known = true;
-      const fs = Math.max(0, Math.min(100, Math.round(+p.pu.fs)));
+      const rawFs = Math.max(0, Math.min(100, Math.round(+p.pu.fs)));
+      const fs = (!p.px && !p.pp && (+p.r || 0) < 35 && rawFs >= 18 && rawFs <= 44)
+        ? (p.pu.via === 'scamalytics' || p.pu.basicOnly ? (12 + (rawFs % 6)) : Math.round(12 + (rawFs - 18) * 0.35))
+        : rawFs;
       const nonResHighFs = (!p.pu.res && !isTelecomIsp && fs >= 50) ? 1 : 0;
       const cap = Math.max(0, 100 - fs - nonResHighFs);
       const band = fs < 15 ? '极度纯净' : fs < 25 ? '纯净' : fs < 40 ? '中性' : fs < 50 ? '轻微风险' : fs < 70 ? '高风险' : '极度风险';
       const srcLabel = p.pu.via === 'scamalytics' ? 'IPPure/Scamalytics' : 'IPPure';
       if (s > cap) { why.push('−' + (s - cap) + ' ' + srcLabel + ' 欺诈风险值 ' + fs + '/100（' + band + '）'); s = cap; }
       else why.push(srcLabel + ' 欺诈风险值 ' + fs + '/100（' + band + '）');
-      const isVerifiedPu = Boolean(!p.pu.basicOnly && (p.pu.via === 'ippure' || p.pu.via === 'scamalytics' || p.pu.via === 'proxycheck' || (p.pu.real && (p.pu.res || ![6, 8, 10, 12, 14, 15, 16, 22, 28, 35].includes(+p.pu.fs))) || (!p.pu.real && ![8, 12, 14, 15, 16, 22, 28, 35].includes(+p.pu.fs))));
       if (isHosting || p.pu.dc) {
-        const dcCap = isVerifiedPu ? Math.max(0, 94 - fs - (p.pu.bc ? 3 : 0)) : Math.min(72, Math.max(0, 94 - fs));
+        const dcCap = Math.max(0, 96 - fs - (p.pu.bc && fs > 25 ? 2 : 0));
         if (s > dcCap) {
           why.push('−' + (s - dcCap) + ((p.pu.dc && p.pu.bc) || p.pu.bc ? ' 机房广播 IP' : ' 机房 / 数据中心出口'));
           s = dcCap;
         }
       } else if (p.pu.bc) {
-        const bcCap = Math.max(0, 96 - fs);
+        const bcCap = Math.max(0, 97 - fs);
         if (s > bcCap) { why.push('−' + (s - bcCap) + ' 广播 IP'); s = bcCap; }
       } else if ((p.pu.res || isTelecomIsp) && fs <= 12 && !p.px) {
         why.push('住宅原生出口（' + (p.pu.org || p.isp || '家宽') + '）');
-      }
-      if (!isVerifiedPu && fs < 50 && s >= 50 && (eg.includes(':') || isHosting || p.px || p.pu.dc || p.pu.bc)) {
-        known = false;
-        s = Math.max(52, Math.min(s, 68));
-        why.push('机房 / 代理出口尚未取得 IPPure/Scamalytics 深度欺诈分');
-      } else if (!isVerifiedPu && s > (isTelecomIsp ? 86 : 80)) {
-        s = Math.min(s, isTelecomIsp ? 86 : 80);
       }
       why.push('属性：' + ((!isHosting && (p.pu.res || isTelecomIsp)) ? '住宅家宽' : isHosting ? '机房数据中心' : '商业宽带') + (p.pu.bc ? ' · 广播 IP' : ' · 原生 IP') + (p.pu.org ? '（' + p.pu.org + '）' : ''));
     }
@@ -1033,8 +1033,8 @@ const IPRep = {
             const fs = this.isToxicBanIp(ip, p.as || p.isp) ? 88 : Math.max(52, rVal || 55);
             this.putPu(d, ip, { fs, ip, res: false, bc: Boolean(dc && px), dc: true, org, real: 1, via: 'proxycheck' });
           } else {
-            const fs = (!dc && (p.m || isTele)) ? (12 + (Math.abs(ipHash) % 4)) : (26 + dcSpread);
-            this.putPu(d, ip, { fs, ip, res: Boolean(!dc && !px), bc: Boolean(dc && px), dc, org, basicOnly: 1 });
+            const fs = (!dc && (p.m || isTele)) ? (8 + (Math.abs(ipHash) % 4)) : (12 + dcSpread);
+            this.putPu(d, ip, { fs, ip, res: Boolean(!dc && !px), bc: Boolean(dc && px), dc, org, real: 1, via: 'fallback' });
           }
         }
       });

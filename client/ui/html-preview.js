@@ -1147,7 +1147,7 @@ const HtmlPreview = (() => {
       isImg ? null : btn('refresh', '重新读取并刷新', () => { render(); }),
       st.previewUrl ? h('button', { type: 'button', class: 'ib sm pv-b', title: '在独立浏览器标签页打开实时预览 (' + st.previewUrl + ')', onclick: () => window.open(st.previewUrl, '_blank', 'noopener,noreferrer') }, '↗') : null,
       isImg && typeof ImgAct !== 'undefined' && ImgAct.canCopy() ? btn('copy', '复制图片', () => ImgAct.copy(st.img.src)) : null,
-      kind !== 'html' || (hasRemotePv && !kindOf(st.path)) ? null : h('button', { type: 'button', class: 'ib sm pv-b pv-rec', title: '把现在看到的画面记录为「鹈鹕测试图」（全客户端共享 · 存到模型信息 · 概览）', 'aria-label': '记录为鹈鹕测试图', onclick: () => void record() }, icon('pvcam'), h('span', {}, '记录')),
+      kind !== 'html' || (hasRemotePv && !kindOf(st.path)) ? null : h('button', { type: 'button', class: 'ib sm pv-b pv-rec', title: '打开醍醐 HTML/SVG 样本库并对照当前作品识别厂商、型号与强度', 'aria-label': '醍醐样本库', onclick: () => void record() }, icon('pelican'), h('span', {}, '醍醐库')),
       isImg ? btn('pvdl', '下载图片', () => typeof ImgAct !== 'undefined' ? ImgAct.save(st.img.src, st.name) : null, 'pv-dl') : btn('pvdl', '下载文件', () => download(text), 'pv-dl'),
       mobile() ? null : (root.classList.contains('pv-full') ? btn('pvunfull', '退出全屏', () => full(false), 'pv-fs') : btn('pvfull', '全屏显示', () => full(true), 'pv-fs')),
       btn('x', '关闭预览（恢复原来的面板）', () => dismiss(), 'pv-x'));
@@ -1349,26 +1349,32 @@ const HtmlPreview = (() => {
     } finally { f.remove(); }
   }
   async function record() {
-    if (!st || st.kind !== 'html' || st.recording) return; st.recording = true;
+    const baseSid = st?.sid || (typeof Tabs !== 'undefined' ? Tabs.cur?.sid : null) || null;
+    const curChat = baseSid && typeof Chats !== 'undefined' ? Chats.get(baseSid) : null;
+    let cmpModel = '';
     try {
-      if (st.mode !== 'run') { setMode('run'); await sleep(350); }
-      await sleep(60);
-      const baseSid = st.sid || Tabs.cur?.sid || null;
-      const curChat = baseSid && typeof Chats !== 'undefined' ? Chats.get(baseSid) : null;
-      const sid = (baseSid && st.evalPos && curChat?.evalMode === 'battle') ? `${baseSid}#${st.evalPos}` : baseSid;
-      const rawTextNow = String(textOf() || '');
-      let hDig = 2166136261 >>> 0;
-      for (let i = 0; i < rawTextNow.length; i++) { hDig ^= rawTextNow.charCodeAt(i); hDig = Math.imul(hDig, 16777619) >>> 0; }
-      const artifactDigest = rawTextNow.length + ':' + hDig.toString(36);
-      const messageId = st.evalMsg?.id || st.messageId || curChat?.messages?.filter(m => m && m.role === 'assistant')?.at(-1)?.id || null;
-      const curM = PelicanShots.modelOf ? PelicanShots.modelOf(sid) : { model: null, score: null, think: null };
-      const explicitModel = st.evalModelName || (curM?.model && curM.model !== '未识别' ? curM.model : undefined);
-      const shot = (st.previewUrl && rawTextNow.trim()) ? await shootText(rawTextNow, st.name) : await shoot();
-      const r = PelicanShots.add({ sid, ...shot, file: st.name, messageId, artifactDigest, model: explicitModel, score: curM?.score, think: curM?.think, lockedModel: Boolean(explicitModel) });
-      toast('已记录 · ' + r.model + (r.score != null ? ' · 推理分 ' + Strength.fmtScore(r.score) : '') + '（模型信息 · 概览 · 鹈鹕测试图）');
-      try { Dock.render(); } catch {}
-    } catch (e) { toast('记录失败：' + describe(e), 'err'); }
-    finally { if (st) st.recording = false; }
+      if (typeof TihuHub !== 'undefined') {
+        const rawTextNow = String(textOf() || '');
+        if (TihuHub.isReady?.() && rawTextNow.trim().length >= 90) {
+          if (baseSid && curChat) {
+            const r = await TihuHub.recognizePelicanChatAndApply(baseSid, curChat, { allowHealStub: true });
+            if (r?.matched && r.displayLabel) cmpModel = r.family || r.displayLabel;
+          }
+          if (!cmpModel) {
+            const idRes = TihuHub.identifySync(rawTextNow);
+            if (idRes?.detectedModel) {
+              cmpModel = idRes.detectedModel.id || idRes.detectedModel.label || '';
+              toast('醍醐即时指纹识别：' + (idRes.detectedModel.label || cmpModel) + ' [' + String(idRes.effortTier || 'high').toUpperCase() + ']', 'ok');
+            }
+          }
+        }
+      }
+      if (!cmpModel && baseSid && typeof Models !== 'undefined') {
+        const m = Models.get(baseSid);
+        cmpModel = m?.family || m?.rawLabel || m?.name || '';
+      }
+    } catch {}
+    PelicanShots.table({ compareModel: cmpModel });
   }
   // 含脚本的页面：仍可手动交给原来的隔离窗口（不是默认路径）
   async function runIsolated() {
@@ -1403,9 +1409,9 @@ const HtmlPreview = (() => {
     resolvedText, resolvedVer: () => _resolvedVer, cacheResolvedText, healFileText, isUsablePreviewText };
 })();
 
-// ---------- 鹈鹕测试库（全客户端共享）：记录 / 概览卡片 / 导出与导入合并 / 多模型并排对比 / 能力表（SVG） ----------
 const PelicanShots = (() => {
-  const KEY = 'pelican-shots', DEL_KEY = 'pelican-shots-del', PER = 8, TOTAL = 240;   /* PER = 每个对话最多留几张；全客户端所有账号互通合并 */
+  const KEY = 'pelican-shots', DEL_KEY = 'pelican-shots-del', PER = 8, TOTAL = 240;
+  let _tihuOpenModalBody = null;   /* PER = 每个对话最多留几张；全客户端所有账号互通合并 */
   const cleanName = s => String(s || '').replace(/\?+$/, '').trim();
   const key = m => cleanName(m).toLowerCase().replace(/\s*\((none|minimal|low|medium|high|xhigh|max)\)\s*$/i, '-$1').replace(/[\s_]+/g, '-');
   const isBetterModel = (cand, cur) => {
@@ -1657,6 +1663,12 @@ const PelicanShots = (() => {
   let pushT = 0;
   function push() { clearTimeout(pushT); pushT = setTimeout(() => { pushT = 0; void pull(false, true); }, 600); }
   function syncSid(sid) {
+    if (typeof TihuHub !== 'undefined' && typeof TihuHub.recognizePelicanChatAndApply === 'function') {
+      if (!sid || !TihuHub.isReady?.()) return;
+      const c = (typeof Chats !== 'undefined' && Chats.get) ? Chats.get(sid) : null;
+      if (c?.messages?.length) void TihuHub.recognizePelicanChatAndApply(sid, c, { allowHealStub: false });
+      return;
+    }
     if (!sid) return;
     const rawList = all();
     if (!rawList.some(x => x.sid === sid)) return;
@@ -1687,6 +1699,13 @@ const PelicanShots = (() => {
   /* 鹈鹕测试跑完自动存图：取这个对话里最后写出的 html / svg，不打开预览也不用手点「记录」。
      返回 { rec } 成功；{ none:'原因' } = 没有可截图的页面（模型没写文件 / 还没写完）；抛错 = 截图失败 */
   async function auto(sid, chat) {
+    if (typeof TihuHub !== 'undefined' && typeof TihuHub.recognizePelicanChatAndApply === 'function') {
+      if (TihuHub.isReady?.() && sid) {
+        const r = await TihuHub.recognizePelicanChatAndApply(sid, chat, { allowHealStub: true }).catch(() => null);
+        if (r?.matched) return { tihu: r, rec: null, none: null };
+      }
+      return { tihu: null, rec: null, none: null };
+    }
     const list = (typeof R !== 'undefined' && R.writes ? R.writes(sid) : []).filter(x => HtmlPreview.kindOf(x.path) === 'html'), w = list[list.length - 1];
     if (!w) return { none: '这一轮没有写出 html / svg 文件，没有可存的图' };
     const text = String(w.get() || ''); if (text.trim().length < 80) return { none: '写出的页面是空的，没有存图' };
@@ -2208,7 +2227,15 @@ const PelicanShots = (() => {
     };
 
     paintContent();
-    table.refreshOpen = () => { if (hostWrap.isConnected) paintContent(); };
+    table.refreshOpen = () => {
+    if (typeof TihuHub !== 'undefined' && typeof TihuHub.renderLibraryPanel === 'function') {
+      if (!_tihuOpenModalBody || !_tihuOpenModalBody.host?.isConnected) { _tihuOpenModalBody = null; return; }
+      try {
+        const fresh = TihuHub.renderLibraryPanel(_tihuOpenModalBody.cmp || '', { onClose: _tihuOpenModalBody.onClose });
+        _tihuOpenModalBody.host.replaceChildren(...fresh.childNodes);
+      } catch {}
+      return;
+    } if (hostWrap.isConnected) paintContent(); };
     void pull(true, true).then(() => { if (hostWrap.isConnected) paintContent(); });
 
     const foot = h('div', { class: 'pel-mfoot-inner' },
@@ -2228,6 +2255,7 @@ const PelicanShots = (() => {
     return back;
   }
   function entryCard(sid) {
+    if (typeof TihuHub !== 'undefined' && typeof TihuHub.renderModelCardSection === 'function') return card(sid);
     const total = all().length, modCount = latest().length;
     return h('section', { class: 'mc-card mc-pel' },
       h('div', { class: 'mc-pel-head' },
@@ -2242,6 +2270,13 @@ const PelicanShots = (() => {
   }
   // 概览卡片：当前对话这个型号的鹈鹕测试图（最新一张大图 + 其余缩略图 + 全客户端测试库导入/导出/对比）
   function card(sid) {
+    if (typeof TihuHub !== 'undefined' && typeof TihuHub.renderModelCardSection === 'function') {
+      const rawSid = String(sid || '').split('#')[0];
+      const m = (rawSid && typeof Models !== 'undefined' && Models.get) ? Models.get(rawSid) : null;
+      const rawModel = String(m?.rawLabel || m?.name || m?.candidateName || '').replace(/[?？]+$/, '').trim();
+      const effort = String(m?.effort || m?.tier || m?.reverseEffort || '').trim().toLowerCase();
+      return TihuHub.renderModelCardSection(sid, rawModel, effort, true);
+    }
     const m = modelOf(sid), own = forSid(sid), mine = own.length ? own : (m.model !== '未识别' ? forModel(m.model) : []), total = all().length;
     if (!mine.length && !total) return null;
     const sel = (card.sel ||= new Map()), sk = own.length ? 's:' + sid : key(m.model), cur = mine.find(x => x.id === sel.get(sk)) || mine[0];
@@ -2283,6 +2318,6 @@ const PelicanShots = (() => {
       Bus.on('model', chat => { if (chat?.sid) syncSid(chat.sid); });
     }
   } catch {}
-  setTimeout(() => { void pull(true, true); }, 650);
+  if (typeof TihuHub === 'undefined') setTimeout(() => { void pull(true, true); }, 650);
   return { add, auto, all, del, latest, forModel, forSid, card, entryCard, table, openLibrary: table, tableSvg, modelOf, pull, push, syncSid, exportData, exportLibrary, importData, openImport };
 })();

@@ -920,7 +920,7 @@ const PView = {
       modeTabs,
       h('span', { class: 'pv-up-badge', title: '数据最后更新时间' }, icon('clock'), '更新时间：' + this.fmtTime(curAt)),
       h('span', { class: 'grow' }),
-      h('button', { class: 'btn sm ghost pv-hb', title: '打开全客户端鹈鹕测试库：查看/对比各型号鹈鹕测试图、导入合并、导出分享', onclick: () => typeof PelicanShots !== 'undefined' && PelicanShots.table?.() }, icon('pelican'), h('span', {}, '鹈鹕测试库')),
+      h('button', { class: 'btn sm ghost pv-hb', title: '打开醍醐 HTML/SVG 样本库：查看各厂商/型号/强度的鹈鹕网页样本并重识全部对话', onclick: () => typeof PelicanShots !== 'undefined' && PelicanShots.table?.() }, icon('pelican'), h('span', {}, '醍醐样本库')),
       h('button', { class: 'btn sm ghost pv-hb', title: mode === 'power' ? '从本机已读取的 Trace 与反推记录重新收集样本' : '从官方 /leaderboard/agent 同步最新模型与价格目录', onclick: async () => {
         if (mode === 'power') {
           await Strength.pull(true); Strength.collectAll(); this.render(); toast('已重新收集推理分样本');

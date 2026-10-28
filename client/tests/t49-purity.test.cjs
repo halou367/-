@@ -59,7 +59,7 @@ test('a manually chosen risky ProxyIP is rated, banned and deleted, and refused'
 });
 test('only rated-pure IPs are selectable: unrated and 一般 IPs never appear in avail', () => {
   const { P, I } = setup({ '2.2.2.2': { ok: true, loc: 'JP', eg: '8.8.1.1' }, '3.3.3.3': { ok: true, loc: 'JP', eg: '8.8.1.2' }, '4.4.4.4': { ok: true, loc: 'JP', eg: '8.8.1.3' } }, [], () => 0);
-  P.d.rep = {}; I.putPu(P.d, '8.8.1.1', { fs: 8 }); I.putPu(P.d, '8.8.1.2', { fs: 30 }); I._d = null;
+  P.d.rep = {}; I.putPu(P.d, '8.8.1.1', { fs: 8 }); I.putPu(P.d, '8.8.1.2', { fs: 46 }); I._d = null;
   assert.equal(P.state('2.2.2.2', P.d.ips['2.2.2.2']), 'ok');
   assert.equal(P.state('3.3.3.3', P.d.ips['3.3.3.3']), 'mid');
   assert.equal(P.state('4.4.4.4', P.d.ips['4.4.4.4']), 'rate');

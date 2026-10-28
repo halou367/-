@@ -28,10 +28,10 @@ test('空列表 / 重复 id 安全；一个清理失败不影响其它', () => {
 });
 test('所有「删除 / 归档」入口都走这一处：History.remove / History.archive / 批量删除 / 批量归档 / 单个删除', () => {
   const core = ui('core.js'), bulk = ui('bulk.js');
-  assert.match(core, /method: 'DELETE' \}\);\s*try \{ LocalCache\.drop\(\[id\]\); \} catch \{\}/);
+  assert.match(core, /protoMutate\('delete',\s*id[\s\S]*?try \{ LocalCache\.drop\(\[id\]\); \} catch \{\}/);
   assert.match(core, /try \{ LocalCache\.drop\(\[id\], \{ archived: true \}\); \} catch \{\}/);
   assert.match(bulk, /kind === 'arch'\) \{ try \{ LocalCache\.drop\(gone, \{ archived: true \}\)/);
   assert.match(bulk, /kind === 'del'\) \{\s*try \{ LocalCache\.drop\(gone\); \} catch \{\}/);
-  assert.match(t, /function forget\(sid\) \{\s*LocalCache\.drop\(\[sid\]\);/);
+  assert.match(t, /function forget\(sid\) \{[\s\S]*?LocalCache\.drop\(\[(?:sid|sKey)\]\);/);
   assert.match(core, /if \(History\.goneMap\(\)\.has\(chat\.sid\)\) return;/, '刚删除 / 归档的对话不会被缓存写回');
 });

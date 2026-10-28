@@ -61,7 +61,7 @@ test('v0.13.133: Smart cross-region escape, shared node sync across accounts, ma
   const regionIpJs = read('ui/region-ip.js');
   assert.match(routePolicyJs, /allowCrossRegionEscape/);
   assert.match(autoRouteJs, /allowCrossRegionEscape:\s*true/);
-  assert.match(poolJs, /共用节点，各自独立保留不同的 ProxyIP/);
+  assert.match(poolJs, /不同账号的窗口永远不共用同一个 IP/);
   assert.match(nodeRoutesJs, /(?:刷新 )?ProxyIP 列表/);
   assert.match(regionIpJs, /(?:刷新 )?ProxyIP 列表/);
   assert.doesNotMatch(nodeRoutesJs, /不限地区（不用 ProxyIP）/);

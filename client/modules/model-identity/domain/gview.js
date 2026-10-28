@@ -153,16 +153,17 @@ const GView = {
     const custom = h('input', { class: 'gcustom', placeholder: '自定义关键词', value: s.customKeyword || '', maxlength: 60, onchange: () => { Gacha.setVendor(custom.value.trim() ? 'custom' : '', custom.value); this.paintCfg(); }, onkeydown: e => { if (e.key === 'Enter') custom.blur(); } });
     const qty = h('div', { class: 'gseg', 'data-g': 'qty' });
     const acts = h('div', { class: 'gacts', 'data-g': 'acts' });
-    const ctl = h('section', { class: 'gcard' },
+    const openStopWrap = h('div', { class: 'g-corner-bar', 'data-g': 'openStopWrap' });
+    const ctl = h('section', { class: 'gcard gcard-ctl' },
       h('div', { class: 'glabel' }, '目标厂商', h('small', {}, '识别到的模型名包含厂商关键词即命中'), h('span', { class: 'grow' }), h('button', { class: 'link sm', onclick: () => Tabs.openPower() }, '推理分排行 ↗')), vend, h('div', { 'data-g': 'models' }), h('div', { class: 'gcrow' }, custom),
       h('div', { class: 'glabel' }, '目标强度', h('small', {}, '代号模型按推理分排行的实测强度判断')), h('div', { 'data-g': 'str' }),
-      h('div', { class: 'glabel' }, '张数'), qty, acts, h('p', { class: 'greason', 'data-g': 'reason' }));
+      h('div', { class: 'glabel' }, '张数'), qty, acts, h('p', { class: 'greason', 'data-g': 'reason' }), openStopWrap);
     const stats = h('section', { class: 'gcard gstats', 'data-g': 'stats' });
     const results = h('section', { class: 'gcard' }, h('div', { class: 'glabel' }, '本次结果', h('span', { class: 'grow' }), h('button', { class: 'btn sm ghost', 'data-g': 'tidy', title: '归档本次标记为「归档」但还没归档成功的对话', onclick: async e => { e.currentTarget.disabled = true; const n = await Gacha.archiveQueued(true); toast('已归档 ' + n + ' 个'); this.update(true); } }, icon('archive'), '整理')), h('div', { class: 'gres', 'data-g': 'res' }));
     // 选项
     const f = (k, type, attrs = {}) => h('input', { type, ...attrs, 'data-k': k });
     const prompt = h('textarea', { rows: 2, maxlength: 4000, 'data-k': 'prompt' }, s.prompt);
-    const mode=h('select',{'data-k':'mode',onchange:()=>{Gacha.save({mode:mode.value});this.paintCfg();}},...['habit','autoqa','custom'].map((key,i)=>h('option',{value:key,selected:s.mode===key||null},['习惯速测 · 鹈鹕识别','自动问答 · 智能反推','自定义 · 四位数前缀'][i])));
+    const mode=h('select',{'data-k':'mode',onchange:()=>{Gacha.save({mode:mode.value});this.paintCfg();}},...['pelican','custom'].map((key,i)=>h('option',{value:key,selected:(s.mode==='custom'?'custom':'pelican')===key||null},['极简鹈鹕速测','自定义提示词'][i])));
     const preferred=h('textarea',{rows:2,'data-k':'preferredKeywords'},s.preferredKeywords.join('\n'));
 
     const interval = f('intervalSec', 'number', { min: 0, max: 60, step: 0.1, value: (s.intervalMs / 1000).toString() });
@@ -171,11 +172,10 @@ const GView = {
     const opts = h('details', { class: 'gcard gdet' }, h('summary', {}, icon('gear'), '选项'),
       h('div', { class: 'gform' },
         h('label',{class:'gfield'},h('span',{},'抽卡模式'),mode),
-        h('label',{class:'gfield','data-g':'preferred'},h('span',{},'优选名单：首次命中才测满 3 条'),preferred),
-        h('label', { class: 'gfield' }, h('span', {}, '提示词'), prompt),
+        h('label',{class:'gfield','data-g':'preferred',hidden:true},h('span',{},'优选名单'),preferred),
+        h('label', { class: 'gfield', 'data-g': 'promptField' }, h('span', {}, '自定义提示词'), prompt),
         h('div', { class: 'gcrow' }, h('label', { class: 'gfield' }, h('span', {}, '间隔（秒）'), interval), h('label', { class: 'gfield' }, h('span', {}, '并行路数'), par)),
         chk('turbo', '急速并行：发出后立即开下一抽，后台识别（最多 N 路同时识别；两次新建至少间隔 10 秒）', '关闭则一抽识别完再开下一抽'),
-        chk('stopOnThinking', '正文后出现可见思考就停止（已知闭源除外，不代表改派）'),
         chk('stopOnHit', '命中目标后立即停止（默认抽满设定张数）'),
         chk('sortSidebar', '目标厂商置顶（模型分组，组内按推理分降序）'),
         h('div', { class: 'gbtns' }, h('button', { class: 'btn sm', onclick: () => {
@@ -209,8 +209,9 @@ const GView = {
     const qty = this.$('qty'); qty.replaceChildren(...Gacha.QUANTITIES.map(n => h('button', { class: !s.endless && s.maxAttempts === n ? 'on' : '', disabled: busy || null, onclick: () => { Gacha.save({ maxAttempts: n, endless: false }); this.paintCfg(); } }, n + ' 张')),
       h('button', { class: s.endless ? 'on' : '', disabled: busy || null, title: '持续抽卡：不限次数，直到手动停止', onclick: () => { Gacha.save({ endless: true }); this.paintCfg(); } }, '∞ 持续'));
     this.el.querySelectorAll('[data-k]').forEach(n => { const k = n.dataset.k; if (n.type === 'checkbox') n.checked = !!s[k]; if (['prompt', 'intervalSec', 'parallel', 'turbo', 'endless'].includes(k)) n.disabled = busy; });
-    this.$('preferred').hidden=!s.fingerprint;
-    this.el.querySelector('[data-k=mode]').disabled=busy;
+    this.$('preferred').hidden = true;
+    const pf = this.$('promptField'); if (pf) pf.hidden = s.mode !== 'custom';
+    const modeSel = this.el.querySelector('[data-k=mode]'); if (modeSel) { modeSel.value = s.mode === 'custom' ? 'custom' : 'pelican'; modeSel.disabled = busy; }
     this.el.querySelector('[data-k=prompt]').disabled=busy||s.mode!=='custom';
     this.el.querySelector('[data-k=preferredKeywords]').disabled=busy;
     const chips = this.$('chips'); chips.replaceChildren(...s.archiveKeywords.map(k => h('span', { class: 'gtag' }, k, h('button', { title: '删除', disabled: busy || null, onclick: () => { Gacha.save({ archiveKeywords: Gacha.settings().archiveKeywords.filter(x => x !== k) }); this.paintCfg(); } }, '×'))));
@@ -226,7 +227,16 @@ const GView = {
     const max = run?.settings?.endless ? '∞' : (run?.settings?.maxAttempts || s.maxAttempts);
     this.$('prog').textContent = run ? `${run.completed}/${max} · 命中 ${(run.hits || []).length}${Gacha.flights ? ' · 后台 ' + Gacha.flights + ' 路' : ''}` : '';
     // 按钮
-    const acts = this.$('acts'), ip = Gacha.ipLimited();
+    const acts = this.$('acts'), openStopWrap = this.$('openStopWrap'), ip = Gacha.ipLimited(), openStopOn = !!(run?.settings ? run.settings.openAutoStop : s.openAutoStop);
+    if (openStopWrap) {
+      openStopWrap.replaceChildren(h('button', {
+        type: 'button',
+        class: 'g-open-stop-btn' + (openStopOn ? ' on' : ''),
+        'aria-pressed': String(openStopOn),
+        title: openStopOn ? '开源自停：已开启（新建抽卡遇到识别开源自动暂停并归档删除）' : '开源自停：已关闭（点击开启：新建抽卡遇到识别开源自动暂停并归档删除）',
+        onclick: () => { const nx = !Gacha.settings().openAutoStop; Gacha.save({ openAutoStop: nx }); this.paintCfg(); this.update(true); },
+      }, h('i', { 'aria-hidden': 'true' }), '开源自停'));
+    }
     acts.replaceChildren(...K(
       busy ? h('button', { class: 'btn big danger-b', onclick: () => Gacha.stop() }, icon('stop'), '停止') : h('button', { class: 'btn big', onclick: () => { const r = Gacha.start(); if (!r.ok) toast(r.error, 'err'); } }, icon('slot'), s.endless ? '开始持续抽卡' : '开始抽卡 · ' + s.maxAttempts + ' 张'),
       Gacha.capOffer() ? h('button', { class: 'btn ghost', onclick: () => Gacha.solveCaptcha().catch(e => toast(e.message, 'err')) }, '完成验证') : null,
@@ -264,9 +274,9 @@ const GView = {
     if (!list.length) res.replaceChildren(h('div', { class: 'empty' }, '还没有结果'));
     else res.replaceChildren(...list.slice(0, 200).map(a => {
       const gs = !a.done && Gacha.stepInfo ? Gacha.stepInfo(a) : null;
-      const griKey = a.done ? `${a.no}:${a.draw}:${a.model || ''}:${a.tier || ''}:${a.power ?? ''}:${a.verdict || ''}:${a.archived ? 1 : 0}:${a.idMs || 0}:${a.note || ''}` : '';
+      const griKey = a.done ? `${a.no}:${a.draw}:${a.model || ''}:${a.tier || ''}:${a.power ?? ''}:${a.verdict || ''}:${a.archived ? 1 : 0}:${a.openAutoDeleted ? 1 : 0}:${a.idMs || 0}:${a.note || ''}` : '';
       if (griKey && a._griEl && a._griKey === griKey) return a._griEl;
-      const vd = a.done ? VERDICT[a.verdict] || [a.verdict || '—', ''] : [gs?.text || a.phase || '进行中', 'run'];
+      const vd = a.done ? (a.openAutoDeleted ? ['开源删', 'arch'] : (VERDICT[a.verdict] || [a.verdict || '—', ''])) : [gs?.text || a.phase || '进行中', 'run'];
       const name = a.model || a.early || '', vid = Brand.of(name);
       const rowEl = h('div', { class: 'gri ' + (a.verdict === 'hit' ? 'hit' : '') + (gs ? ' gstep-card' : ''), title: gs?.phase || '' },
         h('span', { class: 'gno' }, a.verdict === 'skipped' ? '不计' : (a.draw ? '#' + a.draw : '·' + (a.no || ''))),
@@ -275,7 +285,7 @@ const GView = {
         h('span', { class: 'gtier', title: a.power != null ? '强度分（按回复节奏估算，满分 10000）' : null }, a.power != null ? String(a.power) : a.tier ? TIER_CN[a.tier] || a.tier : a.done && a.model ? (a.partial ? '?' : '标准') : ''),
         h('span', { class: 'gv ' + vd[1] }, !a.done ? h('i', { class: 'spin' }) : null, vd[0], a.archived ? ' ✓' : ''),
         h('span', { class: 'dim gms' }, a.idMs ? (a.idMs / 1000).toFixed(1) + 's' : ''),
-        a.sid ? h('button', { class: 'ib', title: '打开对话', onclick: () => Tabs.open(a.sid, { title: a.model || '抽卡对话' }) }, icon('open')) : h('span', { class: 'ib' }),
+        (a.sid && !a.openAutoDeleted) ? h('button', { class: 'ib', title: '打开对话', onclick: () => Tabs.open(a.sid, { title: a.model || '抽卡对话' }) }, icon('open')) : h('span', { class: 'ib' }),
         gs ? h('i', { class: 'gstep-bar', 'aria-hidden': 'true' }, h('b', { style: { width: gs.pct + '%' } })) : null);
       if (griKey) { a._griKey = griKey; a._griEl = rowEl; }
       return rowEl;
@@ -289,7 +299,7 @@ const GView = {
     const name = a ? a.model || a.early || '' : '', vid = Brand.of(name);
     const key = !a ? 'none' : (a.no + '|' + (a.done ? 'd' : 'p') + '|' + name + '|' + (a.tier || '') + '|' + (a.verdict || ''));
     const sub = this.$('sub');
-    if (a) sub.textContent = a.done ? (a.model ? `第 ${a.draw} 抽：${a.model}${a.verdict === 'hit' ? ' · 命中目标 🎯' : a.verdict === 'archive' ? ' · 已归档' : ''}` : `第 ${a.no} 轮 · ${a.note || VERDICT[a.verdict]?.[0] || ''}`) : `第 ${a.no} 轮 · ${a.phase || '进行中'}${a.early ? ' · 已识别厂商' : ''}`;
+    if (a) sub.textContent = a.done ? (a.model ? `第 ${a.draw} 抽：${a.model}${a.verdict === 'hit' ? ' · 命中目标 🎯' : a.openAutoDeleted ? ' · 开源自停已归档删除' : a.verdict === 'archive' ? ' · 已归档' : ''}` : `第 ${a.no} 轮 · ${a.note || VERDICT[a.verdict]?.[0] || ''}`) : `第 ${a.no} 轮 · ${a.phase || '进行中'}${a.early ? ' · 已识别厂商' : ''}`;
     else sub.textContent = run?.phase || (run ? run.reason || '' : '选好目标厂商和张数，点「开始抽卡」');
     if (key === this.slotKey) return; this.slotKey = key;
     const el = this.el.querySelector('.gslot'); el.classList.toggle('hit', a?.verdict === 'hit');

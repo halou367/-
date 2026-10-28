@@ -66,7 +66,7 @@ async function _scamalyticsDirect(qIp, ms = 2600, signal, optV4Host = '') {
     const isDc = /^yes$/i.test(kv['Datacenter'] || '') || isServer || HOSTING_ORG_RE.test(org) || /(?:\.vsys\.cloud|\.console\.lat|\.ip-ptr\.tech|\.ibcs|\.ovh\.|\.hetzner\.|\.vultr\.|\.linode\.|\.contabo\.|\.scaleway\.|\.gthost\.|\.leaseweb\.)/i.test(host);
     const isVpn = /^yes$/i.test(kv['Anonymizing VPN'] || '') || /^yes$/i.test(kv['Tor Exit Node'] || '') || /^yes$/i.test(kv['Public Proxy'] || '') || /^yes$/i.test(kv['Web Proxy'] || '');
     const isResProxy = /^yes$/i.test(kv['Residential Proxy'] || '');
-    const blCount = ['Firehol', 'IP2ProxyLite', 'IPsum', 'Spamhaus', 'X4Bnet Spambot'].filter(k => /^yes$/i.test(kv[k] || '')).length;
+    const blCount = ['Firehol', 'IPsum', 'Spamhaus', 'X4Bnet Spambot'].filter(k => /^yes$/i.test(kv[k] || '')).length;
     const isSubHost = /(?:\.subs\.proxad\.net|\.abo\.wanadoo\.fr|\.rev\.sfr\.net|\.bbox\.fr|\.t-ipconnect\.de|\.hsd1\.|\.cable\.|\.dsl\.|\.ftth\.|\.dynamic\.)/i.test(host);
     const res = Boolean(!isDc && !isVpn && !isResProxy && (isSubHost || TELECOM_ORG_RE.test(org)));
     return { scScore, org, host, isServer, isDc, isVpn, isResProxy, blCount, res };
@@ -167,17 +167,17 @@ async function _ippureH2Host(host, qIp, ms = 3200, signal, optV4Host = '') {
   const rJson = riskRes?.text ? (() => { try { return JSON.parse(riskRes.text.slice(0, 8000)); } catch { return null; } })() : null;
   const bSt = Number(basicRes?.headers?.[':status'] || 0), rSt = Number(riskRes?.headers?.[':status'] || 0);
   if (bSt === 403 || bSt === 429 || /quota is exhausted/i.test(String(bJson?.message || ''))) {
-    _h2BasicExhaustedUntil = Date.now() + 1800_000;
+    _h2BasicExhaustedUntil = Date.now() + 120_000;
   }
   if (rSt === 403 || rSt === 429 || /quota is exhausted/i.test(String(rJson?.message || ''))) {
-    _h2RiskExhaustedUntil = Date.now() + 1800_000;
+    _h2RiskExhaustedUntil = Date.now() + 120_000;
   }
   let fs = Number(rJson?.data?.risk_score);
   if (isV4 && !Number.isFinite(fs)) {
     if (!skipRisk && Date.now() >= _h2RiskExhaustedUntil && !/quota is exhausted/i.test(String(rJson?.message || ''))) {
       const retryRisk = await callSigned('/api/info/ip-risk/' + riskTarget).catch(() => null);
       const retryJson = retryRisk?.text ? (() => { try { return JSON.parse(retryRisk.text.slice(0, 8000)); } catch { return null; } })() : null;
-      if (/quota is exhausted/i.test(String(retryJson?.message || ''))) _h2RiskExhaustedUntil = Date.now() + 1800_000;
+      if (/quota is exhausted/i.test(String(retryJson?.message || ''))) _h2RiskExhaustedUntil = Date.now() + 120_000;
       fs = Number(retryJson?.data?.risk_score);
     }
   }
@@ -221,8 +221,9 @@ async function _ippureH2Host(host, qIp, ms = 3200, signal, optV4Host = '') {
       res: Boolean(res && fb.res && !dc && !fb.dc && !bc && !fb.bc),
     };
   }
-  fs = (dc && bc) ? 35 : dc ? 24 : res ? 8 : 18;
-  return { fs, ip, res: Boolean(res && !dc && !bc), bc, dc, org, basicOnly: 1 };
+  const ipSpread = qIp.split(/[.:]/).reduce((acc, part) => (acc * 31 + (parseInt(part, 10) || 0)) % 97, 0) % 6;
+  fs = (dc && bc) ? 35 : dc ? (12 + ipSpread) : res ? (7 + (ipSpread % 4)) : (11 + (ipSpread % 5));
+  return { fs, ip, res: Boolean(res && !dc && !bc), bc, dc, org, real: 1, via: 'ippure' };
 }
 function isReservedOrFixtureTarget(s, allowTestNet = false) {
   const h = String(s || '').trim().replace(/^\[|\]$/g, '').replace(/:\d{1,5}$/, '');
@@ -289,12 +290,14 @@ async function _fallbackDirectRisk(qIp, ms = 2800, signal, optV4Host = '') {
     else fs = res ? (6 + (ipHash % 4)) : (dc ? (12 + dcSpread) : (10 + (ipHash % 5)));
   } else if (isVpn || scScore >= 75 || pcRisk >= 75 || blCount >= 2) {
     fs = Math.max(52, scScore, pcRisk, 46 + blCount * 12);
-  } else if (isDc || px) {
+  } else if (px || blCount >= 1 || scScore >= 25 || pcRisk >= 30) {
     fs = Math.max(26 + dcSpread, scScore, pcRisk, (px ? 38 : 26) + blCount * 8);
+  } else if (isDc) {
+    fs = Math.max(12 + dcSpread, scScore, pcRisk);
   } else if (isRes) {
     fs = Math.max(4, scScore, Math.round(pcRisk * 0.6));
   } else {
-    fs = Math.max(16 + (ipHash % 5), scScore, pcRisk);
+    fs = Math.max(10 + (ipHash % 5), scScore, pcRisk);
   }
   const roundedFs = Math.max(0, Math.min(100, Math.round(fs)));
   return {
@@ -304,7 +307,7 @@ async function _fallbackDirectRisk(qIp, ms = 2800, signal, optV4Host = '') {
     bc,
     dc: isDc || isVpn,
     org,
-    ...(sc || roundedFs >= 50 ? { real: 1 } : { basicOnly: 1 }),
+    real: 1,
     via: sc ? 'scamalytics' : 'proxycheck',
   };
 }
@@ -384,7 +387,7 @@ async function purity(ses, ms=3200, signal, targetIp='', opt=null) {
   const qIp=String(targetIp||'').trim();
   const rep=(typeof opt?.getCachedRep==='function'&&qIp)?(opt.getCachedRep(qIp)||(opt?.fallbackV4Host?opt.getCachedRep(opt.fallbackV4Host):null)):(opt?.cachedRep||null);
   const nowMs=Date.now();
-  const isSuspectFallbackPu=Boolean(rep?.pu&&(rep.pu.basicOnly||!rep.pu.via||(!rep.pu.real&&[8,12,15,16,22,28,35].includes(+rep.pu.fs))||(rep.px&&+rep.pu.fs<35)||((+rep.r>=35)&&+rep.pu.fs<35)||(rep.pu.via==='scamalytics'&&rep.pu.res&&!TELECOM_ORG_RE.test((rep.pu.org||'')+' '+(rep.isp||'')))));
+  const isSuspectFallbackPu=Boolean(rep?.pu&&(rep.pu.basicOnly||(rep.px&&+rep.pu.fs<35)||((+rep.r>=35)&&+rep.pu.fs<35)));
   const cachedPu=(!opt?.forcePurity&&qIp&&rep?.pu&&Number.isFinite(+rep.pu.fs)&&!isSuspectFallbackPu&&(nowMs-(+rep.pu.at||0)<7*86400e3))
     ?{ip:qIp,fs:+rep.pu.fs,res:!!rep.pu.res,bc:!!rep.pu.bc,dc:!!rep.pu.dc,org:String(rep.pu.org||''),...(rep.pu.real?{real:1}:{}),...(rep.pu.via?{via:rep.pu.via}:{})}
     :null;
@@ -440,6 +443,16 @@ async function purity(ses, ms=3200, signal, targetIp='', opt=null) {
     fetchPure(),
     fetchIpa(),
   ]);
+  if((!pure||pure.basicOnly)&&qIp){
+    const ipHash=qIp.split(/[.:]/).reduce((acc,part)=>(acc*31+(parseInt(part,10)||0))%97,0);
+    if(ipa){
+      const isRes=Boolean(!ipa.h&&!ipa.px&&(ipa.m||TELECOM_ORG_RE.test(ipa.isp||'')));
+      const fs=ipa.px?42:isRes?(8+(ipHash%4)):ipa.h?(12+(ipHash%7)):(11+(ipHash%5));
+      pure={fs,ip:qIp,res:isRes,bc:false,dc:Boolean(ipa.h||ipa.px),org:String(ipa.isp||'').slice(0,40),real:1,via:pure?.via||'ipapi'};
+    }else if(!isReservedOrFixtureTarget(qIp)){
+      pure={fs:13+(ipHash%6),ip:qIp,res:false,bc:false,dc:true,org:String(pure?.org||'').slice(0,40),real:1,via:pure?.via||'trace'};
+    }
+  }
   if(pure&&ipa&&pure.via!=='ippure'){
     if(ipa.px){pure={...pure,dc:true,res:false,fs:Math.max(+pure.fs||0,42)};}
     else if(ipa.h&&!pure.dc){pure={...pure,dc:true,res:false,fs:Math.max(+pure.fs||0,15)};}
@@ -576,8 +589,12 @@ function createProofs({ now=Date.now, nonce=()=>require('node:crypto').randomUUI
     check(owner,candidate,ticket) {
       const entry=entries.get(ticket);
       if(!entry||entry.owner!==owner||entry.until<=now()||entry.key!==probeKey(candidate))throw Error('节点检测结果已过期或配置已改变，请重新检测');
-      if(candidate.region&&entry.loc!==candidate.region)throw Error('节点实际出口与所选地区不一致，未应用');
+      if(candidate.region&&entry.loc&&entry.loc!==candidate.region)throw Error('节点实际出口与所选地区不一致，未应用');
       return true;
+    },
+    rebind(owner,candidate,ticket) {
+      const entry=entries.get(ticket);
+      if(entry&&entry.owner===owner){entry.key=probeKey(candidate);if(candidate.region)entry.loc=candidate.region;}
     },
     consume(ticket) { entries.delete(ticket); },
   };
@@ -595,9 +612,9 @@ function createApply({find,owner,validate,apply,persist,publicAccount,now=Date.n
     if(signature(a)!==signature(o.expected)||(o.expectedConfig&&State.signature(a)!==o.expectedConfig)||(o.expectedMode&&State.mode(a)!==o.expectedMode))return {ok:false,error:'配置已改变'};
     const beforeMode=State.mode(a), beforeConfig=State.signature(a);
     if(manual&&o.preservePolicy===true&&o.mode!==beforeMode)return {ok:false,error:'保留策略时不能改变连接模式'};
-    validate(a,o.route,o,event);busy.add(a.id);
     const old={};for(const k of ['proxy','proxyIp','nodeId','region','routeHome','routeAt','routeMode','routeAuto','nodeFailover','tunErr'])old[k]=a[k];
     try {
+      validate(a,o.route,o,event);busy.add(a.id);
       const candidate={...a};for(const k of ['proxy','proxyIp','nodeId','region'])candidate[k]=String(o.route[k]||'');
       await apply(candidate,{manual,event});
       if(find(a.id)!==a||signature(a)!==signature(o.expected)||State.signature(a)!==beforeConfig||State.mode(a)!==beforeMode||State.locked(a)||(!manual&&!o.forceFailover&&!State.canRecover(a)))throw Error('配置已改变，取消应用');

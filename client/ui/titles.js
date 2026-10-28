@@ -123,14 +123,14 @@ const Titles = {
     const hasValidMiName = !!(mi?.name && !/^(未识别|未知型号|待定)$/.test(String(mi.name).trim()));
     if (mi?.pendingConfirm && !hasValidMiName) return '';
     if(typeof TitleSync!=='undefined'){const meta=TitleSync.build(sid);if(meta && meta.model && meta.model !== '未识别')return TitleSync.modelLabel(meta);}
-    let m = ((!mi?.guess || mi?.habitInferred || mi?.reverseInferred || mi?.billingProbe || mi?.userCorrected) && hasValidMiName ? mi.name : '') || '';
+    let m = ((!mi?.guess || mi?.tihuRecognized || mi?.habitInferred || mi?.reverseInferred || mi?.billingProbe || mi?.userCorrected || mi?.routed || mi?.effortDowngraded) && hasValidMiName ? (mi.rawLabel || mi.name) : '') || '';
     if (!m) { const e = History.byId(sid); m = noteBase(e?.title || Chats.get(sid)?.title || ''); }
     m = String(Strength.canon(m) || '').replace(/\s+/g, ' ').trim();
     const fp = mi?.fingerprint;
-    if (fp) return Fingerprint.describe({ name: m, fingerprint: fp }).slice(0, 90);
-    return ConversationLabels.label(null,m).slice(0,90);
+    if (fp && !mi?.tihuRecognized) return Fingerprint.describe({ name: m, fingerprint: fp }).slice(0, 90);
+    return ConversationLabels.label(mi, m).slice(0,90);
   },
-  known(sid) { const m = Models.get(sid); const hasValidName = !!(m?.name && !/^(未识别|未知型号|待定)$/.test(String(m.name).trim())); return !!(m && (!m.pendingConfirm || hasValidName) && (((!m.guess || m.habitInferred || m.reverseInferred || m.billingProbe || m.userCorrected) && hasValidName) || m.fingerprint)); },
+  known(sid) { const m = Models.get(sid); const hasValidName = !!(m?.name && !/^(未识别|未知型号|待定)$/.test(String(m.name).trim())); return !!(m && (!m.pendingConfirm || hasValidName) && (((!m.guess || m.tihuRecognized || m.habitInferred || m.reverseInferred || m.billingProbe || m.userCorrected || m.routed || m.effortDowngraded) && hasValidName) || m.fingerprint)); },
   latestAt(sid) {
     const chat = typeof Chats !== 'undefined' ? Chats.get(sid) : null;
     const entry = typeof History !== 'undefined' ? History.byId?.(sid) : null;
@@ -158,7 +158,7 @@ const Titles = {
   timeAt(sid, at = 0) { return Math.max(Number(at) || 0, this.latestAt(sid)); },
   want(sid) {
     const mi = Models.get(sid);
-    const hasReid = !!(mi?.name && !/^(未识别|未知型号|待定)$/.test(String(mi.name).trim()) && (mi.habitInferred || mi.reverseInferred || mi.billingProbe || mi.userCorrected));
+    const hasReid = !!(mi?.name && !/^(未识别|未知型号|待定)$/.test(String(mi.name).trim()) && (mi.tihuRecognized || mi.habitInferred || mi.reverseInferred || mi.billingProbe || mi.userCorrected || mi.routed || mi.effortDowngraded));
     const n = Notes.all[sid] || (hasReid ? Notes.rec(sid) : null); if (!n) return '';
     if (mi?.pendingConfirm && !(mi?.name && !/^(未识别|未知型号|待定)$/.test(String(mi.name).trim()))) return '';
     const head = (this.model(sid) || '未识别') + '/' + noteFmt(n.t || now());
@@ -186,7 +186,7 @@ const Titles = {
   // 识别出（或换了）模型：已接管的对话更新模型段
   // 识别 / 校准指纹后：这个对话优先同步，不等全局空闲，也不排在批量迁移后面
   touch(sid) {
-    if (!sid) return;
+    if (!sid || (typeof History !== 'undefined' && History.isGone?.(sid))) return;
     const mi = Models.get(sid);
     if (mi?.pendingConfirm && !(mi?.name && !/^(未识别|未知型号|待定)$/.test(String(mi.name).trim()))) { UI.renderListSoon?.(); UI.renderTabs?.(); return; }
     this.prio.add(sid);
@@ -195,8 +195,38 @@ const Titles = {
     if (typeof TitleSync !== 'undefined') TitleSync.dirty(sid);
     Notes.save(); this.local(sid); this.kick();
   },
+  // V12: 识别/重识完成后立即刷新本地所有对话名称，并在允许自动标题时静默排队同步云端标题
+  syncRecognized(sid, { cloud = true, sentAt } = {}) {
+    if (!sid || (typeof History !== 'undefined' && History.isDeleted?.(sid))) return;
+    try {
+      const ts = this.timeAt(sid, sentAt || 0);
+      const n = Notes.owns(sid) ? Notes.all[sid] : Notes.rec(sid, ts || undefined);
+      if (n) {
+        if (ts) n.t = Math.max(Number(n.t) || 0, ts);
+        delete n.modelData;
+        delete n.modelStamp;
+        delete n.e;
+      }
+      if (typeof TitleSync !== 'undefined') {
+        TitleSync.invalidate?.(sid);
+        TitleSync.dirty(sid);
+      }
+      if (this._viewMemo) this._viewMemo.delete(sid);
+      try { UI?._cards?.delete?.(sid); } catch {}
+      const isGoldOrFav = (typeof Fav !== 'undefined' && Fav.has(sid)) || (typeof Gold !== 'undefined' && Gold.isChatGold?.(sid)) || (typeof TitleSync !== 'undefined' && TitleSync.shouldGoldPrefix?.(sid));
+      const allowCloud = cloud !== false && (Prefs.autoTitle !== false || isGoldOrFav || Boolean(n?.n));
+      if (allowCloud && n) {
+        n.dirty = true;
+        n.modifiedAt = now();
+        this.prio.add(sid);
+      }
+      Notes.save();
+      this.local(sid);
+      if (allowCloud) this.kick(true);
+    } catch {}
+  },
   capture(sid,at) {
-    if(!sid)return;
+    if(!sid || (typeof History !== 'undefined' && History.isDeleted?.(sid)))return;
     const isGoldOrFav = (typeof Fav !== 'undefined' && Fav.has(sid)) || (typeof Gold !== 'undefined' && Gold.isChatGold?.(sid)) || (typeof TitleSync !== 'undefined' && TitleSync.shouldGoldPrefix?.(sid));
     if (Prefs.autoTitle === false && !isGoldOrFav && !Notes.all[sid]?.n) {
       this.local(sid);
@@ -205,21 +235,28 @@ const Titles = {
     const ts = this.timeAt(sid, at || 0);
     const n=Notes.rec(sid,ts || undefined); if (ts) n.t=Math.max(Number(n.t)||0,ts);
     if (isGoldOrFav) this.prio.add(sid);
+    TitleSync.invalidate?.(sid);
     TitleSync.dirty(sid);Notes.save();this.local(sid);
     this.kick(this.prio.has(sid) ? 1200 : 6500);
   },
   // 本地先显示新名字（左侧卡片、标签页立即变）
   local(sid) {
-    if (!sid) return;
+    if (!sid || (typeof History !== 'undefined' && History.isDeleted?.(sid))) return;
     if (this._viewMemo) this._viewMemo.delete(sid);
+    try { TitleSync?.invalidate?.(sid); } catch {}
+    try { UI?._cards?.delete?.(sid); } catch {}
     if (!Notes.owns(sid) && this.known(sid)) { Notes.rec(sid); Notes.save(); }
     const n = Notes.all[sid];
     if (n) { const ts = this.timeAt(sid, n.t || 0); if (ts > (Number(n.t) || 0)) { n.t = ts; Notes.save(); } }
-    const want = this.want(sid); if (!want) return;
-    const e = History.byId(sid); if (e && e.localTitle !== want) { e.localTitle = want; try { History.saveSoon?.(); } catch {} }
-    const c = typeof Chats !== 'undefined' ? Chats.get(sid) : null;
-    if (c) { c.localTitle = want; }
-    UI.renderListSoon?.(); UI.renderTabs?.();
+    const want = this.want(sid);
+    if (want) {
+      const e = History.byId(sid); if (e && e.localTitle !== want) { e.localTitle = want; try { History.saveSoon?.(); } catch {} }
+      const ae = typeof ArchiveHistory !== 'undefined' ? ArchiveHistory.byId?.(sid) : null;
+      if (ae && ae.localTitle !== want) ae.localTitle = want;
+      const c = typeof Chats !== 'undefined' ? Chats.get(sid) : null;
+      if (c) { c.localTitle = want; }
+    }
+    UI.renderListSoon?.(50); UI.renderTabs?.();
     if (typeof UI !== 'undefined' && UI.els?.chat?.sid === sid && typeof UI.renderChat === 'function') {
       try { UI.renderChat(UI.els.chat, false); } catch {}
     }
@@ -297,7 +334,7 @@ const Titles = {
     const goldKey = typeof Gold !== 'undefined' ? `${Gold.target || ''}:${Gold.hasChat?.(sid) ? 1 : 0}` : '';
     const cMsgs = Array.isArray(cObj?.messages) ? cObj.messages : null;
     const lastCM = cMsgs && cMsgs.length ? cMsgs[cMsgs.length - 1] : null;
-    const vSig = sid ? `${fallback || ''}\0${e?.title || ''}\0${e?.localTitle || ''}\0${e?.type || ''}\0${e?.mode || ''}\0${e?.modelAId || ''}\0${e?.modelBId || ''}\0${cObj?.title || ''}\0${cObj?.localTitle || ''}\0${cObj?.evalMode || ''}\0${cObj?.busy ? 1 : 0}\0${cObj?.streaming ? 1 : 0}\0${cObj?._evalStreaming ? 1 : 0}\0${cMsgs ? cMsgs.length : 0}:${lastCM?.status || ''}:${lastCM?.failed ? 1 : 0}\0${cObj?.voteState?.voted ? 1 : 0}\0${cObj?.voteState?.modelAName || ''}\0${cObj?.voteState?.modelBName || ''}\0${nRec?.n || ''}\0${nRec?.c || ''}\0${nRec?.t || ''}\0${nRec?.modelStamp || ''}\0${nRec?.modelData?.model || ''}\0${mi0?.name || ''}\0${mi0?.effort || ''}\0${mi0?.userCorrected ? 1 : 0}\0${mi0?.confidence ?? ''}\0${mi0?.reverseScore ?? ''}\0${mi0?.habitScore ?? ''}\0${mi0?.pendingConfirm ? 1 : 0}\0${mi0?.openSourcePending ? 1 : 0}\0${mi0?.guess ? 1 : 0}\0${mi0?.routed ? 1 : 0}\0${favBit}\0${goldKey}\0${fpSig}\0${typeof TitleCipher !== 'undefined' ? TitleCipher.generation : 0}\0${rMeta0 ? (rMeta0.model || '') + ':' + (rMeta0.note || '') + ':' + (rMeta0.score ?? '') : ''}` : '';
+    const vSig = sid ? `${fallback || ''}\0${e?.title || ''}\0${e?.localTitle || ''}\0${e?.type || ''}\0${e?.mode || ''}\0${e?.modelAId || ''}\0${e?.modelBId || ''}\0${cObj?.title || ''}\0${cObj?.localTitle || ''}\0${cObj?.evalMode || ''}\0${cObj?.busy ? 1 : 0}\0${cObj?.streaming ? 1 : 0}\0${cObj?._evalStreaming ? 1 : 0}\0${cMsgs ? cMsgs.length : 0}:${lastCM?.status || ''}:${lastCM?.failed ? 1 : 0}\0${cObj?.voteState?.voted ? 1 : 0}\0${cObj?.voteState?.modelAName || ''}\0${cObj?.voteState?.modelBName || ''}\0${nRec?.n || ''}\0${nRec?.c || ''}\0${nRec?.t || ''}\0${nRec?.modelStamp || ''}\0${nRec?.modelData?.model || ''}\0${mi0?.name || ''}\0${mi0?.rawLabel || ''}\0${mi0?.effort || mi0?.tier || ''}\0${mi0?._tihuEngineFixVer || 0}\0${mi0?.tihuRecognized ? 1 : 0}\0${mi0?.userCorrected ? 1 : 0}\0${mi0?.confidence ?? ''}\0${mi0?.reverseScore ?? ''}\0${mi0?.habitScore ?? ''}\0${mi0?.pendingConfirm ? 1 : 0}\0${mi0?.openSourcePending ? 1 : 0}\0${mi0?.guess ? 1 : 0}\0${mi0?.routed ? 1 : 0}\0${mi0?.effortDowngraded ? 1 : 0}\0${mi0?.routeTo || ''}\0${favBit}\0${goldKey}\0${fpSig}\0${typeof TitleCipher !== 'undefined' ? TitleCipher.generation : 0}\0${rMeta0 ? (rMeta0.model || '') + ':' + (rMeta0.note || '') + ':' + (rMeta0.score ?? '') : ''}` : '';
     if (vSig && this._viewMemo) {
       const hit = this._viewMemo.get(sid);
       if (hit && hit.sig === vSig) return hit.val;
@@ -430,29 +467,35 @@ const Dialog = {
 
 // 删除对话：云端删除 + 清掉本机的模型信息 / 备注 / 运行记录 / 标签页
 async function deleteChat(e) {
-  if (!e?.id) return false;
-  const v = Titles.view(e.id, e.title), name = v.note || v.model || e.title || '这个对话';
+  const sid = String(e?.id || '').trim();
+  if (!sid) return false;
+  if (typeof FingerprintBatch !== 'undefined' && FingerprintBatch.owns?.(sid)) {
+    toast('该对话在批量指纹队列中，请先停止测试', 'err');
+    return false;
+  }
+  const v = Titles.view(sid, e.title), name = v.note || v.model || e.title || '这个对话';
   const ok = await Dialog.confirm({ title: '删除对话', text: `删除「${name}」？\n会同时删除 Brana 上的对话和本机保存的模型信息、备注、运行记录，无法恢复。`, ok: '删除', danger: true });
   if (!ok) return false;
-  let queuedBg = false;
-  try {
-    if (!String(e.id).startsWith('pending:')) await History.remove(e.id);
-  } catch (err) {
-    if (err?.status !== 404 && !e._localRecovered) {
-      try {
-        if (typeof Store !== 'undefined') {
-          const q = Store.get('archDelQ', []);
-          if (Array.isArray(q) && !q.includes(e.id)) Store.set('archDelQ', [...q, e.id]);
-          queuedBg = true;
-        }
-      } catch {}
-      if (!queuedBg) { toast('删除失败：' + describe(err), 'err'); return false; }
-    }
-    History.items = History.items.filter(x => x.id !== e.id);
-    Bus.emit('history');
+  const isEval = Boolean(e?.type === 'evaluation' || e?.mode === 'battle' || e?.mode === 'direct' || (typeof Chats !== 'undefined' && Chats.get?.(sid)?.isEvaluation));
+  const isLocalRec = Boolean(e?._localRecovered);
+  // 乐观即时移除：确认后 0ms 从左侧列表、缓存与打开的标签页彻底移除，绝不等待慢速多路由协议请求卡住卡片
+  forget(sid);
+  toast('已删除');
+  if (!sid.startsWith('pending:') && !sid.startsWith('local-')) {
+    void History.remove(sid, { isEval }).catch(err => {
+      if (err?.status !== 404 && !isLocalRec) {
+        try {
+          if (typeof Store !== 'undefined') {
+            const q = Store.get('archDelQ', []);
+            if (Array.isArray(q) && !q.includes(sid)) Store.set('archDelQ', [...q, sid]);
+          }
+          if (typeof Bulk !== 'undefined' && !Bulk.running?.('del')) {
+            setTimeout(() => { try { Bulk.resume?.(); } catch {} }, 2500);
+          }
+        } catch {}
+      }
+    });
   }
-  forget(e.id);
-  toast(queuedBg ? '已从列表移除（云端删除将在网络恢复后自动完成）' : '已删除');
   return true;
 }
 /* 本机按对话保存的缓存，一个入口清：
@@ -484,15 +527,60 @@ const LocalCache = {
   },
 };
 function forget(sid) {
-  LocalCache.drop([sid]);
-  try { History.bury?.([sid]); } catch {}
-  ArchiveHistory.drop([sid]);Fav.setQuiet(sid,false);
-  for (const t of Tabs.list.filter(x => x.sid === sid)) Tabs.close(t.key);
-  const c = Chats.get(sid); if (c) { try { c.ctl?.abort(); } catch {} Chats.delete(sid); }
-  if (Models.all[sid]) { delete Models.all[sid]; Store.set('models', Models.all); try { Bus.emit('models'); } catch {} }
-  Notes.drop(sid); try { Trace.clear(sid); } catch {}
+  const sKey = String(sid || '').trim();
+  if (!sKey) return;
+  try { LocalCache.drop([sKey]); } catch {}
+  try {
+    if (typeof History !== 'undefined') {
+      History.items = (History.items || []).filter(x => x && String(x.id) !== sKey);
+      History._ix = null;
+      History.markDeleted?.([sKey]);
+      History.bury?.([sKey]);
+      History.saveSoon?.();
+    }
+  } catch {}
+  try { if (typeof ArchiveHistory !== 'undefined') ArchiveHistory.drop([sKey]); } catch {}
+  try { if (typeof CardSelect !== 'undefined' && CardSelect.ids?.delete(sKey)) CardSelect.revision++; } catch {}
+  try { if (typeof Fav !== 'undefined' && Fav.setQuiet) Fav.setQuiet(sKey, false); } catch {}
+  try { if (typeof Titles !== 'undefined') { Titles.prio?.delete?.(sKey); Titles._viewMemo?.delete?.(sKey); } } catch {}
+  try {
+    const c = typeof Chats !== 'undefined' ? Chats.get(sKey) : null;
+    if (c) {
+      try { c.ctl?.abort(); } catch {}
+      try { c._loadCtl?.abort(); } catch {}
+      Chats.delete(sKey);
+    }
+  } catch {}
+  try {
+    if (typeof Tabs !== 'undefined' && Array.isArray(Tabs.list)) {
+      for (const t of Tabs.list.filter(x => x && x.sid === sKey)) {
+        try { Tabs.close(t.key); } catch {}
+      }
+    }
+  } catch {}
+  try {
+    if (typeof Models !== 'undefined' && Models.all?.[sKey]) {
+      delete Models.all[sKey];
+      if (Models.save) Models.save(); else Store.set('models', Models.all);
+      try { Bus.emit('models', sKey); } catch {}
+    }
+  } catch {}
+  try { Notes.drop(sKey); } catch {}
+  try { Trace.clear(sKey); } catch {}
   try { AcctStats.report(); } catch { try { AcctStats.soon(150); } catch {} }
-  UI.renderList(); UI.renderTabs();
+  try {
+    if (typeof UI !== 'undefined') {
+      UI._cards?.delete?.(sKey);
+      const listEl = typeof document !== 'undefined' ? document.querySelector('#list') : null;
+      if (listEl) {
+        for (const child of [...listEl.children]) {
+          if (child?.dataset?.sid === sKey) child.remove();
+        }
+      }
+      UI.renderList?.(true);
+      UI.renderTabs?.();
+    }
+  } catch {}
 }
 
 // ---------- 自动识别：打开对话后，1 小时内有运行记录的自动读取模型信息 / Trace（不用手动点）----------

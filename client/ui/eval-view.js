@@ -1319,6 +1319,21 @@ const EvalView = {
       }
     };
 
+    const handleSkipVote = () => {
+      if (!chat) return;
+      chat._voteSkippedTurnId = lastTurn?.user?.id || lastTurn?.a?.id || 'skipped';
+      if (typeof toast === 'function') {
+        toast('已跳过选择，可直接输入内容继续下一轮对话或视频生成', 'ok');
+      }
+      try {
+        const inp = document.getElementById('in');
+        if (inp) inp.focus();
+      } catch {}
+      if (typeof UI !== 'undefined' && UI.els?.chat === chat) {
+        UI.renderChat(chat, false);
+      }
+    };
+
     const buttons = [
       {
         val: 'model_a',
@@ -1330,19 +1345,28 @@ const EvalView = {
       },
       {
         val: 'tie',
-        label: '平局',
-        title: '平局 (Tie)',
+        label: '都可以',
+        title: '都可以 / 平局 (Tie)',
         cls: 'vote-tie',
         svg: '<path d="M5 9h14"/><path d="M5 15h14"/>',
         iconRight: false,
       },
       {
         val: 'both_bad',
-        label: '都不佳',
-        title: '都不佳 (Both are bad)',
+        label: '都不行',
+        title: '都不行 / 都不佳 (Both are bad)',
         cls: 'vote-bad',
         svg: '<path d="M18 6 6 18"/><path d="m6 6 12 12"/>',
         iconRight: false,
+      },
+      {
+        val: 'skip',
+        label: '跳过',
+        title: '跳过选择，直接继续下一轮对话或视频制作',
+        cls: 'vote-skip',
+        svg: '<path d="m6 17 5-5-5-5"/><path d="m13 17 5-5-5-5"/>',
+        iconRight: false,
+        isSkip: true,
       },
       {
         val: 'model_b',
@@ -1370,7 +1394,7 @@ const EvalView = {
             title: b.title,
             'aria-label': b.title,
             disabled: disabled ? true : null,
-            onclick: () => handleVote(b.val),
+            onclick: () => (b.isSkip ? handleSkipVote() : handleVote(b.val)),
           },
           b.iconRight ? h('span', {}, b.label) : this._svgIcon(b.svg),
           b.iconRight ? this._svgIcon(b.svg) : h('span', {}, b.label))

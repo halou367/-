@@ -157,6 +157,51 @@ const TOXIC_MAIN_IPS = new Set([
   '198.20.138.119', '83.228.193.177', '43.170.8.95', '43.175.16.48', '38.65.9.251',
   '77.73.71.200',
 ]);
+function pickFreeCleanProxyIp(forAcct, preferRegion = '') {
+  const pool = DB.shared?.pippool;
+  if (!pool || typeof pool !== 'object') return '';
+  const ips = pool.ips || {}, ban = pool.ban || {}, rep = pool.rep || {}, nowMs = Date.now();
+  const usedHosts = new Set(), usedEgs = new Set();
+  for (const x of (DB?.accounts || [])) {
+    if (!x || x === forAcct || (forAcct?.id && x.id === forAcct.id)) continue;
+    const raw = String(x.proxyIp || '').trim();
+    if (!raw) continue;
+    const hk = pipKey(raw);
+    if (hk) usedHosts.add(hk);
+    usedHosts.add(raw.toLowerCase());
+    const e = ips[raw] || (hk ? ips[hk] : null);
+    if (e?.eg) usedEgs.add(String(e.eg).trim().toLowerCase());
+  }
+  const isBadPip = k => {
+    const raw = String(k || '').trim();
+    if (!raw) return true;
+    const host = pipKey(raw);
+    if (TOXIC_MAIN_IPS.has(host) || ban[raw.toLowerCase()] || ban[host]) return true;
+    const e = ips[raw] || ips[host];
+    if (e && (e.banned || e.gone || (e.impureUntil && e.impureUntil > nowMs) || (e.cool && e.cool > nowMs))) return true;
+    const eg = String(e?.eg || host).trim().toLowerCase();
+    if (eg && (TOXIC_MAIN_IPS.has(eg) || pool.banEg?.[eg])) return true;
+    const r = (eg && rep[eg]) || rep[host];
+    if (r?.impureUntil && r.impureUntil > nowMs) return true;
+    if (r?.pu && Number.isFinite(+r.pu.fs) && +r.pu.fs >= 45) return true;
+    return false;
+  };
+  const cc = String(preferRegion || forAcct?.region || forAcct?.routeHome || '').trim().toUpperCase();
+  const filterPool = wantCc => Object.entries(ips).filter(([k, e]) => {
+    if (!e || e.ok !== true || e.gone || e.banned || isBadPip(k)) return false;
+    if (wantCc && e.loc !== wantCc) return false;
+    const hk = pipKey(k), eg = String(e.eg || hk).trim().toLowerCase();
+    if (usedHosts.has(k.toLowerCase()) || (hk && usedHosts.has(hk)) || (eg && (usedEgs.has(eg) || usedHosts.has(eg)))) return false;
+    return true;
+  }).sort((x, y) => {
+    const fsX = rep[x[1].eg || pipKey(x[0])]?.pu?.fs ?? 18;
+    const fsY = rep[y[1].eg || pipKey(y[0])]?.pu?.fs ?? 18;
+    return (fsX * 8 + (x[1].ms || 600)) - (fsY * 8 + (y[1].ms || 600));
+  });
+  let cands = cc ? filterPool(cc) : [];
+  if (!cands.length) cands = filterPool('');
+  return cands[0]?.[0] || '';
+}
 function healBannedAccountProxyIps() {
   if (!Array.isArray(DB?.accounts) || !DB.accounts.length) return false;
   const pool = DB.shared?.pippool;
@@ -166,18 +211,18 @@ function healBannedAccountProxyIps() {
   const isBadPip = k => {
     const raw = String(k || '').trim();
     if (!raw) return false;
-    const host = raw.replace(/^\[|\]$/g, '').split(':')[0];
-    if (TOXIC_MAIN_IPS.has(host) || ban[raw.toLowerCase()] || ban[host.toLowerCase()]) return true;
+    const host = pipKey(raw);
+    if (TOXIC_MAIN_IPS.has(host) || ban[raw.toLowerCase()] || ban[host]) return true;
     const e = ips[raw] || ips[host];
     if (e && (e.banned || e.gone || (e.impureUntil && e.impureUntil > nowMs))) return true;
     const eg = String(e?.eg || host).trim();
     if (eg && TOXIC_MAIN_IPS.has(eg)) return true;
     const r = (eg && rep[eg]) || rep[host];
     if (r?.impureUntil && r.impureUntil > nowMs) return true;
-    if (r?.pu && Number.isFinite(+r.pu.fs) && +r.pu.fs > 24) return true;
+    if (r?.pu && Number.isFinite(+r.pu.fs) && +r.pu.fs >= 45) return true;
     return false;
   };
-  const used = new Set(DB.accounts.map(a => String(a?.proxyIp || '').trim()).filter(Boolean));
+  const seenHosts = new Set(), seenEgs = new Set();
   let changed = false;
   for (const a of DB.accounts) {
     if (!a) continue;
@@ -190,24 +235,25 @@ function healBannedAccountProxyIps() {
       }
     }
     if (!a.proxyIp || RouteState.locked(a)) continue;
-    if (!isBadPip(a.proxyIp) && a.status?.loggedIn !== false) continue;
-    used.delete(String(a.proxyIp).trim());
-    const cc = String(a.region || a.routeHome || '').trim().toUpperCase();
-    const cands = Object.entries(ips).filter(([k, e]) => {
-      if (!e || e.ok !== true || e.gone || e.banned || used.has(k) || isBadPip(k)) return false;
-      if (cc && e.loc !== cc) return false;
-      const eg = e.eg || k.replace(/^\[|\]$/g, '').split(':')[0];
-      const fsVal = rep[eg]?.pu?.fs;
-      return fsVal === undefined || +fsVal < 35;
-    }).sort((x, y) => {
-      const fsX = rep[x[1].eg || x[0]]?.pu?.fs ?? 28;
-      const fsY = rep[y[1].eg || y[0]]?.pu?.fs ?? 28;
-      return (fsX * 12 + (x[1].ms || 600)) - (fsY * 12 + (y[1].ms || 600));
-    });
-    const nextPip = cands[0]?.[0] || '';
-    if (!nextPip) { used.add(String(a.proxyIp).trim()); continue; }
+    const curHost = pipKey(a.proxyIp);
+    const curEg = String((ips[a.proxyIp] || ips[curHost])?.eg || '').trim().toLowerCase();
+    const isDup = Boolean((curHost && seenHosts.has(curHost)) || (curEg && seenEgs.has(curEg)));
+    if (!isDup && !isBadPip(a.proxyIp) && a.status?.loggedIn !== false) {
+      if (curHost) seenHosts.add(curHost);
+      if (curEg) seenEgs.add(curEg);
+      continue;
+    }
+    const nextPip = pickFreeCleanProxyIp(a, a.region || a.routeHome || '');
+    if (!nextPip) {
+      if (curHost) seenHosts.add(curHost);
+      if (curEg) seenEgs.add(curEg);
+      continue;
+    }
     a.proxyIp = nextPip;
-    used.add(nextPip);
+    const nextHost = pipKey(nextPip);
+    const nextEg = String((ips[nextPip] || ips[nextHost])?.eg || '').trim().toLowerCase();
+    if (nextHost) seenHosts.add(nextHost);
+    if (nextEg) seenEgs.add(nextEg);
     if (a.route && typeof a.route === 'object' && a.route.mode === 'vless') a.route.proxyIp = nextPip;
     changed = true;
   }
@@ -258,6 +304,7 @@ function compactPipPool(pool) {
     const nextIps = {};
     const okList = [];
     const untested = [];
+    const failedList = [];
     for (const [ip, info] of entries) {
       if (!ip || !info || typeof info !== 'object') continue;
       const slim = { ...info };
@@ -270,43 +317,78 @@ function compactPipPool(pool) {
         okList.push([ip, slim]);
       } else if (slim.ok == null && !slim.gone && !slim.banned) {
         untested.push([ip, slim]);
+      } else if (slim.ok === false && !slim.gone) {
+        failedList.push([ip, slim]);
       }
     }
     okList.sort((a, b) => ((a[1]?.ms || 9999) - (b[1]?.ms || 9999)) || ((b[1]?.at || 0) - (a[1]?.at || 0)));
-    for (let i = 0; i < Math.min(okList.length, 280); i++) {
+    for (let i = 0; i < Math.min(okList.length, 2500); i++) {
       nextIps[okList[i][0]] = okList[i][1];
     }
-    untested.sort((a, b) => (b[1]?.at || 0) - (a[1]?.at || 0));
-    for (let i = 0; i < Math.min(untested.length, 160); i++) {
-      nextIps[untested[i][0]] = untested[i][1];
+    const MAX_UNTESTED = 6500;
+    if (untested.length <= MAX_UNTESTED) {
+      for (const [k, v] of untested) nextIps[k] = v;
+    } else {
+      const bySrc = new Map();
+      for (const item of untested) {
+        const sk = String(item[1]?.src || item[1]?.loc || '_');
+        let g = bySrc.get(sk);
+        if (!g) { g = []; bySrc.set(sk, g); }
+        g.push(item);
+      }
+      let kept = 0, idx = 0;
+      const groups = [...bySrc.values()];
+      while (kept < MAX_UNTESTED && groups.length) {
+        let progressed = false;
+        for (const g of groups) {
+          if (idx < g.length) {
+            nextIps[g[idx][0]] = g[idx][1];
+            kept++;
+            progressed = true;
+            if (kept >= MAX_UNTESTED) break;
+          }
+        }
+        if (!progressed) break;
+        idx++;
+      }
+    }
+    failedList.sort((a, b) => (b[1]?.at || 0) - (a[1]?.at || 0));
+    for (let i = 0; i < Math.min(failedList.length, 800); i++) {
+      nextIps[failedList[i][0]] = failedList[i][1];
     }
     out.ips = nextIps;
   }
   if (Array.isArray(out.rep) && out.rep.length > 240) {
     out.rep = out.rep.slice(-240);
   } else if (out.rep && typeof out.rep === 'object' && !Array.isArray(out.rep)) {
-    if (!out.unpoisonV202 && Object.keys(out.rep).length >= 20) {
-      out.unpoisonV202 = 1;
-      for (const rv of Object.values(out.rep)) {
-        if (!rv || typeof rv !== 'object') continue;
-        delete rv.a;
-        if (rv.pu && !rv.pu.res && (!rv.pu.dc || [10, 11, 12, 13, 14, 15, 16, 22, 23, 24, 25, 26, 27].includes(+rv.pu.fs))) {
-          delete rv.pu;
-        }
+    const keptHosts = new Set();
+    const addHost = v => {
+      const s = String(v || '').trim();
+      if (!s) return;
+      keptHosts.add(s);
+      keptHosts.add(s.toLowerCase());
+      const bare = s.replace(/^\[|\]$/g, '').replace(/:\d{1,5}$/, '').trim();
+      if (bare) {
+        keptHosts.add(bare);
+        keptHosts.add(bare.toLowerCase());
+      }
+    };
+    for (const [k, info] of Object.entries(out.ips || {})) {
+      addHost(k);
+      if (info && typeof info === 'object') {
+        addHost(info.eg);
+        addHost(info.ip);
       }
     }
-    const keptHosts = new Set();
-    for (const k of Object.keys(out.ips || {})) {
-      keptHosts.add(k);
-      keptHosts.add(String(k).split(':')[0].trim());
-    }
-    for (const s of srcSet) keptHosts.add(s);
+    for (const s of srcSet) addHost(s);
     const nextRep = {};
     let repCnt = 0;
     for (const [rk, rv] of Object.entries(out.rep)) {
-      if (keptHosts.has(rk) || keptHosts.has(String(rk).split(':')[0].trim())) {
+      const rkLow = String(rk || '').trim().toLowerCase();
+      const rkBare = rkLow.replace(/^\[|\]$/g, '').replace(/:\d{1,5}$/, '').trim();
+      if (keptHosts.has(rk) || keptHosts.has(rkLow) || keptHosts.has(rkBare)) {
         nextRep[rk] = rv;
-        if (++repCnt >= 450) break;
+        if (++repCnt >= 3500) break;
       }
     }
     out.rep = nextRep;
@@ -1890,9 +1972,21 @@ ipcMain.handle('host:saveAccount', async (e, a) => {
   const routeBefore = cur ? JSON.stringify([cur.proxy, cur.nodeId, cur.region]) : '';
   const prevRouteSig = cur ? RouteState.signature(cur) : "";
   const prevFpJson = cur ? JSON.stringify(cur.fp || null) : "";
-  // ProxyIP 每个账号唯一（留空不限）：同一个节点可以共用，但落地 IP 不能撞
-  const pipN = String(a.proxyIp ?? cur?.proxyIp ?? '').trim().toLowerCase();
-  if (pipN) { const dup = DB.accounts.find(x => x !== cur && pipKey(x.proxyIp) === pipKey(pipN)); if (dup) throw new Error('ProxyIP「' + pipN + '」已被账号「' + dup.name + '」使用，每个账号的 ProxyIP 不能相同'); }
+  // ProxyIP 每个账号唯一（留空不限）：若所选或旧 ProxyIP 已被其他账号占用，自动分配未占用的纯净 ProxyIP，不抛错中断
+  let pipN = String(a.proxyIp ?? cur?.proxyIp ?? '').trim();
+  if (pipN) {
+    const dup = DB.accounts.find(x => x !== cur && pipKey(x.proxyIp) === pipKey(pipN));
+    if (dup) {
+      const curPrev = String(cur?.proxyIp || '').trim();
+      if (curPrev && pipKey(curPrev) !== pipKey(pipN) && !DB.accounts.some(x => x !== cur && pipKey(x.proxyIp) === pipKey(curPrev))) {
+        a = { ...a, proxyIp: curPrev };
+      } else {
+        const freeAlt = pickFreeCleanProxyIp(cur, a.region ?? cur?.region ?? '');
+        a = { ...a, proxyIp: freeAlt || '' };
+      }
+      pipN = String(a.proxyIp || '').trim();
+    }
+  }
   if (email && cur && byEmail(email) && byEmail(email) !== cur) throw new Error('该邮箱已在另一个账号里：' + byEmail(email).name);
   if (!cur) { cur = { id: newId(), name: String(a.name || email || '账号').slice(0, 40), proxy: String(a.proxy || '').trim(), proxyIp: String(a.proxyIp || '').trim(), email: email || '', fp: a.fp ? cleanFp(a.fp) : genFp() }; if (a.password) cur.pw = encPw(String(a.password)); if (a.nodeId) cur.nodeId = String(a.nodeId).slice(0, 40); DB.accounts.push(cur); }
   else {
@@ -2989,7 +3083,7 @@ ipcMain.handle('host:ippureDirect', async (_e, ip) => {
     const ds = await directSession().catch(() => null);
     const pOpt = { ...purityCacheOpt(ds), forcePurity: true };
     const cached = pOpt.getCachedRep(qIp);
-    const isSuspect = Boolean(cached?.pu && (cached.pu.basicOnly || (!cached.pu.real && [8, 12, 15, 16, 22, 28, 35].includes(+cached.pu.fs)) || (cached.pu.real && !cached.pu.via && !cached.pu.res && [6, 10, 14, 15, 16].includes(+cached.pu.fs))));
+    const isSuspect = Boolean(cached?.pu && cached.pu.basicOnly);
     if (cached?.pu && !isSuspect && Number.isFinite(+cached.pu.fs) && (Date.now() - (+cached.pu.at || 0) < 7 * 86400e3)) {
       return { ip: qIp, fs: +cached.pu.fs, res: !!cached.pu.res, bc: !!cached.pu.bc, dc: !!cached.pu.dc, org: String(cached.pu.org || ''), ...(cached.pu.real ? { real: 1 } : {}), ...(cached.pu.via ? { via: cached.pu.via } : {}) };
     }
@@ -4137,7 +4231,7 @@ const poolProbes=createPoolProbeRunner(async (e, o, job) => {
     job.stage('probing');
     const ds = await directSession().catch(() => null);
     const dsFetch = (u, op) => nodeOrDirectFetch(u, op, ds);
-    const pOpt = { ...purityCacheOpt(ds), forcePurity: o?.forcePurity === true || pips.length <= 12, fastBatch: o?.fastBatch === true };
+    const pOpt = { ...purityCacheOpt(ds), forcePurity: o?.forcePurity !== false, fastBatch: false };
     const queue = [...directCands];
     const hasValidVless = Boolean(parseVless(o?.link));
     const runDirectWorker = async () => {
@@ -4705,6 +4799,11 @@ ipcMain.handle('host:shared', (e, k, v) => {
     if (!global.__branaLocalApiGateway) {
       const { createLocalApiGateway } = require('./local-api-gateway');
       global.__branaLocalApiGateway = createLocalApiGateway({
+        storageDir: app.getPath('userData'),
+        getWebContentsForAccount: (accId) => {
+          const w = accId && wins.get(accId);
+          return (w && !w.isDestroyed() && w.webContents && !w.webContents.isDestroyed()) ? w.webContents : null;
+        },
         getFallbackWebContents: () => {
           for (const w of wins.values()) {
             if (w && !w.isDestroyed() && w.webContents && !w.webContents.isDestroyed()) return w.webContents;
@@ -4810,8 +4909,73 @@ ipcMain.handle('host:shared', (e, k, v) => {
     return true;
   }
   // gacha@<账号id>：每个账号自己的抽卡设置；hist@<账号id> / models@<账号id>：每个账号的对话列表与识别缓存备份
-  if (!['prefs', 'gacha', 'nodes', 'nodesubs', 'proxyips', 'pippool', 'archbl', 'gold', 'pelshots', 'pelican', 'habitLearnBank', 'habitCalibration'].includes(k) && !/^(gacha|draft|gtok|signup|mailtok|webreg|hist|models)@[\w-]{1,64}$/.test(String(k))) return null;
+  if (!['prefs', 'gacha', 'nodes', 'nodesubs', 'proxyips', 'pippool', 'archbl', 'gold', 'pelshots', 'pelican', 'habitLearnBank', 'habitCalibration', 'tihu-cfg', 'tihu-bundle'].includes(k) && !/^(gacha|draft|gtok|signup|mailtok|webreg|hist|models)@[\w-]{1,64}$/.test(String(k))) return null;
   DB.shared = DB.shared || {};
+  if (k === 'tihu-cfg') {
+    if (v === undefined) return DB.shared['tihu-cfg'] ?? null;
+    if (v === null) { delete DB.shared['tihu-cfg']; saveSoon(); }
+    else if (v && typeof v === 'object') { DB.shared['tihu-cfg'] = v; saveSoon(); }
+    else return false;
+    try {
+      if (typeof BrowserWindow !== 'undefined') {
+        const cmd = { tihuCfgSync: DB.shared['tihu-cfg'] || null, at: Date.now() };
+        for (const bw of BrowserWindow.getAllWindows()) {
+          if (bw && !bw.isDestroyed() && bw.webContents && bw.webContents !== e?.sender) {
+            bw.webContents.send('anc-cmd', cmd);
+          }
+        }
+      }
+    } catch {}
+    return true;
+  }
+  if (k === 'tihu-bundle') {
+    const bundleFile = (typeof app !== 'undefined' && app?.getPath) ? path.join(app.getPath('userData'), 'shared', 'tihu-bundle.json') : '';
+    if (v === undefined) {
+      if (global._memTihuBundle && typeof global._memTihuBundle === 'object') return global._memTihuBundle;
+      if (bundleFile && typeof fs !== 'undefined' && fs.existsSync(bundleFile)) {
+        try {
+          const parsed = JSON.parse(fs.readFileSync(bundleFile, 'utf8'));
+          if (parsed && typeof parsed === 'object') { global._memTihuBundle = parsed; return parsed; }
+        } catch {}
+      }
+      return DB.shared['tihu-bundle'] ?? null;
+    }
+    if (v === null) {
+      global._memTihuBundle = null;
+      delete DB.shared['tihu-bundle'];
+      if (bundleFile && typeof fs !== 'undefined') { try { fs.unlinkSync(bundleFile); } catch {} }
+      saveSoon();
+      return true;
+    }
+    if (v && typeof v === 'object') {
+      global._memTihuBundle = v;
+      delete DB.shared['tihu-bundle'];
+      if (bundleFile && typeof fs !== 'undefined' && fs.promises) {
+        clearTimeout(global._tihuBundleWriteTimer);
+        global._tihuBundleWriteTimer = setTimeout(async () => {
+          try {
+            await fs.promises.mkdir(path.dirname(bundleFile), { recursive: true });
+            await fs.promises.writeFile(bundleFile, JSON.stringify(v));
+          } catch {}
+        }, 250);
+      } else {
+        DB.shared['tihu-bundle'] = v;
+        saveSoon();
+      }
+      try {
+        if (typeof BrowserWindow !== 'undefined') {
+          const cmd = { tihuBundleSync: true, syncedAt: v.syncedAt || Date.now(), version: v.version || '' };
+          for (const bw of BrowserWindow.getAllWindows()) {
+            if (bw && !bw.isDestroyed() && bw.webContents && bw.webContents !== e?.sender) {
+              bw.webContents.send('anc-cmd', cmd);
+            }
+          }
+        }
+      } catch {}
+      return true;
+    }
+    return false;
+  }
   if (k === 'habitLearnBank') {
     const bankFile = path.join(app.getPath('userData'), 'shared', 'habitLearnBank.json');
     const userDataDir = app.getPath('userData');
@@ -5638,13 +5802,36 @@ const ensureAccountNodeProxy = a => {
       if (!a.nodeId && (nodeObj?.id || vlessAcct?.nodeId)) a.nodeId = nodeObj?.id || vlessAcct?.nodeId || '';
     }
     if (!String(a.proxyIp || '').trim() && DB.shared?.pippool?.ips && typeof DB.shared.pippool.ips === 'object') {
-      const usedPips = new Set((DB.accounts || []).filter(x => x && x.id !== a.id).map(x => String(x.proxyIp || '').trim().toLowerCase()).filter(Boolean));
-      const cands = Object.entries(DB.shared.pippool.ips)
-        .filter(([k, e]) => k && e && e.ok === true && !e.gone && !e.banned && !usedPips.has(String(k).toLowerCase()))
+      const usedPips = new Set();
+      const usedEgs = new Set();
+      for (const x of (DB.accounts || [])) {
+        if (!x || x.id === a.id) continue;
+        const pk = String(x.proxyIp || '').trim();
+        if (!pk) continue;
+        usedPips.add(pk.toLowerCase());
+        usedPips.add(pk.split(':')[0].trim().toLowerCase());
+        const pe = DB.shared.pippool.ips[pk];
+        if (pe?.eg) usedEgs.add(String(pe.eg).trim().toLowerCase());
+      }
+      const isFreeEntry = ([k, e]) => {
+        if (!k || !e || e.gone || e.banned) return false;
+        const kLow = String(k).toLowerCase();
+        const kBare = kLow.split(':')[0].trim();
+        const egLow = String(e.eg || '').trim().toLowerCase();
+        if (usedPips.has(kLow) || usedPips.has(kBare) || (egLow && usedEgs.has(egLow))) return false;
+        if (DB.shared.pippool.ban?.[kLow] || (egLow && DB.shared.pippool.banEg?.[egLow])) return false;
+        return true;
+      };
+      const nowAt = Date.now();
+      const okCands = Object.entries(DB.shared.pippool.ips)
+        .filter(([k, e]) => isFreeEntry([k, e]) && e.ok === true && !(e.cool > nowAt) && !(e.impureUntil > nowAt))
         .sort((x, y) => (Number(x[1]?.ms) || 9999) - (Number(y[1]?.ms) || 9999));
-      if (cands[0]) {
-        a.proxyIp = cands[0][0];
-        if (!a.region && cands[0][1]?.loc) a.region = cands[0][1].loc;
+      const waitCands = okCands.length ? [] : Object.entries(DB.shared.pippool.ips)
+        .filter(([k, e]) => isFreeEntry([k, e]) && e.ok == null);
+      const picked = okCands[0] || waitCands[0] || null;
+      if (picked) {
+        a.proxyIp = picked[0];
+        if (!a.region && picked[1]?.loc) a.region = picked[1].loc;
       }
     }
     saveSoon();
@@ -5745,6 +5932,9 @@ const routeProbe = RouteNative.createProbe(async (event, candidate) => {
     if (!candidate || typeof candidate.proxy !== 'string' || candidate.proxy.length > 64000 || !validProxy(candidate.proxy)) throw Error('候选线路无效');
     if (isDirect(candidate.proxy) && !isDirect(proxyStr(account)) && !['manual','auto-select'].includes(candidate.kind)) throw Error('不会自动改为直连');
     if (candidate.proxyIp && !/^(?:[\w.:\[\]-]{3,120}|(?:socks5|https?|turn|sstp):\/\/(?:[\w.~%+=!$&'()*,;:-]{1,128}@)?[\w.\[\]:-]{3,160})$/i.test(String(candidate.proxyIp))) throw Error('候选出口无效');
+    if (candidate.proxyIp && DB.accounts.some(x => x && x !== account && x.id !== account.id && pipKey(x.proxyIp) === pipKey(candidate.proxyIp))) {
+      return { ok: false, kind: 'occupied', occupied: true, error: '该出口已被其他账号使用，已自动跳过' };
+    }
     if (parseProxy(candidate.proxy)?.user) throw Error('带认证的自定义代理不参与无凭据探测');
     const temp = { id: key, proxy: candidate.proxy, proxyIp: String(candidate.proxyIp || '') };
     const config = await proxyConfig(temp, key); if (temp.tunErr) throw Error('候选节点初始化失败');
@@ -5774,8 +5964,18 @@ function validateRouteCandidate(a, route, options, proofOwner = a.id) {
     if (['proxy','proxyIp','nodeId','region','routeHome'].some(k => route[k] !== undefined && typeof route[k] !== 'string')) throw Error('候选字段类型无效');
     if (route.proxyIp && !/^(?:[\w.:\[\]-]{3,120}|(?:socks5|https?|turn|sstp):\/\/(?:[\w.~%+=!$&'()*,;:-]{1,128}@)?[\w.\[\]:-]{3,160})$/i.test(route.proxyIp)) throw Error('候选出口无效');
     if (/^vless:/i.test(route.proxy) && route.proxy !== a.proxy) { const node = DB.shared?.nodes?.find?.(x => x.id === route.nodeId); if (!node || Vless.toLink(node) !== route.proxy) throw Error('候选节点已改变'); }
+    if (route.proxyIp && DB.accounts.some(x => x.id !== a.id && pipKey(x.proxyIp) === pipKey(route.proxyIp))) {
+      const altPip = pickFreeCleanProxyIp(a, route.region || a.region || '');
+      if (altPip) {
+        route.proxyIp = altPip;
+        const altLoc = DB.shared?.pippool?.ips?.[altPip]?.loc;
+        if (altLoc) route.region = altLoc;
+        routeProofs.rebind?.(proofOwner, route, options.ticket);
+      } else {
+        throw Error('当前无其他未占用出口，保留原配置');
+      }
+    }
     if (route.proxyIp && !options.manual) { const pool = DB.shared?.pippool || {}, item = pool.ips?.[route.proxyIp]; if (!item || item.gone || pool.ban?.[route.proxyIp.toLowerCase()] || item.cool > Date.now()) throw Error('候选出口已改变或冷却'); }
-    if (route.proxyIp && DB.accounts.some(x => x.id !== a.id && pipKey(x.proxyIp) === pipKey(route.proxyIp))) throw Error('候选出口已被占用');
 }
 const applyRoute = RouteNative.createApply({
   find: acct, owner: e => winAcct(e.sender), publicAccount: pub, persist: () => saveDB(true),
@@ -5787,7 +5987,11 @@ const saveRouteDraft = RouteDrafts.createSave({
   build: (current, input) => RouteDrafts.buildAccount(current, input, { newId, genFp, cleanFp, encPw, validProxy }),
   validate(draft, candidate, request, changed) {
     if (candidate.email && DB.accounts.some(x => x !== draft.target && String(x.email || '').toLowerCase() === candidate.email.toLowerCase())) throw Error('该邮箱已存在，请在对应账号中编辑；不会覆盖已有账号');
-    if (candidate.proxyIp && DB.accounts.some(x => x !== draft.target && pipKey(x.proxyIp) === pipKey(candidate.proxyIp))) throw Error('ProxyIP 已被其他账号占用');
+    if (candidate.proxyIp && DB.accounts.some(x => x !== draft.target && pipKey(x.proxyIp) === pipKey(candidate.proxyIp))) {
+      const altPip = pickFreeCleanProxyIp(draft.target || candidate, candidate.region || '');
+      if (altPip) candidate.proxyIp = altPip;
+      else candidate.proxyIp = '';
+    }
     if (changed) {
       const route = Object.fromEntries(['proxy','proxyIp','nodeId','region','routeHome'].map(k => [k, String(candidate[k] || '')]));
       validateRouteCandidate(draft.target || { id: candidate.id, proxy: '' }, route, { manual: true, mode: RouteState.mode(candidate), ticket: request.ticket }, draft.owner);

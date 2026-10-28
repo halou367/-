@@ -32,267 +32,149 @@ const GachaPrompts = (() => {
     }
     return result;
   }
-  const PELICAN_LANG_BANKS = [
-    // 多语言权重分配：繁体中文(24%)、英文(24%)、日文(22%)、韩文(20%) 高概率优先（合计 90%），法/德/西等其他语言(6%)，简体中文低概率(4%)
+  const PELICAN_SHORT_BANKS = [
+    {
+      lang: 'zh-CN',
+      weight: 24,
+      make() {
+        const pre = pick(['', '', '现在', '立刻', '马上', '请', '帮我', '请帮我', '请帮我现在', '现在帮我', '请立刻', '麻烦帮我']);
+        const verb = pick(['制作', '制作', '做', '写', '生成', '创建', '编写']);
+        const det = pick(['', '', '一个', '一份']);
+        const svgTag = pick(['svg', 'SVG']);
+        const htmlTag = pick(['html', 'HTML']);
+        const bike = pick(['自行车', '自行车', '单车']);
+        const core = pick([
+          '鹈鹕骑' + bike + '的' + svgTag + '的' + htmlTag,
+          svgTag + '鹈鹕骑' + bike + '的' + htmlTag,
+          '鹈鹕骑' + bike + svgTag + '的' + htmlTag,
+          '骑' + bike + '的鹈鹕' + svgTag + '的' + htmlTag,
+          svgTag + '的鹈鹕骑' + bike + htmlTag,
+          '鹈鹕骑' + bike + '的' + htmlTag + '(' + svgTag + ')',
+        ]);
+        const suf = pick(['', '', '', '文件', '页面', '网页']);
+        return pre + verb + det + core + suf;
+      },
+    },
     {
       lang: 'zh-TW',
-      weight: 24,
-      sep: '',
-      a: [
-        '請建立一個獨立的單一檔案 HTML 頁面。',
-        '請撰寫一個完整的單檔 HTML 網頁。',
-        '請產生一個自包含的全新 HTML 文件，並將所有程式碼內聯。',
-        '請製作一個完整且獨立的 HTML 檔案。',
-        '請構建一個無需外部依賴的單一檔案 HTML 網頁。',
-        '請直接編寫一個包含全部內聯程式碼的獨立 HTML 文件。',
-      ],
-      scene: [
-        '使用內聯 SVG 繪製一隻鵜鶘踩著踏板向前騎自行車的 2D 動態動畫場景。',
-        '透過 SVG 製作一個二維動態畫面，展現一隻大嘴鵜鶘正在騎腳踏車前進。',
-        '以內聯 SVG 實作一隻鵜鶘騎著自行車持續向前踩踏的 2D 動畫插畫。',
-        '運用 SVG 描繪一隻鵜鶘在 2D 場景中騎腳踏車順暢前行的循環動畫。',
-        '利用內聯 SVG 呈現一隻鵜鶘雙腿交替踩踏板騎自行車向前行進的 2D 動畫。',
-        '使用 SVG 構建一隻鵜鶘騎在腳踏車上持續踩踏前進的二維動態場景。',
-      ],
-      detail: [
-        '保持車輪轉動與踏板踩踏動作自然同步。',
-        '讓鵜鶘標誌性的大嘴、喉囊與騎乘姿態清晰可辨。',
-        '保持畫面簡潔乾淨，且動態過渡流暢平滑。',
-        '展現出鵜鶘一邊踩踏板一邊向前行進的動態感。',
-        '確保踏板曲柄轉動、車輪滾動與腿部動作協調一致。',
-        '突顯鵜鶘的大嘴喉囊特徵與自然連貫的騎乘動作。',
-      ],
-      noTest: [
-        '直接輸出最終完成的 HTML 檔案即可，無需執行任何測試或檢查。',
-        '不需要進行測試步驟，請直接交付完整的 HTML 程式碼。',
-        '略過所有測試環節，直接建立並輸出檔案。',
-        '請勿執行測試或驗證，直接提供完整結果。',
-        '無需執行驗證指令或測試腳本，直接完成檔案即可。',
-        '省去一切測試與檢查流程，直接產生最終 HTML。',
-      ],
+      weight: 18,
+      make() {
+        const pre = pick(['', '', '現在', '立刻', '馬上', '請', '幫我', '請幫我', '請幫我現在', '現在幫我']);
+        const verb = pick(['製作', '做', '寫', '產生', '建立']);
+        const det = pick(['', '', '一個', '一份']);
+        const svgTag = pick(['svg', 'SVG']);
+        const htmlTag = pick(['html', 'HTML']);
+        const bike = pick(['自行車', '腳踏車']);
+        const core = pick([
+          '鵜鶘騎' + bike + '的' + svgTag + '的' + htmlTag,
+          svgTag + '鵜鶘騎' + bike + '的' + htmlTag,
+          '騎' + bike + '的鵜鶘' + svgTag + '的' + htmlTag,
+          svgTag + '的鵜鶘騎' + bike + htmlTag,
+        ]);
+        const suf = pick(['', '', '檔案', '頁面', '網頁']);
+        return pre + verb + det + core + suf;
+      },
     },
     {
       lang: 'en',
-      weight: 24,
-      sep: ' ',
-      a: [
-        'Create a new standalone single-file HTML page.',
-        'Write a complete, self-contained HTML file with all code inline.',
-        'Build a fresh single-file HTML document with zero external dependencies.',
-        'Generate a complete standalone HTML webpage in one file.',
-        'Produce a self-contained single-file HTML document.',
-        'Author a clean, standalone HTML file containing all markup, styles, and scripts inline.',
-      ],
-      scene: [
-        'Use inline SVG to render a 2D animation of a pelican pedaling a bicycle forward.',
-        'Draw an animated 2D scene using inline SVG showing a large-billed pelican riding a bicycle.',
-        'Implement a continuous 2D inline SVG animation of a pelican cycling forward.',
-        'Create an SVG-based 2D animated illustration of a pelican riding a bicycle smoothly.',
-        'Use inline SVG to depict a pelican actively pedaling a bicycle forward in a 2D scene.',
-        'Build a looping 2D SVG animation featuring a pelican riding a bicycle.',
-      ],
-      detail: [
-        'Keep the wheel rotation and pedaling motion naturally synchronized.',
-        'Make the signature large beak, throat pouch, and cycling posture clearly recognizable.',
-        'Keep the visual composition clean and the animation motion smooth.',
-        'Show a clear sense of forward motion as the pelican pedals.',
-        'Ensure the crank rotation, rolling wheels, and leg movement stay smoothly coordinated.',
-        'Highlight the pelican distinctive bill and pouch with fluid cycling motion.',
-      ],
-      noTest: [
-        'Output the finished file directly; do not run any tests or checks.',
-        'No testing is needed; just provide the completed HTML directly.',
-        'Skip all testing steps and create the file directly.',
-        'Do not perform any tests or verification; deliver the complete result directly.',
-        'Omit any test runs or validation commands and produce the final HTML immediately.',
-        'Bypass all testing and inspection steps and output the finished HTML file.',
-      ],
+      weight: 26,
+      make() {
+        const lead = pick(['', '', 'Now ', 'Right now, ', 'Immediately ', 'Please ', 'Help me ', 'Please help me ', 'Quickly ']);
+        let verb = pick(['make', 'create', 'build', 'write', 'generate']);
+        if (!lead) verb = verb[0].toUpperCase() + verb.slice(1);
+        const svgTag = pick(['SVG', 'svg']);
+        const htmlTag = pick(['HTML', 'html']);
+        const bike = pick(['a bicycle', 'a bike']);
+        const suf = pick(['', '', ' file', ' page']);
+        const body = pick([
+          'an ' + htmlTag + suf + ' of an ' + svgTag + ' pelican riding ' + bike,
+          'an ' + svgTag + ' pelican riding ' + bike + ' ' + htmlTag + suf,
+          'a pelican riding ' + bike + ' ' + svgTag + ' ' + htmlTag + suf,
+          'an ' + htmlTag + suf + ' with an ' + svgTag + ' pelican riding ' + bike,
+          'an ' + svgTag + ' of a pelican riding ' + bike + ' in ' + htmlTag + suf,
+        ]);
+        return lead + verb + ' ' + body;
+      },
     },
     {
       lang: 'ja',
-      weight: 22,
-      sep: '',
-      a: [
-        '新しいスタンドアロンの単一ファイル HTML ページを作成してください。',
-        'すべてのコードをインライン化した完全な単一 HTML ファイルを書いてください。',
-        '自己完結型の新しい HTML ドキュメントを構築してください。',
-        '完全な単一ファイルの新しい HTML ウェブページを生成してください。',
-        '外部依存のない単一ファイルの HTML ドキュメントを作成してください。',
-        'すべてインラインで記述された独立した単一 HTML ファイルを生成してください。',
-      ],
-      scene: [
-        'インライン SVG を使用して、ペリカンが自転車のペダルを漕いで前に進む 2D アニメーションを描画してください。',
-        'SVG を使って、大きな嘴を持つペリカンが自転車に乗っている 2D アニメーションシーンを作成してください。',
-        'インライン SVG で、ペリカンが自転車を漕ぎ続ける 2D アニメーションイラストを表現してください。',
-        'SVG を用いて、ペリカンが自転車で滑らかに前進する 2 次元アニメーションを描いてください。',
-        'インライン SVG でペリカンがペダルを踏んで自転車で前進するループ 2D アニメーションを作成してください。',
-        'SVG を活用して、ペリカンが自転車に乗って前に進む 2D アニメーションシーンを構築してください。',
-      ],
-      detail: [
-        '車輪の回転とペダルを漕ぐ動きを自然に同期させてください。',
-        '特徴的な大きな嘴とのど袋、そして自転車を漕ぐ動作がはっきり分かるようにしてください。',
-        'シーンをクリーンに保ち、アニメーションの動きを滑らかにしてください。',
-        'ペダルを踏みながら前方へ進む躍動感を表現してください。',
-        'クランクの回転、車輪の動き、脚のペダリングが自然に連動するようにしてください。',
-        'ペリカンの大きな嘴とのど袋の特徴を活かし、滑らかな走行アニメーションにしてください。',
-      ],
-      noTest: [
-        'テストやチェックは実行せず、完成した HTML ファイルを直接出力してください。',
-        'テスト手順はすべてスキップして、完成した HTML をそのまま提示してください。',
-        '動作確認やテストは不要ですので、直接ファイルを作成して出力してください。',
-        '検証コマンドは実行せず、完成したコードのみを直接届けてください。',
-        'テストスクリプトや検査は一切行わず、最終的な HTML を直接生成してください。',
-        'すべてのテスト工程を省略し、完成した HTML ファイルだけを出力してください。',
-      ],
+      weight: 12,
+      make() {
+        const pre = pick(['', '今すぐ', 'すぐに', '今から']);
+        const svgTag = pick(['SVG', 'svg']);
+        const htmlTag = pick(['HTML', 'html']);
+        const core = pick([
+          'ペリカンが自転車に乗る' + svgTag + 'の' + htmlTag,
+          svgTag + 'のペリカンが自転車に乗る' + htmlTag,
+          '自転車に乗るペリカンの' + svgTag + 'の' + htmlTag,
+          'ペリカンが自転車を漕ぐ' + svgTag + 'の' + htmlTag,
+        ]);
+        const suf = pick(['', 'ファイル', 'ページ']);
+        const tail = pick(['を作って', 'を作成して', 'を作成してください', 'を書いて', 'を生成して']);
+        return pre + core + suf + tail;
+      },
     },
     {
       lang: 'ko',
-      weight: 20,
-      sep: ' ',
-      a: [
-        '새로운 독립 실행형 단일 파일 HTML 페이지를 만들어 주세요.',
-        '모든 코드가 인라인으로 포함된 완전한 단일 HTML 파일을 작성해 주세요.',
-        '외부 의존성이 없는 자체 포함형 새 HTML 문서를 구축해 주세요.',
-        '하나의 파일로 된 완전한 독립형 HTML 웹페이지를 생성해 주세요.',
-        '모든 스타일과 스크립트를 인라인으로 담은 단일 HTML 문서를 제작해 주세요.',
-        '별도의 외부 파일 없이 바로 실행되는 깔끔한 단일 HTML 파일을 작성해 주세요.',
-      ],
-      scene: [
-        '인라인 SVG를 사용하여 펠리컨이 페달을 밟으며 자전거를 타고 앞으로 나아가는 2D 애니메이션을 그려 주세요.',
-        'SVG를 활용해 큰 부리를 가진 펠리컨이 자전거를 타고 달리는 2D 애니메이션 장면을 구현해 주세요.',
-        '인라인 SVG로 펠리컨이 자전거 페달을 계속 밟으며 전진하는 2D 루프 애니메이션 일러스트를 만들어 주세요.',
-        'SVG를 이용해 펠리컨이 자전거를 타고 부드럽게 앞으로 나아가는 2차원 애니메이션을 표현해 주세요.',
-        '인라인 SVG로 펠리컨이 두 다리로 페달을 번갈아 밟으며 자전거를 타는 2D 애니메이션을 제작해 주세요.',
-        'SVG를 사용하여 자전거를 탄 펠리컨이 경쾌하게 앞으로 달려가는 2D 다이내믹 장면을 구성해 주세요.',
-      ],
-      detail: [
-        '바퀴의 회전과 페달을 밟는 움직임이 자연스럽게 동기화되도록 해 주세요.',
-        '펠리컨 특유의 큰 부리와 목주머니, 그리고 자전거를 타는 자세가 뚜렷하게 드러나도록 해 주세요.',
-        '화면 구성을 깔끔하게 유지하고 애니메이션 움직임을 매끄럽게 처리해 주세요.',
-        '펠리컨이 페달을 밟으며 앞으로 나아가는 생동감이 잘 느껴지도록 해 주세요.',
-        '크랭크 회전, 구르는 바퀴, 다리 움직임이 자연스럽게 맞물려 돌아가도록 해 주세요.',
-        '펠리컨의 특징적인 큰 부리와 목주머니를 살려 자연스럽고 연속적인 라이딩 동작을 보여 주세요.',
-      ],
-      noTest: [
-        '어떠한 테스트나 검사도 실행하지 말고 완성된 HTML 파일을 바로 출력해 주세요.',
-        '테스트 과정은 모두 생략하고 완성된 HTML 코드만 직접 제시해 주세요.',
-        '동작 확인이나 검증 명령 없이 바로 파일을 생성하여 결과만 전달해 주세요.',
-        '별도의 테스트 스크립트나 점검을 수행하지 말고 최종 HTML을 즉시 생성해 주세요.',
-        '모든 테스트 단계를 건너뛰고 완성된 단일 HTML 파일만 바로 출력해 주세요.',
-        '검증이나 확인 절차 없이 최종 완성된 HTML 결과물만 바로 제공해 주세요.',
-      ],
+      weight: 10,
+      make() {
+        const pre = pick(['', '지금 ', '바로 ', '지금 바로 ']);
+        const svgTag = pick(['SVG', 'svg']);
+        const htmlTag = pick(['HTML', 'html']);
+        const core = pick([
+          '펠리컨이 자전거를 타는 ' + svgTag + '의 ' + htmlTag,
+          '자전거 타는 펠리컨 ' + svgTag + ' ' + htmlTag,
+          svgTag + ' 펠리컨 자전거 타기 ' + htmlTag,
+        ]);
+        const suf = pick(['', ' 파일', ' 페이지']);
+        const tail = pick([' 만들어줘', ' 만들어 주세요', ' 작성해줘', ' 생성해 주세요']);
+        return pre + core + suf + tail;
+      },
     },
     {
       lang: 'fr',
-      weight: 2,
-      sep: ' ',
-      a: [
-        'Créez une nouvelle page HTML autonome dans un seul fichier.',
-        'Écrivez un fichier HTML complet et auto-contenu avec tout le code en ligne.',
-        'Construisez un document HTML unique sans aucune dépendance externe.',
-      ],
-      scene: [
-        'Utilisez du SVG en ligne pour dessiner une animation 2D d\'un pélican pédalant sur un vélo vers l\'avant.',
-        'Réalisez une scène animée 2D en SVG montrant un pélican à grand bec faisant du vélo en boucle.',
-        'Implémentez une illustration animée 2D fluide en SVG d\'un pélican qui avance à vélo.',
-      ],
-      detail: [
-        'Gardez la rotation des roues et le mouvement de pédalage naturellement synchronisés.',
-        'Rendez le grand bec, la poche gulaire et la posture de cycliste du pélican clairement reconnaissables.',
-        'Maintenez une composition propre et une animation fluide.',
-      ],
-      noTest: [
-        'Produisez directement le fichier HTML final sans exécuter aucun test ni vérification.',
-        'Aucun test n\'est nécessaire ; fournissez directement le code HTML complet.',
-        'Ignorez toutes les étapes de test et livrez directement le fichier terminé.',
-      ],
+      weight: 4,
+      make() {
+        const pre = pick(['', 'Maintenant, ', 'Tout de suite, ', 'Vite, ']);
+        let verb = pick(['crée', 'fais', 'génère', 'écris']);
+        if (!pre) verb = verb[0].toUpperCase() + verb.slice(1);
+        const body = pick([
+          'un HTML avec un SVG de pélican à vélo',
+          'un fichier HTML avec un SVG de pélican sur un vélo',
+          'un SVG de pélican qui fait du vélo en HTML',
+        ]);
+        return pre + verb + ' ' + body;
+      },
     },
     {
       lang: 'de',
-      weight: 2,
-      sep: ' ',
-      a: [
-        'Erstellen Sie eine neue, eigenständige HTML-Seite in einer einzigen Datei.',
-        'Schreiben Sie eine vollständige, in sich geschlossene HTML-Datei mit gesamtem Inline-Code.',
-        'auen Sie ein einzelnes HTML-Dokument ohne externe Abhängigkeiten.',
-      ],
-      scene: [
-        'Verwenden Sie Inline-SVG, um eine 2D-Animation eines Pelikans zu zeichnen, der auf einem Fahrrad vorwärts radelt.',
-        'Zeichnen Sie mit SVG eine animierte 2D-Szene, die einen Pelikan mit großem Kehlsack beim Fahrradfahren zeigt.',
-        'Implementieren Sie eine flüssige, endlose 2D-SVG-Animation eines fahrradfahrenden Pelikans.',
-      ],
-      detail: [
-        'Halten Sie die Raddrehung und die Tretbewegung natürlich synchronisiert.',
-        'Machen Sie den markanten großen Schnabel, den Kehlsack und die Fahrhaltung klar erkennbar.',
-        'Halten Sie das Bild aufgeräumt und die Animation geschmeidig.',
-      ],
-      noTest: [
-        'Geben Sie die fertige HTML-Datei direkt aus, ohne Tests oder Prüfungen auszuführen.',
-        'Es sind keine Tests erforderlich; liefern Sie einfach direkt den fertigen HTML-Code.',
-        'Überspringen Sie alle Testschritte und erstellen Sie die Datei direkt.',
-      ],
+      weight: 3,
+      make() {
+        const pre = pick(['', 'Jetzt ', 'Sofort ', 'Bitte ']);
+        let verb = pick(['erstelle', 'mache', 'schreibe', 'generiere']);
+        if (!pre) verb = verb[0].toUpperCase() + verb.slice(1);
+        const body = pick([
+          'ein HTML mit einem Fahrrad fahrenden Pelikan als SVG',
+          'eine HTML-Datei eines SVG-Pelikans auf einem Fahrrad',
+          'einen Pelikan auf dem Fahrrad als SVG im HTML',
+        ]);
+        return pre + verb + ' ' + body;
+      },
     },
     {
       lang: 'es',
-      weight: 2,
-      sep: ' ',
-      a: [
-        'Crea una nueva página HTML independiente en un solo archivo.',
-        'Escribe un archivo HTML completo y autónomo con todo el código en línea.',
-        'Construye un documento HTML de archivo único sin dependencias externas.',
-      ],
-      scene: [
-        'Usa SVG en línea para renderizar una animación 2D de un pelícano pedaleando hacia adelante en una bicicleta.',
-        'Dibuja una escena animada 2D con SVG que muestre a un pelícano de gran pico montando en bicicleta.',
-        'Implementa una animación 2D continua en SVG de un pelícano avanzando en bicicleta.',
-      ],
-      detail: [
-        'Mantén la rotación de las ruedas y el movimiento de pedaleo sincronizados con naturalidad.',
-        'Haz que el gran pico característico, la bolsa gular y la postura de ciclismo sean claramente reconocibles.',
-        'Mantén una composición limpia y un movimiento de animación fluido.',
-      ],
-      noTest: [
-        'Entrega directamente el archivo HTML terminado sin ejecutar ninguna prueba ni verificación.',
-        'No se necesita ninguna prueba; proporciona directamente el código HTML completo.',
-        'Omite todos los pasos de prueba y genera el archivo directamente.',
-      ],
-    },
-    {
-      lang: 'zh-CN',
-      weight: 4,
-      sep: '',
-      a: [
-        '请新建一个独立的单文件 HTML 页面。',
-        '请编写一个完整的单文件 HTML 网页。',
-        '请创建一个自包含的全新 HTML 文档，所有代码内联。',
-        '请生成一个完整的独立 HTML 文件。',
-        '请构建一个无需外部依赖的单文件 HTML 页面。',
-        '请直接编写一个包含全部内联代码的独立 HTML 文件。',
-      ],
-      scene: [
-        '使用内联 SVG 绘制一只鹈鹕踩着脚踏板向前骑自行车的 2D 动态动画场景。',
-        '通过 SVG 制作一个二维动态画面，展示一只大嘴鹈鹕正在骑自行车前进。',
-        '用内联 SVG 实现一只鹈鹕骑着自行车持续向前蹬行的 2D 动画插画。',
-        '借助 SVG 描绘一只鹈鹕在 2D 场景中骑自行车顺畅前行的循环动画。',
-        '利用内联 SVG 呈现一只鹈鹕双腿交替踩踏板骑自行车向前行进的 2D 动画。',
-        '使用 SVG 构建一只鹈鹕骑在自行车上持续蹬车前进的二维动态场景。',
-      ],
-      detail: [
-        '保持车轮旋转与脚踏蹬动自然同步。',
-        '让鹈鹕标志性的长喙、喉囊以及骑行动作清晰易辨。',
-        '画面保持干净利落，动画过渡平滑流畅。',
-        '展现出鹈鹕一边踩踏板一边向前行进的动感。',
-        '确保脚踏曲柄转动、车轮滚动与腿部动作协调一致。',
-        '突出鹈鹕的大嘴喉囊特征与自然连贯的骑行姿态。',
-      ],
-      noTest: [
-        '直接输出最终完成的 HTML 文件即可，无需运行任何测试或检查。',
-        '不需要执行测试步骤，请直接给出完整的 HTML 代码。',
-        '跳过所有测试环节，直接创建并输出该文件。',
-        '请勿进行测试或校验，直接交付完整结果。',
-        '无需运行验证命令或测试脚本，直接完成文件即可。',
-        '省去一切测试与检查流程，直接生成最终 HTML。',
-      ],
+      weight: 3,
+      make() {
+        const pre = pick(['', 'Ahora ', 'De inmediato ', 'Por favor ']);
+        let verb = pick(['crea', 'haz', 'genera', 'escribe']);
+        if (!pre) verb = verb[0].toUpperCase() + verb.slice(1);
+        const body = pick([
+          'un HTML de un pelícano en bicicleta en SVG',
+          'un archivo HTML con un SVG de un pelícano montando bicicleta',
+          'un SVG de pelícano en bicicleta en HTML',
+        ]);
+        return pre + verb + ' ' + body;
+      },
     },
   ];
 
@@ -310,23 +192,13 @@ const GachaPrompts = (() => {
   }
 
   function svg() {
-    return unique('gacha:svg-prompts:v1', () => {
-      const lastKey = 'gacha:pelican-svg-last-lang:v1';
+    return unique('gacha:svg-prompts:v2', () => {
+      const lastKey = 'gacha:pelican-svg-last-lang:v2';
       const lastLang = String(Store.get(lastKey, '') || '');
-      const pool = PELICAN_LANG_BANKS.filter(b => b.lang !== lastLang);
-      const bank = pickWeighted(pool.length ? pool : PELICAN_LANG_BANKS, b => b.weight) || PELICAN_LANG_BANKS[0];
+      const pool = PELICAN_SHORT_BANKS.filter(b => b.lang !== lastLang);
+      const bank = pickWeighted(pool.length ? pool : PELICAN_SHORT_BANKS, b => b.weight) || PELICAN_SHORT_BANKS[0];
       try { Store.set(lastKey, bank.lang); } catch {}
-      const sep = bank.sep ?? ' ';
-      const a = pick(bank.a);
-      const scene = pick(bank.scene);
-      const detail = pick(bank.detail);
-      const noTest = pick(bank.noTest);
-      return pick([
-        [a, scene, detail, noTest].join(sep),
-        [noTest, a, scene, detail].join(sep),
-        [scene, detail, a, noTest].join(sep),
-        [a, detail, scene, noTest].join(sep),
-      ]);
+      return bank.make();
     });
   }
   async function custom(text) {
@@ -336,7 +208,6 @@ const GachaPrompts = (() => {
     const used = new Set((Store.get(key, []) || []).filter(n => Number.isInteger(n) && n >= 1000 && n <= 9999));
     if (used.size >= 9000) throw Error('该提示词的 9000 个四位前缀已全部使用，请修改提示词后再抽卡');
     let n = 1000 + randomInt(9000);
-    // Collision handling is bounded even with an unlucky or mocked random source.
     while (used.has(n)) n = n === 9999 ? 1000 : n + 1;
     used.add(n); Store.set(key, [...used]);
     if (!(Store.get(key, []) || []).includes(n)) throw Error('随机前缀保存失败，未发送以避免重复');
@@ -440,9 +311,9 @@ const GachaPrompts = (() => {
         `请生成一个自包含的 \`.html\` 徽章文件保存到工作区（文件名由你根据主题词 ${themePair} 自由命名），显示标签「${badgeTitle}」并${svgScene}，全文严格控制在 35～45 行以内。`
       ]);
       const step2 = pick([
-        '保存后请执行一条最简单的终端命令查看该文件的行数或字节数以确认落盘，最后用中文列出 2～3 条简短的加粗要点总结你的设计与动效实现。',
-        '文件生成后请运行一条轻量终端命令核对文件大小或行数，随后在回复中用中文分 2～3 条加粗要点简述核心样式与动画细节。',
-        '完成后请用一条简短的终端命令检查生成的行数与字节数，并在回复末尾用中文给出 2～3 条加粗要点说明实现亮点。'
+        '保存后请执行一条终端命令自检同时查看该文件的行数、字节数并统计 SVG 图元标签数量以确认落盘，最后用中文列出 2～3 条简短的加粗要点总结你的设计与动效实现，不要调用提问工具。',
+        '文件生成后请运行一条轻量终端命令同时核对文件行数、字节大小及 SVG 几何标签数量，随后在回复中用中文分 2～3 条加粗要点简述核心样式与动画细节，不要调用提问工具。',
+        '完成后请用一条简短的终端命令检查生成的行数与字节数并核验 SVG 图元个数，并在回复末尾用中文给出 2～3 条加粗要点说明实现亮点，不要调用提问工具。'
       ]);
       return `${step1}${step2}`;
     });

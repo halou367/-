@@ -47,9 +47,8 @@ test('3. Export Fingerprint and Export Tool Calls are right-aligned icon buttons
   assert.match(dockJs, /unitBtn\(unit\)/);
   assert.match(dockJs, /exportBtns\(sid\)/);
   assert.match(dockJs, /class: 'mc-foot-acts'/);
-  assert.match(dockJs, /icon\('fingerprint'\)/);
+  assert.match(dockJs, /'aria-label': '导出诊断 JSON'/);
   assert.match(dockJs, /icon\('tool'\)/);
-  assert.match(dockJs, /'aria-label': '习惯库'/);
   assert.match(dockJs, /'aria-label': '导出调用工具'/);
 });
 
@@ -76,5 +75,5 @@ test('fast client message & stream sync parity with browser: drain keepIfFinishe
   assert.match(core, /void this\.remoteSync\(\{\s*seq:\s*baseSeq,\s*rewind:\s*true,\s*pend:\s*true\s*\}\)/);
   assert.match(core, /const waitReply = !!lastMsg && \(lastMsg\.role === 'user' \|\| lastMsg\.metadata\?\.pending\)/);
   assert.match(core, /quickSync\(force = false\)/);
-  assert.match(view, /else if \(chat\.loaded && !chat\.loading\) chat\.quickSync\?\.\(\);/);
+  assert.match(view, /else if \(chat\.loaded && !chat\.loading\)\s*(?:\{\s*Promise\.resolve\()?chat\.quickSync\?\.\(\)/);
 });

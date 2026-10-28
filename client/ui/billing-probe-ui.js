@@ -894,35 +894,11 @@ const ChatHabitFingerprint = (() => {
     },
   ];
 
-  const KNOWN_ARGON_SIDS = new Set([
-    '01a148c8-6f04-710a-88aa-9560c56c0bd4',
-    '01a14957-ba36-7f15-9640-56b3d0ec48ee',
-    '01a148ca-80b6-70c9-b6f9-a109b4cd987d',
-    '01a148c6-ca67-7ceb-aa92-5c339219c511',
-    '01a14952-484c-71a8-9c4a-a8375fab0e96',
-    '01a14945-7342-7b05-9a63-eba75b98edc1',
-    '01a152bd-4889-74e0-9582-c4406da4280e',
-    '01a14d22-3773-75f1-86c2-5b4b320e8ed6',
-    '01a14d86-d856-764e-bf1e-f0f9813086f8',
-    '01a14d86-2966-78fe-847a-361dacd27bc4',
-    '01a14cec-224c-71e5-a6c0-9ee87a3b3ba1',
-  ]);
-  const CONFIRMED_GEMINI_FLASH_SIDS = new Set([
-    '01a148b9-30df-7fb9-87be-135772d6a4b0',
-    '01a14a34-814a-792f-b7c1-ad747c5797ff',
-    '01a151de-5840-75e5-b5e0-9bf662f543dd',
-    '01a13ac5-6024-763a-9a83-c43b1bd86840',
-  ]);
-  const HAIKU_55_MEDIUM_SIDS = new Set([
-    '01a13ee4-54ab-710c-ae56-163689598d73',
-    '01a13ee4-294d-7e67-8554-fad3b69284f6',
-  ]);
-  const CONFIRMED_SOL_61_SIDS = new Set([
-    '01a14ce5-b4b6-7962-9f20-c3cbc66c1a54',
-    '01a13f78-0d74-716a-97e7-cdeb3c7a5a3c',
-    '01a1440a-e8c4-7939-8910-ffe946582807',
-    '01a151e0-c58e-7766-9c65-f7287592c61b',
-  ]);
+  // V11: 移除早期硬编码特定会话 SID 白名单，统一走通用特征与计费融合管道
+  const KNOWN_ARGON_SIDS = new Set();
+  const CONFIRMED_GEMINI_FLASH_SIDS = new Set();
+  const HAIKU_55_MEDIUM_SIDS = new Set();
+  const CONFIRMED_SOL_61_SIDS = new Set();
 
   const KNOWN_DIAG_SIDS = new Set([
     '01a13ee4-294d-7e67-8554-fad3b69284f6',
@@ -1098,6 +1074,7 @@ const ChatHabitFingerprint = (() => {
       'claude-fable-5': 'Claude Fable 5',
       'claude-haiku-5.5': 'Claude Haiku 5.5',
       'gemini-4-argon': 'Gemini 4 Argon',
+      'gemini-4-carbon': 'Gemini 4 Carbon',
       'gemini-3.8-flash': 'Gemini 3.8 Flash',
       'gemini-3.7-flash': 'Gemini 3.7 Flash',
       'gemini-3.1-pro-preview': 'Gemini 3.1 Pro Preview',
@@ -1149,7 +1126,7 @@ const ChatHabitFingerprint = (() => {
            .replace(/^hy-4-preview\b/i, 'hy4-preview')
            .replace(/^gpt-5\.6-luna/i, 'gpt-6-luna')
            .replace(/^(?:opus|sonnet|haiku|fable)-[\d.]+$/i, m => 'claude-' + m)
-           .replace(/^(?:4-argon|3\.[178]-(?:flash|pro(?:-preview)?))$/i, m => 'gemini-' + m);
+           .replace(/^(?:4-(?:argon|carbon)|3\.[178]-(?:flash|pro(?:-preview)?))$/i, m => 'gemini-' + m);
       return sanitizeCorruptedTierSlug(b, rawLabelHint || rawStr);
     };
 
@@ -1205,7 +1182,7 @@ const ChatHabitFingerprint = (() => {
       if (vHint && VENDOR_LABELS[vHint]) return vHint;
       if (/gpt|openai|\bsol(?=$|[-\s_.\d])|luna|astra|terra|\bo[134]\b/i.test(s)) return 'openai';
       if (/claude|anthropic|opus|sonnet|haiku|fable/i.test(s)) return 'anthropic';
-      if (/gemini|google|argon|barium/i.test(s)) return 'google';
+      if (/gemini|google|argon|carbon|barium/i.test(s)) return 'google';
       if (/grok|xai/i.test(s)) return 'xai';
       if (/deepseek|beam/i.test(s)) return 'deepseek';
       if (/qwen|qwq|alibaba/i.test(s)) return 'qwen';
@@ -1654,62 +1631,14 @@ const ChatHabitFingerprint = (() => {
   }
 
   function applyRemoteBankSync(sh, { persistToHost = false, onDone = null } = {}) {
-    if (!sh || !Array.isArray(sh.samples)) {
-      if (typeof onDone === 'function') onDone();
-      return null;
-    }
-    const res = mergeSharedBank(sh.samples, sh.calibration || null, sh.usageStats || null, { persistToHost, tombstones: sh.tombstones || null });
-    if (typeof onDone === 'function') onDone(res);
-    return res;
+    if (typeof onDone === 'function') onDone(null);
+    return null;
   }
 
   function syncFromSharedHost({ force = false, onDone = null } = {}) {
-    if (typeof Host === 'undefined' || typeof Host.shared !== 'function') {
-      if (typeof onDone === 'function') onDone(null);
-      return Promise.resolve(null);
-    }
-    const now = Date.now();
-    if (!force && sharedBankLoaded && now - lastSharedSyncAt < 1500) {
-      if (typeof onDone === 'function') onDone(null);
-      return Promise.resolve(null);
-    }
     sharedBankLoaded = true;
-    lastSharedSyncAt = now;
-    const harvestedCount = harvestLocalAccountModelsIntoBank();
-    return Promise.resolve(Host.shared('habitLearnBank')).then(sh => {
-      if (sh && Array.isArray(sh.samples)) {
-        const localSamples = loadBank();
-        const remoteByKey = new Map();
-        for (const rs of sh.samples) {
-          if (!rs) continue;
-          const rk = rs.sid || `${rs.model}:${rs.at || 0}`;
-          remoteByKey.set(rk, rs);
-        }
-        let hasLocalNewOrUpgraded = harvestedCount > 0;
-        if (!hasLocalNewOrUpgraded) {
-          for (const ls of localSamples) {
-            const cleanL = sanitizeBankSample(ls);
-            if (!cleanL) continue;
-            const lk = cleanL.sid || `${cleanL.model}:${cleanL.at || 0}`;
-            const rs = remoteByKey.get(lk);
-            if (!rs) { hasLocalNewOrUpgraded = true; break; }
-            const lRank = (cleanL.userConfirmed && !cleanL.autoTeacher) || cleanL.importedFromDiag ? 2 : (cleanL.userConfirmed ? 1 : 0);
-            const rRank = (rs.userConfirmed && !rs.autoTeacher) || rs.importedFromDiag ? 2 : (rs.userConfirmed ? 1 : 0);
-            if (lRank > rRank || ((cleanL.at || 0) > (rs.at || 0) && lRank >= rRank) || (!rs.meta && cleanL.meta)) {
-              hasLocalNewOrUpgraded = true;
-              break;
-            }
-          }
-        }
-        const res = applyRemoteBankSync(sh, { persistToHost: hasLocalNewOrUpgraded, onDone });
-        return res;
-      }
-      if (typeof onDone === 'function') onDone(null);
-      return null;
-    }).catch(() => {
-      if (typeof onDone === 'function') onDone(null);
-      return null;
-    });
+    if (typeof onDone === 'function') onDone(null);
+    return Promise.resolve(null);
   }
 
   let _cachedBankSamples = null;
@@ -1901,6 +1830,29 @@ const ChatHabitFingerprint = (() => {
     loadBank();
     if (isSampleTombstoned(sid)) return null;
     return _cachedBankBySid ? (_cachedBankBySid.get(String(sid)) || null) : null;
+  }
+
+  let _v11PurgeDone = false;
+  async function purgeLegacyHabitDataOnce() {
+    if (_v11PurgeDone) return false;
+    _v11PurgeDone = true;
+    try {
+      if (typeof window === "undefined" || typeof Host === "undefined" || typeof Host.shared !== "function") return false;
+      const already = (typeof Store !== "undefined" && Store.get) ? Store.get("tihu:v11HabitPurged", 0) : 0;
+      if (already === 1) return false;
+      if (typeof Store !== "undefined") {
+        try { Store.del?.(BANK_KEY); } catch {}
+        try { Store.del?.("habit:calibration:v1"); } catch {}
+        try { Store.del?.("habit:usageStats:v1"); } catch {}
+        try { Store.del?.("billing:rankFilter"); } catch {}
+        try { Store.set?.("tihu:v11HabitPurged", 1); } catch {}
+      }
+      _cachedBankSamples = null;
+      _cachedCalibration = null;
+      bankRev++;
+      calibRev++;
+      return true;
+    } catch { return false; }
   }
 
   let _initialBuiltinArchetypes = null;
@@ -4490,6 +4442,21 @@ const ChatHabitFingerprint = (() => {
         }
       }
     } catch {}
+    let tihuAttribution = null;
+    try {
+      if (typeof TihuHub !== "undefined" && TihuHub.isReady?.() && TihuHub.fuseScores) {
+        tihuAttribution = TihuHub.fuseScores(scores, target.raw, {
+          decomposeModelIdentity,
+          formatDisplayModelLabel,
+          isOpenName,
+          tieredFamilies: TIERED_HTML_SVG_FAMILIES,
+          strictOpenClosed: effStrictOpenClosed,
+          isOpenThink: effIsOpenThink,
+          hardVendor: opts.hardVendor || "",
+          isPelicanLockedTurn: Boolean(opts.isPelicanLockedTurn),
+        });
+      }
+    } catch {}
     const top = scores.slice(0, opts.topK || 5);
     const maxS = scores[0]?.score || 0;
     const exps = scores.map(x => Math.exp((x.score - maxS) * 7.2));
@@ -4533,6 +4500,16 @@ const ChatHabitFingerprint = (() => {
         extractFeatures: (code, ct) => extractHtmlSvgFeatures(code, ct || ""),
       };
       globalThis.PelicanV24Standalone = globalThis.__mcpPelicanEngine;
+      if (typeof TihuHub !== "undefined" && TihuHub.onSync) {
+        TihuHub.onSync(() => {
+          try {
+            _htmlSvgClassCache.clear();
+            _featCache.clear();
+            _analyzeCache.clear();
+            if (typeof BillingProbe !== "undefined" && BillingProbe.clearSummaryCache) BillingProbe.clearSummaryCache();
+          } catch {}
+        });
+      }
     }
   } catch {}
 
@@ -5145,8 +5122,8 @@ const ChatHabitFingerprint = (() => {
           if (curStepTools >= 2) parallelSteps++;
           curStepTools = 0;
           stepStarts++;
-        } else if (ty === 'reasoning') {
-          const rt = String(p.text || '').trim();
+        } else if (ty === 'reasoning' || ty === 'thinking') {
+          const rt = String(p.text || p.reasoning || '').trim();
           if (/[^\s.…·。]/.test(rt)) {
             visR++;
             turnVisR++;
@@ -5262,7 +5239,22 @@ const ChatHabitFingerprint = (() => {
             turnWrite++;
             const fpath = String(inp.path || inp.file_path || inp.TargetFile || inp.filename || '');
             if (/[a-z]+_[a-z]+\.html$/i.test(fpath)) writeUnderscoreName++;
-            const content = String(inp.content ?? inp.code ?? inp.file_text ?? inp.CodeContent ?? '');
+            const rawContent = String(inp._healedContent ?? inp.content ?? inp.code ?? inp.file_text ?? inp.CodeContent ?? '');
+            const resolvedPv = (sidKey && fpath && typeof HtmlPreview !== 'undefined' && typeof HtmlPreview.resolvedText === 'function')
+              ? String(HtmlPreview.resolvedText(sidKey, fpath) || '')
+              : '';
+            const content = (resolvedPv && resolvedPv.length > rawContent.length && !/\[cached\]/i.test(resolvedPv.slice(0, 32))) ? resolvedPv : rawContent;
+            if (!resolvedPv && sidKey && chat && /\.(?:html?|svg)$/i.test(fpath) && rawContent.length < 64 && /\[cached\]/i.test(rawContent) && !chat._tihuHealingStub && typeof TihuHub !== 'undefined' && typeof TihuHub.healChatHtmlStubs === 'function') {
+              chat._tihuHealingStub = true;
+              Promise.resolve(TihuHub.healChatHtmlStubs(sidKey, chat)).then(async h => {
+                chat._tihuHealingStub = false;
+                if (h?.healedCount > 0) {
+                  _featMemo.delete(sidKey);
+                  try { await TihuHub.recognizePelicanChatAndApply?.(sidKey, chat, { allowHealStub: false }); } catch {}
+                  try { ChatHabitFingerprint.identifyAndApply(chat, { force: true, fromCostFallback: true }); } catch {}
+                }
+              }).catch(() => { chat._tihuHealingStub = false; });
+            }
             writtenChars += content.length;
             if (content) editAddedLines += content.split('\n').length;
             scanHtmlHabits(content, m === asstMsgs.at(-1));
@@ -5454,7 +5446,9 @@ const ChatHabitFingerprint = (() => {
           const nm = String(t?.name || "").toLowerCase();
           if (nm === "write_file" || nm === "create_file" || nm === "edit_file" || nm === "write_to_file") {
             const fp = String(t?.input?.path || t?.input?.file_path || t?.input?.TargetFile || t?.input?.filename || "");
-            const content = String(t?.input?.content || t?.input?.code || t?.input?.new_text || t?.input?.CodeContent || "");
+            const rawToolC = String(t?.input?._healedContent || t?.input?.content || t?.input?.code || t?.input?.new_text || t?.input?.CodeContent || "");
+            const pvToolC = (sidKey && fp && typeof HtmlPreview !== "undefined" && typeof HtmlPreview.resolvedText === "function") ? String(HtmlPreview.resolvedText(sidKey, fp) || "") : "";
+            const content = (pvToolC && pvToolC.length > rawToolC.length && !/\[cached\]/i.test(pvToolC.slice(0, 32))) ? pvToolC : rawToolC;
             if (content.length >= 180 && (/.(?:html?|svg)$/i.test(fp) || /<(?:!doctypes+html|html|svg)/i.test(content))) {
               if (content.length > bestHtmlSvgCode.length) bestHtmlSvgCode = content;
             }
@@ -5495,53 +5489,31 @@ const ChatHabitFingerprint = (() => {
     const isOpenThink = isEvalChat
       ? Boolean(visR > 0 && visRChars > 0)
       : Boolean(visR > 0 || wireFam === 'deepseek' || wireFam === 'kimi' || (thinkSt?.kind === 'compat-thinking' && (!chat?._closedLockedModel || turns >= 2)));
-    const chosenHtmlSvgCode = (finalArtifactCode && (/<svg\b/i.test(finalArtifactCode) || finalArtifactCode.length >= 3800)) ? finalArtifactCode : bestHtmlSvgCode;
-    let htmlSvgMatch = (chosenHtmlSvgCode && chosenHtmlSvgCode.length >= 60 && (/<svg\b/i.test(chosenHtmlSvgCode) || chosenHtmlSvgCode.length >= 3800))
-      ? classifyHtmlSvg(chosenHtmlSvgCode, { isOpenThink, strictOpenClosed: !isEvalChat })
+    const _tihuPelTurn = (typeof TihuHub !== 'undefined' && typeof TihuHub.extractPelicanTurnHtml === 'function')
+      ? TihuHub.extractPelicanTurnHtml(chat, null, sidKey)
       : null;
+    const isPelicanLockedTurn = Boolean(_tihuPelTurn?.matched);
+    const chosenHtmlSvgCode = (isPelicanLockedTurn && _tihuPelTurn.html)
+      ? _tihuPelTurn.html
+      : ((finalArtifactCode && (/<svg\b/i.test(finalArtifactCode) || finalArtifactCode.length >= 3800)) ? finalArtifactCode : bestHtmlSvgCode);
+    const deterministicToolVendor = (wireFam === 'anthropic' || wireFam === 'openai') ? wireFam : '';
+    let htmlSvgMatch = (chosenHtmlSvgCode && chosenHtmlSvgCode.length >= 60 && (isPelicanLockedTurn || /<svg\b/i.test(chosenHtmlSvgCode) || chosenHtmlSvgCode.length >= 3800))
+      ? classifyHtmlSvg(chosenHtmlSvgCode, { isOpenThink, strictOpenClosed: !isEvalChat, hardVendor: deterministicToolVendor, isPelicanLockedTurn })
+      : null;
+    const hasAuthTihuHtmlWinner = Boolean(
+      htmlSvgMatch?.best &&
+      (htmlSvgMatch.best.tihuExact || htmlSvgMatch.best.tihuAuthoritative || Number(htmlSvgMatch.best.tihuProb || 0) >= 0.38 || (isPelicanLockedTurn && Number(htmlSvgMatch.best.tihuProb || 0) >= 0.14))
+    );
     let htmlSvgSig = htmlSvgMatch?.features?.sig12 || null;
     const topRevCand = null;
     const msgFmtAvgChunk = (msgFmtTN >= 3 && msgFmtTChars > 0) ? Math.round((msgFmtTChars / msgFmtTN) * 10) / 10 : 0;
     const msgFmtTidAvg = (msgFmtTidCount >= 4 && msgFmtTidChars > 0) ? Math.round((msgFmtTidChars / msgFmtTidCount) * 10) / 10 : 0;
-    const isLiveOpenAiFmt = !isEvalChat && hasLiveMsgFmt && visR === 0 && !(turns >= 2 && lastTurnAvgChunk >= 12.0 && lastTurnWireFam !== 'openai') && ((msgFmtTN >= 15 && msgFmtAvgChunk >= 1.0 && msgFmtAvgChunk <= 3.8) || (msgFmtTN < 6 && msgFmtTidCount >= 18 && msgFmtTidAvg > 0 && msgFmtTidAvg <= 4.2));
-    const isLiveGeminiFmt = !isEvalChat && hasLiveMsgFmt && visR === 0 && !isLiveOpenAiFmt && msgFmtTN >= 3 && (msgFmtTN / Math.max(1, turns)) <= 28 && msgFmtAvgChunk >= 28.0 && sandboxLink === 0 && lowerDoctype === 0 && colorSchemeCss === 0 && prefersReducedMotion === 0 && claudeWarmPalette === 0 && boxComment === 0;
-    const isLiveNonClaudeFmt = Boolean(
-      (hidR === 0 && msgFmtRWireDeltas === 0 && msgFmtTidCount === 0 && turns === 1 && write === 1 && totalTools === 1 && writtenChars >= 35000 && prefersReducedMotion >= 1 && boxComment === 0) ||
-      (msgFmtRWireDeltas === 0 && msgFmtTidCount > 0 && msgFmtTidCount <= 6 && msgFmtTidAvg >= 1800 && hidR >= 2) ||
-      (hidR >= 2 && (msgFmtAvgChunk >= 15.0 || (prefersReducedMotion >= 1 && boxComment === 0 && claudeWarmPalette === 0 && edit === 0 && read === 0))) ||
-      (htmlSvgMatch?.best?.vendorId && htmlSvgMatch.best.vendorId !== 'anthropic' && Number(htmlSvgMatch.best.ruleScore) >= 0.45) ||
-      (wireFam !== 'anthropic' && boxComment === 0 && claudeWarmPalette === 0 && ((bashGrepPipeWc > 0 && bashWcCombined === 0 && bashPy3EofHeredoc === 0 && bashSedUnquoted === 0) || ((bashWcSeparate > 0 || bashPy2Heredoc > 0 || bashNodeColonPrefix > 0) && bashWcCombined === 0 && bashPy3EofHeredoc === 0)))
-    );
-    const isLiveClaudeFmt = !isEvalChat && hasLiveMsgFmt && visR === 0 && !isLiveOpenAiFmt && !isLiveGeminiFmt && !isLiveNonClaudeFmt && ((msgFmtTN >= 15 && msgFmtAvgChunk >= 4.0 && msgFmtAvgChunk <= 25.0) || (msgFmtTN >= 6 && msgFmtAvgChunk >= 4.0 && msgFmtAvgChunk <= 25.0 && hidR > 0) || (msgFmtTidCount > 0 && msgFmtTidCount <= 8 && !(msgFmtTN >= 3 && msgFmtAvgChunk >= 28.0))) && sandboxLink === 0 && lowerDoctype === 0 && colorSchemeCss === 0;
-    if (isLiveGeminiFmt) {
-      hidR = 0;
-      maxRInTurn = 0;
-      codingTurnsNoR = Math.max(codingTurnsNoR, turns);
-      codingTurnsWithHidR = 0;
-      wireFam = '';
-    } else if (isLiveOpenAiFmt) {
-      wireFam = 'openai';
-      if (hidR === 0) {
-        hidR = Math.max(1, turns);
-        maxRInTurn = Math.max(1, maxRInTurn);
-        if (codingTurns > 0) { codingTurnsWithHidR = codingTurns; codingTurnsNoR = 0; }
-      }
-    } else if (isLiveClaudeFmt) {
-      wireFam = 'anthropic';
-      if (hidR === 0) {
-        hidR = Math.max(1, turns);
-        maxRInTurn = Math.max(1, maxRInTurn);
-        if (codingTurns > 0) { codingTurnsWithHidR = codingTurns; codingTurnsNoR = 0; }
-      }
-    } else if (wireFam === 'anthropic' && isLiveNonClaudeFmt && claudeWarmPalette === 0) {
-      wireFam = '';
-    }
-    if (!wireFam) {
-      const rawEntryFam = String(chat?.fam || modelEntry?.fam || mKnown?.fam || '').toLowerCase();
-      const isMuseShortChunk = totalTools === 0 && hidR <= 2 && Number(sseMemoObj?.avgChunk || modelEntry?.habitFeatures?.meta?.memoAvgChunk || 0) >= 10.0 && Number(sseMemoObj?.avgChunk || modelEntry?.habitFeatures?.meta?.memoAvgChunk || 0) <= 16.5;
-      if ((rawEntryFam === 'claude' || rawEntryFam === 'anthropic') && !isLiveNonClaudeFmt && !isLiveOpenAiFmt && !isLiveGeminiFmt && !isMuseShortChunk) wireFam = 'anthropic';
-      else if ((rawEntryFam === 'openai' || rawEntryFam === 'gpt') && !isLiveClaudeFmt && !isLiveGeminiFmt && !isMuseShortChunk && !(htmlSvgMatch?.best?.vendorId === 'meta' && Number(htmlSvgMatch?.best?.ruleScore) >= 0.55)) wireFam = 'openai';
-    }
+    // V11: Arena 流加密与重命名后 SSE 分块长度与历史 mKnown.fam 均不可作为硬协议证据；wireFam 严格仅保留真实工具调用 ID (toolu_01 / call_24)
+    const isLiveOpenAiFmt = false;
+    const isLiveGeminiFmt = false;
+    const isLiveNonClaudeFmt = false;
+    const isLiveClaudeFmt = false;
+    wireFam = deterministicToolVendor;
     const hasOverwhelmingGoogleBash = hidR === 0 && visR === 0 && (pyHeredoc >= 5 || catHeredoc >= 5 || (bash >= 10 && totalTools >= 20));
     const knownRBlocks = (hasLiveMsgFmt || hasOverwhelmingGoogleBash)
       ? hidR
@@ -5911,6 +5883,7 @@ const ChatHabitFingerprint = (() => {
       knownCwTok,
       isFlash38LowIdentity,
       isOpenThink,
+      isPelicanLockedTurn,
       wireFam,
       evalModality,
       tableCount,
@@ -6201,6 +6174,7 @@ const ChatHabitFingerprint = (() => {
       multiTurnPersistence: feat.multiTurnPersistence ?? 0.78,
       promptEntropy: feat.promptEntropy ?? 0.45,
       codingTurns: feat.codingTurns || undefined,
+      isPelicanLockedTurn: feat.isPelicanLockedTurn || undefined,
       wireFam: feat.wireFam || undefined,
       htmlSvgMatch: feat.htmlSvgMatch?.best ? { code_type: feat.htmlSvgMatch.code_type, best: feat.htmlSvgMatch.best, top_candidates: (feat.htmlSvgMatch.top_candidates || feat.htmlSvgMatch.top3 || [feat.htmlSvgMatch.best]).slice(0, 4), features: feat.htmlSvgMatch.features } : undefined,
       tierVec: Array.isArray(feat.tierVec) && feat.tierVec.length === 12 ? feat.tierVec : undefined,
@@ -6842,7 +6816,7 @@ const ChatHabitFingerprint = (() => {
         if (proto.vendor === 'OpenAI') sim = Math.min(0.99, sim + 0.12);
         else sim *= 0.65;
       }
-      if (!feat.isOpenThink && !feat.isGeminiCoding && feat.hidR > 0 && proto.vendor === 'Google') sim *= 0.58;
+      if (!feat.isOpenThink && !feat.isGeminiCoding && feat.hidR > 0 && (feat.wireFam === 'anthropic' || feat.wireFam === 'openai') && proto.vendor === 'Google') sim *= 0.58;
       if (!feat.isOpenThink && feat.isGeminiCoding && proto.vendor !== 'Google') sim *= 0.58;
 
       // 2. Google Gemini 家族内部细分（Gemini 3.8 Flash vs 3.7 Flash vs 4 Argon High/Medium/Low）
@@ -8039,6 +8013,96 @@ const ChatHabitFingerprint = (() => {
         }
       }
     }
+
+    const tihuSyncSig = (typeof TihuHub !== 'undefined' && typeof TihuHub.analyzeChatSync === 'function')
+      ? TihuHub.analyzeChatSync(sid, chat, modelEntry)
+      : null;
+
+    if (tihuSyncSig?.matched && Array.isArray(tihuSyncSig.models) && tihuSyncSig.models.length > 0) {
+      const htmlWeight = tihuSyncSig.isPelican ? 0.86 : 0.65;
+      const topHtml = tihuSyncSig.models[0];
+      const topHtmlFam = parseModelFamilyAndTier(topHtml.canon || topHtml.id || '').famKey;
+      for (let i = 0; i < Math.min(8, tihuSyncSig.models.length); i++) {
+        const hm = tihuSyncSig.models[i];
+        if (!hm) continue;
+        const hmIsOpen = isOpenName(hm.canon || hm.id || hm.label);
+        if (hmIsOpen !== Boolean(feat.isOpenThink)) continue;
+        const mapKey = String(hm.canon || hm.id || '').toLowerCase();
+        if (!mapKey) continue;
+        const existing = scoreMap.get(mapKey);
+        const habSim = existing ? existing.sim : 0.64;
+        const htmlSim = Math.max(0.35, Math.min(0.996, Number(hm.htmlConf || 75) / 100));
+        const fusedSim = hm.isExact
+          ? 0.996
+          : Math.min(0.988, htmlWeight * htmlSim + (1 - htmlWeight) * habSim);
+        const hTag = hm.isExact
+          ? ('🦩 醍醐原库精确命中:' + hm.displayLabel)
+          : ((tihuSyncSig.isPelican ? '🦩 醍醐鹈鹕HTML后验:' : '醍醐HTML特征:') + hm.displayLabel + ' ' + Math.round((Number(hm.probability) || 0) * 100) + '%');
+        if (existing) {
+          existing.sim = Math.max(existing.sim, fusedSim);
+          if (hm.tier) existing.detectedEffort = hm.tier;
+          existing.tags = [hTag, ...(existing.tags || []).filter(t => t !== hTag).slice(0, 4)];
+        } else {
+          scoreMap.set(mapKey, {
+            id: (hm.vendor || 'arena') + '/' + (hm.family || hm.canon),
+            label: hm.displayLabel || hm.label,
+            canon: hm.canon,
+            vendor: hm.vendorLabel || hm.vendor,
+            isOpen: hmIsOpen,
+            sim: fusedSim,
+            detectedEffort: hm.tier || tihuSyncSig.chosenTier || 'high',
+            tags: [hTag, ...(feat.habitTags || []).slice(0, 3)],
+            learnedHits: 0,
+            userLearned: false,
+          });
+        }
+      }
+      if (tihuSyncSig.isPelican && topHtmlFam) {
+        const winKey = String(topHtml.canon || topHtml.id || '').toLowerCase();
+        const winSim = scoreMap.get(winKey)?.sim || 0.90;
+        for (const [k, it] of scoreMap.entries()) {
+          if (k === winKey) continue;
+          const inHtmlTop = tihuSyncSig.models.some(x => String(x.canon || x.id || '').toLowerCase() === k);
+          if (!inHtmlTop) {
+            it.sim = Math.min(it.sim, Math.max(0.42, winSim - 0.16));
+          }
+        }
+      }
+    } else if (feat.htmlSvgMatch?.best) {
+      const htmlCands = Array.isArray(feat.htmlSvgMatch.top_candidates) ? feat.htmlSvgMatch.top_candidates : [feat.htmlSvgMatch.best];
+      for (let i = 0; i < Math.min(5, htmlCands.length); i++) {
+        const hc = htmlCands[i];
+        if (!hc) continue;
+        const hcIsOpen = isOpenName(hc.canon || hc.label || hc.model_id);
+        if (hcIsOpen !== Boolean(feat.isOpenThink)) continue;
+        const hcDecomp = decomposeModelIdentity(hc.canon || hc.label || hc.model_id, {
+          vendor: hc.vendorId || hc.vendor,
+          effort: hc.tihuEffort || hc.effort || undefined,
+          rawLabel: hc.label,
+        });
+        const mapKey = String(hcDecomp.canon || hc.canon || '').toLowerCase();
+        if (!mapKey || mapKey === 'other') continue;
+        const existing = scoreMap.get(mapKey);
+        const boostSim = Math.min(0.95, Math.max(0.55, Number(hc.score || 0.65)));
+        if (existing) {
+          existing.sim = Math.max(existing.sim, Math.min(0.95, 0.55 * boostSim + 0.45 * existing.sim));
+        } else {
+          scoreMap.set(mapKey, {
+            id: hc.model_id || hcDecomp.canon,
+            label: hcDecomp.displayLabel,
+            canon: hcDecomp.canon,
+            vendor: hcDecomp.vendorLabel,
+            isOpen: hcIsOpen,
+            sim: boostSim * 0.92,
+            detectedEffort: hcDecomp.effort || 'high',
+            tags: ['HTML结构特征:' + hcDecomp.displayLabel, ...(feat.habitTags || []).slice(0, 3)],
+            learnedHits: 0,
+            userLearned: false,
+          });
+        }
+      }
+    }
+
     const sorted = [...scoreMap.values()].sort((a, b) => (b.sim - a.sim) || ((b.learnedHits || 0) - (a.learnedHits || 0)) || ((b.userLearned ? 1 : 0) - (a.userLearned ? 1 : 0)));
     let calibratedScore = feat.habitReasoningScore;
     const topWinner = sorted[0] || null;
@@ -8403,39 +8467,9 @@ const ChatHabitFingerprint = (() => {
     return entry;
   }
 
-  // 反推教师 -> 习惯学生 自动闭环学习入口：每当 /cost 锁定结果时，自动纠偏该会话习惯样本并在线更新原型均值与推理分偏移
   function learnFromReverseTeacher(chat, modelEntry, topRev, teacherScore = null) {
-    if (!topRev || topRev.structuralRev || topRev.source === 'habit' || topRev.source === 'fp' || topRev.habitSource) return null;
-    if (modelEntry?.fromTitle || modelEntry?.origin === 'title') return null;
-    const revPct = Number(topRev.revPct ?? topRev.match ?? 0);
-    if (!(topRev.diophantinePassed || revPct >= 85) || revPct < 75) return null;
-    const sid = chat?.sid || modelEntry?.sid || '';
-    if (!sid) return null;
-    const label = String(topRev.effortProfile?.stealthModelLabel || topRev.dynamicLabel || topRev.label || topRev.canon || topRev.id || '').replace(/[?？]+$/, '').trim();
-    if (!label || /^(未知型号|待定|未识别)$/.test(label)) return null;
-    const decomp = decomposeModelIdentity(label, {
-      vendor: topRev.vendor || modelEntry?.vendor,
-      family: topRev.family || modelEntry?.family,
-      effort: topRev.effortProfile?.effort || topRev.effort || undefined,
-      rawLabel: label,
-    });
-    const isOkScore = s => s != null && s !== '' && Number.isFinite(+s) && +s >= 10 && +s <= 100;
-    const resolvedScore = isOkScore(teacherScore)
-      ? +teacherScore
-      : (isOkScore(modelEntry?.reverseScore) && !modelEntry?.habitInferred)
-        ? +modelEntry.reverseScore
-        : null;
-    return learnFromChat(chat || { sid, messages: [] }, decomp.canon || label, {
-      userConfirmed: false,
-      autoTeacher: true,
-      teacherConf: revPct,
-      weight: topRev.diophantinePassed ? 3.2 : 2.2,
-      score: resolvedScore,
-      modelMeta: modelEntry,
-      vendorHint: decomp.vendor,
-      familyHint: decomp.family,
-      effortHint: decomp.effort,
-    });
+    // V11: 禁用 /cost 自动回写习惯学习库，杜绝旧价格表偏差自我强化；计费价格结果仅实时参与多信号融合打分
+    return null;
   }
 
   // 将确定知道是什么模型的诊断 JSON（billing-*.json 或习惯库 JSON）导入到习惯库中，辅助习惯识别
@@ -8629,22 +8663,27 @@ const ChatHabitFingerprint = (() => {
     const hasAuthoritativeApiPre = Boolean(known && !known.guess && !known.fromTitle && !known.reverseInferred && !known.billingProbe && !known.habitInferred && (known.response || known.internal));
     if (!interactive && !hasAuthoritativeApiPre && typeof BillingProbe !== 'undefined' && typeof BillingProbe.shouldSkipCostForOpenSource === 'function' && typeof BillingProbe.markAsOpenSourceModel === 'function' && BillingProbe.shouldSkipCostForOpenSource(chat)) {
       const routeShape = closedToOpenRouteShape(chat);
-      const canForceOpen = !known?.userCorrected && !known?.manualOpenInferred;
+      const canForceOpen = !known?.userCorrected && !known?.manualOpenInferred && !(known?.tihuRecognized && known?.openSource && known?.name && known.name !== '开源模型');
       const markedOpen = BillingProbe.markAsOpenSourceModel(chat, (!routeShape && canForceOpen) ? { force: true } : {});
       if (!markedOpen || markedOpen.name === '开源模型') return markedOpen;
       if (!canForceOpen || !routeShape) return markedOpen;
       openRouteFallThrough = true;
     }
-    if (known?.fingerprint?.result && !interactive && !openRouteFallThrough) return known;
+    const isStaleFixVer = !known || (Number(known._tihuEngineFixVer) || 0) < 15;
+    if (known?.fingerprint?.result && !interactive && !force && !preferLatestTurn && !isStaleFixVer && !openRouteFallThrough) return known;
     const cloudTitle = (typeof History !== 'undefined' && History.byId?.(sid)?.title) || chat?.title || '';
     const restoredMeta = typeof TitleSync !== 'undefined' ? TitleSync.restored?.(sid) : null;
     const compAsstForGuard = Array.isArray(chat?.messages) ? chat.messages.filter(x => x && x.role === 'assistant' && !x.failed && x.status !== 'failed' && x.status !== 'pending') : [];
     const hasLoadedMsgs = compAsstForGuard.length > 0;
     const hasNewerLoadedTurn = Boolean(hasLoadedMsgs && ((compAsstForGuard.length > (Number(known?.completedTurnCount) || 0)) || !known?.lastMessageId || (compAsstForGuard.at(-1)?.id && compAsstForGuard.at(-1).id !== known.lastMessageId) || (known?.reverseVer || 0) < 187));
-    if (!interactive && !force && !preferLatestTurn && ((typeof TitleCipher !== 'undefined' && TitleCipher.isEncoded?.(cloudTitle)) || (restoredMeta && !restoredMeta.fromPrefix)) && !(known?.lastMessageId && compAsstForGuard.at(-1)?.id && compAsstForGuard.at(-1).id !== known.lastMessageId) && !openRouteFallThrough) return known;
-    if (!interactive && !force && !hasLoadedMsgs && restoredMeta?.fromPrefix && (!known?.habitFeatures && (known?.reverseVer || 0) >= 174)) return known;
+    if (!interactive && !force && !preferLatestTurn && !isStaleFixVer && ((typeof TitleCipher !== 'undefined' && TitleCipher.isEncoded?.(cloudTitle)) || (restoredMeta && !restoredMeta.fromPrefix)) && !hasNewerLoadedTurn && !openRouteFallThrough) return known;
+    if (!interactive && !force && !isStaleFixVer && !hasLoadedMsgs && restoredMeta?.fromPrefix && (!known?.habitFeatures && (known?.reverseVer || 0) >= 174)) return known;
     const hasAuthoritativeApi = known && !known.guess && !known.fromTitle && !known.reverseInferred && !known.billingProbe && !known.habitInferred && (known.response || (known.internal && !known.billingProbe));
     if (hasAuthoritativeApi && !force) return known;
+    /* V15 关键修复：已被醍醐最新鹈鹕测试权威锁定的会话，绝不允许被纯习惯指纹反覆盖（无论是否有 /cost） */
+    if (known?.tihuRecognized && known?.tihuAuthoritative && (known?._tihuEngineFixVer || 0) >= 15 && !interactive && !hasNewerLoadedTurn && !openRouteFallThrough) {
+      return known;
+    }
     // 注：开源思考的收敛已前移到指纹短路之前（见上方 openRouteFallThrough），此处不再重复处理。
     const costEnabledNow = typeof BillingProbe !== 'undefined' && typeof BillingProbe.isCostProbeEnabled === 'function' ? BillingProbe.isCostProbeEnabled() : true;
     const stNowForCost = (typeof BillingProbe !== 'undefined' && typeof BillingProbe.getLiveState === 'function')
@@ -8768,6 +8807,34 @@ const ChatHabitFingerprint = (() => {
       completedTurnCount: compMsgsNow.length || known?.completedTurnCount || 0,
       at: Date.now(),
     };
+    const topTihuNow = res?.features?.htmlSvgMatch?.best || null;
+    const tihuBestFamNow = topTihuNow ? parseModelFamilyAndTier(topTihuNow.canon || topTihuNow.family || topTihuNow.model_id || '').famKey : '';
+    const matchesCurrentTihu = Boolean(
+      topTihuNow &&
+      (topTihuNow.tihuExact || topTihuNow.tihuAuthoritative || Number(topTihuNow.tihuProb || 0) >= 0.14) &&
+      tihuBestFamNow &&
+      tihuBestFamNow === decomp.family
+    );
+    if (matchesCurrentTihu && res?.features?.isPelicanLockedTurn) {
+      nextEntry.tihuRecognized = true;
+      nextEntry.tihuAuthoritative = true;
+      nextEntry.tihuModel = decomp.family;
+      nextEntry.tihuVendorId = decomp.vendor;
+      nextEntry.tihuExact = Boolean(topTihuNow.tihuExact);
+      nextEntry.tihuConfidence = best.match;
+      nextEntry._tihuEngineFixVer = 3;
+      if (!hasRealCostModel && !isNowMidTurnRouted) {
+        nextEntry.provider = '醍醐 Pelican HTML/SVG 识别';
+      }
+    } else {
+      delete nextEntry.tihuRecognized;
+      delete nextEntry.tihuAuthoritative;
+      delete nextEntry.tihuModel;
+      delete nextEntry.tihuVendorId;
+      delete nextEntry.tihuExact;
+      delete nextEntry.tihuConfidence;
+      delete nextEntry.tihuTurnKeyword;
+    }
     if (interactive || CONFIRMED_GEMINI_FLASH_SIDS.has(sid) || Boolean(habRouteNow?.routed && habRouteNow?.fromBank)) {
       delete nextEntry.userCorrected;
       delete nextEntry.userCorrectedAt;
@@ -8883,20 +8950,7 @@ const ChatHabitFingerprint = (() => {
         .filter(k => k && k !== canon.toLowerCase());
     }
     recordModelUse(canon, decomp.vendor || vendorHint, decomp.family || familyHint, curEffort);
-    let learnedEntry = null;
-    if (learn && chat) {
-      learnedEntry = learnFromChat(chat, canon, {
-        userConfirmed: true,
-        autoTeacher: false,
-        weight: 3.5,
-        score,
-        modelMeta: known,
-        oldModel: prevRecognizedModel,
-        vendorHint: decomp.vendor || vendorHint,
-        familyHint: decomp.family || familyHint,
-        effortHint: curEffort,
-      });
-    }
+    // V11: 手动纠错仅锁定当前对话并同步上传至醍醐 GitHub 仓库（按 sourceKey 覆盖替换），不再写入本地跨会话习惯纠偏库联动篡改其他会话
     const refreshedHabit = analyze(chat, known) || habitRes;
 
     const nextEntry = {
@@ -8914,16 +8968,17 @@ const ChatHabitFingerprint = (() => {
       confidence: 100,
       reverseScore: score,
       habitScore: score,
-      habitTags: ['✓ 用户手动纠偏确认', ...(refreshedHabit?.habitTags || []).slice(0, 4)],
-      habitCandidates: refreshedHabit?.candidates ? refreshedHabit.candidates.slice(0, 5) : known?.habitCandidates,
+      habitTags: ['✓ 用户手动纠错确认', ...(refreshedHabit?.habitTags || []).slice(0, 4)],
+      habitCandidates: refreshedHabit?.candidates ? refreshedHabit.candidates.slice(0, 6) : known?.habitCandidates,
       userCorrected: true,
       userCorrectedAt: Date.now(),
       habitInferred: true,
       reverseInferred: true,
       tier: curEffort,
       billingProbe: true,
-      reverseVer: 187,
-      _v197CalibVer: 3,
+      reverseVer: 188,
+      _tihuEngineFixVer: 4,
+      _v197CalibVer: 4,
       sure: true,
       guess: false,
       uncertain: false,
@@ -8931,7 +8986,7 @@ const ChatHabitFingerprint = (() => {
       fromTitle: false,
       routed: false,
       est: { ...(known?.est || {}), score, source: 'user-corrected' },
-      provider: learn ? '手动纠偏确认 · 已记入习惯库' : '手动纠偏确认',
+      provider: '手动纠错确认 · 同步醍醐库',
       at: Date.now(),
     };
     delete nextEntry.routeType;
@@ -8961,17 +9016,16 @@ const ChatHabitFingerprint = (() => {
       UI?.renderTabs?.();
       Dock?.soon?.();
     } catch {}
-    // 全局回溯纠偏（Retroactive Elastic Re-Scoring）：清理缓存并对所有未手动锁定的其它对话（含 /cost 候选池与纯习惯会话）同步应用弹性纠偏与双引擎拟合
-    const retroUpdatedCount = learn ? syncAllOpenAndKnownChats({ excludeSid: sid }) : 0;
-
-    const totalLearned = loadBank().length;
-    const neighborList = learnedEntry?.softTargets
-      ? Object.keys(learnedEntry.softTargets).filter(k => k.toLowerCase() !== canon.toLowerCase()).slice(0, 2)
-      : [];
-    const neighborHint = neighborList.length ? (' · 弹性邻域牵引[' + neighborList.join(' / ') + ']') : '';
-    const retroHint = retroUpdatedCount > 0 ? (' · 已联动修正 ' + retroUpdatedCount + ' 个相似对话') : '';
+    try {
+      if (typeof BillingProbe !== 'undefined' && BillingProbe.clearSummaryCache) BillingProbe.clearSummaryCache();
+    } catch {}
+    try {
+      if (typeof TihuHub !== 'undefined' && TihuHub.uploadChatCorrection) {
+        void TihuHub.uploadChatCorrection(sid, chat, nextEntry);
+      }
+    } catch {}
     if (typeof toast === 'function') {
-      toast(`已确认纠偏为「${canon}」（推理分 ${score}）${neighborHint}${retroHint}${learnedEntry ? ` · 习惯库共 ${totalLearned} 条` : ''}`);
+      toast(`已确认纠错为「${decomp.displayLabel || canon}」（推理分 ${score}）· 如含 HTML/SVG 将自动同步醍醐 GitHub 库`);
     }
     try {
       if (typeof Bus !== 'undefined') Bus.emit('billing', sid);
@@ -9942,6 +9996,7 @@ const ChatHabitFingerprint = (() => {
     importHabitBank,
     identifyAndApply,
     confirmUserCorrection,
+    purgeLegacyHabitDataOnce,
     recordUserCorrection,
     getUsageStats,
     recordModelUse,
@@ -9956,6 +10011,8 @@ const ChatHabitFingerprint = (() => {
     syncShared: syncFromSharedHost,
     applyRemoteSync: applyRemoteBankSync,
     openManager,
+    decomposeModelIdentity,
+    clearAllCaches: () => { _htmlSvgClassCache.clear(); _featCache.clear(); _analyzeCache.clear(); },
     rebuildCalibrationFromBank,
     syncAllOpenAndKnownChats,
     PROTOTYPES,
@@ -10498,7 +10555,7 @@ const BillingProbe = (() => {
     if (_markingOpenSids.has(sid)) return known;
     if (known?.userCorrected && !force) return known;
     // 若用户之前已手动点击「反推锁定」推理出了具体的开源型号（manualOpenInferred），在自动流程中保留该结果不覆盖
-    if (known?.manualOpenInferred && !force) return known;
+    if ((known?.manualOpenInferred || (known?.tihuRecognized && known?.openSource && known?.name && known.name !== '开源模型')) && !force) return known;
     if (!force && known?.name && known.name !== '开源模型' && isClosedCandidateName(known.name) && !known.guess) return known;
     if (!force && c && Array.isArray(c.messages)) {
       const asstList = c.messages.filter(m => m && m.role === 'assistant');
@@ -10640,7 +10697,7 @@ const BillingProbe = (() => {
       if (!p) continue;
       if (p.type === 'reasoning') {
         stepHasReason = true;
-        const rTxt = String(p.text || '').trim();
+        const rTxt = String(p.text || p.reasoning || '').trim();
         if (rTxt.length > 0 && isClosedCandidateName(fromLabel) && lastToolBeforeSwitch && !chosenTool) {
           chosenTool = { ...lastToolBeforeSwitch, trigger: 'open-reasoning-after-tool' };
         }
@@ -10762,9 +10819,9 @@ const BillingProbe = (() => {
         const stAvgChunk = stTN >= 4 && stTChars > 0 ? (stTChars / stTN) : Number(turnMf?.avgChunk || 0);
         for (const p of parts) {
           if (!p) continue;
-          if (p.type === 'reasoning') {
+          if (p.type === 'reasoning' || p.type === 'thinking') {
             rParts++;
-            const txt = String(p.text || '').trim();
+            const txt = String(p.text || p.reasoning || '').trim();
             if (txt.length > 0 && /[^\s.…·。]/.test(txt)) rOpen++;
             else if (p.providerMetadata?.openai?.reasoningEncryptedContent || p.providerMetadata?.anthropic || txt.length === 0) rEnc++;
           } else if (String(p.type || '').startsWith('tool-') || p.type === 'dynamic-tool' || p.toolCallId) {
@@ -11178,18 +11235,24 @@ const BillingProbe = (() => {
       msgPivot?.type === 'enc-to-zero' &&
       (isGem || cps >= 38)
     );
+    // V11: 仅当发生不可伪造的硬协议跨模型切换（开源<->闭源思考切换，或多次鹈鹕跨厂商真值跳变）时才判定中途路由，杜绝流块大小或隐藏思考段波动导致误报
     const msgPivotConfirmed = Boolean(
-      msgPivot &&
-      (fromFam !== toFam || msgPivot.type === 'closed-to-open' || msgPivot.type === 'open-to-closed' || msgPivot.type === 'pelican-retest-route') &&
-      toHabitMatch >= 82 &&
-      (habitGap >= 12 || googleToEncConflict || encToGoogleConflict || msgPivot.type === 'anthropic-to-openai' || msgPivot.type === 'openai-to-anthropic' || msgPivot.type === 'meta-to-openai' || msgPivot.type === 'openai-to-meta' || msgPivot.type === 'closed-to-open' || msgPivot.type === 'open-to-closed' || msgPivot.type === 'pelican-retest-route')
+      msgPivot && (
+        msgPivot.type === 'closed-to-open' ||
+        msgPivot.type === 'open-to-closed' ||
+        (msgPivot.type === 'pelican-retest-route' && fromFam && toFam && fromFam !== toFam && toHabitMatch >= 85) ||
+        (fromFam && toFam && fromFam !== toFam && toHabitMatch >= 80 && (
+          msgPivot.type === 'meta-to-openai' ||
+          msgPivot.type === 'openai-to-meta' ||
+          msgPivot.type === 'anthropic-to-openai' ||
+          msgPivot.type === 'openai-to-anthropic' ||
+          msgPivot.type === 'stream-chunk-shift' ||
+          msgPivot.type === 'hidden-reasoning-drop' ||
+          msgPivot.type === 'hidden-reasoning-emerge'
+        ))
+      )
     );
-    const metaConflictConfirmed = Boolean(
-      !costCoveredLatest &&
-      (googleToEncConflict || encToGoogleConflict) &&
-      toHabitMatch >= 85 &&
-      habitGap >= 25
-    );
+    const metaConflictConfirmed = false;
 
     if (!msgPivotConfirmed && !metaConflictConfirmed) {
       return { routed: false };
@@ -11391,7 +11454,7 @@ const BillingProbe = (() => {
       chatObj._routePromptedKey = promptKey;
       if (m) m._routePromptedKey = promptKey;
       if (isActiveViewChat && !alreadyPromptedInModel && !isHistoricalBankRoute) {
-        const latestHasOpenThink = (latest?.parts || []).some(p => p && p.type === 'reasoning' && /[^\s.…·。]/.test(String(p.text || '')));
+        const latestHasOpenThink = (latest?.parts || []).some(p => p && (p.type === 'reasoning' || p.type === 'thinking') && /[^\s.…·。]/.test(String(p.text || p.reasoning || '')));
         const wasClosedModel = Boolean(cleanFrom && !isOpenCandidateName(cleanFrom));
         if (chatObj.busy && Boolean(chatObj.gacha) && wasClosedModel && latestHasOpenThink && isOpenCandidateName(cleanTo) && !chatObj._allowOpenThink && (typeof Prefs === 'undefined' || Prefs.thinkStop !== false)) {
           chatObj.thinkStopped = true;
@@ -11429,13 +11492,25 @@ const BillingProbe = (() => {
 
   // 将「费用反推候选」与「指纹识别候选」放在一起按置信度从高到低统一排序（谁高选谁，互不冲突）
   function mergeCandidates(sid, d, m, opts = {}) {
-    const byKey = new Map();
     const st = sid ? engine.state(sid) : null;
+    const _engineRef = engine?.reference ? engine.reference() : null; void _engineRef;
     const chatObj = (sid && typeof Chats !== 'undefined') ? Chats.get(sid) : null;
     const thinkSt = (chatObj && typeof ThinkingStatus !== 'undefined' && ThinkingStatus.of) ? ThinkingStatus.of(chatObj) : null;
     const evObj = d?.evidence || st?.lastInfo?.evidence || st?.info?.evidence || null;
-    const isOpenThink = thinkSt?.kind === 'compat-thinking' || thinkSt?.kind === 'open' || d?.hasCompatThinking === true || d?.family?.reasoning === 'visible-text' || evObj?.visibleReasoning === true;
-    if ((isOpenThink || m?.name === '开源模型' || m?.reverseCandidateId === 'open-source') && !m?.manualOpenInferred && !m?.userCorrected) {
+    const isOpenThink = Boolean(
+      thinkSt?.kind === 'compat-thinking' ||
+      thinkSt?.kind === 'open' ||
+      d?.hasCompatThinking === true ||
+      d?.family?.reasoning === 'visible-text' ||
+      evObj?.visibleReasoning === true ||
+      (m?.openSource === true && m?.habitFeatures?.isOpenThink !== false && !isClosedCandidateName(m?.name || ''))
+    );
+
+    const tihuSig = (typeof TihuHub !== 'undefined' && typeof TihuHub.analyzeChatSync === 'function')
+      ? TihuHub.analyzeChatSync(sid, chatObj, m)
+      : null;
+
+    if ((isOpenThink || m?.name === '开源模型' || m?.reverseCandidateId === 'open-source') && !m?.manualOpenInferred && !m?.userCorrected && !(tihuSig?.matched && tihuSig.models?.length)) {
       return [{
         key: '开源模型',
         id: 'open-source/generic',
@@ -11444,6 +11519,7 @@ const BillingProbe = (() => {
         revPct: 100,
         fpPct: null,
         match: 100,
+        combinedPct: 100,
         combinedWeight: 100,
         source: 'rev',
         both: false,
@@ -11451,32 +11527,37 @@ const BillingProbe = (() => {
         streamFallback: true,
       }];
     }
+
     const isClosedThink = !isOpenThink;
     const violatesThinkingScope = (idOrLabel) => {
+      if (!idOrLabel) return true;
       if (isOpenThink && isClosedCandidateName(idOrLabel)) return true;
       if (isClosedThink && isOpenCandidateName(idOrLabel)) return true;
       return false;
     };
-    const isRoutedOrWeakened = Boolean(d ? (d.routeSwitched || d.effortDowngraded || d.routeType) : m?.routed);
-    const routedTargetLabel = isRoutedOrWeakened ? cleanModelLabel(d ? (d.routedModelLabel || '') : (m?.routeTo || '')) : '';
-    const routedTargetKey = routedTargetLabel ? canonKey(routedTargetLabel) : '';
-    const cands = (d?.candidates || []).slice().sort((a, b) => (b.match || 0) - (a.match || 0));
+
+    const stripFamKey = (raw) => {
+      if (typeof ChatHabitFingerprint !== 'undefined' && ChatHabitFingerprint.parseModelFamilyAndTier) {
+        return ChatHabitFingerprint.parseModelFamilyAndTier(raw).famKey || String(raw || '').trim().toLowerCase();
+      }
+      return String(raw || '')
+        .replace(/\s*\((?:none|minimal|low|medium|high|xhigh|max)\)\s*$/i, '')
+        .replace(/-(?:none|minimal|low|medium|high|xhigh|max)$/i, '')
+        .replace(/[?？]+$/, '')
+        .trim()
+        .toLowerCase();
+    };
+
+    const alnum = s => String(s || '').toLowerCase().replace(/[^a-z0-9.]+/g, '');
     const isOpus56Session = Boolean(
-      sid === '01a13f8c-41c2-7ad3-8e77-73feb405f68d' ||
       (m?.reverseTokens?.output > 65536) ||
       ((m?.reverseTokens?.thinking || 0) > 60000) ||
       (d?.preimage?.byMessage && Object.values(d.preimage.byMessage).some(x => (x?.output || 0) > 65536))
     );
-    const isArgonHighSession = Boolean(
-      sid === '01a148c8-6f04-710a-88aa-9560c56c0bd4' ||
-      sid === '01a14957-ba36-7f15-9640-56b3d0ec48ee' ||
-      sid === '01a148ca-9c83-77c7-8d6c-6dd42a957363' ||
-      sid === '01a148c6-1fc1-719e-b17c-e867ca76a520' ||
-      sid === '01a14952-47dd-77e8-91cc-03516f61aa29' ||
-      sid === '01a14945-7382-7327-8fd5-e99f94473d3d'
-    );
-    const sol61Spec = SOL_61_SIDS.get(sid) || null;
-    const lastInfoList = (st?.lastInfo?.result?.baseMatch?.candidates || []).slice(0, 5).map(c => ({
+
+    // ── 信号 B：真实 /cost 价格扣费反推候选 ──
+    const cands = (d?.candidates || []).slice().sort((a, b) => (b.match || 0) - (a.match || 0));
+    const lastInfoList = (st?.lastInfo?.result?.baseMatch?.candidates || []).slice(0, 6).map(c => ({
       id: c.effortProfile?.stealthModelId || c.id,
       label: cleanModelLabel(c.effortProfile?.stealthModelLabel || c.dynamicLabel || c.label),
       dynamicLabel: cleanModelLabel(c.effortProfile?.stealthModelLabel || c.dynamicLabel || c.label),
@@ -11488,399 +11569,354 @@ const BillingProbe = (() => {
       priceTier: c.priceTier,
       matchedVariant: c.matchedVariant,
     }));
-    const isGeminiFlashFixSid = GEMINI_FLASH_FIX_SIDS.has(sid);
     const hasSavedPreimageOrCost = Boolean(
       (Number(m?.costUsd) > 0) ||
       (Number(m?.reverseTokens?.total) > 0 && m?.reverseTokens?.source !== 'estimated-stream') ||
       (Number(m?.reverseTotalTokens?.total) > 0 && m?.reverseTotalTokens?.source !== 'estimated-stream') ||
       (Number(d?.samples?.observations || st?.ledger?.observations || 0) > 0 && Number(d?.pricing?.observedBaseUsd || st?.info?.result?.actual?.basePriceUsd || st?.lastInfo?.result?.actual?.basePriceUsd || 0) > 0)
     );
-    const savedRevCands = (hasSavedPreimageOrCost && Array.isArray(m?.reverseCandidates) && m.reverseCandidates.length && !(isArgonHighSession && m.reverseCandidateId !== 'contenders/barium-bb-v2-4xts-agent') && !(sol61Spec && m.reverseCandidateId !== 'openai/gpt-6.1-sol'))
+    const savedRevCands = (hasSavedPreimageOrCost && Array.isArray(m?.reverseCandidates) && m.reverseCandidates.length)
       ? m.reverseCandidates
-          .filter(rc => {
-            if (!rc || rc.source === 'habit' || rc.source === 'fp' || rc.habitSource || rc.structuralRev || rc.zeroQuota || rc.zeroQuotaMode) return false;
-            if (isGeminiFlashFixSid && /gemini[-\s]*4|argon|barium-bb-v2-4xts/i.test(String(rc.label || rc.id || ''))) return false;
-            return (rc.revPct != null || rc.diophantinePassed || rc.source === 'rev');
-          })
-          .map(rc => {
-            let mVal = Number(rc.revPct ?? rc.match ?? 0);
-            if ((m.reverseVer || 0) < 155 && rc?.diophantinePassed && mVal >= 60 && mVal <= 66) {
-              mVal = Math.min(100, Number((mVal + 35).toFixed(1)));
-            }
-            return {
-              id: rc.id || rc.label,
-              label: cleanModelLabel(rc.label || rc.id || ''),
-              dynamicLabel: cleanModelLabel(rc.dynamicLabel || rc.label || rc.id || ''),
-              effortProfile: rc.effortProfile || null,
-              solvedTokens: rc.solvedTokens || null,
-              match: mVal,
-              diophantinePassed: Boolean(rc.diophantinePassed),
-              structuralRev: false,
-              solverTier: rc.solverTier,
-              priceTier: rc.priceTier,
-              matchedVariant: rc.matchedVariant,
-              matchedDims: rc.matchedDims || [],
-            };
-          })
+          .filter(rc => rc && !rc.structuralRev && !rc.zeroQuota && !rc.zeroQuotaMode && rc.source !== 'habit' && rc.source !== 'fp' && !rc.habitSource && !rc.tihuLocked && (rc.revPct != null || rc.diophantinePassed || rc.source === 'rev'))
+          .map(rc => ({
+            id: rc.id || rc.label,
+            label: cleanModelLabel(rc.label || rc.id || ''),
+            dynamicLabel: cleanModelLabel(rc.dynamicLabel || rc.label || rc.id || ''),
+            effortProfile: rc.effortProfile || null,
+            solvedTokens: rc.solvedTokens || null,
+            match: Number(rc.revPct ?? rc.match ?? 0),
+            revPct: Number(rc.revPct ?? rc.match ?? 0),
+            diophantinePassed: Boolean(rc.diophantinePassed),
+            structuralRev: false,
+            solverTier: rc.solverTier,
+            priceTier: rc.priceTier,
+            matchedVariant: rc.matchedVariant,
+          }))
       : [];
+
     const costOn = isCostProbeEnabled();
     const hasLiveCostObs = Boolean(
       (Number(d?.samples?.observations || st?.ledger?.observations || 0) > 0 && Number(d?.pricing?.observedBaseUsd || st?.info?.result?.actual?.basePriceUsd || st?.lastInfo?.result?.actual?.basePriceUsd || 0) > 0) ||
       cands.some(r => r && !r.structuralRev && (r.diophantinePassed || Number(r.predictedBaseUsd) > 0)) ||
       lastInfoList.some(r => r && !r.structuralRev && (r.diophantinePassed || Number(r.solvedTokens?.O) > 0))
     );
-    const hasRealCostRev = Boolean(costOn && (hasLiveCostObs || savedRevCands.length > 0));
-    const hasRealCostEvidence = hasRealCostRev;
-    const rawRevList = (!costOn || !hasRealCostEvidence)
+    const hasRealCostRev = Boolean(costOn && !isOpenThink && (hasLiveCostObs || savedRevCands.length > 0));
+    const rawRevList = !hasRealCostRev
       ? []
       : (hasLiveCostObs && cands.length)
         ? cands
         : (hasLiveCostObs && lastInfoList.length)
           ? lastInfoList
           : savedRevCands;
-    const revList = rawRevList.filter(r => !isGeminiFlashFixSid || !/gemini[-\s]*4|argon|barium-bb-v2-4xts/i.test(String(r?.label || r?.dynamicLabel || r?.id || '')));
-    let topRevMatch = 0;
-    for (const [idx, r] of revList.entries()) {
+
+    const costByFam = new Map();
+    for (const [idx, r] of rawRevList.entries()) {
+      if (!r || r.structuralRev) continue;
       let rId = r.effortProfile?.stealthModelId || r.id || '';
       let label = cleanModelLabel(r.effortProfile?.stealthModelLabel || r.dynamicLabel || r.label || rId || '');
-      if (idx === 0 && isRoutedOrWeakened && routedTargetLabel && (!r.effortProfile?.stealthModelLabel)) {
-        label = routedTargetLabel;
-      }
       if ((/claude[-\s]*opus[-\s]*5\.5/i.test(label) || /claude-opus-5\.5/i.test(rId)) && (isOpus56Session || (r.solvedTokens?.maxTurnO > 65536) || (r.solvedTokens?.thinking > 60000))) {
         rId = 'anthropic/claude-opus-5.6';
         label = 'Claude Opus 5.6 (Max)';
       }
       if (violatesThinkingScope(rId) || violatesThinkingScope(label)) continue;
-      const canon = typeof Strength !== 'undefined' && Strength.canon ? Strength.canon(label) : label;
-      const k = canonKey(canon) || canonKey(label) || canonKey(rId);
-      if (!k) continue;
-      const revPct = Math.max(0, Math.min(100, Number(r.match || r.revPct || 0)));
-      if (revPct > topRevMatch) topRevMatch = revPct;
-      byKey.set(k, {
-        key: k,
-        id: rId || label,
-        label: label,
-        canon,
-        revPct,
-        fpPct: null,
-        match: revPct,
-        combinedWeight: r.structuralRev ? (revPct * 0.95) : hasRealCostRev ? (revPct * 2.0 + (r.diophantinePassed ? 50 : 15)) : (revPct * 0.85),
-        source: 'rev',
-        structuralRev: Boolean(r.structuralRev),
-        both: false,
-        diophantinePassed: !!r.diophantinePassed,
-        solverTier: r.solverTier,
-        priceTier: r.priceTier,
-        matchedVariant: r.matchedVariant,
-        dynamicLabel: cleanModelLabel(r.dynamicLabel || label),
-        baseLabel: cleanModelLabel(r.baseLabel || label),
-        inferredEffort: (idx === 0 && d?.latestEffort) ? d.latestEffort : (r.inferredEffort || null),
-        effortProfile: r.effortProfile || null,
-        solvedTokens: r.solvedTokens || null,
-        matchedDims: r.matchedDims || [],
-      });
-    }
-    const fp = m?.fingerprint;
-    const fpRes = fp && !fp.skipped && !fp.probeError ? fp.result : null;
-    if (fpRes) {
-      const fpPool = [...(fpRes.candidates || [])];
-      if (fpRes.nearest?.id && Number.isFinite(fpRes.signals?.relative_probability)) {
-        fpPool.unshift({ id: fpRes.nearest.id, probability: fpRes.signals.relative_probability });
-      }
-      for (const c of fpPool) {
-        const id = cleanModelLabel(String(c?.id || '').trim());
-        if (!id || violatesThinkingScope(id)) continue;
-        if (isGeminiFlashFixSid && /gemini[-\s]*4|argon|barium-bb-v2-4xts/i.test(id)) continue;
-        let fpPct = Math.max(0, Math.min(100, Number(c.probability || 0) * 100));
-        if (!(fpPct > 0)) continue;
-        const canon = typeof Strength !== 'undefined' && Strength.canon ? Strength.canon(id) : id;
-        const k = canonKey(canon);
-        if (isRoutedOrWeakened && topRevMatch > 0 && k !== routedTargetKey) {
-          fpPct = Math.min(fpPct, Math.max(1, topRevMatch - 5));
-        }
-        const existing = byKey.get(k);
-        if (existing) {
-          if (existing.fpPct == null || fpPct > existing.fpPct) existing.fpPct = fpPct;
-          existing.both = existing.revPct >= 5 && existing.fpPct >= 5;
-          existing.source = (!hasRealCostRev && !isRoutedOrWeakened && existing.fpPct > existing.revPct) ? 'fp' : 'rev';
-          existing.match = (hasRealCostRev || isRoutedOrWeakened) ? existing.revPct : Math.max(existing.revPct, existing.fpPct);
-          existing.combinedWeight = hasRealCostRev
-            ? ((existing.revPct || 0) * 2.0 + (existing.diophantinePassed ? 50 : 15) + (existing.fpPct || 0) * 0.02)
-            : ((existing.revPct || 0) * 1.45 + (existing.fpPct || 0) * 0.25 + (existing.diophantinePassed ? 24 : 0));
-          existing.fpStatus = fpRes.status;
-        } else {
-          byKey.set(k, {
-            key: k,
-            id,
-            label: id,
-            canon,
-            revPct: null,
-            fpPct,
-            match: fpPct,
-            combinedWeight: fpPct * (hasRealCostRev ? 0.12 : 0.85),
-            source: 'fp',
-            both: false,
-            diophantinePassed: false,
-            fpStatus: fpRes.status,
-          });
-        }
+      const decomp = (typeof ChatHabitFingerprint !== 'undefined' && ChatHabitFingerprint.decomposeModelIdentity)
+        ? ChatHabitFingerprint.decomposeModelIdentity(label, { effort: (idx === 0 && d?.latestEffort) ? d.latestEffort : (r.inferredEffort || r.effortProfile?.primaryEffort || undefined), rawLabel: label })
+        : { canon: label, displayLabel: label, family: stripFamKey(label), effort: 'high', vendor: '' };
+      const fam = decomp.family || stripFamKey(decomp.canon || label);
+      if (!fam || fam === 'other') continue;
+      const revPct = Math.max(0, Math.min(99.5, Number(r.revPct ?? r.match ?? 0)));
+      const prev = costByFam.get(fam);
+      if (!prev || revPct > prev.revPct) {
+        costByFam.set(fam, {
+          fam,
+          id: rId || decomp.canon,
+          label: decomp.displayLabel || label,
+          canon: decomp.canon || label,
+          vendorId: decomp.vendor || '',
+          effort: decomp.effort || 'high',
+          revPct,
+          diophantinePassed: Boolean(r.diophantinePassed),
+          solverTier: r.solverTier,
+          priceTier: r.priceTier,
+          matchedVariant: r.matchedVariant,
+          effortProfile: r.effortProfile || null,
+          solvedTokens: r.solvedTokens || null,
+        });
       }
     }
-    // ── 对话聊天习惯（Bash习惯 / HTML习惯 / 思考与工具节奏 / 推理分 / 习惯库）联合排序 ──
+
+    // ── 信号 C：精简可用协议与工具习惯 ──
     const habitRes = (typeof ChatHabitFingerprint !== 'undefined' && ChatHabitFingerprint.analyze)
       ? ChatHabitFingerprint.analyze(chatObj || { sid, messages: [] }, m, opts?.preferLatestTurn ? { preferLatestTurn: true } : undefined)
       : null;
-    if (habitRes && Array.isArray(habitRes.candidates) && habitRes.candidates.length) {
-      for (const hc of habitRes.candidates) {
+
+    const habitByFam = new Map();
+    if (habitRes && Array.isArray(habitRes.allCandidates || habitRes.candidates)) {
+      for (const hc of (habitRes.allCandidates || habitRes.candidates)) {
+        if (!hc) continue;
         const hLabel = cleanModelLabel(hc.label || hc.id || '');
         if (!hLabel || violatesThinkingScope(hc.id) || violatesThinkingScope(hLabel)) continue;
-        if (isGeminiFlashFixSid && /gemini[-\s]*4|argon|barium-bb-v2-4xts/i.test(hLabel)) continue;
-        const canon = typeof Strength !== 'undefined' && Strength.canon ? Strength.canon(hLabel) : hLabel;
-        const k = canonKey(canon);
-        if (!k) continue;
-        let existing = byKey.get(k);
-        // 同家族不同思考档位（Low/Medium/High/xHigh/Max）共享完全一致的 /cost 单价与丢番图原像解：
-        // 若 /cost 候选池中该家族对应条目尚未匹配到精确档位的习惯分，则合并家族习惯分（保持 /cost 反推档位为准，绝不派生伪造第二行）
-        if (!existing && hasRealCostRev) {
-          const stripBaseTier = s => (typeof ChatHabitFingerprint !== 'undefined' && ChatHabitFingerprint.parseModelFamilyAndTier)
-            ? (ChatHabitFingerprint.parseModelFamilyAndTier(s).famKey || String(s || '').toLowerCase())
-            : String(s || '').toLowerCase().replace(/(?:-(?:none|minimal|low|medium|high|xhigh|max))+$/i, '');
-          const baseFamKey = stripBaseTier(k);
-          if (baseFamKey) {
-            for (const [otherK, otherVal] of byKey.entries()) {
-              if (otherVal && otherVal.revPct != null && !otherVal.structuralRev && stripBaseTier(otherK) === baseFamKey) {
-                const hasExactOtherInHabit = habitRes.candidates.some(c => canonKey(c.canon || c.label || c.id) === otherK);
-                if (!otherVal.habitPct && !hasExactOtherInHabit) {
-                  existing = otherVal;
-                  existing.supportGranularity = 'family';
-                }
-                break;
-              }
-            }
-          }
-        }
-        if (existing) {
-          existing.habitPct = hc.match;
-          existing.habitScore = hc.habitScore;
-          existing.userLearned = Boolean(existing.userLearned || hc.userLearned);
-          if (Array.isArray(hc.matchedDims) && hc.matchedDims.length) {
-            existing.matchedDims = [...new Set([...(existing.matchedDims || []), ...hc.matchedDims])];
-          }
-          if (existing.revPct != null && existing.revPct >= 5) {
-            const isFamilyOnly = existing.supportGranularity === 'family';
-            const isSameOriginStructural = Boolean(existing.structuralRev || existing.sameOriginAsHabit);
-            existing.both = Boolean(!isSameOriginStructural && !isFamilyOnly);
-            if (isFamilyOnly) existing.familyBoth = true;
-            if (!existing.structuralRev) {
-              // 真实 /cost 候选 + 习惯指纹与弹性纠偏双引擎协同：计算反推+习惯综合置信度与双源总分（支持无额度反推、总余额/价目表同池及高置信度HTML/SVG/习惯特征直接决断）
-              const hcRankIdx = habitRes.candidates.indexOf(hc);
-              const isDecisiveUnmarkedTop = Boolean(!isArgonHighSession && !sol61Spec && !isOpus56Session && !isGeminiFlashFixSid && hcRankIdx === 0 && hc.match >= 95.0 && /solar-pro4|muse|kibitz|horizon-6\.2|kalmia|cynosure|grok-4\.6/i.test(String(hc.id || hc.canon || hc.label || '')));
-              const isEffectiveLearnedOrDecisive = Boolean(hc.userLearned || isDecisiveUnmarkedTop);
-              const isBillingFeasibleTie = (topRevMatch - existing.revPct) <= (isDecisiveUnmarkedTop ? 7.5 : 3.5);
-              const learnedRankBoost = isEffectiveLearnedOrDecisive ? (hcRankIdx === 0 ? 22.5 : hcRankIdx === 1 ? 15.0 : 9.5) : 0;
-              const effRevBase = (isBillingFeasibleTie && isEffectiveLearnedOrDecisive) ? (topRevMatch * 0.70 + existing.revPct * 0.30) : existing.revPct;
-              existing.combinedPct = Math.min(100, Math.round((effRevBase * 0.55 + hc.match * 0.45) * 10) / 10);
-              existing.dualSum = Math.round((effRevBase + hc.match) * 10) / 10;
-              existing.match = isBillingFeasibleTie && isEffectiveLearnedOrDecisive
-                ? Math.min(99.8, Math.round((effRevBase * 0.35 + hc.match * 0.65) * 10) / 10)
-                : existing.combinedPct;
-              existing.combinedPct = existing.match;
-              existing.combinedWeight = hasRealCostRev
-                ? (200 + existing.dualSum + (existing.diophantinePassed ? 50 : 15) + (isBillingFeasibleTie ? learnedRankBoost : (isEffectiveLearnedOrDecisive ? 6 : 0)))
-                : (200 + existing.dualSum + (isEffectiveLearnedOrDecisive ? 12 : 0));
-            } else {
-              // 结构化对话反推（无 /cost 账单）：由习惯识别与结构反推融合，习惯主导型号定性
-              existing.combinedPct = Math.min(100, Math.round((existing.revPct * 0.45 + hc.match * 0.55) * 10) / 10);
-              existing.dualSum = Math.round((existing.revPct + hc.match) * 10) / 10;
-              existing.match = hc.match;
-              existing.combinedWeight = 200 + existing.dualSum + (hc.userLearned ? 8 : 0);
-            }
-          } else {
-            existing.fpPct = Math.max(existing.fpPct || 0, hc.match);
-            existing.match = Math.max(existing.match || 0, hc.match);
-            existing.combinedPct = existing.match;
-            existing.dualSum = existing.match;
-            existing.combinedWeight = existing.match * 0.92 + (hc.userLearned ? 8 : 0);
-          }
-        } else {
-          const hcRankIdx = habitRes.candidates.indexOf(hc);
-          const isDecisiveCatalogTop = Boolean(hasRealCostRev && topRevMatch >= 85 && !isArgonHighSession && !sol61Spec && !isOpus56Session && !isGeminiFlashFixSid && hcRankIdx === 0 && hc.match >= 95.0 && /solar-pro4|muse|kibitz|horizon-6\.2|kalmia|cynosure|grok-4\.6/i.test(String(hc.id || hc.canon || hLabel || '')));
-          const catRef = (isDecisiveCatalogTop && typeof engine?.reference === 'function') ? engine.reference(hc.id || hLabel) : null;
-          const hasDecisiveCatBoost = Boolean(isDecisiveCatalogTop && (catRef || /solar-pro4|muse|kibitz|horizon-6\.2|kalmia|cynosure|grok-4\.6/i.test(String(hc.id || ''))));
-          byKey.set(k, {
-            key: k,
-            id: hc.id || hLabel,
+        const fam = hc.family || stripFamKey(hc.canon || hLabel);
+        if (!fam || fam === 'other') continue;
+        const rawHab = Math.max(35, Math.min(99, Number(hc.habitPct ?? hc.match ?? 60)));
+        const prev = habitByFam.get(fam);
+        if (!prev || rawHab > prev.habPct) {
+          habitByFam.set(fam, {
+            fam,
+            id: hc.id || hc.canon || hLabel,
             label: hLabel,
-            canon,
-            revPct: null,
-            fpPct: hc.match,
-            habitPct: hc.match,
+            canon: hc.canon || hLabel,
+            vendorId: hc.vendorId || '',
+            effort: hc.detectedEffort || hc.effort || 'high',
+            habPct: rawHab,
+            pureHabPct: Math.min(84, rawHab),
             habitScore: hc.habitScore,
-            userLearned: Boolean(hc.userLearned),
-            match: hc.match,
-            combinedPct: hc.match,
-            dualSum: hc.match,
-            combinedWeight: hasDecisiveCatBoost
-              ? (200 + topRevMatch + hc.match + 50 + 22.5)
-              : (hc.match * 0.92 + (hc.userLearned ? 8 : 0)),
-            source: 'fp',
-            habitSource: true,
-            both: false,
-            inBillingPool: false,
-            supportGranularity: 'habit-only',
-            diophantinePassed: false,
-            matchedDims: hasDecisiveCatBoost
-              ? [...(hc.matchedDims || []), '价目表P50同池+习惯特征协同锁定']
-              : (hc.matchedDims || []),
+            matchedDims: hc.matchedDims || [],
           });
         }
       }
     }
-    // 用户手动纠偏确认（✓ 确认纠偏）：最高优先级置顶锁定（排除 3 个 Flash 诊断会话的旧误标记录）
+
+    // ── 信号 A：醍醐 HTML / SVG 条件后验（鹈鹕重权 72%，普通 HTML 45%） ──
+    const htmlByFam = new Map();
+    const isPelicanHtml = Boolean(tihuSig?.matched && tihuSig.isPelican && Array.isArray(tihuSig.models) && tihuSig.models.length > 0);
+    const isGeneralHtml = Boolean(tihuSig?.matched && !tihuSig.isPelican && Array.isArray(tihuSig.models) && tihuSig.models.length > 0);
+    if (isPelicanHtml || isGeneralHtml) {
+      for (const hm of tihuSig.models) {
+        if (!hm) continue;
+        if (violatesThinkingScope(hm.canon || hm.id || hm.label)) continue;
+        const fam = hm.family || stripFamKey(hm.canon || hm.id || hm.label);
+        if (!fam || fam === 'other') continue;
+        const prev = htmlByFam.get(fam);
+        if (!prev || Number(hm.htmlConf || 0) > prev.htmlConf) {
+          htmlByFam.set(fam, {
+            fam,
+            id: (hm.vendor || 'arena') + '/' + fam,
+            label: hm.displayLabel || hm.label,
+            canon: hm.canon,
+            vendorId: hm.vendor || '',
+            effort: hm.tier || tihuSig.chosenTier || 'high',
+            htmlConf: Number(hm.htmlConf || 75),
+            probability: Number(hm.probability || 0),
+            isExact: Boolean(hm.isExact),
+          });
+        }
+      }
+    }
+
+    // 收集所有候选家族并执行统一多源加权融合
+    const allFams = new Set([...htmlByFam.keys(), ...costByFam.keys(), ...habitByFam.keys()]);
+    const lookupSoftCostForFam = (fam, vendorId) => {
+      if (!hasRealCostRev || costByFam.size === 0) return null;
+      if (costByFam.has(fam)) return costByFam.get(fam).revPct;
+      const fa = alnum(fam);
+      for (const [cf, cv] of costByFam.entries()) {
+        const ca = alnum(cf);
+        if (ca && fa && (ca.includes(fa) || fa.includes(ca))) return cv.revPct;
+      }
+      // 同厂商调价/重命名容错（如 gpt-6-luna 与 gpt-6-sol 价格接近）：给予 35 分软兜底而非归零否决
+      if (vendorId) {
+        for (const [, cv] of costByFam.entries()) {
+          if (cv.revPct >= 75 && cv.vendorId && cv.vendorId === vendorId) return 35;
+        }
+      }
+      return 18;
+    };
+
+    const byFam = new Map();
+    for (const fam of allFams) {
+      const hEntry = htmlByFam.get(fam) || null;
+      const cEntry = costByFam.get(fam) || null;
+      const bEntry = habitByFam.get(fam) || null;
+
+      const vendorId = hEntry?.vendorId || cEntry?.vendorId || bEntry?.vendorId ||
+        ((typeof Brand !== 'undefined' && Brand.id) ? Brand.id(hEntry?.id || cEntry?.id || bEntry?.id || fam) : '');
+
+      // 优先采用鹈鹕 HTML 强度档位 -> /cost 档位 -> 习惯档位
+      const chosenEffort = (isPelicanHtml && hEntry?.effort)
+        ? hEntry.effort
+        : (cEntry?.effort && cEntry.effort !== 'standard')
+          ? cEntry.effort
+          : (hEntry?.effort || bEntry?.effort || 'high');
+
+      const decomp = (typeof ChatHabitFingerprint !== 'undefined' && ChatHabitFingerprint.decomposeModelIdentity)
+        ? ChatHabitFingerprint.decomposeModelIdentity(fam, {
+            vendor: vendorId,
+            family: fam,
+            effort: chosenEffort,
+            rawLabel: hEntry?.label || cEntry?.label || bEntry?.label || fam,
+          })
+        : null;
+
+      const finalCanon = decomp?.canon || hEntry?.canon || cEntry?.canon || bEntry?.canon || fam;
+      const finalLabel = cleanModelLabel(decomp?.displayLabel || hEntry?.label || cEntry?.label || bEntry?.label || fam);
+      const finalId = cEntry?.id || hEntry?.id || bEntry?.id || finalCanon;
+
+      const pureHab = bEntry ? bEntry.pureHabPct : 62;
+      const softCost = lookupSoftCostForFam(fam, vendorId);
+      const realRevPct = cEntry ? cEntry.revPct : null;
+
+      let unifiedPct = 0;
+      let tihuLocked = false;
+      let costAssisted = false;
+      const dims = [];
+
+      if (isPelicanHtml) {
+        const htmlScore = hEntry ? hEntry.htmlConf : 26;
+        if (hEntry?.isExact) {
+          unifiedPct = 99.6;
+          tihuLocked = true;
+          costAssisted = Boolean(realRevPct != null && realRevPct >= 75);
+          dims.push('🦩 醍醐原库 SHA-256 精确命中');
+        } else {
+          const rawFused = softCost !== null
+            ? (0.72 * htmlScore + 0.18 * softCost + 0.10 * pureHab)
+            : (0.88 * htmlScore + 0.12 * pureHab);
+          unifiedPct = Math.max(22, Math.min(99.2, rawFused + (softCost !== null && softCost >= 80 ? 5.5 : 3.5)));
+          tihuLocked = Boolean(hEntry && htmlScore >= 68);
+          costAssisted = Boolean(realRevPct != null && realRevPct >= 70);
+          if (hEntry) dims.push('🦩 鹈鹕HTML重权 ' + Math.round(htmlScore) + '%');
+          if (realRevPct != null) dims.push('💰 计费协同 ' + Math.round(realRevPct) + '%');
+        }
+      } else if (isGeneralHtml) {
+        const htmlScore = hEntry ? hEntry.htmlConf : 34;
+        const rawFused = softCost !== null
+          ? (0.45 * htmlScore + 0.38 * softCost + 0.17 * pureHab)
+          : (0.68 * htmlScore + 0.32 * pureHab);
+        unifiedPct = Math.max(24, Math.min(98.5, rawFused + (softCost !== null && softCost >= 85 ? 4.0 : 2.0)));
+        tihuLocked = Boolean(hEntry && !hasRealCostRev && htmlScore >= 78);
+        costAssisted = Boolean(realRevPct != null && realRevPct >= 70);
+        if (hEntry) dims.push('🧩 HTML结构特征 ' + Math.round(htmlScore) + '%');
+        if (realRevPct != null) dims.push('💰 计费反推 ' + Math.round(realRevPct) + '%');
+      } else if (hasRealCostRev) {
+        const cScore = cEntry ? cEntry.revPct : (softCost ?? 18);
+        const dioBonus = cEntry?.diophantinePassed ? 3.2 : 0;
+        unifiedPct = Math.max(20, Math.min(99.4, 0.72 * cScore + 0.28 * pureHab + dioBonus));
+        costAssisted = Boolean(cEntry);
+        if (cEntry) dims.push('💰 价格扣费反推 ' + Math.round(cEntry.revPct) + '%');
+      } else {
+        const rawHab = bEntry ? Number(bEntry.habPct || 55) : 45;
+        unifiedPct = rawHab > 82 ? Math.min(97.5, 82 + (rawHab - 82) * 0.85) : Math.max(35, rawHab);
+      }
+
+      if (bEntry?.matchedDims?.length) {
+        for (const md of bEntry.matchedDims.slice(0, 3)) {
+          if (md && !dims.includes(md)) dims.push(md);
+        }
+      }
+
+      unifiedPct = Math.round(unifiedPct * 10) / 10;
+      byFam.set(fam, {
+        key: canonKey(finalCanon) || fam,
+        famKey: fam,
+        id: finalId,
+        label: finalLabel,
+        canon: finalCanon,
+        vendorId,
+        inferredEffort: chosenEffort,
+        effortProfile: cEntry?.effortProfile || null,
+        solvedTokens: cEntry?.solvedTokens || null,
+        revPct: realRevPct,
+        htmlPct: hEntry ? hEntry.htmlConf : null,
+        fpPct: hEntry ? hEntry.htmlConf : (bEntry ? bEntry.pureHabPct : null),
+        habitPct: bEntry ? bEntry.pureHabPct : null,
+        habitScore: bEntry?.habitScore ?? habitRes?.reasoningScore ?? null,
+        match: unifiedPct,
+        combinedPct: unifiedPct,
+        combinedWeight: unifiedPct,
+        dualSum: unifiedPct * 2,
+        source: (realRevPct != null && !tihuLocked) ? 'rev' : 'fp',
+        habitSource: Boolean(realRevPct == null),
+        both: Boolean((realRevPct != null && (hEntry || bEntry)) || (hEntry && bEntry)),
+        tihuLocked,
+        tihuExact: Boolean(hEntry?.isExact),
+        costAssisted,
+        isPelicanHtml,
+        isGeneralHtml,
+        diophantinePassed: Boolean(cEntry?.diophantinePassed),
+        solverTier: cEntry?.solverTier,
+        priceTier: cEntry?.priceTier,
+        matchedVariant: cEntry?.matchedVariant,
+        matchedDims: dims,
+      });
+    }
+
+    // 用户手动纠错置顶锁定（100%）
     const isPollutedUserCorrection = Boolean(
-      (isGeminiFlashFixSid && /gemini[-\s]*4|argon|barium-bb-v2-4xts/i.test(String(m?.rawLabel || m?.name || ''))) ||
-      (sid === '01a151de-5840-75e5-b5e0-9bf662f543dd' && /6\.1-sol|gpt/i.test(String(m?.rawLabel || m?.name || ''))) ||
-      Boolean(habitRes?.routedFromBank && m?.userCorrected)
+      m?.userCorrected && (
+        m?.autoTeacher ||
+        m?.fromTitle ||
+        (isOpenThink && isClosedCandidateName(m.rawLabel || m.name)) ||
+        (isClosedThink && isOpenCandidateName(m.rawLabel || m.name))
+      )
     );
     if (m?.userCorrected && m?.name && !isPollutedUserCorrection) {
       const ucLabel = cleanModelLabel(m.rawLabel || m.name);
       const ucCanon = ucLabel === '开源模型' ? '开源模型' : (typeof Strength !== 'undefined' && Strength.canon ? Strength.canon(ucLabel) : ucLabel);
-      const ucKey = canonKey(ucCanon) || 'user-corrected';
-      const stripBaseTierUc = s => (typeof ChatHabitFingerprint !== 'undefined' && ChatHabitFingerprint.parseModelFamilyAndTier)
-        ? (ChatHabitFingerprint.parseModelFamilyAndTier(s).famKey || String(s || '').toLowerCase())
-        : String(s || '').toLowerCase().replace(/-(?:none|minimal|low|medium|high|xhigh|max)$/i, '');
-      const ucFamKey = stripBaseTierUc(ucKey);
-      let sameFamCost = null;
-      if (!byKey.has(ucKey) && ucFamKey) {
-        for (const [, otherVal] of byKey.entries()) {
-          if (otherVal && otherVal.revPct != null && !otherVal.structuralRev && stripBaseTierUc(otherVal.key) === ucFamKey) {
-            sameFamCost = otherVal;
-            break;
-          }
-        }
+      const ucFam = stripFamKey(ucCanon) || canonKey(ucCanon) || 'user-corrected';
+      for (const [, v] of byFam.entries()) {
+        if (v.match >= 90) v.match = v.combinedPct = v.combinedWeight = 88.0;
       }
-      const prev = byKey.get(ucKey) || sameFamCost || {};
-      byKey.set(ucKey, {
+      const prev = byFam.get(ucFam) || {};
+      byFam.set(ucFam, {
         ...prev,
-        key: ucKey,
+        key: canonKey(ucCanon) || ucFam,
+        famKey: ucFam,
         id: m.reverseCandidateId || prev.id || ucCanon,
         label: ucLabel,
         canon: ucCanon,
-        revPct: 100,
-        fpPct: 100,
+        vendorId: m.vendor || prev.vendorId || ((typeof Brand !== 'undefined' && Brand.id) ? Brand.id(ucCanon) : ''),
+        inferredEffort: m.effort || m.tier || prev.inferredEffort || 'high',
+        revPct: prev.revPct ?? null,
         habitPct: 100,
-        combinedPct: 100,
-        dualSum: 200,
         match: 100,
+        combinedPct: 100,
         combinedWeight: 500,
-        source: (prev.revPct != null || hasRealCostRev) ? 'rev' : 'fp',
-        habitSource: true,
+        source: prev.revPct != null ? 'rev' : 'fp',
+        habitSource: prev.revPct == null,
         userCorrected: true,
         userLearned: true,
         both: true,
         diophantinePassed: Boolean(prev.diophantinePassed || hasRealCostRev),
-        matchedDims: m.habitTags || ['✓ 用户手动纠偏确认 · 已记入习惯库'],
+        matchedDims: ['★ 用户手动纠错锁定 · 已同步醍醐库'],
       });
-    }
-    if (!byKey.size && m) {
-      if (Array.isArray(m.reverseCandidates) && m.reverseCandidates.length && !m.habitInferred && !(isArgonHighSession && m.reverseCandidateId !== 'contenders/barium-bb-v2-4xts-agent') && !(sol61Spec && m.reverseCandidateId !== 'openai/gpt-6.1-sol')) {
-        for (const rc of m.reverseCandidates) {
-          if (!rc || rc.source === 'habit' || rc.habitSource) continue;
-          const rcLabel = cleanModelLabel(rc?.label || rc?.id || '');
-          const k = canonKey(rcLabel);
-          if (!k || violatesThinkingScope(rc?.id) || violatesThinkingScope(rcLabel)) continue;
-          let mVal = Number(rc?.revPct ?? rc?.match ?? 0);
-          if ((m.reverseVer || 0) < 155 && rc?.diophantinePassed && mVal >= 60 && mVal <= 66) {
-            mVal = Math.min(100, Number((mVal + 35).toFixed(1)));
-          }
-          byKey.set(k, { ...rc, key: k, label: rcLabel, revPct: mVal, match: mVal, combinedWeight: mVal * 1.18 });
-        }
-      }
-      if (!byKey.size && (m.reverseInferred || m.billingProbe || m.fingerprint || !m.guess)) {
-        let savedName = cleanModelLabel(String(m.reverseLabel || m.candidateName || m.name || '').replace(/\?+$/, '').trim());
-        let savedId = m.reverseCandidateId || savedName;
-        if (isOpus56Session && /opus[-\s]*5\.5/i.test(savedName)) {
-          savedName = 'Claude Opus 5.6 (Max)';
-          savedId = 'anthropic/claude-opus-5.6';
-        } else if (isArgonHighSession && /sonnet[-\s]*5|gpt[-\s]*6\.1[-\s]*sol|gpt[-\s]*6[-\s]*sol|claude-haiku/i.test(savedName)) {
-          savedName = 'Gemini 4 Argon (High)';
-          savedId = 'contenders/barium-bb-v2-4xts-agent';
-        } else if (sol61Spec) {
-          savedName = sol61Spec.label;
-          savedId = 'openai/gpt-6.1-sol';
-        }
-        const k = canonKey(savedName);
-        if (k && !/^(未知型号|待定|未识别)$/.test(savedName) && !violatesThinkingScope(savedId) && !violatesThinkingScope(savedName)) {
-          const isFpSaved = Boolean((m.fingerprint && !m.reverseInferred && !m.billingProbe) || m.habitInferred);
-          const pct = (isArgonHighSession && savedId === 'contenders/barium-bb-v2-4xts-agent') ? 99.8
-            : sol61Spec ? 100
-            : Number.isFinite(+m.reverseMatch) ? +m.reverseMatch
-            : Number.isFinite(+m.confidence) ? (+m.confidence <= 1 ? +m.confidence * 100 : +m.confidence)
-            : 85;
-          byKey.set(k, {
-            key: k,
-            id: savedId,
-            label: savedName,
-            canon: typeof Strength !== 'undefined' && Strength.canon ? Strength.canon(savedName) : savedName,
-            revPct: isFpSaved ? null : pct,
-            fpPct: isFpSaved ? pct : null,
-            habitPct: m.habitInferred ? pct : null,
-            match: pct,
-            combinedWeight: isFpSaved ? pct * 0.88 : pct * 1.18,
-            source: isFpSaved ? 'fp' : 'rev',
-            habitSource: Boolean(m.habitInferred),
-            both: false,
-            diophantinePassed: Boolean((m.sure && !m.habitInferred) || isArgonHighSession || sol61Spec),
-          });
-        }
+    } else if (!byFam.size && m?.name && !/^(未知型号|待定|未识别)$/.test(String(m.name))) {
+      const savedName = cleanModelLabel(String(m.reverseLabel || m.rawLabel || m.candidateName || m.name || '').replace(/\?+$/, '').trim());
+      if (savedName && !violatesThinkingScope(savedName)) {
+        const savedCanon = typeof Strength !== 'undefined' && Strength.canon ? Strength.canon(savedName) : savedName;
+        const pct = Number.isFinite(+m.confidence) ? (+m.confidence <= 1 ? +m.confidence * 100 : +m.confidence) : (Number.isFinite(+m.reverseMatch) ? +m.reverseMatch : 80);
+        const sFam = stripFamKey(savedCanon) || canonKey(savedCanon);
+        byFam.set(sFam, {
+          key: canonKey(savedCanon) || sFam,
+          famKey: sFam,
+          id: m.reverseCandidateId || savedCanon,
+          label: savedName,
+          canon: savedCanon,
+          vendorId: m.vendor || ((typeof Brand !== 'undefined' && Brand.id) ? Brand.id(savedCanon) : ''),
+          revPct: m.habitInferred ? null : pct,
+          habitPct: m.habitInferred ? pct : null,
+          match: pct,
+          combinedPct: pct,
+          combinedWeight: pct,
+          source: m.habitInferred ? 'fp' : 'rev',
+          habitSource: Boolean(m.habitInferred),
+          tihuLocked: Boolean(m.tihuRecognized),
+          both: false,
+          diophantinePassed: Boolean(m.sure && !m.habitInferred),
+        });
       }
     }
-    if (!byKey.size && sid && typeof Chats !== 'undefined') {
-      const ch = Chats.get(sid);
-      const lastMsg = ch ? globalThis.ArenaBilling.completed(ch).at(-1) : null;
-      const fam = d?.family?.family || st?.lastInfo?.family?.family || '';
-      const fmtG = ch?.fmtGuess || ((lastMsg?._fmt || ch?.fmt) && typeof Fmt !== 'undefined' && Fmt.guess ? Fmt.guess(lastMsg?._fmt || ch?.fmt) : null);
-      const rows = Array.isArray(engine.catalogRaw) && engine.catalogRaw.length ? engine.catalogRaw : (Array.isArray(bundled?.data) ? bundled.data : []);
-      if (fam && fam !== 'conflict' && rows.length && !violatesThinkingScope(fam)) {
-        const famRows = rows.filter(r => !violatesThinkingScope(r.id) && !violatesThinkingScope(r.label) && (String(r.vendor || '').toLowerCase() === fam.toLowerCase() || String(r.id || '').toLowerCase().startsWith(fam.toLowerCase() + '/')))
-          .sort((a, b) => (Number(a.leaderboardRank) || 999) - (Number(b.leaderboardRank) || 999));
-        for (const [idx, r] of famRows.slice(0, 3).entries()) {
-          const label = r.label || r.id;
-          const canon = typeof Strength !== 'undefined' && Strength.canon ? Strength.canon(label) : label;
-          const k = canonKey(canon);
-          if (!k || byKey.has(k) || violatesThinkingScope(canon)) continue;
-          const pct = Math.max(45, 58 - idx * 4);
-          byKey.set(k, { key: k, id: r.id, label: canon, canon, revPct: pct, fpPct: null, match: pct, combinedWeight: pct, source: 'rev', both: false, diophantinePassed: false, streamFallback: true });
-        }
-      } else if (fmtG?.name && !violatesThinkingScope(fmtG.name)) {
-        const rawFmtName = fmtG.name === 'compat' ? '开源模型' : fmtG.name;
-        const canon = rawFmtName === '开源模型' ? '开源模型' : (typeof Strength !== 'undefined' && Strength.canon ? Strength.canon(rawFmtName) : rawFmtName);
-        const k = canonKey(canon);
-        if (k && !violatesThinkingScope(canon)) {
-          byKey.set(k, { key: k, id: canon, label: canon, canon, revPct: 55, fpPct: null, match: 55, combinedWeight: 55, source: 'rev', both: false, diophantinePassed: false, streamFallback: true });
-        }
-      }
-    }
+
     const habitRoute = detectHabitAndMessageRoute(sid, chatObj, d, m, habitRes, rawRevList);
     if (habitRoute && habitRoute.routed && (!m?.userCorrected || isPollutedUserCorrection)) {
-      const stripBaseTier = s => (typeof ChatHabitFingerprint !== 'undefined' && ChatHabitFingerprint.parseModelFamilyAndTier)
-        ? (ChatHabitFingerprint.parseModelFamilyAndTier(s).famKey || String(s || '').toLowerCase())
-        : String(s || '').toLowerCase().replace(/\s*\((?:none|minimal|low|medium|high|xhigh|max)\)\s*$/i, '').replace(/-(?:none|minimal|low|medium|high|xhigh|max)$/i, '').replace(/[?？]+$/, '').trim();
-      const fromBase = habitRoute.fromBase || stripBaseTier(habitRoute.fromCanon || habitRoute.fromLabel);
-      const toBase = habitRoute.toBase || stripBaseTier(habitRoute.toCanon || habitRoute.toLabel);
-      const toCanonKey = canonKey(habitRoute.toCanon || habitRoute.toLabel);
-      for (const [ck, cand] of byKey.entries()) {
-        if (!cand) continue;
-        const candBase = stripBaseTier(cand.canon || cand.label || ck);
-        if (fromBase && candBase === fromBase && candBase !== toBase) {
+      const toFam = stripFamKey(habitRoute.toCanon || habitRoute.toLabel);
+      const fromFam = stripFamKey(habitRoute.fromCanon || habitRoute.fromLabel);
+      for (const [fk, cand] of byFam.entries()) {
+        if (fromFam && fk === fromFam && fk !== toFam) {
           cand.preRouteModel = true;
-          cand.combinedWeight = Math.max(150, Math.min(Number(cand.combinedWeight ?? cand.match ?? 95), 185));
-          cand.matchedDims = [...new Set([`⚠️ 路由前模型（前序 /cost 锁定，第 #${habitRoute.toTurn || '?'} 轮起已切换）`, ...(cand.matchedDims || [])])];
-        } else if (cand.source === 'rev' && !cand.habitPct) {
-          cand.combinedWeight = Math.min(Number(cand.combinedWeight || 0), Number(cand.match || 0) * 0.85);
-          cand.diophantinePassed = false;
+          cand.combinedWeight = Math.min(cand.combinedWeight, 82);
         }
-        if ((toCanonKey && ck === toCanonKey) || (toBase && candBase === toBase && ck === toCanonKey)) {
+        if (toFam && fk === toFam) {
           cand.routedTarget = true;
           cand.routed = true;
           cand.routeType = habitRoute.routeType || 'model';
@@ -11888,64 +11924,21 @@ const BillingProbe = (() => {
           cand.routeTo = habitRoute.toLabel;
           cand.routeReason = habitRoute.reason;
           cand.routeInfo = habitRoute;
-          cand.combinedWeight = Math.max(Number(cand.combinedWeight || 0), 235 + Number(cand.match || 0) * 0.1);
-          cand.matchedDims = [...new Set([`⚠️ 中途路由切换后模型（${habitRoute.fromLabel} → ${habitRoute.toLabel}）`, ...(cand.matchedDims || [])])];
-        }
-      }
-      const hasPreInMap = [...byKey.values()].some(c => c && c.preRouteModel);
-      if (!hasPreInMap && habitRoute.fromLabel) {
-        const fromCanonLabel = habitRoute.fromCanon || habitRoute.fromLabel;
-        const fromKey = canonKey(fromCanonLabel);
-        const fhc = habitRoute.fromHabitCand;
-        const fMatch = Number(fhc?.match || habitRoute.fromRevCand?.match || 95.8);
-        if (fromKey && fromKey !== toCanonKey) {
-          byKey.set(fromKey, {
-            key: fromKey,
-            id: fhc?.id || habitRoute.fromRevCand?.id || fromCanonLabel,
-            label: fromCanonLabel,
-            canon: fromCanonLabel,
-            revPct: habitRoute.fromRevCand ? fMatch : null,
-            fpPct: fhc ? fMatch : null,
-            habitPct: fhc ? fMatch : null,
-            match: fMatch,
-            combinedPct: fMatch,
-            dualSum: fMatch,
-            combinedWeight: 175,
-            source: habitRoute.fromRevCand ? 'rev' : 'fp',
-            habitSource: Boolean(fhc),
-            both: false,
-            diophantinePassed: false,
-            preRouteModel: true,
-            matchedDims: [
-              `⚠️ 路由前模型（前序${habitRoute.fromRevCand ? ' /cost ' : '习惯'}锁定，第 #${habitRoute.toTurn || '?'} 轮起已切换）`,
-              ...(fhc?.matchedDims || []),
-            ],
-          });
+          cand.combinedWeight = Math.max(cand.combinedWeight, 120);
         }
       }
     }
-    const merged = [...byKey.values()].filter(x => !violatesThinkingScope(x.id) && !violatesThinkingScope(x.label)).sort((a, b) => {
-      if (Boolean(a.userCorrected) !== Boolean(b.userCorrected)) return Number(Boolean(b.userCorrected)) - Number(Boolean(a.userCorrected));
-      // if (Boolean(a.hasDual) !== Boolean(b.hasDual)) return Number(Boolean(b.hasDual)) - Number(Boolean(a.hasDual)); ((b.displayMatch || 0) - (a.displayMatch || 0))
-      if (Boolean(a.routedTarget) !== Boolean(b.routedTarget)) return Number(Boolean(b.routedTarget)) - Number(Boolean(a.routedTarget));
-      if (Boolean(a.preRouteModel) !== Boolean(b.preRouteModel)) return Number(Boolean(b.preRouteModel)) - Number(Boolean(a.preRouteModel));
-      const aDual = Boolean(!a.preRouteModel && a.both && (a.revPct || 0) > 0 && ((a.habitPct ?? a.fpPct) || 0) > 0);
-      const bDual = Boolean(!b.preRouteModel && b.both && (b.revPct || 0) > 0 && ((b.habitPct ?? b.fpPct) || 0) > 0);
-      if (aDual !== bDual) return Number(bDual) - Number(aDual);
-      const aStrongDio = Boolean(!a.preRouteModel && a.diophantinePassed && (a.match || 0) >= 70);
-      const bStrongDio = Boolean(!b.preRouteModel && b.diophantinePassed && (b.match || 0) >= 70);
-      if (aStrongDio !== bStrongDio) return Number(bStrongDio) - Number(aStrongDio);
-      const aComb = Number(a.combinedPct ?? a.match ?? 0);
-      const bComb = Number(b.combinedPct ?? b.match ?? 0);
-      return (
-        (bComb - aComb) ||
-        ((b.dualSum ?? b.combinedWeight ?? b.match ?? 0) - (a.dualSum ?? a.combinedWeight ?? a.match ?? 0)) ||
-        ((b.combinedWeight ?? b.match) - (a.combinedWeight ?? a.match)) ||
-        (b.match - a.match) ||
-        (Number(b.diophantinePassed) - Number(a.diophantinePassed)) ||
-        ((b.revPct ?? b.fpPct ?? 0) - (a.revPct ?? a.fpPct ?? 0))
+
+    const merged = [...byFam.values()]
+      .filter(x => !violatesThinkingScope(x.id) && !violatesThinkingScope(x.label))
+      .sort((a, b) =>
+        (Number(Boolean(b.userCorrected)) - Number(Boolean(a.userCorrected))) ||
+        (Number(Boolean(b.routedTarget)) - Number(Boolean(a.routedTarget))) ||
+        ((b.combinedWeight ?? b.match ?? 0) - (a.combinedWeight ?? a.match ?? 0)) ||
+        ((b.match ?? 0) - (a.match ?? 0)) ||
+        (Number(Boolean(b.diophantinePassed)) - Number(Boolean(a.diophantinePassed)))
       );
-    });
+
     if (habitRoute) merged._habitRoute = habitRoute;
     if (isOpenThink) {
       const topOpen = merged[0];
@@ -11959,6 +11952,8 @@ const BillingProbe = (() => {
           revPct: 75,
           fpPct: null,
           match: 75,
+          combinedPct: 75,
+          combinedWeight: 75,
           source: 'rev',
           both: false,
           diophantinePassed: false,
@@ -12016,7 +12011,8 @@ const BillingProbe = (() => {
     const tailPart = tailMsg?.parts?.at(-1);
     const tailLen = typeof tailPart?.text === 'string' ? tailPart.text.length : (typeof tailPart?.inputText === 'string' ? tailPart.inputText.length : 0);
     const busySig = chat?.busy ? `1:${tailMsg?.id || ''}:${tailMsg?.parts?.length || 0}:${tailLen >> 8}:${chat?.fmt?.tN ? (chat.fmt.tN >> 4) : 0}` : '0';
-    const makeSumCacheKey = (mObj, latestId = compTail?.id) => sid ? `${state.at || 0}:${state.status || ''}:${state.httpStatus || 0}:${state.retryAt || 0}:${state.pending ? 1 : 0}:${latestId || ''}:${chat?.messages?.length || 0}:${msgDigest}:${busySig}:${mObj?.at || 0}:${mObj?.name || ''}:${mObj?.reverseVer || 0}:${mObj?.routed ? 1 : 0}:${trace?.done ? 1 : 0}:${isCostProbeEnabled() ? 1 : 0}:${bRev}:${cRev}:${rf.rev ? 1 : 0}:${rf.habit ? 1 : 0}` : '';
+    const tRev = typeof TihuHub !== 'undefined' && typeof TihuHub.syncRevision === 'function' ? TihuHub.syncRevision() : 0;
+    const makeSumCacheKey = (mObj, latestId = compTail?.id) => sid ? `${state.at || 0}:${state.status || ''}:${state.httpStatus || 0}:${state.retryAt || 0}:${state.pending ? 1 : 0}:${latestId || ''}:${chat?.messages?.length || 0}:${msgDigest}:${busySig}:${mObj?.at || 0}:${mObj?.name || ''}:${mObj?.reverseVer || 0}:${mObj?._tihuEngineFixVer || 0}:${mObj?.routed ? 1 : 0}:${trace?.done ? 1 : 0}:${isCostProbeEnabled() ? 1 : 0}:${bRev}:${cRev}:${tRev}` : '';
     const preCacheKey = makeSumCacheKey(model, compTail?.id);
     if (preCacheKey && summaryCache.has(sid)) {
       const hit = summaryCache.get(sid);
@@ -12103,7 +12099,7 @@ const BillingProbe = (() => {
       (diagnostics?.samples?.observations > 0)
     );
     try {
-    if (!opts?.readOnly && !opts?.noModelSync && !isFullEncodedTitle && (isActiveOrLoadedChat || hasLocalSyncEvidence) && sid && mergedCandidates.length > 0 && (!model || ((!model.userCorrected || Boolean(out.habitRoute?.routed && out.habitRoute?.fromBank)) && !(model.fingerprint?.result && !model.reverseInferred && !model.habitInferred && !model.billingProbe)))) {
+    if (!opts?.readOnly && !opts?.noModelSync && (!isFullEncodedTitle || opts?.commit === true || (Number(model?._tihuEngineFixVer) || 0) < 15 || Boolean(mergedCandidates[0]?.isPelicanHtml)) && (isActiveOrLoadedChat || hasLocalSyncEvidence) && sid && mergedCandidates.length > 0 && (!model || ((!model.userCorrected || Boolean(out.habitRoute?.routed && out.habitRoute?.fromBank)) && !(model.fingerprint?.result && !model.reverseInferred && !model.habitInferred && !model.billingProbe)))) {
       const top0 = mergedCandidates[0], top1 = mergedCandidates[1];
       const hr = out.habitRoute;
       const isNowRouted = Boolean(top0?.routed || hr?.routed || diagnostics?.routeSwitched || diagnostics?.effortDowngraded || diagnostics?.routeType);
@@ -12139,7 +12135,7 @@ const BillingProbe = (() => {
           : null;
         const nextScore = calcRevSc ?? top0.habitScore ?? model?.reverseScore ?? model?.habitScore ?? undefined;
         const isHabitWinner = Boolean((top0.habitSource || top0.source === 'fp' || top0.structuralRev) && (!top0.revPct || top0.structuralRev));
-        const isLockedAutoOpen = Boolean(model && (model.name === '开源模型' || model.reverseCandidateId === 'open-source') && !model.manualOpenInferred && !model.userCorrected);
+        const isLockedAutoOpen = Boolean(model && (model.name === '开源模型' || model.reverseCandidateId === 'open-source') && !model.manualOpenInferred && !model.userCorrected && !model.tihuRecognized);
         const rAnnotations = isNowRouted
           ? applyChatRouteAnnotations(
               sid, chat, diagnostics, model, hr,
@@ -12225,7 +12221,15 @@ const BillingProbe = (() => {
             delete syncedEntry.lastRouteNotice;
             delete syncedEntry.routeNotices;
           }
-          const syncedFam = /claude|anthropic|opus|sonnet|haiku|fable/i.test(topCanon) ? 'claude' : /gemini|google|argon|barium/i.test(topCanon) ? 'gemini' : /gpt|openai|\bsol\b|luna|astra|terra/i.test(topCanon) ? 'gpt' : /muse|spark|\bmeta\b/i.test(topCanon) ? 'muse' : /grok|xai/i.test(topCanon) ? 'grok' : 'compat';
+          if (top0.tihuLocked) {
+            syncedEntry.tihuRecognized = true;
+            syncedEntry.tihuExact = Boolean(top0.tihuExact || model?.tihuExact);
+            syncedEntry.tihuConfidence = nextMatch;
+            if (top0.vendorId) syncedEntry.vendor = top0.vendorId;
+            if (top0.tihuFamily) syncedEntry.family = top0.tihuFamily;
+            if (Array.isArray(top0.matchedDims) && top0.matchedDims.length) syncedEntry.habitTags = top0.matchedDims;
+          }
+          const syncedFam = /claude|anthropic|opus|sonnet|haiku|fable/i.test(topCanon) ? 'claude' : /gemini|google|argon|carbon|barium/i.test(topCanon) ? 'gemini' : /gpt|openai|\bsol\b|luna|astra|terra/i.test(topCanon) ? 'gpt' : /muse|spark|\bmeta\b/i.test(topCanon) ? 'muse' : /grok|xai/i.test(topCanon) ? 'grok' : 'compat';
           syncedEntry.fam = syncedFam;
           if (syncedFam !== 'claude' && /闭合推理|tc_/.test(String(syncedEntry.why || ''))) delete syncedEntry.why;
           Models.set(sid, syncedEntry);
@@ -12369,21 +12373,25 @@ const BillingProbe = (() => {
     if (known?.userCorrected && !interactive) {
       return { entry: known, best, close: [best], standout: true, preimage: sum.preimage, payment: sum.payment };
     }
-    if (known?.fingerprint?.result && !interactive) {
+    if (known?.fingerprint?.result && !interactive && !force && !forceLock && !preferLatestTurn && (Number(known._tihuEngineFixVer) || 0) >= 15) {
       return { entry: known, best, close: [best], standout: true, preimage: sum.preimage, payment: sum.payment };
     }
     const cloudTitle = (typeof History !== 'undefined' && History.byId?.(sid)?.title) || chat?.title || '';
     const restoredMeta = typeof TitleSync !== 'undefined' ? TitleSync.restored?.(sid) : null;
     const compAsstForGuard = Array.isArray(chat?.messages) ? chat.messages.filter(x => x && x.role === 'assistant' && !x.failed && x.status !== 'failed' && x.status !== 'pending') : [];
     const hasLoadedMsgs = compAsstForGuard.length > 0;
-    const hasNewerLoadedTurn = Boolean(hasLoadedMsgs && ((compAsstForGuard.length > (Number(known?.completedTurnCount) || 0)) || !known?.lastMessageId || (compAsstForGuard.at(-1)?.id && compAsstForGuard.at(-1).id !== known.lastMessageId) || (known?.reverseVer || 0) < 187));
-    if (!interactive && !forceLock && ((typeof TitleCipher !== 'undefined' && TitleCipher.isEncoded?.(cloudTitle)) || (restoredMeta && !restoredMeta.fromPrefix)) && !(known?.lastMessageId && compAsstForGuard.at(-1)?.id && compAsstForGuard.at(-1).id !== known.lastMessageId)) {
+    const needsV12Audit = !known || (Number(known._tihuEngineFixVer) || 0) < 15;
+    const hasNewerLoadedTurn = Boolean(hasLoadedMsgs && ((compAsstForGuard.length > (Number(known?.completedTurnCount) || 0)) || !known?.lastMessageId || (compAsstForGuard.at(-1)?.id && compAsstForGuard.at(-1).id !== known.lastMessageId) || (known?.reverseVer || 0) < 187 || needsV12Audit));
+    if (!interactive && !force && !forceLock && !needsV12Audit && ((typeof TitleCipher !== 'undefined' && TitleCipher.isEncoded?.(cloudTitle)) || (restoredMeta && !restoredMeta.fromPrefix)) && !(known?.lastMessageId && compAsstForGuard.at(-1)?.id && compAsstForGuard.at(-1).id !== known.lastMessageId)) {
       return { entry: known, best, close: [best], standout: true, preimage: sum.preimage, payment: sum.payment };
     }
-    if (!interactive && !forceLock && !hasLoadedMsgs && restoredMeta?.fromPrefix && (known?.reverseVer || 0) >= 174) {
+    if (!interactive && !force && !forceLock && !needsV12Audit && !hasLoadedMsgs && restoredMeta?.fromPrefix && (known?.reverseVer || 0) >= 174) {
       return { entry: known, best, close: [best], standout: true, preimage: sum.preimage, payment: sum.payment };
     }
-    const hasRealEvidence = (d?.samples?.observations > 0) || Boolean(best.habitSource || best.habitPct || known?.fingerprint?.result || known?.reverseInferred || known?.billingProbe) || ARGON_HIGH_SIDS.has(sid) || SOL_61_SIDS.has(sid) || sid === '01a13f8c-41c2-7ad3-8e77-73feb405f68d';
+    if (!interactive && known?.tihuAuthoritative && !needsV12Audit && !best?.tihuLocked && !(known?.lastMessageId && compAsstForGuard.at(-1)?.id && compAsstForGuard.at(-1).id !== known.lastMessageId)) {
+      return { entry: known, best, close: [best], standout: true, preimage: sum.preimage, payment: sum.payment };
+    }
+    const hasRealEvidence = (d?.samples?.observations > 0) || Boolean(best.habitSource || best.habitPct || known?.fingerprint?.result || known?.reverseInferred || known?.billingProbe || known?.tihuRecognized);
     if (!hasRealEvidence && !interactive && !forceLock && !fallbackQuestionMark) return null;
     const hasAuthoritativeApi = known && !known.guess && !known.fromTitle && !known.reverseInferred && !known.billingProbe && (known.response || (known.internal && !known.billingProbe) || known.fingerprint?.apiIdentity);
     if (hasAuthoritativeApi && !interactive) return { entry: known, best, close: [best], preimage: sum.preimage, payment: sum.payment };
@@ -12536,8 +12544,22 @@ const BillingProbe = (() => {
       reverseCandidateId: (detectedRouteType && d?.routedModelId) ? d.routedModelId : best.id,
       reverseLabel: (detectedRouteType && routeToLabel) ? routeToLabel : (curDecomp?.displayLabel || best.label || best.id),
       reverseEffort: curEffort || null,
-      reverseCandidates: Array.isArray(sum.mergedCandidates) ? sum.mergedCandidates.filter(c => c && !c.structuralRev && !c.habitSource && (c.source === 'rev' || (c.revPct != null && c.revPct > 0))).slice(0, 5) : [],
-      habitCandidates: freshHabitList ? freshHabitList.slice(0, 5) : (Array.isArray(sum.mergedCandidates) ? sum.mergedCandidates.filter(c => c && (c.habitPct != null || c.habitSource || c.source === 'fp')).slice(0, 5) : (known?.habitCandidates || undefined)),
+      _tihuEngineFixVer: 15,
+      ...(best.tihuLocked ? {
+        tihuRecognized: true,
+        tihuAuthoritative: true,
+        tihuExact: Boolean(best.tihuExact),
+        tihuConfidence: Math.round(best.match * 10) / 10,
+      } : {}),
+      reverseCandidates: Array.isArray(sum.mergedCandidates)
+        ? sum.mergedCandidates
+            .filter(c => c && !c.structuralRev && c.revPct != null && c.revPct > 0)
+            .map(c => ({ ...c, match: c.revPct, habitSource: false }))
+            .slice(0, 6)
+        : [],
+      habitCandidates: freshHabitList
+        ? freshHabitList.slice(0, 6)
+        : (Array.isArray(sum.mergedCandidates) ? sum.mergedCandidates.slice(0, 6) : (known?.habitCandidates || undefined)),
       reverseTiedCount: standout ? 1 : Math.max(close.length, 2),
       reverseEpoch: best.matchedVariant || '2026-10-15',
       reverseVer: 187,
@@ -12592,8 +12614,16 @@ const BillingProbe = (() => {
         }
         nextEntry.fingerprint = syncedFp;
       }
+    } else if (known?.tihuAuthoritative && (known?.routed || known?.effortDowngraded) && !interactive) {
+      nextEntry.routed = Boolean(known.routed);
+      nextEntry.effortDowngraded = Boolean(known.effortDowngraded);
+      if (known.routeType) nextEntry.routeType = known.routeType;
+      if (known.routeFrom) nextEntry.routeFrom = known.routeFrom;
+      if (known.routeTo) nextEntry.routeTo = known.routeTo;
+      if (known.routeReason) nextEntry.routeReason = known.routeReason;
     } else {
       nextEntry.routed = false;
+      nextEntry.effortDowngraded = false;
       delete nextEntry.routeType;
       delete nextEntry.routeFrom;
       delete nextEntry.routeTo;
@@ -12605,7 +12635,7 @@ const BillingProbe = (() => {
       delete nextEntry.userCorrected;
       delete nextEntry.userCorrectedAt;
     }
-    const changed = !known || known.name !== nextEntry.name || Boolean(known.routed) !== Boolean(nextEntry.routed) || known.routeType !== nextEntry.routeType || known.routeTo !== nextEntry.routeTo || Boolean(known.uncertain) !== Boolean(nextEntry.uncertain) || Boolean(known.pendingConfirm) !== Boolean(nextEntry.pendingConfirm) || known.reverseMatch !== nextEntry.reverseMatch || known.reverseScore !== nextEntry.reverseScore || known.guess !== nextEntry.guess || Boolean(known.fromTitle) !== Boolean(nextEntry.fromTitle);
+    const changed = !known || needsV12Audit || known.name !== nextEntry.name || known.effort !== nextEntry.effort || Boolean(known.routed) !== Boolean(nextEntry.routed) || Boolean(known.effortDowngraded) !== Boolean(nextEntry.effortDowngraded) || known.routeType !== nextEntry.routeType || known.routeTo !== nextEntry.routeTo || Boolean(known.uncertain) !== Boolean(nextEntry.uncertain) || Boolean(known.pendingConfirm) !== Boolean(nextEntry.pendingConfirm) || known.reverseMatch !== nextEntry.reverseMatch || known.reverseScore !== nextEntry.reverseScore || known.guess !== nextEntry.guess || Boolean(known.fromTitle) !== Boolean(nextEntry.fromTitle);
     if (typeof Models !== 'undefined' && (changed || interactive)) {
       Models.set(sid, nextEntry);
       summaryCache.delete(sid);
@@ -12614,17 +12644,16 @@ const BillingProbe = (() => {
     }
     if (typeof Titles !== 'undefined' && (changed || interactive || forceLock) && (!hasAuthoritativeApi || interactive || detectedRouteType)) {
       try {
-        if (typeof Notes !== 'undefined') {
-          const nRec = Notes.owns?.(sid) ? Notes.all[sid] : Notes.rec?.(sid, chat?.sentAt || Date.now());
-          if (nRec) { delete nRec.modelData; delete nRec.modelStamp; }
-          Notes.save?.();
-        }
-        Titles.local?.(sid);
-        const shouldCloudSync = Boolean(standout && (interactive || (typeof Prefs !== 'undefined' && Prefs.autoTitle) || (typeof TitleSync !== 'undefined' && TitleSync.shouldGoldPrefix?.(sid))));
-        if (shouldCloudSync) {
-          Titles.capture?.(sid, chat?.sentAt);
-          Titles.touch(sid);
-          Titles.kick(true);
+        const shouldCloudSync = Boolean(standout && (interactive || (typeof Prefs === 'undefined' || Prefs.autoTitle !== false) || (typeof TitleSync !== 'undefined' && TitleSync.shouldGoldPrefix?.(sid))));
+        if (typeof Titles.syncRecognized === 'function') {
+          Titles.syncRecognized(sid, { cloud: shouldCloudSync, sentAt: chat?.sentAt });
+        } else {
+          Titles.local?.(sid);
+          if (shouldCloudSync) {
+            Titles.capture?.(sid, chat?.sentAt);
+            Titles.touch(sid);
+            Titles.kick(true);
+          }
         }
       } catch {}
     }
@@ -12683,8 +12712,19 @@ const BillingProbe = (() => {
         return { entry, best: { label: '开源模型', match: 100 }, close: [], standout: true };
       }
       const skipCost = !isCostProbeEnabled() || (isOpenChat && !interactive) || (globalCost429Until > now() && !interactive) || (globalCost403Until > now() && !interactive);
-      const alreadyReady = Boolean(skipCost || (latestPre && !stPre.error && stPre.status === 'ready' && stPre.info && !stPre.info.reason && (usedPre.some(r => r.messageId === latestPre.id) || coveredPre.includes(latestPre.id))));
-      // 先通过对话记录与工具调用执行一次完整的习惯+结构反推，确保即使 /cost 受阻也立即锁定真实模型
+      if (interactive) {
+        clearCachedCostDoc(sid);
+        summaryCache.delete(sid);
+      }
+      const alreadyReady = Boolean(skipCost || (!interactive && latestPre && !stPre.error && stPre.status === 'ready' && stPre.info && !stPre.info.reason && (usedPre.some(r => r.messageId === latestPre.id) || coveredPre.includes(latestPre.id))));
+      // 先补全可能被折叠为 [cached] 的鹈鹕/HTML 代码并运行醍醐 HTML/SVG 识别（支持最新轮次与路由检测），再执行计费+习惯综合反推
+      if (typeof TihuHub !== 'undefined') {
+        try {
+          if (!TihuHub.isReady?.() && TihuHub.sync) await TihuHub.sync({ force: false, quiet: true, skipRetroScan: true });
+          if (TihuHub.healChatHtmlStubs) await TihuHub.healChatHtmlStubs(sid, chat);
+          if (TihuHub.recognizePelicanChatAndApply) await TihuHub.recognizePelicanChatAndApply(sid, chat, { allowHealStub: true, preferLatestTurn: true, force: true, clearUserCorrected: Boolean(interactive) });
+        } catch {}
+      }
       try { ChatHabitFingerprint.identifyAndApply(chat, { force: true, interactive: Boolean(interactive) }); } catch {}
       summaryCache.delete(sid);
       if (skipCost) {
@@ -12741,6 +12781,10 @@ const BillingProbe = (() => {
         }
       }
       summaryCache.delete(sid);
+      if (typeof TihuHub !== 'undefined' && TihuHub.recognizePelicanChatAndApply) {
+        try { await TihuHub.recognizePelicanChatAndApply(sid, chat, { allowHealStub: true, preferLatestTurn: true, force: true, clearUserCorrected: Boolean(interactive) }); } catch {}
+        summaryCache.delete(sid);
+      }
       let applied = applyReverseIdentity(chat, { interactive: true, forceLock: true });
       if (!applied) {
         const habApplied = ChatHabitFingerprint.identifyAndApply(chat, { force: true, fromCostFallback: true, interactive: true });
@@ -12796,39 +12840,11 @@ const BillingProbe = (() => {
     const cur = String(UI.host?.account?.id || UI.me?.id || '');
     return !owner || !cur || cur === owner;
   };
-  const ARGON_HIGH_SIDS = new Set([
-    '01a148c8-6f04-710a-88aa-9560c56c0bd4',
-    '01a14957-ba36-7f15-9640-56b3d0ec48ee',
-    '01a148ca-9c83-77c7-8d6c-6dd42a957363',
-    '01a148c6-1fc1-719e-b17c-e867ca76a520',
-    '01a14952-47dd-77e8-91cc-03516f61aa29',
-    '01a14945-7382-7327-8fd5-e99f94473d3d',
-  ]);
-  const GEMINI_FLASH_FIX_SIDS = new Set([
-    '01a148b9-30df-7fb9-87be-135772d6a4b0',
-    '01a14a34-814a-792f-b7c1-ad747c5797ff',
-    '01a151de-5840-75e5-b5e0-9bf662f543dd',
-  ]);
-  const SOL_61_SIDS = new Map([
-    ['01a1492d-0b0f-734b-a06d-578eef051a20', { canon: 'gpt-6.1-sol-xhigh', label: 'GPT 6.1 Sol (xHigh)', effort: 'xHigh' }],
-    ['01a148c5-fbc8-7ce1-a86c-9cc9fa1f5d54', { canon: 'gpt-6.1-sol-high', label: 'GPT 6.1 Sol (High)', effort: 'High' }],
-    ['01a13f78-0d74-716a-97e7-cdeb3c7a5a3c', { canon: 'gpt-6.1-sol-xhigh', label: 'GPT 6.1 Sol (xHigh)', effort: 'xHigh' }],
-    ['01a151e0-c58e-7766-9c65-f7287592c61b', { canon: 'gpt-6.1-sol-high', label: 'GPT 6.1 Sol (High)', effort: 'High', habitPreferred: true }],
-    ['01a1440a-e8c4-7939-8910-ffe946582807', { canon: 'gpt-6.1-sol-high', label: 'GPT 6.1 Sol (High)', effort: 'High' }],
-    ['01a14d16-a416-761f-af0d-f93f30b2731e', { canon: 'gpt-6.1-sol-high', label: 'GPT 6.1 Sol (High)', effort: 'High' }],
-    ['01a14ce5-b4b6-7962-9f20-c3cbc66c1a54', {
-      canon: 'gpt-6.1-sol-max',
-      label: 'GPT 6.1 Sol (Max)',
-      effort: 'Max',
-      match: 99.8,
-      score: 91.2,
-      reverseTokens: { input: 43561, cacheRead: 115434, cacheWrite: 0, output: 42947, thinking: 15392, total: 201942 },
-      reverseTotalTokens: { input: 80116, cacheRead: 247166, cacheWrite: 0, output: 49544, thinking: 21121, total: 376826 },
-    }],
-  ]);
-  const HAIKU_55_MEDIUM_SIDS = new Set([
-    '01a13ee4-294d-7e67-8554-fad3b69284f6',
-  ]);
+  // V11: 移除早期硬编码特定会话 SID 白名单，统一走通用多信号融合管道
+  const ARGON_HIGH_SIDS = new Set();
+  const GEMINI_FLASH_FIX_SIDS = new Set();
+  const SOL_61_SIDS = new Map();
+  const HAIKU_55_MEDIUM_SIDS = new Set();
   let _fullOpus56MigratedAcct = '';
   let _fullOpus56MigratedCount = -1;
   const _upgradedCacheSids = new Set();
@@ -12842,9 +12858,8 @@ const BillingProbe = (() => {
       return Boolean(c1 && c2 && c1 !== c2);
     };
     const isOpus55Needs56 = (idKey, mObj) => Boolean(
-      mObj && /opus[-\s]*5\.5/i.test(String(mObj.name || '')) &&
-      (idKey === '01a13f8c-41c2-7ad3-8e77-73feb405f68d' ||
-        (mObj.reverseTokens?.output > 65536) ||
+      mObj && !mObj.tihuAuthoritative && (mObj._tihuEngineFixVer || 0) < 15 && /opus[-\s]*5\.5/i.test(String(mObj.name || '')) &&
+      ((mObj.reverseTokens?.output > 65536) ||
         ((mObj.reverseTokens?.thinking || 0) > 60000) ||
         ((mObj.reverseTotalTokens?.output || 0) > 95000))
     );
@@ -12857,10 +12872,10 @@ const BillingProbe = (() => {
       if (ARGON_HIGH_SIDS.has(idKey)) return /sonnet[-\s]*5|gpt[-\s]*6\.1[-\s]*sol|gpt[-\s]*6[-\s]*sol|claude-haiku/i.test(nm) || (mObj.reverseVer || 0) < 140;
       return false;
     };
-    const needsV197Recalib = (mObj) => Boolean(sid && mObj && !mObj.userCorrected && mObj.habitInferred && (mObj._v197CalibVer || 0) < 3 && (mObj.habitFeatures?.meta?.htmlMaxLen > 0 || mObj.habitFeatures?.meta?.writtenChars > 0));
+    const needsV197Recalib = (mObj) => Boolean(mObj && !mObj.userCorrected && ((sid && mObj.habitInferred && (mObj._v197CalibVer || 0) < 3 && (mObj.habitFeatures?.meta?.htmlMaxLen > 0 || mObj.habitFeatures?.meta?.writtenChars > 0)) || (mObj.tihuRecognized && (mObj._tihuEngineFixVer || 0) < 2)));
     if (sid) {
       const mQuick = Models.get(sid);
-      if (mQuick && !needsV197Recalib(mQuick) && ((mQuick.reverseVer || 0) >= 187 || (SOL_61_SIDS.has(sid) && (mQuick.reverseVer || 0) >= 164)) && !hasNameRevMismatch(mQuick) && !(mQuick.routed && (mQuick.reverseVer || 0) < 187) && !isSpecialSidNeedsFix(sid, mQuick) && !isOpus55Needs56(sid, mQuick)) {
+      if (mQuick && ((mQuick._tihuEngineFixVer || 0) >= 15 || (!needsV197Recalib(mQuick) && ((mQuick.reverseVer || 0) >= 187 || (SOL_61_SIDS.has(sid) && (mQuick.reverseVer || 0) >= 164)) && !hasNameRevMismatch(mQuick) && !(mQuick.routed && (mQuick.reverseVer || 0) < 187) && !isSpecialSidNeedsFix(sid, mQuick) && !isOpus55Needs56(sid, mQuick)))) {
         return;
       }
     } else {
@@ -12893,7 +12908,7 @@ const BillingProbe = (() => {
       } catch {}
     };
     for (const [id, m] of targets) {
-      if (m && !needsV197Recalib(m) && ((m.reverseVer || 0) >= 187 || (SOL_61_SIDS.has(id) && (m.reverseVer || 0) >= 164)) && !hasNameRevMismatch(m) && !(m.routed && (m.reverseVer || 0) < 187) && !isSpecialSidNeedsFix(id, m) && !isOpus55Needs56(id, m)) {
+      if (m && ((m._tihuEngineFixVer || 0) >= 15 || (!needsV197Recalib(m) && ((m.reverseVer || 0) >= 187 || (SOL_61_SIDS.has(id) && (m.reverseVer || 0) >= 164)) && !hasNameRevMismatch(m) && !(m.routed && (m.reverseVer || 0) < 187) && !isSpecialSidNeedsFix(id, m) && !isOpus55Needs56(id, m)))) {
         continue;
       }
       const nmCur = String(m?.name || m?.candidateName || m?.reverseLabel || m?.rawLabel || '');
@@ -13440,11 +13455,15 @@ const BillingProbe = (() => {
         if (sid && !hasLoadedAsst && typeof MsgCache !== 'undefined' && typeof MsgCache.get === 'function' && !chatObj._upgradingFromCache && !_upgradedCacheSids.has(id)) {
           _upgradedCacheSids.add(id);
           chatObj._upgradingFromCache = true;
-          Promise.resolve(MsgCache.get(id)).then(cached => {
+          Promise.resolve(MsgCache.get(id)).then(async cached => {
             chatObj._upgradingFromCache = false;
             if (cached && Array.isArray(cached.messages) && cached.messages.length > 0) {
               if (!Array.isArray(chatObj.messages) || !chatObj.messages.length) {
                 chatObj.messages = cached.messages.map(x => ({ ...x, v: 0 }));
+              }
+              if (typeof TihuHub !== 'undefined' && TihuHub.healChatHtmlStubs) {
+                try { await TihuHub.healChatHtmlStubs(id, chatObj); } catch {}
+                try { await TihuHub.recognizePelicanChatAndApply?.(id, chatObj, { allowHealStub: false }); } catch {}
               }
               summaryCache.delete(id);
               const reAsync = ChatHabitFingerprint.identifyAndApply(chatObj, { force: true, fromCostFallback: true });
@@ -13516,8 +13535,7 @@ const BillingProbe = (() => {
         continue;
       }
       if (!/opus[-\s]*5\.5/i.test(nm)) continue;
-      const is56 = id === '01a13f8c-41c2-7ad3-8e77-73feb405f68d' ||
-        (m.reverseTokens?.output > 65536) ||
+      const is56 = (m.reverseTokens?.output > 65536) ||
         ((m.reverseTokens?.thinking || 0) > 60000) ||
         ((m.reverseTotalTokens?.output || 0) > 95000);
       if (!is56) continue;
@@ -13550,6 +13568,13 @@ const BillingProbe = (() => {
     chat._inAutomatic = true;
     try {
       try { upgradeCachedOpus56(chat.sid); } catch {}
+      if (typeof TihuHub !== 'undefined' && TihuHub.isReady?.() && chat.messages?.length) {
+        const mPreTihu = typeof Models !== 'undefined' ? Models.get(chat.sid) : null;
+        const compLastId = globalThis.ArenaBilling.completed(chat).at(-1)?.id || '';
+        if (!mPreTihu?.userCorrected && (!mPreTihu?.tihuRecognized || (mPreTihu?._tihuEngineFixVer || 0) < 15 || (compLastId && mPreTihu.lastMessageId !== compLastId))) {
+          void TihuHub.recognizePelicanChatAndApply(chat.sid, chat, { allowHealStub: true, preferLatestTurn: true, force: true }).catch(() => {});
+        }
+      }
       if (shouldSkipCostForOpenSource(chat)) {
         markAsOpenSourceModel(chat);
         return;
@@ -13560,6 +13585,9 @@ const BillingProbe = (() => {
           chat._autoLoadingMsgs = true;
           Promise.resolve(chat.load()).catch(() => {}).finally(() => {
             chat._autoLoadingMsgs = false;
+            if (typeof TihuHub !== 'undefined' && TihuHub.isReady?.() && chat.messages?.length) {
+              void TihuHub.recognizePelicanChatAndApply(chat.sid, chat, { allowHealStub: true }).catch(() => {});
+            }
             if (shouldSkipCostForOpenSource(chat)) {
               markAsOpenSourceModel(chat);
               return;
@@ -13753,232 +13781,72 @@ const BillingProbe = (() => {
       if (cp) box.append(cp);
     }
 
-    // 在思考分和纠偏下面：可点击开关的「反推」「习惯」排名切换按钮 + 低饱和度数据胶囊区
-    const toggleRankMode = (which) => {
-      const cur = getRankFilter();
-      let next;
-      if (which === 'rev') {
-        next = cur.rev ? (cur.habit ? { rev: false, habit: true } : { rev: true, habit: true }) : { rev: true, habit: cur.habit };
-      } else {
-        next = cur.habit ? (cur.rev ? { rev: true, habit: false } : { rev: true, habit: true }) : { rev: cur.rev, habit: true };
-      }
-      setRankFilter(next);
-      try {
-        if (typeof Dock !== 'undefined') {
-          Dock.force = true;
-          Dock._pointerDownUntil = 0;
-          Dock.render?.(true);
-        }
-        UI?.renderListSoon?.();
-        UI?.renderTabs?.();
-      } catch (err) {
-        console.error('[toggleRankMode]', err);
-      }
-    };
-    const pills = h('div', { class: 'bp-pills' },
-      h('span', { class: 'bp-legend bp-rank-switch' },
-        h('button', {
-          type: 'button',
-          class: 'bp-leg bp-leg-rev bp-leg-toggle' + (rankFilter.rev ? ' is-on' : ' is-off'),
-          'aria-pressed': String(rankFilter.rev),
-          'data-tip': '点击开启/关闭「反推」排名（两个都亮着显示给反推加权的综合排名；关掉一个则只显示另一个排名）',
-          title: '点击开启/关闭反推排名',
-          onclick: e => { e?.stopPropagation?.(); toggleRankMode('rev'); }
-        }, icon('bolt'), '反推'),
-        h('button', {
-          type: 'button',
-          class: 'bp-leg bp-leg-fp bp-leg-toggle' + (rankFilter.habit ? ' is-on' : ' is-off'),
-          'aria-pressed': String(rankFilter.habit),
-          'data-tip': '点击开启/关闭「习惯」排名（两个都亮着显示给反推加权的综合排名；关掉一个则只显示另一个排名）',
-          title: '点击开启/关闭习惯排名',
-          onclick: e => { e?.stopPropagation?.(); toggleRankMode('habit'); }
-        }, icon('fingerprint'), '习惯')));
-    if (d.samples.observations > 0 && costOn) {
-      pills.append(iconPill('layers', d.samples.observations + 'R', `已采样配对 ${d.samples.observations} 轮完整账单回复`, 'neutral'));
-    }
-    if (!costOn) {
-      pills.append(iconPill('fingerprint', '纯习惯模式', '计费接口（/cost）开关已关闭：当前完全使用本地「对话习惯 + 对话记录结构反推 + 推理分 + 习惯库」识别，零网络请求、零 429 风险', 'ok'));
+    // ── V11 统一置信度 Top-6 排行榜（重权鹈鹕 HTML + 真实账单计费反推 + 可用协议习惯协同） ──
+    const m = (typeof mCard !== 'undefined' && mCard) || (typeof Models !== 'undefined' ? Models.get(sid) : null);
+    const topCand0 = sortedCands[0] || null;
+    const hasPelHtmlSig = Boolean(topCand0?.isPelicanHtml || m?.tihuRecognized);
+    const hasGenHtmlSig = Boolean(!hasPelHtmlSig && topCand0?.isGeneralHtml);
+    const hasCostSig = Boolean(costOn && !openSkip && sortedCands.some(r => r && r.revPct != null && r.revPct > 0 && !r.structuralRev));
+
+    const pills = h('div', { class: 'bp-pills' });
+    if (hasCostSig) {
+      pills.append(iconPill('bolt', (d.samples.observations > 0 ? d.samples.observations + 'R · ' : '') + '计费协同', '已融合真实 /cost 价格档位与整数 Token 原像计费推测', 'rev'));
+    } else if (!costOn) {
+      pills.append(iconPill('fingerprint', '本地零请求', '计费接口开关已关闭：使用 HTML 识别与纯净协议习惯融合', 'ok'));
     } else if (openSkip) {
-      pills.append(iconPill('fingerprint', '开源免请求', '检测到开源思考模型：已自动跳过 /cost 计费接口，使用对话习惯与推理分识别', 'neutral'));
+      pills.append(iconPill('fingerprint', hasPelHtmlSig ? '开源HTML识别' : '开源免请求', '检测到开源可见思考链：自动跳过 /cost 请求并严格限定开源模型域', 'neutral'));
     }
     if (!chargedInHero && combined.payment?.chargedUsd != null) {
-      pills.append(iconPill('pulse', fmtUsd(combined.payment.chargedUsd), `本轮实际扣费（chargedUsd）：${fmtUsd(combined.payment.chargedUsd)}`, 'rev'));
+      pills.append(iconPill('pulse', fmtUsd(combined.payment.chargedUsd), '本轮实际扣费（chargedUsd）：' + fmtUsd(combined.payment.chargedUsd), 'rev'));
     }
     if (combined.payment?.upstreamUsd != null) {
-      pills.append(iconPill('bolt', fmtUsd(combined.payment.upstreamUsd), `上游模型真实计费成本（upstreamUsd）：${fmtUsd(combined.payment.upstreamUsd)}`, 'rev'));
-    }
-    if (combined.payment?.basePriceUsd != null) {
-      pills.append(iconPill('info', fmtUsd(combined.payment.basePriceUsd), `官方 P50 基准参照费（basePriceUsd）：${fmtUsd(combined.payment.basePriceUsd)}`, 'neutral'));
+      pills.append(iconPill('bolt', fmtUsd(combined.payment.upstreamUsd), '上游模型真实计费成本（upstreamUsd）：' + fmtUsd(combined.payment.upstreamUsd), 'rev'));
     }
     if (combined.sessionPayment?.effectiveUsd != null) {
       const sp = combined.sessionPayment;
-      const recChecks = [
-        `会话累计实付总额（${sp.turns || sp.count || 1} 轮）：${fmtUsd(sp.effectiveUsd)}`,
-        sp.basePriceUsd != null ? `会话基准总额（basePriceUsd）：${fmtUsd(sp.basePriceUsd)}${sp.chargedIdentityOk ? ' · 扣费=2×基准价 ✓' : ''}` : null,
-        sp.upstreamUsd != null ? `会话上游原始成本（upstreamUsd）：${fmtUsd(sp.upstreamUsd)}${sp.channelIdentityOk ? ' · 四通道合计一致 ✓' : ''}` : null,
-        sp.preimageIdentityOk ? 'Token 原像与单价反算总额精确吻合 ✓' : null,
-      ].filter(Boolean).join('\n');
-      pills.append(iconPill('check', (sp.reconciled ? '核对✓ ' : '') + fmtUsd(sp.effectiveUsd), recChecks, sp.reconciled ? 'ok' : 'rev'));
+      pills.append(iconPill('layers', 'Σ ' + fmtUsd(sp.effectiveUsd), '会话累计实付总额（' + (sp.turns || sp.count || 1) + ' 轮）：' + fmtUsd(sp.effectiveUsd), 'neutral'));
     }
-    const tok = combined.preimage?.latest || combined.preimage?.totals;
-    if (tok && tok.total > 0) {
-      pills.append(iconPill('upload', fmtTokS(tok.input), `反推精确输入 Token：${tok.input.toLocaleString('en-US')} tok`, 'in'));
-      if (tok.cacheRead > 0) pills.append(iconPill('refresh', fmtTokS(tok.cacheRead), `反推精确缓存读取 Token：${tok.cacheRead.toLocaleString('en-US')} tok`, 'cache'));
-      if (tok.cacheWrite > 0) pills.append(iconPill('folder', fmtTokS(tok.cacheWrite), `反推精确缓存写入 Token：${tok.cacheWrite.toLocaleString('en-US')} tok`, 'cache'));
-      pills.append(iconPill('download', fmtTokS(tok.output), `反推精确输出+思考 Token：${tok.output.toLocaleString('en-US')} tok（合计 ${tok.total.toLocaleString('en-US')} tok）`, 'out'));
-    }
-    if (topCand?.diophantinePassed) {
-      pills.append(iconPill('check', '1e-10', '通过 BigInt 1e-10 量子区间丢番图整数精确解校验', 'ok'));
-    }
-    if (topCand?.effortProfile?.effort) {
-      pills.append(iconPill('spark', topCand.effortProfile.effort, `5维思考档位反推：${topCand.effortProfile.effort}（REI=${topCand.effortProfile.reiScore}${topCand.effortProfile.thinkTokens != null ? ' · 思考≈' + topCand.effortProfile.thinkTokens + ' tok' : ''}）`, 'rev'));
-    }
-    if (topCand?.matchedVariant) {
-      pills.append(iconPill('route', topCand.matchedVariant.slice(5), `命中价格纪元快照：${topCand.matchedVariant}`, 'neutral'));
-    }
-    const hrCard = s?.habitRoute || null;
-    const isRouteModel = Boolean(d.routeSwitched || d.routeType === 'model' || (mCard?.routed && mCard?.routeType !== 'effort') || (hrCard?.routed && hrCard?.routeType !== 'effort'));
-    const isRouteEffort = Boolean(!isRouteModel && (d.effortDowngraded || d.routeType === 'effort' || mCard?.routeType === 'effort' || hrCard?.routeType === 'effort'));
-    const rFromLbl = cleanModelLabel(d.initialModelLabel || hrCard?.fromLabel || mCard?.routeFrom || mCard?.lastRouteNotice?.fromLabel || '');
-    const rToLbl = cleanModelLabel(d.routedModelLabel || hrCard?.toLabel || mCard?.routeTo || mCard?.lastRouteNotice?.toLabel || topCand?.canon || topCand?.label || '');
-    const rReasonTxt = String(hrCard?.reason || mCard?.routeReason || mCard?.lastRouteNotice?.reason || '').trim();
-    const rTurnTxt = (hrCard?.toTurn || mCard?.lastRouteNotice?.toTurn) ? `第 #${hrCard?.toTurn || mCard?.lastRouteNotice?.toTurn} 轮起` : '';
+    const isRouteModel = Boolean(d.routeSwitched || d.routeType === 'model' || combined.habitRoute?.routed || m?.routeType === 'model' || (m?.routed && !d.effortDowngraded && m?.routeType !== 'effort'));
+    const isRouteEffort = Boolean(!isRouteModel && (d.effortDowngraded || d.routeType === 'effort' || m?.routeType === 'effort'));
+    const rFromLbl = cleanModelLabel(d.initialModelLabel || combined.habitRoute?.fromLabel || m?.routeFrom || '');
+    const rToLbl = cleanModelLabel(d.routedModelLabel || combined.habitRoute?.toLabel || m?.routeTo || m?.name || '');
+    const rTurnTxt = combined.habitRoute?.toTurn ? ('第 #' + combined.habitRoute.toTurn + ' 轮起') : '';
+    const rReasonTxt = d.routeReason || combined.habitRoute?.reason || m?.routeReason || '';
     if (isRouteModel) {
-      const rtDesc = (rFromLbl && rToLbl) ? `（${rFromLbl} → ${rToLbl}${rTurnTxt ? ' · ' + rTurnTxt : ''}）` : '';
-      pills.append(iconPill('alert', '路由换模', `检测到中途路由切换模型${rtDesc}${rReasonTxt ? ' · ' + rReasonTxt : ''}`, 'warn'));
+      pills.append(iconPill('alert', '中途路由', '检测到对话中途发生硬协议跨模型切换' + ((rFromLbl && rToLbl) ? ('（' + rFromLbl + ' → ' + rToLbl + '）') : ''), 'warn'));
     } else if (isRouteEffort) {
-      const efDesc = (d.initialEffort && d.latestEffort) ? `（${d.initialEffort} → ${d.latestEffort}）` : ((rFromLbl && rToLbl) ? `（${rFromLbl} → ${rToLbl}）` : '');
-      pills.append(iconPill('alert', '强度削弱', `检测到同型号的强度削弱${efDesc}`, 'warn'));
+      pills.append(iconPill('alert', '强度削弱', '检测到同型号的强度削弱', 'warn'));
     }
     if (pills.childNodes.length) box.append(pills);
     if (isRouteModel || isRouteEffort) {
       const stripText = isRouteEffort
-        ? `⚠️ 思考强度削弱：${rFromLbl || d.initialEffort || '原档位'} → ${rToLbl || d.latestEffort || '新档位'}${rTurnTxt ? '（' + rTurnTxt + '）' : ''}`
-        : `⚠️ 路由切换提醒：${rFromLbl || '前序模型'} → ${rToLbl || '当前模型'}${rTurnTxt ? '（' + rTurnTxt + '）' : ''}`;
+        ? ('⚠️ 思考强度削弱：' + (rFromLbl || d.initialEffort || '原档位') + ' → ' + (rToLbl || d.latestEffort || '新档位') + (rTurnTxt ? '（' + rTurnTxt + '）' : ''))
+        : ('⚠️ 路由切换提醒：' + (rFromLbl || '前序模型') + ' → ' + (rToLbl || '当前模型') + (rTurnTxt ? '（' + rTurnTxt + '）' : ''));
       box.append(h('div', { class: 'bp-route-strip', title: rReasonTxt || stripText }, icon('alert'), h('span', {}, stripText)));
     }
 
-    // 根据「反推」「习惯」开关状态过滤与排序候选列表
-    let displayCands = [];
-    if (rankFilter.rev && rankFilter.habit) {
-      displayCands = sortedCands
-        .map(r => {
-          const revVal = (r && r.revPct != null && r.revPct > 0) ? Math.max(0, Math.min(100, +r.revPct)) : null;
-          const rawHab = r?.habitPct ?? (r?.source === 'fp' || r?.both ? r?.fpPct : null);
-          const habVal = (rawHab != null && rawHab > 0) ? Math.max(0, Math.min(100, +rawHab)) : null;
-          const hasDual = Boolean(revVal != null && habVal != null);
-          const combinedMatch = r?.userCorrected
-            ? 100
-            : Number(r?.match ?? r?.combinedPct ?? (hasDual ? Math.min(100, Math.round((revVal * 0.55 + habVal * 0.45) * 10) / 10) : (revVal ?? habVal ?? 0)));
-          const dualSum = Math.round(((revVal || 0) + (habVal || 0)) * 10) / 10;
-          return {
-            ...r,
-            displayMatch: combinedMatch,
-            dualSum,
-            hasDual,
-            displayMode: 'both',
-          };
-        })
-        .slice(0, 5);
-    } else if (rankFilter.rev) {
-      // 仅看反推（严格仅展示真实 /cost 账单反推结果；无接口、403、429 或无效接口绝不伪造反推列表）
-      const revPool = sortedCands
-        .filter(r => r && !r.structuralRev && !r.zeroQuota && !r.zeroQuotaMode && r.revPct != null && r.revPct > 0)
-        .map(r => ({ ...r, displayMatch: +r.revPct, displayMode: 'rev-only' }));
-      displayCands = revPool
-        .sort((a, b) => (b.displayMatch - a.displayMatch) || (Number(Boolean(b.diophantinePassed)) - Number(Boolean(a.diophantinePassed))))
-        .slice(0, 5);
-    } else if (rankFilter.habit) {
-      const habMap = new Map();
-      // 优先以实时重算的 ChatHabitFingerprint.analyze 结果为准（确保导入习惯库或纠偏后点击重新测立即反映最新校准结果）
-      if (habitInfo && Array.isArray(habitInfo.candidates)) {
-        for (const hc of habitInfo.candidates) {
-          const hLabel = cleanModelLabel(hc.label || hc.id || '');
-          const canon = typeof Strength !== 'undefined' && Strength.canon ? Strength.canon(hLabel) : hLabel;
-          const k = canonKey(canon) || String(canon || hLabel).toLowerCase();
-          habMap.set(k, {
-            key: k,
-            id: hc.id || hLabel,
-            label: hLabel,
-            canon,
-            revPct: null,
-            fpPct: hc.match,
-            habitPct: hc.match,
-            userLearned: Boolean(hc.userLearned),
-            match: hc.match,
-            displayMatch: +hc.match,
-            displayMode: 'habit-only',
-            source: 'fp',
-            habitSource: true,
-            both: false,
-            matchedDims: hc.matchedDims || [],
-          });
-        }
-      }
-      for (const r of sortedCands) {
-        const hp = r?.habitPct ?? (r?.source === 'fp' ? r?.fpPct : null);
-        if (hp != null && hp > 0) {
-          const k = canonKey(r.canon || r.label || r.id) || r.key || r.label || r.id;
-          if (!habMap.has(k)) {
-            habMap.set(k, { ...r, displayMatch: +hp, displayMode: 'habit-only' });
-          } else {
-            const cur = habMap.get(k);
-            if (r.userCorrected) {
-              habMap.set(k, { ...cur, ...r, displayMatch: Math.max(cur.displayMatch || 0, +hp), displayMode: 'habit-only' });
-            }
-          }
-        }
-      }
-      displayCands = [...habMap.values()].sort((a, b) => (b.displayMatch - a.displayMatch)).slice(0, 5);
-    }
-
-    // 置信度前五模型：逐行展开展示；重叠置信度采用「大值作为背景色条、小值放在背景色条前面」双色显示，反推存在时优先展示反推百分比
+    const displayCands = sortedCands.slice(0, 6);
     for (const [idx, row] of displayCands.entries()) {
-      const revVal = (rankFilter.rev && row.revPct != null && row.revPct > 0) ? Math.max(0, Math.min(100, +row.revPct)) : null;
-      const rawHab = row.habitPct ?? (row.source === 'fp' || row.both ? row.fpPct : null);
-      const habVal = (rankFilter.habit && rawHab != null && rawHab > 0) ? Math.max(0, Math.min(100, +rawHab)) : null;
-      const hasDualOverlap = Boolean(rankFilter.rev && rankFilter.habit && revVal != null && habVal != null);
-      const shownPct = row.displayMatch != null
-        ? row.displayMatch
-        : (revVal != null && !row.structuralRev)
-          ? revVal
-          : hasDualOverlap
-            ? Math.max(revVal, habVal, Number(row.match || 0))
-            : (revVal ?? habVal ?? Number(row.match || 0));
-      const fit = Number(shownPct || 0).toFixed(1);
-      const isFpOnly = !hasDualOverlap && (habVal != null && revVal == null);
+      const shownPct = row.userCorrected ? 100 : Math.max(0, Math.min(100, Number(row.match ?? row.combinedPct ?? row.revPct ?? row.habitPct ?? 0)));
+      const fit = shownPct.toFixed(1);
+      const isTihuRow = Boolean(row.tihuLocked || row.htmlPct != null);
+      const isRevRow = Boolean(row.revPct != null && row.revPct > 0);
       const toneCls = (idx === 0 && (standout || displayCands.length === 1))
-        ? (' top ' + (hasDualOverlap ? 'tint-both' : isFpOnly ? 'tint-fp' : 'tint-rev'))
-        : (hasDualOverlap ? ' tint-both' : isFpOnly ? ' tint-fp' : ' tint-rev');
-      const srcTip = '点击此行纠偏 · 综合置信度 ' + fit + '%';
+        ? (' top ' + (isTihuRow && isRevRow ? 'tint-both' : isRevRow ? 'tint-rev' : 'tint-fp'))
+        : (isTihuRow && isRevRow ? ' tint-both' : isRevRow ? ' tint-rev' : ' tint-fp');
+      const detailParts = ['置信度 ' + fit + '%'];
+      if (row.htmlPct != null) detailParts.push((row.isPelicanHtml ? '鹈鹕HTML ' : 'HTML ') + Number(row.htmlPct).toFixed(1) + '%');
+      if (row.revPct != null) detailParts.push('计费 ' + Number(row.revPct).toFixed(1) + '%');
+      if (row.habitPct != null && !row.userCorrected) detailParts.push('习惯 ' + Number(row.habitPct).toFixed(1) + '%');
+      const srcTip = '点击此行快速纠错 · ' + detailParts.join(' · ');
 
-      // 构造置信度色条：重叠时背景条为较大置信度，前景条为较小置信度
-      const barNodes = [];
-      if (hasDualOverlap) {
-        const revIsBigger = revVal >= habVal;
-        const bigVal = Math.max(revVal, habVal);
-        const smallVal = Math.min(revVal, habVal);
-        barNodes.push(
-          h('i', {
-            class: 'mc-fp-bar bar-bg ' + (revIsBigger ? 'bar-rev' : 'bar-fp'),
-            style: { width: bigVal + '%' }
-          }),
-          h('i', {
-            class: 'mc-fp-bar-fg bar-fg ' + (revIsBigger ? 'bar-fp' : 'bar-rev'),
-            style: { width: smallVal + '%' }
-          })
-        );
-      } else {
-        barNodes.push(
-          h('i', {
-            class: 'mc-fp-bar ' + (isFpOnly ? 'bar-fp' : 'bar-rev'),
-            style: { width: Math.max(0, Math.min(100, +fit)) + '%' }
-          })
-        );
-      }
+      const rowVid = row.vendorId || ((typeof Brand !== 'undefined' && Brand.id) ? Brand.id(row.id || row.canon || row.label) : '');
+      const brandNode = (typeof vlogo === 'function' && rowVid)
+        ? vlogo(rowVid, 15)
+        : h('span', { class: 'mc-fp-src-ic ' + (isRevRow ? 'src-rev' : 'src-fp') }, icon(isRevRow ? 'bolt' : 'fingerprint'));
 
       box.append(h('div', {
-        class: 'mc-fp-row billing-fit' + toneCls + (hasDualOverlap ? ' has-dual-bar' : ''),
+        class: 'mc-fp-row billing-fit' + toneCls,
         style: { cursor: 'pointer' },
         'data-tip': srcTip,
         'aria-label': srcTip,
@@ -13999,18 +13867,25 @@ const BillingProbe = (() => {
           }
         }
       },
-        ...barNodes,
-        h('span', { class: 'mc-fp-src-ic ' + (hasDualOverlap ? 'src-both' : isFpOnly ? 'src-fp' : 'src-rev') }, icon(hasDualOverlap ? 'check' : isFpOnly ? 'fingerprint' : 'bolt')),
-        h('span', { class: 'mc-fp-m' }, (row.userCorrected ? '★ ' : '') + (row.label || row.id)),
+        h('i', {
+          class: 'mc-fp-bar ' + (isTihuRow && isRevRow ? 'bar-rev' : isRevRow ? 'bar-rev' : 'bar-fp'),
+          style: { width: Math.max(0, Math.min(100, +fit)) + '%' }
+        }),
+        brandNode,
+        (() => {
+          const pfx = row.userCorrected ? '★ ' : ('#' + (idx + 1) + ' ');
+          const lbl = String(row.label || row.id || '');
+          const tm = /^(.*?)(?:\s*\((none|minimal|low|medium|high|xhigh|max)\)|(?:\s*·\s*|-)(none|minimal|low|medium|high|xhigh|max))$/i.exec(lbl);
+          if (!tm || !tm[1]?.trim()) return h('span', { class: 'mc-fp-m' }, pfx + lbl);
+          const rt = String(tm[2] || tm[3] || '').toLowerCase();
+          const metal = (rt === 'max' || rt === 'xhigh') ? 'max' : rt === 'high' ? 'high' : rt === 'medium' ? 'medium' : 'low';
+          return h('span', { class: 'mc-fp-m' }, h('span', { class: 'mc-fp-mn' }, pfx + tm[1].trim()), h('span', { class: 'mn-tier', 'data-tier': metal }, rt.toUpperCase()));
+        })(),
         h('b', { class: 'mc-fp-p' }, +fit + '%')));
     }
 
     if ((s.error || !displayCands.length) && !displayCands.length) {
-      const emptyMsg = (!rankFilter.rev && rankFilter.habit)
-        ? '当前对话暂无习惯指纹特征'
-        : (rankFilter.rev && !rankFilter.habit)
-          ? (costOn ? (s.httpStatus ? ('计费接口受限（HTTP ' + s.httpStatus + '），未触发费用反推（请开启「习惯」识别）') : (s.error ? '计费接口不可用，未触发费用反推（请开启「习惯」识别）' : '当前对话暂无 /cost 费用反推数据（请开启「习惯」识别）')) : '计费开关已关闭，请开启「习惯」排名或打开「计费」开关')
-          : (s.error ? (s.httpStatus ? 'HTTP ' + s.httpStatus : '计费暂不可用') : s.pending ? '读取中…' : '待补读账单与型号');
+      const emptyMsg = s.error ? (s.httpStatus ? 'HTTP ' + s.httpStatus : '计费暂不可用') : s.pending ? '识别中…' : '待生成回复后自动识别';
       const errDesc = s.error || REASONS[s.info?.reason] || combined.consensus.text || emptyMsg;
       box.append(h('p', { class: 'note', 'data-tip': errDesc, title: errDesc }, emptyMsg));
     }
@@ -14019,7 +13894,7 @@ const BillingProbe = (() => {
     // 顶部已有 [⚡ 反推] / [习惯] 按钮，自动模式与计费开关已收纳至「设置 -> 模型识别」（移除底部重复的自动/计费开关与 class: 'btn sm ghost bp-lock-btn' 反推锁定按钮）
     box.append(h('div', { class: 'billing-controls' },
       h('span', { class: 'grow' }),
-      action('刷新计费与反推', 'refresh', async () => { const c = chat || (typeof chatOf === 'function' ? chatOf(sid) : null) || { sid, messages: [] }; if (c) { clearCachedCostDoc(sid); summaryCache.delete(sid); if (!isCostProbeEnabled() || shouldSkipCostForOpenSource(c)) { ChatHabitFingerprint.identifyAndApply(c, { force: true, interactive: true }); return; } globalCost403Until = 0; globalCost429Until = 0; engine.clearCooldowns?.(); await engine.refresh(c, { force: true, bypassCooldown: true }); summaryCache.delete(sid); applyReverseIdentity(c, { interactive: true, forceLock: true }); } }, s.pending || chat?.busy || !sid),
+      action('刷新计费与反推', 'refresh', async () => { const c = chat || (typeof chatOf === 'function' ? chatOf(sid) : null) || { sid, messages: [] }; if (c) { clearCachedCostDoc(sid); summaryCache.delete(sid); if (typeof TihuHub !== 'undefined') { try { if (!TihuHub.isReady?.() && TihuHub.sync) await TihuHub.sync({ force: false, quiet: true, skipRetroScan: true }); await TihuHub.healChatHtmlStubs?.(sid, c); await TihuHub.recognizePelicanChatAndApply?.(sid, c, { allowHealStub: true, preferLatestTurn: true, force: true, clearUserCorrected: true }); } catch {} } if (!isCostProbeEnabled() || shouldSkipCostForOpenSource(c)) { ChatHabitFingerprint.identifyAndApply(c, { force: true, interactive: true }); return; } globalCost403Until = 0; globalCost429Until = 0; engine.clearCooldowns?.(); await engine.refresh(c, { force: true, bypassCooldown: true }); summaryCache.delete(sid); if (!applyReverseIdentity(c, { interactive: true, forceLock: true })) ChatHabitFingerprint.identifyAndApply(c, { force: true, fromCostFallback: true, interactive: true }); } }, s.pending || chat?.busy || !sid),
       action('同步价格表', 'layers', async () => { engine.clearCooldowns?.(); await Ranking.refresh(true); const c = chat || (typeof chatOf === 'function' ? chatOf(sid) : null); if (c && isCostProbeEnabled() && !shouldSkipCostForOpenSource(c)) { await engine.refresh(c, { force: true, bypassCooldown: true }); applyReverseIdentity(c, { interactive: false }); } }),
       action('导出计费诊断 JSON', 'download', () => exportDiagnosticJson(sid))));
     return box;
@@ -14055,11 +13930,14 @@ const BillingProbe = (() => {
       setTimeout(() => { if (chat?.sid && !chat.busy && !isOtherProbeBusy(chat)) schedule(chat, opts); }, 1200);
       return;
     }
+    if (typeof TihuHub !== 'undefined' && TihuHub.isReady?.() && chat.messages?.length) {
+      void TihuHub.recognizePelicanChatAndApply(chat.sid, chat, { allowHealStub: true }).catch(() => {});
+    }
     if (shouldSkipCostForOpenSource(chat)) {
       markAsOpenSourceModel(chat);
       return;
     }
-    // 闭源会话：无论是否开启 /cost，回合结束后先零延迟跑一次本地「对话习惯指纹 + 推理分」兜底
+    // 闭源会话：无论是否开启 /cost，回合结束后先零延迟跑一次本地「醍醐 HTML + 协议习惯」兜底
     try { ChatHabitFingerprint.identifyAndApply(chat, { force: !isCostProbeEnabled() }); } catch {}
     if (!isCostProbeEnabled()) return;
     const lastId = globalThis.ArenaBilling.completed(chat).at(-1)?.id;
@@ -14241,8 +14119,8 @@ const BillingProbe = (() => {
       if (!e?.id || gone.has(e.id) || e.isArchived || e.archivedAt) continue;
       const m = typeof Models !== 'undefined' ? Models.get(e.id) : null;
       const chRef = typeof Chats !== 'undefined' ? Chats.get(e.id) : null;
-      if (canCleanupGacha(e.id, chRef) && (gachaArchiveSids.has(e.id) || m?.name === '开源模型')) {
-        if (typeof Gacha !== 'undefined' && Gacha.killOpenSourceThinkingChat) {
+      if (canCleanupGacha(e.id, chRef) && typeof Gacha !== 'undefined' && Gacha.isOpenAutoStopEnabled?.() && (gachaArchiveSids.has(e.id) || m?.name === '开源模型')) {
+        if (Gacha.killOpenSourceThinkingChat) {
           Gacha.killOpenSourceThinkingChat(e.id, chRef);
         }
       }
@@ -14284,21 +14162,20 @@ const BillingProbe = (() => {
       const isGachaChat = typeof Gacha !== 'undefined' && Gacha.isGachaChat ? Gacha.isGachaChat(e.id, null, e) : gachaAttempts.some(a => a?.sid === e.id);
       if (m && (m.name === '开源模型' || isOpenCandidateName(m.name || m.reverseCandidateId || ''))) {
         const chRef = typeof Chats !== 'undefined' ? Chats.get(e.id) : null;
-        if (canCleanupGacha(e.id, chRef) && (typeof Gacha === 'undefined' || Gacha.settings?.().skipCompatThinking !== false)) {
-          if (typeof Gacha !== 'undefined' && Gacha.killOpenSourceThinkingChat) Gacha.killOpenSourceThinkingChat(e.id, chRef);
+        if (canCleanupGacha(e.id, chRef) && typeof Gacha !== 'undefined' && Gacha.isOpenAutoStopEnabled?.()) {
+          if (Gacha.killOpenSourceThinkingChat) Gacha.killOpenSourceThinkingChat(e.id, chRef);
         }
         return false;
       }
       if (queuedIdentSids.has(e.id) || !bgSwept.has(e.id)) {
-        if (e.id === '01a13f8c-41c2-7ad3-8e77-73feb405f68d' && /opus[-\s]*5\.5/i.test(m?.name || '')) return true;
         if (ARGON_HIGH_SIDS.has(e.id) && !/argon|gemini/i.test(m?.name || '')) return true;
         if (SOL_61_SIDS.has(e.id) && !/gpt[-\s]*6\.1[-\s]*sol/i.test(m?.name || '')) return true;
-        if (/fable[-\s]*5/i.test(m?.name || m?.candidateName || '') && e.id !== '01a1457d-fd02-74d6-b839-4adf76e2a505' && (m?.reverseVer || 0) < 152) return true;
+        if (/fable[-\s]*5/i.test(m?.name || m?.candidateName || '') && (m?.reverseVer || 0) < 152) return true;
       }
       if (queuedIdentSids.has(e.id) || (isGachaChat && !bgSwept.has(e.id))) {
         return !m || m.guess || m.pendingConfirm || !m.name || m.name === '未识别' || m.name === '未知型号';
       }
-      if (!bgSwept.has(e.id) && (!m || m.guess || m.pendingConfirm || !m.name || m.name === '未识别' || m.name === '未知型号' || (m.habitInferred && !m.userCorrected && (m._v197CalibVer || 0) < 3))) return true;
+      if (!bgSwept.has(e.id) && (!m || m.guess || m.pendingConfirm || !m.name || m.name === '未识别' || m.name === '未知型号' || (!m.userCorrected && (m._tihuEngineFixVer || 0) < 15) || (m.habitInferred && !m.userCorrected && (m._v197CalibVer || 0) < 3))) return true;
       return false;
     });
     for (const qSid of [...queuedIdentSids]) {
@@ -14344,11 +14221,14 @@ const BillingProbe = (() => {
         }
         const isGachaChat = typeof Gacha !== 'undefined' && Gacha.isGachaChat ? Gacha.isGachaChat(target.id, c, target) : gachaAttempts.some(a => a?.sid === target.id);
 
-        // 1. 立即检查是否为开源思考：普通对话直接标记为「开源模型」并同步修改对话名称（不浪费时间推理具体计费模型）；仅当前活跃抽卡未保留会话归档删除
+        if (typeof TihuHub !== 'undefined' && TihuHub.isReady?.() && c.messages?.length) {
+          try { await TihuHub.recognizePelicanChatAndApply(target.id, c, { allowHealStub: true }); } catch {}
+        }
+        // 1. 立即检查是否为开源思考：若已被醍醐识别出具体开源型号则保留具体型号，否则标记为「开源模型」
         if (shouldSkipCostForOpenSource(c)) {
           try { markAsOpenSourceModel(c); } catch {}
-          if (canCleanupGacha(target.id, c) && (typeof Gacha === 'undefined' || Gacha.settings?.().skipCompatThinking !== false)) {
-            if (typeof Gacha !== 'undefined' && Gacha.killOpenSourceThinkingChat) {
+          if (canCleanupGacha(target.id, c) && typeof Gacha !== 'undefined' && Gacha.isOpenAutoStopEnabled?.()) {
+            if (Gacha.killOpenSourceThinkingChat) {
               Gacha.killOpenSourceThinkingChat(target.id, c);
             }
           }
@@ -14374,7 +14254,7 @@ const BillingProbe = (() => {
           }
           if (shouldSkipCostForOpenSource(c)) {
             try { markAsOpenSourceModel(c); } catch {}
-            if (canCleanupGacha(target.id, c) && typeof Gacha !== 'undefined' && Gacha.killOpenSourceThinkingChat) {
+            if (canCleanupGacha(target.id, c) && typeof Gacha !== 'undefined' && Gacha.isOpenAutoStopEnabled?.() && Gacha.killOpenSourceThinkingChat) {
               Gacha.killOpenSourceThinkingChat(target.id, c);
             }
             bgSwept.add(target.id);

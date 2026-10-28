@@ -254,7 +254,7 @@ const RegionIP = {
         const e=a.proxyIp&&typeof Pool!=='undefined'?Pool.d?.ips?.[a.proxyIp]:null;
         const curRep=typeof IPRep!=='undefined'&&IPRep.cur?IPRep.cur(a,ip):null;
         const sc=curRep?.sc||(e&&typeof IPRep!=='undefined'?IPRep.score?.(a.proxyIp,e):null),rl=curRep?.label||(sc?IPRep.label(sc):'');
-        if(ip&&!IP.err&&(rl==='高风险'||rl==='一般')&&typeof IPRep!=='undefined'&&typeof IPRep.check==='function'){
+        if(ip&&!IP.err&&rl==='高风险'&&typeof IPRep!=='undefined'&&typeof IPRep.check==='function'){
           try{void IPRep.check({forceOnHighRisk:true});}catch{}
         }
         const pipNote=a.proxyIp&&ip&&!ip.startsWith(String(a.proxyIp).split(':')[0])?'（入口 '+String(a.proxyIp).split(':')[0]+'）':'';

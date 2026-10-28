@@ -87,7 +87,20 @@ const FixedPw = {
 };
 
 function modal(title, body, foot, cls = '') {
-  const back = h('div', { class: 'modal-back', onclick: e => { if (e.target === back && !back.dataset.busy) back.remove(); } });
+  let downOnBackdrop = false;
+  const back = h('div', {
+    class: 'modal-back',
+    onpointerdown: e => {
+      downOnBackdrop = (e.target === back) && !back.dataset.busy && !document.querySelector('.tihu-cmenu.open') && (Date.now() - (window.__tihuComboActAt || 0) > 350);
+    },
+    onclick: e => {
+      if (e.target === back) {
+        document.querySelectorAll('.tihu-cmenu.open').forEach(m => m.classList.remove('open'));
+        if (downOnBackdrop && !back.dataset.busy && (Date.now() - (window.__tihuComboActAt || 0) > 350)) back.remove();
+      }
+      downOnBackdrop = false;
+    },
+  });
   back.append(h('div', { class: 'modal ' + cls }, h('div', { class: 'modal-h' }, title), h('div', { class: 'modal-b' }, body), foot ? h('div', { class: 'modal-f' }, foot) : null));
   document.body.append(back); return back;
 }

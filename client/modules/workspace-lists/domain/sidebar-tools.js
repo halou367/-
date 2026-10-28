@@ -20,7 +20,8 @@ const ArchiveHistory = {
           let j;try {j=await api('/api/history/unified?limit=50&includeArchived=true&archivedOnly=true'+(cursor?'&cursor='+encodeURIComponent(cursor):''),{signal:ctl.signal});}finally{clearTimeout(timer);}
           if(epoch!==this.epoch)return;
           if(!Array.isArray(j?.entries))throw Error('归档列表响应格式无效');
-          for(const e of j.entries){if(e?.id&&(e.isArchived||e.archivedAt)&&(e.type==='agentic'||e.type==='evaluation'||e.productMode||e.mode)&&!this.removed.has(e.id))this.index.set(e.id,{...e,mode:e.mode,modality:e.modality,modelAId:e.modelAId,modelBId:e.modelBId});}
+          const delQSet = new Set([...(typeof Bulk !== 'undefined' && Bulk.running?.('del')?.ids || []), ...(typeof Bulk !== 'undefined' && Bulk.running?.('unarch')?.ids || [])]);
+          for(const e of j.entries){if(e?.id&&(e.isArchived||e.archivedAt)&&(e.type==='agentic'||e.type==='evaluation'||e.productMode||e.mode)&&!this.removed.has(e.id)&&!(typeof History!=='undefined'&&History.isDeleted?.(e.id))&&!delQSet.has(e.id))this.index.set(e.id,{...e,mode:e.mode,modality:e.modality,modelAId:e.modelAId,modelBId:e.modelBId});}
           this.items=[...this.index.values()];this.loaded=true;
           const next=j.pagination?.cursor||'';this.hasMore=!!j.pagination?.hasMore;
           if(this.hasMore&&(!next||next===cursor))throw Error('归档分页缺少有效游标，请稍后刷新');
@@ -113,10 +114,18 @@ const SideTools = {
   },
   rows() {
     this.ensure();
-    const raw = this.scope === 'archived' ? ArchiveHistory.items : History.items;
-    if (typeof ModeState === 'undefined' || typeof ModeState.matchesHistoryEntry !== 'function') return raw;
+    const isArch = this.scope === 'archived';
+    const gone = (!isArch && typeof History !== 'undefined' && typeof History.goneMap === 'function') ? History.goneMap() : null;
+    const base = (isArch ? ArchiveHistory.items : History.items) || [];
+    const filtered = base.filter(e => {
+      if (!e?.id) return false;
+      if (typeof History !== 'undefined' && History.isDeleted?.(e.id)) return false;
+      if (isArch) return !ArchiveHistory.removed.has(e.id);
+      return !(gone && gone.has(e.id)) && !e.isArchived && !e.archivedAt;
+    });
+    if (typeof ModeState === 'undefined' || typeof ModeState.matchesHistoryEntry !== 'function') return filtered;
     const curMode = ModeState.getMode();
-    return (raw || []).filter(e => ModeState.matchesHistoryEntry(e, curMode));
+    return filtered.filter(e => ModeState.matchesHistoryEntry(e, curMode));
   },
   toggle() { CardSelect.mode=!CardSelect.mode;if(!CardSelect.mode)CardSelect.clear();UI.renderList(); },
   paintToolbar() {

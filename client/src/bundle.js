@@ -15,19 +15,19 @@ if (!fs._branaBrotliHooked) {
   fs._branaBrotliHooked = true;
 }
 const path = require('path');
-const ORDER = ['vless.js', 'route-state.js', 'route-policy.js', 'route-host.js', 'workspace-path.js', 'md.js', 'net-policy.js', 'auth-flow.js', 'auth-environment.js', 'core.js', 'cap-route.js', 'eval-core.js', 'mail-token.js', 'gacha-prompts.js', 'title-compact.js', 'title-flex.js', 'title-cipher.js', 'fmt.js', 'cscore.js', 'trace.js', 'workspace-preview.js', 'probe-vendor.js', 'probe-bank-cache.js', 'probe-bank-ikale.js', 'fp-libs.js', 'probe-output-guard.js', 'thinking-status.js', 'personal-fingerprint-math.js', 'personal-fingerprint.js', 'shared-fingerprint-schema.js', 'shared-fingerprint.js', 'fingerprint.js', 'fingerprint-library-ui.js', 'fingerprint-batch.js', 'pelican-test.js', 'fingerprint-review.js', 'conversation-labels.js', 'slash-commands.js', 'panel-work.js', 'render-work.js', 'send-queue.js', 'view.js', 'mode-switcher.js', 'eval-view.js', 'html-preview.js', 'sidebar-tools.js', 'gacha.js', 'gview.js', 'device-info.js', 'arena-trace/probe-context.js', 'arena-trace/preimage.js', 'arena-trace/claude-standalone-v5.js', 'arena-trace/gpt-standalone-v1.js', 'arena-trace/pricing.js', 'arena-trace/family.js', 'arena-trace/confidence.js', 'arena-trace/catalog-sync.js', 'billing-probe.js', 'habit-builtin-bank.js', 'billing-probe-ui.js', 'dock.js', 'file-export.js', 'chat-export.js', 'connectors.js', 'titles.js', 'title-sync.js', 'probe-archive.js', 'strength.js', 'price.js', 'gpop.js', 'slot.js', 'revolver.js', 'accounts.js', 'account-panel-size.js', 'account-vendor-fold.js', 'account-picker.js', 'account-management.js', 'nodes.js', 'iprep.js', 'pool.js', 'node-speed.js', 'node-routes.js', 'region-ip.js', 'env-refresh.js', 'env-check.js', 'auto-route.js', 'plus.js', 'palette.js', 'keep.js', 'mobile.js', 'astats.js', 'mgr.js', 'update.js', 'capture.js', 'bulk.js', 'session-gate.js', 'boot.js'];
+const ORDER = ['vless.js', 'route-state.js', 'route-policy.js', 'route-host.js', 'workspace-path.js', 'md.js', 'net-policy.js', 'auth-flow.js', 'auth-environment.js', 'core.js', 'cap-route.js', 'eval-core.js', 'mail-token.js', 'gacha-prompts.js', 'title-compact.js', 'title-flex.js', 'title-cipher.js', 'fmt.js', 'cscore.js', 'trace.js', 'workspace-preview.js', 'probe-vendor.js', 'probe-bank-cache.js', 'probe-bank-ikale.js', 'fp-libs.js', 'probe-output-guard.js', 'thinking-status.js', 'personal-fingerprint-math.js', 'personal-fingerprint.js', 'shared-fingerprint-schema.js', 'shared-fingerprint.js', 'fingerprint.js', 'fingerprint-library-ui.js', 'fingerprint-batch.js', 'pelican-test.js', 'fingerprint-review.js', 'conversation-labels.js', 'slash-commands.js', 'panel-work.js', 'render-work.js', 'send-queue.js', 'view.js', 'mode-switcher.js', 'eval-view.js', 'tihu-hub.js', 'html-preview.js', 'sidebar-tools.js', 'gacha.js', 'gview.js', 'device-info.js', 'arena-trace/probe-context.js', 'arena-trace/preimage.js', 'arena-trace/claude-standalone-v5.js', 'arena-trace/gpt-standalone-v1.js', 'arena-trace/pricing.js', 'arena-trace/family.js', 'arena-trace/confidence.js', 'arena-trace/catalog-sync.js', 'billing-probe.js', 'habit-builtin-bank.js', 'billing-probe-ui.js', 'dock.js', 'file-export.js', 'chat-export.js', 'connectors.js', 'titles.js', 'title-sync.js', 'probe-archive.js', 'strength.js', 'price.js', 'gpop.js', 'slot.js', 'revolver.js', 'accounts.js', 'account-panel-size.js', 'account-vendor-fold.js', 'account-picker.js', 'account-management.js', 'nodes.js', 'iprep.js', 'pool.js', 'node-speed.js', 'node-routes.js', 'region-ip.js', 'env-refresh.js', 'env-check.js', 'auto-route.js', 'plus.js', 'palette.js', 'keep.js', 'mobile.js', 'astats.js', 'mgr.js', 'update.js', 'capture.js', 'bulk.js', 'session-gate.js', 'boot.js'];
 function build(uiDir, version, opt = {}) {
   if (process.versions?.electron && !opt?.forceRebuild) {
     for (const cand of [
-      path.join(uiDir, '..', 'gen', 'ui.bundle.js'),
-      path.join(uiDir, '..', 'gen', 'ui.desktop.bundle.js'),
       path.join(uiDir, '..', 'gen', 'ui.bundle.js').replace(/app\.asar([\\/])/i, 'app.asar.unpacked$1'),
       path.join(uiDir, '..', 'gen', 'ui.desktop.bundle.js').replace(/app\.asar([\\/])/i, 'app.asar.unpacked$1'),
+      path.join(uiDir, '..', 'gen', 'ui.bundle.js'),
+      path.join(uiDir, '..', 'gen', 'ui.desktop.bundle.js'),
     ]) {
       try {
         if (fs.existsSync(cand)) {
           const txt = fs.readFileSync(cand, 'utf8');
-          if (!version || txt.includes('const VERSION = ' + JSON.stringify(version || ''))) return txt;
+          if (!version || txt.includes('const VERSION = ' + JSON.stringify(version || '')) || txt.includes("const VERSION = '" + version + "'")) return txt;
         }
       } catch {}
     }

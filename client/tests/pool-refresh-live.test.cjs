@@ -108,7 +108,7 @@ test('native transport errors remain errors and are not converted to false compl
  const c=loadPool(),out=[];c.Host.probe=async()=>({error:'xray unavailable'});const r=await c.Pool.streamProbe(['a'],{link:'node',onItem:k=>out.push(k)});assert.equal(r.error,'xray unavailable');assert.equal(out.length,0);
 });
 test('regional selectors retain strict verified-region, purity, occupancy and cooldown filters',()=>{
- const src=fs.readFileSync(path.join(__dirname,'../ui/node-routes.js'),'utf8');assert.match(src,/e\.ok===true&&e\.loc===cc/);assert.match(src,/!P\.banned\?\.\(k\)&&pureK\(k\)/);assert.match(src,/!blocked\(k\)&&!cooling\(e\)/);assert.match(src,/candidateRows\(\)\.map/);assert.match(src,/workLive\(j\).*P\.apply/s);
+ const src=fs.readFileSync(path.join(__dirname,'../ui/node-routes.js'),'utf8');assert.match(src,/e\.ok===true&&e\.loc===cc/);assert.match(src,/!P\.banned\?\.\(k\)(?:&&!used\(k\))?&&pureK\(k\)/);assert.match(src,/!blocked\(k\)&&!cooling\(e\)/);assert.match(src,/candidateRows\(\)\.map/);assert.match(src,/workLive\(j\).*P\.apply/s);
 });
 
 test('Japan-specific sources are tested before generic sources learned as Japan',async()=>{

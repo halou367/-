@@ -29,65 +29,304 @@ const HtmlPreview = (() => {
   const kindOf = path => { const f = String(path || '').split(/[?#]/)[0]; return /\.(?:html?|svg)$/i.test(f) ? 'html' : /\.(?:md|markdown|mdx)$/i.test(f) ? 'md' : CODE.test(f) ? 'code' : null; };
   const previewable = path => kindOf(path) !== null;
   const hasScript = html => /<script[\s>]/i.test(html) || /\son[a-z]+\s*=/i.test(html);
-  // 把任意 html / svg 文本整理成「只读」文档：补 CSP、去掉自动跳转和外链，svg 单文件包一层页面
-  function docOf(text, name, { run = false, thumb = false } = {}) {
-    const cKey = (run ? '1:' : '0:') + (thumb ? '1:' : '0:') + textSig(String(text || ''), name);
+  function resolveRelPvPath(basePath, ref) {
+    let r = String(ref || '').trim();
+    if (!r || /^(?:[a-z][a-z0-9+.-]*:|\/\/|#)/i.test(r)) return null;
+    r = r.split(/[?#]/)[0];
+    if (!r) return null;
+    const cleanBase = normPvPath(basePath);
+    const dir = cleanBase.includes('/') ? cleanBase.split('/').slice(0, -1) : [];
+    const parts = r.startsWith('/') ? [] : [...dir];
+    for (const seg of r.replace(/^\/home\/user\//, '').replace(/^~\//, '').replace(/^\/+/, '').split('/')) {
+      if (!seg || seg === '.') continue;
+      if (seg === '..') parts.pop();
+      else parts.push(seg);
+    }
+    return parts.join('/') || null;
+  }
+  function lookupSessionAssetText(sid, relPath) {
+    if (!sid || !relPath) return '';
+    const norm = normPvPath(relPath);
+    if (!norm) return '';
+    try {
+      if (typeof R !== 'undefined' && typeof R.latestFileText === 'function') {
+        const lt = String(R.latestFileText(sid, norm) || '');
+        if (lt && !isStubText(lt)) return lt;
+      }
+    } catch {}
+    return resolvedText(sid, norm);
+  }
+  // 把任意 html / svg 文本整理成「只读」文档：补 CSP、内联当前会话相对路径资源、去掉自动跳转和外链，svg 单文件包一层页面
+  function docOf(text, name, { run = false, thumb = false, sid = '', basePath = '' } = {}) {
+    const rawStr = String(text || '');
+    const hasExtAssetRef = /<(?:link|script|img|source|image)\b/i.test(rawStr);
+    const assetVer = (sid && hasExtAssetRef) ? (':' + sid + ':' + _resolvedVer + ':' + (typeof Chats !== 'undefined' && typeof R !== 'undefined' && R._chatWriteStamp && Chats.get?.(sid) ? R._chatWriteStamp(Chats.get(sid)) : '')) : '';
+    const cKey = (run ? '1:' : '0:') + (thumb ? '1:' : '0:') + textSig(rawStr, basePath || name) + assetVer;
     const hit = docCache.get(cKey);
     if (hit !== undefined) return hit;
-    const svg = /\.svg$/i.test(name || '') || (/^\s*(?:<\?xml[^>]*>\s*)?<svg[\s>]/i.test(text) && !/<html[\s>]/i.test(text));
-    const src = svg ? '<!doctype html><html><head><meta charset="utf-8"><style>html,body{margin:0;width:100%;height:100%;background:#fff}body{display:flex;align-items:center;justify-content:center}svg{width:100%;height:100%}</style></head><body>' + text.replace(/^\s*<\?xml[^>]*>/i, '') + '</body></html>' : text;
+    const svg = /\.svg$/i.test(name || '') || (/^\s*(?:<\?xml[^>]*>\s*)?<svg[\s>]/i.test(rawStr) && !/<html[\s>]/i.test(rawStr));
+    const src = svg ? '<!doctype html><html><head><meta charset="utf-8"><style>html,body{margin:0;width:100%;height:100%;background:#fff}body{display:flex;align-items:center;justify-content:center}svg{width:100%;height:100%}</style></head><body>' + rawStr.replace(/^\s*<\?xml[^>]*>/i, '') + '</body></html>' : rawStr;
     const d = new DOMParser().parseFromString(src, 'text/html');
     d.querySelectorAll('meta[http-equiv]').forEach(m => m.remove());
-    if (!run) d.querySelectorAll('script').forEach(s => s.remove());
+    const refBase = basePath || name || '';
+    for (const l of [...d.querySelectorAll('link[rel~="stylesheet"][href]')]) {
+      const rel = sid ? resolveRelPvPath(refBase, l.getAttribute('href')) : null;
+      const cssTxt = rel ? lookupSessionAssetText(sid, rel) : '';
+      if (cssTxt) {
+        const stEl = d.createElement('style');
+        stEl.textContent = cssTxt;
+        l.replaceWith(stEl);
+      } else {
+        l.remove();
+      }
+    }
+    if (!run) {
+      d.querySelectorAll('script').forEach(s => s.remove());
+    } else {
+      for (const sc of [...d.querySelectorAll('script[src]')]) {
+        const rawSrc = sc.getAttribute('src') || '';
+        const rel = sid ? resolveRelPvPath(refBase, rawSrc) : null;
+        const jsTxt = rel ? lookupSessionAssetText(sid, rel) : '';
+        if (jsTxt) {
+          sc.removeAttribute('src');
+          sc.textContent = jsTxt;
+        } else if (/^(?:https?:|\/\/)/i.test(rawSrc.trim())) {
+          sc.remove();
+        }
+      }
+    }
+    if (sid) {
+      for (const el of [...d.querySelectorAll('img[src],source[src],image')]) {
+        const at = el.hasAttribute('src') ? 'src' : el.hasAttribute('href') ? 'href' : 'xlink:href';
+        const rel = resolveRelPvPath(refBase, el.getAttribute(at));
+        if (rel && /\.svg$/i.test(rel)) {
+          const svgTxt = lookupSessionAssetText(sid, rel);
+          if (svgTxt) el.setAttribute(at, 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svgTxt));
+        }
+      }
+    }
     d.querySelectorAll('a[href]').forEach(a => { if (!/^#/.test(a.getAttribute('href'))) a.removeAttribute('href'); });
     d.querySelectorAll('form').forEach(f => f.removeAttribute('action'));
     const m = d.createElement('meta'); m.setAttribute('http-equiv', 'Content-Security-Policy'); m.setAttribute('content', run ? CSP_RUN : CSP);
     if (run) {
       const syncSc = d.createElement('script');
-      syncSc.textContent = `(function(){var E=Math.floor(Date.now()/3600000)*3600000;var sNow=function(){return Date.now()-E;};try{Object.defineProperty(performance,'now',{value:sNow,configurable:true,writable:true});}catch(e){}try{var oRaf=window.requestAnimationFrame;if(typeof oRaf==='function'){window.requestAnimationFrame=function(cb){return oRaf.call(window,function(){cb(sNow());});};}}catch(e){}function sync(){try{var t=sNow();if(document.getAnimations){var as=document.getAnimations({subtree:true});for(var i=0;i<as.length;i++){try{as[i].play();var tm=as[i].effect&&as[i].effect.getComputedTiming?as[i].effect.getComputedTiming():null;if(tm&&(tm.iterations===Infinity||tm.iterations>=5)){as[i].currentTime=t;}}catch(e){}}}var svgs=document.querySelectorAll('svg');for(var j=0;j<svgs.length;j++){try{if(svgs[j].unpauseAnimations)svgs[j].unpauseAnimations();if(svgs[j].setCurrentTime)svgs[j].setCurrentTime(t/1000);}catch(e){}}}catch(e){}}if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',sync,{once:true});else sync();window.addEventListener('load',function(){sync();setTimeout(sync,60);},{once:true});})();`;
+      syncSc.textContent = `(function(){function unpause(){try{var svgs=document.querySelectorAll('svg');for(var j=0;j<svgs.length;j++){if(svgs[j].animationsPaused&&svgs[j].animationsPaused()&&svgs[j].unpauseAnimations)svgs[j].unpauseAnimations();}}catch(e){}}if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',unpause,{once:true});else unpause();})();`;
       d.head.prepend(syncSc);
     }
     d.head.prepend(m);
-    if (thumb) { const s = d.createElement('style'); s.textContent = NOBAR; d.head.append(s); }   // 小窗隐藏滚动条，保留动态动画与脚本同步运行
+    if (thumb) { const s = d.createElement('style'); s.textContent = NOBAR; d.head.append(s); }   // 小窗隐藏滚动条，保留原生时间轴动画与脚本运行
     const out = '<!doctype html>' + d.documentElement.outerHTML;
     if (docCache.size >= 64) docCache.delete(docCache.keys().next().value);
     docCache.set(cKey, out);
     return out;
   }
   const isSvgDoc = (text, name) => /\.svg$/i.test(name || '') || (/^\s*(?:<\?xml[^>]*>\s*)?<svg[\s>]/i.test(text) && !/<html[\s>]/i.test(text));
-  // 从工作区打开的 html：把相对路径的 CSS / 图片读出来内联进页面（脚本不跑，所以 JS 不用管）；读不到的就跳过
+  // 从工作区打开的 html：把相对路径的 CSS / JS / 图片读出来内联进页面；读不到的外链安全跳过
   async function inlineAssets(html, path, ctx) {
-    const d = new DOMParser().parseFromString(html, 'text/html'), dir = String(path).split('/').slice(0, -1);
-    const resolve = ref => {
-      let r = String(ref || '').trim(); if (!r || /^(?:[a-z][a-z0-9+.-]*:|\/\/|#)/i.test(r)) return null;
-      r = r.split(/[?#]/)[0]; const parts = r.startsWith('/') ? [] : [...dir];
-      for (const x of r.replace(/^\/home\/user\//, '').replace(/^\//, '').split('/')) { if (!x || x === '.') continue; if (x === '..') parts.pop(); else parts.push(x); }
-      return parts.join('/');
-    };
+    const d = new DOMParser().parseFromString(html, 'text/html');
+    const resolve = ref => resolveRelPvPath(path, ref);
     let budget = 8 * 1024 * 1024, n = 0;
     const blobOf = async ref => { const p = resolve(ref); if (!p || n >= 40 || budget <= 0) return null; try { const ent = await ctx.entry(p); if (!ent || ent.e.type === 'dir' || +ent.e.size > 3 * 1024 * 1024) return null; const b = await Workspace.fileBlob(ent.e); n++; budget -= b.size; return b; } catch { return null; } };
     const dataUrl = (b, mime) => new Promise(res => { const fr = new FileReader(); fr.onload = () => res(String(fr.result)); fr.onerror = () => res(null); fr.readAsDataURL(mime ? new Blob([b], { type: mime }) : b); });
-    for (const l of [...d.querySelectorAll('link[rel~="stylesheet"][href]')]) { const b = await blobOf(l.getAttribute('href')); if (b) { const st = d.createElement('style'); st.textContent = await b.text(); l.replaceWith(st); } else l.remove(); }
+    for (const l of [...d.querySelectorAll('link[rel~="stylesheet"][href]')]) { const b = await blobOf(l.getAttribute('href')); if (b) { const stEl = d.createElement('style'); stEl.textContent = await b.text(); l.replaceWith(stEl); } else l.remove(); }
+    for (const sc of [...d.querySelectorAll('script[src]')]) { const b = await blobOf(sc.getAttribute('src')); if (b) { sc.removeAttribute('src'); sc.textContent = await b.text(); } else if (/^(?:https?:|\/\/)/i.test(String(sc.getAttribute('src') || '').trim())) sc.remove(); }
     for (const el of [...d.querySelectorAll('img[src],source[src],image')]) {
       const at = el.hasAttribute('src') ? 'src' : el.hasAttribute('href') ? 'href' : 'xlink:href', ref = el.getAttribute(at), b = await blobOf(ref);
       if (b) { const u = await dataUrl(b, WorkspacePath.mime?.(resolve(ref) || '') || b.type); if (u) el.setAttribute(at, u); }
     }
     return '<!doctype html>' + d.documentElement.outerHTML;
   }
+  const resolvedTexts = new Map(), healingFiles = new Map();
+  let _resolvedVer = 0;
+  const normPvPath = p => String(p || '').replace(/\\/g, '/').replace(/^\/home\/user\//, '').replace(/^~\//, '').replace(/^\.\//, '').replace(/^\/+/, '');
+  const isStubText = t => !t || String(t).includes('…[cached]');
+  const hasUnclosedCodeTag = t => {
+    const s = String(t || '');
+    const sOpen = (s.match(/<style\b/gi) || []).length, sClose = (s.match(/<\/style\s*>/gi) || []).length;
+    if (sOpen > sClose) return true;
+    const jOpen = (s.match(/<script\b/gi) || []).length, jClose = (s.match(/<\/script\s*>/gi) || []).length;
+    return jOpen > jClose;
+  };
+  const isUsablePreviewText = (t, name = '') => {
+    const s = String(t || '').trim();
+    if (!s || isStubText(s) || hasUnclosedCodeTag(s)) return false;
+    if (/<\/(?:html|svg)\s*>\s*$/i.test(s)) return true;
+    if (/\.svg$/i.test(name || '')) return /<\/svg\s*>/i.test(s);
+    return /<(?:body|svg|main|canvas|section|div)\b/i.test(s) && /<\/(?:html|body|svg|main|canvas|script|div)\s*>/i.test(s);
+  };
+  const isClosedHtmlDoc = s => /<\/(?:html|svg)\s*>\s*$/i.test(String(s || '').trim());
+  function resolvedText(sid, path) {
+    const norm = normPvPath(path);
+    const sKey = String(sid || '').trim();
+    if (!norm || !sKey) return '';
+    return resolvedTexts.get(sKey + ':' + norm) || '';
+  }
+  function cacheResolvedText(sid, path, text, opts = {}) {
+    const norm = normPvPath(path), s = String(text || ''), sKey = String(sid || '').trim();
+    if (!norm || !sKey || !s.trim() || isStubText(s)) return false;
+    const k = sKey + ':' + norm, prev = resolvedTexts.get(k) || '';
+    if (prev === s) return false;
+    if (!opts.authoritative && prev && !isStubText(prev) && kindOf(norm) === 'html' && isClosedHtmlDoc(prev) && !isClosedHtmlDoc(s)) {
+      return false;
+    }
+    if (resolvedTexts.size >= 80) resolvedTexts.delete(resolvedTexts.keys().next().value);
+    resolvedTexts.set(k, s);
+    _resolvedVer++;
+    try {
+      if (typeof Chats !== 'undefined') {
+        const chat = Chats.get?.(sKey);
+        if (chat && Array.isArray(chat.messages)) {
+          let patchedChat = false;
+          for (let mi = chat.messages.length - 1; mi >= 0; mi--) {
+            const m = chat.messages[mi];
+            const parts = m?.parts || [];
+            for (let pi = parts.length - 1; pi >= 0; pi--) {
+              const p = parts[pi];
+              if (!p || !(String(p.type || '').startsWith('tool-') || p.type === 'dynamic-tool')) continue;
+              const tn = String(p.toolName || p.name || p.type || '').replace(/^tool-/, '').toLowerCase();
+              if (!/^(write_?file|create_?file|overwrite_?file|write)$/.test(tn)) continue;
+              const inp = (typeof R !== 'undefined' && R.tinput ? R.tinput(p) : p.input) || {};
+              const pNorm = normPvPath(inp.path || inp.file_path || '');
+              if (pNorm !== norm) continue;
+              const curC = typeof p.input?.content === 'string' ? p.input.content : (typeof p.input?.text === 'string' ? p.input.text : '');
+              if (!p.input || isStubText(curC)) {
+                p.input = { ...(p.input && typeof p.input === 'object' ? p.input : {}), path: inp.path || inp.file_path || norm, content: s };
+                delete p.inputText; delete p._parsedInputRaw; delete p._parsedInputVal;
+                m.v = (m.v || 0) + 1;
+                patchedChat = true;
+              }
+              mi = -1;
+              break;
+            }
+          }
+          try { R?._fileTextCache?.delete(sKey); R?._writesCache?.delete(sKey); } catch {}
+          if (patchedChat) {
+            try { if (typeof MsgCache !== 'undefined') MsgCache.put?.(chat); } catch {}
+          }
+        }
+      }
+    } catch {}
+    try {
+      const lineCnt = countLinesFast(s);
+      if (typeof document !== 'undefined') {
+        document.querySelectorAll('details.wcard').forEach(d => {
+          if (normPvPath(d._filePath) === norm && (!d._wsid || d._wsid === sKey)) {
+            if (d._linesEl && lineCnt) d._linesEl.textContent = lineCnt + ' 行';
+            const pre = d.querySelector('pre.wc-code');
+            if (pre) pre.textContent = s.length > 60000 ? s.slice(0, 60000) + '\n…' : s;
+          }
+        });
+      }
+    } catch {}
+    try {
+      cards.forEach(c => {
+        if (!c?.o || normPvPath(c.o.path) !== norm) return;
+        const cSid = String(c.o.getWsid?.() || '').trim();
+        if (!cSid || cSid === sKey) c.paint();
+      });
+    } catch {}
+    return true;
+  }
+  async function healFileText(sid, path) {
+    const opts = arguments[2] || {};
+    const norm = normPvPath(path);
+    const effSid = String(sid || (st && normPvPath(st.path) === norm ? (st.sid || st.wsid) : '') || (typeof Tabs !== 'undefined' ? Tabs.cur?.sid : '') || '').trim();
+    if (!norm || !effSid) return '';
+    if (!opts.force) {
+      const existing = resolvedText(effSid, norm);
+      if (existing && isUsablePreviewText(existing, norm) && isClosedHtmlDoc(existing)) return existing;
+    }
+    const hKey = effSid + ':' + norm;
+    if (healingFiles.has(hKey)) return healingFiles.get(hKey);
+    const job = (async () => {
+      try {
+        if (typeof Workspace !== 'undefined' && typeof WorkspacePreview !== 'undefined') {
+          let data = (typeof WS !== 'undefined' && WS.sid === effSid && WS.data?.manifest?.root) ? WS.data : null;
+          if (!data?.manifest?.root && typeof Workspace.latest === 'function') {
+            try { data = await Workspace.latest(effSid); } catch {}
+          }
+          if (data?.manifest?.root) {
+            const ctx = WorkspacePreview.context(effSid, data);
+            const r = await ctx.find(norm);
+            const hit = r?.hits?.[0];
+            if (hit?.e) {
+              const blob = await Workspace.fileBlob(hit.e);
+              let txt = (await blob.text()).slice(0, MAXCODE);
+              if (txt && !isStubText(txt)) {
+                if (kindOf(norm) === 'html' && !/\.svg$/i.test(norm) && /<(?:link|script|img|source|image)\b/i.test(txt)) {
+                  try { txt = await inlineAssets(txt, norm, ctx); } catch {}
+                }
+                cacheResolvedText(effSid, norm, txt, { authoritative: true });
+                if (st && (st.sid === effSid || st.wsid === effSid) && normPvPath(st.path) === norm) render();
+                return txt;
+              }
+            }
+          }
+        }
+        if (typeof api === 'function') {
+          const d = await api('/api/chat/' + effSid, { timeout: 12000 }).catch(() => null);
+          const rawList = Array.isArray(d?.messages) ? d.messages : Array.isArray(d?.data?.messages) ? d.data.messages : [];
+          for (let i = rawList.length - 1; i >= 0; i--) {
+            const m = rawList[i];
+            for (const p of (m?.parts || m?.experimental_attachments || [])) {
+              const inp = p?.input || p?.args || null;
+              if (!inp || typeof inp !== 'object') continue;
+              const pNorm = normPvPath(inp.path || inp.file_path || '');
+              const c = typeof inp.content === 'string' ? inp.content : (typeof inp.text === 'string' ? inp.text : '');
+              if (pNorm === norm && c && !isStubText(c)) {
+                cacheResolvedText(effSid, norm, c, { authoritative: true });
+                if (st && (st.sid === effSid || st.wsid === effSid) && normPvPath(st.path) === norm) render();
+                return c;
+              }
+            }
+          }
+        }
+      } catch {}
+      finally {
+        setTimeout(() => healingFiles.delete(hKey), 3000);
+      }
+      return '';
+    })();
+    healingFiles.set(hKey, job);
+    return job;
+  }
+  const shouldUseDirectOverResolved = (direct, res, path) => {
+    if (!direct || isStubText(direct)) return false;
+    if (!res) return true;
+    if (kindOf(path) === 'html' && !isClosedHtmlDoc(direct) && isClosedHtmlDoc(res)) return false;
+    return true;
+  };
   const textOf = () => {
     try {
+      const sid = st?.sid || st?.wsid || (typeof Tabs !== 'undefined' ? Tabs.cur?.sid : null);
+      const res = st?.path ? resolvedText(sid, st.path) : '';
       const direct = String(st?.get?.() ?? '');
-      if (direct) return direct;
-      if (st?.sid && st?.path && typeof R !== 'undefined' && R.latestFileText) return String(R.latestFileText(st.sid, st.path) || '');
-      return '';
+      if (shouldUseDirectOverResolved(direct, res, st?.path || st?.name)) {
+        if (sid && st?.path && isUsablePreviewText(direct, st.name)) cacheResolvedText(sid, st.path, direct);
+        return direct;
+      }
+      if (sid && st?.path && typeof R !== 'undefined' && R.latestFileText) {
+        const lt = String(R.latestFileText(sid, st.path) || '');
+        if (lt && !isStubText(lt) && shouldUseDirectOverResolved(lt, res, st.path)) return lt;
+      }
+      if (res) return res;
+      return isStubText(direct) ? '' : direct;
     } catch { return ''; }
   };
   const textFrom = (fn, sid, path) => {
     try {
+      const res = path ? resolvedText(sid, path) : '';
       const direct = String(fn?.() ?? '');
-      if (direct) return direct;
-      if (path && typeof R !== 'undefined' && R.latestFileText) return String(R.latestFileText(sid, path) || '');
-      return '';
+      if (shouldUseDirectOverResolved(direct, res, path)) {
+        if (sid && path && isUsablePreviewText(direct, path)) cacheResolvedText(sid, path, direct);
+        return direct;
+      }
+      if (sid && path && typeof R !== 'undefined' && R.latestFileText) {
+        const lt = String(R.latestFileText(sid, path) || '');
+        if (lt && !isStubText(lt) && shouldUseDirectOverResolved(lt, res, path)) return lt;
+      }
+      if (res) return res;
+      return isStubText(direct) ? '' : direct;
     } catch { return ''; }
   };
   const on = () => !!st;
@@ -130,6 +369,7 @@ const HtmlPreview = (() => {
         if (cached && stage.clientWidth > 0 && stage.clientHeight > 0) {
           W = cached.W; H = cached.H; wfit = cached.wfit; fill = cached.fill; lastPw = stage.clientWidth;
           if (cached.bg) stage.style.background = cached.bg;
+          if (o.probe) { try { o.probe.remove(); } catch {} }
           place();
           return;
         }
@@ -209,7 +449,7 @@ const HtmlPreview = (() => {
     let mounted = 0;
     while (cardMountQueue.length && mounted < 2) {
       const c = cardMountQueue.shift();
-      if (c && c.live && c.o && c.text != null && !c.stage.querySelector('iframe.pvc-frame')) {
+      if (c && c.live && c.o && c.text != null && (c.shown !== c.text || !c.stage.querySelector('iframe.pvc-frame'))) {
         c.renderNow(c.text, String(c.o.path || '').split('/').pop());
         mounted++;
       }
@@ -242,9 +482,13 @@ const HtmlPreview = (() => {
       if (c.title.textContent !== t) c.title.textContent = t;
       const bTxt = extOf(name); if (c.badge.textContent !== bTxt) c.badge.textContent = bTxt;
       if (c._ariaLabel !== t) { c._ariaLabel = t; c.el.setAttribute('aria-label', '放大预览 ' + t); }
-      const ready = !!text.trim() && (!o.running || finished(text));
+      const usable = isUsablePreviewText(text, name);
+      const ready = usable && (!o.running || finished(text));
+      if (!o.running && (!usable || !finished(text)) && (sid || o.path)) {
+        void healFileText(sid, o.path);
+      }
       c.ph.hidden = ready && !!c.shown; c.phText.textContent = ready ? '正在加载预览…' : '正在生成预览…'; c.el.classList.toggle('pvc-wait', !ready);
-      if (!ready || text === c.text) return;
+      if (!ready || (text === c.text && c.shown === text && c.stage.querySelector('iframe.pvc-frame'))) return;
       c.text = text; if (c.live) c.render(text, name); else c.pending = true;
     };
     c.renderNow = (text, name) => {
@@ -263,17 +507,33 @@ const HtmlPreview = (() => {
       f.addEventListener('load', () => {
         old?.remove(); prev?.destroy(); f.style.visibility = ''; c.shown = text; c.ph.hidden = true;
       }, { once: true });
-      probe.srcdoc = docOf(text, name, { run: false, thumb: true });
-      f.srcdoc = docOf(text, name, { run: true, thumb: true });
+      const cardSid = c.o?.getWsid?.() || '';
+      const cardPath = c.o?.path || name;
+      probe.srcdoc = docOf(text, name, { run: false, thumb: true, sid: cardSid, basePath: cardPath });
+      f.srcdoc = docOf(text, name, { run: true, thumb: true, sid: cardSid, basePath: cardPath });
       c.stage.append(probe, f);
     };
     c.render = (text, name) => {
       c.pending = false;
       scheduleCardMount(c);
     };
-    // 滚动到可见范围才真正创建页面（长对话里很多个 html 不会同时加载；且滚动进行中推迟挂载避免卡帧）
-    const go = () => { c.live = true; if (c.o && c.text != null && !c.stage.querySelector('iframe')) c.render(c.text, String(c.o.path || '').split('/').pop()); };
-    if (typeof IntersectionObserver === 'function') { const io = new IntersectionObserver(es => { if (es.some(e => e.isIntersecting)) { io.disconnect(); go(); } }, { rootMargin: '300px' }); io.observe(c.el); c.io = io; } else c.live = true;
+    // 滚动到可见范围才真正创建页面，滚出视口外时暂停 iframe 动画合成以释放 CPU/GPU
+    const go = () => { c.live = true; if (c.o && c.text != null && (c.shown !== c.text || !c.stage.querySelector('iframe'))) c.render(c.text, String(c.o.path || '').split('/').pop()); };
+    if (typeof IntersectionObserver === 'function') {
+      const io = new IntersectionObserver(es => {
+        const vis = es.some(e => e.isIntersecting);
+        if (vis) {
+          go();
+          const fr = c.stage.querySelector('iframe.pvc-frame');
+          if (fr && fr.style.display === 'none') fr.style.display = '';
+        } else if (c.shown) {
+          const fr = c.stage.querySelector('iframe.pvc-frame');
+          if (fr && fr.style.visibility !== 'hidden') fr.style.display = 'none';
+        }
+      }, { rootMargin: '360px' });
+      io.observe(c.el);
+      c.io = io;
+    } else c.live = true;
     return c;
   }
   // 同一个 Write 在对话里反复重绘时复用同一个小窗节点（不重新创建页面，不闪）；流式写入期间等写完（出现结束标签）才渲染
@@ -529,6 +789,15 @@ const HtmlPreview = (() => {
       highlightEnd: o.highlightEnd || 0,
     };
     if (prev && prev.kind === kind && o.keepMode) st.mode = prev.mode;
+    const effSid = st.sid || st.wsid || (typeof Tabs !== 'undefined' ? Tabs.cur?.sid : null);
+    if (st.kind !== 'image' && st.path) {
+      const initTxt = String(o.view || st.get?.() || '');
+      if (initTxt && !isStubText(initTxt) && (st.kind !== 'html' || isUsablePreviewText(initTxt, st.name))) {
+        cacheResolvedText(effSid, st.path, initTxt);
+      } else if (effSid) {
+        void healFileText(effSid, st.path);
+      }
+    }
     document.body.classList.add('pv-on');
     if (!wasOpen && root && mobile()) { root.classList.add('pv-enter'); const tok = ++closeTok; setTimeout(() => { if (closeTok === tok) root?.classList.remove('pv-enter'); }, 420); }
     render(); if (!wasOpen) try { UI.layout(); } catch {}
@@ -878,7 +1147,7 @@ const HtmlPreview = (() => {
       isImg ? null : btn('refresh', '重新读取并刷新', () => { render(); }),
       st.previewUrl ? h('button', { type: 'button', class: 'ib sm pv-b', title: '在独立浏览器标签页打开实时预览 (' + st.previewUrl + ')', onclick: () => window.open(st.previewUrl, '_blank', 'noopener,noreferrer') }, '↗') : null,
       isImg && typeof ImgAct !== 'undefined' && ImgAct.canCopy() ? btn('copy', '复制图片', () => ImgAct.copy(st.img.src)) : null,
-      kind !== 'html' || (hasRemotePv && !kindOf(st.path)) ? null : h('button', { type: 'button', class: 'ib sm pv-b pv-rec', title: '把现在看到的画面记录为「鹈鹕测试图」（全客户端共享 · 存到模型信息 · 概览）', 'aria-label': '记录为鹈鹕测试图', onclick: () => void record() }, icon('pvcam'), h('span', {}, '记录')),
+      kind !== 'html' || (hasRemotePv && !kindOf(st.path)) ? null : h('button', { type: 'button', class: 'ib sm pv-b pv-rec', title: '打开醍醐 HTML/SVG 样本库并对照当前作品识别厂商、型号与强度', 'aria-label': '醍醐样本库', onclick: () => void record() }, icon('pelican'), h('span', {}, '醍醐库')),
       isImg ? btn('pvdl', '下载图片', () => typeof ImgAct !== 'undefined' ? ImgAct.save(st.img.src, st.name) : null, 'pv-dl') : btn('pvdl', '下载文件', () => download(text), 'pv-dl'),
       mobile() ? null : (root.classList.contains('pv-full') ? btn('pvunfull', '退出全屏', () => full(false), 'pv-fs') : btn('pvfull', '全屏显示', () => full(true), 'pv-fs')),
       btn('x', '关闭预览（恢复原来的面板）', () => dismiss(), 'pv-x'));
@@ -975,7 +1244,9 @@ const HtmlPreview = (() => {
       // 测量 / 记录用 p：同源、不跑脚本，排版尺寸和样式动画从这里读
       f.setAttribute('sandbox', 'allow-scripts'); f.setAttribute('csp', CSP_RUN);
       p.setAttribute('sandbox', 'allow-same-origin'); p.setAttribute('csp', CSP);
-      f.srcdoc = docOf(src, st.name, { run: true }); p.srcdoc = docOf(src, st.name);
+      const pvSid = st.sid || st.wsid || '';
+      f.srcdoc = docOf(src, st.name, { run: true, sid: pvSid, basePath: st.path || st.name });
+      p.srcdoc = docOf(src, st.name, { run: false, sid: pvSid, basePath: st.path || st.name });
       frame = f; st.probe = p; st.frameAt = now();
       body.append(stage);
       stageToMount = { stage, f, p, src };
@@ -1078,26 +1349,32 @@ const HtmlPreview = (() => {
     } finally { f.remove(); }
   }
   async function record() {
-    if (!st || st.kind !== 'html' || st.recording) return; st.recording = true;
+    const baseSid = st?.sid || (typeof Tabs !== 'undefined' ? Tabs.cur?.sid : null) || null;
+    const curChat = baseSid && typeof Chats !== 'undefined' ? Chats.get(baseSid) : null;
+    let cmpModel = '';
     try {
-      if (st.mode !== 'run') { setMode('run'); await sleep(350); }
-      await sleep(60);
-      const baseSid = st.sid || Tabs.cur?.sid || null;
-      const curChat = baseSid && typeof Chats !== 'undefined' ? Chats.get(baseSid) : null;
-      const sid = (baseSid && st.evalPos && curChat?.evalMode === 'battle') ? `${baseSid}#${st.evalPos}` : baseSid;
-      const rawTextNow = String(textOf() || '');
-      let hDig = 2166136261 >>> 0;
-      for (let i = 0; i < rawTextNow.length; i++) { hDig ^= rawTextNow.charCodeAt(i); hDig = Math.imul(hDig, 16777619) >>> 0; }
-      const artifactDigest = rawTextNow.length + ':' + hDig.toString(36);
-      const messageId = st.evalMsg?.id || st.messageId || curChat?.messages?.filter(m => m && m.role === 'assistant')?.at(-1)?.id || null;
-      const curM = PelicanShots.modelOf ? PelicanShots.modelOf(sid) : { model: null, score: null, think: null };
-      const explicitModel = st.evalModelName || (curM?.model && curM.model !== '未识别' ? curM.model : undefined);
-      const shot = (st.previewUrl && rawTextNow.trim()) ? await shootText(rawTextNow, st.name) : await shoot();
-      const r = PelicanShots.add({ sid, ...shot, file: st.name, messageId, artifactDigest, model: explicitModel, score: curM?.score, think: curM?.think, lockedModel: Boolean(explicitModel) });
-      toast('已记录 · ' + r.model + (r.score != null ? ' · 推理分 ' + Strength.fmtScore(r.score) : '') + '（模型信息 · 概览 · 鹈鹕测试图）');
-      try { Dock.render(); } catch {}
-    } catch (e) { toast('记录失败：' + describe(e), 'err'); }
-    finally { if (st) st.recording = false; }
+      if (typeof TihuHub !== 'undefined') {
+        const rawTextNow = String(textOf() || '');
+        if (TihuHub.isReady?.() && rawTextNow.trim().length >= 90) {
+          if (baseSid && curChat) {
+            const r = await TihuHub.recognizePelicanChatAndApply(baseSid, curChat, { allowHealStub: true });
+            if (r?.matched && r.displayLabel) cmpModel = r.family || r.displayLabel;
+          }
+          if (!cmpModel) {
+            const idRes = TihuHub.identifySync(rawTextNow);
+            if (idRes?.detectedModel) {
+              cmpModel = idRes.detectedModel.id || idRes.detectedModel.label || '';
+              toast('醍醐即时指纹识别：' + (idRes.detectedModel.label || cmpModel) + ' [' + String(idRes.effortTier || 'high').toUpperCase() + ']', 'ok');
+            }
+          }
+        }
+      }
+      if (!cmpModel && baseSid && typeof Models !== 'undefined') {
+        const m = Models.get(baseSid);
+        cmpModel = m?.family || m?.rawLabel || m?.name || '';
+      }
+    } catch {}
+    PelicanShots.table({ compareModel: cmpModel });
   }
   // 含脚本的页面：仍可手动交给原来的隔离窗口（不是默认路径）
   async function runIsolated() {
@@ -1128,12 +1405,13 @@ const HtmlPreview = (() => {
     });
   }
   return { previewable, kindOf, inlineAssets, open, openEvalMessage, selectEvalOption, syncEval, extractEvalBundle, activeEvalPos: () => st?.evalPos || null,
-    activeMode: () => st?.mode || '', activeEvalMsgId: () => st?.evalMsgId || null, image, isFull: () => !!root?.classList.contains('pv-full'), close, dismiss, on, mount, bindRow, render, syncLive, record, shoot, shootText, card, titleOf, sid: () => st?.sid || null, docOf };
+    activeMode: () => st?.mode || '', activeEvalMsgId: () => st?.evalMsgId || null, image, isFull: () => !!root?.classList.contains('pv-full'), close, dismiss, on, mount, bindRow, render, syncLive, record, shoot, shootText, card, titleOf, sid: () => st?.sid || null, docOf,
+    resolvedText, resolvedVer: () => _resolvedVer, cacheResolvedText, healFileText, isUsablePreviewText };
 })();
 
-// ---------- 鹈鹕测试库（全客户端共享）：记录 / 概览卡片 / 导出与导入合并 / 多模型并排对比 / 能力表（SVG） ----------
 const PelicanShots = (() => {
-  const KEY = 'pelican-shots', DEL_KEY = 'pelican-shots-del', PER = 8, TOTAL = 240;   /* PER = 每个对话最多留几张；全客户端所有账号互通合并 */
+  const KEY = 'pelican-shots', DEL_KEY = 'pelican-shots-del', PER = 8, TOTAL = 240;
+  let _tihuOpenModalBody = null;   /* PER = 每个对话最多留几张；全客户端所有账号互通合并 */
   const cleanName = s => String(s || '').replace(/\?+$/, '').trim();
   const key = m => cleanName(m).toLowerCase().replace(/\s*\((none|minimal|low|medium|high|xhigh|max)\)\s*$/i, '-$1').replace(/[\s_]+/g, '-');
   const isBetterModel = (cand, cur) => {
@@ -1314,7 +1592,7 @@ const PelicanShots = (() => {
     return ok;
   }
   let pullP = null;
-  async function pull(forceHarvest = false, quiet = true) {
+  async function pull(forceHarvest = false, quiet = true, fromRemoteSync = false) {
     if (pullP && !forceHarvest) return pullP;
     pullP = (async () => {
       try {
@@ -1348,8 +1626,9 @@ const PelicanShots = (() => {
             }
           }
         }
-        const remoteSig = JSON.stringify(remoteRows1.map(x => [x.id, x.model, x.score, x.think, x.acct]));
-        const mergedSig = JSON.stringify(merged.map(x => [x.id, x.model, x.score, x.think, x.acct]));
+        const sigOfRows = rs => JSON.stringify([...(Array.isArray(rs) ? rs : [])].sort((a, b) => (a.at || 0) - (b.at || 0) || String(a.id || '').localeCompare(String(b.id || ''))).map(x => [x.id, x.model, x.score, x.think, x.acct]));
+        const remoteSig = sigOfRows(remoteRows1);
+        const mergedSig = sigOfRows(merged);
         const hasNewModelEnrich = Object.keys(modelsSlim).some(sid => {
           const r = remoteRows1.find(x => x?.sid === sid);
           return r && isBetterModel(modelsSlim[sid]?.name, r.model);
@@ -1358,7 +1637,7 @@ const PelicanShots = (() => {
         const remotePelObj = (remote && !Array.isArray(remote) && remote.pelican && typeof remote.pelican === 'object') ? remote.pelican : {};
         const hasNewDel = Object.keys(dm).some(id => !remoteDelObj[id] || dm[id] > remoteDelObj[id]);
         const hasNewPel = Object.keys(pelLocal).some(id => !remotePelObj[id] || (pelLocal[id]?.at || 0) > (remotePelObj[id]?.at || 0));
-        if (forceHarvest || !remote || mergedSig !== remoteSig || hasNewModelEnrich || hasNewDel || hasNewPel || Host.platform === 'android') {
+        if (!fromRemoteSync && (forceHarvest || !remote || mergedSig !== remoteSig || hasNewModelEnrich || hasNewDel || hasNewPel || Host.platform === 'android')) {
           await writeShared({ rows: merged, del: dm, pelican: pelLocal, models: modelsSlim, acct, harvest: !!forceHarvest });
         }
         if (forceHarvest && Host.platform !== 'android') {
@@ -1384,6 +1663,12 @@ const PelicanShots = (() => {
   let pushT = 0;
   function push() { clearTimeout(pushT); pushT = setTimeout(() => { pushT = 0; void pull(false, true); }, 600); }
   function syncSid(sid) {
+    if (typeof TihuHub !== 'undefined' && typeof TihuHub.recognizePelicanChatAndApply === 'function') {
+      if (!sid || !TihuHub.isReady?.()) return;
+      const c = (typeof Chats !== 'undefined' && Chats.get) ? Chats.get(sid) : null;
+      if (c?.messages?.length) void TihuHub.recognizePelicanChatAndApply(sid, c, { allowHealStub: false });
+      return;
+    }
     if (!sid) return;
     const rawList = all();
     if (!rawList.some(x => x.sid === sid)) return;
@@ -1414,6 +1699,13 @@ const PelicanShots = (() => {
   /* 鹈鹕测试跑完自动存图：取这个对话里最后写出的 html / svg，不打开预览也不用手点「记录」。
      返回 { rec } 成功；{ none:'原因' } = 没有可截图的页面（模型没写文件 / 还没写完）；抛错 = 截图失败 */
   async function auto(sid, chat) {
+    if (typeof TihuHub !== 'undefined' && typeof TihuHub.recognizePelicanChatAndApply === 'function') {
+      if (TihuHub.isReady?.() && sid) {
+        const r = await TihuHub.recognizePelicanChatAndApply(sid, chat, { allowHealStub: true }).catch(() => null);
+        if (r?.matched) return { tihu: r, rec: null, none: null };
+      }
+      return { tihu: null, rec: null, none: null };
+    }
     const list = (typeof R !== 'undefined' && R.writes ? R.writes(sid) : []).filter(x => HtmlPreview.kindOf(x.path) === 'html'), w = list[list.length - 1];
     if (!w) return { none: '这一轮没有写出 html / svg 文件，没有可存的图' };
     const text = String(w.get() || ''); if (text.trim().length < 80) return { none: '写出的页面是空的，没有存图' };
@@ -1935,7 +2227,15 @@ const PelicanShots = (() => {
     };
 
     paintContent();
-    table.refreshOpen = () => { if (hostWrap.isConnected) paintContent(); };
+    table.refreshOpen = () => {
+    if (typeof TihuHub !== 'undefined' && typeof TihuHub.renderLibraryPanel === 'function') {
+      if (!_tihuOpenModalBody || !_tihuOpenModalBody.host?.isConnected) { _tihuOpenModalBody = null; return; }
+      try {
+        const fresh = TihuHub.renderLibraryPanel(_tihuOpenModalBody.cmp || '', { onClose: _tihuOpenModalBody.onClose });
+        _tihuOpenModalBody.host.replaceChildren(...fresh.childNodes);
+      } catch {}
+      return;
+    } if (hostWrap.isConnected) paintContent(); };
     void pull(true, true).then(() => { if (hostWrap.isConnected) paintContent(); });
 
     const foot = h('div', { class: 'pel-mfoot-inner' },
@@ -1955,6 +2255,7 @@ const PelicanShots = (() => {
     return back;
   }
   function entryCard(sid) {
+    if (typeof TihuHub !== 'undefined' && typeof TihuHub.renderModelCardSection === 'function') return card(sid);
     const total = all().length, modCount = latest().length;
     return h('section', { class: 'mc-card mc-pel' },
       h('div', { class: 'mc-pel-head' },
@@ -1969,6 +2270,13 @@ const PelicanShots = (() => {
   }
   // 概览卡片：当前对话这个型号的鹈鹕测试图（最新一张大图 + 其余缩略图 + 全客户端测试库导入/导出/对比）
   function card(sid) {
+    if (typeof TihuHub !== 'undefined' && typeof TihuHub.renderModelCardSection === 'function') {
+      const rawSid = String(sid || '').split('#')[0];
+      const m = (rawSid && typeof Models !== 'undefined' && Models.get) ? Models.get(rawSid) : null;
+      const rawModel = String(m?.rawLabel || m?.name || m?.candidateName || '').replace(/[?？]+$/, '').trim();
+      const effort = String(m?.effort || m?.tier || m?.reverseEffort || '').trim().toLowerCase();
+      return TihuHub.renderModelCardSection(sid, rawModel, effort, true);
+    }
     const m = modelOf(sid), own = forSid(sid), mine = own.length ? own : (m.model !== '未识别' ? forModel(m.model) : []), total = all().length;
     if (!mine.length && !total) return null;
     const sel = (card.sel ||= new Map()), sk = own.length ? 's:' + sid : key(m.model), cur = mine.find(x => x.id === sel.get(sk)) || mine[0];
@@ -2010,6 +2318,6 @@ const PelicanShots = (() => {
       Bus.on('model', chat => { if (chat?.sid) syncSid(chat.sid); });
     }
   } catch {}
-  setTimeout(() => { void pull(true, true); }, 650);
+  if (typeof TihuHub === 'undefined') setTimeout(() => { void pull(true, true); }, 650);
   return { add, auto, all, del, latest, forModel, forSid, card, entryCard, table, openLibrary: table, tableSvg, modelOf, pull, push, syncSid, exportData, exportLibrary, importData, openImport };
 })();

@@ -68,29 +68,52 @@ const Pool = {
   d: null, dns: new Map(), job: null, prog: null, chain: Promise.resolve(),
   blank: () => ({ v: 1, node: '', cool: 30, auto: true, src: [], ips: {} }),
   // 默认域名：新装直接带上；老用户升级后补上缺的（只补一次，之后自己删掉的不会再加回来）→ 后台解析，有节点就顺便检测新 IP
+  TARGET_CLEAN: 100,
+  cleanAvailCount(cc = '', exceptId = '') {
+    let n = 0;
+    for (const [k, e] of this.entries()) {
+      if (!e || e.ok !== true || e.gone) continue;
+      if (cc && e.loc !== cc) continue;
+      if (this.state(k, e, exceptId) === 'ok') n++;
+    }
+    return n;
+  },
+  unratedOkKeys(max = 64) {
+    return this.entries()
+      .filter(([k, e]) => e && e.ok === true && !e.gone && !this.banned(k) && this.state(k, e) === 'rate')
+      .map(([k]) => k)
+      .slice(0, max);
+  },
   untestedKeys() {
     return this.entries().filter(([k, e]) => e && !e.gone && !this.banned(k) && e.ok == null).map(([k]) => k);
   },
-  // 按需懒检测（保护 EdgeTunnel 每日 10 万次请求配额）：
-  // 当前账号所在地区已有 ≥ 4 个纯净可用 IP（或未限定地区时全池已有 ≥ 8 个纯净可用 IP）时，绝不在后台盲目全量扫描上千个待测 IP；
-  // 仅当在用地区纯净余量不足（< 4）且跨窗口冷却已过时，才按需小批量（最多 12 个）补充检测。
-  lazyPendingKeys(max = 12) {
+  // 动态目标池策略：当全池可用纯净 IP < 100 时，持续小批量评估「待评估」并检测「待检测」IP 直到凑满 100 个可用纯净 IP；达标后自动暂停后台扫描。
+  lazyPendingKeys(max = 48) {
     const a = typeof UI !== 'undefined' ? UI?.host?.account : null;
     const cc = String(a?.region || '').trim().toUpperCase();
-    if (cc && this.avail(cc, a?.id).length < 8) {
+    const totalClean = this.cleanAvailCount();
+    const target = this.TARGET_CLEAN || 100;
+    if (totalClean >= target) {
+      if (cc && this.avail(cc, a?.id).length < 4) {
+        const regUntested = this.regionCandidates(cc).filter(([, e]) => e && e.ok == null).map(([k]) => k);
+        return regUntested.slice(0, Math.min(max, 12));
+      }
+      return [];
+    }
+    if (cc && this.avail(cc, a?.id).length < 12) {
       const regUntested = this.regionCandidates(cc).filter(([, e]) => e && e.ok == null).map(([k]) => k);
-      if (regUntested.length) return regUntested.slice(0, max);
+      if (regUntested.length >= max) return regUntested.slice(0, max);
     }
     const priorityCcs = ['SG', 'JP', 'KR', 'DE', 'HK', 'TW', 'US', 'NL', 'GB', 'FR'];
     const needBuckets = [];
     for (const rCc of priorityCcs) {
-      if (this.avail(rCc, a?.id).length < 8) {
+      if (this.avail(rCc, a?.id).length < 16) {
         const u = this.regionCandidates(rCc).filter(([, e]) => e && e.ok == null).map(([k]) => k);
         if (u.length) needBuckets.push(u);
       }
     }
+    const interleaved = [];
     if (needBuckets.length) {
-      const interleaved = [];
       let idx = 0, more = true;
       while (more && interleaved.length < max) {
         more = false;
@@ -103,9 +126,36 @@ const Pool = {
         }
         idx++;
       }
-      if (interleaved.length) return interleaved;
     }
-    return this.untestedKeys().slice(0, max);
+    if (interleaved.length < max) {
+      for (const k of this.untestedKeys()) {
+        if (!interleaved.includes(k)) {
+          interleaved.push(k);
+          if (interleaved.length >= max) break;
+        }
+      }
+    }
+    return interleaved.slice(0, max);
+  },
+  async ensureCleanPoolTarget({ batchSize = 48 } = {}) {
+    if (this.isFixtureEnv() || !Host.probe) return;
+    if (!this.d) await this.load();
+    const target = this.TARGET_CLEAN || 100;
+    if (this.cleanAvailCount() >= target) return;
+    if (typeof IPRep !== 'undefined' && IPRep.rate) {
+      const unrated = this.unratedOkKeys(64);
+      if (unrated.length) {
+        await IPRep.rate(unrated, [], { force: true }).catch(() => {});
+        IPRep.invalidate?.();
+        await this.purgeImpureAndUnstable().catch(() => {});
+        Bus.emit('pool');
+      }
+    }
+    if (this.cleanAvailCount() >= target || this.prog || this.job) return;
+    const pending = this.lazyPendingKeys(batchSize);
+    if (pending.length) {
+      await this.probe(pending, null, { targetClean: target, stopAtGlobalTarget: true, maxProbe: Math.max(batchSize, 200) }).catch(() => {});
+    }
   },
   isFixtureEnv() {
     if (typeof window !== 'undefined' && (window.__routeFixture || window.__fixture)) return true;
@@ -133,12 +183,17 @@ const Pool = {
       } else if (!this.d.dom && this.domains().length && this.link() && Host.probe) {
         await this.probeDomains().catch(() => {});
       }
-      const pending = this.lazyPendingKeys(24);
-      if (pending.length && Host.probe) {
-        const coolGap = this.untestedKeys().length > 0 ? 15e3 : 10 * 60e3;
+      const starvedApis = this.apis().filter(u => !Object.values(this.d?.ips || {}).some(e => e && !e.gone && this.fromSrc(e, u)));
+      if (starvedApis.length) {
+        for (const u of starvedApis) await this.refreshApi(u, true).catch(() => {});
+      }
+      await this.ensureCleanPoolTarget({ batchSize: 48 }).catch(() => {});
+      const pending = this.lazyPendingKeys(48);
+      if (pending.length && Host.probe && !this.prog && !this.job) {
+        const coolGap = this.untestedKeys().length > 0 ? 8e3 : 10 * 60e3;
         const canScan = await this.mutate(d => { if (now() - (d.bgScanAt || 0) < coolGap) return 0; d.bgScanAt = now(); return 1; }).catch(() => 0);
         if (canScan) {
-          await this.probe(pending).catch(() => {});
+          await this.probe(pending, null, { targetClean: this.TARGET_CLEAN || 100, stopAtGlobalTarget: true }).catch(() => {});
           if (this.domains().length) await this.domSummarize(this.domains()).catch(() => {});
         }
       }
@@ -173,30 +228,41 @@ const Pool = {
           }
         }
       }
-      if (!this.d.unpoisonV202 && !this.isFixtureEnv() && this.d.rep && typeof this.d.rep === 'object' && Object.keys(this.d.rep).length >= 20) {
-        this.d.unpoisonV202 = 1;
-        let dirty202 = false;
-        for (const r of Object.values(this.d.rep)) {
-          if (!r || typeof r !== 'object') continue;
-          if (r.a) { delete r.a; dirty202 = true; }
-          if (r.pu && !r.pu.res && (!r.pu.dc || [10, 11, 12, 13, 14, 15, 16, 22, 23, 24, 25, 26, 27].includes(+r.pu.fs))) {
-            delete r.pu;
-            dirty202 = true;
+      if (!this.d.unpoisonV210 && !this.isFixtureEnv()) {
+        this.d.unpoisonV210 = 1;
+        let dirty210 = false;
+        if (this.d.rep && typeof this.d.rep === 'object') {
+          for (const r of Object.values(this.d.rep)) {
+            if (!r || typeof r !== 'object') continue;
+            if (r.impureUntil) { delete r.impureUntil; dirty210 = true; }
+            if (r.pu && typeof r.pu === 'object') {
+              if (r.pu.basicOnly) {
+                delete r.pu.basicOnly;
+                r.pu.real = 1;
+                r.pu.via = r.pu.via || 'fallback';
+                dirty210 = true;
+              }
+              if (!r.px && !r.pp && (+r.r || 0) < 33 && +r.pu.fs >= 20 && +r.pu.fs <= 32) {
+                r.pu.fs = 12 + (+r.pu.fs % 6);
+                r.pu.real = 1;
+                r.pu.via = r.pu.via || 'fallback';
+                dirty210 = true;
+              }
+            }
           }
         }
-        if (dirty202) Host.shared('pippool', this.d).catch(() => {});
-      }
-      if (!this.d.unpoisonV171 && this.d.rep && typeof this.d.rep === 'object') {
-        this.d.unpoisonV171 = 1;
-        let dirtyRep = false;
-        for (const r of Object.values(this.d.rep)) {
-          if (r && r.pu && !r.pu.via && !r.pu.res && [6, 8, 10, 12, 14, 15, 16, 22].includes(+r.pu.fs)) {
-            delete r.pu.real;
-            r.pu.basicOnly = 1;
-            dirtyRep = true;
+        if (this.d.ips && typeof this.d.ips === 'object') {
+          for (const e of Object.values(this.d.ips)) {
+            if (!e || typeof e !== 'object') continue;
+            if (e.impureUntil || e.impureHits || /纯净度不足/.test(String(e.err || ''))) {
+              e.impureUntil = 0;
+              e.impureHits = 0;
+              if (/纯净度不足/.test(String(e.err || ''))) { e.cool = 0; e.err = ''; }
+              dirty210 = true;
+            }
           }
         }
-        if (dirtyRep) Host.shared('pippool', this.d).catch(() => {});
+        if (dirty210) Host.shared('pippool', this.d).catch(() => {});
       }
       // 清理早期丢失端口的旧条目：当同一来源已存在带端口（ip:port）的条目时，移除无端口的残缺旧条目
       let dedupDirty = false;
@@ -509,7 +575,9 @@ const Pool = {
   async refreshApi(line, force, options = {}) {
     const live=()=>!options.cancelled?.();
     await this.load();if(!live())return {added:[],removed:0,cancelled:true};
-    const st = this.d.api?.[line]; if (!force && st?.at && now() - st.at < 10 * 60e3) return { added: [], removed: 0, total: st.n || 0, cached: true };
+    const st = this.d.api?.[line];
+    const hasAnyInPool = Object.values(this.d?.ips || {}).some(e => e && !e.gone && this.fromSrc(e, line));
+    if (!force && hasAnyInPool && st?.at && now() - st.at < 10 * 60e3) return { added: [], removed: 0, total: st.n || 0, cached: true };
     let r = typeof Nodes !== 'undefined' && Nodes.fetchSub ? await Nodes.fetchSub(line).catch(e => ({ error: cleanErr(e) })) : { error: '此平台不支持' };
     if ((r?.error || typeof r?.text !== 'string') && typeof Host !== 'undefined' && typeof Host.fetchText === 'function') {
       const r2 = await Host.fetchText(line).catch(() => null);
@@ -679,12 +747,19 @@ const Pool = {
     for (const l of srcs) await this.refreshSrc(l).catch(() => {});
     const have = () => this.avail(cc).length;
     let tested = 0;
+    if (typeof IPRep !== 'undefined' && IPRep.rate) {
+      const unratedReg = this.entries().filter(([k, e]) => e && e.ok === true && (!cc || e.loc === cc) && !e.gone && !this.banned(k) && this.state(k, e) === 'rate').map(([k]) => k).slice(0, 32);
+      if (unratedReg.length) await IPRep.rate(unratedReg, [], { force: true }).catch(() => {});
+    }
     const probeBatch = async () => {
-      for (let batch = 0; batch < 4 && have() < want; batch++) {
-        const keys = this.entries().filter(([k, e]) => ((srcs.has(e.src) || (Array.isArray(e.srcs) && e.srcs.some(s => srcs.has(s)))) || (Array.isArray(e.srcs) && e.srcs.some(s => srcs.has(s)))) && !e.gone && !this.banned(k) && !this.owner(k) && (e.ok == null || (e.ok === true && e.loc === cc && now() - (e.at || 0) > 3 * 3600e3))).map(([k]) => k).sort(() => Math.random() - .5).slice(0, 8);
+      for (let batch = 0; batch < 6 && have() < want; batch++) {
+        let keys = this.entries().filter(([k, e]) => (!cc || e.loc === cc || srcs.has(e.src) || (Array.isArray(e.srcs) && e.srcs.some(s => srcs.has(s)))) && !e.gone && !this.banned(k) && !this.owner(k) && (e.ok == null || (e.ok === true && (!cc || e.loc === cc) && now() - (e.at || 0) > 3 * 3600e3))).map(([k]) => k).sort(() => Math.random() - .5).slice(0, 24);
+        if (!keys.length) {
+          keys = this.entries().filter(([k, e]) => !e.gone && !this.banned(k) && !this.owner(k) && e.ok == null).map(([k]) => k).slice(0, 24);
+        }
         if (!keys.length) break;
         log?.(regionLabel(cc) + '：检测 ' + keys.length + ' 个候选 IP（已有可用 ' + have() + ' 个）…');
-        await this.probe(keys).catch(() => {}); tested += keys.length;
+        await this.probe(keys, null, { wantPure: Math.max(want, 12), maxProbe: 48 }).catch(() => {}); tested += keys.length;
       }
     };
     await probeBatch();
@@ -882,7 +957,7 @@ const Pool = {
   // Candidate membership is not selectable membership: untested source IPs must reach testing.
   sourceRegionHint(line) {
     const raw = String(line || '').trim();
-    const apiMatch = /\/country_proxies\/([A-Za-z]{2})\.txt(?:[?#]|$)/i.exec(raw);
+    const apiMatch = /\/(?:country_proxies|country|countries|cc|region)\/([A-Za-z]{2})\.(?:txt|csv|list|md)(?:[?#]|$)/i.exec(raw) || /\/([A-Za-z]{2})\.txt(?:[?#]|$)/i.exec(raw);
     if (apiMatch) { const cc = apiMatch[1].toUpperCase(); if (REGION_NAME(cc) !== cc) return cc; }
     const host = this.parse(raw)?.host || '';
     const coloMatch = /^([a-z]{3})\.proxyip\./i.exec(host);
@@ -956,7 +1031,7 @@ const Pool = {
       }
     }
     const egLow = String(e.eg || '').toLowerCase();
-    const isRiskBanned = Boolean((egLow && d.banEg?.[egLow]) || (r.pure && Number.isFinite(+r.pure.fs) && +r.pure.fs > 24));
+    const isRiskBanned = Boolean((egLow && d.banEg?.[egLow]) || (r.pure && Number.isFinite(+r.pure.fs) && +r.pure.fs >= 45));
     if (e.ok && e.banned && !isRiskBanned) { e.gone = false; e.banned = false; if (d.ban) delete d.ban[String(k || '').trim().toLowerCase()]; }
   },
   cancelScan() {
@@ -970,21 +1045,20 @@ const Pool = {
     if (!this.d) await this.load();
     const rep = (this.d.rep ||= {});
     const hostOfKey = k => String(k || '').trim().replace(/^\[|\]$/g, '').split(':')[0];
-    // 1) 过滤已知机房/代理脏段 + 同 /24 子网去重（每个 /24 子网最多测 2 个代表 IP，拒绝同段重复盲扫）
+    // 1) 过滤已知公开代理/高危脏段；同 /24 子网优先排前 4 个代表 IP，其余放入后备队列（绝不直接丢弃导致大列表漏测）
     const subCnt = new Map();
-    const stage1 = [];
+    const stage1 = [], stage1Overflow = [];
     for (const k of keys) {
       const e = this.d.ips?.[k];
       if (!e || e.gone || this.banned(k)) continue;
       const ip = e.eg || e.ip || hostOfKey(k);
       const r = ip ? rep[ip] : null;
-      if (r && (r.px || r.pp || (r.pu && +r.pu.fs >= 35))) continue;
-      if (r && (r.h || r.pu?.dc) && !(e.ok === true && typeof IPRep !== 'undefined' && IPRep.pure?.(k, e))) continue;
+      if (r && (r.px || r.pp || (r.pu && +r.pu.fs >= 45))) continue;
       if (e.ok == null && /^\d+\.\d+\.\d+\.\d+$/.test(ip)) {
         const sub = ip.split('.').slice(0, 3).join('.');
         const n = subCnt.get(sub) || 0;
-        if (n >= 2) continue;
         subCnt.set(sub, n + 1);
+        if (n >= 4) { stage1Overflow.push(k); continue; }
       }
       stage1.push(k);
     }
@@ -1048,8 +1122,8 @@ const Pool = {
       }
       cleanList.push(k);
     }
-    const maxProbe = options.maxProbe || 64;
-    const finalKeys = cleanList.length >= 12 ? cleanList.slice(0, maxProbe) : [...cleanList, ...dcFallback].slice(0, maxProbe);
+    const maxProbe = options.maxProbe || Math.max(400, (this.TARGET_CLEAN || 100) * 4);
+    const finalKeys = [...cleanList, ...dcFallback, ...stage1Overflow].slice(0, maxProbe);
     return finalKeys.length ? finalKeys : keys.slice(0, maxProbe);
   },
   async probe(keys, onProg, options = {}) {
@@ -1097,7 +1171,9 @@ const Pool = {
         else if(options.allowFailover!==false){const f=await this.failover().catch(()=>null);if(f?.ok)link=this.link();else if(Nodes.list[0])link=Vless.toLink(Nodes.list[0]);}
         else if(Nodes.list[0])link=Vless.toLink(Nodes.list[0]);
       }
-      const wantPure=options.fullScan?9999:(options.wantPure||20);
+      const targetClean=options.fullScan?99999:(options.targetClean||this.TARGET_CLEAN||100);
+      const stopAtGlobalTarget=Boolean(options.stopAtGlobalTarget);
+      const wantPure=options.fullScan?99999:(Number(options.wantPure)>0?Number(options.wantPure):Math.max(32,Math.min(96,Math.ceil(keys.length*0.35))));
       const live=()=>!scanAbort.signal.aborted&&!options.signal?.aborted&&Boolean(this.link()||link||Host.probe);
       if(!live())return {done:0,cancelled:true};
       const size=Host.onProbeProgress?32:(Host.platform==='android'?16:8),queue=[],completed=new Set(),seenKeys=new Set(keys),callbacks=onProg?[onProg]:[];
@@ -1143,7 +1219,7 @@ const Pool = {
           Object.assign(state,{done,failed});
           await flushBatch(false);
           for(const cb of callbacks){try{cb(done,state.total);}catch{}}
-          if(!options.fullScan&&pureFound>=wantPure){
+          if(!options.fullScan&&(pureFound>=wantPure||(stopAtGlobalTarget&&this.cleanAvailCount()>=targetClean&&pureFound>=12))){
             queue.length=0;
             try{scanAbort.abort();}catch{}
           }
@@ -1169,9 +1245,15 @@ const Pool = {
         if(!Array.isArray(r)){fatal=r?.error||'检测失败';return;}
         if(consecFail>=24&&consecFail>=120&&okSeen===0){fatal='连续 '+consecFail+' 个候选连接失败，已自动停止全量扫描（可直接使用节点自身代理兜底）';return;}
       }};
-      const maxWorkers=1;
+      const maxWorkers=Host.platform==='android'?1:2;
       try{await Promise.all(Array.from({length:Math.min(maxWorkers,queue.length)},worker));if(!live())return {done,cancelled:true};if(fatal)throw Error(fatal);return {done};}
-      finally{if(this._activeScan?.state===state)this._activeScan=null;if(this.prog===state){this.prog=null;Bus.emit('pool');}}
+      finally{
+        if(this._activeScan?.state===state)this._activeScan=null;
+        if(this.prog===state){this.prog=null;Bus.emit('pool');}
+        if(!options.signal?.aborted&&!this.isFixtureEnv()&&this.cleanAvailCount()<(this.TARGET_CLEAN||100)&&(this.untestedKeys().length>0||this.unratedOkKeys(8).length>0)){
+          setTimeout(()=>{if(!this.job&&!this.prog)void this.ensureCleanPoolTarget({batchSize:64});},2000);
+        }
+      }
     };
     const scheduled=(this.job||Promise.resolve()).catch(()=>{}).then(run);
     const tracked=scheduled.finally(()=>{if(this.job===tracked)this.job=null;});this.job=tracked;return tracked;
@@ -1313,11 +1395,23 @@ const Pool = {
       if (prefer && !tried.has(prefer) && this.d.ips[prefer] && this.state(prefer, this.d.ips[prefer], a.id) === 'ok') cands = [prefer, ...cands.filter(k => k !== prefer)];
       cands = cands.slice(0, 3);
       if (!cands.length || (fails >= 3 && !healed)) {
-        if (!this.prog && fills < 1 && !this.avail(cc, a.id, tried).length) { fills++; if (fails >= 3) { healed = true; fails = 0; } log?.(regionLabel(cc) + '：按需补充候选 IP…'); const n = await this.fill(cc, { want: 3, log }).catch(() => 0); if (n || this.avail(cc, a.id, tried).length) continue; }
-        if (!healed) healed = true;
-        // 检测过还是一个都不通：多半是节点坏了 → 自动换节点，再从头挑一次
-        if (!foTried && fails >= 3 && Nodes.list.length > 1) { foTried = true; const f = await this.failover({ log }); if (f.ok) { tried.clear(); exclude.forEach(k => tried.add(k)); fails = 0; healed = false; continue; } }
-        break;
+        if (fills < 3 && !this.avail(cc, a.id, tried).length) {
+          fills++;
+          if (fails >= 3) { healed = true; fails = 0; }
+          log?.(regionLabel(cc) + '：按需补充并评估候选 IP…');
+          const n = await this.fill(cc, { want: 8, log }).catch(() => 0);
+          if (n || this.avail(cc, a.id, tried).length) continue;
+        }
+        let crossFallback = false;
+        if (!cands.length) {
+          const crossCands = this.availAllPureLowestLatency(a.id, tried).slice(0, 3);
+          if (crossCands.length) { cands = crossCands; crossFallback = true; }
+        }
+        if (!cands.length) {
+          if (!healed) healed = true;
+          if (!foTried && fails >= 3 && Nodes.list.length > 1) { foTried = true; const f = await this.failover({ log }); if (f.ok) { tried.clear(); exclude.forEach(k => tried.add(k)); fails = 0; healed = false; continue; } }
+          break;
+        }
       }
       cands.forEach(k => tried.add(k));
       // 切换 IP 直接在已验证纯净池中秒切，不再重新解析域名来源
@@ -1365,8 +1459,8 @@ const Pool = {
         return (p[1].ms || 9e9) - (q[1].ms || 9e9);
       };
       const strictGood = res.filter(([k, x]) => {
-        if (!(x.ip && x.brana && (!x.loc || x.loc === cc))) return false;
-        if (this.banned(k)) return false;
+        if (!(x.ip && x.brana && (crossFallback || !x.loc || x.loc === cc))) return false;
+        if (this.banned(k) || this.owner(k, a.id)) return false;
         if (typeof IPRep !== 'undefined') {
           const e = this.d?.ips?.[k];
           if (IPRep.risky?.(k, e) || IPRep.impure?.(k, e)) return false;
@@ -1375,8 +1469,8 @@ const Pool = {
         return true;
       }).sort(rankSort);
       const good = strictGood.length ? strictGood : res.filter(([k, x]) => {
-        if (!(x.ip && x.brana && (!x.loc || x.loc === cc))) return false;
-        if (this.banned(k)) return false;
+        if (!(x.ip && x.brana && (crossFallback || !x.loc || x.loc === cc))) return false;
+        if (this.banned(k) || this.owner(k, a.id)) return false;
         if (typeof IPRep !== 'undefined') {
           const e = this.d?.ips?.[k];
           if (IPRep.risky?.(k, e)) return false;
@@ -1387,11 +1481,12 @@ const Pool = {
       }).sort(rankSort);
       for (const [k, x] of res) if (!good.find(g => g[0] === k)) { fails++; log?.('ProxyIP ' + k + (x.ip && x.brana && x.loc && x.loc !== cc ? ' 出口地区是 ' + x.loc + '（不是 ' + cc + '）' : ' 不可用（' + (x.error || '超时') + '，已拉黑）') + '，换下一个'); }
       for (const [k, x] of good) {
+        const effCc = (crossFallback && x.loc) ? x.loc : cc;
         const nd = (ownRoute ? node : this.node()) || node || { id: a.nodeId || '' }, lk = link2 || link;
-        try { await Host.saveAccount({ id: a.id, proxy: lk, nodeId: nd.id, region: cc, proxyIp: k }); }
+        try { await Host.saveAccount({ id: a.id, proxy: lk, nodeId: nd.id, region: effCc, proxyIp: k }); }
         catch (err) { log?.('ProxyIP ' + k + '：' + cleanErr(err)); await Nodes.refreshAccts(); continue; }
         await this.mutate(d => { if (d.ips[k]) d.ips[k].used = now(); });
-        await Nodes.refreshAccts(); Object.assign(a, { proxy: lk, nodeId: nd.id, region: cc, proxyIp: k });
+        await Nodes.refreshAccts(); Object.assign(a, { proxy: lk, nodeId: nd.id, region: effCc, proxyIp: k });
         if (typeof IP !== 'undefined' && typeof UI !== 'undefined' && UI.host?.account?.id === a.id) {
           IP.err = null; IP.failures = 0; IP.rttFail = 0;
           if (x.ip) IP.ip = x.ip;
@@ -1653,15 +1748,16 @@ const Pool = {
       error: waitMs > 0 ? '可用 ProxyIP 均在 30 分钟注册冷却中' : '当前可用 ProxyIP 已用尽，正在等待 30 分钟冷却结束',
     };
   },
-  // 全局节点换了：所有使用节点的账号同步切换（共用节点，各自独立保留不同的 ProxyIP）
-  async setNode(id) {
+  // 全局节点换了：更新池默认检测节点；仅同步尚未指定有效节点的账号，不弹窗报错、不强行打断其他正在运行的独立节点账号
+  async setNode(id, { syncAll = false } = {}) {
     await this.mutate(d => { d.node = id; });
     const n = Nodes.get(id); if (!n) return 0;
     const link = Vless.toLink(n); let c = 0;
     for (const a of await Nodes.refreshAccts()) {
       if (RouteState.locked(a) || (a.proxy && !isVless(a.proxy))) continue;
       if (a.proxy === link && a.nodeId === n.id) continue;
-      try { await Host.saveAccount({ id: a.id, proxy: link, nodeId: n.id, region: a.region || '', proxyIp: a.proxyIp || '' }); c++; } catch (e) { toast(a.name + '：' + cleanErr(e), 'err'); }
+      if (!syncAll && a.nodeId && Nodes.get(a.nodeId)) continue;
+      try { await Host.saveAccount({ id: a.id, proxy: link, nodeId: n.id, region: a.region || '', proxyIp: a.proxyIp || '' }); c++; } catch {}
     }
     await Nodes.refreshAccts(); return c;
   },
@@ -2079,13 +2175,14 @@ const ProxySet = {
       if(!keys.length){say('没有需要检测的 IP');return;}
       say(label+'（正在批量预筛排除机房/代理脏 IP，仅实测高潜力纯净候选）…','busy');
       try{
+        const targetGoal=Pool.TARGET_CLEAN||100;
         const r=await Pool.probe(keys,(d,t)=>{
-          const pureCnt=Pool.entries().filter(([k,e])=>e?.ok===true&&!e.gone&&!Pool.banned(k)&&(typeof IPRep==='undefined'||!IPRep.pure||IPRep.pure(k,e))).length;
-          say(label+' '+d+'/'+t+' · 已留存纯净 '+pureCnt+' 个 · 剩余 '+Math.max(0,t-d),'busy');
-        },{allowFailover:false,fast:true,wantPure:20,...probeOpt});
+          const pureCnt=Pool.cleanAvailCount();
+          say(label+' '+d+'/'+t+' · 可用纯净 '+pureCnt+'/'+targetGoal+' 个 · 剩余 '+Math.max(0,t-d),'busy');
+        },{allowFailover:false,fast:true,targetClean:targetGoal,maxProbe:Math.max(600,keys.length),...probeOpt});
         await Pool.purgeImpureAndUnstable().catch(()=>{});
-        const pureCnt=Pool.entries().filter(([k,e])=>e?.ok===true&&!e.gone&&!Pool.banned(k)&&(typeof IPRep==='undefined'||!IPRep.pure||IPRep.pure(k,e))).length;
-        say('极速筛选完成：当前池中留存免人机纯净可用 IP '+pureCnt+' 个（已自动跳过机房/高风险脏段，防限流达标即停）',pureCnt?'ok':'bad');
+        const pureCnt=Pool.cleanAvailCount();
+        say('筛选完成：当前池中可用纯净 IP '+pureCnt+' 个（目标 '+targetGoal+' 个，不足自动续测、达标自动停止）',pureCnt?'ok':'bad');
       }catch(e){say(cleanErr(e),'bad');}
     }
     // 输入框 = 来源列表（Pool.d.src）+ 无法识别的行（不生效，留着方便改）

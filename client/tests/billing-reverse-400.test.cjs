@@ -173,8 +173,8 @@ test('8 client & browser mode experience, autoqa gacha, and background reverse-i
   const gpSrc = fs.readFileSync(path.join(clientDir, 'ui/gacha-prompts.js'), 'utf8');
   const gachaSrc = fs.readFileSync(path.join(clientDir, 'ui/gacha.js'), 'utf8');
   assert.ok(gpSrc.includes('autoqa') && gpSrc.includes('AUTOQA_NUMBERS'), 'GachaPrompts.autoqa generates 3 random English word clauses + 4 number words');
-  assert.match(gachaSrc, /mode:\s*'autoqa'/);
-  assert.ok(gachaSrc.includes('trackAutoQA') && gachaSrc.includes('fallbackQuestionMark: true'), 'trackAutoQA handles 1-3 turns and appends ? on 3-turn tie');
+  assert.match(gachaSrc, /mode:\s*'pelican'/);
+  assert.ok(gachaSrc.includes('waitSingleGachaTurn') && gachaSrc.includes('recognizePelicanChatAndApply'), 'Gacha pelican mode runs single-turn generation + HTML/feature recognition');
 
   const bpUiSrc = fs.readFileSync(path.join(clientDir, 'ui/billing-probe-ui.js'), 'utf8');
   assert.ok(!bpUiSrc.includes('!chat?.loaded || chat.busy || chat.gacha'), 'background and gacha chats can auto-reverse-infer without foreground load');
@@ -206,8 +206,8 @@ test('protocol-first + automatic fallback across main, core, gacha, billing-prob
   assert.ok(bpuiSrc.includes('streamFallback: true'));
 
   assert.ok(gachaSrc.includes("'Next-Url': '/leaderboard/agent'"));
-  assert.ok(gachaSrc.includes('stNow?.httpStatus === 429'));
-  assert.ok(gachaSrc.includes('流式协议特征兜底'));
+  assert.ok(gachaSrc.includes('st === 429') && gachaSrc.includes('rl429Streak'));
+  assert.ok(gachaSrc.includes('按回复格式识别'));
 
   assert.ok(acctSrc.includes('/nextjs-api/account/password'));
 });
@@ -274,8 +274,8 @@ test('killOpenSourceThinkingChat and non-Pelican Luna vs Haiku 5.5 disambiguatio
   const C = require(path.join(__dirname, '..', 'ui', 'arena-trace', 'confidence.js'));
   const gachaSrc = fs.readFileSync(path.join(__dirname, '..', 'ui', 'gacha.js'), 'utf8');
   assert.ok(gachaSrc.includes('function killOpenSourceThinkingChat(sid, c)'), 'gacha.js should define killOpenSourceThinkingChat');
-  assert.ok(gachaSrc.includes('History.remove?.(sid)'), 'killOpenSourceThinkingChat should directly delete open-source thinking chats');
-  assert.ok(gachaSrc.includes('检测到开源思考，已直接归档删除'), 'gacha.js should immediately archive and delete open-source thinking chats');
+  assert.ok(gachaSrc.includes('await History.remove(sid)'), 'stopAndArchiveDeleteOpenGachaChat should directly delete open-source thinking chats when openAutoStop is enabled');
+  assert.ok(gachaSrc.includes('检测到开源模型 · 自动暂停并归档删除'), 'gacha.js should stop, archive and delete open-source chats when openAutoStop is enabled');
 
   const rawCat = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'ui', 'arena-trace', 'catalog.json'), 'utf8'));
   const models = P.normalizeAgentCatalog(rawCat).filter(P.servesInteractively);
@@ -765,7 +765,7 @@ test('15. v0.13.139: Stream repair, account card cleanup, rate-limit fix, archiv
 
   // (9) Open-source Gacha immediate skip & archive + 1-question cap
   const gachaSrc = fs.readFileSync(path.join(clientDir, 'ui/gacha.js'), 'utf8');
-  assert.ok(gachaSrc.includes('isOpenThinkingChat') && gachaSrc.includes('isOpenSourceModelCand') && gachaSrc.includes('if (!isOpenChat && roundNo < 3)'), 'gacha.js immediately skips/archives open-source thinking chats and caps open-source models at 1 question');
+  assert.ok(gachaSrc.includes('isOpenThinkingChat') && gachaSrc.includes('isOpenSourceModelCand') && gachaSrc.includes('isOpenAutoStopEnabled'), 'gacha.js supports open-source detection and optional openAutoStop');
 });
 
 test('16. v0.13.140: Session 01a148c8-6f04-710a-88aa-9560c56c0bd4 and 01a14957-ba36-7f15-9640-56b3d0ec48ee identify Gemini 4 Argon (High) (contenders/barium-bb-v2-4xts-agent) #1 over claude-sonnet-5.5-max and gpt-6.1-sol-max', () => {
@@ -913,7 +913,7 @@ test('v0.13.141: GPT 6.1 Sol (01a148c5 & 01a1492d), DeepSeek V4.1 Flash 64-tok K
   const dockSrc = fs.readFileSync(path.join(clientDir, 'ui/dock.js'), 'utf8');
   const gachaSrc = fs.readFileSync(path.join(clientDir, 'client' in {} ? '' : 'ui/gacha.js'), 'utf8');
   assert.ok(bpUiSrc.includes('const isClosedThink = !isOpenThink;') && bpUiSrc.includes('sessionPayment.reconciled = Boolean(chargedOk || (channelOk && preimageOk))'));
-  assert.ok(dockSrc.includes('✓核对') && gachaSrc.includes('paceGachaPost') && gachaSrc.includes('allCloseArchive'));
+  assert.ok(dockSrc.includes('✓核对') && gachaSrc.includes('paceGachaPost') && gachaSrc.includes('stopAndArchiveDeleteOpenGachaChat'));
 });
 
 test('v0.13.142: 01a13f78 (不是gemini.json) & 01a1457a route cleanup, turning-point pair badges, 开源思考已停止, and mid-task fake finish auto-continue', () => {
@@ -946,8 +946,8 @@ test('v0.13.142: 01a13f78 (不是gemini.json) & 01a1457a route cleanup, turning-
   const keepSrc = fs.readFileSync(path.join(clientDir, 'ui/keep.js'), 'utf8');
   const coreSrc = fs.readFileSync(path.join(clientDir, 'ui/core.js'), 'utf8');
   const fpSrc = fs.readFileSync(path.join(clientDir, 'ui/fingerprint.js'), 'utf8');
-  assert.ok(bpUiSrc.includes('const isRoutedOrWeakened = Boolean(d ? (d.routeSwitched || d.effortDowngraded || d.routeType) : m?.routed);'));
-  assert.ok(bpUiSrc.includes("'01a13f78-0d74-716a-97e7-cdeb3c7a5a3c'") && bpUiSrc.includes('pivotPrevMsg._routePivotRole = \'prev\''));
+  assert.ok(bpUiSrc.includes('const isNowRouted = Boolean(top0?.routed || hr?.routed || diagnostics?.routeSwitched || diagnostics?.effortDowngraded || diagnostics?.routeType);'));
+  assert.ok(bpUiSrc.includes("pivotPrevMsg._routePivotRole = 'prev'"));
   assert.ok(viewSrc.includes('is-route-prev') && viewSrc.includes('开源思考已停止') && !viewSrc.includes('if (!rn && isLast && chat?.lastRouteNotice?.text)'));
   assert.ok(fpSrc.includes('openThinkStopped:true') && coreSrc.includes('openThinkStopped: true'));
   assert.ok(keepSrc.includes('if (propose(c, st, \'cont\'') && keepSrc.includes('c.peeking || !c.live') && keepSrc.includes('stall-tr|'));

@@ -17,10 +17,11 @@ const Bulk = {
       } },
     del: { name: '批量删除对话', verb: '删除', store: 'archDelQ', conc: 6, cls: 'del', ic: 'trash',
       req: async id => {
+        const isEval = Boolean(Bulk.q?.del?.evalSet?.has?.(id));
         if (typeof History !== 'undefined' && typeof History.protoMutateResponse === 'function') {
-          return History.protoMutateResponse('delete', id);
+          return History.protoMutateResponse('delete', id, { isEval });
         }
-        return rawFetch('/api/chat/' + encodeURIComponent(id), { method: 'DELETE', credentials: 'same-origin', cache: 'no-store' });
+        return rawFetch('/api/history/agentic/' + encodeURIComponent(id), { method: 'DELETE', credentials: 'same-origin', cache: 'no-store' });
       } },
   },
   q: {},          // kind → 正在跑的任务
@@ -47,13 +48,26 @@ const Bulk = {
     const lim = parseInt(g('ratelimit-limit') || '', 10);
     return { ra, rem: Number.isFinite(rem) ? rem : null, resetIn, lim: lim > 0 && lim < 1000 ? lim : 0 };
   },
-  start(kind, ids, resumed) {
+  start(kind, ids, resumed, metaMap = null) {
     if(typeof FingerprintBatch!=='undefined'&&FingerprintBatch.busy){toast('请先停止批量测指纹，再归档或删除','err');return null;}
     if (this.q[kind]) return this.q[kind];
     const K = this.K[kind];
-    const q = this.q[kind] = { kind, ids: [...new Set(ids)], total: 0, done: 0, fail: 0, k: 0, stop: false, until: 0, why: '', gone: new Set(), missing:new Set(), rem: null, lim: 0, t0: now() };
+    const evalSet = new Set();
+    if (kind === 'del') {
+      for (const id of ids) {
+        const entry = metaMap?.get?.(id) || (typeof History !== 'undefined' && History.byId?.(id)) || (typeof ArchiveHistory !== 'undefined' && ArchiveHistory.byId?.(id)) || null;
+        if (entry?.type === 'evaluation' || entry?.mode === 'battle' || entry?.mode === 'direct' || (typeof Chats !== 'undefined' && Chats.get?.(id)?.isEvaluation)) {
+          evalSet.add(id);
+        }
+      }
+    }
+    const q = this.q[kind] = { kind, ids: [...new Set(ids)], evalSet, total: 0, done: 0, fail: 0, k: 0, stop: false, until: 0, why: '', gone: new Set(), missing:new Set(), rem: null, lim: 0, t0: now() };
     q.total = q.ids.length;
     Store.set(K.store, q.ids);
+    // 用户在界面确认批量删除/归档/恢复后，立即 0ms 乐观更新界面，后台队列异步同步云端
+    if (!resumed && (kind === 'del' || kind === 'arch' || kind === 'unarch')) {
+      try { this.tidy(kind, new Set(q.ids)); } catch {}
+    }
     if (!resumed) this.dialog(kind);
     this.paint();
     this.run(q).catch(e => toast(K.name + '失败：' + describe(e), 'err'));
@@ -119,10 +133,12 @@ const Bulk = {
       for (const e of restored.reverse()) {
         if (!ex.has(e.id)) { History.items.unshift({ ...e, isArchived: false, archivedAt: null }); ex.add(e.id); }
       }
+      History._ix = null;
       History.saveSoon();
     } else {
+      if (kind === 'del') { try { History.markDeleted?.([...gone]); } catch {} }
       try { History.bury?.([...gone]); } catch {}
-      History.items = History.items.filter(e => !gone.has(e.id)); History.saveSoon();
+      History.items = History.items.filter(e => !gone.has(e.id)); History._ix = null; History.saveSoon();
     }
     if (kind === 'arch') { try { LocalCache.drop(gone, { archived: true }); } catch {} }
     if (kind === 'del') {
@@ -140,7 +156,15 @@ const Bulk = {
       if (dm) { if (typeof Models !== 'undefined' && Models.save) Models.save(); else Store.set('models2', Models.all); }
       if (dt) try { AcctStats.save?.(); } catch {}
     }
-    Bus.emit('history'); try { AcctStats.report(); } catch {} try { UI.renderList(); UI.renderTabs(); } catch {}
+    Bus.emit('history'); try { AcctStats.report(); } catch {}
+    try {
+      if (typeof UI !== 'undefined') {
+        for (const sid of gone) UI._cards?.delete?.(sid);
+        UI.adPaintBtn?.();
+        UI.renderList(true);
+        UI.renderTabs();
+      }
+    } catch {}
   },
   resume() {
     for (const kind of ['arch', 'unarch', 'del']) {
@@ -223,7 +247,7 @@ const Bulk = {
   },
   // 选关键词 / 看数量的确认窗
   archPick(items, bl) {
-    const rows = items.map(e => { const m = this.modelOf(e.id, e.title); return { id: e.id, text: [e.title, m?.name, m?.internal, Models.get(e.id)?.name].filter(Boolean).join(' '), m, fav: Fav.has(e.id), busy: !!Chats.get(e.id)?.busy }; });
+    const rows = items.map(e => { const m = this.modelOf(e.id, e.title), mi = Models.get(e.id); return { id: e.id, text: [e.title, e.localTitle, m?.name, m?.internal, mi?.name, mi?.rawLabel].filter(Boolean).join(' '), m, fav: Fav.has(e.id), busy: !!Chats.get(e.id)?.busy }; });
     const kw = [...bl]; if (!kw.some(k => /^muse$/i.test(k))) kw.push('muse');
     const on = new Set(bl.length ? bl : kw); on.add(kw.find(k => /^muse$/i.test(k)));
     let skipFav = true;
@@ -265,10 +289,24 @@ const Bulk = {
     if (this.busy.del) return; this.busy.del = true;
     const sc = this.scanBox('删除归档对话');
     try {
-      const got = []; let cursor = '', other = 0;
+      const got = [], metaMap = new Map(); let cursor = '', other = 0;
+      const queuedDel = new Set(this.q.del?.ids || []);
       for (let i = 0; i < 400 && !sc.stop; i++) {
         const j = await api('/api/history/unified?limit=50&includeArchived=true&archivedOnly=true' + (cursor ? '&cursor=' + encodeURIComponent(cursor) : ''));
-        for (const e of j.entries || []) { if (!(e.archivedAt || e.isArchived)) continue; if (e.type === 'agentic' || e.type === 'evaluation' || e.productMode || e.mode) got.push({ id: e.id, title: e.title || '' }); else other++; }
+        for (const e of j.entries || []) {
+          if (!e?.id || !(e.archivedAt || e.isArchived)) continue;
+          if ((typeof History !== 'undefined' && History.isDeleted?.(e.id)) || (typeof ArchiveHistory !== 'undefined' && ArchiveHistory.removed?.has(e.id)) || queuedDel.has(e.id)) continue;
+          if (e.type === 'agentic' || e.type === 'evaluation' || e.productMode || e.mode) {
+            const item = { id: e.id, title: e.title || '', type: e.type, mode: e.mode, modality: e.modality, modelAId: e.modelAId, modelBId: e.modelBId };
+            got.push(item);
+            metaMap.set(e.id, item);
+            try {
+              if (typeof ArchiveHistory !== 'undefined' && !ArchiveHistory.index.has(e.id)) {
+                ArchiveHistory.index.set(e.id, { ...e, isArchived: true });
+              }
+            } catch {}
+          } else other++;
+        }
         sc.set('正在统计已归档的对话… ' + got.length);
         cursor = j.pagination?.hasMore ? j.pagination.cursor : ''; if (!cursor) break;
       }
@@ -279,7 +317,7 @@ const Bulk = {
       const ids = await this.delPick(list);
       if (!ids || !ids.length) return;
       if (!await Dialog.confirm({ title: '删除归档对话', text: '是否删除 ' + ids.length + ' 个归档对话？\n删除后无法恢复（只删本账号已归档的，未归档的对话不受影响）。' + (ids.length > 10 ? '\n\nBrana 限制删除频率（约每分钟 10 个），' + ids.length + ' 个大约需要 ' + Math.ceil(ids.length / 10) + ' 分钟；在后台按上限速度自动删，可以最小化到底部状态栏。' : ''), ok: '删除', danger: true })) return;
-      this.start('del', ids, false);
+      this.start('del', ids, false, metaMap);
     } catch (e) { sc.close(); toast('删除归档失败：' + describe(e), 'err'); }
     finally { this.busy.del = false; }
   },

@@ -20,8 +20,10 @@ const ChatExport = {
   },
   resolveTitle(chat) {
     const sid = chat?.sid, row = typeof History !== 'undefined' ? History.byId?.(sid) : null, mi = typeof Models !== 'undefined' ? Models.get?.(sid) : null;
-    const synced = (typeof Titles !== 'undefined' && typeof Titles.view === 'function') ? Titles.view(sid, row?.title || chat?.title, row?.localTitle) : '';
-    return synced || row?.localTitle || row?.title || chat?.title || mi?.name || '对话';
+    const synced = (typeof Titles !== 'undefined' && typeof Titles.view === 'function') ? Titles.view(sid, row?.title || chat?.title, row?.localTitle) : null;
+    const pickStr = v => (typeof v === 'string' && v.trim() && v.trim() !== '[object Object]') ? v.trim() : '';
+    const syncedStr = typeof synced === 'string' ? pickStr(synced) : pickStr(synced?.title);
+    return syncedStr || pickStr(row?.localTitle) || pickStr(row?.title) || pickStr(chat?.localTitle) || pickStr(chat?.title) || pickStr(mi?.rawLabel) || pickStr(mi?.name) || '对话';
   },
   quote(text) { return String(text ?? '').replace(/\n$/, '').split('\n').map(l => '> ' + l).join('\n'); },
   json(v) { if (typeof v === 'string') return v; try { return JSON.stringify(v, null, 2); } catch { return String(v); } },

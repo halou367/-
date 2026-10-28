@@ -20,18 +20,29 @@ const TitleSync = (() => {
     score:m.score==null?null:Number(m.score.toFixed(1)),average:m.average==null?null:Number(m.average.toFixed(1)),
     tier:TitleCompact.tiers.includes(String(m.tier||'').toLowerCase())?String(m.tier||'').toLowerCase():'',revision:0}));
   const modelLabel = m => m ? ConversationLabels.unified(m) : '';
-  const modelStamp = mi => JSON.stringify([mi?.name,mi?.at,mi?.guess,mi?.pendingConfirm,mi?.routed,mi?.userCorrected,mi?.reverseInferred,mi?.habitInferred,mi?.billingProbe,mi?.reverseMatch,mi?.confidence,mi?.revPct,mi?.match,mi?.reverseScore,mi?.habitScore,mi?.reverseEffort,mi?.reverseVer,mi?.tier,mi?.est?.score,mi?.fingerprint?.skipped,mi?.fingerprint?.stopConfirmed,mi?.fingerprint?.result?.nearest?.id,mi?.fingerprint?.result?.signals?.relative_probability,mi?.fingerprint?.reasoning?.score,mi?.fingerprint?.avgProbeSec]);
-  const hasReidentifiedModel = mi => Boolean(mi && mi.name && !mi.pendingConfirm && !/^(未识别|未知型号|待定)$/.test(String(mi.name).trim()) && (mi.userCorrected || mi.reverseInferred || mi.habitInferred || mi.billingProbe));
+  const modelStamp = mi => JSON.stringify([mi?.name,mi?.rawLabel,mi?.at,mi?.guess,mi?.pendingConfirm,mi?.routed,mi?.effortDowngraded,mi?.routeTo,mi?.tihuRecognized,mi?._tihuEngineFixVer,mi?.userCorrected,mi?.reverseInferred,mi?.habitInferred,mi?.billingProbe,mi?.reverseMatch,mi?.confidence,mi?.revPct,mi?.match,mi?.reverseScore,mi?.habitScore,mi?.reverseEffort,mi?.effort,mi?.reverseVer,mi?.tier,mi?.est?.score,mi?.fingerprint?.skipped,mi?.fingerprint?.stopConfirmed,mi?.fingerprint?.result?.nearest?.id,mi?.fingerprint?.result?.signals?.relative_probability,mi?.fingerprint?.reasoning?.score,mi?.fingerprint?.avgProbeSec]);
+  const hasReidentifiedModel = mi => Boolean(mi && mi.name && !mi.pendingConfirm && !/^(未识别|未知型号|待定)$/.test(String(mi.name).trim()) && (mi.tihuRecognized || mi.userCorrected || mi.reverseInferred || mi.habitInferred || mi.billingProbe || mi.routed || mi.effortDowngraded || (mi.sure && !mi.fromTitle && !mi.guess)));
   const canonLower = s => String(typeof Strength !== 'undefined' && Strength.canon ? Strength.canon(s) : (s || '')).replace(/[?？]+$/, '').trim().toLowerCase();
+  const reidCanonOf = mi => {
+    const cName = mi?.name ? (typeof Strength !== 'undefined' && Strength.canon ? Strength.canon(mi.name) : mi.name) : '';
+    const cRaw = mi?.rawLabel ? (typeof Strength !== 'undefined' && Strength.canon ? Strength.canon(mi.rawLabel) : mi.rawLabel) : '';
+    if (cName && cRaw) {
+      const stripT = s => String(s).replace(/[?？]+$/, '').replace(/[-\s]*(none|minimal|low|medium|high|xhigh|max)$/i, '').trim().toLowerCase();
+      if (stripT(cName) === stripT(cRaw) && cRaw.length >= cName.length) return cRaw;
+      return cName;
+    }
+    return cName || cRaw || '';
+  };
   const label = m => modelLabel(m) + '/' + noteFmt(m.time) + (m.note ? '/' + m.note : '');
   function restored(sid) {
     const mi = typeof Models !== 'undefined' ? Models.get(sid) : null;
     const reid = hasReidentifiedModel(mi);
     const x = cache.get(sid);
     if (x?.generation === TitleCipher.generation) {
-      if (reid && x.meta && canonLower(x.meta.model) !== canonLower(mi.name)) {
+      const targetCanon = reid ? reidCanonOf(mi) : '';
+      if (reid && x.meta && ((mi?._tihuEngineFixVer || 0) >= 12 || canonLower(x.meta.model) !== canonLower(targetCanon))) {
         const reidSc = ConversationLabels.sane(numeric(mi.reverseScore ?? mi.habitScore ?? mi.est?.score));
-        return { ...x.meta, model: (typeof Strength !== 'undefined' && Strength.canon ? Strength.canon(mi.name) : mi.name), confidence: null, score: reidSc ?? x.meta.score ?? null };
+        return { ...x.meta, model: targetCanon, tier: String(mi.effort || mi.tier || x.meta.tier || ''), confidence: null, score: reidSc ?? x.meta.score ?? null };
       }
       return x.meta;
     }
@@ -43,11 +54,12 @@ const TitleSync = (() => {
         if (gp.fav && typeof Fav !== 'undefined' && !Fav.has(sid) && !(Fav.unfavAt && Fav.unfavAt[sid])) Fav.setQuiet(sid, true);
         if (gp.gold && typeof Gold !== 'undefined' && Gold.noteRestoredChat) Gold.noteRestoredChat(sid, gp);
         if (gp.model) {
-          const effModel = reid ? (typeof Strength !== 'undefined' && Strength.canon ? Strength.canon(mi.name) : mi.name) : gp.model;
-          const effScore = (reid && canonLower(gp.model) !== canonLower(mi.name))
+          const targetCanon = reid ? reidCanonOf(mi) : '';
+          const effModel = reid ? targetCanon : gp.model;
+          const effScore = (reid && ((mi?._tihuEngineFixVer || 0) >= 12 || canonLower(gp.model) !== canonLower(targetCanon)))
             ? (ConversationLabels.sane(numeric(mi.reverseScore ?? mi.habitScore ?? mi.est?.score)) ?? null)
             : (gp.score ?? null);
-          return { version: 2, model: effModel, confidence: null, score: effScore, average: null, time: Number(Notes.all?.[sid]?.t) || now(), note: String(Notes.all?.[sid]?.n || ''), tier: '', source: 'fingerprint', revision: 0, fav: !!gp.fav, gold: !!gp.gold, v4: false, fromPrefix: true };
+          return { version: 2, model: effModel, confidence: null, score: effScore, average: null, time: Number(Notes.all?.[sid]?.t) || now(), note: String(Notes.all?.[sid]?.n || ''), tier: String(reid ? (mi.effort || mi.tier || '') : ''), source: 'fingerprint', revision: 0, fav: !!gp.fav, gold: !!gp.gold, v4: false, fromPrefix: true };
         }
       }
     }
@@ -105,7 +117,7 @@ const TitleSync = (() => {
     const n = Notes.all[sid] || (mi && !mi.pendingConfirm && (!mi.guess || hasReidMi) && mi.name ? Notes.rec(sid) : null);
     if (!n) return null;
     const mStamp = modelStamp(mi);
-    if(n.modelData && n.modelData.model && !/^(未识别|未知型号|待定)$/.test(String(n.modelData.model).trim()) && n.modelStamp===mStamp && (!hasReidMi || canonLower(n.modelData.model)===canonLower(mi.name)))return {...n.modelData,time:Number(n.t)||n.modelData.time,note:String(n.n||''),revision:Number(n.modifiedAt)||n.modelData.revision};
+    if(n.modelData && n.modelData.model && !/^(未识别|未知型号|待定)$/.test(String(n.modelData.model).trim()) && n.modelStamp===mStamp && (!hasReidMi || canonLower(n.modelData.model)===canonLower(reidCanonOf(mi))))return {...n.modelData,time:Number(n.t)||n.modelData.time,note:String(n.n||''),revision:Number(n.modifiedAt)||n.modelData.revision};
     const entry=History.byId(sid), raw=entry?.localTitle || (!TitleCipher.isEncoded(entry?.title) ? entry?.title : '') || '';
     const memoKey = mStamp + '\u0001' + raw + '\u0001' + (prior?.model || '') + '\u0001' + (prior?.score ?? '') + '\u0001' + (prior?.confidence ?? '') + '\u0001' + (prior?.tier || '');
     const cached0 = buildMemo.get(sid);
@@ -115,7 +127,7 @@ const TitleSync = (() => {
     const fp = mi?.fingerprint, parsed = ConversationLabels.parse(noteBase(raw));
     const measured=fp?ConversationLabels.fingerprintData(mi):null;
     // Format-based vendor guesses ("xxx（推测）") or pendingConfirm are never synced or shown as a model name.
-    const apiName=mi&&(!mi.guess||hasReidMi)&&!mi.pendingConfirm?(typeof Strength!=='undefined'&&Strength.canon?Strength.canon(mi.name):mi.name):'';
+    const apiName=mi&&(!mi.guess||hasReidMi)&&!mi.pendingConfirm?reidCanonOf(mi):'';
     const preferredModel=hasReidMi?(apiName||measured?.model):(measured?.model||apiName);
     let model=mi?.pendingConfirm?'未识别':(String(preferredModel || prior?.model || (/推测/.test(parsed.name||'')?'':parsed.name) || '未识别').replace(/[（(]推测[）)]/g,'').trim()||'未识别');
     if(/^未知型号\??$/.test(model))model='未识别';   // 中文占位名没法编码进标题，统一成「未识别」
@@ -151,10 +163,11 @@ const TitleSync = (() => {
     const mi = typeof Models !== 'undefined' ? Models.get(sid) : null;
     const reid = hasReidentifiedModel(mi);
     Object.assign(n,{n:note,t:meta.time,c:title,syncedData:signature(meta),modifiedAt:meta.revision,dirty:false,f:0,nx:0});
-    if (reid && canonLower(meta.model) !== canonLower(mi.name)) {
+    if (reid && ((mi?._tihuEngineFixVer || 0) >= 12 || canonLower(meta.model) !== canonLower(reidCanonOf(mi)))) {
       const reidMeta = {
         ...meta,
-        model: typeof Strength !== 'undefined' && Strength.canon ? Strength.canon(mi.name) : mi.name,
+        model: reidCanonOf(mi),
+        tier: String(mi.effort || mi.tier || meta.tier || ''),
         confidence: null,
         score: ConversationLabels.sane(numeric(mi.reverseScore ?? mi.habitScore ?? mi.est?.score)) ?? null,
         note: n.n,
@@ -234,8 +247,8 @@ const TitleSync = (() => {
           if(!Notes.all[e.id]?.dirty) {
             const mi = typeof Models !== 'undefined' ? Models.get(e.id) : null;
             const reid = hasReidentifiedModel(mi);
-            const effMeta = (reid && canonLower(old.meta?.model) !== canonLower(mi.name))
-              ? { ...old.meta, model: typeof Strength !== 'undefined' && Strength.canon ? Strength.canon(mi.name) : mi.name, confidence: null, score: ConversationLabels.sane(numeric(mi.reverseScore ?? mi.habitScore ?? mi.est?.score)) ?? null }
+            const effMeta = (reid && ((mi?._tihuEngineFixVer || 0) >= 12 || canonLower(old.meta?.model) !== canonLower(reidCanonOf(mi))))
+              ? { ...old.meta, model: reidCanonOf(mi), tier: String(mi.effort || mi.tier || old.meta?.tier || ''), confidence: null, score: ConversationLabels.sane(numeric(mi.reverseScore ?? mi.habitScore ?? mi.est?.score)) ?? null }
               : old.meta;
             const nextLocal = label({...effMeta,note:Notes.all[e.id]?.n??(old.meta.version===1?old.meta.note:'')});
             if (e.localTitle !== nextLocal) { e.localTitle = nextLocal; didMutate = true; }
@@ -328,9 +341,18 @@ const TitleSync = (() => {
   function lock() {TitleCipher.lock();cache.clear();texts.clear();failures.clear();conflicts.clear();lastError='';}
   function resolve(sid,useCloud) {
     const conflict=conflicts.get(sid);if(!conflict)return;
-    if(useCloud)apply(sid,conflict.title,conflict.meta);
+    if(useCloud){apply(sid,conflict.title,conflict.meta);}
     else {const n=Notes.rec(sid);n.c=conflict.title;dirty(sid);}
-    conflicts.delete(sid);Notes.save();Titles.local(sid);Titles.kick();
+    conflicts.delete(sid);Titles.local(sid);
+    if(useCloud&&conflict.meta&&typeof conflict.meta==='object'){
+      const n=Notes.rec(sid);
+      cache.set(sid,{title:conflict.title,meta:conflict.meta,generation:TitleCipher.generation});
+      n.modelData={...conflict.meta,note:n.n};
+      n.modelStamp=modelStamp(Models.get(sid));
+      n.dirty=false;
+      buildMemo.delete(sid);
+    }
+    Notes.save();Titles.kick();
   }
   async function unlock(phrase, {automatic=false} = {}) {
     TitleCipher.unlock(phrase);const generation=TitleCipher.generation;cache.clear();texts.clear();failures.clear();conflicts.clear();lastError='';
@@ -389,6 +411,12 @@ const TitleSync = (() => {
     if(typeof Fav!=='undefined')for(const sid of Object.keys(Fav.all))if(History.byId(sid)){Notes.rec(sid);dirty(sid);}
     Notes.save();Titles.kick();
   }
+  function invalidate(sid) {
+    if (!sid) { buildMemo.clear(); return; }
+    buildMemo.delete(sid);
+    const n = typeof Notes !== 'undefined' ? Notes.all?.[sid] : null;
+    if (n) { delete n.modelData; delete n.modelStamp; }
+  }
   Bus.on('history',()=>{queue();recoverLocal();migrateExt();});
-  return {start,syncNow,recoverLocal,pending,build,modelLabel,label,signature,goldPrefixSignature,selectiveEnabled,shouldGoldPrefix,pack,validate,restored,displayText,canWrite,ingest,queue,dirty,wireTitle,remember,unlock,lock,open,row,status,resolve,get busy(){return hydrating;},get conflicts(){return conflicts.size;},error(message){lastError=String(message||'');}};
+  return {start,syncNow,recoverLocal,pending,build,invalidate,modelLabel,label,signature,goldPrefixSignature,selectiveEnabled,shouldGoldPrefix,pack,validate,restored,displayText,canWrite,ingest,queue,dirty,wireTitle,remember,unlock,lock,open,row,status,resolve,get busy(){return hydrating;},get conflicts(){return conflicts.size;},error(message){lastError=String(message||'');}};
 })();

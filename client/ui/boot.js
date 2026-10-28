@@ -159,7 +159,7 @@ const WebBar = (() => {
       .replace(/(^|[\s,}>(~+])body(?=[.\[:#\s{,>)~+])/g, '$1.anc-r');
     return { c, faces };
   }
-  const OPEN = [['.bmeter', 'quota'], ['.lpbtn', 'leader'], ['.fp-library-btn', 'fplib'], ['.pel-library-btn', 'pelican'], ['.ipit', 'region'], ['.bar-ver', 'update'], ['.bcap', 'gacha']];
+  const OPEN = [['.bmeter', 'quota'], ['.lpbtn', 'leader'], ['.fp-library-btn', 'fplib'], ['.pel-library-btn', 'pelican'], ['.api-gw-bar-btn', 'apigw'], ['.ipit', 'region'], ['.bar-ver', 'update'], ['.bcap', 'gacha']];
   function mount() {
     if (wrap?.isConnected) return true;
     if (typeof Bar === 'undefined' || typeof CSS !== 'string' || !CSS) return false;
@@ -691,7 +691,7 @@ async function init() {
   // 浏览器模式输入框旁的「抽卡」按钮跳回来：登录就绪后直接打开抽卡面板
   { const m = /^#open=(\w+)/.exec(location.hash);
     if (m) { history.replaceState(null, '', '/robots.txt'); const kind = m[1], t0 = Date.now();
-      const SEL = { quota: '#bar .bmeter', leader: '#bar .lpbtn', fplib: '#bar .fp-library-btn', region: '#bar .ipit', update: '#bar .bar-ver' };
+      const SEL = { quota: '#bar .bmeter', leader: '#bar .lpbtn', fplib: '#bar .fp-library-btn', pelican: '#bar .pel-library-btn', apigw: '#bar .api-gw-bar-btn', region: '#bar .ipit', update: '#bar .bar-ver' };
       const w = setInterval(() => { if (Date.now() - t0 > 20000) { clearInterval(w); return; } if (!UI.me) return;
         if (kind === 'gacha') { clearInterval(w); try { GPop.openAny(); } catch {} return; }
         const el = document.querySelector(SEL[kind] || '#none'); if (el) { clearInterval(w); setTimeout(() => el.click(), 150); } }, 300); } }
@@ -959,16 +959,15 @@ async function init() {
     if (m?.pelshotsSync) {
       try { if (typeof PelicanShots !== 'undefined' && PelicanShots.pull) void PelicanShots.pull(false, true, true); } catch {}
     }
-    if (m?.habitBankSync) {
+    if (m?.tihuCfgSync || m?.tihuBundleSync) {
       try {
-        if (typeof ChatHabitFingerprint !== 'undefined') {
-          if (m.habitBankSync.samples && ChatHabitFingerprint.applyRemoteSync) {
-            ChatHabitFingerprint.applyRemoteSync(m.habitBankSync, { persistToHost: false });
-          } else if (ChatHabitFingerprint.syncShared) {
-            void ChatHabitFingerprint.syncShared({ force: true });
-          }
+        if (typeof TihuHub !== 'undefined' && typeof TihuHub.pullSharedFromHost === 'function') {
+          void TihuHub.pullSharedFromHost({ triggerScan: Boolean(m?.tihuBundleSync), triggerSyncIfEmpty: Boolean(m?.tihuCfgSync) });
         }
       } catch {}
+    }
+    if (m?.habitBankSync) {
+      // V11: 旧版跨会话习惯纠偏学习库已废弃清理；纠错样本统一同步至醍醐 GitHub 仓库，不再本地回灌
     }
     // 账号管理窗口：打开某个对话 / 重新统计
     if (m?.tokenRegStep) { try { window.__onTokenRegStep?.(m); } catch {} }

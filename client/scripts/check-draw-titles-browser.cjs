@@ -107,9 +107,9 @@ async function finish(f, name) {
   await p.evaluate(()=>{__anc.GPop.openAny();});await p.clock.runFor(200);
   await p.locator('#gpop [data-ui=text]').click();
   const mode=p.locator('#gpop [data-k=mode]'),preferred=p.locator('#gpop [data-ui=preferred]');
-  assert.deepEqual(await mode.locator('option').evaluateAll(x=>x.map(o=>o.value)),['habit','autoqa','custom']);
-  await mode.selectOption('habit');assert.equal(await preferred.isVisible(),false);assert.equal(await p.locator('#gpop [data-k=prompt]').isDisabled(),true);
-  await mode.selectOption('autoqa');assert.equal(await preferred.isVisible(),false);assert.equal(await p.locator('#gpop [data-k=prompt]').isDisabled(),true);
+  assert.deepEqual(await mode.locator('option').evaluateAll(x=>x.map(o=>o.value)),['pelican','custom']);
+  await mode.selectOption('pelican');assert.equal(await preferred.isVisible(),false);assert.equal(await p.locator('#gpop [data-k=prompt]').isDisabled(),true);
+  await mode.selectOption('pelican');assert.equal(await preferred.isVisible(),false);assert.equal(await p.locator('#gpop [data-k=prompt]').isDisabled(),true);
   await mode.selectOption('custom');assert.equal(await preferred.isVisible(),false);
   await p.locator('#gpop [data-k=prompt]').fill('Reply with the word ready.');await p.locator('#gpop [data-k=prompt]').blur();assert.equal(await p.locator('#gpop [data-ui=saveText]').count(),0);
   await p.locator('#gpop [data-k=intervalSec]').fill('3000');await p.locator('#gpop [data-k=intervalSec]').press('Enter');assert.equal(await p.evaluate(()=>__anc.Gacha.settings().intervalMs),3000000);assert.equal(await p.locator('#gpop [data-k=intervalSec]').inputValue(),'3000');
