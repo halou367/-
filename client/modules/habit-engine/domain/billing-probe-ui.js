@@ -8676,7 +8676,7 @@ const ChatHabitFingerprint = (() => {
     const compAsstForGuard = Array.isArray(chat?.messages) ? chat.messages.filter(x => x && x.role === 'assistant' && !x.failed && x.status !== 'failed' && x.status !== 'pending') : [];
     const hasLoadedMsgs = compAsstForGuard.length > 0;
     const hasNewerLoadedTurn = Boolean(hasLoadedMsgs && ((compAsstForGuard.length > (Number(known?.completedTurnCount) || 0)) || !known?.lastMessageId || (compAsstForGuard.at(-1)?.id && compAsstForGuard.at(-1).id !== known.lastMessageId) || (known?.reverseVer || 0) < 187));
-    if (!interactive && !force && !preferLatestTurn && !isStaleFixVer && ((typeof TitleCipher !== 'undefined' && TitleCipher.isEncoded?.(cloudTitle)) || (restoredMeta && !restoredMeta.fromPrefix)) && !hasNewerLoadedTurn && !openRouteFallThrough) return known;
+    if (!interactive && !preferLatestTurn && ((typeof TitleCipher !== 'undefined' && TitleCipher.isEncoded?.(cloudTitle)) || (restoredMeta && !restoredMeta.fromPrefix)) && !(known?.lastMessageId && compAsstForGuard.at(-1)?.id && compAsstForGuard.at(-1).id !== known.lastMessageId) && !openRouteFallThrough) return known;
     if (!interactive && !force && !isStaleFixVer && !hasLoadedMsgs && restoredMeta?.fromPrefix && (!known?.habitFeatures && (known?.reverseVer || 0) >= 174)) return known;
     const hasAuthoritativeApi = known && !known.guess && !known.fromTitle && !known.reverseInferred && !known.billingProbe && !known.habitInferred && (known.response || (known.internal && !known.billingProbe));
     if (hasAuthoritativeApi && !force) return known;
@@ -12383,7 +12383,7 @@ const BillingProbe = (() => {
     const hasLoadedMsgs = compAsstForGuard.length > 0;
     const needsV12Audit = !known || (Number(known._tihuEngineFixVer) || 0) < 15;
     const hasNewerLoadedTurn = Boolean(hasLoadedMsgs && ((compAsstForGuard.length > (Number(known?.completedTurnCount) || 0)) || !known?.lastMessageId || (compAsstForGuard.at(-1)?.id && compAsstForGuard.at(-1).id !== known.lastMessageId) || (known?.reverseVer || 0) < 187 || needsV12Audit));
-    if (!interactive && !force && !forceLock && !needsV12Audit && ((typeof TitleCipher !== 'undefined' && TitleCipher.isEncoded?.(cloudTitle)) || (restoredMeta && !restoredMeta.fromPrefix)) && !(known?.lastMessageId && compAsstForGuard.at(-1)?.id && compAsstForGuard.at(-1).id !== known.lastMessageId)) {
+    if (!interactive && !forceLock && !best?.isPelicanHtml && !best?.tihuLocked && !(d?.samples?.observations > 0) && ((typeof TitleCipher !== 'undefined' && TitleCipher.isEncoded?.(cloudTitle)) || (restoredMeta && !restoredMeta.fromPrefix)) && !(known?.lastMessageId && compAsstForGuard.at(-1)?.id && compAsstForGuard.at(-1).id !== known.lastMessageId)) {
       return { entry: known, best, close: [best], standout: true, preimage: sum.preimage, payment: sum.payment };
     }
     if (!interactive && !force && !forceLock && !needsV12Audit && !hasLoadedMsgs && restoredMeta?.fromPrefix && (known?.reverseVer || 0) >= 174) {
