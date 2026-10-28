@@ -37,7 +37,7 @@ const GachaPrompts = (() => {
       lang: 'zh-CN',
       weight: 24,
       make() {
-        const pre = pick(['', '', '现在', '立刻', '马上', '请', '帮我', '请帮我', '请帮我现在', '现在帮我', '请立刻', '麻烦帮我']);
+        const pre = pick(['现在帮我', '立刻帮我', '马上帮我', '请帮我现在', '请立刻帮我', '请马上帮我', '麻烦现在帮我', '现在请帮我']);
         const verb = pick(['制作', '制作', '做', '写', '生成', '创建', '编写']);
         const det = pick(['', '', '一个', '一份']);
         const svgTag = pick(['svg', 'SVG']);
@@ -59,7 +59,7 @@ const GachaPrompts = (() => {
       lang: 'zh-TW',
       weight: 18,
       make() {
-        const pre = pick(['', '', '現在', '立刻', '馬上', '請', '幫我', '請幫我', '請幫我現在', '現在幫我']);
+        const pre = pick(['現在幫我', '立刻幫我', '馬上幫我', '請幫我現在', '請立刻幫我', '請馬上幫我', '麻煩現在幫我', '現在請幫我']);
         const verb = pick(['製作', '做', '寫', '產生', '建立']);
         const det = pick(['', '', '一個', '一份']);
         const svgTag = pick(['svg', 'SVG']);
