@@ -1669,19 +1669,28 @@ const PelicanShots = (() => {
   }
   let pushT = 0;
   function push() { clearTimeout(pushT); pushT = setTimeout(() => { pushT = 0; void pull(false, true); }, 600); }
+  // Re-entrancy guard: Bus 'model' -> syncSid -> TihuHub.recognizePelicanChatAndApply -> Bus.emit('model') -> syncSid ...
+  // was an unbounded synchronous recursion (allowHealStub:false has no await before the emit) that froze the whole UI.
   function syncSid(sid) {
-    if (typeof TihuHub !== 'undefined' && typeof TihuHub.recognizePelicanChatAndApply === 'function') {
-      if (sid && TihuHub.isReady?.()) {
-        const c = (typeof Chats !== 'undefined' && Chats.get) ? Chats.get(sid) : null;
-        if (c?.messages?.length) void TihuHub.recognizePelicanChatAndApply(sid, c, { allowHealStub: false });
-      }
-    }
     if (!sid) return;
-    const rawList = all();
-    if (!rawList.some(x => x.sid === sid)) return;
-    const updated = rawList.map(x => x.sid === sid ? view(x) : x);
-    save(updated);
-    push();
+    const active = syncSid._active || (syncSid._active = new Set());
+    if (active.has(sid)) return;
+    active.add(sid);
+    try {
+      if (typeof TihuHub !== 'undefined' && typeof TihuHub.recognizePelicanChatAndApply === 'function' && TihuHub.isReady?.()) {
+        const c = (typeof Chats !== 'undefined' && Chats.get) ? Chats.get(sid) : null;
+        if (c?.messages?.length) {
+          try { Promise.resolve(TihuHub.recognizePelicanChatAndApply(sid, c, { allowHealStub: false })).catch(() => {}); } catch {}
+        }
+      }
+      const rawList = all();
+      if (!rawList.some(x => x.sid === sid)) return;
+      const updated = rawList.map(x => x.sid === sid ? view(x) : x);
+      save(updated);
+      push();
+    } finally {
+      active.delete(sid);
+    }
   }
   function add({ sid, url, w, h: hh, file, auto, acct, messageId, artifactDigest, lockedModel, model: explicitModel, score: explicitScore, think: explicitThink }) {
     const m = modelOf(sid), aLabel = acct || curAcct();

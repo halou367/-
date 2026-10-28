@@ -3227,6 +3227,7 @@ const TihuHub = (() => {
     }
     if (!isReady()) return { matched: false, reason: 'not-ready' };
     const sKey = String(sid).trim();
+    if (recognizePelicanChatAndApply._emitting?.has(sKey)) return { matched: false, skipped: 'reentrant-model-event' };
     if (!sKey || (typeof History !== 'undefined' && History.isGone?.(sKey))) return { matched: false, reason: 'deleted' };
     const known = (typeof Models !== 'undefined' && Models.get) ? Models.get(sKey) : null;
     if (known?.userCorrected && !opts.clearUserCorrected) return { matched: false, skipped: 'user-corrected' };
@@ -3540,7 +3541,9 @@ const TihuHub = (() => {
       }
     } catch {}
     if (!opts.batchMode) {
-      try { if (chatObj && typeof Bus !== 'undefined' && Bus.emit) Bus.emit('model', chatObj, nextEntry); } catch {}
+      const emitting = recognizePelicanChatAndApply._emitting || (recognizePelicanChatAndApply._emitting = new Set());
+      emitting.add(sKey);
+      try { if (chatObj && typeof Bus !== 'undefined' && Bus.emit) Bus.emit('model', chatObj, nextEntry); } catch {} finally { emitting.delete(sKey); }
       try { UI?.renderListSoon?.(); UI?.renderTabs?.(); Dock?.render?.(); Bar?.render?.(); } catch {}
     }
 

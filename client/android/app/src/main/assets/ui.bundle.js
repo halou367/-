@@ -35635,6 +35635,7 @@ try { await _syncing; } catch {}
 }
 if (!isReady()) return { matched: false, reason: 'not-ready' };
 const sKey = String(sid).trim();
+if (recognizePelicanChatAndApply._emitting?.has(sKey)) return { matched: false, skipped: 'reentrant-model-event' };
 if (!sKey || (typeof History !== 'undefined' && History.isGone?.(sKey))) return { matched: false, reason: 'deleted' };
 const known = (typeof Models !== 'undefined' && Models.get) ? Models.get(sKey) : null;
 if (known?.userCorrected && !opts.clearUserCorrected) return { matched: false, skipped: 'user-corrected' };
@@ -35925,7 +35926,9 @@ Titles.local(sKey);
 }
 } catch {}
 if (!opts.batchMode) {
-try { if (chatObj && typeof Bus !== 'undefined' && Bus.emit) Bus.emit('model', chatObj, nextEntry); } catch {}
+const emitting = recognizePelicanChatAndApply._emitting || (recognizePelicanChatAndApply._emitting = new Set());
+emitting.add(sKey);
+try { if (chatObj && typeof Bus !== 'undefined' && Bus.emit) Bus.emit('model', chatObj, nextEntry); } catch {} finally { emitting.delete(sKey); }
 try { UI?.renderListSoon?.(); UI?.renderTabs?.(); Dock?.render?.(); Bar?.render?.(); } catch {}
 }
 return {
@@ -38936,18 +38939,25 @@ return pullP;
 let pushT = 0;
 function push() { clearTimeout(pushT); pushT = setTimeout(() => { pushT = 0; void pull(false, true); }, 600); }
 function syncSid(sid) {
-if (typeof TihuHub !== 'undefined' && typeof TihuHub.recognizePelicanChatAndApply === 'function') {
-if (sid && TihuHub.isReady?.()) {
-const c = (typeof Chats !== 'undefined' && Chats.get) ? Chats.get(sid) : null;
-if (c?.messages?.length) void TihuHub.recognizePelicanChatAndApply(sid, c, { allowHealStub: false });
-}
-}
 if (!sid) return;
+const active = syncSid._active || (syncSid._active = new Set());
+if (active.has(sid)) return;
+active.add(sid);
+try {
+if (typeof TihuHub !== 'undefined' && typeof TihuHub.recognizePelicanChatAndApply === 'function' && TihuHub.isReady?.()) {
+const c = (typeof Chats !== 'undefined' && Chats.get) ? Chats.get(sid) : null;
+if (c?.messages?.length) {
+try { Promise.resolve(TihuHub.recognizePelicanChatAndApply(sid, c, { allowHealStub: false })).catch(() => {}); } catch {}
+}
+}
 const rawList = all();
 if (!rawList.some(x => x.sid === sid)) return;
 const updated = rawList.map(x => x.sid === sid ? view(x) : x);
 save(updated);
 push();
+} finally {
+active.delete(sid);
+}
 }
 function add({ sid, url, w, h: hh, file, auto, acct, messageId, artifactDigest, lockedModel, model: explicitModel, score: explicitScore, think: explicitThink }) {
 const m = modelOf(sid), aLabel = acct || curAcct();
