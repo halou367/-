@@ -339,15 +339,17 @@ export default {
         const len = r.headers.get('content-length'); if (len) h.set('content-length', len);
         return new Response(req.method === 'HEAD' ? null : r.body, { headers: h });
       }
-      if (path.startsWith('/dl/') && req.method === 'GET') {
+      if (path.startsWith('/dl/') && (req.method === 'GET' || req.method === 'HEAD')) {
         const t = await unsign(env, path.slice(4));
         if (!t || !t.id) return J({ error: '下载票据无效' }, 403);
         if (!(t.exp > Date.now())) return J({ error: '下载票据已过期，请重新更新' }, 403);
-        const r = await gh(env, `/repos/${env.REPO}/releases/assets/${t.id}`, { headers: { accept: 'application/octet-stream' } });
-        if (!r.ok) return J({ error: 'GitHub ' + r.status }, 502);
-        const h = new Headers({ 'content-type': 'application/octet-stream', 'cache-control': 'no-store' });
-        const len = r.headers.get('content-length'); if (len) h.set('content-length', len);
-        return new Response(r.body, { headers: h });
+        const rng = req.headers.get('range');
+        const ghHdr = { accept: 'application/octet-stream', ...(rng ? { range: rng } : {}) };
+        const r = await gh(env, `/repos/${env.REPO}/releases/assets/${t.id}`, { headers: ghHdr });
+        if (!r.ok && r.status !== 206 && r.status !== 416) return J({ error: 'GitHub ' + r.status }, 502);
+        const h = new Headers({ 'content-type': 'application/octet-stream', 'cache-control': 'no-store', 'accept-ranges': 'bytes', ...CORS });
+        for (const k of ['content-length', 'content-range', 'etag']) { const v = r.headers.get(k); if (v) h.set(k, v); }
+        return new Response(req.method === 'HEAD' ? null : r.body, { status: r.status, headers: h });
       }
       // ---- 管理页面 ----
       if (path === '/admin' && req.method === 'GET') return new Response(ADMIN_HTML, { headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'x-frame-options': 'DENY', 'referrer-policy': 'no-referrer' } });

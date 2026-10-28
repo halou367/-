@@ -87352,10 +87352,14 @@ if (!back.isConnected) return;
 const s = await Host.updStatus().catch(() => ({})) || {};
 const pct = s.total ? Math.min(100, s.got / s.total * 100) : 0;
 const curAt = now(), dt = curAt - lastAt;
-if (s.phase === 'down' && s.got > lastGot && dt >= 250) {
+if (s.phase === 'down') {
+if (lastGot === 0 && s.got > 0 && !s.speed) { lastGot = s.got; lastAt = curAt; }
+else if (s.got < lastGot) { lastGot = s.got; lastAt = curAt; estSpeed = 0; }
+else if (s.got > lastGot && dt >= 250) {
 const inst = Math.round((s.got - lastGot) * 1000 / dt);
 estSpeed = estSpeed ? Math.round(estSpeed * 0.6 + inst * 0.4) : inst;
 lastGot = s.got; lastAt = curAt;
+}
 }
 const spd = s.speed || estSpeed || 0;
 const etaSec = (spd > 0 && s.total > s.got) ? Math.max(1, Math.ceil((s.total - s.got) / spd)) : 0;
@@ -87375,7 +87379,7 @@ say('校验通过，正在保存多账号会话并启动自动覆盖安装…', 
 const x = await Host.updInstall().catch(e => ({ error: cleanErr(e) }));
 if (x?.error) { say(x.error + (x.file ? '：' + x.file : ''), 'bad'); delete back.dataset.busy; go.hidden = false; go.textContent = '关闭'; go.onclick = () => back.remove(); return; }
 setStepUI?.(4);
-say('已打开独立安装进度窗口，正在静默覆盖安装并自动重新打开客户端…', 'ok'); return;
+say('正在后台静默覆盖安装并自动重新打开客户端（约 5–15 秒）…', 'ok'); return;
 } else if (s.phase === 'ready' || s.phase === 'install') {
 setStepUI?.(4);
 bar.hidden = true; say('请在系统安装界面点「更新」完成安装（聊天记录和账号都会保留）', 'ok'); delete back.dataset.busy; go.hidden = false; go.textContent = '重新打开安装界面'; this.stepRef('perm'); if (s.phase === 'install') return;

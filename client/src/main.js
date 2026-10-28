@@ -3268,15 +3268,23 @@ ipcMain.handle('host:fetchText', async (e, url, opt) => {
         if (rMirror && !rMirror.error) return rMirror;
       } catch {}
     }
-    for (const ua of ['Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36', 'v2rayN/6.23', 'ClashforWindows/0.20.39']) {
+    let hasSysProxy = false;
+    try { const px = await session.defaultSession.resolveProxy(url); hasSysProxy = !!(px && !/^DIRECT\b/i.test(String(px).trim())); } catch {}
+    const trySysFetch = async () => {
+      const rSys = await one((u, o) => session.defaultSession.fetch(u, { ...o, credentials: 'omit' }), 'v2rayN/6.23');
+      if (rSys && !rSys.error) return rSys;
+      if (rSys && (!r || (!r.body && rSys.body))) r = rSys;
+      if (rSys?.error && /^HTTP (?:400|401|403|404|405|409|410|422|429)\b/i.test(rSys.error)) return rSys;
+      return null;
+    };
+    if (hasSysProxy) { const hitSys = await trySysFetch(); if (hitSys) return hitSys; }
+    for (const ua of (hasSysProxy ? ['Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36'] : ['Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36', 'v2rayN/6.23'])) {
       const rDirect = await one((u, o) => ds.fetch(u, o), ua);
       if (rDirect && !rDirect.error) return rDirect;
-      if (rDirect) r = rDirect;
-      if (rDirect?.error && /^HTTP (?:400|401|403|404|405|410|422)\b/i.test(rDirect.error)) return rDirect;
+      if (rDirect && (!r || (!r.body && rDirect.body))) r = rDirect;
+      if (rDirect?.error && /^HTTP (?:400|401|403|404|405|409|410|422|429)\b/i.test(rDirect.error)) return rDirect;
     }
-    const rSys = await one((u, o) => session.defaultSession.fetch(u, o), 'v2rayN/6.23');
-    if (rSys && !rSys.error) return rSys;
-    if (rSys && !r) r = rSys;
+    if (!hasSysProxy) { const hitSys = await trySysFetch(); if (hitSys) return hitSys; }
   }
   if (a && opt?.direct === true && (!r || r.error)) {
     if (!tunnels.has(a.id) && /^vless:/i.test(proxyStr(a))) await applyProxy(a).catch(() => {});
@@ -3441,6 +3449,7 @@ ipcMain.handle('host:netEnv', async e => {
 });
 ipcMain.handle('host:updInfo', () => ({ kind: updKind(), canInstall: !EXTENSION_TEST.testBuild && process.platform === 'win32' && app.isPackaged, testBuild:EXTENSION_TEST.testBuild, version: VERSION, device: deviceId(), devName: (os.hostname() + ' · ' + ({ win32: 'Windows', darwin: 'macOS', linux: 'Linux' }[process.platform] || process.platform) + (updKind() === 'portable' ? ' 便携版' : '')).slice(0, 80) }));
 ipcMain.handle('host:updStatus', () => ({ phase: UPD.phase, got: UPD.got, total: UPD.total, speed: UPD.speed || 0, ver: UPD.ver || '', error: UPD.error, kind: UPD.kind }));
+const UpdaterRuntime = require('./updater-runtime');
 ipcMain.handle('host:updStart', async (e, o) => {
   if(EXTENSION_TEST.testBuild)throw Error('独立扩展测试版已禁用正式通道更新；请使用单独提供的测试构建');
   if (UPD.phase === 'down' || UPD.phase === 'verify' || UPD.phase === 'install') return { ok: true, busy: true };
@@ -3452,81 +3461,55 @@ ipcMain.handle('host:updStart', async (e, o) => {
   const file = path.join(dir, name), acct = winAcct(e.sender) || (Array.isArray(DB?.accounts) ? (DB.accounts.find(x => x && !isDirect(proxyStr(x))) || DB.accounts[0]) : null);
   Object.assign(UPD, { phase: 'down', got: 0, total: size, speed: 0, error: '', file: '', kind: updKind(), ver: String(o?.ver || '').slice(0, 30) });
   (async () => {
-    let err = '';
-    if(!acct)throw Error('缺少账号代理上下文，未直连下载');
-    const candAccts = [acct, ...(Array.isArray(DB?.accounts) ? DB.accounts.filter(x => x && x.id !== acct.id && !isDirect(proxyStr(x))) : [])].slice(0, 3);
-    for (const ca of candAccts) {
-      if (!tunnels.has(ca.id) && !isDirect(proxyStr(ca))) await applyProxy(ca).catch(() => {});
-    }
     const partFile = file + '.part';
     if (fs.existsSync(file)) {
       try {
         const st = fs.statSync(file);
         const sizeOk = !size || st.size === size;
         const nsisOk = !(updKind() === 'setup' && /\.exe$/i.test(name)) || verifyNsisInstaller(file).ok;
-        let shaOk = true;
-        if (sizeOk && nsisOk && sha) {
-          const h0 = crypto.createHash('sha256');
-          h0.update(fs.readFileSync(file));
-          shaOk = h0.digest('hex').toLowerCase() === sha;
-        }
+        const shaOk = !(sizeOk && nsisOk && sha) || UpdaterRuntime.hashFileSha256Sync(file) === sha;
         if (sizeOk && nsisOk && shaOk) {
           UPD.got = st.size; UPD.total = st.size; UPD.speed = 0; UPD.file = file; UPD.phase = 'ready'; return;
         }
       } catch {}
       try { fs.unlinkSync(file); } catch {}
     }
+    const candAccts = [acct, ...(Array.isArray(DB?.accounts) ? DB.accounts.filter(x => x && (!acct || x.id !== acct.id) && !isDirect(proxyStr(x))) : [])].filter(x => x && !isDirect(proxyStr(x))).slice(0, 3);
     const ds = await directSession().catch(() => null);
-    const fetchers = [
-      ...candAccts.map(ca => (u, op) => session.fromPartition(partOf(ca.id)).fetch(u, op)),
-      (u, op) => nodeOrDirectFetch(u, op, ds),
-      ...(ds ? [(u, op) => ds.fetch(u, op)] : []),
-      (u, op) => session.defaultSession.fetch(u, op),
-    ];
-    for (const u of urls) for (const f of fetchers) {
-      const ctl = new AbortController(); let stall = null; const kick = () => { clearTimeout(stall); stall = setTimeout(() => ctl.abort(), 30000); };
-      let out = null;
-      try {
-        try { if (fs.existsSync(partFile)) fs.unlinkSync(partFile); } catch {}
-        kick(); UPD.got = 0; UPD.speed = 0;
-        const r = await f(u, { signal: ctl.signal, cache: 'no-store', headers: { 'User-Agent': 'BranaAi/' + VERSION } });
-        if (!r.ok || !r.body) throw new Error('HTTP ' + r.status);
-        const len = +r.headers.get('content-length') || size; if (len) UPD.total = len;
-        const h = crypto.createHash('sha256'); out = fs.createWriteStream(partFile);
-        const rd = r.body.getReader();
-        let speedAt = Date.now(), speedBytes = 0;
-        for (;;) {
-          const { done, value } = await rd.read(); if (done) break; kick();
-          h.update(value); UPD.got += value.length; speedBytes += value.length;
-          const nowMs = Date.now(), dt = nowMs - speedAt;
-          if (dt >= 300) {
-            const inst = Math.round(speedBytes * 1000 / dt);
-            UPD.speed = UPD.speed ? Math.round(UPD.speed * 0.65 + inst * 0.35) : inst;
-            speedAt = nowMs; speedBytes = 0;
-          }
-          if (!out.write(Buffer.from(value))) await new Promise(res => out.once('drain', res));
-        }
-        await new Promise((res, rej) => out.end(err2 => err2 ? rej(err2) : res())); out = null;
-        clearTimeout(stall);
-        UPD.phase = 'verify'; UPD.speed = 0;
-        const got = h.digest('hex');
-        if (size && UPD.got !== size) throw new Error('文件大小不对（' + UPD.got + ' / ' + size + '）');
-        if (sha && got !== sha) throw new Error('sha256 校验失败');
-        if (updKind() === 'setup' && /\.exe$/i.test(name)) {
-          const nsis = verifyNsisInstaller(partFile);
-          if (!nsis.ok) throw new Error('NSIS 完整性校验失败：' + nsis.err);
-        }
-        try { if (fs.existsSync(file)) fs.unlinkSync(file); } catch {}
-        fs.renameSync(partFile, file);
-        UPD.file = file; UPD.phase = 'ready'; return;
-      } catch (x) {
-        clearTimeout(stall); try { out?.destroy(); } catch {}
-        try { if (fs.existsSync(partFile)) fs.unlinkSync(partFile); } catch {}
-        err = x?.name === 'AbortError' ? '下载超时（30 秒没有数据）' : String(x?.message || x); UPD.phase = 'down'; UPD.speed = 0;
-      }
+    let hasSysProxy = false;
+    try { const px = await session.defaultSession.resolveProxy(urls[0]); hasSysProxy = !!(px && !/^DIRECT\b/i.test(String(px).trim())); } catch {}
+    const acctFetchers = candAccts.map(ca => async (u, op) => {
+      if (!tunnels.has(ca.id) && !isDirect(proxyStr(ca))) await applyProxy(ca).catch(() => {});
+      return session.fromPartition(partOf(ca.id)).fetch(u, op);
+    });
+    const plan = UpdaterRuntime.buildUpdateDownloadPlan({
+      urls,
+      hasSysProxy,
+      defaultFetch: (u, op) => session.defaultSession.fetch(u, op),
+      directFetch: ds ? (u, op) => ds.fetch(u, op) : (u, op) => nodeOrDirectFetch(u, op, null),
+      acctFetchers,
+    });
+    updLog('开始下载更新 v' + (UPD.ver || '?') + ' (' + name + ', sysProxy=' + (hasSysProxy ? '1' : '0') + ')');
+    const dl = await UpdaterRuntime.downloadToPartWithRangeResume({
+      plan,
+      partFile,
+      expectedSize: size,
+      expectedSha256: sha,
+      verifyInstaller: (updKind() === 'setup' && /\.exe$/i.test(name)) ? verifyNsisInstaller : null,
+      userAgent: 'BranaAi/' + VERSION,
+      onPhase: ph => { UPD.phase = ph; if (ph === 'verify') UPD.speed = 0; },
+      onProgress: ({ got, total, speed }) => { UPD.got = got; if (total) UPD.total = total; UPD.speed = speed || 0; },
+      onLog: msg => updLog(msg),
+    });
+    if (dl && dl.ok) {
+      try { if (fs.existsSync(file)) fs.unlinkSync(file); } catch {}
+      fs.renameSync(partFile, file);
+      UPD.file = file; UPD.speed = 0; UPD.phase = 'ready';
+      return;
     }
-    UPD.phase = 'error'; UPD.error = err || '下载失败';
-  })().catch(error=>{UPD.phase='error';UPD.error=String(error.message||error);});
+    UPD.phase = 'error'; UPD.speed = 0; UPD.error = (dl && dl.err) || '下载失败';
+    updLog('下载更新失败：' + UPD.error);
+  })().catch(error => { UPD.phase = 'error'; UPD.speed = 0; UPD.error = String(error.message || error); updLog('下载异常：' + UPD.error); });
   return { ok: true };
 });
 // 自动安装的记录：装之前写 upd-pending.json，下次启动时对比版本号 —— 没装上就提示并给「手动安装」
@@ -3690,8 +3673,7 @@ ipcMain.handle('host:updManual', async () => {
   const updDir = path.dirname(p.file);
   const wscriptExe = fs.existsSync('C:\\Windows\\System32\\wscript.exe') ? 'C:\\Windows\\System32\\wscript.exe' : 'wscript.exe';
   try {
-    const manVbs = path.join(updDir, 'brana-ai-manual-upd.vbs');
-    fs.writeFileSync(manVbs, [
+    const manVbs = UpdaterRuntime.writeUtf16LeVbsSync(path.join(updDir, 'brana-ai-manual-upd.vbs'), [
       'On Error Resume Next',
       'Set sh = CreateObject("WScript.Shell")',
       'Set fso = CreateObject("Scripting.FileSystemObject")',
@@ -3701,15 +3683,39 @@ ipcMain.handle('host:updManual', async () => {
       'newFile = env("ANC_NEW")',
       'appDir = env("ANC_DIR")',
       'exePath = env("ANC_EXE")',
+      'Function IsScopedTarget(procObj)',
+      '  On Error Resume Next',
+      '  IsScopedTarget = False',
+      '  If CLng(procObj.ProcessId) = oldPid Then IsScopedTarget = True : Exit Function',
+      '  Dim ep, pfx, nm',
+      '  ep = LCase(Trim(CStr(procObj.ExecutablePath & "")))',
+      '  nm = LCase(Trim(CStr(procObj.Name & "")))',
+      '  pfx = LCase(Trim(appDir))',
+      '  If Right(pfx, 1) <> "\\" And pfx <> "" Then pfx = pfx & "\\"',
+      '  If pfx <> "" And ep <> "" Then',
+      '    If Left(ep, Len(pfx)) = pfx Then IsScopedTarget = True',
+      '  ElseIf ep = "" And nm = "brana ai.exe" Then',
+      '    IsScopedTarget = True',
+      '  End If',
+      'End Function',
       'Set wmi = GetObject("winmgmts:\\\\.\\root\\cimv2")',
       'If Not (wmi Is Nothing) Then',
-      '  For w = 1 To 24',
+      '  For w = 1 To 28',
       '    Set col = wmi.ExecQuery("SELECT ProcessId FROM Win32_Process WHERE ProcessId = " & oldPid)',
       '    If col.Count = 0 Then Exit For',
       '    WScript.Sleep 250',
       '  Next',
+      '  For k = 1 To 16',
+      '    aliveCnt = 0',
+      '    For Each pr In wmi.ExecQuery("SELECT * FROM Win32_Process WHERE ProcessId = " & oldPid & " OR Name = \'Brana AI.exe\' OR Name LIKE \'BranaAI%.exe\' OR Name = \'xray.exe\' OR Name = \'win-mem-trim.exe\'")',
+      '      If IsScopedTarget(pr) Then aliveCnt = aliveCnt + 1 : pr.Terminate()',
+      '    Next',
+      '    If aliveCnt = 0 Then Exit For',
+      '    WScript.Sleep 250',
+      '  Next',
       'End If',
-      'If appDir <> "" And fso.FolderExists(appDir) Then fso.DeleteFile appDir & "\\BranaAI-*.exe", True : Err.Clear',
+      'If appDir <> "" And fso.FolderExists(appDir) Then fso.DeleteFile appDir & "\\BranaAI-*.exe", True : fso.DeleteFile appDir & "\\BranaAI.exe", True : Err.Clear',
+      'WScript.Sleep 350',
       'rc = sh.Run(q & newFile & q & " /NCRC --updated /S /D=" & appDir, 0, True)',
       'If rc <> 0 Then rc = sh.Run(q & newFile & q & " /NCRC --updated --force-run /D=" & appDir, 1, True)',
       'env("BRANA_UPDATING") = ""',
@@ -3718,7 +3724,7 @@ ipcMain.handle('host:updManual', async () => {
       'End If',
       'WScript.Quit 0',
       '',
-    ].join('\r\n'), 'utf8');
+    ]);
     spawn(wscriptExe, ['//B', '//Nologo', manVbs], {
       detached: true,
       stdio: 'ignore',
@@ -3739,7 +3745,7 @@ ipcMain.handle('host:updManual', async () => {
       const openErr = await shell.openPath(p.file); if (openErr) return { error: openErr };
     }
   }
-  setTimeout(async () => { quitting = true; try { captureAllWindowBounds(); const open = shownIds(); if (open.length) DB.open = open; saveDB(); } catch {} for (const w of [...wins.values()]) destroyWindow(w); if (mgr && !mgr.isDestroyed()) destroyWindow(mgr); await cookiePersistence.flushAll().catch(() => {}); for (const k of [...tunnels.keys()]) stopTunnel(k); killKids(); app.exit(0); }, 500);
+  setTimeout(async () => { quitting = true; try { captureAllWindowBounds(); const open = shownIds(); if (open.length) DB.open = open; saveDB(); } catch {} for (const w of [...wins.values()]) destroyWindow(w); if (mgr && !mgr.isDestroyed()) destroyWindow(mgr); await Promise.race([extensionStorage.close().catch(() => {}), new Promise(r => setTimeout(r, 800))]); await cookiePersistence.flushAll().catch(() => {}); for (const k of [...tunnels.keys()]) stopTunnel(k); killKids(); app.exit(0); }, 450);
   return { ok: true };
 });
 ipcMain.handle('host:updFolder', () => { const f = updFailed?.file || UPD.file; if (!f || !fs.existsSync(f)) return { error: '安装包已经不在了，请重新下载' }; shell.showItemInFolder(f); return { ok: true, file: f }; });
@@ -3965,11 +3971,13 @@ ipcMain.handle('host:updInstall', async () => {
     // 并由 GUI 子系统的 wscript.exe 直接通过 WMI + NSIS GUI 完成进程等待与静默覆盖安装（全程零 cmd.exe / 零 find.exe 调用）
     const launchHidden = (batPath, extraEnv) => {
       const vbsPath = path.join(updDir, 'brana-ai-launch.vbs');
+      const runnerLogPath = path.join(updDir, 'upd-runner.log');
       const mergedEnv = {
         ...process.env,
         ...extraEnv,
         ANC_KIND: kind,
         ANC_UPD_DIR: updDir,
+        ANC_LOG: runnerLogPath,
         ANC_PS_EXE: psExe,
         ANC_PROG_PS1: progPs1,
         ANC_BAT: batPath,
@@ -3986,8 +3994,10 @@ ipcMain.handle('host:updInstall', async () => {
         } catch {}
       }
       const wscriptExe = fs.existsSync('C:\\Windows\\System32\\wscript.exe') ? 'C:\\Windows\\System32\\wscript.exe' : 'wscript.exe';
+      const hasVbsEngine = !fs.existsSync('C:\\Windows\\System32\\wscript.exe') || fs.existsSync('C:\\Windows\\System32\\vbscript.dll');
       try {
-        fs.writeFileSync(vbsPath, [
+        if (!hasVbsEngine) throw new Error('VBScript engine unavailable');
+        const actualVbsPath = UpdaterRuntime.writeUtf16LeVbsSync(vbsPath, [
           'On Error Resume Next',
           'Set sh = CreateObject("WScript.Shell")',
           'Set fso = CreateObject("Scripting.FileSystemObject")',
@@ -3995,6 +4005,7 @@ ipcMain.handle('host:updInstall', async () => {
           'sh.CurrentDirectory = env("ANC_UPD_DIR")',
           'q = Chr(34)',
           'statePath = env("ANC_STATE")',
+          'logPath = env("ANC_LOG")',
           'fromVer = env("ANC_FROM")',
           'toVer = env("ANC_TO")',
           'openCnt = env("ANC_OPEN_CNT")',
@@ -4007,10 +4018,26 @@ ipcMain.handle('host:updInstall', async () => {
           'exePath = env("ANC_EXE")',
           'updKind = env("ANC_KIND")',
           '',
+          'Sub LogLine(msg)',
+          '  On Error Resume Next',
+          '  If logPath = "" Then Exit Sub',
+          '  Dim lf',
+          '  Set lf = fso.OpenTextFile(logPath, 8, True, -1)',
+          '  lf.WriteLine Now & " [" & fromVer & "->" & toVer & "] " & msg',
+          '  lf.Close',
+          'End Sub',
+          '',
+          'Function JsonEsc(s)',
+          '  Dim t',
+          '  t = Replace(CStr(s & ""), "\\", "\\\\")',
+          '  t = Replace(t, Chr(34), "\\" & Chr(34))',
+          '  JsonEsc = t',
+          'End Function',
+          '',
           'Sub WriteState(stepNum, pctNum, restartPctNum, doneRaw, errRaw, msgText)',
           '  On Error Resume Next',
           '  Dim stm, bin, jsonStr',
-          '  jsonStr = "{""from"":""" & fromVer & """,""to"":""" & toVer & """,""step"":" & stepNum & ",""pct"":" & pctNum & ",""restartPct"":" & restartPctNum & ",""openCount"":" & openCnt & ",""oldPid"":" & oldPid & ",""done"":" & doneRaw & ",""err"":" & errRaw & ",""text"":""" & msgText & """}"',
+          '  jsonStr = "{""from"":""" & JsonEsc(fromVer) & """,""to"":""" & JsonEsc(toVer) & """,""step"":" & stepNum & ",""pct"":" & pctNum & ",""restartPct"":" & restartPctNum & ",""openCount"":" & openCnt & ",""oldPid"":" & oldPid & ",""exePath"":""" & JsonEsc(exePath) & """,""done"":" & doneRaw & ",""err"":" & errRaw & ",""text"":""" & JsonEsc(msgText) & """}"',
           '  Set stm = CreateObject("ADODB.Stream")',
           '  stm.Type = 2',
           '  stm.Charset = "utf-8"',
@@ -4042,15 +4069,17 @@ ipcMain.handle('host:updInstall', async () => {
           '  End If',
           'End Function',
           '',
+          'LogLine "START kind=" & updKind & " oldPid=" & oldPid & " appDir=" & appDir',
           'Set wmi = Nothing',
-          'For wi = 1 To 4',
+          'For wi = 1 To 6',
           '  Err.Clear',
           '  Set wmi = GetObject("winmgmts:\\\\.\\root\\cimv2")',
           '  If Err.Number = 0 And Not (wmi Is Nothing) Then Exit For',
           '  WScript.Sleep 200',
           'Next',
           'If wmi Is Nothing Then',
-          '  WScript.Sleep 2000',
+          '  LogLine "WMI_UNAVAILABLE fallback sleep"',
+          '  WScript.Sleep 2500',
           '  rc = sh.Run(q & newFile & q & " /NCRC --updated /S /D=" & appDir, 0, True)',
           '  env("BRANA_UPDATING") = ""',
           '  If exePath <> "" And fso.FileExists(exePath) Then sh.Run q & exePath & q & " --updated", 1, False',
@@ -4075,6 +4104,7 @@ ipcMain.handle('host:updInstall', async () => {
           '    End If',
           '  Next',
           '  If Not copied Then',
+          '    LogLine "PORTABLE_COPY_FAILED"',
           '    WriteState 5, 100, 0, "true", "true", "文件被占用，请手动替换"',
           '    If oldFile <> "" And fso.FileExists(oldFile) Then sh.Run q & oldFile & q & " --updated", 1, False',
           '    WScript.Quit 1',
@@ -4083,52 +4113,76 @@ ipcMain.handle('host:updInstall', async () => {
           '  fso.DeleteFile newFile, True',
           '  sh.Run q & oldFile & q & " --updated", 1, False',
           '  WriteState 4, 100, 38, "false", "false", "正在载入更新并恢复原来的账号窗口…"',
+          '  LogLine "PORTABLE_DONE"',
           '  WScript.Quit 0',
           'End If',
           '',
           'WriteState 2, 22, 0, "false", "false", "正在关闭旧版窗口与后台进程…"',
-          'For w = 1 To 28',
+          'For w = 1 To 32',
           '  Set col = wmi.ExecQuery("SELECT ProcessId FROM Win32_Process WHERE ProcessId = " & oldPid)',
           '  If col.Count = 0 Then Exit For',
           '  WScript.Sleep 250',
           'Next',
-          'For Each p In wmi.ExecQuery("SELECT * FROM Win32_Process WHERE ProcessId = " & oldPid & " OR Name = \'Brana AI.exe\' OR Name LIKE \'BranaAI%.exe\' OR Name = \'xray.exe\' OR Name = \'win-mem-trim.exe\'")',
-          '  If IsScopedTarget(p) Then p.Terminate()',
+          'For k = 1 To 24',
+          '  aliveCnt = 0',
+          '  For Each p In wmi.ExecQuery("SELECT * FROM Win32_Process WHERE ProcessId = " & oldPid & " OR Name = \'Brana AI.exe\' OR Name LIKE \'BranaAI%.exe\' OR Name = \'xray.exe\' OR Name = \'win-mem-trim.exe\'")',
+          '    If IsScopedTarget(p) Then aliveCnt = aliveCnt + 1 : p.Terminate()',
+          '  Next',
+          '  If aliveCnt = 0 Then Exit For',
+          '  WScript.Sleep 250',
           'Next',
-          'If appDir <> "" And fso.FolderExists(appDir) Then fso.DeleteFile appDir & "\\BranaAI-*.exe", True : Err.Clear',
-          'WScript.Sleep 350',
+          'If appDir <> "" And fso.FolderExists(appDir) Then fso.DeleteFile appDir & "\\BranaAI-*.exe", True : fso.DeleteFile appDir & "\\BranaAI.exe", True : Err.Clear',
+          'WScript.Sleep 400',
           'WriteState 3, 38, 0, "false", "false", "正在静默覆盖安装新版本核心组件…"',
+          'LogLine "RUN_NSIS_1 " & newFile',
           'rc = sh.Run(q & newFile & q & " /NCRC --updated /S /D=" & appDir, 0, True)',
+          'LogLine "NSIS_1 rc=" & rc',
           'If rc <> 0 Then',
           '  WriteState 3, 64, 0, "false", "false", "正在释放文件占用并自动重试静默安装…"',
-          '  For Each p In wmi.ExecQuery("SELECT * FROM Win32_Process WHERE Name = \'Brana AI.exe\' OR Name LIKE \'BranaAI%.exe\' OR Name = \'xray.exe\' OR Name = \'win-mem-trim.exe\'")',
-          '    If IsScopedTarget(p) Then p.Terminate()',
+          '  For k2 = 1 To 20',
+          '    aliveCnt2 = 0',
+          '    For Each p In wmi.ExecQuery("SELECT * FROM Win32_Process WHERE Name = \'Brana AI.exe\' OR Name LIKE \'BranaAI%.exe\' OR Name = \'xray.exe\' OR Name = \'win-mem-trim.exe\'")',
+          '      If IsScopedTarget(p) Then aliveCnt2 = aliveCnt2 + 1 : p.Terminate()',
+          '    Next',
+          '    If aliveCnt2 = 0 Then Exit For',
+          '    WScript.Sleep 250',
           '  Next',
-          '  If appDir <> "" And fso.FolderExists(appDir) Then fso.DeleteFile appDir & "\\BranaAI-*.exe", True : Err.Clear',
-          '  WScript.Sleep 1200',
+          '  If appDir <> "" And fso.FolderExists(appDir) Then fso.DeleteFile appDir & "\\BranaAI-*.exe", True : fso.DeleteFile appDir & "\\BranaAI.exe", True : Err.Clear',
+          '  WScript.Sleep 1000',
+          '  LogLine "RUN_NSIS_2 " & newFile',
           '  rc = sh.Run(q & newFile & q & " /NCRC --updated /S /D=" & appDir, 0, True)',
+          '  LogLine "NSIS_2 rc=" & rc',
           'End If',
           'If rc <> 0 Then',
           '  env("BRANA_UPDATING") = ""',
+          '  LogLine "INSTALL_FAILED rc=" & rc',
           '  WriteState 5, 100, 0, "true", "true", "自动静默安装未完成，请在客户端内点击重试安装"',
           '  If exePath <> "" And fso.FileExists(exePath) Then sh.Run q & exePath & q & " --updated", 1, False',
           '  WScript.Quit 1',
           'End If',
           'env("BRANA_UPDATING") = ""',
-          'Set alive = wmi.ExecQuery("SELECT ProcessId FROM Win32_Process WHERE Name = \'Brana AI.exe\' AND ProcessId <> " & oldPid)',
-          'If alive.Count > 0 Then WScript.Quit 0',
+          'alreadyAlive = False',
+          'For Each ap In wmi.ExecQuery("SELECT * FROM Win32_Process WHERE Name = \'Brana AI.exe\' AND ProcessId <> " & oldPid)',
+          '  If IsScopedTarget(ap) Then alreadyAlive = True',
+          'Next',
+          'If alreadyAlive Then',
+          '  LogLine "ALREADY_ALIVE in appDir"',
+          '  WScript.Quit 0',
+          'End If',
           'WriteState 4, 100, 28, "false", "false", "安装已完成，正在启动新版客户端并恢复原有窗口…"',
           'If exePath <> "" And fso.FileExists(exePath) Then',
+          '  LogLine "LAUNCH " & exePath',
           '  sh.Run q & exePath & q & " --updated", 1, False',
           'ElseIf fso.FileExists(sh.ExpandEnvironmentStrings("%LOCALAPPDATA%\\Programs\\Brana AI\\Brana AI.exe")) Then',
           '  sh.Run q & sh.ExpandEnvironmentStrings("%LOCALAPPDATA%\\Programs\\Brana AI\\Brana AI.exe") & q & " --updated", 1, False',
           'ElseIf fso.FileExists(sh.ExpandEnvironmentStrings("%ProgramFiles%\\Brana AI\\Brana AI.exe")) Then',
           '  sh.Run q & sh.ExpandEnvironmentStrings("%ProgramFiles%\\Brana AI\\Brana AI.exe") & q & " --updated", 1, False',
           'End If',
+          'LogLine "DONE"',
           'WScript.Quit 0',
           '',
-        ].join('\r\n'), 'utf8');
-        spawn(wscriptExe, ['//B', '//Nologo', vbsPath], {
+        ]);
+        spawn(wscriptExe, ['//B', '//Nologo', actualVbsPath], {
           detached: true,
           stdio: 'ignore',
           windowsHide: true,
@@ -4137,7 +4191,7 @@ ipcMain.handle('host:updInstall', async () => {
         }).unref();
       } catch {
         spawn('cmd.exe', ['/d', '/c', batPath], {
-          detached: false,
+          detached: true,
           stdio: 'ignore',
           windowsHide: true,
           cwd: updDir,
@@ -4145,7 +4199,6 @@ ipcMain.handle('host:updInstall', async () => {
         }).unref();
       }
     };
-
     if (kind === 'portable') {
       // 便携版：等本程序（和便携版外壳）退出后用新 exe 覆盖旧 exe 再打开；路径用环境变量传，中文路径也没问题
       const old = process.env.PORTABLE_EXECUTABLE_FILE;
@@ -4241,7 +4294,7 @@ ipcMain.handle('host:updInstall', async () => {
     updLog('开始自动安装（' + kind + '）→ ' + (UPD.ver || '?') + ' · ' + UPD.file);
   } catch (x) { updLog('启动安装失败：' + (x?.message || x)); return { error: '启动安装失败：' + (x?.message || x), file: UPD.file }; }
   UPD.phase = 'install';
-  setTimeout(async () => { quitting = true; try { const open = shownIds(); if (open.length) DB.open = open; saveDB(); } catch {} for (const w of [...wins.values()]) destroyWindow(w); if (mgr && !mgr.isDestroyed()) destroyWindow(mgr); await cookiePersistence.flushAll().catch(() => {}); for (const k of [...tunnels.keys()]) stopTunnel(k); killKids(); app.exit(0); }, 180);
+  setTimeout(async () => { quitting = true; try { const open = shownIds(); if (open.length) DB.open = open; saveDB(); } catch {} for (const w of [...wins.values()]) destroyWindow(w); if (mgr && !mgr.isDestroyed()) destroyWindow(mgr); await Promise.race([extensionStorage.close().catch(() => {}), new Promise(r => setTimeout(r, 800))]); await cookiePersistence.flushAll().catch(() => {}); for (const k of [...tunnels.keys()]) stopTunnel(k); killKids(); app.exit(0); }, 300);
   return { ok: true };
 });
 const {createPoolProbeRunner,withAbort:poolWithAbort}=require('./pool-probe-runtime');
